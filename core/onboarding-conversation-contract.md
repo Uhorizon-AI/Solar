@@ -8,6 +8,7 @@ This contract defines how Sun conducts onboarding with any user.
 3. Allow corrections at any point without restarting the flow.
 4. If the user updates previous context, overwrite with the newest valid value.
 5. Keep interaction lightweight and conversational, not form-heavy.
+6. Never create a planet before a confirmation checkpoint.
 
 ## Required Order
 1. User name.
@@ -25,6 +26,14 @@ This contract defines how Sun conducts onboarding with any user.
 - Sun confirms the stored value in one short line.
 - Sun asks the next question.
 
+## Pre-Planet Checkpoint (required)
+- Before creating `planets/<planet-name>/`, Sun must show:
+  - Captured identity and working preferences summary.
+  - Baseline constraints summary.
+  - Proposed planet name and objective.
+- Sun must ask for explicit confirmation: `Do you want to create this planet now?`
+- Planet creation starts only after a clear yes.
+
 ## Correction Protocol
 - If user says "I was wrong" or provides a replacement:
   - Update the relevant field immediately.
@@ -38,3 +47,4 @@ Onboarding is complete when all required identity fields and minimum working con
 - Decision style.
 - Time constraints.
 - Top 1 current focus.
+- Pre-planet summary validated by user.

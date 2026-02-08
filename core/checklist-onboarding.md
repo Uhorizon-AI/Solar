@@ -19,6 +19,11 @@
 - [ ] Fill `sun/memories/baseline.md`.
 - [ ] Start `sun/daily-log/YYYY-MM-DD.md`.
 
+## Pre-Planet Validation (Required)
+- [ ] Show a summary of captured onboarding data.
+- [ ] Show proposed planet name and objective.
+- [ ] Ask explicit confirmation before creating the first planet.
+
 ## Planet Setup
 - [ ] Create `planets/<planet-name>/`.
 - [ ] Copy `core/templates/planet-AGENTS.md` into the new planet.

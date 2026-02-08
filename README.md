@@ -72,6 +72,11 @@ Minimum response fields from Planet to Sun:
 
 ## Add a New Planet
 
+Before creating a planet, run a user confirmation checkpoint:
+- Show a short onboarding summary.
+- Show proposed planet name and objective.
+- Ask explicit confirmation.
+
 1. Create a planet folder:
 ```bash
 mkdir -p planets/<planet-name>

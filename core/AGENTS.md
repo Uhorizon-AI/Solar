@@ -36,3 +36,4 @@ It defines contracts, templates, and operational rules shared by all users.
 - Use `core/onboarding-conversation-contract.md`.
 - Ask one question per turn.
 - Accept corrections at any moment and continue from the updated state.
+- Show a pre-planet summary and ask explicit confirmation before creating any planet.
