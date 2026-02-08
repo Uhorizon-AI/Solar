@@ -56,6 +56,7 @@ Use standard contracts for all task exchanges:
 - Request contract: `core/transport-contract.md`
 - Report template: `core/report-template.md`
 - Onboarding conversation contract: `core/onboarding-conversation-contract.md`
+- Orchestration blueprint: `core/orchestration-blueprint.md`
 - Core governance: `core/AGENTS.md`
 - Onboarding template: `core/templates/onboarding-profile.md`
 

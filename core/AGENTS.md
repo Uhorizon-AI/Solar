@@ -7,6 +7,7 @@ It defines contracts, templates, and operational rules shared by all users.
 ## What belongs in core
 - Transport and reporting contracts.
 - Onboarding conversation contract.
+- Orchestration blueprint.
 - Reusable templates for onboarding and planets.
 - Bootstrap and maintenance scripts.
 - Documentation about architecture and governance.
@@ -37,3 +38,6 @@ It defines contracts, templates, and operational rules shared by all users.
 - Ask one question per turn.
 - Accept corrections at any moment and continue from the updated state.
 - Show a pre-planet summary and ask explicit confirmation before creating any planet.
+
+## Orchestration rule (required)
+- Use `core/orchestration-blueprint.md` for routing, execution, reporting, and persistence.
