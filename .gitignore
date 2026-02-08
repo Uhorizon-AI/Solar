@@ -18,5 +18,10 @@ __pycache__/
 sun/
 planets/
 
+# Local AI client runtime/config
+.claude/
+.cursor/
+.codex/
+
 # Local symlink to external knowledge repo
 brain.ai

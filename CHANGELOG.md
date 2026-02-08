@@ -11,6 +11,10 @@ The format is based on Keep a Changelog.
 - `CHANGELOG.md` to track notable framework changes.
 - `core/checklist-agents-validation.md` with practical tests for routing, hierarchy, first-run UX, onboarding, and ambiguity handling.
 - `core/scripts/sync-clients.sh` to sync Solar core skills/agents/commands to local AI clients (`.codex`, `.claude`, `.cursor`).
+- `core/mcp-catalog.md` as baseline documentation for MCP purpose, usage, and adoption journey.
+- `core/scripts/check-mcp.sh` to validate required MCP declarations from a skill against local Codex MCP configuration.
+- Extended MCP catalog entries for `n8n`, `telegram`, `whatsapp`, and `chrome-devtools`, including a mobile-first conversation path.
+- `core/skills/solar-n8n-workflow` skill (Telegram-first) with MCP requirements, fallback behavior, validation commands, and implementation reference.
 
 ### Changed
 - Root `AGENTS.md` now defines instruction-resolution priority (`nearest child AGENTS.md` wins by path scope).
