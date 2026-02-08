@@ -1,23 +1,27 @@
 # Onboarding Profile
 
+## Meta
+- Status: in_progress | completed
+- Last updated:
+
 ## Identity Handshake
-- Your name:
-- How you want me to call you:
-- How you want to call this assistant:
-- Preferred language:
-- Preferred tone:
+- Your name: [ ]
+- How you want me to call you: [ ]
+- How you want to call this assistant: [ ]
+- Preferred language: [ ]
+- Preferred tone: [ ]
 
 ## Working Style
-- Response format:
-- Decision style (autonomous vs ask-first):
-- Priority style (speed vs depth):
+- Response format: [ ]
+- Decision style (autonomous vs ask-first): [ ]
+- Priority style (speed vs depth): [ ]
 
 ## Operating Constraints
-- Time constraints:
-- Energy constraints:
-- Non-negotiables:
+- Time constraints: [ ]
+- Energy constraints: [ ]
+- Non-negotiables: [ ]
 
 ## Current Focus
-1.
-2.
-3.
+1. [ ]
+2. [ ]
+3. [ ]

@@ -6,6 +6,7 @@ It defines contracts, templates, and operational rules shared by all users.
 
 ## What belongs in core
 - Transport and reporting contracts.
+- Onboarding conversation contract.
 - Reusable templates for onboarding and planets.
 - Bootstrap and maintenance scripts.
 - Documentation about architecture and governance.
@@ -30,3 +31,8 @@ It defines contracts, templates, and operational rules shared by all users.
 2. User operating preferences.
 3. Baseline context.
 4. Planet creation and governance.
+
+## Onboarding interaction rule (required)
+- Use `core/onboarding-conversation-contract.md`.
+- Ask one question per turn.
+- Accept corrections at any moment and continue from the updated state.

@@ -5,6 +5,8 @@
 - [ ] Create first commit with base architecture.
 
 ## Identity Handshake (Required First)
+- [ ] Run onboarding as conversation (one field per turn).
+- [ ] Accept and apply corrections without restarting.
 - [ ] Fill user name.
 - [ ] Fill how user wants to be addressed.
 - [ ] Fill assistant name.
