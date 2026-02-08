@@ -35,15 +35,11 @@ This repository is intentionally lightweight. It is a Git-based operating framew
 git clone <repo-url> solar.ai
 cd solar.ai
 ```
-2. Initialize local git (if needed):
-```bash
-git init
-```
-3. Run bootstrap:
+2. Run bootstrap:
 ```bash
 bash core/bootstrap.sh
 ```
-4. Complete onboarding checklist:
+3. Complete onboarding checklist:
 - `core/checklist-onboarding.md`
 
 ## How it Works
