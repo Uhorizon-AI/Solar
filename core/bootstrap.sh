@@ -7,12 +7,7 @@ mkdir -p "$ROOT_DIR/sun/preferences"
 mkdir -p "$ROOT_DIR/sun/memories"
 mkdir -p "$ROOT_DIR/sun/daily-log"
 mkdir -p "$ROOT_DIR/planets"
-mkdir -p "$ROOT_DIR/planets/_template"
 mkdir -p "$ROOT_DIR/core"
-
-touch "$ROOT_DIR/sun/preferences/.gitkeep"
-touch "$ROOT_DIR/sun/memories/.gitkeep"
-touch "$ROOT_DIR/sun/daily-log/.gitkeep"
 
 if [ ! -f "$ROOT_DIR/sun/preferences/profile.md" ]; then
   cat > "$ROOT_DIR/sun/preferences/profile.md" <<'EOF'
@@ -66,50 +61,9 @@ if [ ! -f "$TODAY_FILE" ]; then
 EOF
 fi
 
-if [ ! -f "$ROOT_DIR/planets/_template/AGENTS.md" ]; then
-  cat > "$ROOT_DIR/planets/_template/AGENTS.md" <<'EOF'
-# Planet Guidelines
-
-## Scope
-- Domain:
-- In scope:
-- Out of scope:
-
-## Governance
-- Required checks:
-- Security/data rules:
-- Operational limits:
-
-## Input Contract (Sun -> Planet)
-- Objective:
-- Constraints:
-- Context:
-
-## Output Contract (Planet -> Sun)
-- Status:
-- Deliverables:
-- Risks:
-- Next steps:
-EOF
-fi
-
-if [ ! -f "$ROOT_DIR/planets/_template/memory.md" ]; then
-  cat > "$ROOT_DIR/planets/_template/memory.md" <<'EOF'
-# Planet Memory
-
-## Facts
-- 
-
-## Decisions
-- 
-
-## Open Threads
-- 
-EOF
-fi
-
 echo "Solar bootstrap complete."
 echo "Next steps:"
-echo "1) Initialize git: git init"
-echo "2) Create a planet: mkdir -p planets/<planet-name>"
-echo "3) Copy templates into the new planet"
+echo "1) Create a planet: mkdir -p planets/<planet-name>"
+echo "2) Copy templates into the new planet"
+echo "   cp core/templates/planet-AGENTS.md planets/<planet-name>/AGENTS.md"
+echo "   cp core/templates/planet-memory.md planets/<planet-name>/memory.md"

@@ -10,3 +10,7 @@
 .env.*
 *.key
 *.pem
+
+# Runtime workspaces (local, user-specific)
+sun/
+planets/

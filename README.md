@@ -15,15 +15,11 @@ Real-world users are not mono-faceted. A single person often manages multiple di
 
 ```text
 /solar.ai/
-├── core/                # Shared contracts, templates, bootstrap
-├── sun/                 # PERSONAL AGENT (Identity)
-│   ├── memories/        # Long-term personal storage
-│   ├── preferences/     # How you like things done
-│   └── daily-log/       # Your stream of consciousness
-└── planets/             # DOMAIN AGENTS (Contexts)
-    ├── [planet-a]/      # e.g., "brain.ai"
-    ├── [planet-b]/      # e.g., "consulting-firm"
-    └── [planet-c]/      # e.g., "family-office"
+├── core/                # Versioned source of truth
+│   ├── templates/       # Templates used to create local workspaces
+│   └── ...
+├── sun/                 # Local runtime workspace (gitignored)
+└── planets/             # Local runtime workspace (gitignored)
 ```
 
 ## Installation
@@ -41,6 +37,8 @@ bash core/bootstrap.sh
 ```
 3. Complete onboarding checklist:
 - `core/checklist-onboarding.md`
+
+Note: `sun/` and `planets/` are ignored by Git on purpose, so each person can adapt their own instance without polluting the shared framework repository.
 
 ## How it Works
 
@@ -76,7 +74,7 @@ mkdir -p planets/<planet-name>
 ```
 2. Copy templates:
 ```bash
-cp planets/_template/AGENTS.md planets/<planet-name>/AGENTS.md
-cp planets/_template/memory.md planets/<planet-name>/memory.md
+cp core/templates/planet-AGENTS.md planets/<planet-name>/AGENTS.md
+cp core/templates/planet-memory.md planets/<planet-name>/memory.md
 ```
 3. Customize governance in `planets/<planet-name>/AGENTS.md`.

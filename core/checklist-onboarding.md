@@ -1,7 +1,6 @@
 # Onboarding Checklist
 
 ## Repository Setup
-- [ ] Run `git init` in repo root.
 - [ ] Add `.gitignore` according to your stack.
 - [ ] Create first commit with base architecture.
 
@@ -12,8 +11,8 @@
 
 ## Planet Setup
 - [ ] Create `planets/<planet-name>/`.
-- [ ] Copy `planets/_template/AGENTS.md` into the new planet.
-- [ ] Copy `planets/_template/memory.md` into the new planet.
+- [ ] Copy `core/templates/planet-AGENTS.md` into the new planet.
+- [ ] Copy `core/templates/planet-memory.md` into the new planet.
 - [ ] Define governance and boundaries in the planet `AGENTS.md`.
 
 ## Execution Readiness
