@@ -27,6 +27,7 @@ Keep execution simple, traceable, and reusable for any user.
 ## Discovery Standard (for sales/commercial planets)
 - Use `core/templates/lead-discovery-5q.md` for first-call qualification.
 - Persist score, package recommendation, and next action in planet memory.
+- Use `core/skills/solar-sales-pipeline/SKILL.md` to keep sales records and stage transitions consistent across planets.
 
 ## Routing Rules
 - If task is identity, communication style, or personal constraints -> Sun.

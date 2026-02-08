@@ -57,6 +57,7 @@ Use standard contracts for all task exchanges:
 - Report template: `core/report-template.md`
 - Onboarding conversation contract: `core/onboarding-conversation-contract.md`
 - Orchestration blueprint: `core/orchestration-blueprint.md`
+- Reusable sales skill: `core/skills/solar-sales-pipeline/SKILL.md`
 - Core governance: `core/AGENTS.md`
 - Onboarding template: `core/templates/onboarding-profile.md`
 

@@ -8,6 +8,7 @@ It defines contracts, templates, and operational rules shared by all users.
 - Transport and reporting contracts.
 - Onboarding conversation contract.
 - Orchestration blueprint.
+- Cross-planet reusable skills.
 - Reusable templates for onboarding and planets.
 - Bootstrap and maintenance scripts.
 - Documentation about architecture and governance.
@@ -49,3 +50,8 @@ It defines contracts, templates, and operational rules shared by all users.
   2. It is needed by 2 or more planets.
 - If an artifact is specific to one planet, keep it inside that planet workspace.
 - Keep `core/templates/` small, stable, and cross-planet by design.
+
+## Language policy (required)
+- Everything in `core/` must be written in English for cross-user reuse.
+- Planet-specific files may use the user's preferred language.
+- Planet skills may use the user's preferred language.
