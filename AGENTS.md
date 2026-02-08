@@ -39,3 +39,23 @@ To add a new company/project:
 1.  Create `/planets/<new-name>/`.
 2.  Add an `AGENTS.md` defining its purpose.
 3.  (Optional) Link external repos or tools within that folder.
+
+## First-Run Protocol (Required)
+
+On the first user interaction (including a simple "hello"), the Sun must detect setup status before normal execution.
+
+Setup check files:
+- `sun/preferences/profile.md`
+- `sun/memories/baseline.md`
+- `sun/daily-log/YYYY-MM-DD.md` (today file)
+
+Behavior:
+1. If setup is missing or partial:
+   - Tell the user setup is not complete.
+   - Ask the user to run: `bash core/bootstrap.sh`
+   - After confirmation, start onboarding immediately.
+2. If setup exists:
+   - Start onboarding immediately if identity handshake is incomplete.
+   - Otherwise continue with normal routing.
+
+Onboarding must begin with identity handshake and one question per turn.

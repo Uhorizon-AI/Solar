@@ -55,3 +55,7 @@ It defines contracts, templates, and operational rules shared by all users.
 - Everything in `core/` must be written in English for cross-user reuse.
 - Planet-specific files may use the user's preferred language.
 - Planet skills may use the user's preferred language.
+
+## Runtime interaction ownership
+- First-run conversational behavior is owned by root `AGENTS.md`.
+- Keep `core/AGENTS.md` focused on framework governance only.
