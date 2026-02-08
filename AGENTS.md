@@ -4,6 +4,15 @@
 
 This system operates on a **Hub-and-Spoke** model called "Solar".
 
+## Instruction Resolution (Required)
+
+Instruction priority is path-based:
+1. Root `AGENTS.md` defines global defaults.
+2. If working inside a subfolder that has its own `AGENTS.md`, that child file overrides root rules for that scope.
+3. If multiple nested `AGENTS.md` files exist, use the nearest one to the target files as highest priority.
+
+This applies to any folder (`core/`, `sun/`, `planets/`, or any other child folder).
+
 ### 1. The Sun (Personal Agent)
 *   **Location:** `/sun/`
 *   **Role:** The Interface & Router.
@@ -26,7 +35,7 @@ This system operates on a **Hub-and-Spoke** model called "Solar".
 
 When the **Sun** delegates to a **Planet**:
 
-1.  **Check Protocol:** Look for `AGENTS.md` in the target planet's root.
+1.  **Check Protocol:** Resolve applicable `AGENTS.md` files for the target path, prioritizing the nearest child scope.
 2.  **Context Transfer:** The Sun must provide:
     *   `Objective`: What needs to be done.
     *   `Constraints`: User-specific limitations (e.g., "Finish by 5 PM").
