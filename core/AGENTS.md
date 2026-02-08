@@ -41,3 +41,11 @@ It defines contracts, templates, and operational rules shared by all users.
 
 ## Orchestration rule (required)
 - Use `core/orchestration-blueprint.md` for routing, execution, reporting, and persistence.
+
+## Template policy (required)
+- Do not create a template for every new artifact.
+- Create a new file in `core/templates/` only if:
+  1. It will be reused at least 3 times, or
+  2. It is needed by 2 or more planets.
+- If an artifact is specific to one planet, keep it inside that planet workspace.
+- Keep `core/templates/` small, stable, and cross-planet by design.
