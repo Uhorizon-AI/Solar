@@ -59,3 +59,8 @@ It defines contracts, templates, and operational rules shared by all users.
 ## Runtime interaction ownership
 - First-run conversational behavior is owned by root `AGENTS.md`.
 - Keep `core/AGENTS.md` focused on framework governance only.
+
+## Client sync rule (required)
+- If files are added or modified in `core/skills/`, `core/agents/`, or `core/commands/`, run:
+  - `bash core/scripts/sync-clients.sh`
+- This sync must be executed before considering the change operationally complete.
