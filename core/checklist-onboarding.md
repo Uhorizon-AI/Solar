@@ -5,6 +5,7 @@
 - [ ] Create first commit with base architecture.
 
 ## Sun Setup
+- [ ] Fill `core/templates/onboarding-profile.md` first (identity handshake + preferences).
 - [ ] Fill `sun/preferences/profile.md`.
 - [ ] Fill `sun/memories/baseline.md`.
 - [ ] Start `sun/daily-log/YYYY-MM-DD.md`.

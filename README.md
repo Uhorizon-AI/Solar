@@ -54,6 +54,8 @@ Use standard contracts for all task exchanges:
 
 - Request contract: `core/transport-contract.md`
 - Report template: `core/report-template.md`
+- Core governance: `core/AGENTS.md`
+- Onboarding template: `core/templates/onboarding-profile.md`
 
 Minimum request fields from Sun to Planet:
 - `objective`
