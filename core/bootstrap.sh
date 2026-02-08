@@ -66,6 +66,15 @@ if [ ! -f "$TODAY_FILE" ]; then
 EOF
 fi
 
+SYNC_SCRIPT="$ROOT_DIR/core/scripts/sync-clients.sh"
+if [ -x "$SYNC_SCRIPT" ]; then
+  echo "Running client sync..."
+  if ! "$SYNC_SCRIPT"; then
+    echo "Warning: client sync failed. You can retry manually:"
+    echo "  bash core/scripts/sync-clients.sh"
+  fi
+fi
+
 echo "Solar bootstrap complete."
 echo "Next steps:"
 echo "1) Create a planet: mkdir -p planets/<planet-name>"

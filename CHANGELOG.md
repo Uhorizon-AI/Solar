@@ -17,6 +17,7 @@ The format is based on Keep a Changelog.
 - Root `AGENTS.md` first-run protocol now uses non-technical UX with simple menu options (`configure now`, `already configured`, `help`).
 - Root `AGENTS.md` now requires explicit scope clarification before writing when user requests are ambiguous.
 - `core/AGENTS.md` now requires running `bash core/scripts/sync-clients.sh` after changes in `core/skills/`, `core/agents/`, or `core/commands/`.
+- `core/bootstrap.sh` now runs `core/scripts/sync-clients.sh` when available to keep local clients aligned after setup.
 
 ## [0.1.0] - 2026-02-08
 
