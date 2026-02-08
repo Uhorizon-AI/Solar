@@ -89,3 +89,8 @@ cp core/templates/planet-AGENTS.md planets/<planet-name>/AGENTS.md
 cp core/templates/planet-memory.md planets/<planet-name>/memory.md
 ```
 3. Customize governance in `planets/<planet-name>/AGENTS.md`.
+
+## Agent Instruction Source
+
+- Root `AGENTS.md` is the single source of truth for top-level agent instructions.
+- `CLAUDE.md` and `GEMINI.md` are symlinks pointing to `AGENTS.md` to avoid drift.
