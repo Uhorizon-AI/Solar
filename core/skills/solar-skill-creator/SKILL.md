@@ -59,6 +59,10 @@ Do not add auxiliary docs like README/INSTALL/CHANGELOG inside skill folders.
 - Description states what it does and when to use it.
 - Body stays procedural and concise.
 - Core skills remain vendor-neutral and Solar-owned.
+- Skill body includes these required sections:
+  - `Required MCP`
+  - `Validation commands`
+- `Fallback if MCP missing` is required only when `Required MCP` is not `None`.
 
 ## Migration Rule
 

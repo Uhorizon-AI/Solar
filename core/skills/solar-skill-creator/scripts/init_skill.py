@@ -38,6 +38,21 @@ description: >
 2. Execute procedure
 3. Format output
 
+## Required MCP
+
+- [TODO: List required MCP servers or write "None"]
+
+## Fallback if MCP missing
+
+- [TODO: Define behavior if MCP is unavailable]
+- [TODO: If Required MCP is "None", write "N/A"]
+
+## Validation commands
+
+```bash
+[TODO: Add one or more commands to verify this skill works]
+```
+
 ## Examples
 
 ### Example 1

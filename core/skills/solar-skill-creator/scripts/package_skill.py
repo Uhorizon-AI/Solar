@@ -12,6 +12,12 @@ import argparse
 from pathlib import Path
 import re
 
+
+def extract_section(body: str, heading: str) -> str:
+    pattern = rf"{re.escape(heading)}\n(.*?)(?=\n## |\Z)"
+    match = re.search(pattern, body, re.DOTALL)
+    return match.group(1).strip() if match else ""
+
 def validate_skill(skill_path: Path) -> list:
     """Validate skill structure and return list of errors."""
     errors = []
@@ -63,6 +69,25 @@ def validate_skill(skill_path: Path) -> list:
     # Check for TODOs in body
     if '[TODO]' in body:
         errors.append("SKILL.md contains [TODO] markers - complete before packaging")
+
+    # Required sections (always)
+    always_required_sections = [
+        "## Required MCP",
+        "## Validation commands",
+    ]
+    for section in always_required_sections:
+        if section not in body:
+            errors.append(f"Missing required section: {section}")
+
+    # Conditional fallback section
+    required_mcp_content = extract_section(body, "## Required MCP")
+    has_fallback_section = "## Fallback if MCP missing" in body
+    requires_mcp = bool(required_mcp_content) and not re.search(
+        r"\b(none|n/a|not required)\b", required_mcp_content, re.IGNORECASE
+    )
+
+    if requires_mcp and not has_fallback_section:
+        errors.append("Missing required section: ## Fallback if MCP missing")
 
     # Check file size
     if len(content) > 100000:  # ~100KB

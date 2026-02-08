@@ -19,6 +19,8 @@ The format is based on Keep a Changelog.
 - `core/AGENTS.md` now requires running `bash core/scripts/sync-clients.sh` after changes in `core/skills/`, `core/agents/`, or `core/commands/`.
 - `core/bootstrap.sh` now runs `core/scripts/sync-clients.sh` when available to keep local clients aligned after setup.
 - `core/bootstrap.sh` now writes `sun/.setup-complete` and root `AGENTS.md` uses it as setup fast-path to avoid repeated first-run setup prompts across new conversations.
+- `core/skills/solar-skill-creator` now enforces MCP-oriented skill metadata: `Required MCP` and `Validation commands` always required; `Fallback if MCP missing` required only when MCP is actually required.
+- `.gitignore` now includes `__pycache__/`.
 
 ## [0.1.0] - 2026-02-08
 

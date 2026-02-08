@@ -5,6 +5,9 @@
 .idea/
 .vscode/
 
+# Python
+__pycache__/
+
 # Local secrets and env
 .env
 .env.*
