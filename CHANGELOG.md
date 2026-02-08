@@ -14,6 +14,7 @@ The format is based on Keep a Changelog.
 ### Changed
 - Root `AGENTS.md` now defines instruction-resolution priority (`nearest child AGENTS.md` wins by path scope).
 - Root `AGENTS.md` first-run protocol now uses non-technical UX with simple menu options (`configure now`, `already configured`, `help`).
+- Root `AGENTS.md` now requires explicit scope clarification before writing when user requests are ambiguous.
 
 ## [0.1.0] - 2026-02-08
 

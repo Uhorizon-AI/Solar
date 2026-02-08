@@ -79,3 +79,14 @@ User-facing behavior must be simple and non-technical:
 
 Only provide technical diagnostics (missing files, shell output) if the user explicitly asks.
 Onboarding must begin with identity handshake and one question per turn.
+
+## Ambiguity Handling (Required)
+
+If a user request is ambiguous about destination scope (for example: "create a template", "save this", "update this"), the Sun must ask a short clarifying question before writing files.
+
+Allowed destination options:
+- `core/` for reusable framework artifacts
+- `sun/` for personal runtime context
+- `planets/<planet-name>/` for domain-specific artifacts
+
+Do not write to an assumed folder when scope is unclear.
