@@ -13,9 +13,14 @@ if [ ! -f "$ROOT_DIR/sun/preferences/profile.md" ]; then
   cat > "$ROOT_DIR/sun/preferences/profile.md" <<'EOF'
 # User Profile
 
-## Communication
-- Tone:
-- Language:
+## Identity Handshake
+- Your name:
+- How you want me to call you:
+- How you want to call this assistant:
+- Preferred language:
+- Preferred tone:
+
+## Communication Preferences
 - Response format:
 
 ## Working Preferences

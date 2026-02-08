@@ -37,6 +37,7 @@ bash core/bootstrap.sh
 ```
 3. Complete onboarding checklist:
 - `core/checklist-onboarding.md`
+- Start with the identity handshake in `core/templates/onboarding-profile.md`.
 
 Note: `sun/` and `planets/` are ignored by Git on purpose, so each person can adapt their own instance without polluting the shared framework repository.
 

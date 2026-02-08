@@ -4,6 +4,13 @@
 - [ ] Add `.gitignore` according to your stack.
 - [ ] Create first commit with base architecture.
 
+## Identity Handshake (Required First)
+- [ ] Fill user name.
+- [ ] Fill how user wants to be addressed.
+- [ ] Fill assistant name.
+- [ ] Fill preferred language.
+- [ ] Fill preferred tone.
+
 ## Sun Setup
 - [ ] Fill `core/templates/onboarding-profile.md` first (identity handshake + preferences).
 - [ ] Fill `sun/preferences/profile.md`.
