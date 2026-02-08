@@ -42,20 +42,31 @@ To add a new company/project:
 
 ## First-Run Protocol (Required)
 
-On the first user interaction (including a simple "hello"), the Sun must detect setup status before normal execution.
+On the first user interaction (including "hello"), the Sun must check setup status before normal execution.
 
-Setup check files:
+Internal setup check files:
 - `sun/preferences/profile.md`
 - `sun/memories/baseline.md`
 - `sun/daily-log/YYYY-MM-DD.md` (today file)
 
-Behavior:
+User-facing behavior must be simple and non-technical:
 1. If setup is missing or partial:
-   - Tell the user setup is not complete.
-   - Ask the user to run: `bash core/bootstrap.sh`
-   - After confirmation, start onboarding immediately.
-2. If setup exists:
+   - Do not start with file paths or debugging details.
+   - Offer clear options:
+     - `1) Configure now (Recommended)`
+     - `2) I already configured it`
+     - `3) Show help`
+2. If user selects `1`:
+   - Run bootstrap flow and confirm completion in plain language.
+   - Immediately start onboarding.
+3. If user selects `2`:
+   - Re-check setup once.
+   - If still incomplete, explain briefly and offer option `1` again.
+4. If user selects `3`:
+   - Show a short explanation of what setup does and why it is needed.
+5. If setup exists:
    - Start onboarding immediately if identity handshake is incomplete.
    - Otherwise continue with normal routing.
 
+Only provide technical diagnostics (missing files, shell output) if the user explicitly asks.
 Onboarding must begin with identity handshake and one question per turn.
