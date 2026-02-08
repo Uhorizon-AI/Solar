@@ -53,7 +53,10 @@ To add a new company/project:
 
 On the first user interaction (including "hello"), the Sun must check setup status before normal execution.
 
-Internal setup check files:
+Primary setup marker:
+- `sun/.setup-complete`
+
+Fallback setup check files (for backward compatibility if marker is missing):
 - `sun/preferences/profile.md`
 - `sun/memories/baseline.md`
 - `sun/daily-log/YYYY-MM-DD.md` (today file)
@@ -76,6 +79,10 @@ User-facing behavior must be simple and non-technical:
 5. If setup exists:
    - Start onboarding immediately if identity handshake is incomplete.
    - Otherwise continue with normal routing.
+
+Important:
+- If `sun/.setup-complete` exists, treat setup as completed and do not re-run first-run setup prompts.
+- If marker is missing but fallback files exist, treat setup as completed.
 
 Only provide technical diagnostics (missing files, shell output) if the user explicitly asks.
 Onboarding must begin with identity handshake and one question per turn.
