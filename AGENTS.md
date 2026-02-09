@@ -59,7 +59,6 @@ Primary setup marker:
 Fallback setup check files (for backward compatibility if marker is missing):
 - `sun/preferences/profile.md`
 - `sun/memories/baseline.md`
-- `sun/daily-log/YYYY-MM-DD.md` (today file)
 
 User-facing behavior must be simple and non-technical:
 1. If setup is missing or partial:
@@ -83,6 +82,7 @@ User-facing behavior must be simple and non-technical:
 Important:
 - If `sun/.setup-complete` exists, treat setup as completed and do not re-run first-run setup prompts.
 - If marker is missing but fallback files exist, treat setup as completed.
+- `sun/daily-log/YYYY-MM-DD.md` is operational and created on demand, not required for setup completion.
 
 Only provide technical diagnostics (missing files, shell output) if the user explicitly asks.
 Onboarding must begin with identity handshake and one question per turn.

@@ -8,7 +8,7 @@ Keep execution simple, traceable, and reusable for any user.
 ## Runtime Sources
 - User preferences: `sun/preferences/profile.md`
 - Baseline context: `sun/memories/baseline.md`
-- Daily execution: `sun/daily-log/YYYY-MM-DD.md`
+- Daily execution (on demand): `sun/daily-log/YYYY-MM-DD.md`
 - Planet scope and governance: `planets/<planet-name>/AGENTS.md`
 - Planet memory: `planets/<planet-name>/memory.md`
 
@@ -21,7 +21,7 @@ Keep execution simple, traceable, and reusable for any user.
 6. Persist learnings:
    - Stable user-level decisions -> `sun/memories/baseline.md`
    - Domain decisions and facts -> `planets/<planet-name>/memory.md`
-   - Daily actions and follow-ups -> `sun/daily-log/YYYY-MM-DD.md`
+   - Daily actions and follow-ups -> `sun/daily-log/YYYY-MM-DD.md` (only when daily planning or follow-up is needed)
 7. Return concise result to user and ask next decision only if needed.
 
 ## Discovery Standard (for sales/commercial planets)

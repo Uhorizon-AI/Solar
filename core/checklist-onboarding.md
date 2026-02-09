@@ -17,7 +17,7 @@
 - [ ] Fill `core/templates/onboarding-profile.md` first (identity handshake + preferences).
 - [ ] Fill `sun/preferences/profile.md`.
 - [ ] Fill `sun/memories/baseline.md`.
-- [ ] Start `sun/daily-log/YYYY-MM-DD.md`.
+- [ ] Create `sun/daily-log/YYYY-MM-DD.md` only if needed by current user interaction (daily planning/follow-up).
 
 ## Pre-Planet Validation (Required)
 - [ ] Show a summary of captured onboarding data.
