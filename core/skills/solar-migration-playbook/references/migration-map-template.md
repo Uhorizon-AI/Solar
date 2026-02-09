@@ -12,7 +12,14 @@
 |---|---|---|
 |  |  |  |
 
-## 3) File-level Mapping
+## 3) Migration Mode
+
+- `.git` detected: yes/no
+- Selected mode: `in-place` or `copy-import`
+- Why this mode:
+- User confirmation:
+
+## 4) File-level Mapping
 
 | Source | Target scope | Target path | Action (keep/move/rewrite/archive) | Rationale |
 |---|---|---|---|---|
@@ -20,7 +27,7 @@
 |  | sun |  |  |  |
 |  | planet | planets/<name>/... |  |  |
 
-## 4) Batches
+## 5) Batches
 
 ### Batch 1 (Critical)
 - Scope:
@@ -37,13 +44,13 @@
 - Success criteria:
 - Rollback note:
 
-## 5) Validation
+## 6) Validation
 
 - Functional checks:
 - Data integrity checks:
 - Routing/governance checks:
 
-## 6) Risks and Decisions
+## 7) Risks and Decisions
 
 - Risks:
 - Mitigations:

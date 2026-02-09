@@ -46,25 +46,37 @@ bash core/scripts/sync-clients.sh
 - Ask for source path(s) and intended destination scope.
 - Confirm migration objective and constraints (timeline, risk tolerance, critical systems).
 
-2. Build inventory
+2. Select migration mode (required)
+- Detect whether source contains `.git`.
+- If `.git` is present, default recommendation is `in-place`:
+  - keep repository history,
+  - apply changes directly in source repo,
+  - review diffs before commit.
+- Alternative mode is `copy-import`:
+  - copy content into Solar structure,
+  - useful for sandbox/testing or non-git sources,
+  - does not preserve original git history.
+- Ask user to confirm selected mode before file edits.
+
+3. Build inventory
 - Create a concise list of top-level folders/files per source.
 - Tag each item as: reusable framework, personal runtime, or domain-specific.
 
-3. Map to Solar targets
+4. Map to Solar targets
 - `core/` for reusable contracts/templates/skills/scripts.
 - `sun/` for personal runtime context and memory.
 - `planets/<planet-name>/` for domain-specific assets.
 
-4. Define migration batches
+5. Define migration batches
 - Batch 1: critical day-to-day paths.
 - Batch 2: automations and integrations.
 - Batch 3: cleanup and standardization.
 
-5. Execute one batch at a time
+6. Execute one batch at a time
 - Apply only scoped changes for the current batch.
 - Report moved/rewritten files and deferred items.
 
-6. Validate and close batch
+7. Validate and close batch
 - Validate expected runtime behavior.
 - Record open risks and next batch entry criteria.
 
