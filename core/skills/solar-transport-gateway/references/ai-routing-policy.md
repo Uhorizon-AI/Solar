@@ -27,8 +27,13 @@ SOLAR_AI_PROVIDER_PRIORITY=codex,claude,gemini
 - Router timeout keys:
   - `SOLAR_AI_PROVIDER_TIMEOUT_SEC` (per provider call)
   - `SOLAR_AI_ROUTER_TIMEOUT_SEC` (bridge-level timeout)
+- Conversation continuity keys:
+  - `SOLAR_RUNTIME_DIR` (default: `sun/runtime/transport-gateway`)
+  - `SOLAR_SYSTEM_PROMPT_FILE` (default skill asset prompt)
+  - `SOLAR_CONTEXT_TURNS` (default: `12`)
 
 ## Notes
 
 - If the first provider fails (auth/model access/error), the bridge retries next providers in
   `SOLAR_AI_PROVIDER_PRIORITY` order.
+- Router keeps local conversation history and injects recent turns into each provider prompt.

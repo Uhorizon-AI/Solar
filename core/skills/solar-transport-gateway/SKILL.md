@@ -69,6 +69,7 @@ bash core/scripts/sync-clients.sh
 - Python dependency managed by Poetry: `websockets`
 - At least one AI client CLI in `PATH`:
   - `codex`, `claude`, or `gemini`
+- Local runtime write access for conversation memory (default: `sun/runtime/transport-gateway/`)
 
 ## Workflow
 
@@ -77,6 +78,19 @@ bash core/scripts/sync-clients.sh
 3. For stable DNS, configure named tunnel with `configure_named_tunnel.sh` and set `SOLAR_TUNNEL_MODE=named`.
 4. Route provider calls via `scripts/run_ai_router.py` (selected by `SOLAR_AI_PROVIDER_PRIORITY`).
 5. Use individual scripts only for troubleshooting or partial reconfiguration.
+
+## Conversation continuity
+
+- `run_ai_router.py` stores conversation turns in local runtime memory (JSONL) by conversation id.
+- Conversation id priority:
+  1. `user_id`
+  2. `session_id`
+- Default system prompt file:
+  - `core/skills/solar-transport-gateway/assets/system_prompt.md`
+- Override keys:
+  - `SOLAR_RUNTIME_DIR`
+  - `SOLAR_SYSTEM_PROMPT_FILE`
+  - `SOLAR_CONTEXT_TURNS`
 
 ## Message contract (v1)
 
