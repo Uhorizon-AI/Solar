@@ -42,6 +42,18 @@ Before creating a new planet, Sun must:
 3. Ask explicit confirmation.
 4. Create folder only after a clear yes.
 
+## Planet Boundary Rule (Required)
+- Treat each `planet` as an autonomous operational context (not as a department/channel).
+- A new `planet` should be created only when context boundaries justify separation:
+  - objective/KPI,
+  - stakeholders,
+  - data/processes,
+  - execution rules.
+- Decision threshold:
+  - 2 criteria -> evaluate split,
+  - 3+ criteria -> create a new `planet`.
+- Do not split planets by channel or isolated task type; keep those concerns inside the existing planet structure.
+
 ## Persistence Rules
 - Write only the minimum durable context.
 - Do not duplicate the same fact in multiple files unless needed for operation.

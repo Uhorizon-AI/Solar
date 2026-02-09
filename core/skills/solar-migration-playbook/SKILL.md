@@ -62,26 +62,45 @@ bash core/scripts/sync-clients.sh
 - Create a concise list of top-level folders/files per source.
 - Tag each item as: reusable framework, personal runtime, or domain-specific.
 
-4. Map to Solar targets
+4. Apply planet boundary gate (required)
+- Treat each `planet` as an autonomous operational context, not a department/channel.
+- Evaluate whether each domain slice belongs to an existing planet or requires a new one.
+- Use context-boundary criteria:
+  - objective/KPI,
+  - stakeholders,
+  - data/processes,
+  - execution rules.
+- Decision threshold:
+  - 2 criteria -> evaluate split before edits,
+  - 3+ criteria -> create/suggest a separate `planet`.
+- Do not split by channel or isolated task type.
+
+5. Map to Solar targets
 - `core/` for reusable contracts/templates/skills/scripts.
 - `sun/` for personal runtime context and memory.
 - `planets/<planet-name>/` for domain-specific assets.
 - Do not store user-specific migration outputs in `core/`.
+- If a source item mixes contexts, mark it as `split-required` and migrate only scoped slices (no 1:1 move of mixed folders).
 
-5. Define migration batches
+6. Define migration batches
 - Batch 1: critical day-to-day paths.
 - Batch 2: automations and integrations.
 - Batch 3: cleanup and standardization.
 
-6. Execute one batch at a time
+7. Execute one batch at a time
 - Apply only scoped changes for the current batch.
 - Report moved/rewritten files and deferred items.
 
-7. Validate and close batch
+8. Validate and close batch
 - Validate expected runtime behavior.
 - Record open risks and next batch entry criteria.
+- Append decision log entries for each batch:
+  - scope decision (`core/sun/planet`),
+  - rationale,
+  - risks,
+  - next checkpoint.
 
-8. Persist migration artifacts in the right scope
+9. Persist migration artifacts in the right scope
 - Store migration map instances in:
   - `sun/migrations/...` for user-personal migrations, or
   - `planets/<planet-name>/migrations/...` for project/workspace migrations.

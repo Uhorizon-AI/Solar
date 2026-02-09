@@ -31,6 +31,21 @@ This applies to any folder (`core/`, `sun/`, `planets/`, or any other child fold
     *   Enforce domain-specific governance (e.g., "Commits in this repo must be signed").
     *   Maintain domain memory.
 
+## Planet Design Principles (Required)
+
+- A `planet` is an autonomous operational context, not a department or channel.
+- A `planet` must be governable with a single local `AGENTS.md`.
+- Create a new `planet` only when separation is justified by context boundaries:
+  - distinct objective/KPI,
+  - distinct stakeholders,
+  - distinct data/processes,
+  - distinct execution rules.
+- Use this threshold:
+  - 2 criteria -> evaluate split,
+  - 3 or more criteria -> create a new `planet`.
+- Do not create planets by channel (`linkedin`, `email`, etc.) or by isolated task type; keep those as internal folders/workflows.
+- Prefer fewer planets with strong ownership and clear governance over many weakly defined planets.
+
 ## Protocol: "Interplanetary Transport"
 
 When the **Sun** delegates to a **Planet**:
