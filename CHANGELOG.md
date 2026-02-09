@@ -9,6 +9,7 @@ The format is based on Keep a Changelog.
 ### Added
 - `CONTRIBUTING.md` with contribution scope, architecture boundaries, and changelog policy.
 - `CHANGELOG.md` to track notable framework changes.
+- `core/skills/solar-migration-playbook` to plan and execute phased migrations from existing folders/repos into Solar (`core/sun/planets`) with a reusable mapping template.
 - `core/checklist-agents-validation.md` with practical tests for routing, hierarchy, first-run UX, onboarding, and ambiguity handling.
 - `core/scripts/sync-clients.sh` to sync Solar core skills/agents/commands to local AI clients (`.codex`, `.claude`, `.cursor`).
 - `core/mcp-catalog.md` as baseline documentation for MCP purpose, usage, and adoption journey.
