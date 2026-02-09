@@ -66,6 +66,7 @@ bash core/scripts/sync-clients.sh
 - `core/` for reusable contracts/templates/skills/scripts.
 - `sun/` for personal runtime context and memory.
 - `planets/<planet-name>/` for domain-specific assets.
+- Do not store user-specific migration outputs in `core/`.
 
 5. Define migration batches
 - Batch 1: critical day-to-day paths.
@@ -79,6 +80,12 @@ bash core/scripts/sync-clients.sh
 7. Validate and close batch
 - Validate expected runtime behavior.
 - Record open risks and next batch entry criteria.
+
+8. Persist migration artifacts in the right scope
+- Store migration map instances in:
+  - `sun/migrations/...` for user-personal migrations, or
+  - `planets/<planet-name>/migrations/...` for project/workspace migrations.
+- Keep only reusable templates and guidance in `core/`.
 
 ## Output format
 

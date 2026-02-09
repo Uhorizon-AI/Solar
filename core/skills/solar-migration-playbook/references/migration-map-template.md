@@ -1,5 +1,9 @@
 # Migration Map Template
 
+Template-only file for `core/`.
+Do not store user-specific migration instances in `core/`.
+Save instances under `sun/migrations/` or `planets/<planet-name>/migrations/`.
+
 ## 1) Objective
 
 - Goal:

@@ -17,10 +17,17 @@ It defines contracts, templates, and operational rules shared by all users.
 - User-specific memory or preferences.
 - Runtime task history.
 - Sensitive business data from a specific planet.
+- User-specific execution artifacts (for example: migration maps, audit snapshots, temporary plans).
 
 ## Local-first policy
 - `sun/` and `planets/` are local runtime workspaces and are gitignored by default.
 - The framework repository must stay clean and reusable for multiple users.
+
+## Scope ownership model (required)
+- `core/` is multi-user and reusable by design.
+- `sun/` is user-specific runtime context and outputs.
+- `planets/<planet-name>/` is project/company/workspace-specific context and outputs.
+- Never store user-specific execution artifacts in `core/`.
 
 ## Change rules
 1. Keep changes backward-compatible when possible.
