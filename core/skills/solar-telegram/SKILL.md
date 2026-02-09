@@ -48,6 +48,13 @@ Optional:
 - `TELEGRAM_PARSE_MODE` (default: `Markdown`)
 - `TELEGRAM_DISABLE_PREVIEW` (default: `true`)
 
+## Laptop runtime note (optional, bridge mode)
+
+- `alerts` mode does not require a long-running local endpoint.
+- `bridge` mode may depend on long-running local runtime services.
+- If bridge runtime is hosted on a laptop, host sleep can interrupt message flow.
+- This is a host operations concern, not a mandatory dependency of this skill.
+
 ## Environment block format (required)
 
 - Write Telegram variables in one compact skill-scoped block in root `.env`.

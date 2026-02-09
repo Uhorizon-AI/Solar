@@ -33,14 +33,18 @@ The format is based on Keep a Changelog.
 - `core/AGENTS.md` now requires running `bash core/scripts/sync-clients.sh` after changes in `core/skills/`, `core/agents/`, or `core/commands/`.
 - `core/AGENTS.md` now defines `core/` self-management: agent executes scripts across `core/**` (including skill scripts) based on `SKILL.md` triggers/workflows, asking users only for inputs/secrets, blocked permissions, or high-risk actions.
 - `core/AGENTS.md` now defines a global `.env` policy for env-aware skills: skill-scoped header comment plus compact contiguous variable blocks without blank lines.
+- `core/AGENTS.md` now defines a host availability note policy for runtime-host dependent skills (webhook/bridge/server/tunnel), requiring a short optional laptop runtime note only where relevant.
 - `core/AGENTS.md` now requires per-skill validation with `package_skill.py` whenever a skill under `core/skills/` is modified.
 - `core/bootstrap.sh` now runs `core/scripts/sync-clients.sh` when available to keep local clients aligned after setup.
 - `core/bootstrap.sh` now writes `sun/.setup-complete` and root `AGENTS.md` uses it as setup fast-path to avoid repeated first-run setup prompts across new conversations.
 - `core/skills/solar-skill-creator` now enforces MCP-oriented skill metadata: `Required MCP` and `Validation commands` always required; `Fallback if MCP missing` required only when MCP is actually required.
 - `core/skills/solar-skill-creator` now enforces `.env` block conventions for any env-aware skill.
 - `core/skills/solar-skill-creator` now enforces per-skill validation with `package_skill.py` in normal edit flow.
+- `core/skills/solar-skill-creator` now includes guidance to add `Laptop runtime note (optional)` only for runtime-host dependent skills.
 - `core/skills/solar-telegram` setup flow now supports `--token` and `--chat-id` flags so the agent can complete setup from chat without requiring terminal prompts.
 - `core/skills/solar-telegram/scripts/onboard_telegram_env.sh` now writes a single compact `.env` block with skill header comment and no blank lines inside the Telegram variable block.
+- `core/skills/solar-telegram` now documents optional laptop runtime considerations for `bridge` mode only.
+- `core/skills/solar-transport-gateway` now documents optional laptop runtime considerations for long-running local endpoints.
 - `core/skills/solar-transport-gateway` scripts now use Poetry (`poetry run`) instead of direct `pip` assumptions.
 - `core/skills/solar-skill-creator/scripts/package_skill.py` now excludes local runtime folders (`.venv`, `.poetry-cache`, `__pycache__`, `.git`) from packaged `.skill` artifacts.
 - `.gitignore` now includes `__pycache__/`.

@@ -74,6 +74,14 @@ It defines contracts, templates, and operational rules shared by all users.
 - Scripts must preserve existing values unless user explicitly requests overwrite.
 - New env-aware skills must follow this format from their first version.
 
+## Host availability note policy (required)
+- Apply this policy only to skills that expose long-running local runtime endpoints (for example: webhook, bridge, local server, tunnel).
+- Those skills must include a short `Laptop runtime note` in their `SKILL.md`:
+  - host sleep can stop the runtime,
+  - this is an operational host concern (not a mandatory skill dependency),
+  - if multiple laptops are used, only the active host should serve the same public route.
+- Do not add this note to skills that are not runtime-host dependent.
+
 ## Client sync rule (required)
 - If files are added or modified in `core/skills/`, `core/agents/`, or `core/commands/`, run:
   - `bash core/scripts/sync-clients.sh`

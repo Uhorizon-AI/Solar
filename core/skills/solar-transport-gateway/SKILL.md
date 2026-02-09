@@ -71,6 +71,13 @@ bash core/scripts/sync-clients.sh
   - `codex`, `claude`, or `gemini`
 - Local runtime write access for conversation memory (default: `sun/runtime/transport-gateway/`)
 
+## Laptop runtime note (optional)
+
+- This skill can expose long-running local runtime endpoints (webhook/bridge/server/tunnel).
+- If the active host is a laptop, host sleep can stop the runtime and break reachability.
+- This is a host operations concern, not a mandatory dependency of the skill.
+- If multiple laptops are used, only one active host should serve the same public webhook route at a time.
+
 ## Workflow
 
 1. Run `setup_transport_gateway.sh` as default end-to-end flow.

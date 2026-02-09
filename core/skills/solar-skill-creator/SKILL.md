@@ -77,6 +77,11 @@ Do not add auxiliary docs like README/INSTALL/CHANGELOG inside skill folders.
   - `Required MCP`
   - `Validation commands`
 - `Fallback if MCP missing` is required only when `Required MCP` is not `None`.
+- If a skill exposes long-running local runtime endpoints (webhook, bridge, local server, tunnel), include `Laptop runtime note (optional)` in that skill `SKILL.md`:
+  - host sleep can stop runtime availability,
+  - this is a host operations concern (not a mandatory skill dependency),
+  - if multiple laptops are used, only one active host should serve the same public route.
+- Do not add `Laptop runtime note` to skills that are not runtime-host dependent.
 - If skill scripts manage `.env`, they must write a skill-scoped compact block:
   - header comment identifying the skill,
   - contiguous variables with no blank lines inside the block,
