@@ -112,3 +112,11 @@ Allowed destination options:
 - `planets/<planet-name>/` for domain-specific artifacts
 
 Do not write to an assumed folder when scope is unclear.
+
+## Version Control Boundaries (Required)
+
+- The `solar.ai` framework repository governs `core/` and shared framework files only.
+- `sun/` and `planets/**` are user-owned runtime workspaces and must be treated as out of framework governance.
+- Never suggest removing ignore rules to include `sun/` or `planets/` in the parent `solar.ai` git repository.
+- Never suggest commands such as `git add sun/` or `git add planets/` from the parent repository.
+- If a user wants version control for `sun/` or any `planets/<name>/`, recommend independent repositories inside those folders.

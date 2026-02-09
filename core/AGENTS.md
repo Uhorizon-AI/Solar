@@ -20,8 +20,9 @@ It defines contracts, templates, and operational rules shared by all users.
 - User-specific execution artifacts (for example: migration maps, audit snapshots, temporary plans).
 
 ## Local-first policy
-- `sun/` and `planets/` are local runtime workspaces and are gitignored by default.
+- `sun/` and `planets/` are local runtime workspaces, must remain outside framework governance, and must stay ignored by the parent framework repo.
 - The framework repository must stay clean and reusable for multiple users.
+- Never propose tracking `sun/` or `planets/` in the parent framework repository.
 
 ## Scope ownership model (required)
 - `core/` is multi-user and reusable by design.
