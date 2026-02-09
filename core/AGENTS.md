@@ -60,7 +60,28 @@ It defines contracts, templates, and operational rules shared by all users.
 - First-run conversational behavior is owned by root `AGENTS.md`.
 - Keep `core/AGENTS.md` focused on framework governance only.
 
+## Core self-management rule (required)
+- `core/` must be operated autonomously by the agent.
+- The agent may execute any repository script under `core/**` when needed by the active workflow, including scripts inside skills (`core/skills/**/scripts/*`) and shared scripts.
+- Script execution should follow skill trigger logic from `SKILL.md` frontmatter (`name` + `description`) and the skill body workflow.
+- Do not ask non-technical users to run `bash ...` manually for normal `core/` operations.
+- Ask users only for required inputs/secrets, blocked permissions, or high-risk actions.
+
+## Environment block policy (required)
+- Any skill in `core/` that reads/writes `.env` must use a compact, skill-scoped block format.
+- Each skill block must start with a header comment identifying the skill (example: `# [solar-telegram] required environment`).
+- Variables for the same skill must be grouped contiguously with no blank lines inside the block.
+- Scripts must preserve existing values unless user explicitly requests overwrite.
+- New env-aware skills must follow this format from their first version.
+
 ## Client sync rule (required)
 - If files are added or modified in `core/skills/`, `core/agents/`, or `core/commands/`, run:
   - `bash core/scripts/sync-clients.sh`
 - This sync must be executed before considering the change operationally complete.
+
+## Skill validation rule (required)
+- If a specific skill under `core/skills/` is modified, validate that skill before considering the change complete.
+- Validation command:
+  - `python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /tmp`
+- Do not use `--no-validate` in normal flow.
+- This rule is per-skill (only the skill being modified), not repository-wide.
