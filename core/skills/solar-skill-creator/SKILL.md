@@ -25,6 +25,20 @@ Define a consistent process to:
 - Keep `core` content in English.
 - Planet skills may use the user preferred language.
 
+## Required MCP
+
+None
+
+## Validation commands
+
+```bash
+# Validate one modified skill (standard per-skill flow)
+python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /tmp
+
+# Sync core skill changes to local clients
+bash core/scripts/sync-clients.sh
+```
+
 ## Skill Structure
 
 ```
@@ -63,6 +77,13 @@ Do not add auxiliary docs like README/INSTALL/CHANGELOG inside skill folders.
   - `Required MCP`
   - `Validation commands`
 - `Fallback if MCP missing` is required only when `Required MCP` is not `None`.
+- If skill scripts manage `.env`, they must write a skill-scoped compact block:
+  - header comment identifying the skill,
+  - contiguous variables with no blank lines inside the block,
+  - preserve existing values unless explicit overwrite is requested.
+- If a skill is modified, validate that specific skill with:
+  - `python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /tmp`
+  - do not use `--no-validate` in normal flow.
 
 ## Migration Rule
 

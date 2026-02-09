@@ -111,11 +111,16 @@ def package_skill(skill_path: Path, output_dir: Path) -> Path:
 
     skill_name = skill_path.name
     output_file = output_dir / f"{skill_name}.skill"
+    excluded_dirs = {".venv", ".poetry-cache", "__pycache__", ".git"}
+    excluded_files = {".DS_Store"}
 
     # Create zip file with .skill extension
     with zipfile.ZipFile(output_file, 'w', zipfile.ZIP_DEFLATED) as zf:
         for root, dirs, files in os.walk(skill_path):
+            dirs[:] = [d for d in dirs if d not in excluded_dirs]
             for file in files:
+                if file in excluded_files:
+                    continue
                 file_path = Path(root) / file
                 arcname = file_path.relative_to(skill_path.parent)
                 zf.write(file_path, arcname)
