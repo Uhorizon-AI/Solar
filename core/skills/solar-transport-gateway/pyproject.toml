@@ -1,0 +1,15 @@
+[project]
+name = "solar-transport-gateway"
+version = "0.1.0"
+description = "Local bidirectional websocket transport for Solar runtime"
+requires-python = ">=3.10,<4.0"
+dependencies = [
+  "websockets>=12.0,<13.0",
+]
+
+[tool.poetry]
+package-mode = false
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
