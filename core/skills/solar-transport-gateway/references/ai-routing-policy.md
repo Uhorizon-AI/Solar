@@ -19,8 +19,16 @@ SOLAR_AI_PROVIDER_PRIORITY=codex,claude,gemini
 - The first provider is the primary one.
 - Remaining providers are fallback order if the previous provider fails.
 - Supported providers are enforced by the skill implementation, not by `.env`.
+- Provider execution is handled by `scripts/run_ai_router.py`.
+- You can override provider command templates with:
+  - `SOLAR_AI_CODEX_CMD`
+  - `SOLAR_AI_CLAUDE_CMD`
+  - `SOLAR_AI_GEMINI_CMD`
+- Router timeout keys:
+  - `SOLAR_AI_PROVIDER_TIMEOUT_SEC` (per provider call)
+  - `SOLAR_AI_ROUTER_TIMEOUT_SEC` (bridge-level timeout)
 
 ## Notes
 
-- Current implementation includes provider stubs (`codex`, `claude`, `gemini`) behind one interface.
-- Replace stubs with real provider calls while keeping response contract unchanged.
+- If the first provider fails (auth/model access/error), the bridge retries next providers in
+  `SOLAR_AI_PROVIDER_PRIORITY` order.

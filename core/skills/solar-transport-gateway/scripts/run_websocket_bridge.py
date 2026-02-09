@@ -2,6 +2,8 @@
 import asyncio
 import json
 import os
+import pathlib
+import subprocess
 from typing import Any, Dict, List, Tuple
 
 try:
@@ -19,6 +21,8 @@ SUPPORTED_PROVIDERS = ("codex", "claude", "gemini")
 AI_PROVIDER_PRIORITY = os.getenv(
     "SOLAR_AI_PROVIDER_PRIORITY", "codex,claude,gemini"
 )
+AI_ROUTER_PYTHON = os.getenv("SOLAR_AI_ROUTER_PYTHON", "python3")
+AI_ROUTER_TIMEOUT_SEC = int(os.getenv("SOLAR_AI_ROUTER_TIMEOUT_SEC", "120"))
 
 
 def validate_request(payload: Dict[str, Any]) -> bool:
@@ -54,10 +58,31 @@ def select_provider() -> Tuple[str, List[str]]:
 
 
 def call_provider(provider: str, text: str, payload: Dict[str, Any]) -> str:
-    # Provider stubs. Replace with real API calls while keeping same interface.
-    if provider in SUPPORTED_PROVIDERS:
-        return f"[{provider}] {text}"
-    return text
+    if provider not in SUPPORTED_PROVIDERS:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+    router_script = pathlib.Path(__file__).with_name("run_ai_router.py")
+    router_payload = {
+        "provider": provider,
+        "text": text,
+        "request_id": payload.get("request_id", "n/a"),
+        "session_id": payload.get("session_id", "n/a"),
+        "user_id": payload.get("user_id", "n/a"),
+    }
+    proc = subprocess.run(
+        [AI_ROUTER_PYTHON, str(router_script)],
+        input=json.dumps(router_payload),
+        text=True,
+        capture_output=True,
+        timeout=AI_ROUTER_TIMEOUT_SEC,
+    )
+    if proc.returncode != 0:
+        msg = proc.stderr.strip() or proc.stdout.strip() or "router failed"
+        raise RuntimeError(msg)
+    reply = proc.stdout.strip()
+    if not reply:
+        raise RuntimeError("router returned empty reply")
+    return reply
 
 
 async def handle_connection(websocket) -> None:

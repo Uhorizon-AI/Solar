@@ -45,6 +45,10 @@ bash core/skills/solar-transport-gateway/scripts/onboard_websocket_env.sh
 # Validate runtime prerequisites
 bash core/skills/solar-transport-gateway/scripts/validate_websocket_bridge.sh
 
+# Preflight AI clients in SOLAR_AI_PROVIDER_PRIORITY
+bash core/skills/solar-transport-gateway/scripts/check_ai_providers.sh --dry-run
+bash core/skills/solar-transport-gateway/scripts/check_ai_providers.sh
+
 # Check runtime health (local + public)
 bash core/skills/solar-transport-gateway/scripts/check_transport_gateway.sh
 
@@ -63,13 +67,16 @@ bash core/scripts/sync-clients.sh
 
 - `poetry`
 - Python dependency managed by Poetry: `websockets`
+- At least one AI client CLI in `PATH`:
+  - `codex`, `claude`, or `gemini`
 
 ## Workflow
 
 1. Run `setup_transport_gateway.sh` as default end-to-end flow.
 2. If needed, run `setup_transport_gateway.sh --prepare-only` to stop before long-running services.
 3. For stable DNS, configure named tunnel with `configure_named_tunnel.sh` and set `SOLAR_TUNNEL_MODE=named`.
-4. Use individual scripts only for troubleshooting or partial reconfiguration.
+4. Route provider calls via `scripts/run_ai_router.py` (selected by `SOLAR_AI_PROVIDER_PRIORITY`).
+5. Use individual scripts only for troubleshooting or partial reconfiguration.
 
 ## Message contract (v1)
 
