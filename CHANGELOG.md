@@ -7,6 +7,13 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- `.github/FUNDING.yml` with optional donation links for project sustainability.
+- `.github/ISSUE_TEMPLATE/bug_report.md` and `.github/ISSUE_TEMPLATE/feature_request.md` to standardize incoming reports and proposals.
+- `.github/ISSUE_TEMPLATE/config.yml` with direct commercial support contact routing.
+- `.github/pull_request_template.md` to enforce structured PR context and validation details.
+- `CODE_OF_CONDUCT.md` with expected behavior, unacceptable behavior, and enforcement/reporting notes.
+- `SECURITY.md` with private vulnerability reporting channel and response expectations.
+- `SUPPORT.md` with community support, commercial support, and optional donation guidance.
 - `CONTRIBUTING.md` with contribution scope, architecture boundaries, and changelog policy.
 - `CHANGELOG.md` to track notable framework changes.
 - `core/skills/solar-migration-playbook` to plan and execute phased migrations from existing folders/repos into Solar (`core/sun/planets`) with a reusable mapping template.
@@ -28,6 +35,9 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-transport-gateway` now includes AI provider routing policy via `.env` (`default`, `fallback`, `allowed`, `mode`) and returns `provider_used` in gateway responses.
 
 ### Changed
+- `README.md` restructured for open-source positioning of `Solar`, clearer contribution path, and commercial CTA for Uhorizon AI.
+- `README.md` now includes creator attribution to Louis Jimenez and maintainer/contact links for Uhorizon AI.
+- `CONTRIBUTING.md` rewritten to clarify contribution goals, architecture boundaries, PR requirements, and review expectations.
 - Root `AGENTS.md` now defines instruction-resolution priority (`nearest child AGENTS.md` wins by path scope).
 - Root `AGENTS.md` first-run protocol now uses non-technical UX with simple menu options (`configure now`, `already configured`, `help`).
 - Root `AGENTS.md` now requires explicit scope clarification before writing when user requests are ambiguous.

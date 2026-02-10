@@ -1,56 +1,80 @@
-# Contributing to solar.ai
+# Contributing to Solar
 
-Thanks for contributing.
+Thanks for helping improve Solar.
 
-## Scope and Architecture
+## Contribution Goals
 
-Before opening a change, align with the Solar architecture:
+Solar is an open-source project maintained by Uhorizon AI. We welcome:
 
-- `core/` is the versioned framework (contracts, templates, governance, reusable skills).
-- `sun/` and `planets/` are local runtime workspaces and are gitignored by default.
-- Keep `core/` reusable across users and domains.
+- Bug fixes.
+- Documentation improvements.
+- Reusable framework improvements.
+- New ideas discussed through issues before implementation.
+
+## Scope Boundaries
+
+Solar follows strict architecture boundaries:
+
+- `core/` is versioned framework code and documentation.
+- `sun/` and `planets/` are user runtime workspaces and are gitignored.
+- Contributions in this repository should focus on `core/` and shared files.
 
 Primary references:
+- `AGENTS.md`
 - `core/AGENTS.md`
 - `core/orchestration-blueprint.md`
-- `core/onboarding-conversation-contract.md`
 
-## Language Rules
+## Language Policy
 
-- All content in `core/` must be in English.
-- Planet-specific files may use the user's preferred language.
+- `core/` content must be in English.
+- Runtime/planet-specific content can follow user language preferences outside framework scope.
 
-## Skills Contribution Rules
+## Before You Start
 
-- Put a skill in `core/skills/` only when it is reusable (2+ planets or 3+ repeated uses).
-- Keep planet-specific skills inside `planets/<planet-name>/`.
-- Avoid external dependencies when a Solar-owned implementation is possible.
+1. Check if an issue already exists.
+2. Open an issue for non-trivial changes.
+3. Confirm design alignment before large PRs.
 
-## Templates Contribution Rules
+## Branch and Commit Workflow
 
-- Do not add templates by default.
-- Add to `core/templates/` only when the artifact is truly cross-planet reusable.
+1. Create a focused branch from `main`.
+2. Keep changes small and reviewable.
+3. Use clear commit messages describing intent and impact.
+4. Update docs/contracts when behavior changes.
+5. Update `CHANGELOG.md` for notable framework changes.
 
-## Workflow
+## Pull Request Requirements
 
-1. Create a focused branch.
-2. Make small, reviewable changes.
-3. Update related docs/contracts when behavior changes.
-4. Validate local changes.
-5. Update `CHANGELOG.md` for notable changes.
-6. Open a PR with clear intent, files changed, and impact.
+Each PR should include:
 
-## Pull Request Checklist
+- Problem statement.
+- Scope and files changed.
+- Behavior impact.
+- Validation steps performed.
 
-- [ ] Change matches Solar architecture boundaries (`core` vs runtime).
-- [ ] `core/` changes are in English.
-- [ ] No secrets or sensitive customer data are committed.
-- [ ] Docs/contracts updated if behavior changed.
+Checklist:
+- [ ] Scope matches Solar boundaries.
+- [ ] `core/` updates are in English.
+- [ ] No secrets or private user data.
+- [ ] Documentation updated when needed.
 - [ ] `CHANGELOG.md` updated when relevant.
 
-## Changelog Policy
+## Skill and Template Rules
 
-This repository follows Keep a Changelog style:
-- Add entries under `Unreleased` while work is in progress.
-- Move entries to a versioned section at release time.
-- Include only notable framework-level changes.
+- Add a skill to `core/skills/` only if reusable across domains.
+- Keep domain-specific logic out of framework scope.
+- Add templates only when they are clearly cross-domain reusable.
+
+## Review Expectations
+
+Maintainers prioritize:
+
+- Correctness and architecture alignment.
+- Backward compatibility of contracts.
+- Security and privacy safety.
+- Clarity of documentation.
+
+## Code of Conduct and Security
+
+- Community behavior rules: `CODE_OF_CONDUCT.md`
+- Security reporting process: `SECURITY.md`
