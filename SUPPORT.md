@@ -12,10 +12,12 @@ Use the following channels:
 
 If you want implementation, migration, or managed support for Solar in your company, contact Uhorizon AI.
 
-- Contact: sales@uhorizon.ai
+- Contact page: https://uhorizon.ai/contact
 
 ## Optional Donations
 
 Solar is free and open source. Donations are optional and help sustain maintenance by the main maintainer.
 
-Donation links are listed in `.github/FUNDING.yml`.
+- PayPal: https://www.paypal.com/paypalme/louisjimenezp
+- Buy Me a Coffee: https://buymeacoffee.com/louisjimenezp
+- GitHub Sponsor button is configured via `.github/FUNDING.yml`.
