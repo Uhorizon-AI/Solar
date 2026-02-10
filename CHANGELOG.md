@@ -39,15 +39,18 @@ The format is based on Keep a Changelog.
 - `README.md` now includes creator attribution to Louis Jimenez and maintainer/contact links for Uhorizon AI.
 - `CONTRIBUTING.md` rewritten to clarify contribution goals, architecture boundaries, PR requirements, and review expectations.
 - Root `AGENTS.md` now defines instruction-resolution priority (`nearest child AGENTS.md` wins by path scope).
-- Root `AGENTS.md` first-run protocol now uses non-technical UX with simple menu options (`configure now`, `already configured`, `help`).
+- First-run setup UX now uses a non-technical menu (`configure now`, `already configured`, `help`) through delegated setup protocol in `core/AGENTS.md`.
+- Root `AGENTS.md` first-run protocol now attempts to read `sun/preferences/profile.md` on first interaction, using profile name/language when readable and delegating setup to `core/AGENTS.md` when missing.
 - Root `AGENTS.md` now requires explicit scope clarification before writing when user requests are ambiguous.
+- Root `AGENTS.md` now enforces silent profile verification language and explicitly prohibits exposing verification steps in user-facing replies.
 - `core/AGENTS.md` now requires running `bash core/scripts/sync-clients.sh` after changes in `core/skills/`, `core/agents/`, or `core/commands/`.
+- `core/AGENTS.md` now defines delegated setup protocol details (setup menu, execution options, and onboarding handoff) when root first-run detects missing profile.
 - `core/AGENTS.md` now defines `core/` self-management: agent executes scripts across `core/**` (including skill scripts) based on `SKILL.md` triggers/workflows, asking users only for inputs/secrets, blocked permissions, or high-risk actions.
 - `core/AGENTS.md` now defines a global `.env` policy for env-aware skills: skill-scoped header comment plus compact contiguous variable blocks without blank lines.
 - `core/AGENTS.md` now defines a host availability note policy for runtime-host dependent skills (webhook/bridge/server/tunnel), requiring a short optional laptop runtime note only where relevant.
 - `core/AGENTS.md` now requires per-skill validation with `package_skill.py` whenever a skill under `core/skills/` is modified.
 - `core/bootstrap.sh` now runs `core/scripts/sync-clients.sh` when available to keep local clients aligned after setup.
-- `core/bootstrap.sh` now writes `sun/.setup-complete` and root `AGENTS.md` uses it as setup fast-path to avoid repeated first-run setup prompts across new conversations.
+- `core/bootstrap.sh` no longer writes `sun/.setup-complete`; setup readiness is now driven by profile read behavior in root first-run rules.
 - `core/skills/solar-skill-creator` now enforces MCP-oriented skill metadata: `Required MCP` and `Validation commands` always required; `Fallback if MCP missing` required only when MCP is actually required.
 - `core/skills/solar-skill-creator` now enforces `.env` block conventions for any env-aware skill.
 - `core/skills/solar-skill-creator` now enforces per-skill validation with `package_skill.py` in normal edit flow.

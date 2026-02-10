@@ -65,8 +65,26 @@ It defines contracts, templates, and operational rules shared by all users.
 - Planet skills may use the user's preferred language.
 
 ## Runtime interaction ownership
-- First-run conversational behavior is owned by root `AGENTS.md`.
-- Keep `core/AGENTS.md` focused on framework governance only.
+- First-run trigger and user-facing conversation are owned by root `AGENTS.md`.
+- `core/AGENTS.md` defines setup execution rules only when root delegates.
+
+## Setup Protocol
+
+This protocol is invoked by root `AGENTS.md` when `sun/preferences/profile.md` is missing.
+
+**Setup menu:**
+1. `Configure now (Recommended)`
+2. `I already configured it`
+3. `Show help`
+
+**Execution:**
+- **Option 1:** Run `bash core/bootstrap.sh`, confirm completion, then start onboarding
+- **Option 2:** Re-attempt to read `sun/preferences/profile.md`; if still missing, offer option 1 again
+- **Option 3:** Explain what setup does and why it is needed
+
+**Post-setup handoff:**
+- Onboarding conversation remains governed by root `AGENTS.md`
+- Apply `core/onboarding-conversation-contract.md` as the detailed conversation contract
 
 ## Core self-management rule (required)
 - `core/` must be operated autonomously by the agent.

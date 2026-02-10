@@ -66,9 +66,6 @@ if [ ! -f "$TODAY_FILE" ]; then
 EOF
 fi
 
-SETUP_MARKER="$ROOT_DIR/sun/.setup-complete"
-date -u +"%Y-%m-%dT%H:%M:%SZ" > "$SETUP_MARKER"
-
 SYNC_SCRIPT="$ROOT_DIR/core/scripts/sync-clients.sh"
 if [ -x "$SYNC_SCRIPT" ]; then
   echo "Running client sync..."

@@ -66,41 +66,20 @@ To add a new company/project:
 
 ## First-Run Protocol (Required)
 
-On the first user interaction (including "hello"), the Sun must check setup status before normal execution.
+On **first user interaction** (greeting, question, or any initial message):
 
-Primary setup marker:
-- `sun/.setup-complete`
+1. **Attempt to read `sun/preferences/profile.md`**
+   - **Readable** → Continue normally using that profile (do not read any other files for verification)
+   - **Missing** → Follow setup protocol defined in `core/AGENTS.md`
 
-Fallback setup check files (for backward compatibility if marker is missing):
-- `sun/preferences/profile.md`
-- `sun/memories/baseline.md`
-
-User-facing behavior must be simple and non-technical:
-1. If setup is missing or partial:
-   - Do not start with file paths or debugging details.
-   - Offer clear options:
-     - `1) Configure now (Recommended)`
-     - `2) I already configured it`
-     - `3) Show help`
-2. If user selects `1`:
-   - Run bootstrap flow and confirm completion in plain language.
-   - Immediately start onboarding.
-3. If user selects `2`:
-   - Re-check setup once.
-   - If still incomplete, explain briefly and offer option `1` again.
-4. If user selects `3`:
-   - Show a short explanation of what setup does and why it is needed.
-5. If setup exists:
-   - Start onboarding immediately if identity handshake is incomplete.
-   - Otherwise continue with normal routing.
-
-Important:
-- If `sun/.setup-complete` exists, treat setup as completed and do not re-run first-run setup prompts.
-- If marker is missing but fallback files exist, treat setup as completed.
-- `sun/daily-log/YYYY-MM-DD.md` is operational and created on demand, not required for setup completion.
-
-Only provide technical diagnostics (missing files, shell output) if the user explicitly asks.
-Onboarding must begin with identity handshake and one question per turn.
+**Silent verification rules (CRITICAL):**
+- Read `sun/preferences/profile.md` silently in background
+- **NEVER mention in your text response:** "checking", "verifying", "reading profile", "let me check", "I will review", "first I'll read", or ANY reference to the verification process
+- **NEVER describe what you are reading** as part of your answer to the user
+- If profile is readable: use the user's preferred name and respond in the user's preferred language from profile (including first reply)
+- If profile missing: delegate to `core/AGENTS.md` setup protocol
+- Tool calls may be visible (technical limitation), but NEVER acknowledge them in text
+- Never show technical details unless user explicitly asks
 
 ## Ambiguity Handling (Required)
 
