@@ -20,7 +20,7 @@ Primary commercial CTA:
 
 Optional support:
 - Donations are optional and help sustain maintenance.
-- See `SUPPORT.md` and `.github/FUNDING.yml`.
+- See [`./SUPPORT.md`](./SUPPORT.md) and [`./.github/FUNDING.yml`](./.github/FUNDING.yml).
 
 ## Why Solar
 
@@ -49,8 +49,8 @@ cd Solar
 bash core/bootstrap.sh
 ```
 3. Complete onboarding:
-- `core/checklist-onboarding.md`
-- `core/templates/onboarding-profile.md`
+- [`./core/checklist-onboarding.md`](./core/checklist-onboarding.md)
+- [`./core/templates/onboarding-profile.md`](./core/templates/onboarding-profile.md)
 
 Note:
 - `sun/` and `planets/` are intentionally gitignored in the framework repository.
@@ -65,11 +65,11 @@ Note:
 
 ## Operating Contracts
 
-- Request contract: `core/transport-contract.md`
-- Report template: `core/report-template.md`
-- Onboarding contract: `core/onboarding-conversation-contract.md`
-- Orchestration blueprint: `core/orchestration-blueprint.md`
-- Core governance: `core/AGENTS.md`
+- Request contract: [`./core/transport-contract.md`](./core/transport-contract.md)
+- Report template: [`./core/report-template.md`](./core/report-template.md)
+- Onboarding contract: [`./core/onboarding-conversation-contract.md`](./core/onboarding-conversation-contract.md)
+- Orchestration blueprint: [`./core/orchestration-blueprint.md`](./core/orchestration-blueprint.md)
+- Core governance: [`./core/AGENTS.md`](./core/AGENTS.md)
 
 Minimum request fields:
 - `objective`
@@ -86,7 +86,7 @@ Minimum response fields:
 
 Contributions are welcome.
 
-1. Read `CONTRIBUTING.md`.
+1. Read [`./CONTRIBUTING.md`](./CONTRIBUTING.md).
 2. Open an issue for bugs or feature proposals.
 3. Submit focused pull requests.
 
@@ -96,9 +96,9 @@ Starter labels for first contributions:
 
 ## Security and Community
 
-- Security reports: `SECURITY.md`
-- Code of conduct: `CODE_OF_CONDUCT.md`
-- Support channels and response model: `SUPPORT.md`
+- Security reports: [`./SECURITY.md`](./SECURITY.md)
+- Code of conduct: [`./CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md)
+- Support channels and response model: [`./SUPPORT.md`](./SUPPORT.md)
 
 ## Brand Usage
 
