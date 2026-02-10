@@ -25,8 +25,8 @@ Primary commercial CTA:
 Optional support:
 - Donations are optional and help sustain maintenance.
 - Support Solar directly:
-  - 💸 PayPal: https://www.paypal.com/paypalme/louisjimenezp
-  - ☕ Buy Me a Coffee: https://buymeacoffee.com/louisjimenezp
+  - 💸 PayPal: [@louisjimenezp](https://www.paypal.com/paypalme/louisjimenezp)
+  - ☕ Buy Me a Coffee: [@louisjimenezp](https://buymeacoffee.com/louisjimenezp)
 - See [`./SUPPORT.md`](./SUPPORT.md) for details.
 
 ## 🌞 Why Solar
