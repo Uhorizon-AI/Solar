@@ -1,4 +1,4 @@
-# Solar.ai - Global Agent Guidelines
+# Solar - Global Agent Guidelines
 
 ## Core Directive: Solar Architecture
 
@@ -94,7 +94,7 @@ Do not write to an assumed folder when scope is unclear.
 
 ## Version Control Boundaries (Required)
 
-- The `solar.ai` framework repository governs `core/` and shared framework files only.
+- The `Solar` framework repository governs `core/` and shared framework files only.
 - `sun/` and `planets/**` are user-owned runtime workspaces and must be treated as out of framework governance.
 - Never stage runtime workspace content from the parent framework repository (for example: `git add sun/` or `git add planets/`).
 - If a user wants version control for `sun/` or any `planets/<planet-name>/`, recommend and use an independent repository inside that workspace.

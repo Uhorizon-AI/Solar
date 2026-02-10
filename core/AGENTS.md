@@ -1,7 +1,7 @@
 # Core Governance
 
 ## Purpose
-`core/` is the versioned framework layer of Solar.ai.
+`core/` is the versioned framework layer of Solar.
 It defines contracts, templates, and operational rules shared by all users.
 
 ## What belongs in core
