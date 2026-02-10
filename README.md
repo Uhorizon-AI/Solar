@@ -57,62 +57,20 @@ To get the best experience with Solar, use:
 - Agency model: one planet per client with independent memory, governance, and execution boundaries.
 - Product + business split: keep engineering, go-to-market, and internal operations in distinct contexts.
 
-## Architecture
-
-```text
-/Solar/
-├── core/                # Versioned framework source of truth
-│   ├── templates/       # Reusable templates
-│   └── skills/          # Reusable skills
-├── sun/                 # Local runtime workspace (gitignored)
-└── planets/             # Local runtime workspace (gitignored)
-```
-
 ## Quickstart
 
-1. Clone and enter repository:
+1. Clone the repository:
 ```bash
 git clone git@github.com:Uhorizon-AI/Solar.git
-cd Solar
 ```
-2. Run bootstrap:
-```bash
-bash core/bootstrap.sh
-```
-3. Complete onboarding:
-- [`./core/checklist-onboarding.md`](./core/checklist-onboarding.md)
-- [`./core/templates/onboarding-profile.md`](./core/templates/onboarding-profile.md)
-4. Start your first interaction by saying `hello` to the Sun agent in your AI client.
-
-Note:
-- `sun/` and `planets/` are intentionally gitignored in the framework repository.
-- User runtime data should remain outside framework governance.
+2. Open Visual Studio Code, open this repository, and say `hello`.
 
 ## How It Works
 
 1. You request a task to the Sun.
 2. The Sun routes it to the right Planet.
 3. The Planet executes with domain-specific governance.
-4. The Planet returns status, deliverables, and risks.
-
-## Operating Contracts
-
-- Request contract: [`./core/transport-contract.md`](./core/transport-contract.md)
-- Report template: [`./core/report-template.md`](./core/report-template.md)
-- Onboarding contract: [`./core/onboarding-conversation-contract.md`](./core/onboarding-conversation-contract.md)
-- Orchestration blueprint: [`./core/orchestration-blueprint.md`](./core/orchestration-blueprint.md)
-- Core governance: [`./core/AGENTS.md`](./core/AGENTS.md)
-
-Minimum request fields:
-- `objective`
-- `constraints`
-- `context`
-
-Minimum response fields:
-- `status`
-- `deliverables`
-- `risks`
-- `next_steps`
+4. The Planet returns status and next steps.
 
 ## Contributing
 
