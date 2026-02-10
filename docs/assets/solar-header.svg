@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+
+  <!-- Background -->
+
+  <defs>
+    <radialGradient id="bgGrad" cx="50%" cy="50%" r="80%">
+      <stop offset="0%" stop-color="#12368F"/>
+      <stop offset="40%" stop-color="#0B1E6B"/>
+      <stop offset="70%" stop-color="#070C2B"/>
+      <stop offset="100%" stop-color="#02030B"/>
+    </radialGradient>
+
+    <!-- Nebula Gradients -->
+    <radialGradient id="nebulaCyan" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22D3EE" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="nebulaViolet" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#A78BFA" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#A78BFA" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Sun Gradient -->
+    <radialGradient id="sunGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFF7CC"/>
+      <stop offset="40%" stop-color="#FDE047"/>
+      <stop offset="70%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#EA580C"/>
+    </radialGradient>
+
+  </defs>
+
+  <!-- Background -->
+
+  <rect width="1280" height="640" fill="url(#bgGrad)"/>
+
+  <!-- Nebulas -->
+
+  <ellipse cx="260" cy="200" rx="240" ry="160" fill="url(#nebulaCyan)"/>
+  <ellipse cx="420" cy="420" rx="300" ry="200" fill="url(#nebulaViolet)"/>
+  <ellipse cx="780" cy="260" rx="220" ry="150" fill="url(#nebulaCyan)" opacity="0.4"/>
+  <ellipse cx="980" cy="460" rx="260" ry="180" fill="url(#nebulaViolet)" opacity="0.4"/>
+
+  <!-- Stars -->
+
+  <g fill="#F8FAFC" opacity="0.9">
+    <circle cx="80" cy="90" r="1.5"/>
+    <circle cx="140" cy="220" r="1"/>
+    <circle cx="200" cy="60" r="1.2"/>
+    <circle cx="260" cy="140" r="1"/>
+    <circle cx="320" cy="40" r="1.4"/>
+    <circle cx="380" cy="100" r="1"/>
+    <circle cx="460" cy="180" r="1.6"/>
+    <circle cx="520" cy="70" r="1.1"/>
+    <circle cx="600" cy="130" r="1.3"/>
+    <circle cx="680" cy="90" r="1"/>
+    <circle cx="760" cy="50" r="1.4"/>
+    <circle cx="820" cy="140" r="1"/>
+    <circle cx="900" cy="80" r="1.2"/>
+    <circle cx="980" cy="160" r="1.5"/>
+    <circle cx="1080" cy="60" r="1.3"/>
+    <circle cx="1180" cy="120" r="1"/>
+    <circle cx="100" cy="420" r="1.2"/>
+    <circle cx="180" cy="520" r="1"/>
+    <circle cx="260" cy="460" r="1.4"/>
+    <circle cx="340" cy="560" r="1"/>
+    <circle cx="420" cy="500" r="1.6"/>
+    <circle cx="520" cy="580" r="1.1"/>
+    <circle cx="620" cy="520" r="1.3"/>
+    <circle cx="700" cy="580" r="1"/>
+    <circle cx="780" cy="480" r="1.4"/>
+    <circle cx="860" cy="540" r="1"/>
+    <circle cx="940" cy="500" r="1.2"/>
+    <circle cx="1040" cy="560" r="1.5"/>
+    <circle cx="1140" cy="520" r="1.3"/>
+  </g>
+
+  <!-- Orbits -->
+
+  <g stroke="#E0F2FE" stroke-opacity="0.65" fill="none">
+    <ellipse cx="320" cy="320" rx="160" ry="100" stroke-width="1.6"/>
+    <ellipse cx="320" cy="320" rx="220" ry="150" stroke-width="1.3"/>
+    <ellipse cx="320" cy="320" rx="290" ry="195" stroke-width="1.1"/>
+  </g>
+
+  <!-- Sun -->
+
+  <circle cx="320" cy="320" r="105" fill="url(#sunGrad)"/>
+
+  <!-- Sun Glow -->
+
+  <circle cx="320" cy="320" r="135" fill="#FDE047" opacity="0.18"/>
+  <circle cx="320" cy="320" r="170" fill="#F97316" opacity="0.1"/>
+
+  <!-- Planets (Bigger) -->
+
+  <circle cx="490" cy="320" r="14" fill="#22D3EE"/>
+  <circle cx="220" cy="235" r="12" fill="#34D399"/>
+  <circle cx="430" cy="190" r="13" fill="#F472B6"/>
+  <circle cx="155" cy="390" r="12" fill="#A78BFA"/>
+  <circle cx="540" cy="435" r="13" fill="#38BDF8"/>
+
+  <!-- Right Text Block -->
+
+  <g font-family="Arial, Helvetica, sans-serif">
+    <!-- Title -->
+    <text
+      x="720"
+      y="240"
+      font-size="88"
+      font-weight="700"
+      fill="#F8FAFC"
+    >
+      Solar
+    </text>
+
+    <!-- Subtitle -->
+    <text
+      x="720"
+      y="290"
+      font-size="28"
+      fill="#E0F2FE"
+    >
+      Open-source framework for
+    </text>
+
+    <text
+      x="720"
+      y="325"
+      font-size="28"
+      fill="#E0F2FE"
+    >
+      multi-agent operations
+    </text>
+
+    <!-- Credits -->
+    <text
+      x="720"
+      y="380"
+      font-size="22"
+      fill="#FDE68A"
+    >
+      Created by @louisjimenezp
+    </text>
+
+    <text
+      x="720"
+      y="415"
+      font-size="22"
+      fill="#FDE68A"
+    >
+      Maintained by Uhorizon AI
+    </text>
+  </g>
+
+</svg>

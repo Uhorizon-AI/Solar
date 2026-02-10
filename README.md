@@ -1,11 +1,15 @@
 # Solar
 
+![Solar Header](./docs/assets/solar-header.svg)
+
+> Beta: Solar is under active development. Expect fast iteration and frequent improvements.
+
 Solar is an open-source operating framework for multi-domain AI agents, built with a Hub-and-Spoke model:
 
 - `Sun`: your personal router and context holder.
 - `Planets`: autonomous domain workspaces with their own rules.
 
-Solar was created by [Louis Jimenez](https://github.com/louisjimenezp) and is maintained by [Uhorizon AI](https://uhorizon.ai).
+Solar is created by [@louisjimenezp](https://github.com/louisjimenezp) and maintained by [Uhorizon AI](https://uhorizon.ai).
 
 ## Open Source and Commercial Model
 
@@ -28,6 +32,30 @@ Optional support:
 ## Why Solar
 
 A single assistant does not handle real context boundaries well. Solar separates domains by design so each domain can evolve with clear governance, memory, and execution rules.
+
+## Recommended Setup (Best Experience)
+
+To get the best experience with Solar, use:
+
+- One AI coding client:
+  - Claude Code
+  - Codex
+  - Gemini
+- VS Code as your main interface.
+- Relevant VS Code extensions for your selected client (Claude Code, Codex, or Gemini Code) so you can interact with multiple AI workflows directly against this repository.
+
+## What You Can Do with Solar
+
+- Keep one personal command center (`Sun`) and route tasks to specialized domain workspaces (`Planets`).
+- Enforce different governance rules per domain without mixing context.
+- Reuse common templates, contracts, and skills across projects.
+- Scale from solo workflows to multi-project operations.
+
+## Example Use Cases
+
+- Founder operations: sales outreach, content planning, and delivery coordination in separate planets.
+- Agency model: one planet per client with independent memory, governance, and execution boundaries.
+- Product + business split: keep engineering, go-to-market, and internal operations in distinct contexts.
 
 ## Architecture
 
@@ -54,6 +82,7 @@ bash core/bootstrap.sh
 3. Complete onboarding:
 - [`./core/checklist-onboarding.md`](./core/checklist-onboarding.md)
 - [`./core/templates/onboarding-profile.md`](./core/templates/onboarding-profile.md)
+4. Start your first interaction by saying `hello` to the Sun agent in your AI client.
 
 Note:
 - `sun/` and `planets/` are intentionally gitignored in the framework repository.
@@ -110,8 +139,8 @@ Use the project name as:
 - Attribution: `Solar by Uhorizon AI`
 - Optional creator attribution: `Created by @louisjimenezp` (https://github.com/louisjimenezp)
 
-## Maintainers and Contact
+## Team and Contact
 
-- Creator: [Louis Jiménez P.](https://github.com/louisjimenezp)
-- Maintainer: [Uhorizon AI](https://uhorizon.ai)
+- Created by [@louisjimenezp](https://github.com/louisjimenezp)
+- Maintained by [Uhorizon AI](https://uhorizon.ai)
 - Commercial and general inquiries: https://uhorizon.ai/contact

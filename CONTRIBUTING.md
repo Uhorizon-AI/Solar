@@ -76,5 +76,5 @@ Maintainers prioritize:
 
 ## Code of Conduct and Security
 
-- Community behavior rules: `CODE_OF_CONDUCT.md`
-- Security reporting process: `SECURITY.md`
+- Community behavior rules: [`./CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md)
+- Security reporting process: [`./SECURITY.md`](./SECURITY.md)
