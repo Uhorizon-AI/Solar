@@ -16,6 +16,7 @@ Solar is created by [@louisjimenezp](https://github.com/louisjimenezp) and maint
 ## 🌍 Open Source and Commercial Model
 
 Solar is free and open source.
+Licensed under Apache License 2.0. See [`./LICENSE`](./LICENSE).
 
 - Use it for personal and professional workflows.
 - Contribute improvements through issues and pull requests.
