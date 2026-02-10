@@ -131,26 +131,26 @@
       font-size="28"
       fill="#E0F2FE"
     >
-      multi-agent operations
+      multi-AI operations by context
     </text>
 
     <!-- Credits -->
     <text
       x="720"
       y="380"
-      font-size="22"
+      font-size="21"
       fill="#FDE68A"
     >
-      Created by @louisjimenezp
+      For founders, operators, and non-technical teams
     </text>
 
     <text
       x="720"
       y="415"
-      font-size="22"
+      font-size="21"
       fill="#FDE68A"
     >
-      Maintained by Uhorizon AI
+      Created by @louisjimenezp
     </text>
   </g>
 
