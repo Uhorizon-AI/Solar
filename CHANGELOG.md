@@ -39,6 +39,7 @@ The format is based on Keep a Changelog.
 - `README.md` now includes creator attribution to Louis Jimenez and maintainer/contact links for Uhorizon AI.
 - `CONTRIBUTING.md` rewritten to clarify contribution goals, architecture boundaries, PR requirements, and review expectations.
 - Root `AGENTS.md` now defines instruction-resolution priority (`nearest child AGENTS.md` wins by path scope).
+- Root `AGENTS.md` now separates version-control boundaries from runtime workspace access rules, clarifying that parent-repo ignore status is not an access restriction and that VCS operations for `sun/` and `planets/<planet-name>/` must run in each workspace repo when present.
 - First-run setup UX now uses a non-technical menu (`configure now`, `already configured`, `help`) through delegated setup protocol in `core/AGENTS.md`.
 - Root `AGENTS.md` first-run protocol now attempts to read `sun/preferences/profile.md` on first interaction, using profile name/language when readable and delegating setup to `core/AGENTS.md` when missing.
 - Root `AGENTS.md` now requires explicit scope clarification before writing when user requests are ambiguous.

@@ -96,6 +96,14 @@ Do not write to an assumed folder when scope is unclear.
 
 - The `solar.ai` framework repository governs `core/` and shared framework files only.
 - `sun/` and `planets/**` are user-owned runtime workspaces and must be treated as out of framework governance.
-- Never suggest removing ignore rules to include `sun/` or `planets/` in the parent `solar.ai` git repository.
-- Never suggest commands such as `git add sun/` or `git add planets/` from the parent repository.
-- If a user wants version control for `sun/` or any `planets/<name>/`, recommend independent repositories inside those folders.
+- Never stage runtime workspace content from the parent framework repository (for example: `git add sun/` or `git add planets/`).
+- If a user wants version control for `sun/` or any `planets/<planet-name>/`, recommend and use an independent repository inside that workspace.
+
+## Runtime Workspace Access (Required)
+
+- Scope: apply this rule to `sun/` and every `planets/<planet-name>/`.
+- Treat parent-repo ignore status as indexing metadata only, not as an access restriction.
+- Read and write files in these runtime workspaces directly when the request targets them.
+- If a runtime workspace has its own `.git`, run all version-control commands in that workspace repository context.
+- If client file mention/index features (for example `@`) do not expose those files, continue with explicit relative paths and direct file access tools.
+- Do not request unignore changes in the parent repo as a workaround for indexing limitations.
