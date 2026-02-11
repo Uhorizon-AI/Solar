@@ -38,6 +38,8 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-transport-gateway` now includes AI provider routing policy via `.env` (`default`, `fallback`, `allowed`, `mode`) and returns `provider_used` in gateway responses.
 
 ### Changed
+- `solar.code-workspace` now includes `claudeCode.respectGitIgnore: false` to enable Claude Code @ mention indexing for runtime workspaces (`sun/` and `planets/`) while keeping them in `.gitignore` for version control separation.
+- `solar.code-workspace` simplified settings to minimal required configuration (removed optional `files.exclude` and `search.exclude` patterns).
 - `README.md` restructured for open-source positioning of `Solar`, clearer contribution path, and commercial CTA for Uhorizon AI.
 - `README.md` now includes creator attribution to Louis Jimenez and maintainer/contact links for Uhorizon AI.
 - `README.md` hero copy now positions Solar as an agentic operating system for multi-AI operations by context, clarifies Sun/Planets roles, and updates audience ordering to include founders, operators, developers, and non-technical teams.

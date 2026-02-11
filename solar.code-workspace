@@ -14,16 +14,7 @@
         }
     ],
     "settings": {
-        "files.exclude": {
-            "**/.DS_Store": true,
-            "**/__pycache__": true,
-            "**/.venv": true
-        },
-        "search.exclude": {
-            "**/.DS_Store": true,
-            "**/__pycache__": true,
-            "**/.venv": true,
-            "**/node_modules": true
-        }
+        "claudeCode.respectGitIgnore": false,
+        "git.autoRepositoryDetection": true
     }
 }
