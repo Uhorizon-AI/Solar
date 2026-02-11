@@ -40,6 +40,7 @@ The format is based on Keep a Changelog.
 ### Changed
 - `README.md` restructured for open-source positioning of `Solar`, clearer contribution path, and commercial CTA for Uhorizon AI.
 - `README.md` now includes creator attribution to Louis Jimenez and maintainer/contact links for Uhorizon AI.
+- `README.md` hero copy now positions Solar as an agentic operating system for multi-AI operations by context, clarifies Sun/Planets roles, and updates audience ordering to include founders, operators, developers, and non-technical teams.
 - `CONTRIBUTING.md` rewritten to clarify contribution goals, architecture boundaries, PR requirements, and review expectations.
 - Root `AGENTS.md` now defines instruction-resolution priority (`nearest child AGENTS.md` wins by path scope).
 - Root `AGENTS.md` now separates version-control boundaries from runtime workspace access rules, clarifying that parent-repo ignore status is not an access restriction and that VCS operations for `sun/` and `planets/<planet-name>/` must run in each workspace repo when present.
@@ -70,6 +71,7 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-skill-creator/scripts/package_skill.py` now excludes local runtime folders (`.venv`, `.poetry-cache`, `__pycache__`, `.git`) from packaged `.skill` artifacts.
 - `.gitignore` now includes `__pycache__/`.
 - `.gitignore` now includes `.venv/` and `.poetry-cache/`.
+- `docs/assets/solar-header.svg` hero subtitle and audience text now align with the updated README positioning, including improved line breaks and visual hierarchy.
 - `core/checklist-onboarding.md` now includes on-demand `sun/` workspace health validation via `core/scripts/sun-workspace-doctor.sh` plus optional git checks.
 - `core/checklist-onboarding.md` now includes on-demand `planets/*` workspace health validation via `core/scripts/planets-workspace-doctor.sh` plus optional git checks.
 - `core/skills/solar-migration-playbook` now defines workspace doctor usage as on-demand in step 8, with optional git validation via `--check-git` only when needed.

@@ -4,12 +4,14 @@
 
 > 🧪 Beta: Solar is under active development. Expect fast iteration and frequent improvements.
 
-Solar is an open-source framework for multi-AI operations by context, built with a Hub-and-Spoke model:
+Solar is an agentic operating system built on a Sun-Planets architecture 🌞🪐:
 
-- `Sun`: your personal router and context holder.
-- `Planets`: autonomous domain workspaces with their own rules.
+- `Sun`: a central personal agent that routes tasks.
+- `Planets`: domain agents with local governance ⚖️.
 
-Solar is not only for developers. It is designed for founders, operators, and non-technical teams who need clear execution across contexts.
+It provides standard delegation contracts 🤝, onboarding templates, and operational rules for multi-AI operations by context with clear boundaries 🧭.
+
+Solar is designed for founders, operators, developers, and non-technical teams who need reliable execution across contexts.
 
 Solar is created by [@louisjimenezp](https://github.com/louisjimenezp) and maintained by [Uhorizon AI](https://uhorizon.ai).
 
