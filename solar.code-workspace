@@ -1,0 +1,29 @@
+{
+    "folders": [
+        {
+            "name": ".solar",
+            "path": "."
+        },
+        {
+            "name": "sun",
+            "path": "sun"
+        },
+        {
+            "name": "planets",
+            "path": "planets"
+        }
+    ],
+    "settings": {
+        "files.exclude": {
+            "**/.DS_Store": true,
+            "**/__pycache__": true,
+            "**/.venv": true
+        },
+        "search.exclude": {
+            "**/.DS_Store": true,
+            "**/__pycache__": true,
+            "**/.venv": true,
+            "**/node_modules": true
+        }
+    }
+}
