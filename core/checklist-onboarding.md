@@ -18,6 +18,8 @@
 - [ ] Fill `sun/preferences/profile.md`.
 - [ ] Fill `sun/memories/baseline.md`.
 - [ ] Create `sun/daily-log/YYYY-MM-DD.md` only if needed by current user interaction (daily planning/follow-up).
+- [ ] Validate `sun/` workspace health on demand with `bash core/scripts/sun-workspace-doctor.sh`.
+- [ ] Run optional `sun/` git checks only when needed with `bash core/scripts/sun-workspace-doctor.sh --check-git`.
 
 ## Pre-Planet Validation (Required)
 - [ ] Show a summary of captured onboarding data.
@@ -29,6 +31,8 @@
 - [ ] Copy `core/templates/planet-AGENTS.md` into the new planet.
 - [ ] Copy `core/templates/planet-memory.md` into the new planet.
 - [ ] Define governance and boundaries in the planet `AGENTS.md`.
+- [ ] Validate planet workspace health on demand with `bash core/scripts/planets-workspace-doctor.sh`.
+- [ ] Run optional planet git checks only when needed with `bash core/scripts/planets-workspace-doctor.sh --check-git`.
 
 ## Execution Readiness
 - [ ] Use `core/transport-contract.md` for Sun -> Planet requests.

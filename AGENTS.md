@@ -104,6 +104,20 @@ Do not write to an assumed folder when scope is unclear.
 - Scope: apply this rule to `sun/` and every `planets/<planet-name>/`.
 - Treat parent-repo ignore status as indexing metadata only, not as an access restriction.
 - Read and write files in these runtime workspaces directly when the request targets them.
+- Independent `.git` repositories inside `sun/` and `planets/<planet-name>/` are optional by default.
 - If a runtime workspace has its own `.git`, run all version-control commands in that workspace repository context.
 - If client file mention/index features (for example `@`) do not expose those files, continue with explicit relative paths and direct file access tools.
 - Do not request unignore changes in the parent repo as a workaround for indexing limitations.
+
+## Workspace Doctor Policy (Required)
+
+- `sun/` and `planets/*` git setup is optional by default.
+- Do not require `.git`, commits, remotes, or upstream tracking unless the user explicitly requests git validation or the task clearly requires it.
+- Default doctor checks focus on required runtime/governance files.
+- Git checks are opt-in and on-demand:
+  - `bash core/scripts/sun-workspace-doctor.sh --check-git`
+  - `bash core/scripts/planets-workspace-doctor.sh --check-git`
+- `core/bootstrap.sh` must keep workspace doctor execution disabled by default.
+  - Optional opt-in via environment:
+    - `SOLAR_RUN_WORKSPACE_DOCTOR=1`
+    - `SOLAR_DOCTOR_CHECK_GIT=1` (only when git checks are needed)

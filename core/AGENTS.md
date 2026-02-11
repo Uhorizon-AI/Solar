@@ -93,6 +93,13 @@ This protocol is invoked by root `AGENTS.md` when `sun/preferences/profile.md` i
 - Do not ask non-technical users to run `bash ...` manually for normal `core/` operations.
 - Ask users only for required inputs/secrets, blocked permissions, or high-risk actions.
 
+## Workspace doctor execution policy (required)
+- Default doctor runs are on-demand; do not run workspace doctors automatically unless requested by the user or explicitly required by the active task.
+- Git checks in workspace doctors are optional and must be opt-in:
+  - `bash core/scripts/sun-workspace-doctor.sh --check-git`
+  - `bash core/scripts/planets-workspace-doctor.sh --check-git`
+- Do not treat missing `.git` in `sun/` or `planets/*` as a blocking issue unless git validation was explicitly requested.
+
 ## Environment block policy (required)
 - Any skill in `core/` that reads/writes `.env` must use a compact, skill-scoped block format.
 - Each skill block must start with a header comment identifying the skill (example: `# [solar-telegram] required environment`).

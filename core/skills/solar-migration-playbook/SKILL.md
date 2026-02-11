@@ -93,6 +93,14 @@ bash core/scripts/sync-clients.sh
 
 8. Validate and close batch
 - Validate expected runtime behavior.
+- If workspace health validation is needed, run:
+  - `bash core/scripts/sun-workspace-doctor.sh`
+  - `bash core/scripts/planets-workspace-doctor.sh`
+- Git checks are optional and on-demand; include only when needed:
+  - `bash core/scripts/sun-workspace-doctor.sh --check-git`
+  - `bash core/scripts/planets-workspace-doctor.sh --check-git`
+- If a requested planet git check fails and the user wants git bootstrap, suggest:
+  - `bash core/scripts/planet-git-bootstrap.sh --planet <name>`
 - Record open risks and next batch entry criteria.
 - Append decision log entries for each batch:
   - scope decision (`core/sun/planet`),

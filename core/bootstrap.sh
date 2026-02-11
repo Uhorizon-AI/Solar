@@ -75,6 +75,40 @@ if [ -x "$SYNC_SCRIPT" ]; then
   fi
 fi
 
+RUN_DOCTOR="${SOLAR_RUN_WORKSPACE_DOCTOR:-0}"
+CHECK_GIT="${SOLAR_DOCTOR_CHECK_GIT:-0}"
+
+if [ "$RUN_DOCTOR" = "1" ]; then
+  doctor_args=()
+  if [ "$CHECK_GIT" = "1" ]; then
+    doctor_args+=(--check-git)
+  fi
+
+  SUN_DOCTOR_SCRIPT="$ROOT_DIR/core/scripts/sun-workspace-doctor.sh"
+  if [ -x "$SUN_DOCTOR_SCRIPT" ]; then
+    echo "Running sun workspace doctor..."
+    if ! "$SUN_DOCTOR_SCRIPT" "${doctor_args[@]}"; then
+      echo "Warning: sun workspace doctor detected issues."
+    fi
+  fi
+
+  PLANETS_DOCTOR_SCRIPT="$ROOT_DIR/core/scripts/planets-workspace-doctor.sh"
+  if [ -x "$PLANETS_DOCTOR_SCRIPT" ]; then
+    echo "Running planets workspace doctor..."
+    if ! "$PLANETS_DOCTOR_SCRIPT" "${doctor_args[@]}"; then
+      echo "Warning: planets workspace doctor detected issues."
+    fi
+  fi
+else
+  echo "Workspace doctor checks are on-demand."
+  echo "Run manually when needed:"
+  echo "  bash core/scripts/sun-workspace-doctor.sh"
+  echo "  bash core/scripts/planets-workspace-doctor.sh"
+  echo "Optional git checks:"
+  echo "  bash core/scripts/sun-workspace-doctor.sh --check-git"
+  echo "  bash core/scripts/planets-workspace-doctor.sh --check-git"
+fi
+
 echo "Solar bootstrap complete."
 echo "Next steps:"
 echo "1) Create a planet: mkdir -p planets/<planet-name>"
