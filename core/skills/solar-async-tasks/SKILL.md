@@ -83,19 +83,16 @@ When the user’s request (e.g. via Telegram) is long-running or complex:
 1. **Offer**: Tell the user you can create an async task and notify them when it’s ready or when it’s completed.
 2. **Describe**: Briefly say how you’ll create it: task title, one-line objective, and priority (high/normal/low).
 3. **Confirm**: Ask for confirmation (e.g. “¿La creo como tarea asíncrona y te aviso cuando esté lista?”).
-4. **Create**: If they confirm: run create → plan → approve, and add to the task frontmatter `notify_when: completed` so the user can be notified on completion.
+4. **Create**: If they confirm: run create → plan → approve, then run `add_notify.sh <task_id>` to set `notify_when: completed` in the task frontmatter so the user is notified on completion.
 
 **Task metadata**: Only `notify_when: completed` is stored on the task. The notification channel is **not** stored per task; it is read from the user’s preferences (see below).
 
 **On completion**: If a task has `notify_when: completed`, send an alert using the channel defined in preferences. In v1 the agent can do this when it sees the task in `completed/`. Optionally, `complete.sh` can call `notify_if_configured.sh` so that notifications are sent automatically when a task is completed.
 
-### Notification preferences (sun/preferences)
+### Notification (Telegram)
 
-- **Where**: `sun/preferences/profile.md` (recommended) or `sun/preferences/notifications.md`. Use one place so the agent or scripts know where to read the channel.
-- **Format**: A line with `telegram_chat_id: "123456789"` (frontmatter or in a “Notifications” section). Optional; if missing, no automatic Telegram notification is sent (the agent can still use the active conversation).
-- **Example** in profile.md (frontmatter at top or in a section): `telegram_chat_id: "123456789"`.
-
-The optional script `notify_if_configured.sh` reads the completed task’s `notify_when`, then reads `sun/preferences/profile.md` (or `notifications.md`) for `telegram_chat_id`, and if both are set calls the solar-telegram send script with a “Task completed: [title]” message. Depends on solar-telegram and `.env` (TELEGRAM_BOT_TOKEN) for sending.
+- **Default**: `notify_if_configured.sh` (called by `complete.sh`) uses **`.env`** in the repo root: `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. If those are set, completing a task with `notify_when: completed` sends "Tarea completada: [title]" via solar-telegram.
+- **Override** (optional): `sun/preferences/profile.md` or `notifications.md` can define `telegram_chat_id` to override the chat; otherwise the script uses `TELEGRAM_CHAT_ID` from `.env`.
 
 ## Runtime Structure
 

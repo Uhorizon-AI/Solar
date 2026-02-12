@@ -40,5 +40,8 @@ completed_at: \"$(date -Iseconds)\"
 " "$NEW_FILE"
 fi
 
+# Optional: notify via Telegram if task has notify_when: completed and prefs have telegram_chat_id
+[[ -x "$SCRIPT_DIR/notify_if_configured.sh" ]] && "$SCRIPT_DIR/notify_if_configured.sh" "$NEW_FILE" || true
+
 echo "Task $TASK_ID COMPLETED."
 echo "File: $NEW_FILE"

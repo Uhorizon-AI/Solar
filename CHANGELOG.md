@@ -9,6 +9,9 @@ The format is based on Keep a Changelog.
 ### Added
 - `core/skills/solar-async-tasks` for asynchronous task management: create drafts, plan, approve with priority (high/normal/low), queue, and run via `start_next.sh` or `run_worker.sh`. State in `sun/runtime/async-tasks/` (drafts, planned, queued, active, completed, archive). Scripts: `create.sh`, `plan.sh`, `approve.sh`, `list.sh`, `start_next.sh`, `complete.sh`, `setup_async_tasks.sh`, `verify_lifecycle.sh`, `task_lib.sh`.
 - `core/skills/solar-async-tasks/scripts/run_worker.sh` to run the queue automatically: `--once` (one cycle, e.g. for cron) or loop with `--interval SECS`; clean exit on SIGINT/SIGTERM; logs failures to stderr and continues on next interval in loop mode.
+- `core/skills/solar-async-tasks` scheduling: optional `scheduled_time` and `scheduled_weekdays` (ISO 1–7) in task frontmatter; `is_scheduled_now()` in task_lib with ±15 min window; `schedule.sh` to set/update schedule; `list.sh` shows schedule as `@ 10:00 L,M,X,J,V` for QUEUED/PLANNED.
+- `core/skills/solar-async-tasks/scripts/add_notify.sh` to set `notify_when: completed` on a task so the user is notified when it completes.
+- `core/skills/solar-async-tasks/scripts/notify_if_configured.sh` (called by `complete.sh`): if task has `notify_when: completed`, sends "Tarea completada: [title]" via Telegram using `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from `.env` (optional override from `sun/preferences`). SKILL section "When to suggest async (e.g. Telegram)" for agent guidance.
 - `.github/FUNDING.yml` with optional donation links for project sustainability.
 - `.github/ISSUE_TEMPLATE/bug_report.md` and `.github/ISSUE_TEMPLATE/feature_request.md` to standardize incoming reports and proposals.
 - `.github/ISSUE_TEMPLATE/config.yml` with direct commercial support contact routing.
@@ -43,6 +46,9 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-async-tasks/scripts/list.sh` now orders QUEUED by priority (high → normal → low) and by filename within each group.
 - `core/skills/solar-async-tasks/scripts/create.sh` now prints the correct variable (`$FILENAME`) on task creation.
 - `core/skills/solar-async-tasks/SKILL.md` updated with description (plan → approve → queue by priority → execute), workflow including run_worker, "Automatic execution (run_worker)" section, and validation commands for `run_worker.sh --once`.
+- `core/skills/solar-async-tasks/scripts/start_next.sh` now only picks tasks within their scheduled window (`is_scheduled_now`); `list.sh` shows schedule for QUEUED and PLANNED when set.
+- `core/skills/solar-async-tasks/SKILL.md` now includes "Scheduling (optional)", "When to suggest async (e.g. Telegram)", and "Notification (Telegram)" (default from `.env` TELEGRAM_*, optional override from sun/preferences).
+- `core/skills/solar-async-tasks/scripts/complete.sh` now calls `notify_if_configured.sh` after moving a task to completed so Telegram notification is sent when the task has `notify_when: completed` and `.env` has Telegram credentials.
 - `solar.code-workspace` now includes `claudeCode.respectGitIgnore: false` to enable Claude Code @ mention indexing for runtime workspaces (`sun/` and `planets/`) while keeping them in `.gitignore` for version control separation.
 - `solar.code-workspace` simplified settings to minimal required configuration (removed optional `files.exclude` and `search.exclude` patterns).
 - `README.md` restructured for open-source positioning of `Solar`, clearer contribution path, and commercial CTA for Uhorizon AI.
