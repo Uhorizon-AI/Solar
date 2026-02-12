@@ -21,7 +21,15 @@ for f in "$DIR_PLANNED"/*.md; do
     [ -e "$f" ] || continue
     ID=$(grep "^id:" "$f" | head -n1 | cut -d '"' -f 2)
     TITLE=$(grep "^title:" "$f" | head -n1 | cut -d '"' -f 2)
-    echo "[$ID] $TITLE"
+    STIME=$(extract_meta "$f" "scheduled_time")
+    SDAYS=$(extract_meta "$f" "scheduled_weekdays")
+    if [[ -n "$STIME" || -n "$SDAYS" ]]; then
+        SCHED="$STIME"
+        [[ -n "$SDAYS" ]] && SCHED="${SCHED:+$SCHED }$(weekdays_display "$SDAYS")"
+        echo "[$ID] $TITLE @ $SCHED"
+    else
+        echo "[$ID] $TITLE"
+    fi
 done
 
 echo ""
@@ -32,7 +40,15 @@ for prio in high normal low; do
         [ -e "$f" ] || continue
         ID=$(grep "^id:" "$f" | head -n1 | cut -d '"' -f 2)
         TITLE=$(grep "^title:" "$f" | head -n1 | cut -d '"' -f 2)
-        echo "[$ID] ($prio) $TITLE"
+        STIME=$(extract_meta "$f" "scheduled_time")
+        SDAYS=$(extract_meta "$f" "scheduled_weekdays")
+        if [[ -n "$STIME" || -n "$SDAYS" ]]; then
+            SCHED="$STIME"
+            [[ -n "$SDAYS" ]] && SCHED="${SCHED:+$SCHED }$(weekdays_display "$SDAYS")"
+            echo "[$ID] ($prio) $TITLE @ $SCHED"
+        else
+            echo "[$ID] ($prio) $TITLE"
+        fi
     done
 done
 

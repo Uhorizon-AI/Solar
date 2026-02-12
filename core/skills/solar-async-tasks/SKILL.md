@@ -41,6 +41,9 @@ bash core/skills/solar-async-tasks/scripts/list.sh
 # Worker: one-shot (e.g. for cron)
 bash core/skills/solar-async-tasks/scripts/run_worker.sh --once
 
+# Optional: set schedule for a task (weekdays 1–7, e.g. 1,2,3,4,5 = Mon–Fri)
+# bash core/skills/solar-async-tasks/scripts/schedule.sh <task_id> "10:00" "1,2,3,4,5"
+
 # Verify skill packaging
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-async-tasks /tmp
 ```
@@ -63,6 +66,36 @@ None. (Uses default `sun/runtime/async-tasks` path, overridable via `SOLAR_TASK_
 - **`--once`**: Run one cycle and exit. Useful for cron (e.g. `run_worker.sh --once` every 5 minutes).
 - Without `--once`: Loop every `SECS` (default 60). Use Ctrl+C to stop; trap ensures clean exit.
 - **Error handling**: If `start_next.sh` fails, the worker logs to stderr and in loop mode continues on the next interval. "No tasks in queue" is normal and not an error.
+
+## Scheduling (optional)
+
+Tasks can be scheduled to run only at a specific time and on specific weekdays (e.g. weekdays at 10:00).
+
+- **Frontmatter** (optional): `scheduled_time: "10:00"` (HH:MM or HH:MM:SS), `scheduled_weekdays: "1,2,3,4,5"` (ISO 1=Monday … 7=Sunday). Store only numeric weekdays; display in `list.sh` uses L,M,X,J,V,S,D.
+- **Window**: A ±15 minute margin applies so that if the worker runs every 60s and the scheduled time is 10:00, the task stays eligible from 09:45 to 10:15.
+- **Eligibility**: `start_next.sh` and `run_worker.sh` only pick a task when it is within its scheduled window (and by priority). Tasks without `scheduled_time` / `scheduled_weekdays` are always eligible.
+- **Set schedule**: `schedule.sh <task_id> ["HH:MM"] ["1,2,3,4,5"]` adds or updates the schedule in the task frontmatter. Example: `schedule.sh 20250211-120000 "10:00" "1,2,3,4,5"` for weekdays at 10:00.
+
+## When to suggest async (e.g. Telegram)
+
+When the user’s request (e.g. via Telegram) is long-running or complex:
+
+1. **Offer**: Tell the user you can create an async task and notify them when it’s ready or when it’s completed.
+2. **Describe**: Briefly say how you’ll create it: task title, one-line objective, and priority (high/normal/low).
+3. **Confirm**: Ask for confirmation (e.g. “¿La creo como tarea asíncrona y te aviso cuando esté lista?”).
+4. **Create**: If they confirm: run create → plan → approve, and add to the task frontmatter `notify_when: completed` so the user can be notified on completion.
+
+**Task metadata**: Only `notify_when: completed` is stored on the task. The notification channel is **not** stored per task; it is read from the user’s preferences (see below).
+
+**On completion**: If a task has `notify_when: completed`, send an alert using the channel defined in preferences. In v1 the agent can do this when it sees the task in `completed/`. Optionally, `complete.sh` can call `notify_if_configured.sh` so that notifications are sent automatically when a task is completed.
+
+### Notification preferences (sun/preferences)
+
+- **Where**: `sun/preferences/profile.md` (recommended) or `sun/preferences/notifications.md`. Use one place so the agent or scripts know where to read the channel.
+- **Format**: A line with `telegram_chat_id: "123456789"` (frontmatter or in a “Notifications” section). Optional; if missing, no automatic Telegram notification is sent (the agent can still use the active conversation).
+- **Example** in profile.md (frontmatter at top or in a section): `telegram_chat_id: "123456789"`.
+
+The optional script `notify_if_configured.sh` reads the completed task’s `notify_when`, then reads `sun/preferences/profile.md` (or `notifications.md`) for `telegram_chat_id`, and if both are set calls the solar-telegram send script with a “Task completed: [title]” message. Depends on solar-telegram and `.env` (TELEGRAM_BOT_TOKEN) for sending.
 
 ## Runtime Structure
 

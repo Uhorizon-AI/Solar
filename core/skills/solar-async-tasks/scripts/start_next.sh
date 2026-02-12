@@ -7,19 +7,18 @@ source "$SCRIPT_DIR/task_lib.sh"
 
 ensure_dirs
 
-# Priority order: high, normal, low
+# Priority order: high, normal, low; only tasks that pass is_scheduled_now
 find_next_task() {
-    # Check for high priority first
-    local task=$(grep -l "priority: high" "$DIR_QUEUED"/*.md 2>/dev/null | head -n 1)
-    if [ ! -z "$task" ]; then echo "$task"; return; fi
-
-    # Check for normal priority
-    task=$(grep -l "priority: normal" "$DIR_QUEUED"/*.md 2>/dev/null | head -n 1)
-    if [ ! -z "$task" ]; then echo "$task"; return; fi
-
-    # Check for low priority
-    task=$(grep -l "priority: low" "$DIR_QUEUED"/*.md 2>/dev/null | head -n 1)
-    if [ ! -z "$task" ]; then echo "$task"; return; fi
+    local task f
+    for prio in high normal low; do
+        for f in $(grep -l "priority: $prio" "$DIR_QUEUED"/*.md 2>/dev/null | sort); do
+            [[ -e "$f" ]] || continue
+            if is_scheduled_now "$f"; then
+                echo "$f"
+                return
+            fi
+        done
+    done
 }
 
 TASK_FILE=$(find_next_task)
