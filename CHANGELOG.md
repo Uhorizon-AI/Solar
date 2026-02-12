@@ -7,6 +7,8 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- `core/skills/solar-async-tasks` for asynchronous task management: create drafts, plan, approve with priority (high/normal/low), queue, and run via `start_next.sh` or `run_worker.sh`. State in `sun/runtime/async-tasks/` (drafts, planned, queued, active, completed, archive). Scripts: `create.sh`, `plan.sh`, `approve.sh`, `list.sh`, `start_next.sh`, `complete.sh`, `setup_async_tasks.sh`, `verify_lifecycle.sh`, `task_lib.sh`.
+- `core/skills/solar-async-tasks/scripts/run_worker.sh` to run the queue automatically: `--once` (one cycle, e.g. for cron) or loop with `--interval SECS`; clean exit on SIGINT/SIGTERM; logs failures to stderr and continues on next interval in loop mode.
 - `.github/FUNDING.yml` with optional donation links for project sustainability.
 - `.github/ISSUE_TEMPLATE/bug_report.md` and `.github/ISSUE_TEMPLATE/feature_request.md` to standardize incoming reports and proposals.
 - `.github/ISSUE_TEMPLATE/config.yml` with direct commercial support contact routing.
@@ -38,6 +40,9 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-transport-gateway` now includes AI provider routing policy via `.env` (`default`, `fallback`, `allowed`, `mode`) and returns `provider_used` in gateway responses.
 
 ### Changed
+- `core/skills/solar-async-tasks/scripts/list.sh` now orders QUEUED by priority (high → normal → low) and by filename within each group.
+- `core/skills/solar-async-tasks/scripts/create.sh` now prints the correct variable (`$FILENAME`) on task creation.
+- `core/skills/solar-async-tasks/SKILL.md` updated with description (plan → approve → queue by priority → execute), workflow including run_worker, "Automatic execution (run_worker)" section, and validation commands for `run_worker.sh --once`.
 - `solar.code-workspace` now includes `claudeCode.respectGitIgnore: false` to enable Claude Code @ mention indexing for runtime workspaces (`sun/` and `planets/`) while keeping them in `.gitignore` for version control separation.
 - `solar.code-workspace` simplified settings to minimal required configuration (removed optional `files.exclude` and `search.exclude` patterns).
 - `README.md` restructured for open-source positioning of `Solar`, clearer contribution path, and commercial CTA for Uhorizon AI.
