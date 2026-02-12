@@ -68,6 +68,14 @@ It defines contracts, templates, and operational rules shared by all users.
 - First-run trigger and user-facing conversation are owned by root `AGENTS.md`.
 - `core/AGENTS.md` defines setup execution rules only when root delegates.
 
+## Governance delegation rule (required)
+
+**This layer (core/AGENTS.md):**
+- **Authority:** Framework operational rules (sync, templates, onboarding, validation)
+- **Called by:** Root `AGENTS.md` for framework operations
+
+**Key principle:** Core owns framework operations. Root owns global orchestration.
+
 ## Setup Protocol
 
 This protocol is invoked by root `AGENTS.md` when `sun/preferences/profile.md` is missing.
@@ -114,6 +122,14 @@ This protocol is invoked by root `AGENTS.md` when `sun/preferences/profile.md` i
   - this is an operational host concern (not a mandatory skill dependency),
   - if multiple laptops are used, only the active host should serve the same public route.
 - Do not add this note to skills that are not runtime-host dependent.
+
+## Planet management rule (required)
+- Use `bash core/scripts/create-planet.sh <planet-name>` to create new planets (auto-creates AGENTS.md template + CLAUDE.md/GEMINI.md symlinks).
+- Consult `core/templates/planet-structure.md` for planet structure reference, resource creation workflows, and sync best practices.
+- When creating or modifying resources in `planets/*/skills/`, `planets/*/agents/`, or `planets/*/commands/`:
+  - Run `bash core/scripts/sync-clients.sh` to sync planet resources to AI clients.
+  - Planet resources are automatically discovered and merged with `core/` resources.
+  - All planet resources are prefixed deterministically: `<planet-name>:<resource-name>` (only `core/` resources remain unprefixed).
 
 ## Client sync rule (required)
 - If files are added or modified in `core/skills/`, `core/agents/`, or `core/commands/`, run:

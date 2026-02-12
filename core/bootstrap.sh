@@ -111,7 +111,7 @@ fi
 
 echo "Solar bootstrap complete."
 echo "Next steps:"
-echo "1) Create a planet: mkdir -p planets/<planet-name>"
-echo "2) Copy templates into the new planet"
-echo "   cp core/templates/planet-AGENTS.md planets/<planet-name>/AGENTS.md"
-echo "   cp core/templates/planet-memory.md planets/<planet-name>/memory.md"
+echo "1) Create a planet: bash core/scripts/create-planet.sh <planet-name>"
+echo "2) Edit planets/<planet-name>/AGENTS.md to define scope and governance"
+echo "3) (Optional) Add planet resources (skills/agents/commands) and sync:"
+echo "   bash core/scripts/sync-clients.sh"

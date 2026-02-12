@@ -4,12 +4,20 @@
 
 > 🧪 Beta: Solar is under active development. Expect fast iteration and frequent improvements.
 
-Solar is an agentic operating system built on a Sun-Planets architecture 🌞🪐:
+## What is Solar?
 
-- `Sun`: a central personal agent that routes tasks.
-- `Planets`: domain agents with local governance ⚖️.
+Solar is an **AI Operating System** that orchestrates multi-agent workflows across contexts.
 
-It provides standard delegation contracts 🤝, onboarding templates, and operational rules for multi-AI operations by context with clear boundaries 🧭.
+Like a traditional OS manages processes and resources, Solar:
+- 🔀 **Routes tasks** between a central Sun (router) and domain Planets (specialists)
+- 🔌 **Abstracts AI providers** (Claude, Codex, Gemini) into a unified runtime
+- 🧠 **Manages memory** with isolated context per domain
+- ⚖️ **Enforces governance** through delegation contracts and boundaries
+- 🛰️ **Coordinates execution** across multiple AI systems
+
+Built on a **Sun-Planets architecture** 🌞🪐:
+- **Sun**: Central personal agent that routes tasks
+- **Planets**: Domain agents with local governance and execution rules
 
 Solar is designed for founders, operators, developers, and non-technical teams who need reliable execution across contexts.
 

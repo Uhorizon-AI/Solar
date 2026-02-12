@@ -27,10 +27,12 @@
 - [ ] Ask explicit confirmation before creating the first planet.
 
 ## Planet Setup
-- [ ] Create `planets/<planet-name>/`.
-- [ ] Copy `core/templates/planet-AGENTS.md` into the new planet.
+- [ ] (Recommended) Use `bash core/scripts/create-planet.sh <planet-name>` for automated setup.
+- [ ] (Alternative) Create `planets/<planet-name>/` manually.
+- [ ] Copy `core/templates/planet-AGENTS.md` into the new planet (auto-done by create-planet.sh).
 - [ ] Copy `core/templates/planet-memory.md` into the new planet.
 - [ ] Define governance and boundaries in the planet `AGENTS.md`.
+- [ ] (Optional) See `core/templates/planet-structure.md` for resource creation (agents/skills/commands) and sync workflows.
 - [ ] Validate planet workspace health on demand with `bash core/scripts/planets-workspace-doctor.sh`.
 - [ ] Run optional planet git checks only when needed with `bash core/scripts/planets-workspace-doctor.sh --check-git`.
 

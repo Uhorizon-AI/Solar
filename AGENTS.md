@@ -6,12 +6,26 @@ This system operates on a **Hub-and-Spoke** model called "Solar".
 
 ## Instruction Resolution (Required)
 
-Instruction priority is path-based:
-1. Root `AGENTS.md` defines global defaults.
-2. If working inside a subfolder that has its own `AGENTS.md`, that child file overrides root rules for that scope.
-3. If multiple nested `AGENTS.md` files exist, use the nearest one to the target files as highest priority.
+Solar operates with a three-layer governance structure:
 
-This applies to any folder (`core/`, `sun/`, `planets/`, or any other child folder).
+1. **Root `AGENTS.md`** (this file) - Global orchestration and delegation protocols
+2. **`core/AGENTS.md`** - AI Operating System framework rules
+3. **`planets/<planet-name>/AGENTS.md`** - Domain-specific governance
+
+**How it works:**
+- Working in `core/` → Apply `core/AGENTS.md` rules
+- Working in a planet → Apply that planet's `AGENTS.md` rules
+- Working in `sun/` → Apply root rules (sun/ is runtime storage, not a governance layer)
+
+**Key principle:** More specific governance layers override general ones.
+
+## Governance Delegation (Required)
+
+**This layer (root/AGENTS.md):**
+- **Authority:** Global orchestration (Sun/Planet architecture, delegation protocols)
+- **Delegates to:** `core/AGENTS.md` for framework operational rules
+
+**Key principle:** Each AGENTS.md owns its scope. Delegate what you don't own to your immediate parent or specialist layer.
 
 ### 1. The Sun (Personal Agent)
 *   **Location:** `/sun/`
@@ -59,10 +73,19 @@ When the **Sun** delegates to a **Planet**:
 
 ## Creating New Planets
 
-To add a new company/project:
-1.  Create `/planets/<new-name>/`.
-2.  Add an `AGENTS.md` defining its purpose.
-3.  (Optional) Link external repos or tools within that folder.
+To add a new company/project, use the automated creation script:
+
+```bash
+bash core/scripts/create-planet.sh <planet-name>
+```
+
+This ensures proper structure (AGENTS.md template + CLAUDE.md/GEMINI.md symlinks). See `core/AGENTS.md` "Planet management rule" for details.
+
+## Planet Resource Sync (Required)
+
+Planets can include custom resources (agents, commands, skills).
+
+For framework operational rules on planet resource management, see the **Planet management rule** section in `core/AGENTS.md`.
 
 ## First-Run Protocol (Required)
 

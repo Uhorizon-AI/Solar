@@ -7,6 +7,12 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- `CLAUDE.md` and `GEMINI.md` symlinks in all planets pointing to `AGENTS.md` for multi-client AI compatibility.
+- `core/scripts/create-planet.sh` helper script to automate planet creation with proper structure (AGENTS.md template + symlinks).
+- `core/templates/planet-structure.md` comprehensive guide for planet structure, resource creation, and sync workflow.
+- `core/commands/solar-validate-governance.md` interactive command to verify governance coherence: AGENTS.md structure and connections, delegation chain (each layer knows only immediate delegate), and resource sync protocol consistency.
+- Planet resource sync support in `core/scripts/sync-clients.sh`: automatically discovers and syncs `planets/*/skills/`, `planets/*/agents/`, `planets/*/commands/` to AI clients.
+- Deterministic resource naming in `core/scripts/sync-clients.sh`: all planet resources are always prefixed as `<planet-name>:<resource-name>` (npm-style), only `core/` resources remain unprefixed.
 - `core/skills/solar-async-tasks` for asynchronous task management: create drafts, plan, approve with priority (high/normal/low), queue, and run via `start_next.sh` or `run_worker.sh`. State in `sun/runtime/async-tasks/` (drafts, planned, queued, active, completed, archive). Scripts: `create.sh`, `plan.sh`, `approve.sh`, `list.sh`, `start_next.sh`, `complete.sh`, `setup_async_tasks.sh`, `verify_lifecycle.sh`, `task_lib.sh`.
 - `core/skills/solar-async-tasks/scripts/run_worker.sh` to run the queue automatically: `--once` (one cycle, e.g. for cron) or loop with `--interval SECS`; clean exit on SIGINT/SIGTERM; logs failures to stderr and continues on next interval in loop mode.
 - `core/skills/solar-async-tasks` scheduling: optional `scheduled_time` and `scheduled_weekdays` (ISO 1–7) in task frontmatter; `is_scheduled_now()` in task_lib with ±15 min window; `schedule.sh` to set/update schedule; `list.sh` shows schedule as `@ 10:00 L,M,X,J,V` for QUEUED/PLANNED.
@@ -43,6 +49,22 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-transport-gateway` now includes AI provider routing policy via `.env` (`default`, `fallback`, `allowed`, `mode`) and returns `provider_used` in gateway responses.
 
 ### Changed
+- `core/AGENTS.md` now includes "Planet management rule" defining when to use `create-planet.sh`, referencing `planet-structure.md`, and requiring sync execution for planet resources.
+- `core/bootstrap.sh` "Next steps" now recommends using `create-planet.sh` instead of manual planet creation.
+- `core/checklist-onboarding.md` "Planet Setup" now recommends `create-planet.sh` as primary method and references `planet-structure.md` for advanced resource workflows.
+- `core/scripts/sync-clients.sh` now syncs resources from both `core/` and `planets/*/` (skills, agents, commands) with deterministic npm-style prefixing: all planet resources are prefixed as `<planet-name>:<resource-name>`, only `core/` resources remain unprefixed.
+- `core/scripts/sync-clients.sh` now uses Bash 3.2+ compatible syntax (temp files instead of associative arrays) for macOS compatibility.
+- `core/scripts/sync-clients.sh` duplicate detection (`is_duplicate`, `get_source`) now uses exact string matching (no regex, no substring) for robust handling of special characters.
+- `core/templates/planet-AGENTS.md` "Planet Sync Rule" (renamed from "Resource Sync Protocol") now references `../../AGENTS.md` (root governance) instead of duplicating documentation, maintaining single source of authority.
+- `core/templates/planet-AGENTS.md` now includes explicit "Governance Delegation" section documenting authority (domain-specific governance) and immediate delegation (to root).
+- `AGENTS.md` (root) "Instruction Resolution" now explicitly defines Solar's three-layer governance structure (root, core, planets) instead of abstract "child files", clarifying that `sun/` is runtime storage, not a governance layer.
+- `AGENTS.md` (root) "Governance Delegation" separated as own section, documenting only immediate delegation (root → core), not entire chain.
+- `AGENTS.md` (root) now includes "Planet Resource Sync" section that delegates to `core/AGENTS.md` for framework operational rules.
+- `core/AGENTS.md` "Governance delegation rule" (renamed from "Governance reference rule") now documents only immediate relationship (called by root), not entire governance chain.
+- `core/AGENTS.md` "Governance delegation rule" now documents only immediate relationship (called by root), not entire governance chain, following minimal knowledge principle.
+- `README.md` now emphasizes Solar as an "AI Operating System" with clear OS analogies (routes tasks, abstracts AI providers, manages memory, enforces governance, coordinates execution).
+- All planet `AGENTS.md` files now include resource sync protocol documentation (in Spanish for Spanish planets, English for others).
+- Governance delegation principle applied consistently across all AGENTS.md files: each layer knows only its immediate delegate, not the complete chain.
 - `core/skills/solar-async-tasks/scripts/list.sh` now orders QUEUED by priority (high → normal → low) and by filename within each group.
 - `core/skills/solar-async-tasks/scripts/create.sh` now prints the correct variable (`$FILENAME`) on task creation.
 - `core/skills/solar-async-tasks/SKILL.md` updated with description (plan → approve → queue by priority → execute), workflow including run_worker, "Automatic execution (run_worker)" section, and validation commands for `run_worker.sh --once`.
