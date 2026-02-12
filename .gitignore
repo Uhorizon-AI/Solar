@@ -25,5 +25,6 @@ planets/
 .cursor/
 .codex/
 
-# Local symlink to external knowledge repo
+# Temporary files
 brain.ai
+brain.code-workspace
