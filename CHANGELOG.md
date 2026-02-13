@@ -50,6 +50,8 @@ The format is based on Keep a Changelog.
 - AI-agnostic memory protocol: `sun/MEMORY.md` (required, max 200 lines) and `planets/*/MEMORY.md` (optional, max 100 lines) for operational learnings only, stored in filesystem for access by any AI (Claude, Gemini, etc.).
 - `core/templates/planet-MEMORY.md` template for planet memory files (free-form structure, domain learnings, not configuration).
 - Documentation scope policy in `core/AGENTS.md`: `core/docs/` for framework documentation, `sun/docs/` for user documentation, `sun/plans/` for user-specific design decisions and implementation plans.
+- `core/commands/solar-create-release.md` interactive command for creating framework releases with semantic versioning and automatic changelog generation.
+- `core/scripts/create-release.sh` semi-automated release script: analyzes commits (Conventional Commits), proposes version bump (MAJOR/MINOR/PATCH), generates CHANGELOG entry, asks confirmation, creates tag and commit, optional push with `--push` flag.
 
 ### Changed
 - `core/skills/solar-transport-gateway` WebSocket keepalive timeouts increased from default 20s to `ping_interval=60s` and `ping_timeout=180s` in both `run_websocket_bridge.py` and `run_http_webhook_bridge.py` to prevent error 1011 (keepalive ping timeout) when AI router processing exceeds 20 seconds.
@@ -125,6 +127,8 @@ The format is based on Keep a Changelog.
 - `core/scripts/create-planet.sh` "Next steps" now includes optional step to create `MEMORY.md` from `core/templates/planet-MEMORY.md` template.
 - `core/checklist-onboarding.md` "Planet Setup" now references `core/templates/planet-MEMORY.md` (renamed from `planet-memory-template.md`).
 - `core/templates/planet-MEMORY.md` renamed from `planet-memory-template.md` for naming consistency with `planet-AGENTS.md` pattern (no `-template` suffix).
+- `CONTRIBUTING.md` now includes "Creating a Release" section documenting semantic versioning workflow and Conventional Commits format for maintainers.
+- `README.md` now includes "Development" section for maintainers with release creation reference.
 
 ### Removed
 - `core/templates/planet-memory.md` (legacy template, replaced by `planet-MEMORY.md`).

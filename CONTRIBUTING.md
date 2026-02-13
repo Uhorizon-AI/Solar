@@ -59,6 +59,29 @@ Checklist:
 - [ ] Documentation updated when needed.
 - [ ] `CHANGELOG.md` updated when relevant.
 
+## Creating a Release
+
+**Maintainers only:** Solar uses semantic versioning for framework releases.
+
+To create a release:
+```bash
+bash core/scripts/create-release.sh [--push]
+```
+
+The script will:
+1. Analyze commits since last release (using Conventional Commits)
+2. Propose a version bump (MAJOR/MINOR/PATCH)
+3. Generate CHANGELOG.md entry
+4. Ask for confirmation
+5. Create tag and commit (push with --push flag)
+
+**Commit message format:**
+- `feat(scope): description` → MINOR version bump
+- `fix(scope): description` → PATCH version bump
+- `feat(scope)!: description` or `BREAKING CHANGE:` → MAJOR version bump
+
+See [core/commands/solar-create-release.md](core/commands/solar-create-release.md) for full details.
+
 ## Skill and Template Rules
 
 - Add a skill to `core/skills/` only if reusable across domains.

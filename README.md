@@ -86,6 +86,17 @@ git clone git@github.com:Uhorizon-AI/Solar.git
 3. The Planet executes with domain-specific governance.
 4. The Planet returns status and next steps.
 
+## 🛠️ Development
+
+**For maintainers:** Solar uses semantic versioning for framework releases.
+
+Create a release:
+```bash
+bash core/scripts/create-release.sh [--push]
+```
+
+See [core/commands/solar-create-release.md](core/commands/solar-create-release.md) for details.
+
 ## 🤝 Contributing
 
 Contributions are welcome.
