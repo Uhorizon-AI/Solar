@@ -144,7 +144,8 @@ async def handle_connection(websocket) -> None:
 
 async def main() -> None:
     print(f"solar-transport-gateway listening on ws://{HOST}:{PORT}{PATH}")
-    async with serve(handle_connection, HOST, PORT):
+    # Keepalive config: ping every 60s, wait up to 180s for pong (AI router timeout is 120s)
+    async with serve(handle_connection, HOST, PORT, ping_interval=60, ping_timeout=180):
         await asyncio.Future()
 
 

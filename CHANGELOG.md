@@ -49,6 +49,8 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-transport-gateway` now includes AI provider routing policy via `.env` (`default`, `fallback`, `allowed`, `mode`) and returns `provider_used` in gateway responses.
 
 ### Changed
+- `core/skills/solar-transport-gateway` WebSocket keepalive timeouts increased from default 20s to `ping_interval=60s` and `ping_timeout=180s` in both `run_websocket_bridge.py` and `run_http_webhook_bridge.py` to prevent error 1011 (keepalive ping timeout) when AI router processing exceeds 20 seconds.
+- `core/skills/solar-transport-gateway/assets/system_prompt.md` now includes async task creation workflow: describe task first, ask confirmation, execute create→plan→approve→notify flow, with explicit rule to never create async tasks without confirmation.
 - `core/AGENTS.md` now includes "Planet management rule" defining when to use `create-planet.sh`, referencing `planet-structure.md`, and requiring sync execution for planet resources.
 - `core/bootstrap.sh` "Next steps" now recommends using `create-planet.sh` instead of manual planet creation.
 - `core/checklist-onboarding.md` "Planet Setup" now recommends `create-planet.sh` as primary method and references `planet-structure.md` for advanced resource workflows.

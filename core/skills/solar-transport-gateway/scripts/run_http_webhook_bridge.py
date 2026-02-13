@@ -32,7 +32,8 @@ BRIDGE_ROUTE_PATTERN = f"{SOLAR_HTTP_WEBHOOK_BASE}/<provider>"
 
 async def request_solar(payload: Dict[str, Any]) -> Dict[str, Any]:
     ws_url = f"ws://{SOLAR_WS_HOST}:{SOLAR_WS_PORT}{SOLAR_WS_PATH}"
-    async with connect(ws_url) as ws:
+    # Keepalive config: ping every 60s, wait up to 180s for pong (AI router timeout is 120s)
+    async with connect(ws_url, ping_interval=60, ping_timeout=180) as ws:
         await ws.send(json.dumps(payload))
         raw = await ws.recv()
         return json.loads(raw)
