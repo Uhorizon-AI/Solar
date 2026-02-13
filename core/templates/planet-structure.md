@@ -25,7 +25,7 @@ planets/<planet-name>/
 ├── CLAUDE.md -> AGENTS.md   # Symlink for Claude AI
 ├── GEMINI.md -> AGENTS.md   # Symlink for Gemini AI
 ├── README.md          # Optional: planet overview
-├── memory/            # Optional: planet-specific memory
+├── MEMORY.md          # Optional: planet-specific memory (AI-agnostic, max 100 lines)
 ├── agents/            # Optional: custom agent definitions
 │   ├── agent-1.md
 │   └── agent-2.md

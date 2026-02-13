@@ -47,6 +47,9 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh` now prints copy/paste install commands for `cloudflared` when missing.
 - `core/skills/solar-transport-gateway` now supports named Cloudflare tunnels (`SOLAR_TUNNEL_MODE=named`) with `configure_named_tunnel.sh` for stable webhook DNS.
 - `core/skills/solar-transport-gateway` now includes AI provider routing policy via `.env` (`default`, `fallback`, `allowed`, `mode`) and returns `provider_used` in gateway responses.
+- AI-agnostic memory protocol: `sun/MEMORY.md` (required, max 200 lines) and `planets/*/MEMORY.md` (optional, max 100 lines) for operational learnings only, stored in filesystem for access by any AI (Claude, Gemini, etc.).
+- `core/templates/planet-MEMORY.md` template for planet memory files (free-form structure, domain learnings, not configuration).
+- Documentation scope policy in `core/AGENTS.md`: `core/docs/` for framework documentation, `sun/docs/` for user documentation, `sun/plans/` for user-specific design decisions and implementation plans.
 
 ### Changed
 - `core/skills/solar-transport-gateway` WebSocket keepalive timeouts increased from default 20s to `ping_interval=60s` and `ping_timeout=180s` in both `run_websocket_bridge.py` and `run_http_webhook_bridge.py` to prevent error 1011 (keepalive ping timeout) when AI router processing exceeds 20 seconds.
@@ -113,6 +116,19 @@ The format is based on Keep a Changelog.
 - `core/checklist-onboarding.md` now includes on-demand `planets/*` workspace health validation via `core/scripts/planets-workspace-doctor.sh` plus optional git checks.
 - `core/skills/solar-migration-playbook` now defines workspace doctor usage as on-demand in step 8, with optional git validation via `--check-git` only when needed.
 - `sun/README.md` no longer references `.setup-complete` as a setup marker.
+- `core/AGENTS.md` "Memory protocol" now defines AI-agnostic memory structure (`sun/MEMORY.md` required, `planets/*/MEMORY.md` optional), concision rules (max 200/100 lines, free-form, only stable patterns), and first-run protocol (read `sun/MEMORY.md`, delegate to setup if missing).
+- Root `AGENTS.md` "First-Run Protocol" now checks both `sun/MEMORY.md` and `sun/preferences/profile.md` before delegating to setup protocol (aligned with core).
+- `core/AGENTS.md` "Setup Protocol" now invoked when `sun/MEMORY.md` or `sun/preferences/profile.md` are missing (aligned with root).
+- `core/bootstrap.sh` no longer creates `sun/memories/` directory (now uses single `sun/MEMORY.md` file in root).
+- `core/bootstrap.sh` now creates `sun/MEMORY.md` if missing with free-form template for operational learnings.
+- `core/scripts/planets-workspace-doctor.sh` now validates `MEMORY.md` (uppercase) instead of `memory.md` (lowercase).
+- `core/scripts/create-planet.sh` "Next steps" now includes optional step to create `MEMORY.md` from `core/templates/planet-MEMORY.md` template.
+- `core/checklist-onboarding.md` "Planet Setup" now references `core/templates/planet-MEMORY.md` (renamed from `planet-memory-template.md`).
+- `core/templates/planet-MEMORY.md` renamed from `planet-memory-template.md` for naming consistency with `planet-AGENTS.md` pattern (no `-template` suffix).
+
+### Removed
+- `core/templates/planet-memory.md` (legacy template, replaced by `planet-MEMORY.md`).
+- `core/templates/sun-memory-template.md` (unused, sun/MEMORY.md created by bootstrap).
 
 ## [0.1.0] - 2026-02-08
 

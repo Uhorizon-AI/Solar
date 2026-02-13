@@ -72,7 +72,7 @@ fi
 
 ok "Sun workspace exists"
 require_file "preferences/profile.md"
-require_file "memories/baseline.md"
+require_file "MEMORY.md"
 
 if $CHECK_GIT; then
   if [ -d "$SUN_DIR/.git" ]; then

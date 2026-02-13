@@ -66,7 +66,7 @@ For framework operational rules on planet resource management, see the **Planet 
 
 ## First-Run Protocol (Required)
 
-On first interaction: read `sun/preferences/profile.md` silently. If missing, delegate to `core/AGENTS.md` setup protocol. Never mention verification process in responses.
+On first interaction: read `sun/MEMORY.md` silently. If `sun/MEMORY.md` or `sun/preferences/profile.md` are missing, delegate to `core/AGENTS.md` setup protocol. Never mention verification process in responses.
 
 ## Ambiguity Handling (Required)
 

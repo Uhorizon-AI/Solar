@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 mkdir -p "$ROOT_DIR/sun/preferences"
-mkdir -p "$ROOT_DIR/sun/memories"
 mkdir -p "$ROOT_DIR/sun/daily-log"
 mkdir -p "$ROOT_DIR/planets"
 mkdir -p "$ROOT_DIR/core"
@@ -35,19 +34,26 @@ if [ ! -f "$ROOT_DIR/sun/preferences/profile.md" ]; then
 EOF
 fi
 
-if [ ! -f "$ROOT_DIR/sun/memories/baseline.md" ]; then
-  cat > "$ROOT_DIR/sun/memories/baseline.md" <<'EOF'
-# Baseline Memory
+if [ ! -f "$ROOT_DIR/sun/MEMORY.md" ]; then
+  cat > "$ROOT_DIR/sun/MEMORY.md" <<'EOF'
+# Sun Memory
 
-## Stable Context
-- Role:
-- Current companies/projects:
-- Strategic priorities:
+**Max: 200 lines. Free-form. Only operational learnings.**
 
-## Constraints
-- Time:
-- Energy:
-- Non-negotiables:
+---
+
+## Patterns Discovered
+- (Recurring patterns confirmed across work)
+
+## Common Pitfalls
+- (Mistakes and their solutions)
+
+## Decisions
+- (Architectural decisions during work, with date)
+
+---
+
+**Note:** For detailed notes, create topic files (e.g., `debugging.md`, `solar-patterns.md`) and link from here.
 EOF
 fi
 

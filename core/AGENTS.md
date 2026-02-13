@@ -64,6 +64,41 @@ It defines contracts, templates, and operational rules shared by all users.
 - Planet-specific files may use the user's preferred language.
 - Planet skills may use the user's preferred language.
 
+## Documentation scope policy (required)
+- `core/docs/` and `core/*/docs/` are for **framework documentation only**:
+  - Architecture, contracts, API reference
+  - How-to guides for framework features
+  - Shared templates and blueprints
+- User-specific documentation belongs in `sun/`:
+  - `sun/docs/` for general user documentation
+  - `sun/plans/` for implementation plans and design decisions
+  - `sun/runtime/*/` for execution artifacts
+- When creating design docs or plans for user-specific extensions, default to `sun/plans/` unless the change is meant to be contributed back to core framework.
+
+## Memory protocol (required)
+- Solar uses **AI-agnostic memory** stored in the filesystem, accessible by any AI (Claude, Gemini, etc.).
+- Memory structure:
+  - **`sun/MEMORY.md`** (required): Global operational learnings, cross-planet patterns, common pitfalls.
+  - **`planets/<planet-name>/MEMORY.md`** (optional): Domain-specific learnings, project patterns, business context.
+  - **Topic files** (optional): `debugging.md`, `patterns.md`, etc. for detailed notes (link from MEMORY.md).
+- **Purpose** (CRITICAL):
+  - MEMORY.md is for **operational learnings**, NOT configuration.
+  - Configuration goes in: `AGENTS.md`, `sun/preferences/profile.md`.
+  - `sun/MEMORY.md` is always created (bootstrap), planets create MEMORY.md only when domain is complex.
+- **Concision rules**:
+  - **`sun/MEMORY.md`**: Max 200 lines (truncated after). Keep concise.
+  - **`planets/*/MEMORY.md`**: Max 100 lines per planet.
+  - **Free-form structure**: Semantic, not chronological. No forced sections.
+  - **Only stable patterns** confirmed across multiple interactions.
+  - **Eliminate outdated** info when updating.
+  - **Prioritize "what to do"** over "what happened".
+- **When to update memory**:
+  - When discovering recurring operational patterns.
+  - When fixing mistakes that could be common.
+  - When making architectural decisions during work.
+  - When learning domain-specific context not captured in AGENTS.md.
+- **First-run protocol**: On first interaction, silently read `sun/MEMORY.md`. If missing, delegate to setup protocol.
+
 ## Runtime interaction ownership
 - First-run trigger and user-facing conversation are owned by root `AGENTS.md`.
 - `core/AGENTS.md` defines setup execution rules only when root delegates.
@@ -78,7 +113,7 @@ It defines contracts, templates, and operational rules shared by all users.
 
 ## Setup Protocol
 
-This protocol is invoked by root `AGENTS.md` when `sun/preferences/profile.md` is missing.
+This protocol is invoked by root `AGENTS.md` when `sun/MEMORY.md` or `sun/preferences/profile.md` are missing.
 
 **Setup menu:**
 1. `Configure now (Recommended)`

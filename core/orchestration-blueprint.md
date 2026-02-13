@@ -7,10 +7,10 @@ Keep execution simple, traceable, and reusable for any user.
 
 ## Runtime Sources
 - User preferences: `sun/preferences/profile.md`
-- Baseline context: `sun/memories/baseline.md`
+- User memory: `sun/MEMORY.md` (operational learnings, patterns, pitfalls)
 - Daily execution (on demand): `sun/daily-log/YYYY-MM-DD.md`
 - Planet scope and governance: `planets/<planet-name>/AGENTS.md`
-- Planet memory: `planets/<planet-name>/memory.md`
+- Planet memory (optional): `planets/<planet-name>/MEMORY.md` (domain learnings, patterns)
 
 ## Orchestration Cycle
 1. Understand user intent in one sentence.
@@ -19,8 +19,8 @@ Keep execution simple, traceable, and reusable for any user.
 4. Execute task in the selected planet.
 5. Capture Planet -> Sun response with `core/report-template.md`.
 6. Persist learnings:
-   - Stable user-level decisions -> `sun/memories/baseline.md`
-   - Domain decisions and facts -> `planets/<planet-name>/memory.md`
+   - Stable user-level decisions -> `sun/MEMORY.md`
+   - Domain decisions and facts -> `planets/<planet-name>/MEMORY.md`
    - Daily actions and follow-ups -> `sun/daily-log/YYYY-MM-DD.md` (only when daily planning or follow-up is needed)
 7. Return concise result to user and ask next decision only if needed.
 

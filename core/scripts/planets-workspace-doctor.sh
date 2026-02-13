@@ -75,10 +75,10 @@ for planet_dir in "$PLANETS_DIR"/*; do
     err "$planet_name is missing AGENTS.md"
   fi
 
-  if [ -f "$planet_dir/memory.md" ] || [ -f "$planet_dir/README.md" ]; then
-    ok "$planet_name has runtime context file (memory.md or README.md)"
+  if [ -f "$planet_dir/MEMORY.md" ] || [ -f "$planet_dir/README.md" ]; then
+    ok "$planet_name has runtime context file (MEMORY.md or README.md)"
   else
-    warn "$planet_name has no memory.md or README.md"
+    warn "$planet_name has no MEMORY.md or README.md (optional)"
   fi
 
   if $CHECK_GIT; then
