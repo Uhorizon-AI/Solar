@@ -6,6 +6,24 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-02-13
+### Added
+- feat(release): add semi-automated release creation workflow
+- feat: implement AI-agnostic memory protocol and update related documentation
+- feat: enhance WebSocket keepalive settings and document async task creation workflow
+- feat: implement planet management features including automated creation, resource sync, and governance validation
+- feat: enhance async task notifications and scheduling
+- feat: enhance scheduling capabilities for async tasks
+- feat: introduce solar-async-tasks for managing asynchronous tasks
+- feat: add on-demand workspace doctors with optional git checks
+- feat(core): add solar migration playbook skill
+- feat(transport-gateway): add conversation continuity and stable runtime path
+
+### Fixed
+- fix(release): handle multiline changelog entries in awk
+
+
+
 ### Added
 - `CLAUDE.md` and `GEMINI.md` symlinks in all planets pointing to `AGENTS.md` for multi-client AI compatibility.
 - `core/scripts/create-planet.sh` helper script to automate planet creation with proper structure (AGENTS.md template + symlinks).
