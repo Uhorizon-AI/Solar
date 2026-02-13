@@ -263,23 +263,31 @@ function show_preview_and_confirm() {
 function update_changelog() {
   info "Updating CHANGELOG.md..."
 
-  # Create temp file
+  # Create temp files
   TEMP_FILE=$(mktemp)
+  ENTRY_FILE=$(mktemp)
+
+  # Write the changelog entry to a temp file
+  echo "$CHANGELOG_ENTRY" > "$ENTRY_FILE"
 
   # Read CHANGELOG and insert new entry after [Unreleased]
-  awk -v entry="$CHANGELOG_ENTRY" '
+  awk -v entry_file="$ENTRY_FILE" '
     /^## \[Unreleased\]/ {
       print
       print ""
-      print entry
+      while ((getline line < entry_file) > 0) {
+        print line
+      }
+      close(entry_file)
       print ""
       next
     }
     { print }
   ' "$CHANGELOG_FILE" > "$TEMP_FILE"
 
-  # Replace original
+  # Replace original and cleanup
   mv "$TEMP_FILE" "$CHANGELOG_FILE"
+  rm -f "$ENTRY_FILE"
 
   success "CHANGELOG.md updated"
 }
