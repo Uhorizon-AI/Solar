@@ -13,9 +13,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>__SCRIPT_PATH__</string>
-    <string>--once</string>
+    <string>__ENTRYPOINT_PATH__</string>
   </array>
 
   <key>StandardOutPath</key>

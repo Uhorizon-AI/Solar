@@ -5,10 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog.
 
 ## [Unreleased]
+### Added
+- `core/skills/solar-system/scripts/Solar.c` C wrapper source for the Solar launchd entrypoint binary.
+- `core/skills/solar-system/scripts/diagnose_launchagent.sh` one-pass diagnostic script for LaunchAgent bootstrap issues.
+- `core/skills/solar-system/scripts/set_icon.swift` helper to apply custom icon metadata to the Solar entrypoint binary.
+- `core/skills/solar-system/scripts/svg2png.swift` helper to render SVG icons into PNG assets for `.icns` generation.
+- `core/skills/solar-system/assets/solar-icon.svg` source icon used to build Solar system icon assets.
+
 ### Changed
 - `core/skills/solar-skill-creator/SKILL.md` now requires a short `System activation` subsection for skills designed to run via `solar-system` (feature token, install/status commands, and ownership pointer).
-- `core/skills/solar-system/assets/com.solar.system.plist.template` now uses direct script execution via `/bin/bash <script> --once` with a simplified payload for better launchd compatibility.
+- `core/skills/solar-system/assets/com.solar.system.plist.template` now executes a single Solar entrypoint binary (`scripts/Solar`) from `ProgramArguments` for launchd compatibility.
 - `core/skills/solar-system/scripts/install_launchagent_macos.sh` now enables the launchd label before bootstrap to recover from disabled overrides.
+- `core/skills/solar-system/scripts/install_launchagent_macos.sh` now defaults logs to `~/Library/Logs/com.solar.system/`, ensures log paths exist before bootstrap, compiles the Solar wrapper entrypoint, and applies a custom icon when available.
+- `core/skills/solar-system/scripts/render_launchagent_plist.sh` now renders the Solar wrapper entrypoint path and aligns default log paths with `~/Library/Logs/com.solar.system/`.
+- `core/skills/solar-system/scripts/status_launchagent_macos.sh` now reads the same default log paths used by install/render scripts (`~/Library/Logs/com.solar.system/`).
 - `core/skills/solar-system/scripts/uninstall_launchagent_macos.sh` no longer leaves a persistent `disabled` override on the launchd label.
 
 ### Fixed

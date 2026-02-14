@@ -20,8 +20,8 @@ fi
 LABEL="${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}"
 DOMAIN="gui/${UID}"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
-OUT_LOG="${SOLAR_SYSTEM_STDOUT_PATH:-/tmp/com.solar.system.out}"
-ERR_LOG="${SOLAR_SYSTEM_STDERR_PATH:-/tmp/com.solar.system.err}"
+OUT_LOG="${SOLAR_SYSTEM_STDOUT_PATH:-$HOME/Library/Logs/com.solar.system/stdout.log}"
+ERR_LOG="${SOLAR_SYSTEM_STDERR_PATH:-$HOME/Library/Logs/com.solar.system/stderr.log}"
 
 echo "Solar system status:"
 echo "  label: $LABEL"
