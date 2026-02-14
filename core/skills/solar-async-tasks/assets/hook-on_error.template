@@ -1,0 +1,35 @@
+#!/bin/bash
+# Error hook template for MCP resource cleanup
+# Called if task fails or cleanup fails - performs emergency cleanup
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Portable path: works if repo is moved as long as structure is preserved
+SOLAR_TASK_ROOT="${SOLAR_TASK_ROOT:-$HOME/Sites/solar.ai/sun/runtime/async-tasks}"
+TASK_LIB="REPLACE_WITH_TASK_LIB_PATH"
+source "$TASK_LIB"
+
+TASK_FILE="$1"
+RESOURCE_NAME="REPLACE_WITH_RESOURCE_NAME"  # e.g., "chrome-dev-tools", "postgres"
+
+echo "Running error cleanup for $RESOURCE_NAME..."
+
+TASK_ID=$(grep "^id:" "$TASK_FILE" | sed 's/^id: //' | tr -d '"')
+
+# Force release lock
+ensure_dirs
+LOCK_FILE="$DIR_LOCKS/${RESOURCE_NAME}.lock"
+rm -f "$LOCK_FILE"
+echo "✅ Force-released lock: $RESOURCE_NAME"
+
+# TODO: Add emergency cleanup logic here
+# This should be more aggressive than post_complete.sh
+# Examples:
+# - Force kill processes: pkill -9 -f "chrome.*--remote-debugging-port" || true
+# - Force close connections: kill -9 $(lsof -t -i:9222) || true
+# - Delete lock files: rm -f $DIR_LOCKS/${RESOURCE_NAME}*.lock
+# - Clean temporary resources forcefully
+
+echo "⚠️  Emergency cleanup complete for $RESOURCE_NAME"
+exit 0

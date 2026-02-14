@@ -1,0 +1,40 @@
+#!/bin/bash
+# Post-completion hook template for MCP resource cleanup
+# Called after task completion to cleanup and release resources
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Portable path: works if repo is moved as long as structure is preserved
+SOLAR_TASK_ROOT="${SOLAR_TASK_ROOT:-$HOME/Sites/solar.ai/sun/runtime/async-tasks}"
+TASK_LIB="REPLACE_WITH_TASK_LIB_PATH"
+source "$TASK_LIB"
+
+TASK_FILE="$1"
+RESOURCE_NAME="REPLACE_WITH_RESOURCE_NAME"  # e.g., "chrome-dev-tools", "postgres"
+
+echo "Cleaning up $RESOURCE_NAME..."
+
+TASK_ID=$(grep "^id:" "$TASK_FILE" | sed 's/^id: //' | tr -d '"')
+
+# Release lock
+ensure_dirs
+LOCK_FILE="$DIR_LOCKS/${RESOURCE_NAME}.lock"
+
+if [[ -f "$LOCK_FILE" ]]; then
+    LOCK_OWNER=$(cat "$LOCK_FILE" | head -n1)
+    if [[ "$LOCK_OWNER" == "$TASK_ID" ]]; then
+        rm -f "$LOCK_FILE"
+        echo "✅ Released lock: $RESOURCE_NAME"
+    fi
+fi
+
+# TODO: Add cleanup logic here
+# Examples:
+# - Close MCP connections: mcp <resource> close-all
+# - Close database connections: psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = '$TASK_ID';"
+# - Close browser sessions: pkill -f "chrome.*$TASK_ID" || true
+# - Delete temporary files: rm -rf /tmp/task-$TASK_ID-*
+
+echo "$RESOURCE_NAME cleanup complete."
+exit 0

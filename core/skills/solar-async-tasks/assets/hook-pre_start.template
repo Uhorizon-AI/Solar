@@ -1,0 +1,39 @@
+#!/bin/bash
+# Pre-start hook template for MCP resource cleanup
+# Acquires exclusive lock (queue-wait if busy)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Import SOLAR_TASK_ROOT and DIR_LOCKS
+# Portable path: works if repo is moved as long as structure is preserved
+SOLAR_TASK_ROOT="${SOLAR_TASK_ROOT:-$HOME/Sites/solar.ai/sun/runtime/async-tasks}"
+TASK_LIB="REPLACE_WITH_TASK_LIB_PATH"
+source "$TASK_LIB"
+
+TASK_FILE="$1"
+RESOURCE_NAME="REPLACE_WITH_RESOURCE_NAME"  # e.g., "chrome-dev-tools", "postgres"
+
+ensure_dirs
+LOCK_FILE="$DIR_LOCKS/${RESOURCE_NAME}.lock"
+
+TASK_ID=$(grep "^id:" "$TASK_FILE" | sed 's/^id: //' | tr -d '"')
+
+# Check if locked by another task
+if [[ -f "$LOCK_FILE" ]]; then
+    LOCK_OWNER=$(cat "$LOCK_FILE" | head -n1)
+    if [[ "$LOCK_OWNER" != "$TASK_ID" ]]; then
+        echo "⏸️  Resource busy: $RESOURCE_NAME (locked by: $LOCK_OWNER)"
+        echo "   Task will retry in next worker cycle."
+        exit 1  # Block task start, will retry later
+    fi
+fi
+
+# Acquire lock
+echo "$TASK_ID" > "$LOCK_FILE"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$LOCK_FILE"
+echo "✅ Acquired lock: $RESOURCE_NAME (task: $TASK_ID)"
+
+# TODO: Add any pre-start initialization here (e.g., check resource availability)
+
+exit 0

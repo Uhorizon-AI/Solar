@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# Run the async task worker: move queued tasks to active (once or in a loop).
-# Does not execute task content; only calls start_next.sh.
+# Run the async task worker (once or loop):
+# 1) move queued tasks to active
+# 2) execute one active task
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
@@ -20,16 +21,27 @@ done
 ensure_dirs
 
 run_cycle() {
-    local out
-    out=$("$SCRIPT_DIR/start_next.sh" 2>&1)
-    local ret=$?
-    if [[ $ret -ne 0 ]]; then
-        log_msg "start_next.sh failed (exit $ret): $out"
-        return $ret
+    local out_start out_exec
+    out_start=$("$SCRIPT_DIR/start_next.sh" 2>&1)
+    local ret_start=$?
+    if [[ $ret_start -ne 0 ]]; then
+        log_msg "start_next.sh failed (exit $ret_start): $out_start"
+        return $ret_start
     fi
-    # "No tasks in queue" is normal, not an error
-    if [[ -n "$out" ]]; then
-        echo "$out"
+
+    if [[ -n "$out_start" ]]; then
+        echo "$out_start"
+    fi
+
+    out_exec=$("$SCRIPT_DIR/execute_active.sh" --once 2>&1)
+    local ret_exec=$?
+    if [[ $ret_exec -ne 0 ]]; then
+        log_msg "execute_active.sh failed (exit $ret_exec): $out_exec"
+        return $ret_exec
+    fi
+
+    if [[ -n "$out_exec" ]]; then
+        echo "$out_exec"
     fi
     return 0
 }

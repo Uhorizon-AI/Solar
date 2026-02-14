@@ -12,11 +12,13 @@ export DIR_PLANNED="$SOLAR_TASK_ROOT/planned"
 export DIR_QUEUED="$SOLAR_TASK_ROOT/queued"
 export DIR_ACTIVE="$SOLAR_TASK_ROOT/active"
 export DIR_COMPLETED="$SOLAR_TASK_ROOT/completed"
+export DIR_ERROR="$SOLAR_TASK_ROOT/error"
 export DIR_ARCHIVE="$SOLAR_TASK_ROOT/archive"
+export DIR_LOCKS="$SOLAR_TASK_ROOT/.locks"
 
 # Ensure directories exist
 ensure_dirs() {
-    mkdir -p "$DIR_DRAFTS" "$DIR_PLANNED" "$DIR_QUEUED" "$DIR_ACTIVE" "$DIR_COMPLETED" "$DIR_ARCHIVE"
+    mkdir -p "$DIR_DRAFTS" "$DIR_PLANNED" "$DIR_QUEUED" "$DIR_ACTIVE" "$DIR_COMPLETED" "$DIR_ERROR" "$DIR_ARCHIVE" "$DIR_LOCKS"
 }
 
 # Generate a unique task ID
@@ -44,6 +46,8 @@ get_status() {
     if [[ "$file_path" == *"/queued/"* ]]; then echo "queued"; fi
     if [[ "$file_path" == *"/active/"* ]]; then echo "active"; fi
     if [[ "$file_path" == *"/completed/"* ]]; then echo "completed"; fi
+    if [[ "$file_path" == *"/error/"* ]]; then echo "error"; fi
+    if [[ "$file_path" == *"/archive/"* ]]; then echo "archived"; fi
 }
 
 # Extract metadata from frontmatter
@@ -109,4 +113,59 @@ weekdays_display() {
         esac
     done
     echo "${out%,}"
+}
+
+# Get timeout command (macOS compatibility)
+get_timeout_cmd() {
+    if command -v gtimeout &>/dev/null; then
+        echo "gtimeout"
+    elif command -v timeout &>/dev/null; then
+        echo "timeout"
+    else
+        echo ""  # No timeout available
+    fi
+}
+
+# Parse CSV resources (compatible with extract_meta)
+parse_resources() {
+    local resources_str="$1"
+    echo "$resources_str" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# Check if recurring task is ready to run (race protection)
+is_recurring_ready() {
+    local file="$1"
+    local recurring=$(extract_meta "$file" "recurring")
+    [[ "$recurring" != "true" ]] && return 0  # Not recurring, always ready
+
+    local last_run=$(extract_meta "$file" "recurring_last_run")
+    [[ -z "$last_run" ]] && return 0  # Never run, ready
+
+    local min_interval=$(extract_meta "$file" "recurring_min_interval")
+    min_interval=${min_interval:-86400}  # Default 24h
+
+    local last_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_run" +%s 2>/dev/null || echo 0)
+    local now_epoch=$(date +%s)
+    local elapsed=$((now_epoch - last_epoch))
+
+    [[ $elapsed -ge $min_interval ]]
+}
+
+# Timezone-aware scheduling check (stub for Phase 2)
+is_scheduled_now_tz() {
+    local file="$1"
+
+    # First check basic schedule (existing logic)
+    is_scheduled_now "$file" || return 1
+
+    # Check timezone if specified
+    local tz=$(extract_meta "$file" "scheduled_timezone")
+    if [[ -n "$tz" && "$tz" != "local" ]]; then
+        # Convert scheduled time to target timezone
+        # Note: Requires TZ env var manipulation
+        # For now, warn if timezone specified but not implemented
+        log_msg "Warning: scheduled_timezone='$tz' specified but timezone conversion not yet implemented"
+    fi
+
+    return 0
 }
