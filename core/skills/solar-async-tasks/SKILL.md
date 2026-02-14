@@ -72,6 +72,21 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 
 None. (Uses default `sun/runtime/async-tasks` path, overridable via `SOLAR_TASK_ROOT`)
 
+## System activation (via solar-system)
+
+For automatic host-level execution, enable this feature through `solar-system`:
+
+```dotenv
+# [solar-system] required environment
+SOLAR_SYSTEM_FEATURES=async-tasks
+```
+
+Then install the single Solar LaunchAgent:
+
+```bash
+bash core/skills/solar-system/scripts/install_launchagent_macos.sh
+```
+
 ## Workflow
 
 1.  **Draft**: `create.sh` creates a task in `drafts/`.

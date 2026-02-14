@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog.
 
 ## [Unreleased]
+### Changed
+- `core/skills/solar-skill-creator/SKILL.md` now requires a short `System activation` subsection for skills designed to run via `solar-system` (feature token, install/status commands, and ownership pointer).
+- `core/skills/solar-system/assets/com.solar.system.plist.template` now uses direct script execution via `/bin/bash <script> --once` with a simplified payload for better launchd compatibility.
+- `core/skills/solar-system/scripts/install_launchagent_macos.sh` now enables the launchd label before bootstrap to recover from disabled overrides.
+- `core/skills/solar-system/scripts/uninstall_launchagent_macos.sh` no longer leaves a persistent `disabled` override on the launchd label.
+
+### Fixed
+- `core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh` now resolves `poetry` and `curl` robustly in LaunchAgent contexts (minimal PATH), preventing false `Missing dependency: poetry` failures during `solar-system` ticks.
 
 ## [0.1.0] - 2026-02-13
 ### Added

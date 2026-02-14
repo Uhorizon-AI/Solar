@@ -71,6 +71,27 @@ bash core/scripts/sync-clients.sh
   - `codex`, `claude`, or `gemini`
 - Local runtime write access for conversation memory (default: `sun/runtime/transport-gateway/`)
 
+## System activation (via solar-system)
+
+For host-level orchestration through one LaunchAgent, enable this feature in:
+
+```dotenv
+# [solar-system] required environment
+SOLAR_SYSTEM_FEATURES=transport-gateway
+```
+
+Or combined with async tasks:
+
+```dotenv
+SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
+```
+
+Then install/update Solar LaunchAgent:
+
+```bash
+bash core/skills/solar-system/scripts/install_launchagent_macos.sh
+```
+
 ## Laptop runtime note (optional)
 
 - This skill can expose long-running local runtime endpoints (webhook/bridge/server/tunnel).
