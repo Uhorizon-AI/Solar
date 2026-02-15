@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import subprocess
+import traceback
 from typing import Any, Dict, List, Tuple
 
 try:
@@ -131,12 +132,14 @@ async def handle_connection(websocket) -> None:
                 "reply_text": reply,
                 "provider_used": provider_used,
             }
-        except Exception:
+        except Exception as exc:
+            print(f"provider execution failed: {exc}", flush=True)
+            traceback.print_exc()
             response = {
                 "type": "response",
                 "request_id": request_id,
                 "status": "failed",
-                "reply_text": "Invalid request payload.",
+                "reply_text": str(exc) or "provider execution failed",
             }
 
         await websocket.send(json.dumps(response))
