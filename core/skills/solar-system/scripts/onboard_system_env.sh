@@ -31,10 +31,74 @@ awk '
 ' "$ROOT_ENV_FILE" >"$tmp"
 mv "$tmp" "$ROOT_ENV_FILE"
 
-{
-  if [[ -s "$ROOT_ENV_FILE" ]]; then printf '\n'; fi
-  echo "$BLOCK_HEADER"
-  echo "SOLAR_SYSTEM_FEATURES=${features}"
-} >>"$ROOT_ENV_FILE"
+# Normalize spacing: keep at most one blank line between blocks and remove
+# leading/trailing blank lines to keep repeated runs idempotent.
+tmp="$(mktemp)"
+awk '
+  NF {
+    if (pending_blank && printed_any) {
+      print ""
+    }
+    print
+    printed_any = 1
+    pending_blank = 0
+    next
+  }
+  {
+    if (printed_any) {
+      pending_blank = 1
+    }
+  }
+' "$ROOT_ENV_FILE" >"$tmp"
+mv "$tmp" "$ROOT_ENV_FILE"
+
+insert_line="$(
+  awk -v block="$BLOCK_HEADER" '
+    $0 ~ /^# \[[^]]+\] required environment$/ {
+      if ($0 > block) {
+        print NR
+        exit
+      }
+    }
+  ' "$ROOT_ENV_FILE"
+)"
+
+tmp="$(mktemp)"
+if [[ -n "$insert_line" ]]; then
+  if (( insert_line > 1 )); then
+    sed -n "1,$((insert_line - 1))p" "$ROOT_ENV_FILE" >"$tmp"
+  fi
+  echo "$BLOCK_HEADER" >>"$tmp"
+  echo "SOLAR_SYSTEM_FEATURES=${features}" >>"$tmp"
+  sed -n "${insert_line},\$p" "$ROOT_ENV_FILE" >>"$tmp"
+else
+  cat "$ROOT_ENV_FILE" >"$tmp"
+  if [[ -s "$tmp" ]]; then
+    printf '\n' >>"$tmp"
+  fi
+  echo "$BLOCK_HEADER" >>"$tmp"
+  echo "SOLAR_SYSTEM_FEATURES=${features}" >>"$tmp"
+fi
+mv "$tmp" "$ROOT_ENV_FILE"
+
+# Final normalize pass after insertion to enforce stable spacing.
+tmp="$(mktemp)"
+awk '
+  NF {
+    if (pending_blank && printed_any) {
+      print ""
+    }
+    print
+    printed_any = 1
+    pending_blank = 0
+    next
+  }
+  {
+    if (printed_any) {
+      pending_blank = 1
+    }
+  }
+' "$ROOT_ENV_FILE" >"$tmp"
+mv "$tmp" "$ROOT_ENV_FILE"
 
 echo "OK: wrote compact solar-system block in .env."

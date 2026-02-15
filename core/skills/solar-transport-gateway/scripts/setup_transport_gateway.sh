@@ -26,6 +26,19 @@ resolve_bin() {
   return 1
 }
 
+listener_pid_for_port() {
+  local port="$1"
+  if ! command -v lsof >/dev/null 2>&1; then
+    return 1
+  fi
+  local pid
+  pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true)"
+  if [[ -z "$pid" ]]; then
+    return 1
+  fi
+  echo "$pid"
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -108,13 +121,40 @@ stop_if_running "$RUN_DIR/ws.pid"
 stop_if_running "$RUN_DIR/http.pid"
 stop_if_running "$RUN_DIR/cloudflared.pid"
 
-nohup bash core/skills/solar-transport-gateway/scripts/run_websocket_bridge.sh \
-  >"$RUN_DIR/ws.log" 2>&1 &
-echo $! >"$RUN_DIR/ws.pid"
+ws_port="${SOLAR_WS_PORT:-8765}"
+http_port="${SOLAR_HTTP_PORT:-8787}"
 
-nohup bash core/skills/solar-transport-gateway/scripts/run_http_webhook_bridge.sh \
-  >"$RUN_DIR/http.log" 2>&1 &
-echo $! >"$RUN_DIR/http.pid"
+existing_ws_pid="$(listener_pid_for_port "$ws_port" || true)"
+if [[ -n "$existing_ws_pid" ]]; then
+  echo "$existing_ws_pid" >"$RUN_DIR/ws.pid"
+else
+  nohup bash core/skills/solar-transport-gateway/scripts/run_websocket_bridge.sh \
+    >"$RUN_DIR/ws.log" 2>&1 &
+  echo $! >"$RUN_DIR/ws.pid"
+fi
+
+existing_http_pid="$(listener_pid_for_port "$http_port" || true)"
+if [[ -n "$existing_http_pid" ]]; then
+  echo "$existing_http_pid" >"$RUN_DIR/http.pid"
+else
+  nohup bash core/skills/solar-transport-gateway/scripts/run_http_webhook_bridge.sh \
+    >"$RUN_DIR/http.log" 2>&1 &
+  echo $! >"$RUN_DIR/http.pid"
+fi
+
+# Confirm local bridges are actually listening before proceeding.
+sleep 1
+actual_ws_pid="$(listener_pid_for_port "$ws_port" || true)"
+actual_http_pid="$(listener_pid_for_port "$http_port" || true)"
+if [[ -z "$actual_ws_pid" || -z "$actual_http_pid" ]]; then
+  echo "Failed to start or detect local bridge listeners."
+  echo "WS port ${ws_port} pid: ${actual_ws_pid:-missing}"
+  echo "HTTP port ${http_port} pid: ${actual_http_pid:-missing}"
+  echo "Check logs: $RUN_DIR/{ws.log,http.log}"
+  exit 1
+fi
+echo "$actual_ws_pid" >"$RUN_DIR/ws.pid"
+echo "$actual_http_pid" >"$RUN_DIR/http.pid"
 
 host="${SOLAR_HTTP_HOST:-127.0.0.1}"
 port="${SOLAR_HTTP_PORT:-8787}"

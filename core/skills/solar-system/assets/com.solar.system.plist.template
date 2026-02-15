@@ -16,6 +16,9 @@
     <string>__ENTRYPOINT_PATH__</string>
   </array>
 
+  <key>AbandonProcessGroup</key>
+  <true/>
+
   <key>StandardOutPath</key>
   <string>__STDOUT_PATH__</string>
   <key>StandardErrorPath</key>

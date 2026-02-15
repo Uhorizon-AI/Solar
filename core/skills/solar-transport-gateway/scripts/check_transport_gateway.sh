@@ -37,14 +37,43 @@ check_pid() {
   kill -0 "$pid" >/dev/null 2>&1
 }
 
+listener_pid_for_port() {
+  local port="$1"
+  local pid=""
+  if command -v lsof >/dev/null 2>&1; then
+    pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true)"
+  fi
+  if [[ -n "$pid" ]]; then
+    echo "$pid"
+    return 0
+  fi
+  return 1
+}
+
+check_pid_or_listener() {
+  local pid_file="$1"
+  local port="$2"
+  if check_pid "$pid_file"; then
+    return 0
+  fi
+
+  local pid=""
+  pid="$(listener_pid_for_port "$port" || true)"
+  if [[ -n "$pid" ]]; then
+    echo "$pid" >"$pid_file"
+    return 0
+  fi
+  return 1
+}
+
 local_ok=false
 public_ok=false
 ws_ok=false
 http_ok=false
 tunnel_ok=false
 
-if check_pid "$RUN_DIR/ws.pid"; then ws_ok=true; fi
-if check_pid "$RUN_DIR/http.pid"; then http_ok=true; fi
+if check_pid_or_listener "$RUN_DIR/ws.pid" "${SOLAR_WS_PORT:-8765}"; then ws_ok=true; fi
+if check_pid_or_listener "$RUN_DIR/http.pid" "${SOLAR_HTTP_PORT:-8787}"; then http_ok=true; fi
 if check_pid "$RUN_DIR/cloudflared.pid"; then tunnel_ok=true; fi
 
 local_body="$(curl -fsS "$local_health_url" 2>/dev/null || true)"
