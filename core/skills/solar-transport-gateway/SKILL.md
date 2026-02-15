@@ -27,6 +27,14 @@ Provide a reusable local transport layer for Solar:
 
 None
 
+## Dependencies
+
+- **solar-router:** This skill depends on `solar-router` for AI provider execution. Ensure `solar-router` is configured first:
+  ```bash
+  bash core/skills/solar-router/scripts/onboard_router_env.sh
+  bash core/skills/solar-router/scripts/check_providers.sh
+  ```
+
 ## Validation commands
 
 ```bash
@@ -45,9 +53,9 @@ bash core/skills/solar-transport-gateway/scripts/onboard_websocket_env.sh
 # Validate runtime prerequisites
 bash core/skills/solar-transport-gateway/scripts/validate_websocket_bridge.sh
 
-# Preflight AI clients in SOLAR_AI_PROVIDER_PRIORITY
-bash core/skills/solar-transport-gateway/scripts/check_ai_providers.sh --dry-run
-bash core/skills/solar-transport-gateway/scripts/check_ai_providers.sh
+# Preflight AI providers
+bash core/skills/solar-router/scripts/check_providers.sh --dry-run
+bash core/skills/solar-router/scripts/check_providers.sh
 
 # Check runtime health (local + public)
 bash core/skills/solar-transport-gateway/scripts/check_transport_gateway.sh
@@ -69,7 +77,7 @@ bash core/scripts/sync-clients.sh
 - Python dependency managed by Poetry: `websockets`
 - At least one AI client CLI in `PATH`:
   - `codex`, `claude`, or `gemini`
-- Local runtime write access for conversation memory (default: `sun/runtime/transport-gateway/`)
+- Local runtime write access for conversation memory (default: `sun/runtime/router/`)
 
 ## System activation (via solar-system)
 
@@ -104,21 +112,21 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 1. Run `setup_transport_gateway.sh` as default end-to-end flow.
 2. If needed, run `setup_transport_gateway.sh --prepare-only` to stop before long-running services.
 3. For stable DNS, configure named tunnel with `configure_named_tunnel.sh` and set `SOLAR_TUNNEL_MODE=named`.
-4. Route provider calls via `scripts/run_ai_router.py` (selected by `SOLAR_AI_PROVIDER_PRIORITY`).
+4. Route provider calls via **solar-router** (`core/skills/solar-router/scripts/run_router.py`), configured by `SOLAR_ROUTER_PROVIDER_PRIORITY`.
 5. Use individual scripts only for troubleshooting or partial reconfiguration.
 
 ## Conversation continuity
 
-- `run_ai_router.py` stores conversation turns in local runtime memory (JSONL) by conversation id.
+- The **solar-router** script (see skill `solar-router`) stores conversation turns in local runtime memory (JSONL) by conversation id.
 - Conversation id priority:
   1. `user_id`
   2. `session_id`
 - Default system prompt file:
-  - `core/skills/solar-transport-gateway/assets/system_prompt.md`
+  - `core/skills/solar-router/assets/system_prompt.md`
 - Override keys:
-  - `SOLAR_RUNTIME_DIR`
-  - `SOLAR_SYSTEM_PROMPT_FILE`
-  - `SOLAR_CONTEXT_TURNS`
+  - `SOLAR_ROUTER_RUNTIME_DIR`
+  - `SOLAR_ROUTER_SYSTEM_PROMPT_FILE`
+  - `SOLAR_ROUTER_CONTEXT_TURNS`
 
 ## Message contract (v1)
 
@@ -138,5 +146,5 @@ Outbound `response`:
 ## References
 
 - `references/message-contract.md`
-- `references/ai-routing-policy.md`
+- Routing policy: `core/skills/solar-router/references/routing-policy.md`
 - `references/telegram-webhook-flow.md`

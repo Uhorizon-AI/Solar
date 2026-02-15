@@ -2,7 +2,7 @@
 
 # Execute active tasks using AI router with provider fallback.
 # - Reads active task body as semantic instructions
-# - Tries providers from SOLAR_AI_PROVIDER_PRIORITY
+# - Tries providers from SOLAR_ROUTER_PROVIDER_PRIORITY
 # - On success: saves output log and completes task
 # - On failure: marks task as error and moves it to error/
 
@@ -17,7 +17,7 @@ if [[ "$MODE" != "--once" && "$MODE" != "--all" ]]; then
     exit 1
 fi
 
-ROUTER_SCRIPT="$SCRIPT_DIR/../../solar-transport-gateway/scripts/run_ai_router.py"
+ROUTER_SCRIPT="$SCRIPT_DIR/../../solar-router/scripts/run_router.py"
 if [[ ! -f "$ROUTER_SCRIPT" ]]; then
     echo "Error: AI router not found: $ROUTER_SCRIPT" >&2
     exit 1
@@ -27,7 +27,7 @@ ensure_dirs
 LOG_DIR="$SOLAR_TASK_ROOT/logs"
 mkdir -p "$LOG_DIR"
 
-priority="${SOLAR_AI_PROVIDER_PRIORITY:-codex,claude,gemini}"
+priority="${SOLAR_ROUTER_PROVIDER_PRIORITY:-${SOLAR_AI_PROVIDER_PRIORITY:-codex,claude,gemini}}"
 providers="$(echo "$priority" | awk -F',' '
 {
     for (i=1; i<=NF; i++) {
@@ -41,7 +41,7 @@ providers="$(echo "$priority" | awk -F',' '
 END { print out }')"
 
 if [[ -z "$providers" ]]; then
-    echo "Error: SOLAR_AI_PROVIDER_PRIORITY is empty." >&2
+    echo "Error: SOLAR_ROUTER_PROVIDER_PRIORITY is empty." >&2
     exit 1
 fi
 

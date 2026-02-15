@@ -19,11 +19,17 @@ HOST = os.getenv("SOLAR_WS_HOST", "127.0.0.1")
 PORT = int(os.getenv("SOLAR_WS_PORT", "8765"))
 PATH = os.getenv("SOLAR_WS_PATH", "/ws")
 SUPPORTED_PROVIDERS = ("codex", "claude", "gemini")
-AI_PROVIDER_PRIORITY = os.getenv(
-    "SOLAR_AI_PROVIDER_PRIORITY", "codex,claude,gemini"
+AI_PROVIDER_PRIORITY = (
+    os.getenv("SOLAR_ROUTER_PROVIDER_PRIORITY")
+    or os.getenv("SOLAR_AI_PROVIDER_PRIORITY")
+    or "codex,claude,gemini"
 )
 AI_ROUTER_PYTHON = os.getenv("SOLAR_AI_ROUTER_PYTHON", "python3")
-AI_ROUTER_TIMEOUT_SEC = int(os.getenv("SOLAR_AI_ROUTER_TIMEOUT_SEC", "120"))
+AI_ROUTER_TIMEOUT_SEC = int(
+    os.getenv("SOLAR_ROUTER_TIMEOUT_SEC")
+    or os.getenv("SOLAR_AI_ROUTER_TIMEOUT_SEC")
+    or "310"
+)
 
 
 def validate_request(payload: Dict[str, Any]) -> bool:
@@ -62,7 +68,9 @@ def call_provider(provider: str, text: str, payload: Dict[str, Any]) -> str:
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(f"Unsupported provider: {provider}")
 
-    router_script = pathlib.Path(__file__).with_name("run_ai_router.py")
+    # Router lives in solar-router skill (repo root = parents[4] from this script)
+    _repo_root = pathlib.Path(__file__).resolve().parents[4]
+    router_script = _repo_root / "core/skills/solar-router/scripts/run_router.py"
     router_payload = {
         "provider": provider,
         "text": text,

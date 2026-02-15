@@ -28,6 +28,14 @@ Provide a local-first, filesystem-based task management system for Solar.
 
 None
 
+## Dependencies
+
+- **solar-router:** Task execution uses `solar-router` to invoke AI providers. Ensure `solar-router` is configured:
+  ```bash
+  bash core/skills/solar-router/scripts/onboard_router_env.sh
+  bash core/skills/solar-router/scripts/check_providers.sh
+  ```
+
 ## Validation commands
 
 ```bash
@@ -93,7 +101,7 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 2.  **Plan**: `plan.sh` prepares the task for execution, moving it to `planned/`.
 3.  **Approve**: `approve.sh` moves a planned task to `queued/` with a priority (high, normal, low).
 4.  **Start + Execute**: `run_worker.sh` picks the highest priority eligible task from `queued/`, moves it to `active/`, then executes one active task.
-5.  **Execute (manual/extra)**: `execute_active.sh` processes one `active/` task via `run_ai_router.py` using `SOLAR_AI_PROVIDER_PRIORITY`.
+5.  **Execute (manual/extra)**: `execute_active.sh` processes one `active/` task via `run_router.py` using `SOLAR_ROUTER_PROVIDER_PRIORITY`.
 6.  **Complete**: `complete.sh` moves a task from `active/` to `completed/` (or recurring flow).
 
 ## Automatic execution (run_worker)
@@ -105,8 +113,8 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 
 ## Task execution (execute_active)
 
-- **`execute_active.sh [--once|--all]`**: Executes task content from `active/` by calling `core/skills/solar-transport-gateway/scripts/run_ai_router.py`.
-- Provider selection uses `SOLAR_AI_PROVIDER_PRIORITY` (fallback order, first success wins).
+- **`execute_active.sh [--once|--all]`**: Executes task content from `active/` by calling `core/skills/solar-router/scripts/run_router.py`.
+- Provider selection uses `SOLAR_ROUTER_PROVIDER_PRIORITY` (fallback order, first success wins).
 - Task body is used as semantic instruction source (including agent + skill directions in natural language).
 - On success: writes execution log to `$SOLAR_TASK_ROOT/logs/` and runs `complete.sh`.
 - On failure across all providers: task is moved to `error/`.

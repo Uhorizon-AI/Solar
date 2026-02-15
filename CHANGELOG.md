@@ -6,6 +6,7 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 ### Added
+- `core/skills/solar-router` — Shared router for AI provider execution with Solar repo context, extracted from solar-transport-gateway. Includes run_router.py, check_providers.sh, onboard_router_env.sh, routing policy v2, and system prompt assets.
 - `core/skills/solar-system/scripts/Solar.c` C wrapper source for the Solar launchd entrypoint binary.
 - `core/skills/solar-system/scripts/diagnose_launchagent.sh` one-pass diagnostic script for LaunchAgent bootstrap issues.
 - `core/skills/solar-system/scripts/set_icon.swift` helper to apply custom icon metadata to the Solar entrypoint binary.
@@ -13,6 +14,12 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-system/assets/solar-icon.svg` source icon used to build Solar system icon assets.
 
 ### Changed
+- Unified AI router variable naming to `SOLAR_ROUTER_*` prefix (removed `_AI_` infix for clarity and consistency).
+- `core/skills/solar-router/scripts/run_router.py` default runtime directory changed from `sun/runtime/transport-gateway` to `sun/runtime/router`.
+- `core/skills/solar-transport-gateway/scripts/run_websocket_bridge.py` now reads `SOLAR_ROUTER_PROVIDER_PRIORITY` and `SOLAR_ROUTER_TIMEOUT_SEC` with automatic fallback to legacy variable names for backward compatibility.
+- `core/skills/solar-async-tasks/scripts/execute_active.sh` now reads `SOLAR_ROUTER_PROVIDER_PRIORITY` with automatic fallback to legacy `SOLAR_AI_PROVIDER_PRIORITY`.
+- Router timeout alignment: provider timeout default 300s, bridge/consumer timeout default 310s to prevent race conditions.
+- All skill documentation updated to use `SOLAR_ROUTER_*` naming exclusively, with legacy variables documented only in migration table.
 - `core/skills/solar-skill-creator/SKILL.md` now requires a short `System activation` subsection for skills designed to run via `solar-system` (feature token, install/status commands, and ownership pointer).
 - `core/skills/solar-system/assets/com.solar.system.plist.template` now executes a single Solar entrypoint binary (`scripts/Solar`) from `ProgramArguments` for launchd compatibility.
 - `core/skills/solar-system/scripts/install_launchagent_macos.sh` now enables the launchd label before bootstrap to recover from disabled overrides.
@@ -23,6 +30,11 @@ The format is based on Keep a Changelog.
 
 ### Fixed
 - `core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh` now resolves `poetry` and `curl` robustly in LaunchAgent contexts (minimal PATH), preventing false `Missing dependency: poetry` failures during `solar-system` ticks.
+
+### Removed
+- `core/skills/solar-transport-gateway/references/ai-routing-policy.md` (moved to solar-router/references/routing-policy.md)
+- `core/skills/solar-transport-gateway/scripts/check_ai_providers.sh` (moved to solar-router/scripts/check_providers.sh)
+- `core/skills/solar-transport-gateway/scripts/run_ai_router.py` (moved to solar-router/scripts/run_router.py)
 
 ## [0.1.0] - 2026-02-13
 ### Added
