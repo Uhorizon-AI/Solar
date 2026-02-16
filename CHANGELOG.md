@@ -6,7 +6,7 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 ### Added
-- `core/skills/solar-router` — Shared router for AI provider execution with Solar repo context, extracted from solar-transport-gateway. Includes run_router.py, check_providers.sh, onboard_router_env.sh, routing policy v2, and system prompt assets.
+- `core/skills/solar-router` — Shared router for AI provider execution with Solar repo context, extracted from solar-transport-gateway. Includes run_router.py, diagnose_router.sh, onboard_router_env.sh, routing policy v2, and system prompt assets.
 - `core/skills/solar-system/scripts/Solar.c` C wrapper source for the Solar launchd entrypoint binary.
 - `core/skills/solar-system/scripts/diagnose_launchagent.sh` one-pass diagnostic script for LaunchAgent bootstrap issues.
 - `core/skills/solar-system/scripts/set_icon.swift` helper to apply custom icon metadata to the Solar entrypoint binary.
@@ -19,6 +19,8 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-transport-gateway/scripts/run_websocket_bridge.py` now reads `SOLAR_ROUTER_PROVIDER_PRIORITY` and `SOLAR_ROUTER_TIMEOUT_SEC` with automatic fallback to legacy variable names for backward compatibility.
 - `core/skills/solar-async-tasks/scripts/execute_active.sh` now reads `SOLAR_ROUTER_PROVIDER_PRIORITY` with automatic fallback to legacy `SOLAR_AI_PROVIDER_PRIORITY`.
 - Router timeout alignment: provider timeout default 300s, bridge/consumer timeout default 310s to prevent race conditions.
+- `core/skills/solar-router/scripts/diagnose_router.sh` (router provider preflight/diagnostic): added `--verbose` for full error output on provider failure; all references in solar-router, solar-async-tasks, and solar-transport-gateway point to this script.
+- `core/skills/solar-async-tasks/scripts/execute_active.sh` now records per-provider errors (last 15 lines each) in task error files and logs "Trying provider: X" / "→ X: OK|FAIL" to stderr for easier debugging.
 - All skill documentation updated to use `SOLAR_ROUTER_*` naming exclusively, with legacy variables documented only in migration table.
 - `core/skills/solar-skill-creator/SKILL.md` now requires a short `System activation` subsection for skills designed to run via `solar-system` (feature token, install/status commands, and ownership pointer).
 - `core/skills/solar-system/assets/com.solar.system.plist.template` now executes a single Solar entrypoint binary (`scripts/Solar`) from `ProgramArguments` for launchd compatibility.
@@ -37,7 +39,7 @@ The format is based on Keep a Changelog.
 
 ### Removed
 - `core/skills/solar-transport-gateway/references/ai-routing-policy.md` (moved to solar-router/references/routing-policy.md)
-- `core/skills/solar-transport-gateway/scripts/check_ai_providers.sh` (moved to solar-router/scripts/check_providers.sh)
+- `core/skills/solar-transport-gateway/scripts/check_ai_providers.sh` (moved to solar-router/scripts/diagnose_router.sh)
 - `core/skills/solar-transport-gateway/scripts/run_ai_router.py` (moved to solar-router/scripts/run_router.py)
 
 ## [0.1.0] - 2026-02-13

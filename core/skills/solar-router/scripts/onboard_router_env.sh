@@ -179,4 +179,4 @@ if [[ ${#optional_vars[@]} -gt 0 ]]; then
 fi
 echo ""
 echo "All other variables use sensible defaults (see SKILL.md)."
-echo "Run 'bash core/skills/solar-router/scripts/check_providers.sh' to validate providers."
+echo "Run 'bash core/skills/solar-router/scripts/diagnose_router.sh' to validate providers."

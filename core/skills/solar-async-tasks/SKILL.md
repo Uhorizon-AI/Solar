@@ -33,7 +33,7 @@ None
 - **solar-router:** Task execution uses `solar-router` to invoke AI providers. Ensure `solar-router` is configured:
   ```bash
   bash core/skills/solar-router/scripts/onboard_router_env.sh
-  bash core/skills/solar-router/scripts/check_providers.sh
+  bash core/skills/solar-router/scripts/diagnose_router.sh
   ```
 
 ## Validation commands
@@ -117,7 +117,7 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 - Provider selection uses `SOLAR_ROUTER_PROVIDER_PRIORITY` (fallback order, first success wins).
 - Task body is used as semantic instruction source (including agent + skill directions in natural language).
 - On success: writes execution log to `$SOLAR_TASK_ROOT/logs/` and runs `complete.sh`.
-- On failure across all providers: task is moved to `error/`.
+- On failure across all providers: task is moved to `error/`. To see full provider errors (e.g. 401, binary not found), run `bash core/skills/solar-router/scripts/diagnose_router.sh --verbose`.
 
 ## Scheduling (optional)
 

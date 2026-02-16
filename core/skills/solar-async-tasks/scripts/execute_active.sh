@@ -98,7 +98,7 @@ mark_task_error() {
     local task_file="$1"
     local task_id="$2"
     local attempted_providers="$3"
-    local last_error="$4"
+    local errors_per_provider="$4"
 
     sed -i.bak 's/^status:.*/status: error/' "$task_file"
     rm -f "${task_file}.bak"
@@ -108,7 +108,8 @@ mark_task_error() {
         echo "## Execution Error"
         echo "- time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "- providers_attempted: $attempted_providers"
-        echo "- error: $last_error"
+        echo "- errors (per provider, in attempt order):"
+        printf '%s\n' "$errors_per_provider"
     } >> "$task_file"
 
     mv "$task_file" "$DIR_ERROR/$(basename "$task_file")"
@@ -119,7 +120,7 @@ run_one_task() {
     local task_file="$1"
     local task_id title body prompt
     local provider_attempts=""
-    local last_error=""
+    local errors_per_provider=""
     local success=false
     local reply=""
     local provider
@@ -148,19 +149,25 @@ run_one_task() {
         [[ -z "$provider" ]] && continue
         provider_attempts="${provider_attempts}${provider},"
 
+        echo "  Trying provider: $provider ..." >&2
         if output="$(call_router "$provider" "$prompt" "$task_id" 2>&1)"; then
+            echo "  → $provider: OK" >&2
             reply="$output"
             provider_used="$provider"
             success=true
             break
         else
-            last_error="$output"
+            echo "  → $provider: FAIL" >&2
+            # Record this provider's error: last 15 lines (usually contains RuntimeError + real cause)
+            err_block="$(echo "$output" | tail -n15)"
+            errors_per_provider="${errors_per_provider}  - ${provider}:"$'\n'"$(echo "$err_block" | sed 's/^/    /')"$'\n'
         fi
     done
     provider_attempts="${provider_attempts%,}"
+    errors_per_provider="${errors_per_provider%"$'\n'"}"  # trim trailing newline
 
     if [[ "$success" != "true" ]]; then
-        mark_task_error "$task_file" "$task_id" "$provider_attempts" "$last_error"
+        mark_task_error "$task_file" "$task_id" "$provider_attempts" "$errors_per_provider"
         return 1
     fi
 

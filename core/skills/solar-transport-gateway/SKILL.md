@@ -32,7 +32,7 @@ None
 - **solar-router:** This skill depends on `solar-router` for AI provider execution. Ensure `solar-router` is configured first:
   ```bash
   bash core/skills/solar-router/scripts/onboard_router_env.sh
-  bash core/skills/solar-router/scripts/check_providers.sh
+  bash core/skills/solar-router/scripts/diagnose_router.sh
   ```
 
 ## Validation commands
@@ -54,8 +54,8 @@ bash core/skills/solar-transport-gateway/scripts/onboard_websocket_env.sh
 bash core/skills/solar-transport-gateway/scripts/validate_websocket_bridge.sh
 
 # Preflight AI providers
-bash core/skills/solar-router/scripts/check_providers.sh --dry-run
-bash core/skills/solar-router/scripts/check_providers.sh
+bash core/skills/solar-router/scripts/diagnose_router.sh --dry-run
+bash core/skills/solar-router/scripts/diagnose_router.sh
 
 # Check runtime health (local + public)
 bash core/skills/solar-transport-gateway/scripts/check_transport_gateway.sh

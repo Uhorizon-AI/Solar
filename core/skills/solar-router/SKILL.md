@@ -50,9 +50,12 @@ Optional command overrides:
 # Validate skill structure
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-router /tmp
 
-# Preflight providers (native helper in this skill)
-bash core/skills/solar-router/scripts/check_providers.sh --dry-run
-bash core/skills/solar-router/scripts/check_providers.sh
+# Diagnose router / preflight providers (native helper in this skill)
+bash core/skills/solar-router/scripts/diagnose_router.sh --dry-run
+bash core/skills/solar-router/scripts/diagnose_router.sh
+
+# Full error output when a provider fails (e.g. 401, binary not found)
+bash core/skills/solar-router/scripts/diagnose_router.sh --verbose
 ```
 
 ## Consumers
