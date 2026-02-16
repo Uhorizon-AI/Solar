@@ -30,9 +30,9 @@ ensure_dirs() {
 }
 
 # Generate a unique task ID
+# Format: YYYYMMDD-HHMM (no seconds, no random suffix — conflicts visible if two tasks same minute)
 generate_id() {
-    # Format: YYYYMMDD-HHMMSS-RAND
-    date +"%Y%m%d-%H%M%S-$((RANDOM % 1000))"
+    date +"%Y%m%d-%H%M"
 }
 
 # Log a message

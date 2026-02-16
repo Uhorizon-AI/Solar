@@ -124,13 +124,22 @@ run_one_task() {
     local reply=""
     local provider
     local provider_used=""
+    local providers_for_task="$providers"
 
     task_id="$(extract_meta "$task_file" "id")"
     title="$(extract_meta "$task_file" "title")"
+    # Per-task provider (e.g. provider: claude for Zoho MCP); overrides SOLAR_ROUTER_PROVIDER_PRIORITY
+    local task_provider
+    task_provider="$(extract_meta "$task_file" "provider")"
+    if [[ -n "$task_provider" ]]; then
+        providers_for_task="$(echo "$task_provider" | xargs)"
+    fi
+    [[ -z "$providers_for_task" ]] && providers_for_task="$providers"
+
     body="$(strip_frontmatter "$task_file")"
     prompt="$(build_prompt "$task_id" "$title" "$body")"
 
-    IFS=',' read -r -a arr <<< "$providers"
+    IFS=',' read -r -a arr <<< "$providers_for_task"
     for provider in "${arr[@]}"; do
         provider="$(echo "$provider" | xargs)"
         [[ -z "$provider" ]] && continue
