@@ -3,8 +3,16 @@
 # Shared library for solar-async-tasks
 # Sourced by other scripts
 
-# Default Root
-export SOLAR_TASK_ROOT="${SOLAR_TASK_ROOT:-$HOME/Sites/solar.ai/sun/runtime/async-tasks}"
+# Default Root: prefer (pwd)/sun/... when run from repo (e.g. LaunchAgent); else $HOME path
+if [[ -z "${SOLAR_TASK_ROOT:-}" ]]; then
+  if [[ -d "$(pwd)/sun/runtime/async-tasks" ]]; then
+    export SOLAR_TASK_ROOT="$(pwd)/sun/runtime/async-tasks"
+  else
+    export SOLAR_TASK_ROOT="${HOME:-}/Sites/solar.ai/sun/runtime/async-tasks"
+  fi
+else
+  export SOLAR_TASK_ROOT
+fi
 
 # Subdirectories
 export DIR_DRAFTS="$SOLAR_TASK_ROOT/drafts"
@@ -51,10 +59,11 @@ get_status() {
 }
 
 # Extract metadata from frontmatter
+# When key is missing, return empty string and exit 0 (avoids pipefail exit in callers)
 extract_meta() {
     local file="$1"
     local key="$2"
-    grep "^$key:" "$file" 2>/dev/null | sed "s/^$key: //" | tr -d '"' | head -n1
+    ( grep "^$key:" "$file" 2>/dev/null || true ) | sed "s/^$key: //" | tr -d '"' | head -n1
 }
 
 # Schedule window margin in minutes (±)

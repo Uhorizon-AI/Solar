@@ -11,6 +11,9 @@
   <key>StartInterval</key>
   <integer>__START_INTERVAL__</integer>
 
+  <key>WorkingDirectory</key>
+  <string>__WORKING_DIRECTORY__</string>
+
   <key>ProgramArguments</key>
   <array>
     <string>__ENTRYPOINT_PATH__</string>

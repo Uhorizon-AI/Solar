@@ -27,8 +27,12 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-system/scripts/render_launchagent_plist.sh` now renders the Solar wrapper entrypoint path and aligns default log paths with `~/Library/Logs/com.solar.system/`.
 - `core/skills/solar-system/scripts/status_launchagent_macos.sh` now reads the same default log paths used by install/render scripts (`~/Library/Logs/com.solar.system/`).
 - `core/skills/solar-system/scripts/uninstall_launchagent_macos.sh` no longer leaves a persistent `disabled` override on the launchd label.
+- `core/skills/solar-system/assets/com.solar.system.plist.template` now sets `WorkingDirectory` to repo root so launchd runs the Solar process with correct cwd.
+- `core/skills/solar-system/scripts/render_launchagent_plist.sh` now substitutes `__WORKING_DIRECTORY__` from REPO_ROOT when rendering the plist.
 
 ### Fixed
+- `core/skills/solar-async-tasks/scripts/task_lib.sh`: `extract_meta` no longer causes script exit when a frontmatter key is missing (grep in subshell with `|| true` to avoid pipefail exit in `start_next.sh` and other callers).
+- `core/skills/solar-async-tasks/scripts/task_lib.sh`: `SOLAR_TASK_ROOT` default now prefers `$(pwd)/sun/runtime/async-tasks` when that path exists, so async-tasks runs correctly under LaunchAgent when cwd is repo root.
 - `core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh` now resolves `poetry` and `curl` robustly in LaunchAgent contexts (minimal PATH), preventing false `Missing dependency: poetry` failures during `solar-system` ticks.
 
 ### Removed
