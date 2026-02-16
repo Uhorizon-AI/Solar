@@ -48,23 +48,29 @@ planets/<planet-name>/
 1. Create a folder in `planets/<planet-name>/skills/<skill-name>/`
 2. Add a `SKILL.md` file (required)
 3. Add implementation files as needed
-4. Run sync: `bash ../../core/scripts/sync-clients.sh`
+4. **Update `AGENTS.md`** — Add/update Skills section so routing stays accurate
+5. Run sync: `bash ../../core/scripts/sync-clients.sh`
 
 ### Creating an Agent
 
 1. Create a `.md` file in `planets/<planet-name>/agents/<agent-name>.md`
 2. Define the agent's purpose, capabilities, and protocols
-3. Run sync: `bash ../../core/scripts/sync-clients.sh`
+3. **Update `AGENTS.md`** — Add/update Agents section; add to Request Routing if needed
+4. Run sync: `bash ../../core/scripts/sync-clients.sh`
 
 ### Creating a Command
 
 1. Create a `.md` file in `planets/<planet-name>/commands/<command-name>.md`
 2. Define the command's behavior and usage
-3. Run sync: `bash ../../core/scripts/sync-clients.sh`
+3. **Update `AGENTS.md`** — Add to Request Routing if user requests should trigger it
+4. Run sync: `bash ../../core/scripts/sync-clients.sh`
 
 ## Resource Sync
 
-After creating or updating resources, always run:
+After creating or updating resources:
+
+1. **Verify `AGENTS.md` is up to date** (Agents, Commands, Skills, Request Routing, Ownership matrix)
+2. Run sync:
 
 ```bash
 bash ../../core/scripts/sync-clients.sh
@@ -87,7 +93,7 @@ This syncs your planet's resources to:
 1. **Create folders only when needed** - Don't create empty `agents/`, `commands/`, or `skills/` folders
 2. **Use clear naming** - Choose descriptive names that won't conflict with core resources
 3. **Sync after changes** - Always sync after creating or updating resources
-4. **Document in AGENTS.md** - Keep your planet's governance and scope up to date
+4. **Document in AGENTS.md** - Keep Agents, Commands, Skills, Request Routing (and Ownership matrix if used) in sync with resources
 5. **Keep planet-specific** - Only put domain-specific resources in planets; framework resources go in `core/`
 
 ## Quick Start

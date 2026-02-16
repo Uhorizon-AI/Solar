@@ -9,9 +9,9 @@
 # - .claude/{skills,agents,commands}
 # - .cursor/{skills,agents,commands}
 #
-# Conflict resolution:
-# - If a name exists in both core/ and planets/*, the planet version uses prefix: <planet-name>:<resource-name>
-# - Otherwise, original names are preserved
+# Naming:
+# - core/ resources: unprefixed (e.g. solar-router, solar-telegram)
+# - planets/* resources: always prefixed <planet-name>:<resource-name> (e.g. uhorizon:linkedin-prospecting)
 #
 # Usage:
 #   bash core/scripts/sync-clients.sh [--codex-only|--claude-only|--cursor-only]

@@ -12,8 +12,12 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-system/scripts/set_icon.swift` helper to apply custom icon metadata to the Solar entrypoint binary.
 - `core/skills/solar-system/scripts/svg2png.swift` helper to render SVG icons into PNG assets for `.icns` generation.
 - `core/skills/solar-system/assets/solar-icon.svg` source icon used to build Solar system icon assets.
-
 ### Changed
+- `core/templates/planet-AGENTS.md` — Replaced minimal sync rule with full Planet Sync Rule: verification checklist (Agents, Commands, Skills, Request Routing, Ownership matrix), sync command, and when to sync; corrected prefix description to "planet resources always prefixed" (matches sync-clients.sh).
+- `core/templates/planet-structure.md` — Added "Update AGENTS.md" step to Creating a Skill/Agent/Command; added Commands to Resource Sync checklist and Best Practices.
+- `core/scripts/create-planet.sh` — Next steps: added step 4 "keep AGENTS.md in sync (Agents, Commands, Skills, Request Routing)" when adding resources.
+- `core/bootstrap.sh` — Next steps: "keep AGENTS.md in sync" when adding planet resources.
+- `core/scripts/sync-clients.sh` — Header comment: corrected naming (core unprefixed, planets/* always prefixed); removed obsolete "conflict resolution" wording.
 - Unified AI router variable naming to `SOLAR_ROUTER_*` prefix (removed `_AI_` infix for clarity and consistency).
 - `core/skills/solar-router/scripts/run_router.py` default runtime directory changed from `sun/runtime/transport-gateway` to `sun/runtime/router`.
 - `core/skills/solar-transport-gateway/scripts/run_websocket_bridge.py` now reads `SOLAR_ROUTER_PROVIDER_PRIORITY` and `SOLAR_ROUTER_TIMEOUT_SEC` with automatic fallback to legacy variable names for backward compatibility.
@@ -33,6 +37,8 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-system/scripts/render_launchagent_plist.sh` now substitutes `__WORKING_DIRECTORY__` from REPO_ROOT when rendering the plist.
 
 ### Fixed
+- Documentation: prefix rule described "on conflict" but sync-clients.sh always prefixes planet resources; corrected across templates.
+- Added Commands to verification checklists where missing (planet-AGENTS.md, planet-structure.md, create-planet.sh).
 - `core/skills/solar-async-tasks/scripts/task_lib.sh`: `extract_meta` no longer causes script exit when a frontmatter key is missing (grep in subshell with `|| true` to avoid pipefail exit in `start_next.sh` and other callers).
 - `core/skills/solar-async-tasks/scripts/task_lib.sh`: `SOLAR_TASK_ROOT` default now prefers `$(pwd)/sun/runtime/async-tasks` when that path exists, so async-tasks runs correctly under LaunchAgent when cwd is repo root.
 - `core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh` now resolves `poetry` and `curl` robustly in LaunchAgent contexts (minimal PATH), preventing false `Missing dependency: poetry` failures during `solar-system` ticks.
