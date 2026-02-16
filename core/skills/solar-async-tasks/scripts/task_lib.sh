@@ -29,6 +29,21 @@ ensure_dirs() {
     mkdir -p "$DIR_DRAFTS" "$DIR_PLANNED" "$DIR_QUEUED" "$DIR_ACTIVE" "$DIR_COMPLETED" "$DIR_ERROR" "$DIR_ARCHIVE" "$DIR_LOCKS"
 }
 
+# Setup logging directory: flat logs/ (one .log file per task, same name as task .md).
+setup_logging() {
+    export LOG_DIR="${SOLAR_TASK_ROOT}/logs"
+    mkdir -p "$LOG_DIR"
+}
+
+# Remove log files older than 7 days to avoid unused files piling up.
+# Safe to call at start of worker/execute_active; uses find -mtime +7.
+cleanup_old_logs() {
+    [[ ! -d "$SOLAR_TASK_ROOT/logs" ]] && return 0
+    local removed
+    removed=$(find "$SOLAR_TASK_ROOT/logs" -maxdepth 1 -type f -name '*.log' -mtime +7 -print -delete 2>/dev/null | wc -l | tr -d ' ')
+    [[ -n "$removed" && "$removed" -gt 0 ]] && log_msg "Cleaned $removed log(s) older than 7 days"
+}
+
 # Generate a unique task ID
 # Format: YYYYMMDD-HHMM (no seconds, no random suffix — conflicts visible if two tasks same minute)
 generate_id() {

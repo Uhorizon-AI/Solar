@@ -72,6 +72,12 @@ ls -la $SOLAR_TASK_ROOT/.locks/
 # Check error state tasks (runtime location)
 ls -la $SOLAR_TASK_ROOT/error/
 
+# Re-queue a task that failed (after fixing cause)
+bash core/skills/solar-async-tasks/scripts/requeue_from_error.sh <task_id>
+
+# List execution logs (one .log per task, same name as task; >7 days auto-deleted)
+ls -la $SOLAR_TASK_ROOT/logs/*.log 2>/dev/null || true
+
 # Verify skill packaging
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-async-tasks /tmp
 ```
@@ -116,8 +122,9 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 - **`execute_active.sh [--once|--all]`**: Executes task content from `active/` by calling `core/skills/solar-router/scripts/run_router.py`.
 - Provider selection uses `SOLAR_ROUTER_PROVIDER_PRIORITY` (fallback order, first success wins).
 - Task body is used as semantic instruction source (including agent + skill directions in natural language).
-- On success: writes execution log to `$SOLAR_TASK_ROOT/logs/` and runs `complete.sh`.
-- On failure across all providers: task is moved to `error/`. To see full provider errors (e.g. 401, binary not found), run `bash core/skills/solar-router/scripts/diagnose_router.sh --verbose`.
+- **One log per task (traceability):** The log file has the **same name as the task file**, with `.log` extension (e.g. task `20260214-0100_Triage-diario-de-ofertas-LinkedIn.md` → log `logs/20260214-0100_Triage-diario-de-ofertas-LinkedIn.log`). Each run overwrites it, so the log always reflects the **last** execution (outcome, result or error). Logs older than 7 days are automatically deleted when the worker runs (`cleanup_old_logs`).
+- On success: runs `complete.sh`.
+- On failure: task is moved to `error/`. To see full provider errors (e.g. 401, binary not found), run `bash core/skills/solar-router/scripts/diagnose_router.sh --verbose`.
 
 ## Scheduling (optional)
 
@@ -341,13 +348,21 @@ When the user’s request (e.g. via Telegram) is long-running or complex:
 ## Runtime Structure
 
 Default: `sun/runtime/async-tasks/`
--   `drafts/`: Initial capture.
--   `planned/`: Ready for review.
--   `queued/`: Approved and prioritized (high, normal, low).
+-   `drafts/`: Initial capture; not yet planned or approved. Worker never picks from here.
+-   `planned/`: Ready for review; awaiting approval to move to queue. Worker never picks from here.
+-   `queued/`: Approved and prioritized (high, normal, low). **Worker only picks tasks from here.**
 -   `active/`: Currently in progress.
--   `completed/`: Finished.
--   `error/`: Tasks with cleanup failures (requires manual intervention).
--   `archive/`: Old tasks or completed recurring tasks.
+-   `completed/`: Finished (or moved back to `queued/` if recurring and not at max_runs).
+-   `error/`: Execution or cleanup failure. **Not re-run automatically**; use `requeue_from_error.sh <task_id>` to move back to `queued/` after fixing the cause.
+-   `archive/`: Old tasks or recurring tasks that reached `recurring_max_runs`. Historical only; worker does not use.
+
+**Folder purpose summary:** drafts/planned = “pending your approval”; queued = “ready to run”; archive = “done for good / history”.
+
+## Error State and Recurrence
+
+-   **Tasks in `error/` are never re-executed automatically.** The worker only reads from `queued/`. Recurrence (re-queue after completion) only applies when a task **completes successfully**; if it fails, it is moved to `error/` and stays there until you act.
+-   **To run a failed task again:** fix the underlying issue (env, provider binary, skill, etc.), then run `requeue_from_error.sh <task_id>` to move it from `error/` to `queued/`. It will run in the next eligible schedule window (or immediately if it has no schedule).
+-   **One log per task (same name as task, .log):** The log has the same base name as the task file (e.g. `queued/20260214-0100_Triage-....md` → `logs/20260214-0100_Triage-....log`). Each run overwrites it; the log always reflects the last execution. **Cleanup:** Logs older than 7 days are removed when the worker runs (`cleanup_old_logs`).
 
 ## Output format
 

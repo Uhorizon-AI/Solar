@@ -24,8 +24,8 @@ if [[ ! -f "$ROUTER_SCRIPT" ]]; then
 fi
 
 ensure_dirs
-LOG_DIR="$SOLAR_TASK_ROOT/logs"
-mkdir -p "$LOG_DIR"
+setup_logging
+cleanup_old_logs
 
 priority="${SOLAR_ROUTER_PROVIDER_PRIORITY:-${SOLAR_AI_PROVIDER_PRIORITY:-codex,claude,gemini}}"
 providers="$(echo "$priority" | awk -F',' '
@@ -97,23 +97,44 @@ PY
 mark_task_error() {
     local task_file="$1"
     local task_id="$2"
-    local attempted_providers="$3"
-    local errors_per_provider="$4"
+    local title="$3"
+    local attempted_providers="$4"
+    local errors_per_provider="$5"
+    local err_ts
+    err_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     sed -i.bak 's/^status:.*/status: error/' "$task_file"
     rm -f "${task_file}.bak"
 
+    local error_block=""
+    error_block=$(printf '%s\n' "- time: $err_ts" "- providers_attempted: $attempted_providers" "- errors (per provider, in attempt order):" "$errors_per_provider")
+
     {
         echo ""
         echo "## Execution Error"
-        echo "- time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        echo "- providers_attempted: $attempted_providers"
-        echo "- errors (per provider, in attempt order):"
-        printf '%s\n' "$errors_per_provider"
+        echo "$error_block"
     } >> "$task_file"
+
+    # Log: same name as task file, .log extension (traceability task ↔ log)
+    mkdir -p "$LOG_DIR"
+    local log_file="$LOG_DIR/$(basename "$task_file" .md).log"
+    {
+        echo "# Async Task Execution"
+        echo ""
+        echo "- outcome: error"
+        echo "- task_id: $task_id"
+        echo "- title: $title"
+        echo "- executed_at: $err_ts"
+        echo "- providers_attempted: $attempted_providers"
+        echo ""
+        echo "## Error"
+        echo ""
+        printf '%s\n' "$errors_per_provider"
+    } > "$log_file"
 
     mv "$task_file" "$DIR_ERROR/$(basename "$task_file")"
     echo "❌ Task execution failed and moved to error/: $task_id"
+    echo "   Log: $log_file"
 }
 
 run_one_task() {
@@ -167,18 +188,20 @@ run_one_task() {
     errors_per_provider="${errors_per_provider%"$'\n'"}"  # trim trailing newline
 
     if [[ "$success" != "true" ]]; then
-        mark_task_error "$task_file" "$task_id" "$provider_attempts" "$errors_per_provider"
+        mark_task_error "$task_file" "$task_id" "$title" "$provider_attempts" "$errors_per_provider"
         return 1
     fi
 
-    local log_file="$LOG_DIR/${task_id}_$(date +%Y%m%d-%H%M%S)_execution.md"
+    # Log: same name as task file, .log extension (traceability task ↔ log; last run overwrites)
+    local log_file="$LOG_DIR/$(basename "$task_file" .md).log"
     {
         echo "# Async Task Execution"
         echo ""
+        echo "- outcome: success"
         echo "- task_id: $task_id"
         echo "- title: $title"
-        echo "- provider_used: $provider_used"
         echo "- executed_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "- provider_used: $provider_used"
         echo ""
         echo "## Result"
         echo ""

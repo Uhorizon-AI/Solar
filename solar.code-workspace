@@ -15,6 +15,7 @@
     ],
     "settings": {
         "claudeCode.respectGitIgnore": false,
-        "git.autoRepositoryDetection": true
+        "git.autoRepositoryDetection": true,
+        "git.repositoryScanMaxDepth": 3
     }
 }

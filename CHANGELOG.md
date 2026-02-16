@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog.
 
 ## [Unreleased]
+### Added
+- `core/skills/solar-async-tasks/scripts/requeue_from_error.sh` to move tasks from `error/` back to `queued/` after fixing the root cause.
+
+### Changed
+- `core/skills/solar-async-tasks/scripts/execute_active.sh` now writes one flat log per task (`logs/<task-file>.log`), overwriting on each run to keep last execution state, and includes structured metadata for success/error outcomes.
+- `core/skills/solar-async-tasks/scripts/task_lib.sh` now provides `setup_logging()` and `cleanup_old_logs()` (7-day log retention) used by async task execution.
+- `core/skills/solar-async-tasks/scripts/list.sh` now shows `error/` task detail paths and resolves execution error time from the latest `## Execution Error` block when frontmatter timestamps are absent.
+- `core/skills/solar-async-tasks/SKILL.md` updated to document manual requeue flow from `error/`, one-log-per-task behavior, retention cleanup, and explicit runtime folder semantics (`drafts/planned/queued/error/archive`).
+- `solar.code-workspace` now sets `git.repositoryScanMaxDepth: 3` to improve multi-repo discovery in nested workspace layouts.
 
 ## [0.2.0] - 2026-02-16
 ### Added

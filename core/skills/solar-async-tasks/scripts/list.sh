@@ -89,7 +89,13 @@ for f in "$DIR_ERROR"/*.md; do
     ID=$(grep "^id:" "$f" | head -n1 | cut -d '"' -f 2)
     TITLE=$(grep "^title:" "$f" | head -n1 | cut -d '"' -f 2)
     ERROR_TIME=$(extract_meta "$f" "cleanup_error_time")
-    echo "[$ID] ❌ $TITLE (error at: $ERROR_TIME)"
+    # Execution errors have time in body (## Execution Error - time: ...), not in frontmatter
+    # Use last occurrence so requeue+refail shows most recent error time
+    if [[ -z "$ERROR_TIME" ]]; then
+        ERROR_TIME=$(grep "^- time:" "$f" 2>/dev/null | tail -n1 | sed 's/^- time: //' | tr -d ' ')
+    fi
+    echo "[$ID] ❌ $TITLE (error at: ${ERROR_TIME:-see file})"
+    echo "    → Detalle: $f"
 done
 
 echo ""
