@@ -131,8 +131,10 @@ run_one_task() {
     # Per-task provider (e.g. provider: claude for Zoho MCP); overrides SOLAR_ROUTER_PROVIDER_PRIORITY
     local task_provider
     task_provider="$(extract_meta "$task_file" "provider")"
+    task_provider="${task_provider#"${task_provider%%[![:space:]]*}"}"
+    task_provider="${task_provider%"${task_provider##*[![:space:]]}"}"
     if [[ -n "$task_provider" ]]; then
-        providers_for_task="$(echo "$task_provider" | xargs)"
+        providers_for_task="$task_provider"
     fi
     [[ -z "$providers_for_task" ]] && providers_for_task="$providers"
 
@@ -141,7 +143,8 @@ run_one_task() {
 
     IFS=',' read -r -a arr <<< "$providers_for_task"
     for provider in "${arr[@]}"; do
-        provider="$(echo "$provider" | xargs)"
+        provider="${provider#"${provider%%[![:space:]]*}"}"
+        provider="${provider%"${provider##*[![:space:]]}"}"
         [[ -z "$provider" ]] && continue
         provider_attempts="${provider_attempts}${provider},"
 
