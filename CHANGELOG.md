@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-02-16
+### Added
+- feat(docs): update AGENTS.md and related templates for resource synchronization
+- feat(solar-router): update documentation and scripts for provider diagnostics
+- feat(solar-router): add diagnose_router.sh script for preflight checks of AI providers
+- feat(solar-async-tasks): enhance task provider handling and unique ID generation
+- feat(solar-system): enhance launchd plist rendering and task library functionality
+- feat: refactor AI provider routing to use solar-router, update documentation and scripts accordingly
+- feat(solar-router): implement solar-router skill with provider management and environment setup
+- feat(transport-gateway): enhance process management and environment setup scripts
+- feat(solar-system): switch launchd to Solar entrypoint and align logging
+- feat: Implement solar-system orchestration with LaunchAgent support and related scripts
+- feat: Enhance task management with hooks and recurring support
+
+### Fixed
+- fix(solar-async-tasks): trim whitespace from task provider strings in execute_active.sh
+- fix(websocket-bridge): improve error handling and logging for provider execution failures
+
+
 ### Added
 - `core/skills/solar-router` — Shared router for AI provider execution with Solar repo context, extracted from solar-transport-gateway. Includes run_router.py, diagnose_router.sh, onboard_router_env.sh, routing policy v2, and system prompt assets.
 - `core/skills/solar-system/scripts/Solar.c` C wrapper source for the Solar launchd entrypoint binary.
