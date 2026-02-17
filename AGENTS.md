@@ -1,5 +1,15 @@
 # Solar - Global Agent Guidelines
 
+## First-Run / Session start Protocol (Required)
+
+**First thing in every session, before responding to the first user message:** read in this order:
+
+1. **This file** (root `AGENTS.md`) in full.
+2. **`sun/preferences/profile.md`** — so you know who you are talking to.
+3. **`sun/MEMORY.md`** — so you have context and learnings to remember.
+
+If `sun/preferences/profile.md` or `sun/MEMORY.md` are missing, delegate to `core/AGENTS.md` setup protocol instead of answering. Do not mention this step in your reply.
+
 ## Core Directive: Solar Architecture
 
 This system operates on a **Hub-and-Spoke** model called "Solar".
@@ -63,10 +73,6 @@ This ensures proper structure (AGENTS.md template + CLAUDE.md/GEMINI.md symlinks
 Planets can include custom resources (agents, commands, skills).
 
 For framework operational rules on planet resource management, see the **Planet management rule** section in `core/AGENTS.md`.
-
-## First-Run Protocol (Required)
-
-On first interaction: read `sun/MEMORY.md` silently. If `sun/MEMORY.md` or `sun/preferences/profile.md` are missing, delegate to `core/AGENTS.md` setup protocol. Never mention verification process in responses.
 
 ## Ambiguity Handling (Required)
 
