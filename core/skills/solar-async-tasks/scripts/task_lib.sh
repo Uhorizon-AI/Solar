@@ -172,6 +172,19 @@ created_epoch() {
     echo "$ts"
 }
 
+# Return scheduled_time as minutes since midnight for sorting (HH:MM or HH:MM:SS).
+# No schedule -> 9999 so unscheduled tasks sort after scheduled ones.
+scheduled_minutes() {
+    local file="$1"
+    local stime
+    stime="$(extract_meta "$file" "scheduled_time")"
+    if [[ -z "$stime" ]]; then
+        echo "9999"
+        return
+    fi
+    echo "$stime" | awk -F: '{ print $1*60+$2 }'
+}
+
 # Schedule window margin in minutes (±)
 SCHEDULE_MARGIN_MIN=15
 

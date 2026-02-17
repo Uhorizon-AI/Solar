@@ -34,7 +34,7 @@ done
 
 echo ""
 echo "=== QUEUED ==="
-# Order by priority (high > normal > low), then created asc (FIFO)
+# Order by priority (high > normal > low), then scheduled_time (09:00 before 09:30), then created asc (FIFO)
 find "$DIR_QUEUED" -name "*.md" -print 2>/dev/null | while read -r f; do
     [[ -e "$f" ]] || continue
     prio="$(extract_meta "$f" "priority")"
@@ -42,9 +42,10 @@ find "$DIR_QUEUED" -name "*.md" -print 2>/dev/null | while read -r f; do
     [[ "$prio" == "high" ]] && prio_val=2
     [[ "$prio" == "normal" ]] && prio_val=1
     [[ "$prio" == "low" ]] && prio_val=0
+    sched_min="$(scheduled_minutes "$f")"
     ts="$(created_epoch "$f")"
-    printf '%s\t%s\t%s\t%s\n' "$prio_val" "$ts" "$prio" "$f"
-done | sort -t$'\t' -k1,1nr -k2,2n | while IFS=$'\t' read -r _ _ prio f; do
+    printf '%s\t%s\t%s\t%s\t%s\n' "$prio_val" "$sched_min" "$ts" "$prio" "$f"
+done | sort -t$'\t' -k1,1nr -k2,2n -k3,3n | while IFS=$'\t' read -r _ _ _ prio f; do
     [ -e "$f" ] || continue
     ID=$(extract_meta "$f" "id")
     TITLE=$(extract_meta "$f" "title")
