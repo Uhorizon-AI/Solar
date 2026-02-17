@@ -12,6 +12,7 @@ from typing import Dict, List
 
 SUPPORTED_PROVIDERS = {"codex", "claude", "gemini"}
 CODEX_STATE_DIR = pathlib.Path.home() / ".codex"
+FALLBACK_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
 
 # REPO_ROOT: script lives at core/skills/solar-router/scripts/ -> 4 levels up to repo
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
@@ -21,7 +22,7 @@ DEFAULT_CMDS: Dict[str, str] = {
         f"codex exec --skip-git-repo-check --full-auto -C {REPO_ROOT} "
         f"--add-dir {CODEX_STATE_DIR} --"
     ),
-    "claude": "claude -p --permission-mode bypassPermissions",
+    "claude": "claude -p --permission-mode bypassPermissions --no-session-persistence",
     "gemini": "gemini -y",
 }
 
@@ -131,10 +132,16 @@ def get_cmd(provider: str) -> List[str]:
     cmd = shlex.split(raw)
     if not cmd:
         raise RuntimeError(f"{new_key} is empty")
-    if shutil.which(cmd[0]) is None:
+    found = shutil.which(cmd[0])
+    if found is None:
+        current_path = os.getenv("PATH", "")
+        merged_path = os.pathsep.join(FALLBACK_PATHS + ([current_path] if current_path else []))
+        found = shutil.which(cmd[0], path=merged_path)
+    if found is None:
         raise RuntimeError(
-            f"client binary not found: {cmd[0]} (provider={provider}, env={new_key})"
+            f"client binary not found: {cmd[0]} (provider={provider}, env={new_key}, PATH={os.getenv('PATH','')})"
         )
+    cmd[0] = found
     return cmd
 
 

@@ -41,7 +41,9 @@ cleanup_old_logs() {
     [[ ! -d "$SOLAR_TASK_ROOT/logs" ]] && return 0
     local removed
     removed=$(find "$SOLAR_TASK_ROOT/logs" -maxdepth 1 -type f -name '*.log' -mtime +7 -print -delete 2>/dev/null | wc -l | tr -d ' ')
-    [[ -n "$removed" && "$removed" -gt 0 ]] && log_msg "Cleaned $removed log(s) older than 7 days"
+    if [[ -n "$removed" && "$removed" -gt 0 ]]; then
+        log_msg "Cleaned $removed log(s) older than 7 days"
+    fi
 }
 
 # Generate a unique task ID

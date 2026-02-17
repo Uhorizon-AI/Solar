@@ -10,7 +10,9 @@ The format is based on Keep a Changelog.
 
 ### Changed
 - `core/skills/solar-async-tasks/scripts/execute_active.sh` now writes one flat log per task (`logs/<task-file>.log`), overwriting on each run to keep last execution state, and includes structured metadata for success/error outcomes.
-- `core/skills/solar-async-tasks/scripts/task_lib.sh` now provides `setup_logging()` and `cleanup_old_logs()` (7-day log retention) used by async task execution.
+- `core/skills/solar-async-tasks/scripts/task_lib.sh` now provides `setup_logging()` and `cleanup_old_logs()` (7-day log retention) used by async task execution; `cleanup_old_logs()` log message wrapped in explicit `if` for clarity.
+- `core/skills/solar-router/scripts/run_router.py` now uses `FALLBACK_PATHS` to resolve provider CLIs when the process PATH is minimal (e.g. LaunchAgent); resolves to absolute path and uses it for execution; Claude invocation adds `--no-session-persistence`; "client not found" error message includes current PATH for debugging.
+- `core/skills/solar-system/scripts/solar_orchestrator.sh` now exports a deterministic baseline PATH (`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`, `/usr/sbin`, `/sbin`) at startup so provider CLIs are discoverable when run from LaunchAgent.
 - `core/skills/solar-async-tasks/scripts/list.sh` now shows `error/` task detail paths and resolves execution error time from the latest `## Execution Error` block when frontmatter timestamps are absent.
 - `core/skills/solar-async-tasks/SKILL.md` updated to document manual requeue flow from `error/`, one-log-per-task behavior, retention cleanup, and explicit runtime folder semantics (`drafts/planned/queued/error/archive`).
 - `solar.code-workspace` now sets `git.repositoryScanMaxDepth: 3` to improve multi-repo discovery in nested workspace layouts.
