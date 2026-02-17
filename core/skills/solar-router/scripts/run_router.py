@@ -23,7 +23,7 @@ DEFAULT_CMDS: Dict[str, str] = {
         f"--add-dir {CODEX_STATE_DIR} --"
     ),
     "claude": "claude -p --permission-mode bypassPermissions --no-session-persistence",
-    "gemini": "gemini -y",
+    "gemini": "gemini -y -p",
 }
 
 MAX_CONTEXT_TURNS = int(
@@ -152,12 +152,20 @@ def run_provider(provider: str, prompt: str) -> str:
         or "300"
     )
     cmd = get_cmd(provider) + [prompt]
+    env = os.environ.copy()
+    if provider == "gemini":
+        # Keep Gemini credentials anchored to user-level ~/.gemini regardless of launcher env.
+        env.setdefault("GEMINI_CLI_HOME", str(pathlib.Path.home()))
+        # Prefer file-based oauth creds in ~/.gemini/oauth_creds.json unless explicitly overridden.
+        env.setdefault("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", "false")
+
     proc = subprocess.run(
         cmd,
         text=True,
         capture_output=True,
         timeout=timeout_sec,
         cwd=REPO_ROOT,
+        env=env,
     )
     if proc.returncode != 0:
         error = proc.stderr.strip() or proc.stdout.strip() or "provider returned non-zero"
@@ -165,6 +173,17 @@ def run_provider(provider: str, prompt: str) -> str:
     output = proc.stdout.strip()
     if not output:
         raise RuntimeError("provider returned empty output")
+
+    if provider == "gemini":
+        # Gemini can return auth prompts with exit code 0 in non-interactive mode.
+        cleaned = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", output)
+        if (
+            "Please visit the following URL to authorize the application" in cleaned
+            or "Enter the authorization code:" in cleaned
+        ):
+            raise RuntimeError(
+                "gemini returned OAuth prompt in headless mode; credentials are not usable for non-interactive execution"
+            )
     return output
 
 
