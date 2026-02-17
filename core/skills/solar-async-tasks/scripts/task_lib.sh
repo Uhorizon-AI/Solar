@@ -46,10 +46,59 @@ cleanup_old_logs() {
     fi
 }
 
-# Generate a unique task ID
-# Format: YYYYMMDD-HHMM (no seconds, no random suffix — conflicts visible if two tasks same minute)
+# Generate a unique task ID (UUID).
 generate_id() {
-    date +"%Y%m%d-%H%M"
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+        return 0
+    fi
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 16 | sed 's/^\(........\)\(....\)\(....\)\(....\)\(............\)$/\1-\2-\3-\4-\5/'
+        return 0
+    fi
+    # Last resort: timestamp + pid (keeps runtime functional if uuid tools are unavailable)
+    printf "fallback-%s-%s\n" "$(date +%s)" "$$"
+}
+
+slugify() {
+    local raw="$1"
+    local slug
+    slug=$(printf "%s" "$raw" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+    if [[ -z "$slug" ]]; then
+        slug="task"
+    fi
+    printf "%s" "$slug"
+}
+
+build_task_filename() {
+    local dir="$1"
+    local title="$2"
+    local slug candidate n
+    slug="$(slugify "$title")"
+    candidate="$slug"
+    n=1
+
+    while task_basename_exists "$candidate"; do
+        n=$((n + 1))
+        candidate="${slug}-${n}"
+    done
+
+    printf "%s/%s.md" "$dir" "$candidate"
+}
+
+task_basename_exists() {
+    local base="$1"
+    local logs_dir="$SOLAR_TASK_ROOT/logs"
+    local d
+
+    for d in "$DIR_DRAFTS" "$DIR_PLANNED" "$DIR_QUEUED" "$DIR_ACTIVE" "$DIR_COMPLETED" "$DIR_ERROR" "$DIR_ARCHIVE"; do
+        [[ -e "$d/$base.md" ]] && return 0
+    done
+
+    [[ -e "$logs_dir/$base.log" ]] && return 0
+    return 1
 }
 
 # Log a message
@@ -60,7 +109,16 @@ log_msg() {
 # Find a task file by ID in all directories
 find_task() {
     local task_id="$1"
-    find "$SOLAR_TASK_ROOT" -name "*${task_id}*.md" -print -quit
+    local f id
+    for f in "$DIR_DRAFTS"/*.md "$DIR_PLANNED"/*.md "$DIR_QUEUED"/*.md "$DIR_ACTIVE"/*.md "$DIR_COMPLETED"/*.md "$DIR_ERROR"/*.md "$DIR_ARCHIVE"/*.md; do
+        [[ -e "$f" ]] || continue
+        id="$(extract_meta "$f" "id")"
+        if [[ "$id" == "$task_id" ]]; then
+            echo "$f"
+            break
+        fi
+    done
+    return 0
 }
 
 # Get task status from file path
@@ -81,6 +139,37 @@ extract_meta() {
     local file="$1"
     local key="$2"
     ( grep "^$key:" "$file" 2>/dev/null || true ) | sed "s/^$key: //" | tr -d '"' | head -n1
+}
+
+# Extract created timestamp as epoch for sorting
+# Tries ISO8601 parsing, falls back to file mtime
+created_epoch() {
+    local file="$1"
+    local created created_norm ts=""
+
+    created="$(extract_meta "$file" "created")"
+    if [[ -n "$created" ]]; then
+        # Normalize ISO8601 offset for BSD date: +01:00 -> +0100
+        created_norm="$(echo "$created" | sed -E 's/([+-][0-9]{2}):([0-9]{2})$/\1\2/')"
+
+        # macOS/BSD date
+        ts="$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$created_norm" +%s 2>/dev/null || true)"
+        if [[ -z "$ts" ]]; then
+            ts="$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$created" +%s 2>/dev/null || true)"
+        fi
+        # GNU date fallback
+        if [[ -z "$ts" ]] && command -v gdate >/dev/null 2>&1; then
+            ts="$(gdate -d "$created" +%s 2>/dev/null || true)"
+        elif [[ -z "$ts" ]] && date -d "1970-01-01" +%s >/dev/null 2>&1; then
+            ts="$(date -d "$created" +%s 2>/dev/null || true)"
+        fi
+    fi
+
+    if [[ -z "$ts" ]]; then
+        # Fallback to file mtime
+        ts="$(stat -f %m "$file" 2>/dev/null || echo 0)"
+    fi
+    echo "$ts"
 }
 
 # Schedule window margin in minutes (±)

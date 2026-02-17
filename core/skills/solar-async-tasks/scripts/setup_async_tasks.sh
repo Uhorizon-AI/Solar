@@ -15,7 +15,8 @@ ensure_dirs
 if [ -z "$(ls -A "$DIR_DRAFTS")" ]; then
     echo "Creating sample draft task..."
     sample_id=$(generate_id)
-    cat > "$DIR_DRAFTS/${sample_id}_sample-task.md" <<EOF
+    sample_file="$(build_task_filename "$DIR_DRAFTS" "Sample Task")"
+    cat > "$sample_file" <<EOF
 ---
 id: $sample_id
 title: Sample Task

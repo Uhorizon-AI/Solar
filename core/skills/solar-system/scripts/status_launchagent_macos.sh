@@ -23,6 +23,27 @@ PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 OUT_LOG="${SOLAR_SYSTEM_STDOUT_PATH:-$HOME/Library/Logs/com.solar.system/stdout.log}"
 ERR_LOG="${SOLAR_SYSTEM_STDERR_PATH:-$HOME/Library/Logs/com.solar.system/stderr.log}"
 
+print_tail_with_timestamps() {
+  local log_file="$1"
+  local lines="$2"
+  local context="${3:-300}"
+
+  tail -n "$context" "$log_file" 2>/dev/null | awk '
+    BEGIN { ts = "" }
+    {
+      line = $0
+      if (match(line, /^\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\]/)) {
+        ts = substr(line, 2, 19)
+        print line
+      } else if (ts != "") {
+        print "[" ts "] " line
+      } else {
+        print "[no-ts] " line
+      }
+    }
+  ' | tail -n "$lines"
+}
+
 echo "Solar system status:"
 echo "  label: $LABEL"
 echo "  plist: $PLIST"
@@ -52,5 +73,5 @@ fi
 if [[ -f "$ERR_LOG" ]]; then
   echo ""
   echo "Last 10 stderr lines:"
-  tail -n 10 "$ERR_LOG" || true
+  print_tail_with_timestamps "$ERR_LOG" 10 || true
 fi

@@ -11,7 +11,7 @@ TASK_ID="$1"
 if [[ -z "$TASK_ID" ]]; then
     echo "Usage: $0 <task_id>" >&2
     echo "  Moves the task from error/ to queued/ and sets status to queued." >&2
-    echo "  Example: $0 20260214-0100" >&2
+    echo "  Example: $0 0194f2f2-9b7b-7a8d-b2d7-6b4f2f0d9c31" >&2
     exit 1
 fi
 

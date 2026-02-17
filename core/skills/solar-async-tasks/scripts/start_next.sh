@@ -17,8 +17,10 @@ QUEUED_TASKS=$(find "$DIR_QUEUED" -name "*.md" 2>/dev/null | while read -r f; do
     [[ "$prio" == "high" ]] && prio_val=2
     [[ "$prio" == "normal" ]] && prio_val=1
     [[ "$prio" == "low" ]] && prio_val=0
-    echo "$prio_val $f"
-done | sort -rn | awk '{print $2}')
+    ts="$(created_epoch "$f")"
+    # Sort key: priority desc, created asc (FIFO)
+    printf '%s\t%s\t%s\n' "$prio_val" "$ts" "$f"
+done | sort -t$'\t' -k1,1nr -k2,2n | awk -F'\t' '{print $3}')
 
 # Try each task in order until one can start
 for NEXT_TASK in $QUEUED_TASKS; do

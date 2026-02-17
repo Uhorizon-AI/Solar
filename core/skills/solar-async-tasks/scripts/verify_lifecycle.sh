@@ -2,10 +2,19 @@
 
 # Test script to verify solar-async-tasks functionality
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+cd "$REPO_ROOT"
+
+# Isolate this verification from real runtime data.
+TMP_ROOT="$(mktemp -d /tmp/solar-async-tasks-verify.XXXXXX)"
+export SOLAR_TASK_ROOT="$TMP_ROOT"
+trap 'rm -rf "$TMP_ROOT"' EXIT
 
 # Setup
-echo "Running setup..."
+echo "Running setup in isolated root: $SOLAR_TASK_ROOT"
 bash core/skills/solar-async-tasks/scripts/setup_async_tasks.sh
 
 # Create
@@ -37,7 +46,12 @@ bash core/skills/solar-async-tasks/scripts/list.sh | grep "$TASK_ID"
 
 # Start
 echo "Starting task..."
-bash core/skills/solar-async-tasks/scripts/start_next.sh
+START_OUT="$(bash core/skills/solar-async-tasks/scripts/start_next.sh)"
+echo "$START_OUT"
+if ! echo "$START_OUT" | grep -q "Started task: \\[$TASK_ID\\]"; then
+    echo "Failed: start_next.sh did not activate expected task $TASK_ID"
+    exit 1
+fi
 
 # List active
 echo "Listing active..."

@@ -16,7 +16,7 @@ if [ -z "$TITLE" ]; then
 fi
 
 ID=$(generate_id)
-FILENAME="${DIR_DRAFTS}/${ID}_$(echo "$TITLE" | sed 's/ /-/g' | tr -cd '[:alnum:]-').md"
+FILENAME="$(build_task_filename "$DIR_DRAFTS" "$TITLE")"
 
 cat > "$FILENAME" <<EOF
 ---
