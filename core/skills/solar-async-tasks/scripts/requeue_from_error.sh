@@ -29,8 +29,12 @@ fi
 
 ensure_dirs
 
-# Update status to queued (do not remove ## Execution Error block; it stays as history)
+# Update status to queued
 sed -i.bak 's/^status:.*/status: queued/' "$TASK_FILE"
+rm -f "${TASK_FILE}.bak"
+
+# Remove ## Execution Error block and everything after it (clean slate for requeue)
+sed -i.bak '/^## Execution Error$/,$d' "$TASK_FILE"
 rm -f "${TASK_FILE}.bak"
 
 NEW_FILE="$DIR_QUEUED/$(basename "$TASK_FILE")"
