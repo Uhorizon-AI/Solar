@@ -9,6 +9,11 @@ The format is based on Keep a Changelog.
 - `core/skills/solar-async-tasks/scripts/requeue_from_error.sh` to move tasks from `error/` back to `queued/` after fixing the root cause.
 
 ### Changed
+- `core/skills/solar-skill-creator/SKILL.md`: scripts guidance changed from fixed section format to a documentation rule (if `scripts/` exists, explain usage somewhere in `SKILL.md`).
+- `core/skills/solar-skill-creator/scripts/package_skill.py`: removed hard requirement for `## Scripts`; now validates script-usage coverage only when `scripts/` has files; keeps `## Required MCP` required and `## Fallback if MCP missing` conditional.
+- `core/skills/solar-skill-creator/scripts/package_skill.py`: line-count warning (>500) is non-blocking.
+- `core/skills/solar-skill-creator/scripts/init_skill.py`: template aligned to the new scripts documentation rule (no rigid scripts section).
+- `core/skills/solar-sales-pipeline/SKILL.md`: added `## Required MCP` with `None`.
 - **Root `AGENTS.md`** — Introduced a single **First-Run / Session start Protocol (Required)** at the top: mandatory read order at session start is (1) this file, (2) `sun/preferences/profile.md` (who you are talking to), (3) `sun/MEMORY.md` (context and learnings). Removed duplicate "First-Run Protocol" and "Memory (Required)" sections; memory behaviour remains defined only in `core/AGENTS.md` (Memory protocol). Ensures agents always load profile and memory before the first reply.
 - `core/skills/solar-async-tasks/scripts/task_lib.sh` now generates unique task IDs using UUIDs (via `uuidgen`, `openssl`, or timestamp fallback) instead of timestamp-based IDs (`YYYYMMDD-HHMM`); adds `created_epoch()` function for extracting created timestamps from task metadata with ISO8601 parsing and file mtime fallback; adds `slugify()` and `build_task_filename()` for human-readable filenames without ID prefix; adds `task_basename_exists()` for collision detection across all task directories and logs; updates `find_task()` to search by metadata `id` field instead of filename pattern matching.
 - `core/skills/solar-async-tasks/scripts/create.sh` now uses `build_task_filename()` to generate clean slug-based filenames (e.g., `sample-task.md`) instead of ID-prefixed names.

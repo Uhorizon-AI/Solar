@@ -37,6 +37,7 @@ description: >
 1. Validate request
 2. Execute procedure
 3. Format output
+4. If you use `scripts/`, explain how to run those scripts in SKILL.md (no fixed heading required)
 
 ## Required MCP
 
@@ -46,12 +47,6 @@ description: >
 
 - [TODO: Define behavior if MCP is unavailable]
 - [TODO: If Required MCP is "None", write "N/A"]
-
-## Validation commands
-
-```bash
-[TODO: Add one or more commands to verify this skill works]
-```
 
 ## Examples
 

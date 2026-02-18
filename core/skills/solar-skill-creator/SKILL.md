@@ -29,13 +29,20 @@ Define a consistent process to:
 
 None
 
-## Validation commands
+## Script Usage Documentation
+
+If a skill includes executable files inside `scripts/`, the `SKILL.md` must explain how to use them.
+This is a documentation rule, not a required section title.
+The explanation can live in `Workflow`, `Troubleshooting`, or any other relevant section.
 
 ```bash
-# Validate one modified skill (standard per-skill flow)
+# Package/validate one modified skill (standard per-skill flow)
 python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /tmp
 
-# Sync core skill changes to local clients
+# Initialize a new skill scaffold
+python3 core/skills/solar-skill-creator/scripts/init_skill.py <skill-name> --path <target-dir>
+
+# Sync resource changes to local clients (when core/ resources changed)
 bash core/scripts/sync-clients.sh
 ```
 
@@ -75,8 +82,8 @@ Do not add auxiliary docs like README/INSTALL/CHANGELOG inside skill folders.
 - Core skills remain vendor-neutral and Solar-owned.
 - Skill body includes these required sections:
   - `Required MCP`
-  - `Validation commands`
 - `Fallback if MCP missing` is required only when `Required MCP` is not `None`.
+- If `scripts/` has files, `SKILL.md` must document how those scripts are used (no fixed section title required).
 - If a skill exposes long-running local runtime endpoints (webhook, bridge, local server, tunnel), include `Laptop runtime note (optional)` in that skill `SKILL.md`:
   - host sleep can stop runtime availability,
   - this is a host operations concern (not a mandatory skill dependency),

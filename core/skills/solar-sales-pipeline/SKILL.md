@@ -52,3 +52,7 @@ When `stage` or `next_followup` changes, or when a relevant interaction happens:
 - Current status.
 - Next step with date.
 - Main risk (if any).
+
+## Required MCP
+
+None

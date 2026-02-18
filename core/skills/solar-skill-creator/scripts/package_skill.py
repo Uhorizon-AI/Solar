@@ -73,7 +73,6 @@ def validate_skill(skill_path: Path) -> list:
     # Required sections (always)
     always_required_sections = [
         "## Required MCP",
-        "## Validation commands",
     ]
     for section in always_required_sections:
         if section not in body:
@@ -89,14 +88,31 @@ def validate_skill(skill_path: Path) -> list:
     if requires_mcp and not has_fallback_section:
         errors.append("Missing required section: ## Fallback if MCP missing")
 
+    # Conditional script-usage documentation:
+    # if scripts/ has files, SKILL.md must explain usage somewhere (no fixed heading).
+    scripts_dir = skill_path / "scripts"
+    script_files = []
+    if scripts_dir.exists() and scripts_dir.is_dir():
+        excluded = {"__pycache__", ".DS_Store"}
+        for p in scripts_dir.rglob("*"):
+            if p.is_file() and p.name not in excluded and "__pycache__" not in p.parts:
+                script_files.append(p.relative_to(skill_path).as_posix())
+
+    if script_files:
+        mentions_scripts_dir = "scripts/" in body
+        mentions_any_script_file = any(
+            Path(rel).name in body or rel in body for rel in script_files
+        )
+        if not (mentions_scripts_dir or mentions_any_script_file):
+            errors.append(
+                "Missing script usage documentation: scripts/ has files but SKILL.md does not explain how to use them"
+            )
+
     # Check file size
     if len(content) > 100000:  # ~100KB
         errors.append("SKILL.md too large (>100KB). Consider splitting into references/")
 
-    # Check line count
-    line_count = len(body.split('\n'))
-    if line_count > 500:
-        errors.append(f"SKILL.md body has {line_count} lines (recommended max: 500)")
+    # Line count remains a recommendation, not a hard validation error.
 
     # Warn about extraneous files
     extraneous = ['README.md', 'CHANGELOG.md', 'LICENSE.md', 'INSTALL.md']
