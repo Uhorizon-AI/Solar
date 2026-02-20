@@ -51,6 +51,9 @@ bash core/skills/solar-async-tasks/scripts/list.sh
 # Worker: one-shot (e.g. for cron/launchd)
 bash core/skills/solar-async-tasks/scripts/run_worker.sh --once
 
+# Deterministic manual activation by task ID (auto transitions draft/planned -> queued -> active)
+bash core/skills/solar-async-tasks/scripts/activate.sh <task_id>
+
 # Optional: execute active tasks directly
 bash core/skills/solar-async-tasks/scripts/execute_active.sh --once
 
@@ -109,6 +112,14 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 4.  **Start + Execute**: `run_worker.sh` picks the highest priority eligible task from `queued/`, moves it to `active/`, then executes one active task.
 5.  **Execute (manual/extra)**: `execute_active.sh` processes one `active/` task via `run_router.py` using `SOLAR_ROUTER_PROVIDER_PRIORITY`.
 6.  **Complete**: `complete.sh` moves a task from `active/` to `completed/` (or recurring flow).
+
+## Manual activation by task ID (optional)
+
+Use this only when you want to activate one exact task manually (outside normal queue selection):
+
+- `activate.sh <task_id>`: auto-transitions `draft/planned -> queued -> active` for that specific task, using the task's existing `priority`.
+- Manual activation bypasses schedule and recurring interval gates by design (it still runs cleanup/resource hooks).
+- The standard lifecycle remains queue-driven (`start_next.sh` / `run_worker.sh`).
 
 ## Automatic execution (run_worker)
 
