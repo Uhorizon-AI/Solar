@@ -9,10 +9,17 @@ if [[ ! -f "$ROOT_ENV_FILE" ]]; then
   echo "Created $ROOT_ENV_FILE"
 fi
 
+WORK_ENV_FILE="$(mktemp)"
+cp "$ROOT_ENV_FILE" "$WORK_ENV_FILE"
+cleanup() {
+  rm -f "$WORK_ENV_FILE" "${tmp:-}"
+}
+trap cleanup EXIT
+
 read_key() {
   local key="$1"
-  if grep -Eq "^${key}=" "$ROOT_ENV_FILE"; then
-    grep -E "^${key}=" "$ROOT_ENV_FILE" | tail -n1 | cut -d= -f2-
+  if grep -Eq "^${key}=" "$WORK_ENV_FILE"; then
+    grep -E "^${key}=" "$WORK_ENV_FILE" | tail -n1 | cut -d= -f2-
     return 0
   fi
   return 1
@@ -63,8 +70,8 @@ awk '
   $0 ~ /^SOLAR_ENABLE_DIRECT_TELEGRAM_REPLY=/ { next }
   $0 ~ /^# \[solar-transport-gateway\] required environment$/ { next }
   { print }
-' "$ROOT_ENV_FILE" >"$tmp"
-mv "$tmp" "$ROOT_ENV_FILE"
+' "$WORK_ENV_FILE" >"$tmp"
+mv "$tmp" "$WORK_ENV_FILE"
 
 # Normalize spacing: keep at most one blank line between blocks and remove
 # leading/trailing blank lines to keep repeated runs idempotent.
@@ -84,8 +91,8 @@ awk '
       pending_blank = 1
     }
   }
-' "$ROOT_ENV_FILE" >"$tmp"
-mv "$tmp" "$ROOT_ENV_FILE"
+' "$WORK_ENV_FILE" >"$tmp"
+mv "$tmp" "$WORK_ENV_FILE"
 
 insert_line="$(
   awk -v block="$BLOCK_HEADER" '
@@ -95,13 +102,13 @@ insert_line="$(
         exit
       }
     }
-  ' "$ROOT_ENV_FILE"
+  ' "$WORK_ENV_FILE"
 )"
 
 tmp="$(mktemp)"
 if [[ -n "$insert_line" ]]; then
   if (( insert_line > 1 )); then
-    sed -n "1,$((insert_line - 1))p" "$ROOT_ENV_FILE" >"$tmp"
+    sed -n "1,$((insert_line - 1))p" "$WORK_ENV_FILE" >"$tmp"
   fi
   echo "$BLOCK_HEADER" >>"$tmp"
   echo "SOLAR_WS_HOST=${ws_host}" >>"$tmp"
@@ -114,9 +121,9 @@ if [[ -n "$insert_line" ]]; then
   echo "SOLAR_CLOUDFLARED_TUNNEL_NAME=${tunnel_name}" >>"$tmp"
   echo "SOLAR_CLOUDFLARED_HOSTNAME=${tunnel_hostname}" >>"$tmp"
   echo "SOLAR_CLOUDFLARED_CONFIG=${tunnel_config}" >>"$tmp"
-  sed -n "${insert_line},\$p" "$ROOT_ENV_FILE" >>"$tmp"
+  sed -n "${insert_line},\$p" "$WORK_ENV_FILE" >>"$tmp"
 else
-  cat "$ROOT_ENV_FILE" >"$tmp"
+  cat "$WORK_ENV_FILE" >"$tmp"
   if [[ -s "$tmp" ]]; then
     printf '\n' >>"$tmp"
   fi
@@ -132,7 +139,7 @@ else
   echo "SOLAR_CLOUDFLARED_HOSTNAME=${tunnel_hostname}" >>"$tmp"
   echo "SOLAR_CLOUDFLARED_CONFIG=${tunnel_config}" >>"$tmp"
 fi
-mv "$tmp" "$ROOT_ENV_FILE"
+mv "$tmp" "$WORK_ENV_FILE"
 
 # Final normalize pass after insertion to enforce stable spacing.
 tmp="$(mktemp)"
@@ -151,7 +158,13 @@ awk '
       pending_blank = 1
     }
   }
-' "$ROOT_ENV_FILE" >"$tmp"
-mv "$tmp" "$ROOT_ENV_FILE"
+' "$WORK_ENV_FILE" >"$tmp"
+mv "$tmp" "$WORK_ENV_FILE"
 
-echo "OK: wrote compact solar-transport-gateway block in .env."
+if cmp -s "$WORK_ENV_FILE" "$ROOT_ENV_FILE"; then
+  echo "OK: solar-transport-gateway block already up to date in .env."
+else
+  mv "$WORK_ENV_FILE" "$ROOT_ENV_FILE"
+  WORK_ENV_FILE=""
+  echo "OK: wrote compact solar-transport-gateway block in .env."
+fi

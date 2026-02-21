@@ -7,6 +7,20 @@ cd "$REPO_ROOT"
 
 check_cmd="bash core/skills/solar-transport-gateway/scripts/check_transport_gateway.sh"
 setup_cmd="bash core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh"
+run_dir="${SOLAR_GATEWAY_RUN_DIR:-/tmp/solar-transport-gateway}"
+
+stop_existing_tunnel() {
+  local pid_file="$run_dir/cloudflared.pid"
+  if [[ -f "$pid_file" ]]; then
+    local pid
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      sleep 1
+    fi
+    rm -f "$pid_file"
+  fi
+}
 
 set +e
 check_out="$($check_cmd 2>&1)"
@@ -27,10 +41,20 @@ case "$check_code" in
     $setup_cmd
     ;;
   2)
-    # check_transport_gateway.sh marks this as public tunnel degradation.
-    # Using setup script here is safer than starting a foreground tunnel process.
-    echo "⚠️  Transport gateway partial state detected. Running setup recovery..."
-    $setup_cmd
+    # Partial = local bridge healthy, public tunnel degraded.
+    # Use tunnel-only recovery to avoid full setup side effects (for example .env rewrites).
+    echo "⚠️  Transport gateway partial state detected. Restarting tunnel only..."
+    mkdir -p "$run_dir"
+    stop_existing_tunnel
+    nohup bash core/skills/solar-transport-gateway/scripts/start_cloudflared_tunnel.sh \
+      >"$run_dir/cloudflared.log" 2>&1 &
+    echo $! >"$run_dir/cloudflared.pid"
+    sleep 1
+    if ! kill -0 "$(cat "$run_dir/cloudflared.pid")" 2>/dev/null; then
+      echo "❌ Tunnel recovery failed to start cloudflared process." >&2
+      exit 1
+    fi
+    echo "✅ Tunnel recovery started (pid $(cat "$run_dir/cloudflared.pid"))."
     ;;
   *)
     echo "❌ Unexpected transport gateway check code: $check_code" >&2
