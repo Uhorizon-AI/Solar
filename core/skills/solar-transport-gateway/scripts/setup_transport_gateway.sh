@@ -208,8 +208,7 @@ if [[ -z "$public_url" ]]; then
   exit 1
 fi
 
-SOLAR_WEBHOOK_PUBLIC_URL="$public_url" \
-  bash core/skills/solar-transport-gateway/scripts/set_telegram_webhook.sh >/dev/null
+bash core/skills/solar-transport-gateway/scripts/set_telegram_webhook.sh >/dev/null
 bash core/skills/solar-transport-gateway/scripts/verify_telegram_webhook.sh >/dev/null
 
 echo "Transport gateway setup completed."

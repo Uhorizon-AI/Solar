@@ -16,14 +16,11 @@ fi
 base=""
 if [[ -n "${SOLAR_CLOUDFLARED_HOSTNAME:-}" && "${SOLAR_CLOUDFLARED_HOSTNAME:-}" != "REPLACE_ME" ]]; then
   base="https://${SOLAR_CLOUDFLARED_HOSTNAME}"
-elif [[ -n "${SOLAR_WEBHOOK_PUBLIC_URL:-}" && "${SOLAR_WEBHOOK_PUBLIC_URL:-}" != "REPLACE_ME" ]]; then
-  # Backward compatibility for older env blocks.
-  base="${SOLAR_WEBHOOK_PUBLIC_URL%/}"
 fi
 
 if [[ -z "$base" ]]; then
   echo "Missing public webhook host."
-  echo "Set SOLAR_CLOUDFLARED_HOSTNAME in .env (recommended)."
+  echo "Set SOLAR_CLOUDFLARED_HOSTNAME in .env."
   exit 1
 fi
 

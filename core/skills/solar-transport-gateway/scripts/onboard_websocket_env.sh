@@ -59,7 +59,6 @@ awk '
   $0 ~ /^SOLAR_CLOUDFLARED_TUNNEL_NAME=/ { next }
   $0 ~ /^SOLAR_CLOUDFLARED_HOSTNAME=/ { next }
   $0 ~ /^SOLAR_CLOUDFLARED_CONFIG=/ { next }
-  $0 ~ /^SOLAR_WEBHOOK_PUBLIC_URL=/ { next }
   # Legacy cleanup: remove deprecated transport flag if present.
   $0 ~ /^SOLAR_ENABLE_DIRECT_TELEGRAM_REPLY=/ { next }
   $0 ~ /^# \[solar-transport-gateway\] required environment$/ { next }
