@@ -7,7 +7,7 @@ REPO_ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
 cd "$REPO_ROOT"
 
 ENTRYPOINT="$REPO_ROOT/core/skills/solar-system/scripts/Solar"
-ORCHESTRATOR="$REPO_ROOT/core/skills/solar-system/scripts/solar_orchestrator.sh"
+ORCHESTRATOR="$REPO_ROOT/core/skills/solar-system/scripts/run_orchestrator.sh"
 STDOUT="${SOLAR_SYSTEM_STDOUT_PATH:-$HOME/Library/Logs/com.solar.system/stdout.log}"
 STDERR="${SOLAR_SYSTEM_STDERR_PATH:-$HOME/Library/Logs/com.solar.system/stderr.log}"
 LABEL="${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}"
@@ -18,7 +18,7 @@ ls -la "$ENTRYPOINT" 2>/dev/null || { echo "MISSING: $ENTRYPOINT"; exit 1; }
 [[ -x "$ENTRYPOINT" ]] && echo "OK: executable" || echo "FAIL: not executable (chmod +x)"
 
 echo ""
-echo "=== 2. solar_orchestrator.sh exists and is executable ==="
+echo "=== 2. run_orchestrator.sh exists and is executable ==="
 ls -la "$ORCHESTRATOR" 2>/dev/null || { echo "MISSING: $ORCHESTRATOR"; exit 1; }
 [[ -x "$ORCHESTRATOR" ]] && echo "OK: executable" || echo "FAIL: not executable (chmod +x)"
 

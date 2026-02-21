@@ -7,6 +7,34 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- `core/skills/solar-system/scripts/check_orchestrator.sh` — new single-command orchestrator health check. Reports supervisor state (plist + launchctl) and per-feature health (`transport-gateway` via `check_transport_gateway.sh`, `async-tasks` via filesystem checks). Emits `HEALTHY/PARTIAL/DOWN` verdict with exit codes `0/2/1` aligned with `check_transport_gateway.sh`. Includes portable timeout (gtimeout/timeout/bash fallback with process group kill), orphan lock detection with PID validation, and explicit output for non-numeric lock content.
+- `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh` — moved from `solar-system/scripts/` to its owning skill. Logic (check + recovery of gateway) belongs to `solar-transport-gateway`, not to the orchestrator.
+
+### Fixed
+- `core/skills/solar-transport-gateway/scripts/check_transport_gateway.sh` — curl calls now use `--max-time 5` to prevent hanging when the HTTP bridge is slow to respond.
+- `core/skills/solar-system/scripts/check_orchestrator.sh` — `FEATURE_TIMEOUT` raised to `15s` (5s curl + process overhead margin) to avoid false DOWN verdicts when the gateway is healthy but slow. Suggested actions for `PARTIAL` tunnel state now read the cloudflared log and emit a specific diagnosis: QUIC/control stream errors (transient, retry), Cloudflare registration errors (token/tunnel reconfiguration needed), auth errors, or network errors. Each case includes the exact command to run.
+
+### Changed
+- `core/skills/solar-system/scripts/solar_orchestrator.sh` renamed to `run_orchestrator.sh` to follow `verbo_objeto` naming convention. `Solar.c` wrapper updated and recompiled. LaunchAgent reinstalled.
+- `core/skills/solar-router/scripts/smoke_test.sh` renamed to `check_router.sh` to follow `check_` prefix convention for health/validation scripts.
+- `core/skills/solar-async-tasks/scripts/verify_lifecycle.sh` renamed to `validate_lifecycle.sh` (`validate_` for internal structure/prerequisite checks, `verify_` reserved for external state like APIs/webhooks). Header comment updated to match new purpose.
+- `core/skills/solar-system/scripts/run_orchestrator.sh` now calls `ensure_transport_gateway.sh` from `core/skills/solar-transport-gateway/scripts/` (correct ownership).
+- `core/skills/solar-system/SKILL.md` — updated validation commands, workflow section (3 observability commands documented with scope), and orchestrator behavior to reference `run_orchestrator.sh`.
+- `core/skills/solar-transport-gateway/SKILL.md` — added `ensure_transport_gateway.sh` to validation commands.
+- `core/skills/solar-router/SKILL.md` — added `check_router.sh` to validation commands.
+- `core/skills/solar-async-tasks/SKILL.md` — added `validate_lifecycle.sh` to validation commands.
+- `core/skills/solar-system/references/system-integration.md` — updated orchestrator entrypoint and feature dispatch paths.
+- `core/skills/solar-system/scripts/diagnose_launchagent.sh` — updated `ORCHESTRATOR` variable to point to `run_orchestrator.sh`.
+- `core/skills/solar-async-tasks/scripts/validate_lifecycle.sh` — permissions set to `755` (executable).
+- `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh` — permissions set to `755` (executable).
+
+### Removed
+- `core/skills/solar-system/scripts/solar_orchestrator.sh` (renamed to `run_orchestrator.sh`).
+- `core/skills/solar-system/scripts/ensure_transport_gateway.sh` (moved to `solar-transport-gateway/scripts/`).
+- `core/skills/solar-router/scripts/smoke_test.sh` (renamed to `check_router.sh`).
+- `core/skills/solar-async-tasks/scripts/verify_lifecycle.sh` (renamed to `validate_lifecycle.sh`).
+
+### Added
 - `core/skills/solar-async-tasks/scripts/execute_active.py` — Python executor for async tasks. Handles full I/O JSON with solar-router v3 (`channel=async-task`, `mode=direct_only`), respects per-task `provider:` frontmatter override (strict mode), writes structured logs, and moves tasks to `error/` on failure. Replaces fragile bash provider loop.
 - `core/skills/solar-router/scripts/smoke_test.sh` — Executable smoke test for solar-router v3: validates JSON contract on success/failure, error codes, mode validation, async_only feature gate, execute_active.py frontmatter parsing, and parse_ai_decision_output degradation. 19 PASS, 0 FAIL, 1 SKIP (provider-dependent test skipped when no AI available).
 - `core/skills/solar-async-tasks/scripts/requeue_from_error.sh` to move tasks from `error/` back to `queued/` after fixing the root cause.

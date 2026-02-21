@@ -33,9 +33,9 @@ None
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-system /tmp
 
 # Basic shell checks
-bash -n core/skills/solar-system/scripts/solar_orchestrator.sh
+bash -n core/skills/solar-system/scripts/run_orchestrator.sh
 bash -n core/skills/solar-system/scripts/install_launchagent_macos.sh
-bash -n core/skills/solar-system/scripts/ensure_transport_gateway.sh
+bash -n core/skills/solar-system/scripts/check_orchestrator.sh
 
 # Sync core changes to local clients
 bash core/scripts/sync-clients.sh
@@ -69,19 +69,21 @@ SOLAR_SYSTEM_FEATURES=async-tasks
 2. Install or update LaunchAgent:
    - `bash core/skills/solar-system/scripts/install_launchagent_macos.sh`
 3. Check current status:
-   - `bash core/skills/solar-system/scripts/status_launchagent_macos.sh`
+   - `bash core/skills/solar-system/scripts/status_launchagent_macos.sh` — supervisor only (plist + launchctl + logs)
+   - `bash core/skills/solar-system/scripts/check_orchestrator.sh` — full orchestrator + feature health (daily operational check)
+   - `bash core/skills/solar-system/scripts/diagnose_launchagent.sh` — deep troubleshooting when there is an incident
 4. Uninstall LaunchAgent (if needed):
    - `bash core/skills/solar-system/scripts/uninstall_launchagent_macos.sh`
 
 ## Orchestrator behavior
 
-`solar_orchestrator.sh --once`:
+`run_orchestrator.sh --once`:
 1. loads `.env`,
 2. reads `SOLAR_SYSTEM_FEATURES`,
 3. acquires a lock to avoid overlapping ticks,
 4. runs enabled features in order:
    - async tasks: `run_worker.sh --once`
-   - transport gateway: `ensure_transport_gateway.sh`
+   - transport gateway: `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
 
 ## Design notes
 

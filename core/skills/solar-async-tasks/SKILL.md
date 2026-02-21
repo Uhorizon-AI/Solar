@@ -81,6 +81,9 @@ bash core/skills/solar-async-tasks/scripts/requeue_from_error.sh <task_id>
 # List execution logs (one .log per task, same name as task; >7 days auto-deleted)
 ls -la $SOLAR_TASK_ROOT/logs/*.log 2>/dev/null || true
 
+# Validate task lifecycle (structure + state transitions)
+bash core/skills/solar-async-tasks/scripts/validate_lifecycle.sh
+
 # Verify skill packaging
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-async-tasks /tmp
 ```

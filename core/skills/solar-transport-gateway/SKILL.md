@@ -60,6 +60,9 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 # Check runtime health (local + public)
 bash core/skills/solar-transport-gateway/scripts/check_transport_gateway.sh
 
+# Ensure gateway is healthy, recover if not (used by solar-system orchestrator)
+bash core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh
+
 # Register and verify Telegram webhook
 bash core/skills/solar-transport-gateway/scripts/set_telegram_webhook.sh
 bash core/skills/solar-transport-gateway/scripts/verify_telegram_webhook.sh

@@ -17,7 +17,7 @@ int main(int argc, char *argv[]) {
     
     // Calculate the script path (adjacent to this executable)
     char *dir = dirname(exe_path);
-    snprintf(script_path, sizeof(script_path), "%s/solar_orchestrator.sh", dir);
+    snprintf(script_path, sizeof(script_path), "%s/run_orchestrator.sh", dir);
     
     // Prepare arguments for execv
     // argv[0] should be the script name or a custom name

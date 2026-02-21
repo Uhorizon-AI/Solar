@@ -61,6 +61,9 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 
 # Full error output when a provider fails (e.g. 401, binary not found)
 bash core/skills/solar-router/scripts/diagnose_router.sh --verbose
+
+# Smoke tests: validate router contract v3, bridge delegation, execute_active.py JSON parsing
+bash core/skills/solar-router/scripts/check_router.sh
 ```
 
 ## Router contract v3

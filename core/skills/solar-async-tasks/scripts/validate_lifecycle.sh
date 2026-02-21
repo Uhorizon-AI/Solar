@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Test script to verify solar-async-tasks functionality
+# Validates solar-async-tasks lifecycle: structure, state transitions, and task operations.
 
 set -euo pipefail
 

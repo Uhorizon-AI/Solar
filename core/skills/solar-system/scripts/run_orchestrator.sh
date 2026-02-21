@@ -12,7 +12,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PA
 usage() {
   cat <<'EOF'
 Usage:
-  bash core/skills/solar-system/scripts/solar_orchestrator.sh --once
+  bash core/skills/solar-system/scripts/run_orchestrator.sh --once
 EOF
 }
 
@@ -112,7 +112,7 @@ fi
 
 if has_feature "transport-gateway"; then
   echo "▶ Running feature: transport-gateway"
-  if ! bash core/skills/solar-system/scripts/ensure_transport_gateway.sh; then
+  if ! bash core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh; then
     echo "❌ transport-gateway feature failed." >&2
     failures=$((failures + 1))
   fi

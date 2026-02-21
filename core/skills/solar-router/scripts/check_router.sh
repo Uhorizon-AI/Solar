@@ -1,7 +1,7 @@
 #!/bin/bash
-# smoke_test.sh — solar-router v3 smoke tests
+# check_router.sh — solar-router v3 smoke tests
 # Validates router contract v3, bridge delegation, and execute_active.py JSON parsing.
-# Run from repo root: bash core/skills/solar-router/scripts/smoke_test.sh
+# Run from repo root: bash core/skills/solar-router/scripts/check_router.sh
 
 set -euo pipefail
 

@@ -76,13 +76,13 @@ if check_pid_or_listener "$RUN_DIR/ws.pid" "${SOLAR_WS_PORT:-8765}"; then ws_ok=
 if check_pid_or_listener "$RUN_DIR/http.pid" "${SOLAR_HTTP_PORT:-8787}"; then http_ok=true; fi
 if check_pid "$RUN_DIR/cloudflared.pid"; then tunnel_ok=true; fi
 
-local_body="$(curl -fsS "$local_health_url" 2>/dev/null || true)"
+local_body="$(curl -fsS --max-time 5 "$local_health_url" 2>/dev/null || true)"
 if [[ "$local_body" == *"\"bridge\": \"${BRIDGE_NAME}\""* ]]; then
   local_ok=true
 fi
 
 if [[ -n "$public_health_url" ]]; then
-  public_body="$(curl -fsS "$public_health_url" 2>/dev/null || true)"
+  public_body="$(curl -fsS --max-time 5 "$public_health_url" 2>/dev/null || true)"
   if [[ "$public_body" == *"\"bridge\": \"${BRIDGE_NAME}\""* ]]; then
     public_ok=true
   fi

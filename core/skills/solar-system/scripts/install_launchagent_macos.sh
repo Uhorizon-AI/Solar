@@ -53,7 +53,7 @@ gcc -o "$REPO_ROOT/core/skills/solar-system/scripts/Solar" \
 
 # Ensure entrypoint scripts are executable
 chmod +x "$REPO_ROOT/core/skills/solar-system/scripts/Solar" \
-         "$REPO_ROOT/core/skills/solar-system/scripts/solar_orchestrator.sh" 2>/dev/null || true
+         "$REPO_ROOT/core/skills/solar-system/scripts/run_orchestrator.sh" 2>/dev/null || true
 
 # Apply icon if available
 ASSETS_DIR="$REPO_ROOT/core/skills/solar-system/assets"

@@ -3,13 +3,13 @@
 ## Phase 1: macOS
 
 - Supervisor model: one LaunchAgent (`com.solar.system`) with `StartInterval=60`.
-- Orchestrator entrypoint: `core/skills/solar-system/scripts/solar_orchestrator.sh --once`.
+- Orchestrator entrypoint: `core/skills/solar-system/scripts/run_orchestrator.sh --once`.
 - Feature selector: `SOLAR_SYSTEM_FEATURES` (CSV).
 
 ## Feature dispatch
 
 - `async-tasks` -> `core/skills/solar-async-tasks/scripts/run_worker.sh --once`
-- `transport-gateway` -> `core/skills/solar-system/scripts/ensure_transport_gateway.sh`
+- `transport-gateway` -> `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
 
 ## Why check-first recovery
 
