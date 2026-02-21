@@ -2,6 +2,7 @@
 name: solar-router
 description: >
   Shared router that runs AI providers (Codex, Claude, Gemini) with Solar repo context.
+  Single source of truth for provider selection, fallback, and async routing policy.
   Use when transport-gateway, async-tasks, or other runtimes need to invoke an AI with
   cwd = repo root and paths resolved against REPO_ROOT.
 ---
@@ -10,15 +11,19 @@ description: >
 
 ## Purpose
 
-Provide a single entrypoint to run any supported AI provider (Codex, Claude, Gemini) with the same context as the Solar repo: working directory = repo root, relative paths resolved against `REPO_ROOT`. Used by solar-transport-gateway (WebSocket/bridge) and solar-async-tasks (task execution).
+Single source of truth for all AI execution in Solar:
+- **Provider selection and fallback** live only here.
+- **Async routing policy** (`direct_reply` vs `async_draft_created`) lives only here.
+- Used by solar-transport-gateway (WebSocket/bridge) and solar-async-tasks (task execution).
 
 ## Scope
 
-- Accept JSON payload (provider, text, session_id, user_id) on stdin; output reply on stdout.
+- Accept JSON payload (router contract v3) on stdin; output structured JSON on stdout.
 - Run the selected provider with `cwd=REPO_ROOT` so all providers see `sun/`, `planets/`, `core/`, `AGENTS.md`.
 - Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `REPO_ROOT` when relative.
 - Codex default command includes `-C <repo-root>` and `--add-dir ~/.codex`.
 - Persist conversation turns in runtime dir (JSONL) for continuity.
+- Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output.
 
 ## Required MCP
 
@@ -58,11 +63,58 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 bash core/skills/solar-router/scripts/diagnose_router.sh --verbose
 ```
 
+## Router contract v3
+
+### Input (stdin JSON)
+
+```json
+{
+  "request_id": "string",
+  "session_id": "string",
+  "user_id": "string",
+  "text": "string",
+  "channel": "telegram|n8n|async-task|other",
+  "mode": "auto|direct_only|async_only",
+  "provider": "codex|claude|gemini|null",
+  "metadata": {}
+}
+```
+
+- `provider`: optional. If set, strict mode — no fallback. If fails → `error_code: provider_locked_failed`.
+- `mode`: defaults to `auto`. `direct_only` always returns `direct_reply`. `async_only` requires `async-tasks` feature enabled.
+- `channel`: used by `DecisionEngine` for semantic routing in `mode=auto`.
+
+### Output (stdout JSON)
+
+```json
+{
+  "status": "success|failed",
+  "request_id": "string",
+  "provider_used": "codex|claude|gemini",
+  "reply_text": "string",
+  "decision": {
+    "kind": "direct_reply|async_draft_proposal|async_draft_created|async_activation_needed",
+    "task_id": "string|null",
+    "priority_suggested": "high|normal|low|null"
+  },
+  "error_code": "string|null",
+  "error": "string|null"
+}
+```
+
+## DecisionEngine rules
+
+1. `mode=direct_only` → `decision.kind=direct_reply` always.
+2. `mode=async_only` + `async-tasks` enabled → `decision.kind=async_draft_created`.
+3. `mode=async_only` + `async-tasks` disabled → `status=failed` + explicit error.
+4. `mode=auto` + `channel=async-task` → `decision.kind=direct_reply` (already in queue).
+5. `mode=auto` + `channel=telegram|n8n|other` → AI decides semantically via structured JSON output.
+
 ## Consumers
 
-- **solar-transport-gateway:** `run_websocket_bridge.py` and HTTP webhook bridge call the router script.
-- **solar-async-tasks:** `execute_active.sh` calls the router to run active tasks with provider fallback.
+- **solar-transport-gateway:** `run_websocket_bridge.py` and HTTP webhook bridge call the router with full v3 contract.
+- **solar-async-tasks:** `execute_active.py` (via `execute_active.sh`) calls the router with `channel=async-task`, `mode=direct_only`.
 
 ## References
 
-- `references/routing-policy.md` — provider priority, env keys, repo-context policy.
+- `references/routing-policy.md` — provider priority, env keys, repo-context policy, v3 contract rules.

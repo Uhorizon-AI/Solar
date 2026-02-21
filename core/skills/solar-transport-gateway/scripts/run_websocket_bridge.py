@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
+"""
+solar-transport-gateway WebSocket bridge v3.
+
+Pure delegate: forwards requests to solar-router and returns the structured
+router v3 response. No provider selection, no fallback, no async policy here.
+"""
 import asyncio
 import json
 import os
 import pathlib
 import subprocess
 import traceback
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 try:
     from websockets.server import serve
@@ -18,12 +24,6 @@ except Exception as exc:  # pragma: no cover
 HOST = os.getenv("SOLAR_WS_HOST", "127.0.0.1")
 PORT = int(os.getenv("SOLAR_WS_PORT", "8765"))
 PATH = os.getenv("SOLAR_WS_PATH", "/ws")
-SUPPORTED_PROVIDERS = ("codex", "claude", "gemini")
-AI_PROVIDER_PRIORITY = (
-    os.getenv("SOLAR_ROUTER_PROVIDER_PRIORITY")
-    or os.getenv("SOLAR_AI_PROVIDER_PRIORITY")
-    or "codex,claude,gemini"
-)
 AI_ROUTER_PYTHON = os.getenv("SOLAR_AI_ROUTER_PYTHON", "python3")
 AI_ROUTER_TIMEOUT_SEC = int(
     os.getenv("SOLAR_ROUTER_TIMEOUT_SEC")
@@ -31,80 +31,80 @@ AI_ROUTER_TIMEOUT_SEC = int(
     or "310"
 )
 
+# Router script path: repo root is 4 levels up from this script
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+_ROUTER_SCRIPT = _REPO_ROOT / "core/skills/solar-router/scripts/run_router.py"
+
+REQUIRED_FIELDS = {"type", "request_id", "session_id", "user_id", "text"}
+
 
 def validate_request(payload: Dict[str, Any]) -> bool:
-    required = ["type", "request_id", "session_id", "user_id", "text"]
-    return all(k in payload for k in required) and payload.get("type") == "request"
+    return (
+        all(k in payload for k in REQUIRED_FIELDS)
+        and payload.get("type") == "request"
+    )
 
 
-def parse_csv(value: str) -> List[str]:
-    return [x.strip().lower() for x in value.split(",") if x.strip()]
-
-
-def dedupe(values: List[str]) -> List[str]:
-    seen = set()
-    out: List[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        out.append(value)
-    return out
-
-
-def select_provider() -> Tuple[str, List[str]]:
-    configured = parse_csv(AI_PROVIDER_PRIORITY)
-    ordered = [p for p in configured if p in SUPPORTED_PROVIDERS]
-    ordered = dedupe(ordered)
-    if not ordered:
-        ordered = list(SUPPORTED_PROVIDERS)
-
-    provider = ordered[0]
-    backups = ordered[1:] if len(ordered) > 1 else []
-    return provider, backups
-
-
-def call_provider(provider: str, text: str, payload: Dict[str, Any]) -> str:
-    if provider not in SUPPORTED_PROVIDERS:
-        raise ValueError(f"Unsupported provider: {provider}")
-
-    # Router lives in solar-router skill (repo root = parents[4] from this script)
-    _repo_root = pathlib.Path(__file__).resolve().parents[4]
-    router_script = _repo_root / "core/skills/solar-router/scripts/run_router.py"
+def call_router(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Forward the full request payload to solar-router v3.
+    Returns the parsed router v3 JSON response dict.
+    """
     router_payload = {
-        "provider": provider,
-        "text": text,
         "request_id": payload.get("request_id", "n/a"),
         "session_id": payload.get("session_id", "n/a"),
         "user_id": payload.get("user_id", "n/a"),
+        "text": payload["text"],
+        "channel": payload.get("channel", "other"),
+        "mode": payload.get("mode", "auto"),
+        "metadata": payload.get("metadata", {}),
     }
+    # Pass provider only if explicitly set (strict mode)
+    if payload.get("provider"):
+        router_payload["provider"] = payload["provider"]
+
     proc = subprocess.run(
-        [AI_ROUTER_PYTHON, str(router_script)],
+        [AI_ROUTER_PYTHON, str(_ROUTER_SCRIPT)],
         input=json.dumps(router_payload),
         text=True,
         capture_output=True,
         timeout=AI_ROUTER_TIMEOUT_SEC,
     )
-    if proc.returncode != 0:
-        msg = proc.stderr.strip() or proc.stdout.strip() or "router failed"
-        raise RuntimeError(msg)
-    reply = proc.stdout.strip()
-    if not reply:
-        raise RuntimeError("router returned empty reply")
-    return reply
+    stdout = proc.stdout.strip()
+
+    # Always try to parse stdout as router v3 JSON first — even on non-zero exit.
+    # Router emits structured JSON errors (with real error_code) and then exits 1.
+    if stdout:
+        try:
+            return json.loads(stdout)
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback: no parseable JSON at all (crash, binary not found, etc.)
+    error_msg = proc.stderr.strip() or stdout or "router failed with no output"
+    return {
+        "status": "failed",
+        "request_id": payload.get("request_id", "n/a"),
+        "provider_used": None,
+        "reply_text": error_msg,
+        "decision": {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+        "error_code": "router_crashed",
+        "error": error_msg,
+    }
 
 
 async def handle_connection(websocket) -> None:
     if websocket.path != PATH:
         await websocket.send(
-            json.dumps(
-                {
-                    "type": "response",
-                    "request_id": "n/a",
-                    "status": "failed",
-                    "reply_text": f"Invalid path. Use {PATH}",
-                }
-            )
+            json.dumps({
+                "type": "response",
+                "request_id": "n/a",
+                "status": "failed",
+                "reply_text": f"Invalid path. Use {PATH}",
+                "decision": {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+                "error_code": "invalid_path",
+                "error": f"Invalid path. Use {PATH}",
+            })
         )
         return
 
@@ -115,39 +115,28 @@ async def handle_connection(websocket) -> None:
             request_id = payload.get("request_id", "n/a")
 
             if not validate_request(payload):
-                raise ValueError("Invalid request payload")
+                raise ValueError("Invalid request payload: missing required fields or type != request")
 
-            provider, backups = select_provider()
-            provider_used = provider
-            try:
-                reply = call_provider(provider, payload["text"], payload)
-            except Exception:
-                reply = ""
-                for backup in backups:
-                    try:
-                        reply = call_provider(backup, payload["text"], payload)
-                        provider_used = backup
-                        break
-                    except Exception:
-                        continue
-                if not reply:
-                    raise
+            router_response = call_router(payload)
 
+            # Envelope: minimal transport metadata + full router v3 response
             response = {
                 "type": "response",
                 "request_id": request_id,
-                "status": "success",
-                "reply_text": reply,
-                "provider_used": provider_used,
+                **router_response,
             }
         except Exception as exc:
-            print(f"provider execution failed: {exc}", flush=True)
+            print(f"[ws-bridge] request failed ({request_id}): {exc}", flush=True)
             traceback.print_exc()
             response = {
                 "type": "response",
                 "request_id": request_id,
                 "status": "failed",
-                "reply_text": str(exc) or "provider execution failed",
+                "provider_used": None,
+                "reply_text": str(exc) or "bridge error",
+                "decision": {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+                "error_code": "bridge_error",
+                "error": str(exc),
             }
 
         await websocket.send(json.dumps(response))
@@ -155,7 +144,7 @@ async def handle_connection(websocket) -> None:
 
 async def main() -> None:
     print(f"solar-transport-gateway listening on ws://{HOST}:{PORT}{PATH}")
-    # Keepalive config: ping every 60s, wait up to 180s for pong (AI router timeout is 120s)
+    # Keepalive: ping every 60s, wait up to 180s for pong (router timeout is ~310s)
     async with serve(handle_connection, HOST, PORT, ping_interval=60, ping_timeout=180):
         await asyncio.Future()
 

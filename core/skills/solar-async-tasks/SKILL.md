@@ -110,7 +110,7 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 2.  **Plan**: `plan.sh` prepares the task for execution, moving it to `planned/`.
 3.  **Approve**: `approve.sh` moves a planned task to `queued/` with a priority (high, normal, low).
 4.  **Start + Execute**: `run_worker.sh` picks the highest priority eligible task from `queued/`, moves it to `active/`, then executes one active task.
-5.  **Execute (manual/extra)**: `execute_active.sh` processes one `active/` task via `run_router.py` using `SOLAR_ROUTER_PROVIDER_PRIORITY`.
+5.  **Execute (manual/extra)**: `execute_active.sh` (wrapper) + `execute_active.py` (executor) process one `active/` task via `solar-router` v3 with `channel=async-task`, `mode=direct_only`.
 6.  **Complete**: `complete.sh` moves a task from `active/` to `completed/` (or recurring flow).
 
 ## Manual activation by task ID (optional)
@@ -130,12 +130,14 @@ Use this only when you want to activate one exact task manually (outside normal 
 
 ## Task execution (execute_active)
 
-- **`execute_active.sh [--once|--all]`**: Executes task content from `active/` by calling `core/skills/solar-router/scripts/run_router.py`.
-- Provider selection uses `SOLAR_ROUTER_PROVIDER_PRIORITY` (fallback order, first success wins).
+- **`execute_active.sh [--once|--all]`**: Lightweight wrapper that sets up paths/env and calls `execute_active.py`.
+- **`execute_active.py`**: Python executor — builds router v3 request with `channel=async-task`, `mode=direct_only`, calls `run_router.py`, parses JSON response, writes structured log.
+- All provider selection and fallback is handled by `solar-router`. No fallback loop in bash.
+- Per-task provider override: if task frontmatter has `provider: <name>`, it is passed to the router as strict mode (no fallback).
 - Task body is used as semantic instruction source (including agent + skill directions in natural language).
 - **One log per task (traceability):** The log file has the **same name as the task file**, with `.log` extension (e.g. task `20260214-0100_Triage-diario-de-ofertas-LinkedIn.md` → log `logs/20260214-0100_Triage-diario-de-ofertas-LinkedIn.log`). Each run overwrites it, so the log always reflects the **last** execution (outcome, result or error). Logs older than 7 days are automatically deleted when the worker runs (`cleanup_old_logs`).
-- On success: runs `complete.sh`.
-- On failure: task is moved to `error/`. To see full provider errors (e.g. 401, binary not found), run `bash core/skills/solar-router/scripts/diagnose_router.sh --verbose`.
+- On success: `execute_active.py` writes log, `execute_active.sh` runs `complete.sh`.
+- On failure: `execute_active.py` moves task to `error/` and writes error log. To diagnose provider issues, run `bash core/skills/solar-router/scripts/diagnose_router.sh --verbose`.
 
 ## Scheduling (optional)
 

@@ -14,6 +14,12 @@ Use this when you want Sun responses from local runtime:
 Notes:
 - Keep `sun/` and `planets/` local-only.
 - Use correlation id per message for traceability.
+- Telegram inbound is forwarded to WS bridge with `channel=telegram`, `mode=auto`.
+- Routing policy (direct vs async) is decided by `solar-router` DecisionEngine — not by the bridge.
+- `decision.kind` from router v3 controls the response flow:
+  - `direct_reply`: send `reply_text` directly to Telegram chat.
+  - `async_draft_created` / `async_draft_proposal`: send control message (draft created, ask for activation confirmation).
+  - Activation (`plan.sh` + `approve.sh`) requires a second explicit confirmation from the user — never auto-queued.
 
 ### 2) Alert mode (local -> Telegram)
 

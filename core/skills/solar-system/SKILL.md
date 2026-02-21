@@ -60,6 +60,8 @@ SOLAR_SYSTEM_FEATURES=async-tasks
 - `async-tasks`
 - `transport-gateway`
 
+**Note:** `SOLAR_SYSTEM_FEATURES` is also read by `solar-router` to determine if `async-tasks` is available for async draft creation. Keep this value consistent with your active runtime configuration.
+
 ## Workflow
 
 1. Bootstrap runtime env block:

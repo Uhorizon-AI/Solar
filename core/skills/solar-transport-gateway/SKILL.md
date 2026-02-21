@@ -19,7 +19,7 @@ Provide a reusable local transport layer for Solar:
 ## Scope
 
 - Run local WebSocket server for bidirectional messaging.
-- Run local HTTP webhook bridge with provider routes (`/webhook/<provider>`).
+- Run local HTTP webhook bridge with channel routes (`/webhook/<channel>`).
 - Define stable message contract for channel adapters.
 - Keep implementation lightweight and deterministic.
 
@@ -112,36 +112,42 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 1. Run `setup_transport_gateway.sh` as default end-to-end flow.
 2. If needed, run `setup_transport_gateway.sh --prepare-only` to stop before long-running services.
 3. For stable DNS, configure named tunnel with `configure_named_tunnel.sh` and set `SOLAR_TUNNEL_MODE=named`.
-4. Route provider calls via **solar-router** (`core/skills/solar-router/scripts/run_router.py`), configured by `SOLAR_ROUTER_PROVIDER_PRIORITY`.
+4. All AI execution and routing policy is delegated to **solar-router** (`core/skills/solar-router/scripts/run_router.py`). This skill does not select providers or implement fallback.
 5. Use individual scripts only for troubleshooting or partial reconfiguration.
 
 ## Conversation continuity
 
-- The **solar-router** script (see skill `solar-router`) stores conversation turns in local runtime memory (JSONL) by conversation id.
-- Conversation id priority:
-  1. `user_id`
-  2. `session_id`
-- Default system prompt file:
-  - `core/skills/solar-router/assets/system_prompt.md`
-- Override keys:
-  - `SOLAR_ROUTER_RUNTIME_DIR`
-  - `SOLAR_ROUTER_SYSTEM_PROMPT_FILE`
-  - `SOLAR_ROUTER_CONTEXT_TURNS`
+Managed entirely by `solar-router`. See skill `solar-router` for details.
 
-## Message contract (v1)
+## Message contract (v3)
 
-Inbound `request`:
+This skill is a **pure delegate** to `solar-router`. No provider selection, no fallback, no async policy here.
+
+Inbound `request` (WS bridge):
 - `type`: `request`
 - `request_id`: unique id
 - `session_id`: conversation session id
 - `user_id`: user identifier
 - `text`: user message
+- `channel`: `telegram|n8n|async-task|other` (set by HTTP bridge before forwarding)
+- `mode`: `auto|direct_only|async_only` (set by HTTP bridge based on caller)
+- `provider`: optional — if set, strict mode in router (no fallback)
 
-Outbound `response`:
+Outbound `response` (WS bridge — router v3 JSON + envelope):
 - `type`: `response`
 - `request_id`: mirrors inbound id
-- `status`: `success` | `failed`
+- `status`: `success|failed`
+- `provider_used`: provider that responded
 - `reply_text`: generated reply text
+- `decision.kind`: `direct_reply|async_draft_created|async_activation_needed|async_draft_proposal`
+- `decision.task_id`: task id if async draft was created
+- `error_code`: optional, for consumer routing
+- `error`: human-readable error detail
+
+HTTP bridge channel mapping:
+- Telegram inbound → `channel=telegram`, `mode=auto`
+- n8n inbound → `channel=n8n`, `mode=auto`
+- n8n response: router v3 JSON exposed directly (no legacy double-wrapper)
 
 ## References
 

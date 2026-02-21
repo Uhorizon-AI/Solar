@@ -5,8 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog.
 
 ## [Unreleased]
+
 ### Added
+- `core/skills/solar-async-tasks/scripts/execute_active.py` — Python executor for async tasks. Handles full I/O JSON with solar-router v3 (`channel=async-task`, `mode=direct_only`), respects per-task `provider:` frontmatter override (strict mode), writes structured logs, and moves tasks to `error/` on failure. Replaces fragile bash provider loop.
+- `core/skills/solar-router/scripts/smoke_test.sh` — Executable smoke test for solar-router v3: validates JSON contract on success/failure, error codes, mode validation, async_only feature gate, execute_active.py frontmatter parsing, and parse_ai_decision_output degradation. 19 PASS, 0 FAIL, 1 SKIP (provider-dependent test skipped when no AI available).
 - `core/skills/solar-async-tasks/scripts/requeue_from_error.sh` to move tasks from `error/` back to `queued/` after fixing the root cause.
+
+### Changed
+- `core/skills/solar-router/scripts/run_router.py` — **Breaking (v3).** Router is now the single source of truth for all AI execution and routing policy. Changes: (1) full contract v3 input/output JSON (adds `channel`, `mode`, `decision`, `error_code`); (2) provider selection and fallback moved from consumers into router; (3) `provider` field enables strict mode with no fallback (`error_code: provider_locked_failed`); (4) `DecisionEngine` added for `decision.kind` (`direct_reply`, `async_draft_created`, etc.); (5) `mode=async_only` bypasses AI execution entirely — creates draft by policy from user text without calling any provider; (6) `mode=auto` + AI output parsed for semantic `decision.kind` with controlled degradation to `direct_reply`; (7) async draft created via `create.sh` subprocess (no direct file writes from router); (8) output is always structured JSON (never plain text).
+- `core/skills/solar-router/assets/system_prompt.md` — Updated for v3: in `mode=auto`, AI must return a JSON object with `decision.kind` and `reply_text`. Added decision rules, examples for `direct_reply` and `async_draft_created`, and hard constraints for two-step async confirmation.
+- `core/skills/solar-transport-gateway/scripts/run_websocket_bridge.py` — Removed all provider selection and fallback logic. Now a pure delegate: forwards full request payload (including `channel` and `mode`) to solar-router v3 and returns structured response with minimal envelope. Preserves real `error_code` from router JSON even on non-zero exit code.
+- `core/skills/solar-transport-gateway/scripts/run_http_webhook_bridge.py` — Telegram inbound now sends `channel=telegram`, `mode=auto` to WS bridge. n8n inbound sends `channel=n8n`, `mode=auto` and exposes router v3 JSON directly (no legacy `solar_status`/`solar_response` double-wrapper). Handles `decision.kind` for Telegram response routing. No local async policy or fallback.
+- `core/skills/solar-async-tasks/scripts/execute_active.sh` — Refactored to lightweight wrapper: sets up paths/env, calls `execute_active.py`, and runs `complete.sh` on success. All provider logic removed from bash.
+- `core/skills/solar-router/references/routing-policy.md` — Rewritten for v3: documents router as single source of truth, DecisionEngine rules table, caller mapping (`channel`/`mode` per caller), contract v3 input/output, n8n bridge output rule, and key invariants.
+- `core/skills/solar-router/SKILL.md` — Updated scope, contract v3 section, DecisionEngine rules, and consumer references.
+- `core/skills/solar-transport-gateway/SKILL.md` — Updated message contract to v3, channel mapping, and route pattern from `<provider>` to `<channel>`.
+- `core/skills/solar-async-tasks/SKILL.md` — Updated execute_active section to document `execute_active.py` + wrapper pattern and router v3 delegation.
+- `core/skills/solar-system/SKILL.md` — Added note that `SOLAR_SYSTEM_FEATURES` is also read by solar-router to gate async draft creation.
+- `core/skills/solar-telegram/references/telegram-transport-patterns.md` — Updated Telegram routing notes: `channel=telegram`/`mode=auto`, `decision.kind` controls response flow, activation requires second explicit confirmation.
+- `core/skills/solar-transport-gateway/references/telegram-webhook-flow.md` — Updated base endpoint pattern from `/webhook/<provider>` to `/webhook/<channel>`.
+
+### Fixed
+- `core/skills/solar-transport-gateway/scripts/run_websocket_bridge.py` and `core/skills/solar-async-tasks/scripts/execute_active.py` — Structured router v3 JSON errors (real `error_code` like `unsupported_provider`, `invalid_mode`, `provider_locked_failed`) are now preserved when router exits with code 1. Previously overwritten with generic `router_error`, breaking trazability. Only falls back to `router_crashed` when stdout is not parseable JSON at all.
+- `core/skills/solar-router/scripts/run_router.py` — `mode=async_only` no longer fails with `all_providers_failed` when AI providers are unavailable. Draft is now created by policy from user text without any provider call.
+- `core/skills/solar-transport-gateway/SKILL.md` — Removed internal solar-router details (system prompt path, conversation JSONL, override env keys) from "Conversation continuity" section. Delegate skills must not document the internals of the skill they delegate to. Section now reads: "Managed entirely by `solar-router`."
 
 ### Changed
 - `core/skills/solar-skill-creator/SKILL.md`: scripts guidance changed from fixed section format to a documentation rule (if `scripts/` exists, explain usage somewhere in `SKILL.md`).

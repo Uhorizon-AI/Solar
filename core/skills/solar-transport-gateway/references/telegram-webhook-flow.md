@@ -8,7 +8,7 @@
 
 2. HTTP webhook bridge:
 - `run_http_webhook_bridge.sh`
-- base endpoint pattern: `http://127.0.0.1:8787/webhook/<provider>`
+- base endpoint pattern: `http://127.0.0.1:8787/webhook/<channel>`
 - Telegram endpoint: `http://127.0.0.1:8787/webhook/telegram`
 
 3. Public tunnel:
