@@ -6,6 +6,27 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-21
+### Added
+- feat(solar-system, solar-transport-gateway): enhance orchestrator health checks and script organization
+- feat(solar-async-tasks, solar-router): introduce async task execution with structured logging and enhanced routing
+- feat(solar-transport-gateway): improve tunnel recovery and environment variable handling
+- feat(solar-async-tasks): add manual task activation by ID with deterministic transitions
+- feat(solar-skill-creator): update script usage documentation and validation rules
+- feat(solar-async-tasks): enhance task sorting by scheduled time and priority
+- feat(CHANGELOG.md): update first-run protocol and enhance task management
+- feat(AGENTS.md): update first-run protocol for session initialization
+- feat(solar-router): enhance Gemini provider handling with improved environment setup and OAuth prompt detection
+- feat(solar-async-tasks): enhance task management with UUIDs, slug-based filenames, and improved sorting
+- feat(solar-async-tasks, solar-router, solar-system): enhance logging, path resolution, and environment setup
+- feat(solar-async-tasks): enhance task management with logging, requeue functionality, and error handling improvements
+
+### Fixed
+- fix(execute_active.py): remove redundant import and streamline error handling
+- fix(solar-async-tasks): clean up requeue_from_error.sh to remove execution error history
+
+
+
 ### Added
 - `core/skills/solar-system/scripts/check_orchestrator.sh` — new single-command orchestrator health check. Reports supervisor state (plist + launchctl) and per-feature health (`transport-gateway` via `check_transport_gateway.sh`, `async-tasks` via filesystem checks). Emits `HEALTHY/PARTIAL/DOWN` verdict with exit codes `0/2/1` aligned with `check_transport_gateway.sh`. Includes portable timeout (gtimeout/timeout/bash fallback with process group kill), orphan lock detection with PID validation, and explicit output for non-numeric lock content.
 - `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh` — moved from `solar-system/scripts/` to its owning skill. Logic (check + recovery of gateway) belongs to `solar-transport-gateway`, not to the orchestrator.
