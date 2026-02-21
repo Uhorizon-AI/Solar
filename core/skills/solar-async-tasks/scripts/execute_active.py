@@ -15,6 +15,7 @@ Usage:
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -178,7 +179,6 @@ def mark_task_error(
 ) -> None:
     """Update task frontmatter status to error and move to error/ dir."""
     content = task_file.read_text(encoding="utf-8")
-    import re
     content = re.sub(r"^status:.*$", "status: error", content, flags=re.MULTILINE)
     err_ts = utc_now()
     content += (
