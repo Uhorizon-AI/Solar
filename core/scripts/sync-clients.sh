@@ -44,9 +44,15 @@ CURSOR_SKILLS="$CURSOR_DIR/skills"
 CURSOR_AGENTS="$CURSOR_DIR/agents"
 CURSOR_COMMANDS="$CURSOR_DIR/commands"
 
+GEMINI_DIR="$ROOT_DIR/.gemini"
+GEMINI_SETTINGS="$GEMINI_DIR/settings.json"
+GEMINI_SKILLS="$GEMINI_DIR/skills"
+GEMINI_COMMANDS="$GEMINI_DIR/commands"
+
 SYNC_CODEX=false
 SYNC_CLAUDE=false
 SYNC_CURSOR=false
+SYNC_GEMINI=false
 
 # Temp directory for tracking
 TEMP_DIR="$(mktemp -d)"
@@ -61,8 +67,9 @@ for arg in "$@"; do
     --codex-only) SYNC_CODEX=true ;;
     --claude-only) SYNC_CLAUDE=true ;;
     --cursor-only) SYNC_CURSOR=true ;;
+    --gemini-only) SYNC_GEMINI=true ;;
     -h|--help)
-      echo "Usage: $0 [--codex-only|--claude-only|--cursor-only]"
+      echo "Usage: $0 [--codex-only|--claude-only|--cursor-only|--gemini-only]"
       exit 0
       ;;
     *)
@@ -72,10 +79,11 @@ for arg in "$@"; do
   esac
 done
 
-if ! $SYNC_CODEX && ! $SYNC_CLAUDE && ! $SYNC_CURSOR; then
+if ! $SYNC_CODEX && ! $SYNC_CLAUDE && ! $SYNC_CURSOR && ! $SYNC_GEMINI; then
   SYNC_CODEX=true
   SYNC_CLAUDE=true
   SYNC_CURSOR=true
+  SYNC_GEMINI=true
 fi
 
 log_section() {
@@ -246,14 +254,17 @@ sync_resources_as_symlink() {
 
   ensure_dir "$target_dir"
 
-  # Clean old symlinks from core and planets
+  # Clean old symlinks from core and planets to handle deleted resources
   clean_symlinks_from_prefix "$target_dir" "$ROOT_DIR/core"
   clean_symlinks_from_prefix "$target_dir" "$ROOT_DIR/planets"
 
   [ -f "$index_file" ] || return 0
 
   while IFS='|' read -r name source; do
-    ln -snf "$source" "$target_dir/$name"
+    # Robustness: Remove the destination path if it exists, regardless of type.
+    # This prevents 'ln' from failing if a directory exists where a symlink should be.
+    rm -rf "$target_dir/$name"
+    ln -s "$source" "$target_dir/$name"
     log_ok "$name"
   done < "$index_file"
 }
@@ -308,11 +319,79 @@ sync_cursor() {
   echo
 }
 
+# sync_gemini_commands
+# Converts .md command definitions to .toml for Gemini.
+# Assumes .md format: First line is description, the rest is the prompt.
+sync_gemini_commands() {
+  local index_file="$1"
+  local target_dir="$2"
+
+  ensure_dir "$target_dir"
+
+  # Clean old generated toml files and old md symlinks
+  find "$target_dir" -name "*.toml" -type f -delete
+  clean_symlinks_from_prefix "$target_dir" "$ROOT_DIR/core"
+  clean_symlinks_from_prefix "$target_dir" "$ROOT_DIR/planets"
+
+  [ -f "$index_file" ] || return 0
+
+  while IFS='|' read -r name source; do
+    # Convert name like 'cmd.md' to 'cmd.toml' or 'planet:cmd.md' to 'planet:cmd.toml'
+    local toml_name=$(echo "$name" | sed 's/\.md$/.toml/')
+    # Read first line for description, escape double quotes for TOML
+    local description
+    description=$(head -n 1 "$source" | sed 's/"/\\"/g')
+    # Read the rest of the file for the prompt
+    local prompt
+    prompt=$(tail -n +2 "$source")
+
+    # Create the .toml file from the .md source
+    cat > "$target_dir/$toml_name" <<EOF
+# Auto-generated from $source by sync-clients.sh
+description = "$description"
+prompt = """
+$prompt
+"""
+EOF
+    log_ok "$toml_name (generated from .md)"
+  done < "$index_file"
+}
+
+sync_gemini() {
+  log_section "🔄 Gemini (.gemini)"
+  ensure_dir "$GEMINI_DIR"
+
+  if [ ! -f "$GEMINI_SETTINGS" ]; then
+    log_ok "Creating $GEMINI_SETTINGS with Solar defaults"
+    cat > "$GEMINI_SETTINGS" <<EOF
+{
+  "general": {
+    "enablePromptCompletion": true
+  },
+  "context": {
+    "fileFiltering": {
+      "respectGitIgnore": true
+    }
+  }
+}
+EOF
+  else
+    log_warn "$GEMINI_SETTINGS already exists. (Manual update required if settings are missing)"
+  fi
+
+  log_section "📦 Skills"
+  sync_resources_as_symlink "$SKILLS_INDEX" "$GEMINI_SKILLS"
+  log_section "🧩 Commands"
+  sync_gemini_commands "$COMMANDS_INDEX" "$GEMINI_COMMANDS"
+  echo
+}
+
 # Main execution
 discover_resources
 
 $SYNC_CODEX && sync_codex
 $SYNC_CLAUDE && sync_claude
 $SYNC_CURSOR && sync_cursor
+$SYNC_GEMINI && sync_gemini
 
 echo -e "${GREEN}✅ Sync complete.${NC}"

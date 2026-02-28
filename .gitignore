@@ -22,8 +22,9 @@ planets/
 
 # Local AI client runtime/config
 .claude/
-.cursor/
 .codex/
+.cursor/
+.gemini/
 
 # Temporary files
 brain.ai
