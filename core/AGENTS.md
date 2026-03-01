@@ -171,6 +171,12 @@ This protocol is invoked by root `AGENTS.md` when `sun/MEMORY.md` or `sun/prefer
   - `bash core/scripts/sync-clients.sh`
 - This sync must be executed before considering the change operationally complete.
 
+## Changelog and Project Integrity Policy (required)
+- The root `CHANGELOG.md` is for **Solar framework-level changes only** (`core/`, root config, shared protocols).
+- **NEVER** include planet-specific business logic, user-specific context (`sun/`), or domain-specific operations in the root `CHANGELOG.md`.
+- Planet-specific changes must be documented within their own planet workspace (e.g., in a local `CHANGELOG.md` if it exists).
+- Before updating the root `CHANGELOG.md`, verify that every entry describes a change to the reusable framework, not an execution artifact from a specific workspace.
+
 ## Skill validation rule (required)
 - If a specific skill under `core/skills/` is modified, validate that skill before considering the change complete.
 - Validation command:
