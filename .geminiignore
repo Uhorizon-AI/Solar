@@ -1,0 +1,5 @@
+# Permitir que Gemini vea las carpetas de trabajo ignoradas por Git
+!sun/
+!planets/
+!planets/**
+!sun/**

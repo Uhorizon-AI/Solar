@@ -4,7 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog.
 
-## [Unreleased]
+## [Unreleased] - 2026-03-01
+
+### Added
+- feat(solar-router): implement Solar-JIT (Just-In-Time) agent orchestration architecture. Includes automated agent selection, context injection, UUID-based `router_id`, and structured audit logging in `sun/runtime/router/audit.jsonl`.
+- feat(solar-router): add `status_router.sh` to monitor real-time router health, in-flight processes, and execution history.
+- feat(plans): schedule March R&D blueprints for Solar-JIT and Audio-TTS (Text-to-Speech) execution.
+- feat(config): implement `.geminiignore` with negation patterns to whitelist `sun/` and `planets/` workspace directories while maintaining `.gitignore` compatibility.
+
+### Changed
+- strategy(uhorizon): pivot Uhorizon AI Q1 2026 strategy from product-led (SaaS) to service-led (AI applied solutions), repositioning NexIA as a "Habilitador" (enabler) and service vehicle.
+- docs(plans): update Q1 strategy plan to explicitly define **Solar** as the internal Operating System for productivity and **NexIA** as a delivery accelerator.
+- docs(ecosystem): refine NexIA positioning as a managed "AI OS" for clients, shifting focus from technology competition to implementation value.
+- config(gemini): update `.gemini/settings.json` to enable `respectGitIgnore: true` and add global ignore for `node_modules`.
+- ops(sales): archive February daily logs and finalized linked sales actions; clean up pipeline based on Feb 28th strategic review.
+- docs(marketing): archive high-authority assets and weekly digests; purge legacy product-led social posts to align with new service-led paradigm.
 
 ## [0.3.0] - 2026-02-21
 ### Added
