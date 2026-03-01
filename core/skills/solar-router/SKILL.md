@@ -24,6 +24,8 @@ Single source of truth for all AI execution in Solar:
 - Codex default command includes `-C <repo-root>` and `--add-dir ~/.codex`.
 - Persist conversation turns in runtime dir (JSONL) for continuity.
 - Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output.
+- Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
+- Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability.
 
 ## Required MCP
 
@@ -64,6 +66,10 @@ bash core/skills/solar-router/scripts/diagnose_router.sh --verbose
 
 # Smoke tests: validate router contract v3, bridge delegation, execute_active.py JSON parsing
 bash core/skills/solar-router/scripts/check_router.sh
+
+# Live status: provider health, in-flight processes, last executions
+bash core/skills/solar-router/scripts/status_router.sh
+bash core/skills/solar-router/scripts/status_router.sh --last 20
 ```
 
 ## Router contract v3
@@ -79,13 +85,20 @@ bash core/skills/solar-router/scripts/check_router.sh
   "channel": "telegram|n8n|async-task|other",
   "mode": "auto|direct_only|async_only",
   "provider": "codex|claude|gemini|null",
-  "metadata": {}
+  "metadata": {
+    "agent": "agent-name|null",
+    "skills": ["planet:skill-name", "core-skill-name"],
+    "planet": "planet-name|null"
+  }
 }
 ```
 
 - `provider`: optional. If set, strict mode — no fallback. If fails → `error_code: provider_locked_failed`.
 - `mode`: defaults to `auto`. `direct_only` always returns `direct_reply`. `async_only` requires `async-tasks` feature enabled.
 - `channel`: used by `DecisionEngine` for semantic routing in `mode=auto`.
+- `metadata.agent`: existing agent name from planet's `agents/`, or `null` for JIT role generation.
+- `metadata.skills`: skill name format — `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; `skill` resolves to `core/skills/<skill>/SKILL.md`. Only description is injected (on-demand).
+- `metadata.planet`: planet that owns the task domain. Used for agent/skill lookup.
 
 ### Output (stdout JSON)
 
@@ -117,6 +130,11 @@ bash core/skills/solar-router/scripts/check_router.sh
 
 - **solar-transport-gateway:** `run_websocket_bridge.py` and HTTP webhook bridge call the router with full v3 contract.
 - **solar-async-tasks:** `execute_active.py` (via `execute_active.sh`) calls the router with `channel=async-task`, `mode=direct_only`.
+
+## Runtime files
+
+- `sun/runtime/router/conversations/<user_id>.jsonl` — conversation history per user (for context continuity).
+- `sun/runtime/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`.
 
 ## References
 

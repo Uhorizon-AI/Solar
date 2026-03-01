@@ -115,7 +115,7 @@ Before delegating to `solar-router`:
 - Task **modifies data or sends messages** → show the user which agent + skills will be used and wait for explicit approval before proceeding.
 
 ### 3. Subprocess Invocation
-Call `solar-router` using the v3 contract via stdin:
+Call `solar-router` using the v3 contract via stdin. Always use `mode: direct_only` and `channel: other` in subprocesses to prevent recursion:
 
 ```bash
 echo '{
@@ -134,12 +134,7 @@ echo '{
 }' | python3 core/skills/solar-router/scripts/run_router.py
 ```
 
-**Field rules:**
-- `provider`: specify the best LLM for the task. Omit to let the router use its priority order.
-- `mode`: always `direct_only` in subprocess calls to prevent recursion.
-- `metadata.agent`: use an existing agent from the planet's `agents/` if one fits, otherwise `null` (router creates JIT).
-- `metadata.skills`: list relevant skills available in the planet or `core/`.
-- `metadata.planet`: the planet that owns this task's domain.
+For full field rules, JIT protocol, metadata format, and invariants see `core/skills/solar-router/references/routing-policy.md`.
 
 ### 4. When No Agent or Skill Exists
-If no matching agent or skill exists, `solar-router` will generate one JIT to resolve the task. Frequently used JIT resources will be persisted to the correct planet and synced to all AI clients via `sync-clients.sh`.
+Set `metadata.agent` to `null` — the router generates a role JIT. Frequently used JIT resources are persisted to the correct planet and synced via `sync-clients.sh`.
