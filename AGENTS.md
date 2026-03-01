@@ -99,3 +99,47 @@ Access `sun/` and `planets/*/` directly. See `core/AGENTS.md` for workspace rule
 ## Workspace Doctor Policy (Required)
 
 Git setup in `sun/` and `planets/*` is optional. See `core/AGENTS.md` for doctor rules.
+
+## JIT Delegation Protocol (Required)
+
+When receiving a task, the AI must self-evaluate before responding:
+
+### 1. Self-Assessment
+Check if available agents, skills, and commands are sufficient for the task:
+- **Sufficient** → execute directly.
+- **Insufficient or uncertain** → delegate to `solar-router` as a subprocess.
+
+### 2. Validation Gate
+Before delegating to `solar-router`:
+- Task is **read / analysis only** → delegate automatically.
+- Task **modifies data or sends messages** → show the user which agent + skills will be used and wait for explicit approval before proceeding.
+
+### 3. Subprocess Invocation
+Call `solar-router` using the v3 contract via stdin:
+
+```bash
+echo '{
+  "request_id": "<uuid>",
+  "session_id": "<session_id>",
+  "user_id": "<user_id>",
+  "text": "<task description>",
+  "channel": "other",
+  "mode": "direct_only",
+  "provider": "<claude|gemini|codex>",
+  "metadata": {
+    "agent": "<agent-name or null>",
+    "skills": ["<skill-1>", "<skill-2>"],
+    "planet": "<planet-name>"
+  }
+}' | python3 core/skills/solar-router/scripts/run_router.py
+```
+
+**Field rules:**
+- `provider`: specify the best LLM for the task. Omit to let the router use its priority order.
+- `mode`: always `direct_only` in subprocess calls to prevent recursion.
+- `metadata.agent`: use an existing agent from the planet's `agents/` if one fits, otherwise `null` (router creates JIT).
+- `metadata.skills`: list relevant skills available in the planet or `core/`.
+- `metadata.planet`: the planet that owns this task's domain.
+
+### 4. When No Agent or Skill Exists
+If no matching agent or skill exists, `solar-router` will generate one JIT to resolve the task. Frequently used JIT resources will be persisted to the correct planet and synced to all AI clients via `sync-clients.sh`.

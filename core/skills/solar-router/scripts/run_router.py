@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import uuid
 from typing import Any, Dict, List, Optional
 
 
@@ -128,6 +129,114 @@ def append_message(path: pathlib.Path, role: str, text: str) -> None:
         fh.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
+def audit_log(router_id: str, event: str, **kwargs: Any) -> None:
+    """Append one audit record to sun/runtime/router/audit.jsonl."""
+    import datetime
+    audit_path = RUNTIME_ROOT / "audit.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "ts": datetime.datetime.utcnow().isoformat() + "Z",
+        "event": event,
+        "router_id": router_id,
+        **kwargs,
+    }
+    with audit_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Skill metadata extraction
+# ---------------------------------------------------------------------------
+
+def _extract_skill_description(skill_path: pathlib.Path) -> Optional[str]:
+    """
+    Extract the description field from a SKILL.md frontmatter (YAML block).
+    Returns a single-line description or None if not found.
+    """
+    try:
+        content = skill_path.read_text(encoding="utf-8")
+        # Find YAML frontmatter between --- delimiters
+        match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
+        if not match:
+            return None
+        frontmatter = match.group(1)
+        # Extract description value (handles multi-line YAML block scalar >)
+        desc_match = re.search(r"description:\s*[>|]?\s*\n?((?:[ \t]+.+\n?)+|.+)", frontmatter)
+        if desc_match:
+            raw = desc_match.group(1).strip()
+            # Collapse multi-line into single line
+            return " ".join(line.strip() for line in raw.splitlines() if line.strip())
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# JIT Context Resolution
+# ---------------------------------------------------------------------------
+
+def resolve_jit_context(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Resolve agent and skills from metadata.
+    Looks up resources in the planet first, then core/.
+    If agent is not found, generates a JIT role inline (no extra LLM call).
+    Returns context dict to inject into the prompt.
+    """
+    agent_name = metadata.get("agent")
+    skill_names = metadata.get("skills") or []
+    planet = metadata.get("planet")
+
+    agent_content: Optional[str] = None
+    skills_content: List[Dict[str, str]] = []
+    jit_generated = False
+
+    # --- Resolve agent ---
+    if agent_name:
+        candidates = []
+        if planet:
+            candidates.append(REPO_ROOT / f"planets/{planet}/agents/{agent_name}.md")
+        candidates.append(REPO_ROOT / f"core/agents/{agent_name}.md")
+        for path in candidates:
+            if path.exists():
+                agent_content = path.read_text(encoding="utf-8").strip()
+                break
+        if not agent_content:
+            # Agent specified but not found — generate JIT role inline
+            jit_generated = True
+            agent_content = (
+                f"# Role: {agent_name}\n"
+                f"You are a specialized agent for tasks related to {agent_name}. "
+                f"Apply domain expertise for the task requested."
+            )
+    else:
+        # No agent specified — task drives the role JIT
+        jit_generated = True
+
+    # --- Resolve skills (metadata only — on-demand, no full content) ---
+    # Skill name format: "planet:skill_name" → planets/<planet>/skills/<skill>/SKILL.md
+    #                    "skill_name"         → core/skills/<skill>/SKILL.md
+    for skill in skill_names:
+        if ":" in skill:
+            skill_planet, skill_id = skill.split(":", 1)
+            skill_path = REPO_ROOT / f"planets/{skill_planet}/skills/{skill_id}/SKILL.md"
+        else:
+            skill_path = REPO_ROOT / f"core/skills/{skill}/SKILL.md"
+        if skill_path.exists():
+            skill_description = _extract_skill_description(skill_path)
+            if skill_description:
+                skills_content.append({"name": skill, "description": skill_description})
+        else:
+            print(f"[solar-router] skill not found: {skill}", file=sys.stderr)
+
+    return {
+        "agent_name": agent_name,
+        "agent_content": agent_content,
+        "skills_content": skills_content,
+        "jit_generated": jit_generated,
+        "planet": planet,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Prompt building
 # ---------------------------------------------------------------------------
@@ -139,14 +248,34 @@ def build_prompt(
     conversation_id: str,
     mode: str,
     channel: str,
+    jit_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     lines: List[str] = []
     lines.append(system_prompt)
+
+    # Inject agent role if resolved
+    if jit_context and jit_context.get("agent_content"):
+        lines.append("")
+        lines.append("## Agent Role")
+        lines.append(jit_context["agent_content"])
+
+    # Inject skills catalog (name + description only — load on demand)
+    if jit_context and jit_context.get("skills_content"):
+        lines.append("")
+        lines.append("## Available Skills")
+        lines.append("Invoke these skills by name when needed for the task:")
+        for skill in jit_context["skills_content"]:
+            lines.append(f"- {skill['name']}: {skill['description']}")
+
     lines.append("")
     lines.append("Conversation context")
     lines.append(f"- conversation_id: {conversation_id}")
     lines.append(f"- channel: {channel}")
     lines.append(f"- mode: {mode}")
+    if jit_context and jit_context.get("planet"):
+        lines.append(f"- planet: {jit_context['planet']}")
+    if jit_context and jit_context.get("jit_generated"):
+        lines.append("- agent: jit (generated for this task)")
     lines.append("")
     if recent:
         lines.append("Recent turns (oldest -> newest):")
@@ -455,7 +584,8 @@ def main() -> None:
         })
         sys.exit(1)
 
-    request_id = str(payload.get("request_id", "unknown")).strip()
+    request_id = str(payload.get("request_id", "")).strip() or "unknown"
+    router_id = str(uuid.uuid4())
     session_id = str(payload.get("session_id", "")).strip()
     user_id = str(payload.get("user_id", "")).strip()
     text = str(payload.get("text", "")).strip()
@@ -507,6 +637,20 @@ def main() -> None:
     conversation_id = user_id or session_id or "default"
     conv_path = conversation_file(conversation_id)
 
+    # --- Audit: start ---
+    import time as _time
+    _t_start = _time.monotonic()
+    metadata = payload.get("metadata") or {}
+    audit_log(
+        router_id,
+        "start",
+        request_id=request_id,
+        user_id=user_id,
+        channel=channel,
+        mode=mode,
+        metadata=metadata,
+    )
+
     # --- Fix: async_only bypasses AI execution entirely — policy-driven, no provider needed ---
     if mode == "async_only":
         if not async_tasks_enabled():
@@ -554,9 +698,12 @@ def main() -> None:
         })
         return
 
+    # --- JIT Context Resolution ---
+    jit_context = resolve_jit_context(metadata) if metadata else None
+
     system_prompt = read_system_prompt()
     recent = load_recent_messages(conv_path)
-    full_prompt = build_prompt(system_prompt, recent, text, conversation_id, mode, channel)
+    full_prompt = build_prompt(system_prompt, recent, text, conversation_id, mode, channel, jit_context)
 
     # --- Execute AI ---
     try:
@@ -642,6 +789,16 @@ def main() -> None:
     # --- Persist conversation ---
     append_message(conv_path, "user", text)
     append_message(conv_path, "assistant", reply_text)
+
+    # --- Audit: end ---
+    audit_log(
+        router_id,
+        "end",
+        status="success",
+        provider=provider_used,
+        jit_generated=bool(jit_context and jit_context.get("jit_generated")),
+        duration_ms=int((_time.monotonic() - _t_start) * 1000),
+    )
 
     # --- Emit response ---
     emit({
