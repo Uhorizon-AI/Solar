@@ -370,7 +370,7 @@ sync_gemini() {
   },
   "context": {
     "fileFiltering": {
-      "respectGitIgnore": true
+      "respectGitIgnore": false
     }
   }
 }
