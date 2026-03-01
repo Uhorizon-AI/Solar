@@ -6,6 +6,17 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased] - 2026-03-01
 
+## [0.4.0] - 2026-03-01
+### Added
+- feat(core): implement Solar-JIT architecture, .geminiignore filtering and sync-clients defaults
+- feat(solar-jit): implement JIT agent orchestration with audit log and router status
+- feat(sync-clients): add Gemini CLI support with .md-to-.toml command conversion and .gemini/ gitignore entry
+
+### Fixed
+- fix(sync-clients): set respectGitIgnore to false in Gemini config to allow access to ignored files
+
+
+
 ### Added
 - feat(solar-router): implement Solar-JIT (Just-In-Time) agent orchestration architecture. Includes automated agent selection, context injection, UUID-based `router_id`, and structured audit logging in `sun/runtime/router/audit.jsonl`.
 - feat(solar-router): add `status_router.sh` to monitor real-time router health, in-flight processes, and execution history.
