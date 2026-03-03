@@ -102,9 +102,39 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
 
 **metadata field rules:**
 - `agent`: existing agent from `planets/<planet>/agents/` or `core/agents/`. Set to `null` to generate JIT role inline.
-- `skills`: `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; unprefixed `skill` resolves to `core/skills/<skill>/SKILL.md`. Only the frontmatter `description` is injected — never the full file.
+- `skills`: `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; unprefixed `skill` resolves to `planets/<metadata.planet>/skills/<skill>/SKILL.md` first (if `metadata.planet` is set), then falls back to `core/skills/<skill>/SKILL.md`. Only the frontmatter `description` is injected — never the full file.
 - `planet`: planet that owns this task's domain. Used for agent and skill lookup.
 - `provider` (top-level): `claude` for reasoning/writing, `codex` for code, `gemini` for research. Omit to use priority order.
+
+## Secure Invocation Protocol (Required)
+
+To prevent JSON parsing errors (invalid control characters, unescaped newlines), always use one of these two methods when calling the router from an AI agent or shell:
+
+### Method A: Temporary JSON File (Recommended for Agents)
+
+1. Use `write_file` to create a temporary JSON file (e.g., `sun/runtime/router/request_<id>.json`).
+2. Ensure the `text` field contains explicit `\n` for newlines.
+3. Execute the router piping the file: `python3 core/skills/solar-router/scripts/run_router.py < sun/runtime/router/request_<id>.json`.
+
+### Method B: Heredoc with Single Quotes (Shell)
+
+Use a heredoc with `'EOF'` (single quotes) to prevent the shell from interpreting backslashes or special characters:
+
+```bash
+cat << 'EOF' | python3 core/skills/solar-router/scripts/run_router.py
+{
+  "request_id": "my-id",
+  "text": "Line 1\nLine 2",
+  "channel": "other",
+  "mode": "direct_only"
+}
+EOF
+```
+
+### Critical Rules:
+- **Prefer escaped newlines** (`\n`) inside JSON strings for portability.
+- **Escape double quotes** inside the `text` string as `\"`.
+- **Validate JSON** before sending if using a custom script.
 
 ## Router contract v3 — output
 

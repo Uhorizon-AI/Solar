@@ -183,7 +183,13 @@ def resolve_jit_context(metadata: Dict[str, Any]) -> Dict[str, Any]:
     Returns context dict to inject into the prompt.
     """
     agent_name = metadata.get("agent")
-    skill_names = metadata.get("skills") or []
+    raw_skills = metadata.get("skills") or []
+    if isinstance(raw_skills, str):
+        skill_names = [raw_skills]
+    elif isinstance(raw_skills, list):
+        skill_names = [str(skill) for skill in raw_skills if str(skill).strip()]
+    else:
+        skill_names = []
     planet = metadata.get("planet")
 
     agent_content: Optional[str] = None
@@ -215,17 +221,29 @@ def resolve_jit_context(metadata: Dict[str, Any]) -> Dict[str, Any]:
     # --- Resolve skills (metadata only — on-demand, no full content) ---
     # Skill name format: "planet:skill_name" → planets/<planet>/skills/<skill>/SKILL.md
     #                    "skill_name"         → core/skills/<skill>/SKILL.md
+    # If planet is in metadata, "skill_name" also checks planets/<planet>/skills/<skill>/SKILL.md
     for skill in skill_names:
+        candidates = []
         if ":" in skill:
             skill_planet, skill_id = skill.split(":", 1)
-            skill_path = REPO_ROOT / f"planets/{skill_planet}/skills/{skill_id}/SKILL.md"
+            candidates.append(REPO_ROOT / f"planets/{skill_planet}/skills/{skill_id}/SKILL.md")
         else:
-            skill_path = REPO_ROOT / f"core/skills/{skill}/SKILL.md"
-        if skill_path.exists():
-            skill_description = _extract_skill_description(skill_path)
-            if skill_description:
-                skills_content.append({"name": skill, "description": skill_description})
-        else:
+            # 1. If planet is provided, check planet-specific skills first
+            if planet:
+                candidates.append(REPO_ROOT / f"planets/{planet}/skills/{skill}/SKILL.md")
+            # 2. Fallback to core skills
+            candidates.append(REPO_ROOT / f"core/skills/{skill}/SKILL.md")
+
+        skill_found = False
+        for skill_path in candidates:
+            if skill_path.exists():
+                skill_description = _extract_skill_description(skill_path)
+                if skill_description:
+                    skills_content.append({"name": skill, "description": skill_description})
+                    skill_found = True
+                    break
+        
+        if not skill_found:
             print(f"[solar-router] skill not found: {skill}", file=sys.stderr)
 
     return {
@@ -556,6 +574,19 @@ def emit(response: Dict[str, Any]) -> None:
     print(json.dumps(response, ensure_ascii=False))
 
 
+def parse_request_payload(raw: str) -> Dict[str, Any]:
+    """Parse router request JSON with strict-first validation and tolerant fallback."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as strict_exc:
+        payload = json.loads(raw, strict=False)
+        print(
+            f"[solar-router] non-strict JSON parse accepted input: {strict_exc}",
+            file=sys.stderr,
+        )
+        return payload
+
+
 def main() -> None:
     raw = sys.stdin.read().strip()
     if not raw:
@@ -571,7 +602,7 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        payload = json.loads(raw)
+        payload = parse_request_payload(raw)
     except json.JSONDecodeError as exc:
         emit({
             "status": "failed",

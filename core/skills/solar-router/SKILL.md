@@ -97,8 +97,38 @@ bash core/skills/solar-router/scripts/status_router.sh --last 20
 - `mode`: defaults to `auto`. `direct_only` always returns `direct_reply`. `async_only` requires `async-tasks` feature enabled.
 - `channel`: used by `DecisionEngine` for semantic routing in `mode=auto`.
 - `metadata.agent`: existing agent name from planet's `agents/`, or `null` for JIT role generation.
-- `metadata.skills`: skill name format — `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; `skill` resolves to `core/skills/<skill>/SKILL.md`. Only description is injected (on-demand).
+- `metadata.skills`: skill name format — `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; unprefixed `skill` resolves to `planets/<metadata.planet>/skills/<skill>/SKILL.md` first (if `metadata.planet` is set), then falls back to `core/skills/<skill>/SKILL.md`. Only description is injected (on-demand).
 - `metadata.planet`: planet that owns the task domain. Used for agent/skill lookup.
+
+## Secure Invocation Protocol (Required)
+
+To prevent JSON parsing errors (invalid control characters, unescaped newlines), always use one of these two methods when calling the router from an AI agent or shell:
+
+### Method A: Temporary JSON File (Recommended for Agents)
+
+1. Use `write_file` to create a temporary JSON file (e.g., `sun/runtime/router/request_<id>.json`).
+2. Ensure the `text` field contains explicit `\n` for newlines.
+3. Execute the router piping the file: `python3 core/skills/solar-router/scripts/run_router.py < sun/runtime/router/request_<id>.json`.
+
+### Method B: Heredoc with Single Quotes (Shell)
+
+Use a heredoc with `'EOF'` (single quotes) to prevent the shell from interpreting backslashes or special characters:
+
+```bash
+cat << 'EOF' | python3 core/skills/solar-router/scripts/run_router.py
+{
+  "request_id": "my-id",
+  "text": "Line 1\nLine 2",
+  "channel": "other",
+  "mode": "direct_only"
+}
+EOF
+```
+
+### Critical Rules:
+- **Prefer escaped newlines** (`\n`) inside JSON strings for portability.
+- **Escape double quotes** inside the `text` string as `\"`.
+- **Validate JSON** before sending if using a custom script.
 
 ### Output (stdout JSON)
 
