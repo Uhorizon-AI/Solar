@@ -122,6 +122,7 @@ codex_default = (
     f"--add-dir {os.path.expanduser('~/.codex')} --"
 )
 defaults = {
+    "agent": f"agent -p -f --approve-mcps --workspace {repo_root}",
     "codex": codex_default,
     "claude": "claude -p --permission-mode bypassPermissions",
     "gemini": "gemini -y",

@@ -17,7 +17,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 
-SUPPORTED_PROVIDERS = {"codex", "claude", "gemini"}
+SUPPORTED_PROVIDERS = {"codex", "claude", "gemini", "agent"}
 CODEX_STATE_DIR = pathlib.Path.home() / ".codex"
 FALLBACK_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
 
@@ -31,6 +31,7 @@ DEFAULT_CMDS: Dict[str, str] = {
     ),
     "claude": "claude -p --permission-mode bypassPermissions --no-session-persistence",
     "gemini": "gemini -y -p",
+    "agent": f"agent -p -f --approve-mcps --workspace {REPO_ROOT}",
 }
 
 MAX_CONTEXT_TURNS = int(

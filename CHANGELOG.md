@@ -6,6 +6,14 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-router): integrate Cursor Agent (`agent`) as a first-class provider. Includes default command configuration with non-interactive flags (`-p`), workspace trust (`-f`), and MCP auto-approval (`--approve-mcps`).
+- feat(solar-router): update `onboard_router_env.sh` and `diagnose_router.sh` to support `agent` priority, command migration, and preflight validation.
+- docs(solar-router): update `SKILL.md` and `routing-policy.md` to reflect `agent` capabilities and contract v3 compliance.
+
+### Changed
+- docs(sales-pipeline): refactor sales pipeline documentation, removing obsolete `SKILL.md` and clarifying usage of `sales-record.md` and `sales-pipeline-board.md` templates for unified stage tracking.
+
 ## [0.4.0] - 2026-03-01
 
 ### Added

@@ -1,7 +1,7 @@
 ---
 name: solar-router
 description: >
-  Shared router that runs AI providers (Codex, Claude, Gemini) with Solar repo context.
+  Shared router that runs AI providers (Codex, Claude, Gemini, Agent) with Solar repo context.
   Single source of truth for provider selection, fallback, and async routing policy.
   Use when transport-gateway, async-tasks, or other runtimes need to invoke an AI with
   cwd = repo root and paths resolved against REPO_ROOT.
@@ -84,7 +84,7 @@ bash core/skills/solar-router/scripts/status_router.sh --last 20
   "text": "string",
   "channel": "telegram|n8n|async-task|other",
   "mode": "auto|direct_only|async_only",
-  "provider": "codex|claude|gemini|null",
+  "provider": "codex|claude|gemini|agent|null",
   "metadata": {
     "agent": "agent-name|null",
     "skills": ["planet:skill-name", "core-skill-name"],
@@ -136,7 +136,7 @@ EOF
 {
   "status": "success|failed",
   "request_id": "string",
-  "provider_used": "codex|claude|gemini",
+  "provider_used": "codex|claude|gemini|agent",
   "reply_text": "string",
   "decision": {
     "kind": "direct_reply|async_draft_proposal|async_draft_created|async_activation_needed",

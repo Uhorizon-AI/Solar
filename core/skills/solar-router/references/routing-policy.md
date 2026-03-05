@@ -7,17 +7,17 @@
 - Async routing policy (`direct_reply` vs `async_draft_created`) lives only in the router.
 - Consumers (transport-gateway, async-tasks) delegate 100% to the router and consume the structured v3 response.
 
-All providers (Codex, Claude, Gemini) run with the same repo context: working directory = Solar repo root, so they see `sun/`, `planets/`, `core/`, and `AGENTS.md`.
+All providers (Codex, Claude, Gemini, Agent) run with the same repo context: working directory = Solar repo root, so they see `sun/`, `planets/`, `core/`, and `AGENTS.md`.
 
 ## Environment keys
 
-- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `codex,claude,gemini`)
+- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `agent,codex,claude,gemini`)
 - `SOLAR_SYSTEM_FEATURES` — CSV of enabled features (e.g., `async-tasks,transport-gateway`). Router reads this to check if `async-tasks` is enabled.
 
 ## Recommended defaults
 
 ```env
-SOLAR_ROUTER_PROVIDER_PRIORITY=codex,claude,gemini
+SOLAR_ROUTER_PROVIDER_PRIORITY=agent,codex,claude,gemini
 SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 ```
 
@@ -37,10 +37,12 @@ SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 
 ## Command overrides
 
+- `SOLAR_ROUTER_AGENT_CMD`
 - `SOLAR_ROUTER_CODEX_CMD`
 - `SOLAR_ROUTER_CLAUDE_CMD`
 - `SOLAR_ROUTER_GEMINI_CMD`
 
+Default Agent command: `agent -p -f --approve-mcps --workspace <repo-root>`
 Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full-auto -C <repo-root> --add-dir ~/.codex --`
 
 ## Timeout keys
@@ -91,7 +93,7 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
   "text": "string",
   "channel": "telegram|n8n|async-task|other",
   "mode": "auto|direct_only|async_only",
-  "provider": "codex|claude|gemini|null",
+  "provider": "codex|claude|gemini|agent|null",
   "metadata": {
     "agent": "agent-name|null",
     "skills": ["planet:skill-name", "core-skill-name"],
@@ -142,7 +144,7 @@ EOF
 {
   "status": "success|failed",
   "request_id": "string",
-  "provider_used": "codex|claude|gemini",
+  "provider_used": "codex|claude|gemini|agent",
   "reply_text": "string",
   "decision": {
     "kind": "direct_reply|async_draft_proposal|async_draft_created|async_activation_needed",

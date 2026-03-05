@@ -19,7 +19,7 @@ read_key() {
 }
 
 # Default value for the only required variable
-provider_priority="codex,claude,gemini"
+provider_priority="agent,codex,claude,gemini"
 
 # Read existing value (new name first, then migrate from old name)
 if existing="$(read_key "SOLAR_ROUTER_PROVIDER_PRIORITY")"; then
@@ -73,6 +73,13 @@ elif existing="$(read_key "SOLAR_AI_ROUTER_TIMEOUT_SEC")"; then
 fi
 
 # Custom command overrides (optional)
+if existing="$(read_key "SOLAR_ROUTER_AGENT_CMD")"; then
+  optional_vars+=("SOLAR_ROUTER_AGENT_CMD=${existing}")
+elif existing="$(read_key "SOLAR_AI_AGENT_CMD")"; then
+  optional_vars+=("SOLAR_ROUTER_AGENT_CMD=${existing}")
+  echo "Migrating SOLAR_AI_AGENT_CMD → SOLAR_ROUTER_AGENT_CMD"
+fi
+
 if existing="$(read_key "SOLAR_ROUTER_CODEX_CMD")"; then
   optional_vars+=("SOLAR_ROUTER_CODEX_CMD=${existing}")
 elif existing="$(read_key "SOLAR_AI_CODEX_CMD")"; then
@@ -113,6 +120,8 @@ awk '
   $0 ~ /^SOLAR_AI_PROVIDER_TIMEOUT_SEC=/ { next }
   $0 ~ /^SOLAR_ROUTER_TIMEOUT_SEC=/ { next }
   $0 ~ /^SOLAR_AI_ROUTER_TIMEOUT_SEC=/ { next }
+  $0 ~ /^SOLAR_ROUTER_AGENT_CMD=/ { next }
+  $0 ~ /^SOLAR_AI_AGENT_CMD=/ { next }
   $0 ~ /^SOLAR_ROUTER_CODEX_CMD=/ { next }
   $0 ~ /^SOLAR_AI_CODEX_CMD=/ { next }
   $0 ~ /^SOLAR_ROUTER_CLAUDE_CMD=/ { next }
