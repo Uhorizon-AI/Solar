@@ -157,6 +157,11 @@ Set `metadata.agent` to `null` — the router generates a role JIT. Frequently u
 - After any user correction: capture the pattern in `sun/lessons.md` (inbox). Consolidate into `sun/MEMORY.md` at least weekly or when closing long initiatives.
 - Review lessons at the start of work sessions — recommended, not required in first-run.
 
+### Daily-log Execution Trace (when applicable)
+- When you complete work that produces a traceable deliverable (e.g., sales-actions, content draft, digest, pipeline update), append one line to `sun/daily-log/YYYY-MM-DD.md` (local date): `HH:MM #tag Description → artifact`.
+- Create file if missing (structure: header + ## Log). Tags: #sales #marketing #job #ops.
+- Apply only on explicit completion, not on partial progress. Use local timezone for HH:MM.
+
 ### Verification Before Done
 - Never mark a task complete without running real validation and reviewing output. Tied to No Laziness.
 - Ask: "Would a senior engineer approve this?"
