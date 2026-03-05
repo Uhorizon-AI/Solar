@@ -8,7 +8,7 @@ Keep execution simple, traceable, and reusable for any user.
 ## Runtime Sources
 - User preferences: `sun/preferences/profile.md`
 - User memory: `sun/MEMORY.md` (operational learnings, patterns, pitfalls)
-- Daily execution (on demand only): `sun/daily-log/YYYY-MM-DD.md` — create only when daily planning or follow-up is needed; see `core/templates/daily-log.md` for format
+- Daily execution: `sun/daily-log/YYYY-MM-DD.md` — on demand (planning/follow-up) or when AI completes traceable work (execution trace). Format: Top Priorities, Blockers, Log. See `core/templates/daily-log.md`.
 - Planet scope and governance: `planets/<planet-name>/AGENTS.md`
 - Planet memory (optional): `planets/<planet-name>/MEMORY.md` (domain learnings, patterns)
 
@@ -21,7 +21,7 @@ Keep execution simple, traceable, and reusable for any user.
 6. Persist learnings:
    - Stable user-level decisions -> `sun/MEMORY.md`
    - Domain decisions and facts -> `planets/<planet-name>/MEMORY.md`
-   - Daily actions and follow-ups -> `sun/daily-log/YYYY-MM-DD.md` (on demand only; see `core/templates/daily-log.md`)
+   - Daily actions and follow-ups -> `sun/daily-log/YYYY-MM-DD.md` (on demand or execution trace; see `core/templates/daily-log.md`)
 7. Return concise result to user and ask next decision only if needed.
 
 ## Discovery Standard (for sales/commercial planets)
