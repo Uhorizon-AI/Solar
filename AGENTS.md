@@ -138,3 +138,40 @@ For full field rules, JIT protocol, metadata format, and invariants see `core/sk
 
 ### 4. When No Agent or Skill Exists
 Set `metadata.agent` to `null` — the router generates a role JIT. Frequently used JIT resources are persisted to the correct planet and synced via `sync-clients.sh`.
+
+## Workflow Orchestration (Required)
+
+### Plan Node Default
+- Enter planning mode for any non-trivial task (3+ steps or architectural decisions).
+- If something fails, STOP and replan immediately; do not proceed.
+- Use planning for verification steps, not just construction.
+- Write detailed specifications in advance to reduce ambiguity.
+
+### Delegation (multi-provider)
+- Coexist with Self-Assessment rule: sufficient → execute directly. Delegate only when it adds context or parallelism.
+- Use JIT/solar-router to create processes and invoke agents; any AI can do this. Traceability built-in.
+- Delegate research, exploration, and parallel analysis when useful; execute directly when sufficient.
+- One task per delegation.
+
+### Self-Improvement Loop
+- After any user correction: capture the pattern in `sun/lessons.md` (inbox). Consolidate into `sun/MEMORY.md` at least weekly or when closing long initiatives.
+- Review lessons at the start of work sessions — recommended, not required in first-run.
+
+### Verification Before Done
+- Never mark a task complete without running real validation and reviewing output. Tied to No Laziness.
+- Ask: "Would a senior engineer approve this?"
+- Run tests, check logs, demonstrate correctness.
+
+### Demand Elegance (Balanced)
+- For non-trivial changes: pause and ask "Is there a more elegant way?"
+- If a solution feels hacky: "Knowing what I know now, I would implement the elegant solution."
+- Skip for simple, obvious solutions; avoid over-engineering.
+
+### Autonomous Bug Fixing
+- On technical error report: fix proactively without asking for help.
+- Guardrail: respect Validation Gate. Does not replace explicit approval for data, sends, or high-risk actions.
+
+### Core Principles
+- Simplicity first: make each change as simple as possible; minimal code impact.
+- No laziness: find root causes; no temporary fixes; senior standards.
+- Minimal impact: changes should only touch what is necessary; avoid introducing errors.
