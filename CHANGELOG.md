@@ -7,12 +7,15 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- feat(AGENTS.md): add Daily-log Execution Trace directive — when completing traceable work, append one line to `sun/daily-log/YYYY-MM-DD.md` with `HH:MM #tag Description → artifact`. Create file if missing. Tags: #sales #marketing #job #ops.
 - feat(solar-router): integrate Cursor Agent (`agent`) as a first-class provider. Includes default command configuration with non-interactive flags (`-p`), workspace trust (`-f`), and MCP auto-approval (`--approve-mcps`).
 - feat(solar-router): update `onboard_router_env.sh` and `diagnose_router.sh` to support `agent` priority, command migration, and preflight validation.
 - docs(solar-router): update `SKILL.md` and `routing-policy.md` to reflect `agent` capabilities and contract v3 compliance.
 
 ### Changed
 - docs(sales-pipeline): refactor sales pipeline documentation, removing obsolete `SKILL.md` and clarifying usage of `sales-record.md` and `sales-pipeline-board.md` templates for unified stage tracking.
+- feat(daily-log): update `core/templates/daily-log.md` — Top 3 → Top Priorities (flexible 1–N), Bloqueos → Blockers. Aligns with execution trace and todo-list format.
+- docs(orchestration-blueprint): update daily-log semantics — on demand or execution trace; format Top Priorities, Blockers, Log.
 
 ## [0.4.0] - 2026-03-01
 
