@@ -57,20 +57,7 @@ if [ ! -f "$ROOT_DIR/sun/MEMORY.md" ]; then
 EOF
 fi
 
-TODAY_FILE="$ROOT_DIR/sun/daily-log/$(date +%F).md"
-if [ ! -f "$TODAY_FILE" ]; then
-  cat > "$TODAY_FILE" <<'EOF'
-# Daily Log
-
-## Today
-- Focus:
-- Constraints:
-- Key tasks:
-
-## Notes
-- 
-EOF
-fi
+# daily-log: on demand only (do not auto-create). User creates when planning/follow-up needed.
 
 SYNC_SCRIPT="$ROOT_DIR/core/scripts/sync-clients.sh"
 if [ -x "$SYNC_SCRIPT" ]; then
