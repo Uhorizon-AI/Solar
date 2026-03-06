@@ -2,13 +2,14 @@
 
 > On demand only. Create when daily planning or follow-up is needed. Max 3 min to fill.
 > See `core/orchestration-blueprint.md` for usage.
+> Any artifact (file path) in Top Priorities, Blockers, or Log must be a markdown link: `[path](path)` for easy opening.
 
 ## Top Priorities
-1. [Cash/Content/Ops] — [one line]
+1. [Cash/Content/Ops] — [one line]; artifact as link
 2. ...
 
 ## Blockers
-- [one per line if any]
+- [one per line if any]; artifact as link
 
 ## Log
 
