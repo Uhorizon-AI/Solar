@@ -11,5 +11,9 @@
 - [one per line if any]
 
 ## Log
-- HH:MM #tag Description → artifact  (AI appends on completing work; local timezone)
-- #tag Manual note (no HH:MM prefix). Tags: #sales #marketing #job #ops.
+
+| Time  | Tags       | Description |
+|-------|------------|-------------|
+| HH:MM | tag        | Description → artifact |
+
+(AI appends rows on completing work; local timezone. No time: use `-` in Time. Tags: sales marketing job ops.)
