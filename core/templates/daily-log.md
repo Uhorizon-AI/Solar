@@ -16,4 +16,4 @@
 |-------|------------|-------------|
 | HH:MM | tag        | Description → artifact |
 
-(AI appends rows on completing work; local timezone. No time: use `-` in Time. Tags: sales marketing job ops.)
+(AI inserts rows at top on completing work; local timezone. Order: newest first. No time: use `-` in Time. Tags: sales marketing job ops.)

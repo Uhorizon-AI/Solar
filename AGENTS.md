@@ -158,7 +158,7 @@ Set `metadata.agent` to `null` — the router generates a role JIT. Frequently u
 - Review lessons at the start of work sessions — recommended, not required in first-run.
 
 ### Daily-log Execution Trace (when applicable)
-- When you complete work that produces a traceable deliverable (e.g., sales-actions, content draft, digest, pipeline update), append a row to the Log table in `sun/daily-log/YYYY-MM-DD.md` (local date): `| HH:MM | tag | Description → artifact |`.
+- When you complete work that produces a traceable deliverable (e.g., sales-actions, content draft, digest, pipeline update), insert a row at the top of the Log table in `sun/daily-log/YYYY-MM-DD.md` (local date): `| HH:MM | tag | Description → artifact |`. Order: newest first.
 - If no time: `| - | tag | Description |`. Tags: sales marketing job ops.
 - Create file if missing (structure: header + ## Log with table). Apply only on explicit completion, not on partial progress. Use local timezone for HH:MM.
 
