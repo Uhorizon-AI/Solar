@@ -3,7 +3,7 @@
 # Sync Solar resources to local AI clients.
 # Sources (if present):
 # - core/skills/, core/agents/, core/commands/
-# - planets/*/skills/, planets/*/agents/, planets/*/commands/
+# - planets/* → any */skills/*/SKILL.md under planets/*; planets/*/agents/, planets/*/commands/
 # Targets:
 # - .codex/skills
 # - .claude/{skills,agents,commands}
@@ -153,6 +153,25 @@ get_source() {
   return 0
 }
 
+# Discover planet skills via find */skills/*/SKILL.md (supports nested structures like phuryn)
+discover_planet_skills() {
+  local planet_dir="$1"
+  local planet_name="$2"
+  while IFS= read -r skill_md; do
+    local skill_dir
+    skill_dir="$(dirname "$skill_md")"
+    local name
+    name="$(basename "$skill_dir")"
+    local prefixed_name="$planet_name:$name"
+    if is_duplicate "$SKILLS_INDEX" "$prefixed_name"; then
+      log_warn "Duplicate skill $prefixed_name, skipping (first match wins)"
+      continue
+    fi
+    add_to_index "$SKILLS_INDEX" "$prefixed_name" "$skill_dir"
+    log_ok "$prefixed_name"
+  done < <(find "$planet_dir" -path "*/skills/*/SKILL.md" -type f 2>/dev/null | LC_ALL=C sort)
+}
+
 # Discover all resources from core/ and planets/*/
 discover_resources() {
   log_section "🔍 Discovering resources..."
@@ -202,18 +221,8 @@ discover_resources() {
       local planet_name
       planet_name="$(basename "$planet_dir")"
 
-      # Planet skills (always prefixed)
-      if [ -d "$planet_dir/skills" ]; then
-        for item in "$planet_dir/skills"/*; do
-          [ -d "$item" ] || continue
-          [ -f "$item/SKILL.md" ] || continue
-          local name
-          name="$(basename "$item")"
-          local prefixed_name="$planet_name:$name"
-          add_to_index "$SKILLS_INDEX" "$prefixed_name" "$item"
-          log_ok "$prefixed_name"
-        done
-      fi
+      # Planet skills (any */skills/*/SKILL.md under planet, always prefixed)
+      discover_planet_skills "$planet_dir" "$planet_name"
 
       # Planet agents (always prefixed)
       if [ -d "$planet_dir/agents" ]; then
