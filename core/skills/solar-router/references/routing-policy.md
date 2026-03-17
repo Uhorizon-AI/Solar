@@ -47,8 +47,7 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
 
 ## Timeout keys
 
-- `SOLAR_ROUTER_PROVIDER_TIMEOUT_SEC` (per provider call, default: `300`)
-- `SOLAR_ROUTER_TIMEOUT_SEC` (router-level timeout, default: `310`)
+- `SOLAR_ROUTER_TIMEOUT_SEC` (end-to-end router timeout, including provider execution, default: `300`)
 
 ## Conversation continuity keys
 
@@ -169,7 +168,6 @@ Legacy variable names are supported with automatic fallback:
 - `SOLAR_RUNTIME_DIR` → `SOLAR_ROUTER_RUNTIME_DIR`
 - `SOLAR_SYSTEM_PROMPT_FILE` → `SOLAR_ROUTER_SYSTEM_PROMPT_FILE`
 - `SOLAR_CONTEXT_TURNS` → `SOLAR_ROUTER_CONTEXT_TURNS`
-- `SOLAR_AI_PROVIDER_TIMEOUT_SEC` → `SOLAR_ROUTER_PROVIDER_TIMEOUT_SEC`
 - `SOLAR_AI_ROUTER_TIMEOUT_SEC` → `SOLAR_ROUTER_TIMEOUT_SEC`
 - `SOLAR_AI_{PROVIDER}_CMD` → `SOLAR_ROUTER_{PROVIDER}_CMD`
 

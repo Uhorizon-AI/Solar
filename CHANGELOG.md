@@ -13,6 +13,7 @@ The format is based on Keep a Changelog.
 - docs(solar-router): update `SKILL.md` and `routing-policy.md` to reflect `agent` capabilities and contract v3 compliance.
 
 ### Changed
+- feat(solar-router): consolidate timeout configuration to a single `SOLAR_ROUTER_TIMEOUT_SEC` variable. `run_router.py`, onboarding, and router docs now use one end-to-end timeout contract; the legacy provider-specific timeout key was removed.
 - feat(sync-clients): recursive discovery of planet skills via `find -path "*/skills/*/SKILL.md"` — supports nested structures (e.g. `pm-*/skills/*` in phuryn). Planet skills no longer limited to `planets/*/skills/*`. Uses `LC_ALL=C sort` for deterministic collision resolution across locales.
 - feat(daily-log): Log section from list to table format (Time | Tags | Description). Tags without `#` (sales, marketing, job, ops). Order: newest first — insert new rows at top. Artifact as markdown link mandatory in Top Priorities, Blockers, and Log for easy opening. `core/templates/daily-log.md` and AGENTS.md updated. Legacy list format deprecated.
 - docs(sales-pipeline): refactor sales pipeline documentation, removing obsolete `SKILL.md` and clarifying usage of `sales-record.md` and `sales-pipeline-board.md` templates for unified stage tracking.

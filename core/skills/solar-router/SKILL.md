@@ -43,8 +43,7 @@ bash core/skills/solar-router/scripts/onboard_router_env.sh
 - `SOLAR_ROUTER_RUNTIME_DIR` — Where conversation history is stored (default: `sun/runtime/router`)
 - `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` — System prompt file path (default: `core/skills/solar-router/assets/system_prompt.md`)
 - `SOLAR_ROUTER_CONTEXT_TURNS` — Number of conversation turns to include (default: `12`)
-- `SOLAR_ROUTER_PROVIDER_TIMEOUT_SEC` — Per-provider timeout (default: `300`)
-- `SOLAR_ROUTER_TIMEOUT_SEC` — Router-level timeout (default: `310`)
+- `SOLAR_ROUTER_TIMEOUT_SEC` — End-to-end router timeout, including provider execution (default: `300`)
 
 Optional command overrides:
 - `SOLAR_ROUTER_CODEX_CMD`

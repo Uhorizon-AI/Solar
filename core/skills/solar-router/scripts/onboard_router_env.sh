@@ -56,15 +56,7 @@ elif existing="$(read_key "SOLAR_CONTEXT_TURNS")"; then
   echo "Migrating SOLAR_CONTEXT_TURNS → SOLAR_ROUTER_CONTEXT_TURNS"
 fi
 
-# Provider timeout (optional, default in code: 300)
-if existing="$(read_key "SOLAR_ROUTER_PROVIDER_TIMEOUT_SEC")"; then
-  optional_vars+=("SOLAR_ROUTER_PROVIDER_TIMEOUT_SEC=${existing}")
-elif existing="$(read_key "SOLAR_AI_PROVIDER_TIMEOUT_SEC")"; then
-  optional_vars+=("SOLAR_ROUTER_PROVIDER_TIMEOUT_SEC=${existing}")
-  echo "Migrating SOLAR_AI_PROVIDER_TIMEOUT_SEC → SOLAR_ROUTER_PROVIDER_TIMEOUT_SEC"
-fi
-
-# Router timeout (optional, default in code: 310)
+# Router timeout (optional, default in code: 300)
 if existing="$(read_key "SOLAR_ROUTER_TIMEOUT_SEC")"; then
   optional_vars+=("SOLAR_ROUTER_TIMEOUT_SEC=${existing}")
 elif existing="$(read_key "SOLAR_AI_ROUTER_TIMEOUT_SEC")"; then
@@ -116,8 +108,6 @@ awk '
   $0 ~ /^SOLAR_SYSTEM_PROMPT_FILE=/ { next }
   $0 ~ /^SOLAR_ROUTER_CONTEXT_TURNS=/ { next }
   $0 ~ /^SOLAR_CONTEXT_TURNS=/ { next }
-  $0 ~ /^SOLAR_ROUTER_PROVIDER_TIMEOUT_SEC=/ { next }
-  $0 ~ /^SOLAR_AI_PROVIDER_TIMEOUT_SEC=/ { next }
   $0 ~ /^SOLAR_ROUTER_TIMEOUT_SEC=/ { next }
   $0 ~ /^SOLAR_AI_ROUTER_TIMEOUT_SEC=/ { next }
   $0 ~ /^SOLAR_ROUTER_AGENT_CMD=/ { next }

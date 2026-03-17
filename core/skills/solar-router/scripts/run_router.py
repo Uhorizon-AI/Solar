@@ -347,8 +347,7 @@ def get_cmd(provider: str) -> List[str]:
 
 def run_provider(provider: str, prompt: str) -> str:
     timeout_sec = int(
-        os.getenv("SOLAR_ROUTER_PROVIDER_TIMEOUT_SEC")
-        or os.getenv("SOLAR_AI_PROVIDER_TIMEOUT_SEC")
+        os.getenv("SOLAR_ROUTER_TIMEOUT_SEC")
         or "300"
     )
     cmd = get_cmd(provider) + [prompt]
