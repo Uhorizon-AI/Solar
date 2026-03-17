@@ -25,6 +25,8 @@ planets/
 .codex/
 .cursor/
 .gemini/
+# Antigravity
+.agents/
 
 # Temporary files
 brain.ai
