@@ -25,7 +25,7 @@ Single source of truth for all AI execution in Solar:
 - Persist conversation turns in runtime dir (JSONL) for continuity.
 - Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output.
 - Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
-- Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability.
+- Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability. **Known bug:** some early-exit paths (e.g. `async_only`) write `start` but not `end` — to be fixed in the Orchestrator/Executor refactor.
 
 ## Required MCP
 
@@ -163,7 +163,7 @@ EOF
 ## Runtime files
 
 - `sun/runtime/router/conversations/<user_id>.jsonl` — conversation history per user (for context continuity).
-- `sun/runtime/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`.
+- `sun/runtime/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`. **Note:** `end` record is not guaranteed in all paths until the Orchestrator/Executor refactor is complete.
 
 ## References
 
