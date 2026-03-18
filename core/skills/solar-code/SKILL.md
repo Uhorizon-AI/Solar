@@ -1,10 +1,10 @@
 ---
 name: solar-code
 description: >
-  Reusable Solar protocol for code modifications. Use when an intention (RFC,
-  task, direct instruction) must be converted into a local, human-reviewable
-  code change in any repo — including core/ skills. Covers triage, task spec,
-  local change, checks, and IDE review. Does not handle PRs, push, or CI/CD.
+  Reusable Solar protocol for code modifications in planet-operated repos. Use
+  when an intention (RFC, task, direct instruction) must be converted into a
+  local, human-reviewable code change. Covers triage, task spec, local change,
+  checks, and IDE review. Does not handle PRs, push, or CI/CD.
 ---
 
 # Solar Code
@@ -12,15 +12,17 @@ description: >
 ## Purpose
 
 Convert an intention into a local executable code change without reinventing
-the rules each time. Provides a canonical flow and repo adoption contract that
-works for planet repos and Solar core skills alike.
+the rules each time. Provides a canonical flow and repo adoption contract for
+repos operated by planets.
 
 ## When to Use
 
 Use this skill when:
-- A task requires modifying code in any repo target (planet or core/).
+- A task requires modifying code in a planet-operated repo target.
 - A change needs a defined triage level before touching files.
-- A planet or skill needs to declare its repo policy (allowlist, restrictions, checks).
+- A planet needs to declare its repo policy (allowlist, restrictions, checks).
+
+Do not use for changes inside `core/skills/` — those are governed by `solar-skill-creator`.
 
 Do not use for:
 - PR creation, git push, or GitHub review workflows.
@@ -42,7 +44,6 @@ Classify the change before acting:
 | Standard change | Feature or fix with relevant context | Lightweight task spec (Markdown) |
 | Multi-repo / high risk | Touches multiple repos or has strategic impact | RFC + task spec + prior review |
 
-**Canonical example of a standard change:** refactor of `core/skills/solar-router/` to Orchestrator/Executor pattern — scoped to one skill, well-defined criteria, task spec already written.
 
 ## Workflow
 
@@ -68,8 +69,6 @@ only when there is evidence they are needed.
 Each repo target must declare a policy file. Format: `references/repo-policy.md`.
 The policy lives in the planet that operates the repo target.
 
-For core/ skills, the policy is inlined in the skill's own `SKILL.md` or a
-dedicated `references/repo-policy.md` inside the skill folder.
 
 ## References
 

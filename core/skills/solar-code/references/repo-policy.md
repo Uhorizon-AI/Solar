@@ -1,6 +1,6 @@
 # Repo policy: <repo-name>
 
-**Location of this file:** <planet or skill path that owns this repo>
+**Location of this file:** <planet path that operates this repo>
 **Last updated:** YYYY-MM-DD
 
 ## Command allowlist
@@ -18,7 +18,7 @@
 ## Worktree rules
 
 - Before writing: run `git status`; do not overwrite unrelated human changes.
-- Rollback: human decides `git checkout` or `git restore` to discard.
+- Rollback: run `git restore <modified-files>` to discard only agent-touched files. Do not use `git checkout .` or `git restore .`.
 
 ## Required checks before marking valid
 

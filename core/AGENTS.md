@@ -177,6 +177,10 @@ This protocol is invoked by root `AGENTS.md` when `sun/MEMORY.md` or `sun/prefer
 - Planet-specific changes must be documented within their own planet workspace (e.g., in a local `CHANGELOG.md` if it exists).
 - Before updating the root `CHANGELOG.md`, verify that every entry describes a change to the reusable framework, not an execution artifact from a specific workspace.
 
+## Skill governance rule (required)
+- All changes to `core/skills/` are governed by `solar-skill-creator`, not by `solar-code`.
+- `solar-code` applies exclusively to repos operated by planets. It does not apply to `core/`.
+
 ## Skill validation rule (required)
 - If a specific skill under `core/skills/` is modified, validate that skill before considering the change complete.
 - Validation command:

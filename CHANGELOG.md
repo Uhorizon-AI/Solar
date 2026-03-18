@@ -6,7 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- refactor(solar-code): restrict scope to planet-operated repos only — `core/skills/` changes are governed by `solar-skill-creator`, not `solar-code`. Updated `SKILL.md`, `references/repo-policy.md`, and `core/AGENTS.md` (new Skill governance rule). Removes all references to `core/` as a valid solar-code target.
+
 ### Added
+- feat(core/AGENTS.md): add Skill governance rule — `core/skills/` changes governed by `solar-skill-creator`; `solar-code` applies exclusively to planet-operated repos.
 - feat(solar-code): add `core/skills/solar-code/` — Solar-native protocol for local code modifications. Includes `SKILL.md` with canonical flow (intention → triage → local change → human review), three triage levels (micro/standard/multi-repo), and repo adoption contract. References: `task-spec.md`, `repo-policy.md`, `local-review-guide.md`.
 
 ### Fixed
