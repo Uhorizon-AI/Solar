@@ -7,6 +7,17 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- feat(solar-code): add `core/skills/solar-code/` — Solar-native protocol for local code modifications. Includes `SKILL.md` with canonical flow (intention → triage → local change → human review), three triage levels (micro/standard/multi-repo), and repo adoption contract. References: `task-spec.md`, `repo-policy.md`, `local-review-guide.md`.
+
+### Fixed
+- fix(solar-system): translate `check_orchestrator.sh` suggested actions to English — all diagnostic messages now consistent with `core/` language policy.
+
+### Docs
+- docs(solar-router): document known audit invariant bug in `SKILL.md` — `async_only` and other early-exit paths write `start` but not `end` audit record; flagged as known issue pending Orchestrator/Executor refactor.
+
+---
+
+### Added
 - feat(AGENTS.md): add Daily-log Execution Trace directive — when completing traceable work, append one line to `sun/daily-log/YYYY-MM-DD.md` with `HH:MM #tag Description → artifact`. Create file if missing. Tags: #sales #marketing #job #ops.
 - feat(solar-router): integrate Cursor Agent (`agent`) as a first-class provider. Includes default command configuration with non-interactive flags (`-p`), workspace trust (`-f`), and MCP auto-approval (`--approve-mcps`).
 - feat(solar-router): update `onboard_router_env.sh` and `diagnose_router.sh` to support `agent` priority, command migration, and preflight validation.
