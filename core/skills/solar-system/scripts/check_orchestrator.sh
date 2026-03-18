@@ -106,7 +106,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Check 2: transport-gateway feature
+# Check 2: Process Health (Duplicate detection)
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "── Process Health"
+proc_severity="HEALTHY"
+
+cf_count=$(pgrep -f "cloudflared tunnel" | wc -l | tr -d ' ')
+if [[ "$cf_count" -gt 1 ]]; then
+  echo "  cloudflared: MULTIPLE ($cf_count running - expects 1)"
+  proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
+else
+  echo "  cloudflared: ok ($cf_count)"
+fi
+
+mcp_count=$(pgrep -f "chrome-devtools-mcp" | wc -l | tr -d ' ')
+if [[ "$mcp_count" -gt 3 ]]; then
+  echo "  chrome-mcp:  MULTIPLE ($mcp_count running - possible leak)"
+  proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
+else
+  echo "  chrome-mcp:  ok ($mcp_count)"
+fi
+
+verdict="$(worst_severity "$verdict" "$proc_severity")"
+
+# ---------------------------------------------------------------------------
+# Check 3: transport-gateway feature
 # ---------------------------------------------------------------------------
 
 feature_active() {
@@ -145,7 +171,7 @@ if feature_active "transport-gateway"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Check 3: async-tasks feature
+# Check 4: async-tasks feature
 # ---------------------------------------------------------------------------
 
 if feature_active "async-tasks"; then
@@ -222,6 +248,13 @@ if [[ "$verdict" != "HEALTHY" ]]; then
   echo ""
   echo "── Suggested actions:"
 
+  # Process Health issues
+  if [[ "$proc_severity" != "HEALTHY" ]]; then
+    echo "  • Duplicate processes detected — cleanly kill instances to fix leaks:"
+    [[ "$cf_count" -gt 1 ]] && echo "    pkill -f \"cloudflared tunnel\""
+    [[ "$mcp_count" -gt 3 ]] && echo "    pkill -f \"chrome-devtools-mcp\"; pkill -f \"\.cache/chrome-devtools-mcp\""
+  fi
+
   # Supervisor issues
   if [[ ! -f "$PLIST" ]] || ! launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
     echo "  • LaunchAgent not installed or not loaded:"
@@ -239,28 +272,28 @@ if [[ "$verdict" != "HEALTHY" ]]; then
     if [[ "$gw_code" == "2" ]]; then
       # PARTIAL: local OK, tunnel degraded — diagnose why
       if echo "$tunnel_error" | grep -qi "unknown error registering\|registering the connection"; then
-        echo "  • Tunnel named rechazado por Cloudflare (token inválido o tunnel eliminado):"
-        echo "    1. Verifica el estado en: https://one.dash.cloudflare.com → Networks → Tunnels"
-        echo "    2. Si el tunnel está inactivo o eliminado, reconfigúralo:"
+        echo "  • Named tunnel rejected by Cloudflare (invalid token or deleted tunnel):"
+        echo "    1. Check status at: https://one.dash.cloudflare.com → Networks → Tunnels"
+        echo "    2. If the tunnel is inactive or deleted, reconfigure it:"
         echo "       bash core/skills/solar-transport-gateway/scripts/configure_named_tunnel.sh"
       elif echo "$tunnel_error" | grep -qi "token\|credential\|auth"; then
-        echo "  • Error de autenticación del tunnel — regenera el token en Cloudflare dashboard:"
+        echo "  • Tunnel authentication error — regenerate the token in Cloudflare dashboard:"
         echo "    1. https://one.dash.cloudflare.com → Networks → Tunnels → solar-ai.uhorizon.ai"
-        echo "    2. Copia el nuevo token y actualiza CLOUDFLARED_TUNNEL_TOKEN en .env"
+        echo "    2. Copy the new token and update CLOUDFLARED_TUNNEL_TOKEN in .env"
         echo "    3. bash core/skills/solar-transport-gateway/scripts/configure_named_tunnel.sh"
       elif echo "$tunnel_error" | grep -qi "control stream\|QUIC stream\|Application error 0x0"; then
-        echo "  • Tunnel caído por error de protocolo QUIC/control stream (puede ser transitorio):"
+        echo "  • Tunnel down due to QUIC/control stream protocol error (may be transient):"
         echo "    bash core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh"
-        echo "  • Si persiste, reconfigura el tunnel named:"
+        echo "  • If it persists, reconfigure the named tunnel:"
         echo "    bash core/skills/solar-transport-gateway/scripts/configure_named_tunnel.sh"
       elif echo "$tunnel_error" | grep -qi "connection refused\|dial\|network"; then
-        echo "  • Tunnel sin conectividad de red — verifica tu conexión a internet y reintenta:"
+        echo "  • Tunnel has no network connectivity — check your internet connection and retry:"
         echo "    bash core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh"
       else
-        echo "  • Tunnel degradado — reinicia el tunnel:"
+        echo "  • Tunnel degraded — restart the tunnel:"
         echo "    bash core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh"
         if [[ -n "$tunnel_error" ]]; then
-          echo "  • Último error en cloudflared.log:"
+          echo "  • Last error in cloudflared.log:"
           echo "$tunnel_error" | sed 's/^/    /'
         fi
       fi
