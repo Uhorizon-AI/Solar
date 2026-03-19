@@ -217,6 +217,92 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test 11: provider locked + failing → provider_locked_failed
+# Uses SOLAR_ROUTER_CLAUDE_CMD=false to force the provider to fail without
+# a real AI call. /usr/bin/false exits 1, triggering the strict-mode error path.
+# ---------------------------------------------------------------------------
+echo ""
+echo "── Test 11: provider locked + fails → provider_locked_failed"
+out="$(SOLAR_ROUTER_CLAUDE_CMD=false call_router '{"request_id":"t11","session_id":"s","user_id":"u","text":"hello","channel":"other","mode":"auto","provider":"claude"}')"
+assert_json_valid "provider_locked_failed returns valid JSON" "$out"
+assert_json_field "status=failed on provider_locked_failed" "$out" "['status']" "failed"
+assert_json_field "error_code=provider_locked_failed" "$out" "['error_code']" "provider_locked_failed"
+
+# ---------------------------------------------------------------------------
+# Test 12: all providers fail → all_providers_failed
+# Restricts priority to one provider (claude) and forces it to fail.
+# The fallback loop exhausts all candidates and emits all_providers_failed.
+# ---------------------------------------------------------------------------
+echo ""
+echo "── Test 12: all providers fail → all_providers_failed"
+out="$(SOLAR_ROUTER_CLAUDE_CMD=false SOLAR_ROUTER_PROVIDER_PRIORITY=claude call_router '{"request_id":"t12","session_id":"s","user_id":"u","text":"hello","channel":"other","mode":"auto"}')"
+assert_json_valid "all_providers_failed returns valid JSON" "$out"
+assert_json_field "status=failed on all_providers_failed" "$out" "['status']" "failed"
+assert_json_field "error_code=all_providers_failed" "$out" "['error_code']" "all_providers_failed"
+
+# ---------------------------------------------------------------------------
+# Test 13: mode=async_only + feature enabled → async_draft_created
+# Runs only if solar-async-tasks create.sh is present (side effect: creates a
+# real draft task). Skips otherwise to avoid false failures in bare envs.
+# ---------------------------------------------------------------------------
+echo ""
+echo "── Test 13: mode=async_only + async-tasks enabled → async_draft_created"
+CREATE_SH="$REPO_ROOT/core/skills/solar-async-tasks/scripts/create.sh"
+if [[ ! -f "$CREATE_SH" ]]; then
+    skip "async_only success path" "create.sh not found: $CREATE_SH"
+else
+    out="$(SOLAR_SYSTEM_FEATURES=async-tasks call_router '{"request_id":"t13","session_id":"s","user_id":"u","text":"smoke test async draft","channel":"other","mode":"async_only"}')"
+    assert_json_valid "async_only success returns valid JSON" "$out"
+    status13="$($PYTHON -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$out" 2>/dev/null || echo "unknown")"
+    if [[ "$status13" == "success" ]]; then
+        assert_json_field "async_only success → status=success" "$out" "['status']" "success"
+        assert_json_field "async_only success → decision.kind=async_draft_created" "$out" "['decision']['kind']" "async_draft_created"
+    else
+        fail "async_only success path" "expected status=success, got status=$status13 — output: $out"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Test 14: audit early exit — start written, end NOT written (known bug)
+# Triggers async_tasks_disabled early exit in an isolated temp runtime dir.
+# Verifies that a 'start' audit event IS written. Verifies 'end' is NOT
+# written, documenting the known bug: early exits skip the audit end record.
+# This test PASSES when the bug is present (expected current state).
+# Flip the end assertion once the bug is fixed.
+# ---------------------------------------------------------------------------
+echo ""
+echo "── Test 14: audit early exit — start written, end NOT written (known bug)"
+AUDIT_TMP="$(mktemp -d)"
+SOLAR_ROUTER_RUNTIME_DIR="$AUDIT_TMP" SOLAR_SYSTEM_FEATURES="" \
+    call_router '{"request_id":"t14","session_id":"s","user_id":"u","text":"hello","channel":"other","mode":"async_only"}' > /dev/null
+AUDIT_FILE="$AUDIT_TMP/audit.jsonl"
+if [[ ! -f "$AUDIT_FILE" ]]; then
+    fail "audit early exit: start event" "audit.jsonl not created at $AUDIT_FILE"
+else
+    start_count="$($PYTHON -c "
+import json, sys
+lines = open('$AUDIT_FILE').readlines()
+print(sum(1 for l in lines if json.loads(l).get('event') == 'start'))
+" 2>/dev/null || echo "0")"
+    end_count="$($PYTHON -c "
+import json, sys
+lines = open('$AUDIT_FILE').readlines()
+print(sum(1 for l in lines if json.loads(l).get('event') == 'end'))
+" 2>/dev/null || echo "0")"
+    if [[ "$start_count" -ge 1 ]]; then
+        pass "audit early exit: start event written"
+    else
+        fail "audit early exit: start event" "expected ≥1 start event, got $start_count"
+    fi
+    if [[ "$end_count" -eq 0 ]]; then
+        pass "audit early exit: end event NOT written (known bug — expected)"
+    else
+        fail "audit early exit: end event" "expected 0 end events (known bug), got $end_count — bug may be fixed, update this test"
+    fi
+fi
+rm -rf "$AUDIT_TMP"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
