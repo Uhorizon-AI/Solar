@@ -291,5 +291,101 @@ class TestRouteSuccessPaths(unittest.TestCase):
         self.assertEqual(result["status"], "success")
 
 
+# ---------------------------------------------------------------------------
+# resolve_jit_context
+# ---------------------------------------------------------------------------
+
+class TestResolveJitContext(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.mkdtemp()
+        self._tmp_path = pathlib.Path(self._tmp)
+        # Patch REPO_ROOT so all path lookups go into the temp dir
+        self._patcher = patch("router.REPO_ROOT", self._tmp_path)
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _write(self, rel: str, content: str) -> pathlib.Path:
+        p = self._tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def _skill_md(self, description: str) -> str:
+        return f"---\nname: test-skill\ndescription: {description}\n---\n\nBody."
+
+    # --- agent resolution ---
+
+    def test_agent_found_in_planet(self):
+        self._write("planets/uhorizon/agents/uh-sales.md", "# Role: uh-sales\nSell things.")
+        ctx = router.resolve_jit_context({"agent": "uh-sales", "skills": [], "planet": "uhorizon"})
+        self.assertIn("uh-sales", ctx["agent_content"])
+        self.assertFalse(ctx["jit_generated"])
+
+    def test_agent_found_in_core_fallback(self):
+        self._write("core/agents/uh-sales.md", "# Role: uh-sales (core)\nCore version.")
+        ctx = router.resolve_jit_context({"agent": "uh-sales", "skills": [], "planet": "uhorizon"})
+        self.assertIn("core", ctx["agent_content"])
+        self.assertFalse(ctx["jit_generated"])
+
+    def test_agent_not_found_generates_jit_role(self):
+        ctx = router.resolve_jit_context({"agent": "unknown-agent", "skills": [], "planet": None})
+        self.assertTrue(ctx["jit_generated"])
+        self.assertIn("unknown-agent", ctx["agent_content"])
+
+    def test_no_agent_is_jit(self):
+        ctx = router.resolve_jit_context({"agent": None, "skills": [], "planet": None})
+        self.assertTrue(ctx["jit_generated"])
+        self.assertIsNone(ctx["agent_content"])
+
+    def test_planet_agent_takes_priority_over_core(self):
+        self._write("planets/uhorizon/agents/uh-sales.md", "# Planet version")
+        self._write("core/agents/uh-sales.md", "# Core version")
+        ctx = router.resolve_jit_context({"agent": "uh-sales", "skills": [], "planet": "uhorizon"})
+        self.assertIn("Planet version", ctx["agent_content"])
+
+    # --- skill resolution ---
+
+    def test_skill_prefixed_planet_resolves(self):
+        self._write("planets/uhorizon/skills/sales-pipeline/SKILL.md",
+                    self._skill_md("Pipeline tracker"))
+        ctx = router.resolve_jit_context({"agent": None, "skills": ["uhorizon:sales-pipeline"], "planet": None})
+        self.assertEqual(len(ctx["skills_content"]), 1)
+        self.assertEqual(ctx["skills_content"][0]["description"], "Pipeline tracker")
+
+    def test_skill_unprefixed_checks_planet_first(self):
+        self._write("planets/uhorizon/skills/solar-router/SKILL.md",
+                    self._skill_md("Planet router"))
+        self._write("core/skills/solar-router/SKILL.md",
+                    self._skill_md("Core router"))
+        ctx = router.resolve_jit_context({"agent": None, "skills": ["solar-router"], "planet": "uhorizon"})
+        self.assertEqual(ctx["skills_content"][0]["description"], "Planet router")
+
+    def test_skill_unprefixed_falls_back_to_core(self):
+        self._write("core/skills/solar-router/SKILL.md", self._skill_md("Core router"))
+        ctx = router.resolve_jit_context({"agent": None, "skills": ["solar-router"], "planet": "uhorizon"})
+        self.assertEqual(ctx["skills_content"][0]["description"], "Core router")
+
+    def test_skill_not_found_skipped(self):
+        ctx = router.resolve_jit_context({"agent": None, "skills": ["nonexistent-skill"], "planet": None})
+        self.assertEqual(ctx["skills_content"], [])
+
+    def test_multiple_skills_resolved_independently(self):
+        self._write("core/skills/skill-a/SKILL.md", self._skill_md("Skill A"))
+        self._write("core/skills/skill-b/SKILL.md", self._skill_md("Skill B"))
+        ctx = router.resolve_jit_context({"agent": None, "skills": ["skill-a", "skill-b"], "planet": None})
+        names = [s["name"] for s in ctx["skills_content"]]
+        self.assertIn("skill-a", names)
+        self.assertIn("skill-b", names)
+
+    def test_planet_returned_in_context(self):
+        ctx = router.resolve_jit_context({"agent": None, "skills": [], "planet": "louis"})
+        self.assertEqual(ctx["planet"], "louis")
+
+
 if __name__ == "__main__":
     unittest.main()
