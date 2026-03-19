@@ -81,23 +81,18 @@ assert_json_field "status=failed on missing text" "$out" "['status']" "failed"
 assert_json_field "error_code=missing_text" "$out" "['error_code']" "missing_text"
 
 # ---------------------------------------------------------------------------
-# Test 4: mode=direct_only → decision.kind=direct_reply (no AI call needed for routing)
+# Test 4: mode=direct_only → decision.kind=direct_reply
+# Uses a mock provider (bash -c 'echo mock-response') to avoid any real AI
+# call or network dependency. decision_engine always returns direct_reply
+# for direct_only regardless of provider output.
 # ---------------------------------------------------------------------------
 echo ""
-echo "── Test 4: mode=direct_only → decision.kind=direct_reply (if provider available)"
-payload='{"request_id":"t4","session_id":"s","user_id":"u","text":"hello","channel":"async-task","mode":"direct_only"}'
-out="$(call_router "$payload")"
-if [[ -z "$out" ]]; then
-    skip "mode=direct_only decision.kind check" "no output (provider may not be available)"
-else
-    assert_json_valid "mode=direct_only returns valid JSON" "$out"
-    status="$($PYTHON -c "import json,sys; print(json.loads(sys.argv[1])['status'])" "$out" 2>/dev/null || echo "unknown")"
-    if [[ "$status" == "success" ]]; then
-        assert_json_field "mode=direct_only → decision.kind=direct_reply" "$out" "['decision']['kind']" "direct_reply"
-    else
-        skip "mode=direct_only decision.kind" "provider not available (status=$status)"
-    fi
-fi
+echo "── Test 4: mode=direct_only → decision.kind=direct_reply (mock provider)"
+out="$(SOLAR_ROUTER_CLAUDE_CMD="bash -c 'echo mock-response'" SOLAR_ROUTER_PROVIDER_PRIORITY=claude \
+    call_router '{"request_id":"t4","session_id":"s","user_id":"u","text":"hello","channel":"async-task","mode":"direct_only"}')"
+assert_json_valid "mode=direct_only returns valid JSON" "$out"
+assert_json_field "status=success on direct_only" "$out" "['status']" "success"
+assert_json_field "mode=direct_only → decision.kind=direct_reply" "$out" "['decision']['kind']" "direct_reply"
 
 # ---------------------------------------------------------------------------
 # Test 5: unsupported provider → JSON failed with error_code

@@ -9,6 +9,18 @@
 
 All providers (Codex, Claude, Gemini, Agent) run with the same repo context: working directory = Solar repo root, so they see `sun/`, `planets/`, `core/`, and `AGENTS.md`.
 
+## Internal architecture
+
+`solar-router` is split into three layers. The public contract (stdin/stdout v3) does not change.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Entrypoint | `scripts/run_router.py` | stdin → `route()` → stdout + exit. No logic. |
+| Router core | `scripts/router.py` | Parse, validate, JIT, prompt, decision engine, provider selection. Provider-agnostic. |
+| Provider adapters | `scripts/providers/*.py` | Build command, prepare env, run subprocess, normalize output. No routing logic. |
+
+**Adapter location:** `scripts/providers/{claude,codex,gemini,agent}.py`. Each adapter inherits from `scripts/providers/base.py` (`BaseProvider`). Command override env vars (`SOLAR_ROUTER_{PROVIDER}_CMD`) are resolved in `BaseProvider.get_cmd()`.
+
 ## Environment keys
 
 - `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `agent,codex,claude,gemini`)
@@ -205,6 +217,7 @@ Two records are written per execution:
 - `start` written on request receipt; `end` written before emitting the response.
 - `jit_generated`: `true` if the agent role was generated inline (no pre-existing agent file).
 - Used by `status_router.sh` to show in-flight processes and last N executions.
+- **Known bug:** `end` is not written on early-exit paths (e.g. `async_tasks_disabled`, `provider_locked_failed`, `all_providers_failed`). Test 14 in `check_router.sh` documents this as expected current behavior.
 
 ## Key invariants (enforced)
 
