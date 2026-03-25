@@ -79,6 +79,14 @@ for f in "${RAW_FEATURES[@]}"; do
   [[ -n "$f" ]] && FEATURES+=("$f")
 done
 
+feature_active() {
+  local target="$1"
+  for f in "${FEATURES[@]}"; do
+    [[ "$f" == "$target" ]] && return 0
+  done
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Check 1: Supervisor (launchd)
 # ---------------------------------------------------------------------------
@@ -129,19 +137,21 @@ else
   echo "  chrome-mcp:  ok ($mcp_count)"
 fi
 
+if feature_active "interface"; then
+  interface_proc_count=$(pgrep -f "core/skills/solar-interface/scripts/interface_server.py" | wc -l | tr -d ' ')
+  if [[ "$interface_proc_count" -gt 1 ]]; then
+    echo "  interface:   MULTIPLE ($interface_proc_count daemon candidates running - expects 1)"
+    proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
+  else
+    echo "  interface:   ok ($interface_proc_count)"
+  fi
+fi
+
 verdict="$(worst_severity "$verdict" "$proc_severity")"
 
 # ---------------------------------------------------------------------------
 # Check 3: transport-gateway feature
 # ---------------------------------------------------------------------------
-
-feature_active() {
-  local target="$1"
-  for f in "${FEATURES[@]}"; do
-    [[ "$f" == "$target" ]] && return 0
-  done
-  return 1
-}
 
 if feature_active "transport-gateway"; then
   echo ""
