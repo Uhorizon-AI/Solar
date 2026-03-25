@@ -118,9 +118,17 @@ if has_feature "transport-gateway"; then
   fi
 fi
 
+if has_feature "interface"; then
+  echo "▶ Running feature: interface"
+  if ! bash core/skills/solar-interface/scripts/ensure_interface.sh; then
+    echo "❌ interface feature failed." >&2
+    failures=$((failures + 1))
+  fi
+fi
+
 for token in $(echo "$FEATURES" | tr ',' ' '); do
   case "$token" in
-    async-tasks|transport-gateway) ;;
+    async-tasks|transport-gateway|interface) ;;
     *) echo "⚠️  Unknown feature token ignored: $token" ;;
   esac
 done

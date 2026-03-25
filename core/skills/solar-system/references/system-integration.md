@@ -10,6 +10,7 @@
 
 - `async-tasks` -> `core/skills/solar-async-tasks/scripts/run_worker.sh --once`
 - `transport-gateway` -> `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
+- `interface` -> `core/skills/solar-interface/scripts/ensure_interface.sh`
 
 ## Why check-first recovery
 

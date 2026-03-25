@@ -226,12 +226,39 @@ if feature_active "async-tasks"; then
 fi
 
 # ---------------------------------------------------------------------------
+# Check 5: interface feature
+# ---------------------------------------------------------------------------
+
+if feature_active "interface"; then
+  echo ""
+  echo "── Feature: interface"
+  interface_out=""
+  interface_code=0
+  set +e
+  interface_out="$(run_with_timeout bash core/skills/solar-interface/scripts/check_interface.sh 2>&1)"
+  interface_code=$?
+  set -e
+
+  case "$interface_code" in
+    0)
+      echo "  status: HEALTHY"
+      echo "  url:    ${SOLAR_INTERFACE_BASE_URL:-http://127.0.0.1:7741}"
+      ;;
+    *)
+      echo "  status: DOWN"
+      echo "  detail: $interface_out"
+      verdict="$(worst_severity "$verdict" "DOWN")"
+      ;;
+  esac
+fi
+
+# ---------------------------------------------------------------------------
 # Warn on unknown features
 # ---------------------------------------------------------------------------
 
 for f in "${FEATURES[@]}"; do
   case "$f" in
-    async-tasks|transport-gateway) ;;
+    async-tasks|transport-gateway|interface) ;;
     *) echo ""
        echo "  ⚠️  Unknown feature token ignored: $f" ;;
   esac
@@ -317,6 +344,23 @@ if [[ "$verdict" != "HEALTHY" ]]; then
       echo "  • Orphan lock(s) detected — remove stale locks manually:"
       echo "    rm $DIR_LOCKS/*.lock"
       echo "    (verify no active tasks before removing)"
+    fi
+  fi
+
+  # interface issues
+  if feature_active "interface" && [[ "${interface_code:-0}" != "0" ]]; then
+    if echo "${interface_out:-}" | grep -qi "not_setup"; then
+      echo "  • interface not set up — initialize runtime:"
+      echo "    bash core/skills/solar-interface/scripts/setup_interface.sh"
+    elif echo "${interface_out:-}" | grep -qi "stale_pid"; then
+      echo "  • interface has a stale pid file — restart the local daemon:"
+      echo "    bash core/skills/solar-interface/scripts/start_interface_daemon.sh"
+    elif echo "${interface_out:-}" | grep -qi "start_failed"; then
+      echo "  • interface failed during startup — inspect current status and logs:"
+      echo "    bash core/skills/solar-interface/scripts/status_interface.sh"
+    else
+      echo "  • interface unreachable — start the local daemon:"
+      echo "    bash core/skills/solar-interface/scripts/start_interface_daemon.sh"
     fi
   fi
 

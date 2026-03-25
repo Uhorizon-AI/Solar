@@ -20,6 +20,7 @@ Provide one system-level control point for Solar runtime operations:
 - Orchestrate enabled features from `.env`:
   - `async-tasks`
   - `transport-gateway`
+  - `interface`
 - Keep orchestration deterministic and non-overlapping.
 
 ## Required MCP
@@ -59,6 +60,7 @@ SOLAR_SYSTEM_FEATURES=async-tasks
 `SOLAR_SYSTEM_FEATURES` is a CSV selector. Supported values:
 - `async-tasks`
 - `transport-gateway`
+- `interface`
 
 **Note:** `SOLAR_SYSTEM_FEATURES` is also read by `solar-router` to determine if `async-tasks` is available for async draft creation. Keep this value consistent with your active runtime configuration.
 
@@ -84,6 +86,7 @@ SOLAR_SYSTEM_FEATURES=async-tasks
 4. runs enabled features in order:
    - async tasks: `run_worker.sh --once`
    - transport gateway: `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
+   - interface: `core/skills/solar-interface/scripts/ensure_interface.sh`
 
 ## Design notes
 
