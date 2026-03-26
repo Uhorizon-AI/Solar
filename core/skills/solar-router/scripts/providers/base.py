@@ -67,6 +67,21 @@ class BaseProvider(ABC):
         """Normalize raw stdout. Override to strip ANSI codes or detect error patterns."""
         return output
 
+    def get_cwd(self) -> pathlib.Path:
+        """Working directory for the provider subprocess.
+
+        Defaults to the user's home directory so that Claude/Gemini/Codex do NOT
+        discover CLAUDE.md / GEMINI.md files from the Solar repo tree — those files
+        add thousands of redundant tokens per call since the router already supplies
+        all context via full_prompt. Override in subclasses if the provider needs
+        repo access.
+        """
+        return pathlib.Path.home()
+
+    def stream(self, prompt: str):
+        """Yield output chunks as they arrive. Default: single chunk via run(). Override for real streaming."""
+        yield self.run(prompt)
+
     def run(self, prompt: str) -> str:
         """Execute the provider and return its output string.
 
@@ -81,7 +96,7 @@ class BaseProvider(ABC):
             text=True,
             capture_output=True,
             timeout=timeout_sec,
-            cwd=REPO_ROOT,
+            cwd=self.get_cwd(),
             env=env,
         )
         if proc.returncode != 0:

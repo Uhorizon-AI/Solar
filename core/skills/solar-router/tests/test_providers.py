@@ -2,6 +2,7 @@
 Unit tests for providers/*.py — subprocess.run is mocked throughout.
 No real AI binaries are called.
 """
+import io
 import pathlib
 import sys
 import unittest
@@ -98,11 +99,11 @@ class TestBaseProviderRun(unittest.TestCase):
 
     @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
     @patch("providers.base.subprocess.run")
-    def test_uses_repo_root_as_cwd(self, mock_run, _):
+    def test_uses_home_as_default_cwd(self, mock_run, _):
         mock_run.return_value = _mock_proc()
         self.provider.run("prompt")
         _, kwargs = mock_run.call_args
-        self.assertEqual(kwargs["cwd"], REPO_ROOT)
+        self.assertEqual(kwargs["cwd"], pathlib.Path.home())
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +156,38 @@ class TestCodexProvider(unittest.TestCase):
     def test_default_cmd_contains_skip_git(self):
         p = CodexProvider()
         self.assertIn("--skip-git-repo-check", p.build_default_cmd())
+
+    @patch("providers.codex.subprocess.Popen")
+    @patch("providers.base.shutil.which", return_value="/usr/bin/codex")
+    def test_stream_adds_json_flag_and_yields_delta(self, _mock_which, mock_popen):
+        proc = MagicMock()
+        proc.stdout = io.StringIO('{"type":"agent_message.delta","delta":"hi"}\n')
+        proc.stderr = io.StringIO("")
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        mock_popen.return_value = proc
+
+        p = CodexProvider()
+        chunks = list(p.stream("prompt"))
+
+        self.assertEqual(chunks, ["hi"])
+        cmd = mock_popen.call_args.args[0]
+        self.assertIn("--json", cmd)
+
+    @patch("providers.codex.subprocess.Popen")
+    @patch("providers.base.shutil.which", return_value="/usr/bin/codex")
+    def test_stream_uses_completed_fallback_when_no_deltas(self, _mock_which, mock_popen):
+        proc = MagicMock()
+        proc.stdout = io.StringIO('{"type":"turn.completed","result":"final answer"}\n')
+        proc.stderr = io.StringIO("")
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        mock_popen.return_value = proc
+
+        p = CodexProvider()
+        chunks = list(p.stream("prompt"))
+
+        self.assertEqual(chunks, ["final answer"])
 
 
 class TestAgentProvider(unittest.TestCase):

@@ -329,6 +329,21 @@ def run_strict_provider(provider: str, prompt: str) -> tuple:
     return output, provider
 
 
+def stream_provider(prompt: str, provider_override: Optional[str] = None):
+    """Yield (chunk, provider_name) from the selected provider using streaming.
+
+    Selects provider_override if valid, otherwise picks the first available from priority list.
+    Unlike run_with_fallback, streaming does not retry on failure mid-stream.
+    """
+    if provider_override and provider_override in PROVIDERS:
+        name = provider_override
+    else:
+        providers = _provider_priority()
+        name = providers[0] if providers else next(iter(PROVIDERS))
+    for chunk in PROVIDERS[name].stream(prompt):
+        yield chunk, name
+
+
 # ---------------------------------------------------------------------------
 # Async draft creation
 # ---------------------------------------------------------------------------
@@ -470,6 +485,63 @@ def _failed(request_id: str, error_code: str, error: str, provider_used: Any = N
 # ---------------------------------------------------------------------------
 # Core routing function
 # ---------------------------------------------------------------------------
+
+def route_stream(raw: str):
+    """Streaming variant of route(). Yields JSONL lines to stdout.
+
+    Each yielded string is a complete JSON line:
+      {"type": "chunk", "text": "..."}          — content fragment
+      {"type": "done",  "provider": "...", "request_id": "...", "status": "success|failed", "error": null|"..."}
+
+    The caller (run_router.py --stream) writes each line to stdout and flushes.
+    """
+    if not raw:
+        yield json.dumps({"type": "done", "status": "failed", "error": "missing input", "provider": None, "request_id": "unknown"})
+        return
+
+    try:
+        payload = parse_request_payload(raw)
+    except json.JSONDecodeError as exc:
+        yield json.dumps({"type": "done", "status": "failed", "error": str(exc), "provider": None, "request_id": "unknown"})
+        return
+
+    request_id = str(payload.get("request_id", "")).strip() or "unknown"
+    session_id = str(payload.get("session_id", "")).strip()
+    user_id = str(payload.get("user_id", "")).strip()
+    text = str(payload.get("text", "")).strip()
+    channel = str(payload.get("channel", "other")).strip().lower()
+    mode = str(payload.get("mode", "auto")).strip().lower()
+    provider_override = str(payload.get("provider") or "").strip().lower() or None
+
+    if not text:
+        yield json.dumps({"type": "done", "status": "failed", "error": "missing text", "provider": None, "request_id": request_id})
+        return
+
+    conversation_id = user_id or session_id or "default"
+    conv_path = conversation_file(conversation_id)
+    metadata = payload.get("metadata") or {}
+    jit_context = resolve_jit_context(metadata) if metadata else None
+    system_prompt = read_system_prompt()
+    recent = load_recent_messages(conv_path)
+    full_prompt = build_prompt(system_prompt, recent, text, conversation_id, mode, channel, jit_context)
+
+    provider_used: Optional[str] = None
+    full_text_parts: list[str] = []
+
+    try:
+        for chunk, provider_used in stream_provider(full_prompt, provider_override):
+            full_text_parts.append(chunk)
+            yield json.dumps({"type": "chunk", "text": chunk}, ensure_ascii=False)
+    except Exception as exc:
+        yield json.dumps({"type": "done", "status": "failed", "error": str(exc), "provider": provider_used, "request_id": request_id})
+        return
+
+    reply_text = "".join(full_text_parts)
+    append_message(conv_path, "user", text)
+    append_message(conv_path, "assistant", reply_text)
+
+    yield json.dumps({"type": "done", "status": "success", "provider": provider_used, "request_id": request_id, "error": None})
+
 
 def route(raw: str) -> Dict[str, Any]:
     """Process a raw JSON request string. Returns a RouterResponse dict.

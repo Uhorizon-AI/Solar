@@ -14,13 +14,27 @@ _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from router import route, parse_ai_decision_output  # noqa: F401,E402
+from router import route, route_stream, parse_ai_decision_output  # noqa: F401,E402
 # parse_ai_decision_output is re-exported for backward compatibility with
 # tests that import it directly from run_router (check_router.sh tests 9/10).
 
 
 def main() -> None:
     raw = sys.stdin.read().strip()
+
+    # Streaming mode: request payload contains "stream": true
+    # Outputs JSONL lines incrementally; caller reads them in real-time.
+    try:
+        stream_mode = json.loads(raw).get("stream") if raw else False
+    except (json.JSONDecodeError, AttributeError):
+        stream_mode = False
+
+    if stream_mode:
+        for line in route_stream(raw):
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+        sys.exit(0)
+
     response = route(raw)
     print(json.dumps(response, ensure_ascii=False))
     sys.exit(0 if response.get("status") == "success" else 1)
