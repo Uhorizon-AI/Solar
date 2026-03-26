@@ -509,7 +509,6 @@ def print_thread_history(base_url: str, thread_id: str, title: str | None = None
     runs_data = api_get(base_url, f"/threads/{thread_id}/runs")
     runs = runs_data.get("runs", [])
 
-    print(f"\n  ── {title or 'Untitled'} ──\n")
     for run in runs:
         run_dir = REPO_ROOT / "sun" / "runtime" / "interface" / "runs" / run["run_id"]
         input_file = run_dir / "input.md"
@@ -533,7 +532,6 @@ def print_thread_history(base_url: str, thread_id: str, title: str | None = None
             print(reply_text)
             print()
 
-    print("  Continuing conversation…\n")
 
 
 # ── REPL main ─────────────────────────────────────────────────────────────────

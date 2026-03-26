@@ -326,9 +326,14 @@ if threads:
         chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" "$latest"
       fi
 
-    # default: REPL chat
+    # default: always create a new thread. Use -c to resume the last one.
     else
-      chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" ""
+      require_daemon
+      local_title="${FLAG_NAME:-${text:-Solar Chat}}"
+      resp="$(create_thread "$local_title")"
+      thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
+      set_current_thread "$thread_id"
+      chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" "$thread_id"
     fi
     ;;
 esac
