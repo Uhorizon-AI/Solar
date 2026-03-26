@@ -176,6 +176,33 @@ class TestCodexProvider(unittest.TestCase):
 
     @patch("providers.codex.subprocess.Popen")
     @patch("providers.base.shutil.which", return_value="/usr/bin/codex")
+    def test_stream_inserts_json_before_separator(self, _mock_which, mock_popen):
+        proc = MagicMock()
+        proc.stdout = io.StringIO('{"type":"agent_message.delta","delta":"ok"}\n')
+        proc.stderr = io.StringIO("")
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        mock_popen.return_value = proc
+
+        p = CodexProvider()
+        with patch.dict(
+            "os.environ",
+            {
+                "SOLAR_ROUTER_CODEX_CMD": (
+                    "codex exec --skip-git-repo-check --full-auto -C /tmp "
+                    "--add-dir /tmp/.codex --"
+                )
+            },
+            clear=False,
+        ):
+            chunks = list(p.stream("prompt"))
+
+        self.assertEqual(chunks, ["ok"])
+        cmd = mock_popen.call_args.args[0]
+        self.assertLess(cmd.index("--json"), cmd.index("--"))
+
+    @patch("providers.codex.subprocess.Popen")
+    @patch("providers.base.shutil.which", return_value="/usr/bin/codex")
     def test_stream_uses_completed_fallback_when_no_deltas(self, _mock_which, mock_popen):
         proc = MagicMock()
         proc.stdout = io.StringIO('{"type":"turn.completed","result":"final answer"}\n')
@@ -188,6 +215,86 @@ class TestCodexProvider(unittest.TestCase):
         chunks = list(p.stream("prompt"))
 
         self.assertEqual(chunks, ["final answer"])
+
+    @patch("providers.codex.subprocess.Popen")
+    @patch("providers.base.shutil.which", return_value="/usr/bin/codex")
+    def test_stream_reads_nested_item_text(self, _mock_which, mock_popen):
+        proc = MagicMock()
+        proc.stdout = io.StringIO(
+            '{"type":"item.completed","item":{"type":"agent_message","text":"nested text"}}\n'
+        )
+        proc.stderr = io.StringIO("")
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        mock_popen.return_value = proc
+
+        p = CodexProvider()
+        chunks = list(p.stream("prompt"))
+
+        self.assertEqual(chunks, ["nested text"])
+
+    @patch("providers.codex.subprocess.Popen")
+    @patch("providers.base.shutil.which", return_value="/usr/bin/codex")
+    def test_stream_uses_last_buffered_item_message_only(self, _mock_which, mock_popen):
+        proc = MagicMock()
+        proc.stdout = io.StringIO(
+            '{"type":"item.completed","item":{"type":"agent_message","text":"thinking..."}}\n'
+            '{"type":"item.completed","item":{"type":"agent_message","text":"final answer"}}\n'
+            '{"type":"turn.completed"}\n'
+        )
+        proc.stderr = io.StringIO("")
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        mock_popen.return_value = proc
+
+        p = CodexProvider()
+        chunks = list(p.stream("prompt"))
+
+        self.assertEqual(chunks, ["final answer"])
+
+    @patch("providers.codex.subprocess.Popen")
+    @patch("providers.base.shutil.which", return_value="/usr/bin/codex")
+    def test_stream_captures_usage_from_turn_completed(self, _mock_which, mock_popen):
+        proc = MagicMock()
+        proc.stdout = io.StringIO(
+            '{"type":"item.completed","item":{"type":"agent_message","text":"final"}}\n'
+            '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2,"cached_input_tokens":3}}\n'
+        )
+        proc.stderr = io.StringIO("")
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        mock_popen.return_value = proc
+
+        p = CodexProvider()
+        chunks = list(p.stream("prompt"))
+
+        self.assertEqual(chunks, ["final"])
+        self.assertEqual(
+            p.last_usage,
+            {"input_tokens": 10, "output_tokens": 2, "cached_input_tokens": 3},
+        )
+
+    @patch("providers.codex.subprocess.Popen")
+    @patch("providers.base.shutil.which", return_value="/usr/bin/codex")
+    def test_stream_debug_logs_unknown_event_once(self, _mock_which, mock_popen):
+        proc = MagicMock()
+        proc.stdout = io.StringIO(
+            '{"type":"custom.unknown","foo":"a"}\n'
+            '{"type":"custom.unknown","foo":"b"}\n'
+            '{"type":"turn.completed","result":"done"}\n'
+        )
+        proc.stderr = io.StringIO("")
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        mock_popen.return_value = proc
+
+        p = CodexProvider()
+        with patch.dict("os.environ", {"SOLAR_ROUTER_CODEX_DEBUG_EVENTS": "1"}):
+            with patch("providers.codex.print") as mock_print:
+                chunks = list(p.stream("prompt"))
+
+        self.assertEqual(chunks, ["done"])
+        self.assertEqual(mock_print.call_count, 1)
 
 
 class TestAgentProvider(unittest.TestCase):

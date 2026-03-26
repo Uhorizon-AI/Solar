@@ -51,6 +51,32 @@ def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _extract_reply_text_from_wrapped_json(text: str) -> str | None:
+    """Return reply_text when provider returns decision-wrapper JSON; else None."""
+    raw = text.strip()
+    if not raw:
+        return None
+    # Fast gate to avoid parsing normal prose responses.
+    if '"decision"' not in raw or '"reply_text"' not in raw:
+        return None
+    # Remove optional markdown fences.
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    reply_text = payload.get("reply_text")
+    return reply_text if isinstance(reply_text, str) and reply_text.strip() else None
+
+
 def slugify_title(text: str) -> str:
     cleaned = " ".join(text.strip().split())
     return cleaned[:60] if cleaned else f"Thread {now_iso()}"
@@ -587,9 +613,13 @@ class Handler(BaseHTTPRequestHandler):
         proc.stdin.close()  # type: ignore[union-attr]
 
         full_text_parts: list[str] = []
+        raw_text_parts: list[str] = []
         provider_used: str | None = None
+        usage: dict | None = None
         status = "failed"
         error: str | None = None
+        hold_wrapped_json: bool | None = None
+        client_disconnected = False
 
         try:
             for raw_line in proc.stdout:  # type: ignore[union-attr]
@@ -604,6 +634,14 @@ class Handler(BaseHTTPRequestHandler):
                 if event.get("type") == "chunk":
                     chunk = event.get("text", "")
                     if chunk:
+                        raw_text_parts.append(chunk)
+                        if hold_wrapped_json is None:
+                            probe = chunk.lstrip()
+                            hold_wrapped_json = probe.startswith("{") and (
+                                '"decision"' in probe or '"reply_text"' in probe
+                            )
+                        if hold_wrapped_json:
+                            continue
                         full_text_parts.append(chunk)
                         sse = f"data: {json.dumps({'type': 'chunk', 'text': chunk}, ensure_ascii=False)}\n\n"
                         self.wfile.write(sse.encode("utf-8"))
@@ -611,17 +649,42 @@ class Handler(BaseHTTPRequestHandler):
                 elif event.get("type") == "done":
                     status = event.get("status", "failed")
                     provider_used = event.get("provider")
+                    event_usage = event.get("usage")
+                    if isinstance(event_usage, dict):
+                        usage = event_usage
                     error = event.get("error")
 
             proc.wait()
         except (BrokenPipeError, ConnectionResetError):
-            pass
+            client_disconnected = True
+            status = "failed"
+            error = "client disconnected"
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)
 
-        reply_text = "".join(full_text_parts)
+        if hold_wrapped_json:
+            raw_joined = "".join(raw_text_parts)
+            unwrapped = _extract_reply_text_from_wrapped_json(raw_joined)
+            reply_text = unwrapped or raw_joined
+            if reply_text and not client_disconnected:
+                full_text_parts.append(reply_text)
+                try:
+                    sse = f"data: {json.dumps({'type': 'chunk', 'text': reply_text}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(sse.encode("utf-8"))
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+        else:
+            reply_text = "".join(full_text_parts)
         ended_at = now_iso()
         run_dir = RUNS_DIR / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        if reply_text:
+        if reply_text and not client_disconnected:
             (run_dir / "output.md").write_text(reply_text, encoding="utf-8")
 
         conn = connect_db()
@@ -634,7 +697,7 @@ class Handler(BaseHTTPRequestHandler):
                 "INSERT INTO artifacts(artifact_id, run_id, kind, path, title, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "request", str(input_path.relative_to(REPO_ROOT)), "User input", started_at),
             )
-            if reply_text:
+            if reply_text and not client_disconnected:
                 conn.execute(
                     "INSERT INTO artifacts(artifact_id, run_id, kind, path, title, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "response", str((run_dir / "output.md").relative_to(REPO_ROOT)), "Run output", ended_at),
@@ -644,13 +707,14 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
         update_thread_last_run(thread_id, run_id)
 
-        # Send final SSE done event
-        done_evt = json.dumps({"type": "done", "run_id": run_id, "provider": provider_used, "status": status, "error": error}, ensure_ascii=False)
-        try:
-            self.wfile.write(f"data: {done_evt}\n\n".encode("utf-8"))
-            self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        # Send final SSE done event only if client is still connected.
+        if not client_disconnected:
+            done_evt = json.dumps({"type": "done", "run_id": run_id, "provider": provider_used, "status": status, "usage": usage, "error": error}, ensure_ascii=False)
+            try:
+                self.wfile.write(f"data: {done_evt}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path

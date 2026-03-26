@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import sys
+import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -13,6 +16,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
@@ -30,10 +34,10 @@ def _load_providers() -> list[str]:
                 value = line.split("=", 1)[1].strip()
                 providers = [p.strip() for p in value.split(",") if p.strip()]
                 if providers:
-                    return ["auto"] + providers
+                    return providers
     except (OSError, ValueError):
         pass
-    return ["auto", "claude", "gemini", "codex"]
+    return ["codex", "claude", "gemini"]
 
 
 BUILTIN_COMMANDS = {
@@ -59,6 +63,22 @@ PROV_COLORS = {
     "claude": "ansicyan", "gemini": "ansiblue",
     "codex": "ansigreen", "agent": "ansimagenta",
 }
+
+PROV_ANSI = {
+    "claude": "\033[36m",
+    "gemini": "\033[34m",
+    "codex": "\033[32m",
+    "agent": "\033[35m",
+}
+
+ORPHANED_CSI_U_RE = re.compile(r"(?:\x1b\[|\[)\d+(?:;\d+)*u")
+
+
+def _sanitize_slash_text(text: str) -> str:
+    stripped = text.lstrip()
+    if not stripped.startswith("/"):
+        return text
+    return ORPHANED_CSI_U_RE.sub("", text)
 
 
 # ── Resource discovery ────────────────────────────────────────────────────────
@@ -158,9 +178,11 @@ class SolarCompleter(Completer):
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
+        parts = text.split()
+        current_token = parts[-1] if parts else text.strip()
 
-        if text.lstrip().startswith("/"):
-            word = text.lstrip()
+        if current_token.startswith("/"):
+            word = current_token
 
             # Built-ins
             for cmd, (_, _, desc) in BUILTIN_COMMANDS.items():
@@ -172,12 +194,13 @@ class SolarCompleter(Completer):
                     )
 
             # /client <provider> sub-completions
-            if word.startswith("/client"):
-                prov_prefix = word[len("/client"):].lstrip()
+            stripped = text.lstrip()
+            if stripped.startswith("/client"):
+                prov_prefix = stripped[len("/client"):].lstrip()
                 for p in self._providers:
                     if p.startswith(prov_prefix):
                         yield Completion(
-                            f"/client {p}", start_position=-len(word),
+                            f"/client {p}", start_position=-len(stripped),
                             display=HTML(f"<b>/client</b> {p}"),
                             display_meta=HTML("<ansicyan>provider</ansicyan>"),
                         )
@@ -287,10 +310,31 @@ def api_post(base_url: str, path: str, payload: dict) -> dict:
         return {"error": exc.read().decode("utf-8")}
 
 
+def get_last_provider_for_thread(base_url: str, thread_id: str) -> str | None:
+    data = api_get(base_url, f"/threads/{thread_id}/runs")
+    runs = data.get("runs", [])
+    if not isinstance(runs, list):
+        return None
+    for run in reversed(runs):
+        if not isinstance(run, dict):
+            continue
+        provider = run.get("provider_used")
+        if isinstance(provider, str) and provider.strip():
+            return provider.strip()
+    return None
+
+
 def send_and_print(base_url: str, state: dict, text: str) -> None:
-    obj: dict = {"mode": "ask", "text": text}
-    if state["provider"] != "auto":
-        obj["provider"] = state["provider"]
+    def _fmt_tokens(value: object) -> str | None:
+        if not isinstance(value, int):
+            return None
+        if value < 1000:
+            return str(value)
+        if value >= 100000:
+            return f"{value // 1000}k"
+        return f"{value / 1000:.1f}k"
+
+    obj: dict = {"mode": "ask", "text": text, "provider": state["provider"]}
 
     url = base_url + f"/threads/{state['thread_id']}/stream"
     data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -301,7 +345,29 @@ def send_and_print(base_url: str, state: dict, text: str) -> None:
     )
 
     provider_used = state["provider"]
+    usage: dict | None = None
     started = False
+    saw_non_whitespace = False
+    spinner_stop = threading.Event()
+    spinner_lock = threading.Lock()
+    spinner_frames = [".", "..", "..."]
+    spinner_provider = provider_used
+    spinner_color = "\033[2m"
+
+    def _spinner() -> None:
+        idx = 0
+        while not spinner_stop.is_set():
+            with spinner_lock:
+                frame = spinner_frames[idx % len(spinner_frames)]
+                sys.stdout.write(
+                    f"\r{spinner_color}[{spinner_provider}]\033[0m {frame}   "
+                )
+                sys.stdout.flush()
+            idx += 1
+            time.sleep(0.35)
+
+    spinner_thread = threading.Thread(target=_spinner, daemon=True)
+    spinner_thread.start()
 
     try:
         with urllib.request.urlopen(req) as resp:
@@ -319,20 +385,76 @@ def send_and_print(base_url: str, state: dict, text: str) -> None:
                     chunk = event.get("text", "")
                     if chunk:
                         if not started:
-                            print()
+                            spinner_stop.set()
+                            spinner_thread.join(timeout=0.5)
+                            with spinner_lock:
+                                sys.stdout.write("\r\033[K")
+                                sys.stdout.flush()
+                            print(f"{spinner_color}[{provider_used}]\033[0m")
                             started = True
+                        if chunk.strip():
+                            saw_non_whitespace = True
                         sys.stdout.write(chunk)
                         sys.stdout.flush()
                 elif event.get("type") == "done":
                     provider_used = event.get("provider") or provider_used
+                    event_usage = event.get("usage")
+                    if isinstance(event_usage, dict):
+                        usage = event_usage
                     error = event.get("error")
                     if not started and error:
+                        spinner_stop.set()
+                        spinner_thread.join(timeout=0.5)
+                        with spinner_lock:
+                            sys.stdout.write("\r\033[K")
+                            sys.stdout.flush()
                         print(f"\n\033[31mError: {error}\033[0m")
+    except KeyboardInterrupt:
+        spinner_stop.set()
+        spinner_thread.join(timeout=0.5)
+        with spinner_lock:
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
+        print("\n\033[33mEjecucion cancelada por usuario.\033[0m\n")
+        return
     except urllib.error.URLError as exc:
+        spinner_stop.set()
+        spinner_thread.join(timeout=0.5)
+        with spinner_lock:
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
         print(f"\n\033[31mConnection error: {exc}\033[0m")
         return
 
-    print(f"\n\n\033[2m[{provider_used}]\033[0m\n")
+    spinner_stop.set()
+    spinner_thread.join(timeout=0.5)
+    with spinner_lock:
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+
+    provider_label = provider_used or "unknown"
+    if started and saw_non_whitespace:
+        usage_suffix = ""
+        if isinstance(usage, dict):
+            in_t = _fmt_tokens(usage.get("input_tokens"))
+            out_t = _fmt_tokens(usage.get("output_tokens"))
+            cached_t = _fmt_tokens(usage.get("cached_input_tokens"))
+            parts: list[str] = []
+            if in_t:
+                parts.append(f"in {in_t}")
+            if cached_t:
+                parts.append(f"cached {cached_t}")
+            if out_t:
+                parts.append(f"out {out_t}")
+            if parts:
+                usage_suffix = " · " + ", ".join(parts)
+        if usage_suffix:
+            print(f"\n\033[2m· {usage_suffix.lstrip(' ·')}\033[0m\n")
+        else:
+            print("\n")
+    else:
+        provider_color = PROV_ANSI.get(provider_label, "\033[33m")
+        print(f"\n{provider_color}[{provider_label}]\033[0m\n")
 
 
 # ── /resume ───────────────────────────────────────────────────────────────────
@@ -419,15 +541,78 @@ def print_thread_history(base_url: str, thread_id: str, title: str | None = None
 def main() -> None:
     base_url = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:7741"
     initial_thread = sys.argv[2] if len(sys.argv) > 2 else ""
-    provider = sys.argv[3] if len(sys.argv) > 3 else "auto"
+    provider = sys.argv[3] if len(sys.argv) > 3 else ""
     initial = sys.argv[4] if len(sys.argv) > 4 else ""
-
-    state = {"thread_id": initial_thread, "provider": provider}
 
     SOLAR_DIR.mkdir(parents=True, exist_ok=True)
     slash_items = _load_slash_items()
     file_items = _load_file_items()
     providers = _load_providers()
+    selected_provider = provider.strip().lower()
+    if selected_provider in {"", "auto"}:
+        selected_provider = ""
+        if initial_thread:
+            last_provider = get_last_provider_for_thread(base_url, initial_thread)
+            if last_provider in providers:
+                selected_provider = last_provider
+        if not selected_provider:
+            selected_provider = providers[0]
+    elif selected_provider not in providers:
+        selected_provider = providers[0]
+
+    state = {"thread_id": initial_thread, "provider": selected_provider}
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _submit(event):
+        buf = event.current_buffer
+        # Cursor-like behavior: if completion menu is open, Enter accepts current suggestion.
+        if buf.complete_state:
+            current = buf.complete_state.current_completion
+            if current is not None:
+                buf.apply_completion(current)
+                # For slash commands, execute immediately after accepting completion.
+                if buf.text.strip().startswith("/"):
+                    buf.validate_and_handle()
+                return
+            # If menu is open but nothing is actively selected, accept first candidate.
+            completions = list(buf.complete_state.completions or [])
+            if completions:
+                buf.apply_completion(completions[0])
+                # If slash completion resolves to a single command, execute in the same Enter.
+                if len(completions) == 1 and buf.text.strip().startswith("/"):
+                    buf.validate_and_handle()
+                return
+        buf.validate_and_handle()
+
+    @kb.add("c-j")
+    def _newline(event):
+        event.current_buffer.insert_text("\n")
+
+    @kb.add("c-c", eager=True)
+    def _interrupt(event):
+        # Ensure Ctrl+C always exits REPL regardless of prompt-toolkit mode/terminal quirks.
+        event.app.exit(result="/exit")
+
+    @kb.add("/")
+    def _slash_with_completion(event):
+        buf = event.current_buffer
+        buf.insert_text("/")
+        buf.start_completion(select_first=True)
+        if buf.complete_state and buf.complete_state.current_completion is None:
+            buf.complete_next()
+
+    @kb.add("c-space")
+    def _manual_completion(event):
+        buf = event.current_buffer
+        buf.start_completion(select_first=True)
+        if buf.complete_state and buf.complete_state.current_completion is None:
+            buf.complete_next()
+
+    @kb.add("escape", "[", "1", "3", ";", "2", "u")
+    def _shift_enter_kitty_sequence(event):
+        # Some terminals emit Shift+Enter as CSI u: ESC [ 13 ; 2 u
+        event.current_buffer.insert_text("\n")
 
     # ── Welcome header ────────────────────────────────────────────────────────
     print("\033[1;34m")
@@ -446,8 +631,11 @@ def main() -> None:
         history=FileHistory(str(HISTORY_FILE)),
         completer=SolarCompleter(slash_items, providers, file_items),
         complete_while_typing=True,
+        complete_in_thread=True,
         style=STYLE,
         mouse_support=False,
+        multiline=True,
+        key_bindings=kb,
     )
 
     def bottom_toolbar():
@@ -475,11 +663,12 @@ def main() -> None:
             text = session.prompt(
                 HTML('<ansiwhite>›</ansiwhite> '),
                 bottom_toolbar=bottom_toolbar,
-            ).strip()
+            )
         except (EOFError, KeyboardInterrupt):
             print()
             break
 
+        text = _sanitize_slash_text(text).strip()
         if not text:
             continue
         if text in ("/exit", "/quit"):

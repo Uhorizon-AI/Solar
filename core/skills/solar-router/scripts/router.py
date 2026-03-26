@@ -526,6 +526,7 @@ def route_stream(raw: str):
     full_prompt = build_prompt(system_prompt, recent, text, conversation_id, mode, channel, jit_context)
 
     provider_used: Optional[str] = None
+    usage: Optional[Dict[str, Any]] = None
     full_text_parts: list[str] = []
 
     try:
@@ -537,10 +538,15 @@ def route_stream(raw: str):
         return
 
     reply_text = "".join(full_text_parts)
+    if provider_used:
+        provider_obj = PROVIDERS.get(provider_used)
+        provider_usage = getattr(provider_obj, "last_usage", None)
+        if isinstance(provider_usage, dict):
+            usage = provider_usage
     append_message(conv_path, "user", text)
     append_message(conv_path, "assistant", reply_text)
 
-    yield json.dumps({"type": "done", "status": "success", "provider": provider_used, "request_id": request_id, "error": None})
+    yield json.dumps({"type": "done", "status": "success", "provider": provider_used, "request_id": request_id, "usage": usage, "error": None})
 
 
 def route(raw: str) -> Dict[str, Any]:

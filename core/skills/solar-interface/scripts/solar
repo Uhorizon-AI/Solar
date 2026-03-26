@@ -18,7 +18,7 @@ Flags:
   -p, --print              Non-interactive: send message, print response, exit
   -c, --continue           Continue the most recent conversation
   -r, --resume <thread>    Resume a specific thread by ID
-  -m, --model <provider>   Force provider: claude | gemini | codex | auto (default: auto)
+  -m, --model <provider>   Force provider: codex | claude | gemini (default: first in SOLAR_ROUTER_PROVIDER_PRIORITY)
   -n, --name <title>       Name this session (used when creating a new thread)
   -v, --version            Show version
   -h, --help               Show help
@@ -127,12 +127,12 @@ send_message() {
   local thread_id="$1"
   local mode="$2"
   local text="$3"
-  local provider="${4:-auto}"
+  local provider="${4:-}"
   local payload
   payload="$(python3 - <<'PY' "$mode" "$text" "$provider"
 import json, sys
 obj = {"mode": sys.argv[1], "text": sys.argv[2]}
-if sys.argv[3] != "auto":
+  if sys.argv[3]:
     obj["provider"] = sys.argv[3]
 print(json.dumps(obj))
 PY
@@ -160,12 +160,12 @@ print()
 print_message() {
   local thread_id="$1"
   local text="$2"
-  local provider="${3:-auto}"
+  local provider="${3:-}"
   local payload
   payload="$(python3 - <<'PY' "$text" "$provider"
 import json, sys
 obj = {"mode": "ask", "text": sys.argv[1]}
-if sys.argv[2] != "auto":
+  if sys.argv[2]:
     obj["provider"] = sys.argv[2]
 print(json.dumps(obj))
 PY
@@ -189,7 +189,7 @@ else:
 
 chat_loop() {
   local initial_text="${1:-}"
-  local provider="${2:-auto}"
+  local provider="${2:-}"
   local name="${3:-}"
   local force_thread="${4:-}"
 
@@ -213,7 +213,7 @@ chat_loop() {
       echo "Thread: $thread_id  (resumed)"
     fi
   fi
-  [[ -n "$provider" && "$provider" != "auto" ]] && echo "Provider: $provider"
+  [[ -n "$provider" ]] && echo "Provider: $provider"
   echo "Type '/' to list agents/skills/commands, '@path' to reference files. 'exit' or Ctrl+C to quit."
   echo ""
 
@@ -229,7 +229,7 @@ chat_loop() {
 FLAG_PRINT=0
 FLAG_CONTINUE=0
 FLAG_RESUME=""
-FLAG_MODEL="auto"
+FLAG_MODEL=""
 FLAG_NAME=""
 POSITIONAL=()
 
