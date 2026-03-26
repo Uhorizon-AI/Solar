@@ -31,7 +31,7 @@ Subcommands:
   approve <id>             Approve a pending run
   reject <id>              Reject a pending run
 
-Inside chat: type your message and press Enter. Use 'exit' or Ctrl+C to quit.
+Inside chat: type your message and press Enter. Use '/exit', '/quit', or Ctrl+C to quit.
 
 Examples:
   solar "Hola"             Start chat with initial message
@@ -214,21 +214,14 @@ chat_loop() {
     fi
   fi
   [[ -n "$provider" && "$provider" != "auto" ]] && echo "Provider: $provider"
-  echo "Type 'exit' or Ctrl+C to quit."
+  echo "Type '/' to list agents/skills/commands, '@path' to reference files. 'exit' or Ctrl+C to quit."
   echo ""
 
-  if [[ -n "$initial_text" ]]; then
-    send_message "$thread_id" "ask" "$initial_text" "$provider"
-  fi
-
-  while true; do
-    printf "> "
-    local text
-    IFS= read -r text </dev/tty || { echo; break; }
-    [[ "$text" == "exit" || "$text" == "quit" ]] && break
-    [[ -z "$text" ]] && continue
-    send_message "$thread_id" "ask" "$text" "$provider"
-  done
+  python3 "$SCRIPT_DIR/interface_repl.py" \
+    "$SOLAR_INTERFACE_BASE_URL" \
+    "$thread_id" \
+    "$provider" \
+    "$initial_text"
 }
 
 # ── Argument parsing ──────────────────────────────────────────────────────────

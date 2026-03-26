@@ -35,6 +35,7 @@ def load_env() -> dict[str, str]:
 ENV = load_env()
 HOST = ENV.get("SOLAR_INTERFACE_HOST", "127.0.0.1")
 PORT = int(ENV.get("SOLAR_INTERFACE_PORT", "7741"))
+CONTEXT_TURNS = int(ENV.get("SOLAR_ROUTER_CONTEXT_TURNS", "12"))
 RUNTIME_DIR = REPO_ROOT / ENV.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/interface")
 DB_DIR = RUNTIME_DIR / "db"
 MIGRATIONS_DIR = DB_DIR / "migrations"
@@ -135,6 +136,65 @@ def write_event(run_id: str, event: dict) -> None:
         fh.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
+def write_user_input(run_id: str, text: str) -> pathlib.Path:
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    input_path = run_dir / "input.md"
+    input_path.write_text(text, encoding="utf-8")
+    return input_path
+
+
+def build_thread_context(thread_id: str, current_text: str, mode: str) -> str:
+    conn = connect_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT run_id, started_at
+            FROM runs
+            WHERE thread_id = ?
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (thread_id, CONTEXT_TURNS),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    turns: list[str] = []
+    for row in reversed(rows):
+        run_dir = RUNS_DIR / row["run_id"]
+        input_file = run_dir / "input.md"
+        output_file = run_dir / "output.md"
+
+        if input_file.exists():
+            user_text = input_file.read_text(encoding="utf-8").strip()
+            if user_text:
+                turns.append(f"User: {user_text}")
+
+        if output_file.exists():
+            assistant_text = output_file.read_text(encoding="utf-8").strip()
+            if assistant_text:
+                turns.append(f"Assistant: {assistant_text}")
+
+    if not turns:
+        if mode == "plan":
+            return f"Return a concise actionable plan for:\n\n{current_text}"
+        return current_text
+
+    instruction = (
+        "Continue this conversation naturally, using the prior turns as context."
+        if mode != "plan"
+        else "Continue this conversation. The user is now asking for a concise actionable plan."
+    )
+
+    return (
+        f"{instruction}\n\n"
+        f"Conversation history:\n{chr(10).join(turns)}\n\n"
+        f"User: {current_text}\n"
+        f"Assistant:"
+    )
+
+
 def create_thread(title: str | None = None, scope_layer: str = "sun", scope_planet: str | None = None) -> dict:
     thread_id = f"thread_{uuid.uuid4().hex[:10]}"
     created_at = now_iso()
@@ -215,10 +275,10 @@ def run_router(thread_id: str, mode: str, text: str, provider: str = "auto") -> 
 
     write_event(run_id, {"type": "run_created", "run_id": run_id, "ts": started_at})
     write_event(run_id, {"type": "status_changed", "run_id": run_id, "status": "running", "ts": started_at})
+    write_event(run_id, {"type": "input_received", "run_id": run_id, "text": text, "ts": started_at})
+    input_path = write_user_input(run_id, text)
 
-    router_text = text
-    if mode == "plan":
-        router_text = f"Return a concise actionable plan for:\n\n{text}"
+    router_text = build_thread_context(thread_id, text, mode)
 
     payload = {
         "request_id": request_id,
@@ -280,6 +340,13 @@ def run_router(thread_id: str, mode: str, text: str, provider: str = "auto") -> 
                 """,
                 (artifact_id, run_id, "response", str((run_dir / "output.md").relative_to(REPO_ROOT)), "Run output", ended_at),
             )
+        conn.execute(
+            """
+            INSERT INTO artifacts(artifact_id, run_id, kind, path, title, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "request", str(input_path.relative_to(REPO_ROOT)), "User input", started_at),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -444,6 +511,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/runs":
             self._send({"runs": list_rows("SELECT * FROM runs ORDER BY started_at DESC LIMIT 50")})
             return
+        if path.startswith("/threads/") and path.endswith("/runs"):
+            parts = path.strip("/").split("/")
+            tid = parts[1]
+            self._send({"runs": list_rows(
+                "SELECT * FROM runs WHERE thread_id = ? ORDER BY started_at ASC", (tid,)
+            )})
+            return
         if path == "/approvals":
             self._send({"approvals": list_rows("SELECT * FROM approvals ORDER BY requested_at DESC LIMIT 50")})
             return
@@ -457,6 +531,127 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send({"error": "Not found"}, 404)
 
+    def _stream_run(self, thread_id: str, data: dict) -> None:
+        """SSE endpoint: streams router JSONL chunks to the client as server-sent events."""
+        run_id = f"run_{__import__('uuid').uuid4().hex[:10]}"
+        request_id = f"req_{__import__('uuid').uuid4().hex[:10]}"
+        started_at = now_iso()
+        provider = data.get("provider", "auto")
+        text = data.get("text", "")
+        mode = data.get("mode", "ask")
+
+        conn = connect_db()
+        try:
+            conn.execute(
+                "INSERT INTO runs(run_id, request_id, thread_id, status, provider_requested, provider_used, router_id, pid, started_at, ended_at, summary, error) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL)",
+                (run_id, request_id, thread_id, "running", provider, started_at),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        write_event(run_id, {"type": "run_created", "run_id": run_id, "ts": started_at})
+        write_event(run_id, {"type": "status_changed", "run_id": run_id, "status": "running", "ts": started_at})
+        write_event(run_id, {"type": "input_received", "run_id": run_id, "text": text, "ts": started_at})
+        input_path = write_user_input(run_id, text)
+
+        router_text = build_thread_context(thread_id, text, mode)
+        payload = {
+            "request_id": request_id,
+            "session_id": thread_id,
+            "user_id": "local-interface",
+            "text": router_text,
+            "channel": "other",
+            "mode": "direct_only",
+            "stream": True,
+        }
+        if provider and provider != "auto":
+            payload["provider"] = provider
+
+        # Send SSE headers
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Run-Id", run_id)
+        self.end_headers()
+
+        proc = subprocess.Popen(
+            ["python3", "core/skills/solar-router/scripts/run_router.py"],
+            cwd=str(REPO_ROOT),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        proc.stdin.write(json.dumps(payload, ensure_ascii=False))  # type: ignore[union-attr]
+        proc.stdin.close()  # type: ignore[union-attr]
+
+        full_text_parts: list[str] = []
+        provider_used: str | None = None
+        status = "failed"
+        error: str | None = None
+
+        try:
+            for raw_line in proc.stdout:  # type: ignore[union-attr]
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    event = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+
+                if event.get("type") == "chunk":
+                    chunk = event.get("text", "")
+                    if chunk:
+                        full_text_parts.append(chunk)
+                        sse = f"data: {json.dumps({'type': 'chunk', 'text': chunk}, ensure_ascii=False)}\n\n"
+                        self.wfile.write(sse.encode("utf-8"))
+                        self.wfile.flush()
+                elif event.get("type") == "done":
+                    status = event.get("status", "failed")
+                    provider_used = event.get("provider")
+                    error = event.get("error")
+
+            proc.wait()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+        reply_text = "".join(full_text_parts)
+        ended_at = now_iso()
+        run_dir = RUNS_DIR / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if reply_text:
+            (run_dir / "output.md").write_text(reply_text, encoding="utf-8")
+
+        conn = connect_db()
+        try:
+            conn.execute(
+                "UPDATE runs SET status = ?, provider_used = ?, ended_at = ?, summary = ?, error = ? WHERE run_id = ?",
+                (status, provider_used, ended_at, reply_text[:200] if reply_text else None, error, run_id),
+            )
+            conn.execute(
+                "INSERT INTO artifacts(artifact_id, run_id, kind, path, title, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "request", str(input_path.relative_to(REPO_ROOT)), "User input", started_at),
+            )
+            if reply_text:
+                conn.execute(
+                    "INSERT INTO artifacts(artifact_id, run_id, kind, path, title, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "response", str((run_dir / "output.md").relative_to(REPO_ROOT)), "Run output", ended_at),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        update_thread_last_run(thread_id, run_id)
+
+        # Send final SSE done event
+        done_evt = json.dumps({"type": "done", "run_id": run_id, "provider": provider_used, "status": status, "error": error}, ensure_ascii=False)
+        try:
+            self.wfile.write(f"data: {done_evt}\n\n".encode("utf-8"))
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         data, read_error = self._read_json()
@@ -468,6 +663,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/threads":
             thread = create_thread(title=data.get("title"), scope_layer=data.get("scope_layer", "sun"), scope_planet=data.get("scope_planet"))
             self._send({"thread": thread}, 201)
+            return
+
+        if path.startswith("/threads/") and path.endswith("/stream"):
+            parts = path.strip("/").split("/")
+            thread_id = parts[1]
+            thread = get_row("SELECT * FROM threads WHERE thread_id = ?", (thread_id,))
+            if not thread:
+                self._send({"error": "Thread not found"}, 404)
+                return
+            self._stream_run(thread_id, data)
             return
 
         if path.startswith("/threads/") and path.endswith("/runs"):
