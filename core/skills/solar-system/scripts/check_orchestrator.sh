@@ -121,29 +121,70 @@ echo ""
 echo "── Process Health"
 proc_severity="HEALTHY"
 
-cf_count=$(pgrep -f "cloudflared tunnel" | wc -l | tr -d ' ')
-if [[ "$cf_count" -gt 1 ]]; then
-  echo "  cloudflared: MULTIPLE ($cf_count running - expects 1)"
-  proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
+count_matching_processes() {
+  local pattern="$1"
+  local output
+  set +e
+  output="$(pgrep -f "$pattern" 2>&1)"
+  local code=$?
+  set -e
+
+  case "$code" in
+    0)
+      printf '%s\n' "$output" | wc -l | tr -d ' '
+      return 0
+      ;;
+    1)
+      echo "0"
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+if cf_count="$(count_matching_processes "cloudflared tunnel")"; then
+  if [[ "$cf_count" -gt 1 ]]; then
+    echo "  cloudflared: MULTIPLE ($cf_count running - expects 1)"
+    proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
+  elif [[ "$cf_count" -eq 1 ]]; then
+    echo "  cloudflared: healthy (1 expected process)"
+  else
+    echo "  cloudflared: healthy (0 detected)"
+  fi
 else
-  echo "  cloudflared: ok ($cf_count)"
+  echo "  cloudflared: UNKNOWN (pgrep failed)"
+  proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
 fi
 
-mcp_count=$(pgrep -f "chrome-devtools-mcp" | wc -l | tr -d ' ')
-if [[ "$mcp_count" -gt 3 ]]; then
-  echo "  chrome-mcp:  MULTIPLE ($mcp_count running - possible leak)"
-  proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
+if mcp_count="$(count_matching_processes "chrome-devtools-mcp")"; then
+  if [[ "$mcp_count" -gt 3 ]]; then
+    echo "  chrome-mcp:  MULTIPLE ($mcp_count running - possible leak)"
+    proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
+  elif [[ "$mcp_count" -gt 0 ]]; then
+    echo "  chrome-mcp:  healthy ($mcp_count active)"
+  else
+    echo "  chrome-mcp:  healthy (0 active)"
+  fi
 else
-  echo "  chrome-mcp:  ok ($mcp_count)"
+  echo "  chrome-mcp:  UNKNOWN (pgrep failed)"
+  proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
 fi
 
 if feature_active "interface"; then
-  interface_proc_count=$(pgrep -f "core/skills/solar-interface/scripts/interface_server.py" | wc -l | tr -d ' ')
-  if [[ "$interface_proc_count" -gt 1 ]]; then
-    echo "  interface:   MULTIPLE ($interface_proc_count daemon candidates running - expects 1)"
-    proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
+  if interface_proc_count="$(count_matching_processes "core/skills/solar-interface/scripts/interface_server.py")"; then
+    if [[ "$interface_proc_count" -gt 1 ]]; then
+      echo "  interface:   MULTIPLE ($interface_proc_count daemon candidates running - expects 1)"
+      proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
+    elif [[ "$interface_proc_count" -eq 1 ]]; then
+      echo "  interface:   healthy (1 expected daemon)"
+    else
+      echo "  interface:   healthy (0 daemon detected)"
+    fi
   else
-    echo "  interface:   ok ($interface_proc_count)"
+    echo "  interface:   UNKNOWN (pgrep failed)"
+    proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
   fi
 fi
 
@@ -362,9 +403,12 @@ if [[ "$verdict" != "HEALTHY" ]]; then
     if echo "${interface_out:-}" | grep -qi "not_setup"; then
       echo "  • interface not set up — initialize runtime:"
       echo "    bash core/skills/solar-interface/scripts/setup_interface.sh"
+    elif echo "${interface_out:-}" | grep -qi "not_ready"; then
+      echo "  • interface daemon is alive but not ready — restart it cleanly:"
+      echo "    bash core/skills/solar-interface/scripts/restart_interface_daemon.sh"
     elif echo "${interface_out:-}" | grep -qi "stale_pid"; then
       echo "  • interface has a stale pid file — restart the local daemon:"
-      echo "    bash core/skills/solar-interface/scripts/start_interface_daemon.sh"
+      echo "    bash core/skills/solar-interface/scripts/restart_interface_daemon.sh"
     elif echo "${interface_out:-}" | grep -qi "start_failed"; then
       echo "  • interface failed during startup — inspect current status and logs:"
       echo "    bash core/skills/solar-interface/scripts/status_interface.sh"

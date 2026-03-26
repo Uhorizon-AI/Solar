@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/interface_lib.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  solar status
+  solar ask "<text>"
+  solar plan "<text>"
+  solar run "<text>"
+  solar runs
+  solar approvals
+  solar approve <approval_id>
+  solar reject <approval_id>
+  solar new [title]
+  solar resume <thread_id>
+EOF
+}
+
+require_daemon() {
+  if bash "$SCRIPT_DIR/ensure_interface.sh" >/dev/null 2>&1; then
+    return 0
+  fi
+  bash "$SCRIPT_DIR/status_interface.sh" >&2 || true
+  echo "" >&2
+  echo "Solar Interface is not reachable. Start or fix the local daemon and retry:" >&2
+  echo "  bash core/skills/solar-interface/scripts/start_interface_daemon.sh" >&2
+  echo "  bash core/skills/solar-interface/scripts/status_interface.sh" >&2
+  exit 1
+}
+
+api_get() {
+  local path="$1"
+  python3 - <<'PY' "$SOLAR_INTERFACE_BASE_URL$path"
+import sys
+import urllib.error
+import urllib.request
+
+url = sys.argv[1]
+try:
+    with urllib.request.urlopen(url) as resp:
+        sys.stdout.write(resp.read().decode("utf-8"))
+except urllib.error.HTTPError as exc:
+    sys.stderr.write(exc.read().decode("utf-8"))
+    sys.exit(22)
+PY
+}
+
+api_post() {
+  local path="$1"
+  local _default_payload='{}'
+  local payload="${2:-$_default_payload}"
+  python3 - <<'PY' "$SOLAR_INTERFACE_BASE_URL$path" "$payload"
+import sys
+import urllib.error
+import urllib.request
+
+url = sys.argv[1]
+payload = sys.argv[2].encode("utf-8")
+req = urllib.request.Request(
+    url,
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req) as resp:
+        sys.stdout.write(resp.read().decode("utf-8"))
+except urllib.error.HTTPError as exc:
+    sys.stderr.write(exc.read().decode("utf-8"))
+    sys.exit(22)
+PY
+}
+
+set_current_thread() {
+  local thread_id="$1"
+  ensure_interface_dirs
+  printf '{"thread_id":"%s","updated_at":"%s"}\n' "$thread_id" "$(date -Iseconds)" >"$SOLAR_INTERFACE_CURRENT_THREAD_FILE"
+}
+
+get_current_thread() {
+  if [[ -f "$SOLAR_INTERFACE_CURRENT_THREAD_FILE" ]]; then
+    python3 - <<'PY' "$SOLAR_INTERFACE_CURRENT_THREAD_FILE"
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+print(data.get("thread_id",""))
+PY
+  fi
+}
+
+create_thread() {
+  local title="${1:-}"
+  local payload
+  payload="$(python3 -c 'import json, sys; print(json.dumps({"title": sys.argv[1]}))' "$title")"
+  api_post "/threads" "$payload"
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  status)
+    bash "$SCRIPT_DIR/status_interface.sh"
+    ;;
+  runs)
+    require_daemon
+    api_get "/runs" | python3 -c 'import json, sys
+for item in json.load(sys.stdin).get("runs", []):
+    print(f"{item.get(\"run_id\")} {item.get(\"status\")} {item.get(\"provider_used\") or \"-\"} {item.get(\"thread_id\") or \"-\"}")'
+    ;;
+  approvals)
+    require_daemon
+    api_get "/approvals" | python3 -c 'import json, sys
+for item in json.load(sys.stdin).get("approvals", []):
+    print(f"{item.get(\"approval_id\")} {item.get(\"status\")} {item.get(\"run_id\")} {item.get(\"reason\")}")'
+    ;;
+  approve)
+    require_daemon
+    [[ -n "${2:-}" ]] || { usage >&2; exit 1; }
+    api_post "/approvals/$2/approve" "{}" | python3 -m json.tool
+    ;;
+  reject)
+    require_daemon
+    [[ -n "${2:-}" ]] || { usage >&2; exit 1; }
+    api_post "/approvals/$2/reject" "{}" | python3 -m json.tool
+    ;;
+  new)
+    require_daemon
+    resp="$(create_thread "${2:-}")"
+    thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
+    set_current_thread "$thread_id"
+    printf '%s\n' "$resp" | python3 -m json.tool
+    ;;
+  resume)
+    [[ -n "${2:-}" ]] || { usage >&2; exit 1; }
+    set_current_thread "$2"
+    echo "Active thread: $2"
+    ;;
+  ask|plan|run)
+    shift
+    text="${*:-}"
+    [[ -n "$text" ]] || { usage >&2; exit 1; }
+    require_daemon
+    thread_id="$(get_current_thread)"
+    if [[ -z "$thread_id" ]]; then
+      resp="$(create_thread "$text")"
+      thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
+      set_current_thread "$thread_id"
+    fi
+    payload="$(python3 - <<'PY' "$cmd" "$text"
+import json, sys
+print(json.dumps({"mode": sys.argv[1], "text": sys.argv[2]}))
+PY
+    )"
+    resp="$(api_post "/threads/$thread_id/runs" "$payload")"
+    printf '%s' "$resp" | python3 -c 'import json, sys
+data = json.load(sys.stdin)
+run = data["run"]
+print("Run: " + run["run_id"])
+print("Thread: " + str(run.get("thread_id")))
+print("Status: " + str(run.get("status")))
+print("")
+print(data.get("reply_text", ""))'
+    ;;
+  ""|-h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
