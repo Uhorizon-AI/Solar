@@ -1,23 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SOLAR_VERSION="0.2.0"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/interface_lib.sh"
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
+Solar Interface $SOLAR_VERSION
+
 Usage:
-  solar status
-  solar ask "<text>"
-  solar plan "<text>"
-  solar run "<text>"
-  solar runs
-  solar approvals
-  solar approve <approval_id>
-  solar reject <approval_id>
-  solar new [title]
-  solar resume <thread_id>
+  solar [flags] [text]     Start or continue a chat (REPL by default)
+
+Flags:
+  -p, --print              Non-interactive: send message, print response, exit
+  -c, --continue           Continue the most recent conversation
+  -r, --resume <thread>    Resume a specific thread by ID
+  -m, --model <provider>   Force provider: claude | gemini | codex | auto (default: auto)
+  -n, --name <title>       Name this session (used when creating a new thread)
+  -v, --version            Show version
+  -h, --help               Show help
+
+Subcommands:
+  new [title]              Start a new thread and enter chat
+  status                   Daemon health and recent runs
+  runs                     List recent runs
+  approvals                List pending approvals
+  approve <id>             Approve a pending run
+  reject <id>              Reject a pending run
+
+Inside chat: type your message and press Enter. Use 'exit' or Ctrl+C to quit.
+
+Examples:
+  solar "Hola"             Start chat with initial message
+  solar                    Enter chat (create or resume last thread)
+  solar -c                 Continue most recent conversation
+  solar -p "Hola"          Print response and exit (for pipes/scripts)
+  solar -m claude "Hola"   Force Claude as provider
+  solar -r thread_abc123   Resume specific thread
 EOF
 }
 
@@ -100,76 +122,220 @@ create_thread() {
   api_post "/threads" "$payload"
 }
 
-cmd="${1:-}"
+# send_message <thread_id> <mode> <text> [provider]
+send_message() {
+  local thread_id="$1"
+  local mode="$2"
+  local text="$3"
+  local provider="${4:-auto}"
+  local payload
+  payload="$(python3 - <<'PY' "$mode" "$text" "$provider"
+import json, sys
+obj = {"mode": sys.argv[1], "text": sys.argv[2]}
+if sys.argv[3] != "auto":
+    obj["provider"] = sys.argv[3]
+print(json.dumps(obj))
+PY
+  )"
+  local resp
+  resp="$(api_post "/threads/$thread_id/runs" "$payload")"
+  printf '%s' "$resp" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+run = data["run"]
+provider = run.get("provider_used") or "unknown"
+reply = data.get("reply_text", "")
+print("[" + provider + "]")
+if reply:
+    print(reply)
+else:
+    status = run.get("status", "")
+    error = run.get("error") or ""
+    print("(no reply — status: " + status + ("  " + error if error else "") + ")")
+print()
+'
+}
+
+# print_message: like send_message but no REPL header, used for -p mode
+print_message() {
+  local thread_id="$1"
+  local text="$2"
+  local provider="${3:-auto}"
+  local payload
+  payload="$(python3 - <<'PY' "$text" "$provider"
+import json, sys
+obj = {"mode": "ask", "text": sys.argv[1]}
+if sys.argv[2] != "auto":
+    obj["provider"] = sys.argv[2]
+print(json.dumps(obj))
+PY
+  )"
+  local resp
+  resp="$(api_post "/threads/$thread_id/runs" "$payload")"
+  printf '%s' "$resp" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+reply = data.get("reply_text", "")
+if reply:
+    sys.stdout.write(reply)
+    if not reply.endswith("\n"):
+        sys.stdout.write("\n")
+else:
+    run = data["run"]
+    sys.stderr.write("Error — status: " + str(run.get("status")) + "\n")
+    sys.exit(1)
+'
+}
+
+chat_loop() {
+  local initial_text="${1:-}"
+  local provider="${2:-auto}"
+  local name="${3:-}"
+  local force_thread="${4:-}"
+
+  require_daemon
+
+  local thread_id
+  if [[ -n "$force_thread" ]]; then
+    thread_id="$force_thread"
+    set_current_thread "$thread_id"
+    echo "Thread: $thread_id  (resumed)"
+  else
+    thread_id="$(get_current_thread)"
+    if [[ -z "$thread_id" ]]; then
+      local title="${name:-${initial_text:-Solar Chat}}"
+      local resp
+      resp="$(create_thread "$title")"
+      thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
+      set_current_thread "$thread_id"
+      echo "Thread: $thread_id  (new)"
+    else
+      echo "Thread: $thread_id  (resumed)"
+    fi
+  fi
+  [[ -n "$provider" && "$provider" != "auto" ]] && echo "Provider: $provider"
+  echo "Type 'exit' or Ctrl+C to quit."
+  echo ""
+
+  if [[ -n "$initial_text" ]]; then
+    send_message "$thread_id" "ask" "$initial_text" "$provider"
+  fi
+
+  while true; do
+    printf "> "
+    local text
+    IFS= read -r text </dev/tty || { echo; break; }
+    [[ "$text" == "exit" || "$text" == "quit" ]] && break
+    [[ -z "$text" ]] && continue
+    send_message "$thread_id" "ask" "$text" "$provider"
+  done
+}
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+
+FLAG_PRINT=0
+FLAG_CONTINUE=0
+FLAG_RESUME=""
+FLAG_MODEL="auto"
+FLAG_NAME=""
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--print)       FLAG_PRINT=1;          shift ;;
+    -c|--continue)    FLAG_CONTINUE=1;       shift ;;
+    -r|--resume)      FLAG_RESUME="${2:-}";  shift 2 ;;
+    -m|--model)       FLAG_MODEL="${2:-}";   shift 2 ;;
+    -n|--name)        FLAG_NAME="${2:-}";    shift 2 ;;
+    -v|--version)     echo "solar $SOLAR_VERSION"; exit 0 ;;
+    -h|--help)        usage; exit 0 ;;
+    --) shift; POSITIONAL+=("$@"); break ;;
+    -*) echo "Unknown flag: $1" >&2; usage >&2; exit 1 ;;
+    *)  POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+# ── Subcommand dispatch ───────────────────────────────────────────────────────
+
+cmd="${POSITIONAL[0]:-}"
+
 case "$cmd" in
   status)
     bash "$SCRIPT_DIR/status_interface.sh"
     ;;
   runs)
     require_daemon
-    api_get "/runs" | python3 -c 'import json, sys
+    api_get "/runs" | python3 -c '
+import json, sys
 for item in json.load(sys.stdin).get("runs", []):
-    print(f"{item.get(\"run_id\")} {item.get(\"status\")} {item.get(\"provider_used\") or \"-\"} {item.get(\"thread_id\") or \"-\"}")'
+    print(str(item.get("run_id")) + "  " + str(item.get("status")) + "  " + str(item.get("provider_used") or "-") + "  " + str(item.get("thread_id") or "-"))
+'
     ;;
   approvals)
     require_daemon
-    api_get "/approvals" | python3 -c 'import json, sys
+    api_get "/approvals" | python3 -c '
+import json, sys
 for item in json.load(sys.stdin).get("approvals", []):
-    print(f"{item.get(\"approval_id\")} {item.get(\"status\")} {item.get(\"run_id\")} {item.get(\"reason\")}")'
+    print(str(item.get("approval_id")) + "  " + str(item.get("status")) + "  " + str(item.get("run_id")) + "  " + str(item.get("reason")))
+'
     ;;
   approve)
     require_daemon
-    [[ -n "${2:-}" ]] || { usage >&2; exit 1; }
-    api_post "/approvals/$2/approve" "{}" | python3 -m json.tool
+    [[ -n "${POSITIONAL[1]:-}" ]] || { usage >&2; exit 1; }
+    api_post "/approvals/${POSITIONAL[1]}/approve" '{}' | python3 -m json.tool
     ;;
   reject)
     require_daemon
-    [[ -n "${2:-}" ]] || { usage >&2; exit 1; }
-    api_post "/approvals/$2/reject" "{}" | python3 -m json.tool
+    [[ -n "${POSITIONAL[1]:-}" ]] || { usage >&2; exit 1; }
+    api_post "/approvals/${POSITIONAL[1]}/reject" '{}' | python3 -m json.tool
     ;;
   new)
     require_daemon
-    resp="$(create_thread "${2:-}")"
+    local_title="${POSITIONAL[1]:-${FLAG_NAME:-}}"
+    resp="$(create_thread "$local_title")"
     thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
     set_current_thread "$thread_id"
-    printf '%s\n' "$resp" | python3 -m json.tool
-    ;;
-  resume)
-    [[ -n "${2:-}" ]] || { usage >&2; exit 1; }
-    set_current_thread "$2"
-    echo "Active thread: $2"
-    ;;
-  ask|plan|run)
-    shift
-    text="${*:-}"
-    [[ -n "$text" ]] || { usage >&2; exit 1; }
-    require_daemon
-    thread_id="$(get_current_thread)"
-    if [[ -z "$thread_id" ]]; then
-      resp="$(create_thread "$text")"
-      thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
-      set_current_thread "$thread_id"
-    fi
-    payload="$(python3 - <<'PY' "$cmd" "$text"
-import json, sys
-print(json.dumps({"mode": sys.argv[1], "text": sys.argv[2]}))
-PY
-    )"
-    resp="$(api_post "/threads/$thread_id/runs" "$payload")"
-    printf '%s' "$resp" | python3 -c 'import json, sys
-data = json.load(sys.stdin)
-run = data["run"]
-print("Run: " + run["run_id"])
-print("Thread: " + str(run.get("thread_id")))
-print("Status: " + str(run.get("status")))
-print("")
-print(data.get("reply_text", ""))'
-    ;;
-  ""|-h|--help|help)
-    usage
+    chat_loop "" "$FLAG_MODEL" "$local_title" "$thread_id"
     ;;
   *)
-    usage >&2
-    exit 1
+    # Remaining positional args are the initial message text
+    text="${POSITIONAL[*]:-}"
+
+    # -p / --print: non-interactive, print and exit
+    if [[ $FLAG_PRINT -eq 1 ]]; then
+      [[ -n "$text" ]] || { echo "solar -p requires a message" >&2; exit 1; }
+      require_daemon
+      thread_id="$(get_current_thread)"
+      if [[ -z "$thread_id" ]]; then
+        resp="$(create_thread "$text")"
+        thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
+        set_current_thread "$thread_id"
+      fi
+      print_message "$thread_id" "$text" "$FLAG_MODEL"
+
+    # -r / --resume: resume specific thread then enter chat
+    elif [[ -n "$FLAG_RESUME" ]]; then
+      chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" "$FLAG_RESUME"
+
+    # -c / --continue: resume most recent thread (ignore current_thread file — pick from server)
+    elif [[ $FLAG_CONTINUE -eq 1 ]]; then
+      require_daemon
+      latest="$(api_get "/threads" | python3 -c '
+import json, sys
+threads = json.load(sys.stdin).get("threads", [])
+if threads:
+    print(threads[0]["thread_id"])
+')"
+      if [[ -z "$latest" ]]; then
+        echo "No existing threads. Starting a new one." >&2
+        chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" ""
+      else
+        chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" "$latest"
+      fi
+
+    # default: REPL chat
+    else
+      chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" ""
+    fi
     ;;
 esac
