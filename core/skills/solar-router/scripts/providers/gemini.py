@@ -11,7 +11,7 @@ from .base import BaseProvider, REPO_ROOT
 
 class GeminiProvider(BaseProvider):
     name = "gemini"
-    default_cmd = "gemini -y -p"
+    default_cmd = "gemini -y"
 
     def prepare_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         env = base_env.copy()
@@ -37,10 +37,17 @@ class GeminiProvider(BaseProvider):
         old_key = "SOLAR_AI_GEMINI_CMD"
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.default_cmd).strip()
         if "--output-format" not in raw:
-            raw += " --output-format stream-json --verbose"
+            raw += " --output-format stream-json"
         parts = shlex.split(raw)
+        
+        # Limpiar cualquier "-p" o "--prompt" suelto que carezca de parámetro asociado
+        while "-p" in parts:
+            parts.remove("-p")
+        while "--prompt" in parts:
+            parts.remove("--prompt")
+            
         parts[0] = self.resolve_binary(parts[0])
-        cmd = parts + [prompt]
+        cmd = parts + ["-p", prompt]
 
         env = self.prepare_env(os.environ.copy())
         timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
@@ -64,6 +71,8 @@ class GeminiProvider(BaseProvider):
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
+                    # Validar si saltó el prompt the OAuth silenciosamente
+                    self.clean_output(line)
                     continue
 
                 event_type = event.get("type")
@@ -78,13 +87,19 @@ class GeminiProvider(BaseProvider):
                     if result:
                         full_text.append(result)
                         yield result
+                elif not full_text and event_type not in {"message", "result", "progress"}:
+                    text = event.get("text") or event.get("content") or ""
+                    if text and isinstance(text, str):
+                        full_text.append(text)
+                        yield text
 
             proc.wait(timeout=timeout_sec)
             if proc.returncode != 0:
                 stderr = proc.stderr.read().strip()  # type: ignore[union-attr]
                 raise RuntimeError(stderr or "provider returned non-zero")
             if not full_text:
-                raise RuntimeError("provider returned empty output")
+                stderr_hint = proc.stderr.read().strip()  # type: ignore[union-attr]
+                raise RuntimeError(stderr_hint or "provider returned empty output")
         except subprocess.TimeoutExpired:
             proc.kill()
             raise RuntimeError("provider timed out")
