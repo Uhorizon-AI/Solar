@@ -23,10 +23,11 @@ planets/
 # Local AI client runtime/config
 .claude/
 .codex/
-.cursor/
 .gemini/
-# Antigravity
-.agents/
+# IDEs
+.vscode/
+.cursor/
+.agents/ # Antigravity
 
 # Temporary files
 brain.ai

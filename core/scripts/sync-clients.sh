@@ -403,4 +403,45 @@ $SYNC_CLAUDE && sync_claude
 $SYNC_CURSOR && sync_cursor
 $SYNC_GEMINI && sync_gemini
 
+sync_vscode() {
+  log_section "🔄 VS Code / Cursor Workspace Settings (.vscode)"
+  local vscode_dir="$ROOT_DIR/.vscode"
+  local vscode_settings="$vscode_dir/settings.json"
+  
+  python3 -c "
+import json
+import os
+import glob
+import sys
+
+vscode_settings = sys.argv[1]
+planets_dir = sys.argv[2]
+planets = sorted([f'planets/{os.path.basename(p)}' for p in glob.glob(os.path.join(planets_dir, '*')) if os.path.isdir(p)])
+
+if os.path.exists(vscode_settings):
+    try:
+        with open(vscode_settings, 'r') as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+else:
+    data = {}
+
+data['git.scanRepositories'] = planets
+if 'git.repositoryScanIgnoredFolders' not in data:
+    data['git.repositoryScanIgnoredFolders'] = []
+if 'planets' not in data['git.repositoryScanIgnoredFolders']:
+    data['git.repositoryScanIgnoredFolders'].append('planets')
+
+os.makedirs(os.path.dirname(vscode_settings), exist_ok=True)
+with open(vscode_settings, 'w') as f:
+    json.dump(data, f, indent=2)
+" "$vscode_settings" "$PLANETS_DIR"
+
+  log_ok "Updated .vscode/settings.json with $(ls -1d "$PLANETS_DIR"/*/ 2>/dev/null | wc -l | tr -d ' ') planet repositories"
+  echo
+}
+
+sync_vscode
+
 echo -e "${GREEN}✅ Sync complete.${NC}"
