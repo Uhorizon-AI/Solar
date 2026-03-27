@@ -105,6 +105,18 @@ log_conflict() {
   echo -e "${RED}⚠ CONFLICT:${NC} $1"
 }
 
+log_tree_mid() {
+  local label="$1"
+  local message="$2"
+  echo -e " ├─ ${BLUE}${label}${NC}: ${message}"
+}
+
+log_tree_end() {
+  local label="$1"
+  local message="$2"
+  echo -e " └─ ${BLUE}${label}${NC}: ${message}"
+}
+
 ensure_dir() {
   mkdir -p "$1"
 }
@@ -265,6 +277,7 @@ sync_resources_as_symlink() {
   local index_file="$1"
   local target_dir="$2"
   local label="$3"
+  local branch="${4:-mid}"
 
   ensure_dir "$target_dir"
 
@@ -282,7 +295,11 @@ sync_resources_as_symlink() {
     ln -s "$source" "$target_dir/$name"
     count=$((count + 1))
   done < "$index_file"
-  echo -e "  ↳ ${BLUE}${label}${NC}: ${GREEN}✓${NC} $count (link)"
+  if [ "$branch" = "end" ]; then
+    log_tree_end "$label" "${GREEN}✓${NC} $count (link)"
+  else
+    log_tree_mid "$label" "${GREEN}✓${NC} $count (link)"
+  fi
 }
 
 sync_resources_as_copy() {
@@ -290,6 +307,7 @@ sync_resources_as_copy() {
   local target_dir="$2"
   local is_dir="${3:-false}"
   local label="$4"
+  local branch="${5:-mid}"
 
   ensure_dir "$target_dir"
 
@@ -305,28 +323,32 @@ sync_resources_as_copy() {
     fi
     count=$((count + 1))
   done < "$index_file"
-  echo -e "  ↳ ${BLUE}${label}${NC}: ${GREEN}✓${NC} $count (copy)"
+  if [ "$branch" = "end" ]; then
+    log_tree_end "$label" "${GREEN}✓${NC} $count (copy)"
+  else
+    log_tree_mid "$label" "${GREEN}✓${NC} $count (copy)"
+  fi
 }
 
 sync_codex() {
   log_section "🔄 Codex (.codex)"
-  sync_resources_as_symlink "$SKILLS_INDEX" "$CODEX_SKILLS" "📦 Skills"
+  sync_resources_as_symlink "$SKILLS_INDEX" "$CODEX_SKILLS" "📦 Skills" "end"
   echo
 }
 
 sync_claude() {
   log_section "🔄 Claude (.claude)"
-  sync_resources_as_symlink "$SKILLS_INDEX" "$CLAUDE_SKILLS" "📦 Skills"
-  sync_resources_as_symlink "$AGENTS_INDEX" "$CLAUDE_AGENTS" "🤖 Agents"
-  sync_resources_as_symlink "$COMMANDS_INDEX" "$CLAUDE_COMMANDS" "🧩 Commands"
+  sync_resources_as_symlink "$SKILLS_INDEX" "$CLAUDE_SKILLS" "📦 Skills" "mid"
+  sync_resources_as_symlink "$AGENTS_INDEX" "$CLAUDE_AGENTS" "🤖 Agents" "mid"
+  sync_resources_as_symlink "$COMMANDS_INDEX" "$CLAUDE_COMMANDS" "🧩 Commands" "end"
   echo
 }
 
 sync_cursor() {
   log_section "🔄 Cursor (.cursor)"
-  sync_resources_as_copy "$SKILLS_INDEX" "$CURSOR_SKILLS" true "📦 Skills"
-  sync_resources_as_copy "$AGENTS_INDEX" "$CURSOR_AGENTS" false "🤖 Agents"
-  sync_resources_as_copy "$COMMANDS_INDEX" "$CURSOR_COMMANDS" false "🧩 Commands"
+  sync_resources_as_copy "$SKILLS_INDEX" "$CURSOR_SKILLS" true "📦 Skills" "mid"
+  sync_resources_as_copy "$AGENTS_INDEX" "$CURSOR_AGENTS" false "🤖 Agents" "mid"
+  sync_resources_as_copy "$COMMANDS_INDEX" "$CURSOR_COMMANDS" false "🧩 Commands" "end"
   echo
 }
 
@@ -337,6 +359,7 @@ sync_gemini_commands() {
   local index_file="$1"
   local target_dir="$2"
   local label="$3"
+  local branch="${4:-mid}"
 
   ensure_dir "$target_dir"
 
@@ -368,7 +391,11 @@ $prompt
 EOF
     count=$((count + 1))
   done < "$index_file"
-  echo -e "  ↳ ${BLUE}${label}${NC}: ${GREEN}✓${NC} $count (toml)"
+  if [ "$branch" = "end" ]; then
+    log_tree_end "$label" "${GREEN}✓${NC} $count (toml)"
+  else
+    log_tree_mid "$label" "${GREEN}✓${NC} $count (toml)"
+  fi
 }
 
 sync_gemini() {
@@ -376,7 +403,7 @@ sync_gemini() {
   ensure_dir "$GEMINI_DIR"
 
   if [ ! -f "$GEMINI_SETTINGS" ]; then
-    echo -e "  ↳ ${BLUE}⚙️  Settings${NC}: ${GREEN}✓${NC} Created settings.json"
+    log_tree_mid "⚙️  Settings" "${GREEN}✓${NC} Created settings.json"
     cat > "$GEMINI_SETTINGS" <<EOF
 {
   "general": {
@@ -390,11 +417,11 @@ sync_gemini() {
 }
 EOF
   else
-    echo -e "  ↳ ${BLUE}⚙️  Settings${NC}: ${YELLOW}⚠${NC} $GEMINI_SETTINGS already exists."
+    log_tree_mid "⚙️  Settings" "${YELLOW}⚠${NC} $GEMINI_SETTINGS already exists."
   fi
 
-  sync_resources_as_symlink "$SKILLS_INDEX" "$GEMINI_SKILLS" "📦 Skills"
-  sync_gemini_commands "$COMMANDS_INDEX" "$GEMINI_COMMANDS" "🧩 Commands"
+  sync_resources_as_symlink "$SKILLS_INDEX" "$GEMINI_SKILLS" "📦 Skills" "mid"
+  sync_gemini_commands "$COMMANDS_INDEX" "$GEMINI_COMMANDS" "🧩 Commands" "end"
   echo
 }
 
@@ -446,7 +473,10 @@ with open(vscode_settings, 'w') as f:
     json.dump(data, f, indent=2)
 " "$vscode_settings" "$PLANETS_DIR"
 
-  echo -e "  ↳ ${BLUE}⚙️  Setup${NC}: ${GREEN}✓${NC} Updated settings.json with $(ls -1d "$PLANETS_DIR"/*/ 2>/dev/null | wc -l | tr -d ' ') planet repositories"
+  local planet_count
+  planet_count="$(ls -1d "$PLANETS_DIR"/*/ 2>/dev/null | wc -l | tr -d ' ')"
+  log_tree_mid "⚙️  Settings" "${GREEN}✓${NC} Updated $vscode_settings"
+  log_tree_end "📁 Git scan" "${GREEN}✓${NC} Registered $planet_count planet repositories"
   echo
 }
 
