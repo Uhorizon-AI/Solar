@@ -14,7 +14,7 @@
 # - planets/* resources: always prefixed <planet-name>:<resource-name> (e.g. uhorizon:linkedin-prospecting)
 #
 # Usage:
-#   bash core/scripts/sync-clients.sh [--codex-only|--claude-only|--cursor-only]
+#   bash core/scripts/sync-clients.sh [--codex-only|--claude-only|--cursor-only|--gemini-only|--vscode-only]
 
 set -euo pipefail
 
@@ -53,6 +53,7 @@ SYNC_CODEX=false
 SYNC_CLAUDE=false
 SYNC_CURSOR=false
 SYNC_GEMINI=false
+SYNC_VSCODE=false
 
 # Temp directory for tracking
 TEMP_DIR="$(mktemp -d)"
@@ -68,8 +69,9 @@ for arg in "$@"; do
     --claude-only) SYNC_CLAUDE=true ;;
     --cursor-only) SYNC_CURSOR=true ;;
     --gemini-only) SYNC_GEMINI=true ;;
+    --vscode-only) SYNC_VSCODE=true ;;
     -h|--help)
-      echo "Usage: $0 [--codex-only|--claude-only|--cursor-only|--gemini-only]"
+      echo "Usage: $0 [--codex-only|--claude-only|--cursor-only|--gemini-only|--vscode-only]"
       exit 0
       ;;
     *)
@@ -79,11 +81,12 @@ for arg in "$@"; do
   esac
 done
 
-if ! $SYNC_CODEX && ! $SYNC_CLAUDE && ! $SYNC_CURSOR && ! $SYNC_GEMINI; then
+if ! $SYNC_CODEX && ! $SYNC_CLAUDE && ! $SYNC_CURSOR && ! $SYNC_GEMINI && ! $SYNC_VSCODE; then
   SYNC_CODEX=true
   SYNC_CLAUDE=true
   SYNC_CURSOR=true
   SYNC_GEMINI=true
+  SYNC_VSCODE=true
 fi
 
 log_section() {
@@ -395,14 +398,6 @@ EOF
   echo
 }
 
-# Main execution
-discover_resources
-
-$SYNC_CODEX && sync_codex
-$SYNC_CLAUDE && sync_claude
-$SYNC_CURSOR && sync_cursor
-$SYNC_GEMINI && sync_gemini
-
 sync_vscode() {
   log_section "🔄 VS Code / Cursor Workspace Settings (.vscode)"
   local vscode_dir="$ROOT_DIR/.vscode"
@@ -416,7 +411,7 @@ import sys
 
 vscode_settings = sys.argv[1]
 planets_dir = sys.argv[2]
-planets = sorted([f'planets/{os.path.basename(p)}' for p in glob.glob(os.path.join(planets_dir, '*')) if os.path.isdir(p)])
+planet_repos = sorted([f'planets/{os.path.basename(p)}' for p in glob.glob(os.path.join(planets_dir, '*')) if os.path.isdir(p)])
 
 if os.path.exists(vscode_settings):
     try:
@@ -427,7 +422,20 @@ if os.path.exists(vscode_settings):
 else:
     data = {}
 
-data['git.scanRepositories'] = planets
+existing_scan_repos = data.get('git.scanRepositories', [])
+if not isinstance(existing_scan_repos, list):
+    existing_scan_repos = []
+
+merged_scan_repos = []
+seen = set()
+for repo in existing_scan_repos + planet_repos:
+    if not isinstance(repo, str):
+        continue
+    if repo not in seen:
+        merged_scan_repos.append(repo)
+        seen.add(repo)
+
+data['git.scanRepositories'] = merged_scan_repos
 if 'git.repositoryScanIgnoredFolders' not in data:
     data['git.repositoryScanIgnoredFolders'] = []
 if 'planets' not in data['git.repositoryScanIgnoredFolders']:
@@ -442,6 +450,13 @@ with open(vscode_settings, 'w') as f:
   echo
 }
 
-sync_vscode
+# Main execution
+discover_resources
+
+$SYNC_CODEX && sync_codex
+$SYNC_CLAUDE && sync_claude
+$SYNC_CURSOR && sync_cursor
+$SYNC_GEMINI && sync_gemini
+$SYNC_VSCODE && sync_vscode
 
 echo -e "${GREEN}✅ Sync complete.${NC}"
