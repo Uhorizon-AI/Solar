@@ -171,7 +171,6 @@ discover_planet_skills() {
       continue
     fi
     add_to_index "$SKILLS_INDEX" "$prefixed_name" "$skill_dir"
-    log_ok "$prefixed_name"
   done < <(find "$planet_dir" -path "*/skills/*/SKILL.md" -type f 2>/dev/null | LC_ALL=C sort)
 }
 
@@ -187,7 +186,6 @@ discover_resources() {
       local name
       name="$(basename "$item")"
       add_to_index "$SKILLS_INDEX" "$name" "$item"
-      log_ok "core/skills/$name"
     done
   fi
 
@@ -199,7 +197,6 @@ discover_resources() {
       local name
       name="$(basename "$file")"
       add_to_index "$AGENTS_INDEX" "$name" "$file"
-      log_ok "core/agents/$name"
     done
     shopt -u nullglob
   fi
@@ -212,7 +209,6 @@ discover_resources() {
       local name
       name="$(basename "$file")"
       add_to_index "$COMMANDS_INDEX" "$name" "$file"
-      log_ok "core/commands/$name"
     done
     shopt -u nullglob
   fi
@@ -236,7 +232,6 @@ discover_resources() {
           name="$(basename "$file")"
           local prefixed_name="$planet_name:$name"
           add_to_index "$AGENTS_INDEX" "$prefixed_name" "$file"
-          log_ok "$prefixed_name"
         done
         shopt -u nullglob
       fi
@@ -250,19 +245,26 @@ discover_resources() {
           name="$(basename "$file")"
           local prefixed_name="$planet_name:$name"
           add_to_index "$COMMANDS_INDEX" "$prefixed_name" "$file"
-          log_ok "$prefixed_name"
         done
         shopt -u nullglob
       fi
     done
   fi
 
+  local sc=0
+  local ac=0
+  local cc=0
+  [ -f "$SKILLS_INDEX" ] && sc=$(wc -l < "$SKILLS_INDEX" | tr -d ' ')
+  [ -f "$AGENTS_INDEX" ] && ac=$(wc -l < "$AGENTS_INDEX" | tr -d ' ')
+  [ -f "$COMMANDS_INDEX" ] && cc=$(wc -l < "$COMMANDS_INDEX" | tr -d ' ')
+  log_ok "Found $sc skills, $ac agents, $cc commands"
   echo
 }
 
 sync_resources_as_symlink() {
   local index_file="$1"
   local target_dir="$2"
+  local label="$3"
 
   ensure_dir "$target_dir"
 
@@ -272,62 +274,59 @@ sync_resources_as_symlink() {
 
   [ -f "$index_file" ] || return 0
 
+  local count=0
   while IFS='|' read -r name source; do
     # Robustness: Remove the destination path if it exists, regardless of type.
     # This prevents 'ln' from failing if a directory exists where a symlink should be.
     rm -rf "$target_dir/$name"
     ln -s "$source" "$target_dir/$name"
-    log_ok "$name"
+    count=$((count + 1))
   done < "$index_file"
+  echo -e "  ↳ ${BLUE}${label}${NC}: ${GREEN}✓${NC} $count (link)"
 }
 
 sync_resources_as_copy() {
   local index_file="$1"
   local target_dir="$2"
   local is_dir="${3:-false}"
+  local label="$4"
 
   ensure_dir "$target_dir"
 
   [ -f "$index_file" ] || return 0
 
+  local count=0
   while IFS='|' read -r name source; do
     if [ "$is_dir" = "true" ]; then
       rm -rf "$target_dir/$name"
       cp -R "$source" "$target_dir/$name"
-      log_ok "$name (copy)"
     else
       cp "$source" "$target_dir/$name"
-      log_ok "$name (copy)"
     fi
+    count=$((count + 1))
   done < "$index_file"
+  echo -e "  ↳ ${BLUE}${label}${NC}: ${GREEN}✓${NC} $count (copy)"
 }
 
 sync_codex() {
   log_section "🔄 Codex (.codex)"
-  log_section "📦 Skills"
-  sync_resources_as_symlink "$SKILLS_INDEX" "$CODEX_SKILLS"
+  sync_resources_as_symlink "$SKILLS_INDEX" "$CODEX_SKILLS" "📦 Skills"
   echo
 }
 
 sync_claude() {
   log_section "🔄 Claude (.claude)"
-  log_section "📦 Skills"
-  sync_resources_as_symlink "$SKILLS_INDEX" "$CLAUDE_SKILLS"
-  log_section "🤖 Agents"
-  sync_resources_as_symlink "$AGENTS_INDEX" "$CLAUDE_AGENTS"
-  log_section "🧩 Commands"
-  sync_resources_as_symlink "$COMMANDS_INDEX" "$CLAUDE_COMMANDS"
+  sync_resources_as_symlink "$SKILLS_INDEX" "$CLAUDE_SKILLS" "📦 Skills"
+  sync_resources_as_symlink "$AGENTS_INDEX" "$CLAUDE_AGENTS" "🤖 Agents"
+  sync_resources_as_symlink "$COMMANDS_INDEX" "$CLAUDE_COMMANDS" "🧩 Commands"
   echo
 }
 
 sync_cursor() {
   log_section "🔄 Cursor (.cursor)"
-  log_section "📦 Skills"
-  sync_resources_as_copy "$SKILLS_INDEX" "$CURSOR_SKILLS" true
-  log_section "🤖 Agents"
-  sync_resources_as_copy "$AGENTS_INDEX" "$CURSOR_AGENTS" false
-  log_section "🧩 Commands"
-  sync_resources_as_copy "$COMMANDS_INDEX" "$CURSOR_COMMANDS" false
+  sync_resources_as_copy "$SKILLS_INDEX" "$CURSOR_SKILLS" true "📦 Skills"
+  sync_resources_as_copy "$AGENTS_INDEX" "$CURSOR_AGENTS" false "🤖 Agents"
+  sync_resources_as_copy "$COMMANDS_INDEX" "$CURSOR_COMMANDS" false "🧩 Commands"
   echo
 }
 
@@ -337,6 +336,7 @@ sync_cursor() {
 sync_gemini_commands() {
   local index_file="$1"
   local target_dir="$2"
+  local label="$3"
 
   ensure_dir "$target_dir"
 
@@ -347,6 +347,7 @@ sync_gemini_commands() {
 
   [ -f "$index_file" ] || return 0
 
+  local count=0
   while IFS='|' read -r name source; do
     # Convert name like 'cmd.md' to 'cmd.toml' or 'planet:cmd.md' to 'planet:cmd.toml'
     local toml_name=$(echo "$name" | sed 's/\.md$/.toml/')
@@ -365,8 +366,9 @@ prompt = """
 $prompt
 """
 EOF
-    log_ok "$toml_name (generated from .md)"
+    count=$((count + 1))
   done < "$index_file"
+  echo -e "  ↳ ${BLUE}${label}${NC}: ${GREEN}✓${NC} $count (toml)"
 }
 
 sync_gemini() {
@@ -374,7 +376,7 @@ sync_gemini() {
   ensure_dir "$GEMINI_DIR"
 
   if [ ! -f "$GEMINI_SETTINGS" ]; then
-    log_ok "Creating $GEMINI_SETTINGS with Solar defaults"
+    echo -e "  ↳ ${BLUE}⚙️  Settings${NC}: ${GREEN}✓${NC} Created settings.json"
     cat > "$GEMINI_SETTINGS" <<EOF
 {
   "general": {
@@ -388,13 +390,11 @@ sync_gemini() {
 }
 EOF
   else
-    log_warn "$GEMINI_SETTINGS already exists. (Manual update required if settings are missing)"
+    echo -e "  ↳ ${BLUE}⚙️  Settings${NC}: ${YELLOW}⚠${NC} $GEMINI_SETTINGS already exists."
   fi
 
-  log_section "📦 Skills"
-  sync_resources_as_symlink "$SKILLS_INDEX" "$GEMINI_SKILLS"
-  log_section "🧩 Commands"
-  sync_gemini_commands "$COMMANDS_INDEX" "$GEMINI_COMMANDS"
+  sync_resources_as_symlink "$SKILLS_INDEX" "$GEMINI_SKILLS" "📦 Skills"
+  sync_gemini_commands "$COMMANDS_INDEX" "$GEMINI_COMMANDS" "🧩 Commands"
   echo
 }
 
@@ -446,17 +446,18 @@ with open(vscode_settings, 'w') as f:
     json.dump(data, f, indent=2)
 " "$vscode_settings" "$PLANETS_DIR"
 
-  log_ok "Updated .vscode/settings.json with $(ls -1d "$PLANETS_DIR"/*/ 2>/dev/null | wc -l | tr -d ' ') planet repositories"
+  echo -e "  ↳ ${BLUE}⚙️  Setup${NC}: ${GREEN}✓${NC} Updated settings.json with $(ls -1d "$PLANETS_DIR"/*/ 2>/dev/null | wc -l | tr -d ' ') planet repositories"
   echo
 }
 
 # Main execution
 discover_resources
 
-$SYNC_CODEX && sync_codex
 $SYNC_CLAUDE && sync_claude
-$SYNC_CURSOR && sync_cursor
+$SYNC_CODEX && sync_codex
 $SYNC_GEMINI && sync_gemini
+
 $SYNC_VSCODE && sync_vscode
+$SYNC_CURSOR && sync_cursor
 
 echo -e "${GREEN}✅ Sync complete.${NC}"

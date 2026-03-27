@@ -6,14 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
-### Changed
-- refactor(solar-router): split monolithic `run_router.py` into three layers — `router.py` (provider-agnostic core: parse, validate, JIT, prompt, decision engine), `scripts/providers/` (four adapters: claude, codex, gemini, agent via `BaseProvider`), and `run_router.py` (thin entrypoint: stdin → `route()` → stdout + exit). Public contract v3 unchanged.
-- refactor(solar-code): restrict scope to planet-operated repos only — `core/skills/` changes are governed by `solar-skill-creator`, not `solar-code`. Updated `SKILL.md`, `references/repo-policy.md`, and `core/AGENTS.md` (new Skill governance rule). Removes all references to `core/` as a valid solar-code target.
-- feat(solar-system): extend orchestrator and health checks with `interface` feature support — `run_orchestrator.sh`, `check_orchestrator.sh`, `SKILL.md`, and `system-integration.md` now treat the local interface as a first-class managed runtime alongside existing features.
-- feat(sync-clients): update `.vscode/settings.json` during sync to register planet repos in `git.scanRepositories` and ignore the `planets` root scan folder. Improves multi-repo discovery in VS Code/Cursor workspaces.
-- chore(.gitignore): group editor ignores under IDE section and add `.vscode/` to keep workspace settings out of framework version control.
+## [0.5.0] - 2026-03-27
 
 ### Added
+- feat(sync-clients): add `sync_vscode` function to automatically discover and register all planet repositories in `.vscode/settings.json` (`git.scanRepositories`).
+- feat(sync-clients): add `--vscode-only` flag to allow targeted workspace configuration updates.
+- feat(sync-clients): implement a modern, minimalist tree-view output (`↳`) that summarizes resource counts instead of listing every file.
+- feat(config): update `.gemini/settings.json` to explicitly include all planet directories, ensuring full context visibility despite `respectGitIgnore` being enabled.
 - feat(solar-router): add `scripts/providers/` package — `BaseProvider` with `resolve_binary`, `get_cmd`, `prepare_env`, `clean_output`, `run`. Adapters: `ClaudeProvider` (static cmd), `CodexProvider` (REPO_ROOT-anchored cmd), `GeminiProvider` (ANSI strip + OAuth guard), `AgentProvider` (workspace-anchored cmd). All `SOLAR_ROUTER_{PROVIDER}_CMD` overrides resolved in `BaseProvider.get_cmd`.
 - feat(solar-router): add unit test suite in `tests/` — `test_providers.py` (20 tests, subprocess mocked), `test_router.py` (37 tests, all logic paths without real AI), `test_run_router.py` (21 contract tests). 78 tests total, no real AI binaries needed.
 - feat(solar-router): expand `check_router.sh` smoke tests from 10 to 14 — adds `provider_locked_failed` (mock binary), `all_providers_failed` (mock binary, priority exhaustion), `async_only` success path, and audit early-exit bug guard (Test 14). Test 4 rewritten with mock provider to eliminate real AI dependency and prevent hangs.
@@ -24,7 +23,15 @@ The format is based on Keep a Changelog.
 - feat(solar-router): add streaming support across router/provider layer — `route_stream()` and provider adapters now expose streamed execution paths for Claude, Codex, and Gemini while preserving the structured router contract.
 - test(solar-router): add unit coverage for `resolve_jit_context` and provider streaming paths in `test_router.py` and `test_providers.py`.
 
+### Changed
+- refactor(solar-router): split monolithic `run_router.py` into three layers — `router.py` (provider-agnostic core: parse, validate, JIT, prompt, decision engine), `scripts/providers/` (four adapters: claude, codex, gemini, agent via `BaseProvider`), and `run_router.py` (thin entrypoint: stdin → `route()` → stdout + exit). Public contract v3 unchanged.
+- refactor(solar-code): restrict scope to planet-operated repos only — `core/skills/` changes are governed by `solar-skill-creator`, not `solar-code`. Updated `SKILL.md`, `references/repo-policy.md`, and `core/AGENTS.md` (new Skill governance rule). Removes all references to `core/` as a valid solar-code target.
+- feat(solar-system): extend orchestrator and health checks with `interface` feature support — `run_orchestrator.sh`, `check_orchestrator.sh`, `SKILL.md`, and `system-integration.md` now treat the local interface as a first-class managed runtime alongside existing features.
+- feat(sync-clients): update `.vscode/settings.json` during sync to register planet repos in `git.scanRepositories` and ignore the `planets` root scan folder. Improves multi-repo discovery in VS Code/Cursor workspaces.
+- chore(.gitignore): group editor ignores under IDE section and move `.vscode/` and `.agents/` to keep workspace settings out of framework version control.
+
 ### Fixed
+- fix(sync-clients): add spacing to emoji-prefixed labels (Settings/Setup) in console output for better readability.
 - fix(solar-router): replace `datetime.datetime.utcnow()` with `datetime.datetime.now(datetime.timezone.utc)` in `audit_log` — eliminates DeprecationWarning in Python 3.12+.
 - fix(solar-system): translate `check_orchestrator.sh` suggested actions to English — all diagnostic messages now consistent with `core/` language policy.
 - fix(gemini): remove unnecessary prompt flags from router command execution and improve subprocess error handling in `scripts/providers/gemini.py`.
