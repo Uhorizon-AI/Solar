@@ -462,11 +462,19 @@ for repo in existing_scan_repos + planet_repos:
         merged_scan_repos.append(repo)
         seen.add(repo)
 
+data['explorer.excludeGitIgnore'] = False
+data['search.useIgnoreFiles'] = False
 data['git.scanRepositories'] = merged_scan_repos
-if 'git.repositoryScanIgnoredFolders' not in data:
-    data['git.repositoryScanIgnoredFolders'] = []
-if 'planets' not in data['git.repositoryScanIgnoredFolders']:
-    data['git.repositoryScanIgnoredFolders'].append('planets')
+
+ignored_folders = data.get('git.repositoryScanIgnoredFolders')
+if isinstance(ignored_folders, list):
+    filtered_ignored_folders = [item for item in ignored_folders if item != 'planets']
+    if filtered_ignored_folders:
+        data['git.repositoryScanIgnoredFolders'] = filtered_ignored_folders
+    else:
+        data.pop('git.repositoryScanIgnoredFolders', None)
+else:
+    data.pop('git.repositoryScanIgnoredFolders', None)
 
 os.makedirs(os.path.dirname(vscode_settings), exist_ok=True)
 with open(vscode_settings, 'w') as f:
