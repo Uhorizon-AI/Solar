@@ -12,6 +12,7 @@ from .base import BaseProvider, REPO_ROOT
 class GeminiProvider(BaseProvider):
     name = "gemini"
     default_cmd = "gemini -y"
+    last_usage: dict | None = None
 
     def prepare_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         env = base_env.copy()
@@ -81,12 +82,20 @@ class GeminiProvider(BaseProvider):
                     if text:
                         full_text.append(text)
                         yield text
-                elif event_type == "result" and not full_text:
-                    # Fallback: result field when no assistant events produced text
-                    result = event.get("result", "")
-                    if result:
-                        full_text.append(result)
-                        yield result
+                elif event_type == "result":
+                    # Capture real usage from the final result event
+                    stats = event.get("stats")
+                    if isinstance(stats, dict):
+                        self.last_usage = {
+                            "input_tokens": stats.get("input_tokens", 0),
+                            "output_tokens": stats.get("output_tokens", 0),
+                            "cached_input_tokens": stats.get("cached", 0),
+                        }
+                    if not full_text:
+                        result = event.get("result", "")
+                        if result:
+                            full_text.append(result)
+                            yield result
                 elif not full_text and event_type not in {"message", "result", "progress"}:
                     text = event.get("text") or event.get("content") or ""
                     if text and isinstance(text, str):

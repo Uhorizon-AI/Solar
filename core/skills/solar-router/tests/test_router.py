@@ -174,6 +174,70 @@ class TestBuildPrompt(unittest.TestCase):
         self.assertIn("solar-router", result)
         self.assertIn("Routes AI requests", result)
 
+    def test_includes_user_identity_block(self):
+        result = router.build_prompt(
+            "sys", [], "hello", "c", "direct_only", "other",
+            user_identity="- Name: Louis\n- Call user: Lou",
+        )
+        self.assertIn("User identity", result)
+        self.assertIn("Call user: Lou", result)
+
+    def test_includes_governance_block(self):
+        result = router.build_prompt(
+            "sys", [], "hello", "c", "direct_only", "other",
+            governance_context="## Root governance\nroot rules",
+        )
+        self.assertIn("## Governance", result)
+        self.assertIn("root rules", result)
+
+
+class TestUserContextHelpers(unittest.TestCase):
+    def test_profile_bootstrap_without_identity_removes_identity_handshake(self):
+        profile = (
+            "# User Profile\n\n"
+            "## Identity Handshake\n"
+            "- Your name: Louis\n"
+            "- How you want me to call you: Lou\n"
+            "- Preferred language: Español\n"
+            "- Preferred tone: directo\n\n"
+            "## Working Preferences\n"
+            "- Decision style: autonomo\n"
+        )
+        result = router._profile_bootstrap_without_identity(profile)
+        self.assertNotIn("Identity Handshake", result)
+        self.assertIn("Working Preferences", result)
+
+    def test_read_user_identity_extracts_compact_block(self):
+        profile = (
+            "# User Profile\n\n"
+            "## Identity Handshake\n"
+            "- Your name: Louis\n"
+            "- How you want me to call you: Lou\n"
+            "- Preferred language: Español\n"
+            "- Preferred tone: directo, breve\n"
+        )
+        with patch("router._USER_PROFILE_FILE") as mock_path:
+            mock_path.exists.return_value = True
+            mock_path.read_text.return_value = profile
+            result = router.read_user_identity()
+
+        self.assertIn("- Name: Louis", result)
+        self.assertIn("- Call user: Lou", result)
+        self.assertIn("- Language: Español", result)
+
+    def test_read_governance_context_includes_root_and_core(self):
+        with patch("router._ROOT_AGENTS_FILE") as root_path, patch("router._CORE_AGENTS_FILE") as core_path:
+            root_path.exists.return_value = True
+            root_path.read_text.return_value = "root"
+            core_path.exists.return_value = True
+            core_path.read_text.return_value = "core"
+            result = router.read_governance_context()
+
+        self.assertIn("Root governance", result)
+        self.assertIn("root", result)
+        self.assertIn("Core governance", result)
+        self.assertIn("core", result)
+
 
 # ---------------------------------------------------------------------------
 # async_tasks_enabled
@@ -289,6 +353,59 @@ class TestRouteSuccessPaths(unittest.TestCase):
     def test_unknown_channel_normalized_to_other(self, _):
         result = router.route(_payload(mode="direct_only", channel="unknown_channel"))
         self.assertEqual(result["status"], "success")
+
+    @patch("router.run_with_fallback", return_value=('{"decision": {"kind": "direct_reply"}, "reply_text": "hola limpia"}', "claude"))
+    def test_auto_legacy_json_extracts_clean_reply_text(self, _):
+        result = router.route(_payload(mode="auto", channel="n8n"))
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["decision"]["kind"], "direct_reply")
+        self.assertEqual(result["reply_text"], "hola limpia")
+
+
+# ---------------------------------------------------------------------------
+# route_stream() and rolling summary
+# ---------------------------------------------------------------------------
+
+class TestRouteStream(unittest.TestCase):
+    @patch("router.stream_provider")
+    def test_stream_preserves_chunks_and_updates_summary_from_tags(self, mock_stream):
+        payload = _payload(mode="direct_only")
+        mock_stream.return_value = iter([
+            ("hola", "claude"),
+            ("<solar_summary>Resumen breve</solar_summary>", "claude"),
+        ])
+
+        lines = [__import__("json").loads(line) for line in router.route_stream(payload)]
+
+        self.assertEqual(lines[0]["type"], "chunk")
+        self.assertEqual(lines[0]["text"], "hola")
+        self.assertEqual(lines[1]["type"], "chunk")
+        self.assertEqual(lines[1]["text"], "<solar_summary>Resumen breve</solar_summary>")
+        self.assertEqual(lines[2]["type"], "done")
+        self.assertEqual(lines[2]["status"], "success")
+        self.assertTrue(lines[2]["summary_updated"])
+
+
+class TestRollingSummaryPrompt(unittest.TestCase):
+    def test_summary_keeps_recent_turns_as_supplement(self):
+        recent = [
+            {"role": "user", "text": "turno 1"},
+            {"role": "assistant", "text": "respuesta 1"},
+        ]
+        result = router.build_prompt(
+            "sys",
+            recent,
+            "mensaje actual",
+            "conv",
+            "direct_only",
+            "other",
+            summary="Resumen previo",
+        )
+
+        self.assertIn("Conversation summary", result)
+        self.assertIn("Most recent turns", result)
+        self.assertIn("USER: turno 1", result)
+        self.assertIn("ASSISTANT: respuesta 1", result)
 
 
 # ---------------------------------------------------------------------------

@@ -15,9 +15,12 @@ class CodexProvider(BaseProvider):
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
+        # Use /tmp as working root so Codex does NOT auto-discover solar.ai as a
+        # project and load AGENTS.md/profile.md/MEMORY.md on every call.
+        # --add-dir gives Codex full read/write access to the repo when tasks need it.
         return (
-            f"codex exec --skip-git-repo-check --full-auto -C {REPO_ROOT} "
-            f"--add-dir {_CODEX_STATE_DIR} --"
+            f"codex exec --skip-git-repo-check --full-auto -C /tmp "
+            f"--add-dir {REPO_ROOT} --add-dir {_CODEX_STATE_DIR} --"
         )
 
     def stream(self, prompt: str):

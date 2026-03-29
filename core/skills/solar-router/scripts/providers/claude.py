@@ -9,6 +9,7 @@ from .base import BaseProvider, REPO_ROOT
 class ClaudeProvider(BaseProvider):
     name = "claude"
     default_cmd = "claude -p --permission-mode bypassPermissions --no-session-persistence"
+    last_usage: dict | None = None
 
     def stream(self, prompt: str):
         """Stream token-by-token using --include-partial-messages, yielding text_delta chunks."""
@@ -58,12 +59,20 @@ class ClaudeProvider(BaseProvider):
                             if text:
                                 full_text.append(text)
                                 yield text
-                elif event_type == "result" and not full_text:
-                    # Fallback: result field when no stream_event deltas produced text
-                    result = event.get("result", "")
-                    if result:
-                        full_text.append(result)
-                        yield result
+                elif event_type == "result":
+                    # Capture real usage from the final result event
+                    usage = event.get("usage")
+                    if isinstance(usage, dict):
+                        self.last_usage = {
+                            "input_tokens": usage.get("input_tokens", 0),
+                            "output_tokens": usage.get("output_tokens", 0),
+                            "cached_input_tokens": usage.get("cache_read_input_tokens", 0),
+                        }
+                    if not full_text:
+                        result = event.get("result", "")
+                        if result:
+                            full_text.append(result)
+                            yield result
 
             proc.wait(timeout=timeout_sec)
             if proc.returncode != 0:

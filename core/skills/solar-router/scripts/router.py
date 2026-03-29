@@ -41,7 +41,7 @@ VALID_DECISION_KINDS = {
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 MAX_CONTEXT_TURNS = int(
-    os.getenv("SOLAR_ROUTER_CONTEXT_TURNS") or os.getenv("SOLAR_CONTEXT_TURNS") or "12"
+    os.getenv("SOLAR_ROUTER_CONTEXT_TURNS") or os.getenv("SOLAR_CONTEXT_TURNS") or "6"
 )
 
 _raw_runtime_dir = (
@@ -63,6 +63,90 @@ SYSTEM_PROMPT_FILE = (
 )
 
 ASYNC_TASKS_CREATE_SCRIPT = REPO_ROOT / "core/skills/solar-async-tasks/scripts/create.sh"
+
+_USER_PROFILE_FILE = REPO_ROOT / "sun/preferences/profile.md"
+_USER_MEMORY_FILE = REPO_ROOT / "sun/MEMORY.md"
+_ROOT_AGENTS_FILE = REPO_ROOT / "AGENTS.md"
+_CORE_AGENTS_FILE = REPO_ROOT / "core/AGENTS.md"
+
+
+def read_user_identity() -> Optional[str]:
+    """Return a compact identity block that is safe to inject on every turn."""
+    if not _USER_PROFILE_FILE.exists():
+        return None
+
+    text = _USER_PROFILE_FILE.read_text(encoding="utf-8")
+    extracted: Dict[str, str] = {}
+    field_map = {
+        "Your name": "Name",
+        "How you want me to call you": "Call user",
+        "Preferred language": "Language",
+        "Preferred tone": "Tone",
+    }
+    for source_label, output_label in field_map.items():
+        match = re.search(rf"^- {re.escape(source_label)}:\s*(.+)$", text, re.MULTILINE)
+        if match:
+            extracted[output_label] = match.group(1).strip()
+
+    if not extracted:
+        return None
+
+    return "\n".join(f"- {label}: {value}" for label, value in extracted.items())
+
+
+def read_governance_context(planet: Optional[str] = None) -> Optional[str]:
+    """Return the canonical governance text the router should inject every turn."""
+    parts: List[str] = []
+
+    governance_files = [
+        ("Root governance", _ROOT_AGENTS_FILE),
+        ("Core governance", _CORE_AGENTS_FILE),
+    ]
+    if planet:
+        governance_files.append(
+            (
+                f"Planet governance: {planet}",
+                REPO_ROOT / f"planets/{planet}/AGENTS.md",
+            )
+        )
+
+    for label, path in governance_files:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8").strip()
+        if text:
+            parts.append(f"## {label}\n{text}")
+
+    return "\n\n".join(parts) if parts else None
+
+
+def _profile_bootstrap_without_identity(text: str) -> str:
+    """Remove the Identity Handshake block from profile bootstrap content."""
+    return re.sub(
+        r"(?ms)^## Identity Handshake\s*\n.*?(?=^## |\Z)",
+        "",
+        text,
+    ).strip()
+
+
+def read_user_bootstrap() -> Optional[str]:
+    """Return non-identity profile context + memory for the first turn.
+
+    Identity is injected separately on every turn so channels never depend on
+    the rolling summary to remember the user.
+    """
+    parts: List[str] = []
+    if _USER_PROFILE_FILE.exists():
+        profile_text = _profile_bootstrap_without_identity(
+            _USER_PROFILE_FILE.read_text(encoding="utf-8").strip()
+        )
+        if profile_text:
+            parts.append(f"## User profile\n{profile_text}")
+    if _USER_MEMORY_FILE.exists():
+        memory_text = _USER_MEMORY_FILE.read_text(encoding="utf-8").strip()
+        if memory_text:
+            parts.append(f"## User memory\n{memory_text}")
+    return "\n\n".join(parts) if parts else None
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +173,24 @@ def sanitize_id(value: str) -> str:
 
 def conversation_file(conversation_id: str) -> pathlib.Path:
     return RUNTIME_ROOT / "conversations" / f"{sanitize_id(conversation_id)}.jsonl"
+
+
+def summary_file(conversation_id: str) -> pathlib.Path:
+    return RUNTIME_ROOT / "conversations" / f"{sanitize_id(conversation_id)}-summary.txt"
+
+
+def load_summary(conversation_id: str) -> Optional[str]:
+    path = summary_file(conversation_id)
+    if path.exists():
+        text = path.read_text(encoding="utf-8").strip()
+        return text if text else None
+    return None
+
+
+def save_summary(conversation_id: str, summary: str) -> None:
+    path = summary_file(conversation_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(summary.strip(), encoding="utf-8")
 
 
 def read_system_prompt() -> str:
@@ -239,9 +341,18 @@ def build_prompt(
     mode: str,
     channel: str,
     jit_context: Optional[Dict[str, Any]] = None,
+    governance_context: Optional[str] = None,
+    user_identity: Optional[str] = None,
+    summary: Optional[str] = None,
+    user_bootstrap: Optional[str] = None,
 ) -> str:
     lines: List[str] = []
     lines.append(system_prompt)
+
+    if governance_context:
+        lines.append("")
+        lines.append("## Governance")
+        lines.append(governance_context)
 
     if jit_context and jit_context.get("agent_content"):
         lines.append("")
@@ -255,6 +366,11 @@ def build_prompt(
         for skill in jit_context["skills_content"]:
             lines.append(f"- {skill['name']}: {skill['description']}")
 
+    if user_identity:
+        lines.append("")
+        lines.append("## User identity")
+        lines.append(user_identity)
+
     lines.append("")
     lines.append("Conversation context")
     lines.append(f"- conversation_id: {conversation_id}")
@@ -264,8 +380,26 @@ def build_prompt(
         lines.append(f"- planet: {jit_context['planet']}")
     if jit_context and jit_context.get("jit_generated"):
         lines.append("- agent: jit (generated for this task)")
+    if user_bootstrap:
+        lines.append("")
+        lines.append("## User context (first turn only)")
+        lines.append(user_bootstrap)
+
     lines.append("")
-    if recent:
+    if summary:
+        # Rolling summary: compact context from previous turns
+        lines.append("Conversation summary (previous turns):")
+        lines.append(summary)
+        lines.append("")
+        if recent:
+            # Supplement: last 2 raw turns so very recent context is never lost
+            lines.append("Most recent turns (supplement, newest last):")
+            for item in recent:
+                label = "USER" if item["role"] == "user" else "ASSISTANT"
+                lines.append(f"{label}: {item['text']}")
+            lines.append("")
+    elif recent:
+        # Fallback: raw turns when no summary exists yet
         lines.append("Recent turns (oldest -> newest):")
         for item in recent:
             label = "USER" if item["role"] == "user" else "ASSISTANT"
@@ -378,44 +512,103 @@ def create_async_draft(title: str, description: str) -> Optional[str]:
 # Output parsing for mode=auto
 # ---------------------------------------------------------------------------
 
-def _strip_code_fences(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-    text = re.sub(r"\n?```$", "", text)
+def extract_summary_from_output(raw_output: str) -> Optional[str]:
+    """Extract the rolling summary from the model's <solar_summary> tag.
+
+    Returns None if the tag is absent or empty.
+    """
+    text = (raw_output or "").strip()
+    if not text:
+        return None
+    match = re.search(r"<solar_summary>(.*?)</solar_summary>", text, re.DOTALL)
+    if match:
+        return match.group(1).strip() or None
+    return None
+
+
+def strip_solar_tags(text: str) -> str:
+    """Remove <solar_summary> and <solar_decision> blocks from model output.
+
+    Called before storing reply_text so metadata tags never reach the user.
+    """
+    text = re.sub(r"\s*<solar_decision>[^<]*</solar_decision>", "", text)
+    text = re.sub(r"\s*<solar_summary>.*?</solar_summary>", "", text, flags=re.DOTALL)
     return text.strip()
 
 
 def parse_ai_decision_output(raw_output: str) -> Dict[str, Any]:
-    """
-    Parse AI output for mode=auto. Expects JSON with decision.kind and reply_text.
-    Degrades to direct_reply when JSON is not found but output is non-empty.
-    """
-    text = raw_output.strip()
+    """Parse AI output for mode=auto.
 
-    try:
-        parsed = json.loads(_strip_code_fences(text))
-        if isinstance(parsed, dict) and "decision" in parsed:
-            return parsed
-    except (json.JSONDecodeError, ValueError):
-        pass
+    Reads the optional <solar_decision> tag for decision.kind.
+    Falls back to legacy JSON output when tags are absent.
+    Degrades to direct_reply when neither format is present but output is non-empty.
+    reply_text is the output with solar tags stripped.
+    """
+    text = (raw_output or "").strip()
+    if not text:
+        raise ValueError("AI output is empty and unparseable")
 
-    match = re.search(r"\{[\s\S]*\}", text)
+    kind = "direct_reply"
+    match = re.search(r"<solar_decision>([^<]*)</solar_decision>", text)
     if match:
-        try:
-            parsed = json.loads(match.group(0))
-            if isinstance(parsed, dict) and "decision" in parsed:
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
+        candidate = match.group(1).strip()
+        if candidate in VALID_DECISION_KINDS:
+            kind = candidate
 
-    if text:
+    if match:
+        reply_text = strip_solar_tags(text)
         return {
-            "decision": {"kind": "direct_reply"},
-            "reply_text": text,
-            "_degraded": True,
+            "decision": {"kind": kind},
+            "reply_text": reply_text or text,
+            "_degraded": False,
         }
 
-    raise ValueError("AI output is empty and unparseable")
+    legacy_candidates = [text]
+    fenced_blocks = re.findall(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    legacy_candidates.extend(block.strip() for block in fenced_blocks if block.strip())
+    decoder = json.JSONDecoder()
+    for idx, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            payload, end = decoder.raw_decode(text[idx:])
+        except ValueError:
+            continue
+        if isinstance(payload, dict):
+            legacy_candidates.append(text[idx:idx + end].strip())
+
+    for candidate in legacy_candidates:
+        try:
+            payload = json.loads(candidate)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        decision = payload.get("decision")
+        if isinstance(decision, dict):
+            decision_kind = decision.get("kind")
+            if decision_kind in VALID_DECISION_KINDS:
+                kind = decision_kind
+
+        legacy_reply = payload.get("reply_text")
+        if legacy_reply is None:
+            continue
+
+        reply_text = strip_solar_tags(str(legacy_reply))
+        return {
+            "decision": {"kind": kind},
+            "reply_text": reply_text or str(legacy_reply),
+            "_degraded": False,
+        }
+
+    reply_text = strip_solar_tags(text)
+
+    return {
+        "decision": {"kind": kind},
+        "reply_text": reply_text or text,
+        "_degraded": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -522,8 +715,12 @@ def route_stream(raw: str):
     metadata = payload.get("metadata") or {}
     jit_context = resolve_jit_context(metadata) if metadata else None
     system_prompt = read_system_prompt()
-    recent = load_recent_messages(conv_path)
-    full_prompt = build_prompt(system_prompt, recent, text, conversation_id, mode, channel, jit_context)
+    summary = load_summary(conversation_id)
+    recent = load_recent_messages(conv_path)[-4:] if summary else load_recent_messages(conv_path)
+    governance_context = read_governance_context(jit_context.get("planet") if jit_context else None)
+    user_identity = read_user_identity()
+    user_bootstrap = read_user_bootstrap() if not summary else None
+    full_prompt = build_prompt(system_prompt, recent, text, conversation_id, mode, channel, jit_context, governance_context=governance_context, user_identity=user_identity, summary=summary, user_bootstrap=user_bootstrap)
 
     provider_used: Optional[str] = None
     usage: Optional[Dict[str, Any]] = None
@@ -537,16 +734,24 @@ def route_stream(raw: str):
         yield json.dumps({"type": "done", "status": "failed", "error": str(exc), "provider": provider_used, "request_id": request_id})
         return
 
-    reply_text = "".join(full_text_parts)
+    ai_output = "".join(full_text_parts)
     if provider_used:
         provider_obj = PROVIDERS.get(provider_used)
         provider_usage = getattr(provider_obj, "last_usage", None)
         if isinstance(provider_usage, dict):
             usage = provider_usage
+
+    # Strip solar tags to get clean reply_text for storage
+    reply_text = strip_solar_tags(ai_output) or ai_output
+
     append_message(conv_path, "user", text)
     append_message(conv_path, "assistant", reply_text)
 
-    yield json.dumps({"type": "done", "status": "success", "provider": provider_used, "request_id": request_id, "usage": usage, "error": None})
+    new_summary = extract_summary_from_output(ai_output)
+    if new_summary:
+        save_summary(conversation_id, new_summary)
+
+    yield json.dumps({"type": "done", "status": "success", "provider": provider_used, "request_id": request_id, "usage": usage, "error": None, "prompt_chars": len(full_prompt), "prompt_tokens_approx": len(full_prompt) // 4, "history_turns": len(recent) // 2, "summary_used": summary is not None, "summary_updated": new_summary is not None})
 
 
 def route(raw: str) -> Dict[str, Any]:
@@ -637,8 +842,12 @@ def route(raw: str) -> Dict[str, Any]:
     jit_context = resolve_jit_context(metadata) if metadata else None
 
     system_prompt = read_system_prompt()
-    recent = load_recent_messages(conv_path)
-    full_prompt = build_prompt(system_prompt, recent, text, conversation_id, mode, channel, jit_context)
+    summary = load_summary(conversation_id)
+    recent = load_recent_messages(conv_path)[-4:] if summary else load_recent_messages(conv_path)
+    governance_context = read_governance_context(jit_context.get("planet") if jit_context else None)
+    user_identity = read_user_identity()
+    user_bootstrap = read_user_bootstrap() if not summary else None
+    full_prompt = build_prompt(system_prompt, recent, text, conversation_id, mode, channel, jit_context, governance_context=governance_context, user_identity=user_identity, summary=summary, user_bootstrap=user_bootstrap)
 
     # --- Execute AI ---
     provider_used: Optional[str] = None
@@ -674,11 +883,13 @@ def route(raw: str) -> Dict[str, Any]:
         }
 
     # --- Extract reply_text ---
-    reply_text = ai_output
+    # mode=auto: reply_text was already extracted by parse_ai_decision_output (tags stripped).
+    # other modes: strip solar tags from raw output.
     if mode == "auto" and channel != "async-task":
         parsed_output = decision.pop("_parsed", None)
-        if parsed_output and "reply_text" in parsed_output:
-            reply_text = str(parsed_output["reply_text"])
+        reply_text = str(parsed_output["reply_text"]) if parsed_output and "reply_text" in parsed_output else strip_solar_tags(ai_output) or ai_output
+    else:
+        reply_text = strip_solar_tags(ai_output) or ai_output
 
     # --- Handle async draft creation ---
     task_id = decision.get("task_id")
@@ -699,6 +910,11 @@ def route(raw: str) -> Dict[str, Any]:
     append_message(conv_path, "user", text)
     append_message(conv_path, "assistant", reply_text)
 
+    # --- Rolling summary: persist for next turn ---
+    new_summary = extract_summary_from_output(ai_output)
+    if new_summary:
+        save_summary(conversation_id, new_summary)
+
     # --- Audit: end ---
     audit_log(
         router_id, "end",
@@ -706,6 +922,11 @@ def route(raw: str) -> Dict[str, Any]:
         provider=provider_used,
         jit_generated=bool(jit_context and jit_context.get("jit_generated")),
         duration_ms=int((time.monotonic() - t_start) * 1000),
+        prompt_chars=len(full_prompt),
+        prompt_tokens_approx=len(full_prompt) // 4,
+        history_turns=len(recent) // 2,
+        summary_used=summary is not None,
+        summary_updated=new_summary is not None,
     )
 
     return {

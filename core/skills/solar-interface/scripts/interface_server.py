@@ -51,6 +51,14 @@ def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _strip_solar_tags(text: str) -> str:
+    """Remove <solar_summary> and <solar_decision> blocks from model output."""
+    import re
+    text = re.sub(r"\s*<solar_decision>[^<]*</solar_decision>", "", text)
+    text = re.sub(r"\s*<solar_summary>.*?</solar_summary>", "", text, flags=re.DOTALL)
+    return text.strip()
+
+
 def _extract_reply_text_from_wrapped_json(text: str) -> str | None:
     """Return reply_text when provider returns decision-wrapper JSON; else None."""
     raw = text.strip()
@@ -171,54 +179,11 @@ def write_user_input(run_id: str, text: str) -> pathlib.Path:
 
 
 def build_thread_context(thread_id: str, current_text: str, mode: str) -> str:
-    conn = connect_db()
-    try:
-        rows = conn.execute(
-            """
-            SELECT run_id, started_at
-            FROM runs
-            WHERE thread_id = ?
-            ORDER BY started_at DESC
-            LIMIT ?
-            """,
-            (thread_id, CONTEXT_TURNS),
-        ).fetchall()
-    finally:
-        conn.close()
-
-    turns: list[str] = []
-    for row in reversed(rows):
-        run_dir = RUNS_DIR / row["run_id"]
-        input_file = run_dir / "input.md"
-        output_file = run_dir / "output.md"
-
-        if input_file.exists():
-            user_text = input_file.read_text(encoding="utf-8").strip()
-            if user_text:
-                turns.append(f"User: {user_text}")
-
-        if output_file.exists():
-            assistant_text = output_file.read_text(encoding="utf-8").strip()
-            if assistant_text:
-                turns.append(f"Assistant: {assistant_text}")
-
-    if not turns:
-        if mode == "plan":
-            return f"Return a concise actionable plan for:\n\n{current_text}"
-        return current_text
-
-    instruction = (
-        "Continue this conversation naturally, using the prior turns as context."
-        if mode != "plan"
-        else "Continue this conversation. The user is now asking for a concise actionable plan."
-    )
-
-    return (
-        f"{instruction}\n\n"
-        f"Conversation history:\n{chr(10).join(turns)}\n\n"
-        f"User: {current_text}\n"
-        f"Assistant:"
-    )
+    # Context is managed entirely by solar-router via rolling summary.
+    # The interface passes only the current message.
+    if mode == "plan":
+        return f"Return a concise actionable plan for:\n\n{current_text}"
+    return current_text
 
 
 def create_thread(title: str | None = None, scope_layer: str = "sun", scope_planet: str | None = None) -> dict:
@@ -309,7 +274,7 @@ def run_router(thread_id: str, mode: str, text: str, provider: str = "auto") -> 
     payload = {
         "request_id": request_id,
         "session_id": thread_id,
-        "user_id": "local-interface",
+        "user_id": thread_id,
         "text": router_text,
         "channel": "other",
         "mode": "direct_only",
@@ -585,7 +550,7 @@ class Handler(BaseHTTPRequestHandler):
         payload = {
             "request_id": request_id,
             "session_id": thread_id,
-            "user_id": "local-interface",
+            "user_id": thread_id,
             "text": router_text,
             "channel": "other",
             "mode": "direct_only",
@@ -613,13 +578,14 @@ class Handler(BaseHTTPRequestHandler):
         proc.stdin.close()  # type: ignore[union-attr]
 
         full_text_parts: list[str] = []
-        raw_text_parts: list[str] = []
         provider_used: str | None = None
         usage: dict | None = None
         status = "failed"
         error: str | None = None
-        hold_wrapped_json: bool | None = None
         client_disconnected = False
+        # Buffer chunks once a solar tag opening is detected; flushed/dropped at done.
+        tag_buffer: list[str] = []
+        in_solar_tag = False
 
         try:
             for raw_line in proc.stdout:  # type: ignore[union-attr]
@@ -633,19 +599,28 @@ class Handler(BaseHTTPRequestHandler):
 
                 if event.get("type") == "chunk":
                     chunk = event.get("text", "")
-                    if chunk:
-                        raw_text_parts.append(chunk)
-                        if hold_wrapped_json is None:
-                            probe = chunk.lstrip()
-                            hold_wrapped_json = probe.startswith("{") and (
-                                '"decision"' in probe or '"reply_text"' in probe
-                            )
-                        if hold_wrapped_json:
+                    if not chunk:
+                        continue
+                    full_text_parts.append(chunk)
+                    if in_solar_tag:
+                        # Already inside a tag block — buffer everything
+                        tag_buffer.append(chunk)
+                        continue
+                    # Check if this chunk contains the start of a solar tag
+                    tag_start = chunk.find("<solar_")
+                    if tag_start != -1:
+                        in_solar_tag = True
+                        visible = chunk[:tag_start]
+                        tag_buffer.append(chunk[tag_start:])
+                        if not visible:
                             continue
-                        full_text_parts.append(chunk)
+                        chunk = visible
+                    try:
                         sse = f"data: {json.dumps({'type': 'chunk', 'text': chunk}, ensure_ascii=False)}\n\n"
                         self.wfile.write(sse.encode("utf-8"))
                         self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        client_disconnected = True
                 elif event.get("type") == "done":
                     status = event.get("status", "failed")
                     provider_used = event.get("provider")
@@ -667,20 +642,8 @@ class Handler(BaseHTTPRequestHandler):
                     proc.kill()
                     proc.wait(timeout=2)
 
-        if hold_wrapped_json:
-            raw_joined = "".join(raw_text_parts)
-            unwrapped = _extract_reply_text_from_wrapped_json(raw_joined)
-            reply_text = unwrapped or raw_joined
-            if reply_text and not client_disconnected:
-                full_text_parts.append(reply_text)
-                try:
-                    sse = f"data: {json.dumps({'type': 'chunk', 'text': reply_text}, ensure_ascii=False)}\n\n"
-                    self.wfile.write(sse.encode("utf-8"))
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-        else:
-            reply_text = "".join(full_text_parts)
+        # Strip solar tags from the full accumulated text
+        reply_text = _strip_solar_tags("".join(full_text_parts))
         ended_at = now_iso()
         run_dir = RUNS_DIR / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
