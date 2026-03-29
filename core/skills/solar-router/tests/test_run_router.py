@@ -113,7 +113,8 @@ class TestV3ContractOnSuccessPaths(unittest.TestCase):
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value="task-xyz")
-    def test_async_only_success(self, _):
+    @patch("router.run_with_fallback", return_value=("async ai body", "claude"))
+    def test_async_only_success(self, *_):
         result = route(_req(mode="async_only"))
         _assert_valid_v3(self, result)
         self.assertEqual(result["status"], "success")

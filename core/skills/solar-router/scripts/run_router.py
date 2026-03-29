@@ -14,7 +14,7 @@ _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from router import route, route_stream  # noqa: E402
+from router import parse_ai_decision_output, route, route_stream  # noqa: E402
 
 
 def main() -> None:

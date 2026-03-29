@@ -75,7 +75,7 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
 | `async_only`  | any          | `async_draft_created`  | Requires `async-tasks` in SOLAR_SYSTEM_FEATURES |
 | `async_only`  | any          | `failed`               | If `async-tasks` not enabled                   |
 | `auto`        | `async-task` | `direct_reply`         | Already in queue, never re-propose async       |
-| `auto`        | other        | AI decides semantically | AI returns JSON with `decision.kind`           |
+| `auto`        | other        | AI decides semantically | Model emits `<solar_decision>` (see `system_prompt.md`) → router sets `decision.kind` |
 
 ## Async draft creation rule
 

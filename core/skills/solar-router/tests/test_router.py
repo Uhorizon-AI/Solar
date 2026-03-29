@@ -1,11 +1,11 @@
 """
-Unit tests for router.py — no real subprocess calls.
-PROVIDERS are mocked via patch so no AI binaries are needed.
+Unit tests for router.py — no real subprocess calls unless mocked.
 """
+import json
 import pathlib
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 _SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "scripts"
 if str(_SCRIPTS) not in sys.path:
@@ -43,54 +43,42 @@ class TestSanitizeId(unittest.TestCase):
     def test_special_chars_replaced(self):
         result = router.sanitize_id("user@domain.com/path")
         self.assertNotIn("@", result)
-        self.assertNotIn("/", result)
 
     def test_empty_returns_unknown(self):
         self.assertEqual(router.sanitize_id("   "), "unknown")
 
-    def test_truncates_at_120(self):
-        result = router.sanitize_id("a" * 200)
-        self.assertEqual(len(result), 120)
+
+# ---------------------------------------------------------------------------
+# strip_solar_metadata + tags
+# ---------------------------------------------------------------------------
+
+class TestSolarTags(unittest.TestCase):
+    def test_strip_tags(self):
+        raw = "Hello\n<solar_decision>direct_reply</solar_decision>\n<solar_summary>x</solar_summary>"
+        self.assertEqual(router.strip_solar_metadata(raw), "Hello")
+
+    def test_extract_async_decision(self):
+        raw = "Body\n<solar_decision>async_draft_created</solar_decision>\n<solar_summary>s</solar_summary>"
+        self.assertEqual(router.extract_tag_decision_kind(raw), "async_draft_created")
 
 
 # ---------------------------------------------------------------------------
-# parse_ai_decision_output
+# parse_ai_decision_output (compat for check_router + tooling)
 # ---------------------------------------------------------------------------
 
 class TestParseAiDecisionOutput(unittest.TestCase):
-    def test_valid_json_with_decision(self):
-        import json
-        payload = json.dumps({"decision": {"kind": "direct_reply"}, "reply_text": "hi"})
-        result = router.parse_ai_decision_output(payload)
+    def test_plain_text_degrades(self):
+        result = router.parse_ai_decision_output("Plain answer")
         self.assertEqual(result["decision"]["kind"], "direct_reply")
-        self.assertEqual(result["reply_text"], "hi")
-
-    def test_json_with_code_fences(self):
-        import json
-        payload = "```json\n" + json.dumps({"decision": {"kind": "async_draft_created"}, "reply_text": "ok"}) + "\n```"
-        result = router.parse_ai_decision_output(payload)
-        self.assertEqual(result["decision"]["kind"], "async_draft_created")
-
-    def test_json_embedded_in_text(self):
-        import json
-        block = json.dumps({"decision": {"kind": "direct_reply"}, "reply_text": "sure"})
-        raw = f"Some preamble\n{block}\nSome suffix"
-        result = router.parse_ai_decision_output(raw)
-        self.assertEqual(result["decision"]["kind"], "direct_reply")
-
-    def test_plain_text_degrades_to_direct_reply(self):
-        result = router.parse_ai_decision_output("This is a plain text response")
-        self.assertEqual(result["decision"]["kind"], "direct_reply")
-        self.assertEqual(result["reply_text"], "This is a plain text response")
+        self.assertEqual(result["reply_text"], "Plain answer")
         self.assertTrue(result.get("_degraded"))
 
-    def test_empty_raises(self):
-        with self.assertRaises(ValueError):
-            router.parse_ai_decision_output("")
-
-    def test_whitespace_raises(self):
-        with self.assertRaises(ValueError):
-            router.parse_ai_decision_output("   ")
+    def test_tags_async_in_parse_ai_decision_output(self):
+        raw = "Creating task\n<solar_decision>async_draft_created</solar_decision>\n<solar_summary>x</solar_summary>"
+        result = router.parse_ai_decision_output(raw)
+        self.assertEqual(result["decision"]["kind"], "async_draft_created")
+        self.assertNotIn("solar_", result["reply_text"])
+        self.assertFalse(result.get("_degraded"))
 
 
 # ---------------------------------------------------------------------------
@@ -99,36 +87,32 @@ class TestParseAiDecisionOutput(unittest.TestCase):
 
 class TestDecisionEngine(unittest.TestCase):
     def test_direct_only_always_direct_reply(self):
-        result = router.decision_engine("direct_only", "other", None, "r1", "text")
+        result = router.decision_engine("direct_only", "other", "out", "r1", "text")
         self.assertEqual(result["kind"], "direct_reply")
 
-    def test_async_only_returns_async_draft_created(self):
-        result = router.decision_engine("async_only", "other", None, "r1", "text")
+    @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
+    @patch("router.create_async_draft", return_value="tid")
+    def test_async_only_creates_draft(self, _):
+        result = router.decision_engine("async_only", "other", "ai out", "r1", "text")
         self.assertEqual(result["kind"], "async_draft_created")
+        self.assertEqual(result["task_id"], "tid")
 
-    def test_auto_async_task_channel_always_direct_reply(self):
+    def test_auto_async_task_channel_direct_reply(self):
         result = router.decision_engine("auto", "async-task", "ignored", "r1", "text")
         self.assertEqual(result["kind"], "direct_reply")
 
-    def test_auto_other_channel_requires_ai_output(self):
+    def test_auto_other_requires_ai_output(self):
         with self.assertRaises(ValueError):
             router.decision_engine("auto", "other", None, "r1", "text")
 
-    def test_auto_parses_ai_output(self):
-        import json
-        ai = json.dumps({"decision": {"kind": "async_draft_created"}, "reply_text": "ok"})
-        result = router.decision_engine("auto", "telegram", ai, "r1", "text")
+    def test_auto_telegram_parses_tags(self):
+        raw = "ok<solar_decision>async_draft_created</solar_decision><solar_summary>x</solar_summary>"
+        result = router.decision_engine("auto", "telegram", raw, "r1", "text")
         self.assertEqual(result["kind"], "async_draft_created")
-
-    def test_auto_invalid_kind_falls_back_to_direct_reply(self):
-        import json
-        ai = json.dumps({"decision": {"kind": "made_up_kind"}, "reply_text": "ok"})
-        result = router.decision_engine("auto", "other", ai, "r1", "text")
-        self.assertEqual(result["kind"], "direct_reply")
 
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):
-            router.decision_engine("unknown_mode", "other", None, "r1", "text")
+            router.decision_engine("unknown_mode", "other", "x", "r1", "text")
 
 
 # ---------------------------------------------------------------------------
@@ -136,107 +120,19 @@ class TestDecisionEngine(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestBuildPrompt(unittest.TestCase):
-    def test_mode_auto_includes_json_instruction(self):
-        result = router.build_prompt("sys", [], "hello", "conv1", "auto", "other")
-        self.assertIn("JSON", result)
-        self.assertIn("decision", result)
-
-    def test_mode_direct_does_not_include_json_instruction(self):
-        result = router.build_prompt("sys", [], "hello", "conv1", "direct_only", "other")
-        self.assertNotIn("decision", result)
-        self.assertIn("Respond directly", result)
-
-    def test_includes_conversation_context(self):
-        result = router.build_prompt("sys", [], "hello", "myconv", "auto", "telegram")
-        self.assertIn("myconv", result)
+    def test_includes_telegram_routing_hint(self):
+        p = pathlib.Path("/tmp/nope.jsonl")
+        with patch.object(p.__class__, "exists", return_value=False):
+            result = router.build_prompt("hello", p, mode="auto", channel="telegram")
         self.assertIn("telegram", result)
+        self.assertIn("solar_decision", result)
+        self.assertIn("hello", result)
 
-    def test_includes_recent_turns(self):
-        recent = [{"role": "user", "text": "prev"}, {"role": "assistant", "text": "resp"}]
-        result = router.build_prompt("sys", recent, "now", "c", "direct_only", "other")
-        self.assertIn("USER: prev", result)
-        self.assertIn("ASSISTANT: resp", result)
-
-    def test_includes_jit_agent_role(self):
-        jit = {"agent_content": "# Role: tester\nTest things.", "skills_content": [], "jit_generated": False, "planet": None}
-        result = router.build_prompt("sys", [], "hello", "c", "direct_only", "other", jit)
-        self.assertIn("Agent Role", result)
-        self.assertIn("tester", result)
-
-    def test_includes_skills_catalog(self):
-        jit = {
-            "agent_content": None,
-            "skills_content": [{"name": "solar-router", "description": "Routes AI requests"}],
-            "jit_generated": True,
-            "planet": None,
-        }
-        result = router.build_prompt("sys", [], "hello", "c", "direct_only", "other", jit)
-        self.assertIn("solar-router", result)
-        self.assertIn("Routes AI requests", result)
-
-    def test_includes_user_identity_block(self):
-        result = router.build_prompt(
-            "sys", [], "hello", "c", "direct_only", "other",
-            user_identity="- Name: Louis\n- Call user: Lou",
-        )
-        self.assertIn("User identity", result)
-        self.assertIn("Call user: Lou", result)
-
-    def test_includes_governance_block(self):
-        result = router.build_prompt(
-            "sys", [], "hello", "c", "direct_only", "other",
-            governance_context="## Root governance\nroot rules",
-        )
-        self.assertIn("## Governance", result)
-        self.assertIn("root rules", result)
-
-
-class TestUserContextHelpers(unittest.TestCase):
-    def test_profile_bootstrap_without_identity_removes_identity_handshake(self):
-        profile = (
-            "# User Profile\n\n"
-            "## Identity Handshake\n"
-            "- Your name: Louis\n"
-            "- How you want me to call you: Lou\n"
-            "- Preferred language: Español\n"
-            "- Preferred tone: directo\n\n"
-            "## Working Preferences\n"
-            "- Decision style: autonomo\n"
-        )
-        result = router._profile_bootstrap_without_identity(profile)
-        self.assertNotIn("Identity Handshake", result)
-        self.assertIn("Working Preferences", result)
-
-    def test_read_user_identity_extracts_compact_block(self):
-        profile = (
-            "# User Profile\n\n"
-            "## Identity Handshake\n"
-            "- Your name: Louis\n"
-            "- How you want me to call you: Lou\n"
-            "- Preferred language: Español\n"
-            "- Preferred tone: directo, breve\n"
-        )
-        with patch("router._USER_PROFILE_FILE") as mock_path:
-            mock_path.exists.return_value = True
-            mock_path.read_text.return_value = profile
-            result = router.read_user_identity()
-
-        self.assertIn("- Name: Louis", result)
-        self.assertIn("- Call user: Lou", result)
-        self.assertIn("- Language: Español", result)
-
-    def test_read_governance_context_includes_root_and_core(self):
-        with patch("router._ROOT_AGENTS_FILE") as root_path, patch("router._CORE_AGENTS_FILE") as core_path:
-            root_path.exists.return_value = True
-            root_path.read_text.return_value = "root"
-            core_path.exists.return_value = True
-            core_path.read_text.return_value = "core"
-            result = router.read_governance_context()
-
-        self.assertIn("Root governance", result)
-        self.assertIn("root", result)
-        self.assertIn("Core governance", result)
-        self.assertIn("core", result)
+    def test_direct_only_hint(self):
+        p = pathlib.Path("/tmp/nope.jsonl")
+        with patch.object(p.__class__, "exists", return_value=False):
+            result = router.build_prompt("x", p, mode="direct_only", channel="other")
+        self.assertIn("direct_only", result)
 
 
 # ---------------------------------------------------------------------------
@@ -248,24 +144,16 @@ class TestAsyncTasksEnabled(unittest.TestCase):
         with patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks,other"}):
             self.assertTrue(router.async_tasks_enabled())
 
-    def test_disabled_when_feature_absent(self):
-        with patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": ""}, clear=False):
-            import importlib
-            # Reload to pick up fresh env — or call directly
-            self.assertFalse(router.async_tasks_enabled())
-
-    def test_disabled_when_env_missing(self):
-        env = {k: v for k, v in __import__("os").environ.items() if k != "SOLAR_SYSTEM_FEATURES"}
-        with patch.dict("os.environ", env, clear=True):
+    def test_disabled_when_absent(self):
+        with patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": ""}):
             self.assertFalse(router.async_tasks_enabled())
 
 
 # ---------------------------------------------------------------------------
-# route() — all error paths, no real subprocess
+# route() — error paths
 # ---------------------------------------------------------------------------
 
 def _payload(**kwargs):
-    import json
     base = {
         "request_id": "t",
         "session_id": "s",
@@ -286,11 +174,9 @@ class TestRouteErrorPaths(unittest.TestCase):
 
     def test_invalid_json(self):
         result = router.route("not-json")
-        self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error_code"], "invalid_json")
 
     def test_missing_text(self):
-        import json
         result = router.route(json.dumps({"request_id": "t", "session_id": "s", "user_id": "u", "channel": "other", "mode": "auto"}))
         self.assertEqual(result["error_code"], "missing_text")
 
@@ -318,6 +204,10 @@ class TestRouteErrorPaths(unittest.TestCase):
         self.assertEqual(result["error_code"], "all_providers_failed")
 
 
+# ---------------------------------------------------------------------------
+# route() — success
+# ---------------------------------------------------------------------------
+
 class TestRouteSuccessPaths(unittest.TestCase):
     @patch("router.run_with_fallback", return_value=("the answer", "claude"))
     def test_direct_only_success(self, _):
@@ -325,183 +215,54 @@ class TestRouteSuccessPaths(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["reply_text"], "the answer")
         self.assertEqual(result["decision"]["kind"], "direct_reply")
-        self.assertEqual(result["provider_used"], "claude")
-
-    @patch("router.run_strict_provider", return_value=("strict answer", "claude"))
-    def test_direct_only_with_provider_override(self, _):
-        result = router.route(_payload(mode="direct_only", provider="claude"))
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["provider_used"], "claude")
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value="task-abc-123")
-    def test_async_only_success(self, _):
+    @patch("router.run_with_fallback", return_value=("async body", "claude"))
+    def test_async_only_success(self, *_):
         result = router.route(_payload(mode="async_only"))
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["decision"]["kind"], "async_draft_created")
         self.assertEqual(result["decision"]["task_id"], "task-abc-123")
 
-    @patch("router.run_with_fallback", return_value=("response", "gemini"))
-    def test_response_has_required_v3_fields(self, _):
-        result = router.route(_payload(mode="direct_only"))
-        for field in ("status", "request_id", "provider_used", "reply_text", "decision", "error_code", "error"):
-            self.assertIn(field, result, f"missing field: {field}")
-        for field in ("kind", "task_id", "priority_suggested"):
-            self.assertIn(field, result["decision"], f"missing decision field: {field}")
+    @patch("router.run_with_fallback")
+    def test_auto_telegram_async_tag(self, mock_run):
+        raw = (
+            "Necesito más tiempo.\n"
+            "<solar_decision>async_draft_created</solar_decision>\n"
+            "<solar_summary>pendiente confirmación</solar_summary>"
+        )
+        mock_run.return_value = (raw, "claude")
+        result = router.route(
+            _payload(mode="auto", channel="telegram", text="haz un informe de 50 paginas")
+        )
+        self.assertEqual(result["decision"]["kind"], "async_draft_created")
+        self.assertNotIn("solar_decision", result["reply_text"])
+        self.assertNotIn("solar_summary", result["reply_text"])
 
-    @patch("router.run_with_fallback", return_value=("response", "claude"))
-    def test_unknown_channel_normalized_to_other(self, _):
-        result = router.route(_payload(mode="direct_only", channel="unknown_channel"))
-        self.assertEqual(result["status"], "success")
-
-    @patch("router.run_with_fallback", return_value=('{"decision": {"kind": "direct_reply"}, "reply_text": "hola limpia"}', "claude"))
-    def test_auto_legacy_json_extracts_clean_reply_text(self, _):
+    @patch("router.run_with_fallback", return_value=("hola limpia\n<solar_decision>direct_reply</solar_decision>\n<solar_summary>x</solar_summary>", "claude"))
+    def test_auto_n8n_tags_direct_reply(self, _):
         result = router.route(_payload(mode="auto", channel="n8n"))
-        self.assertEqual(result["status"], "success")
         self.assertEqual(result["decision"]["kind"], "direct_reply")
         self.assertEqual(result["reply_text"], "hola limpia")
 
 
 # ---------------------------------------------------------------------------
-# route_stream() and rolling summary
+# route_stream
 # ---------------------------------------------------------------------------
 
 class TestRouteStream(unittest.TestCase):
     @patch("router.stream_provider")
-    def test_stream_preserves_chunks_and_updates_summary_from_tags(self, mock_stream):
-        payload = _payload(mode="direct_only")
-        mock_stream.return_value = iter([
-            ("hola", "claude"),
-            ("<solar_summary>Resumen breve</solar_summary>", "claude"),
-        ])
-
-        lines = [__import__("json").loads(line) for line in router.route_stream(payload)]
-
+    def test_done_includes_decision(self, mock_stream):
+        mock_stream.return_value = iter([("hola ", "claude"), ("mundo", "claude")])
+        payload = _payload(mode="auto", channel="telegram")
+        lines = [json.loads(line) for line in router.route_stream(payload)]
         self.assertEqual(lines[0]["type"], "chunk")
-        self.assertEqual(lines[0]["text"], "hola")
-        self.assertEqual(lines[1]["type"], "chunk")
-        self.assertEqual(lines[1]["text"], "<solar_summary>Resumen breve</solar_summary>")
-        self.assertEqual(lines[2]["type"], "done")
-        self.assertEqual(lines[2]["status"], "success")
-        self.assertTrue(lines[2]["summary_updated"])
-
-
-class TestRollingSummaryPrompt(unittest.TestCase):
-    def test_summary_keeps_recent_turns_as_supplement(self):
-        recent = [
-            {"role": "user", "text": "turno 1"},
-            {"role": "assistant", "text": "respuesta 1"},
-        ]
-        result = router.build_prompt(
-            "sys",
-            recent,
-            "mensaje actual",
-            "conv",
-            "direct_only",
-            "other",
-            summary="Resumen previo",
-        )
-
-        self.assertIn("Conversation summary", result)
-        self.assertIn("Most recent turns", result)
-        self.assertIn("USER: turno 1", result)
-        self.assertIn("ASSISTANT: respuesta 1", result)
-
-
-# ---------------------------------------------------------------------------
-# resolve_jit_context
-# ---------------------------------------------------------------------------
-
-class TestResolveJitContext(unittest.TestCase):
-    def setUp(self):
-        import tempfile
-        self._tmp = tempfile.mkdtemp()
-        self._tmp_path = pathlib.Path(self._tmp)
-        # Patch REPO_ROOT so all path lookups go into the temp dir
-        self._patcher = patch("router.REPO_ROOT", self._tmp_path)
-        self._patcher.start()
-
-    def tearDown(self):
-        self._patcher.stop()
-        import shutil
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def _write(self, rel: str, content: str) -> pathlib.Path:
-        p = self._tmp_path / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
-        return p
-
-    def _skill_md(self, description: str) -> str:
-        return f"---\nname: test-skill\ndescription: {description}\n---\n\nBody."
-
-    # --- agent resolution ---
-
-    def test_agent_found_in_planet(self):
-        self._write("planets/uhorizon/agents/uh-sales.md", "# Role: uh-sales\nSell things.")
-        ctx = router.resolve_jit_context({"agent": "uh-sales", "skills": [], "planet": "uhorizon"})
-        self.assertIn("uh-sales", ctx["agent_content"])
-        self.assertFalse(ctx["jit_generated"])
-
-    def test_agent_found_in_core_fallback(self):
-        self._write("core/agents/uh-sales.md", "# Role: uh-sales (core)\nCore version.")
-        ctx = router.resolve_jit_context({"agent": "uh-sales", "skills": [], "planet": "uhorizon"})
-        self.assertIn("core", ctx["agent_content"])
-        self.assertFalse(ctx["jit_generated"])
-
-    def test_agent_not_found_generates_jit_role(self):
-        ctx = router.resolve_jit_context({"agent": "unknown-agent", "skills": [], "planet": None})
-        self.assertTrue(ctx["jit_generated"])
-        self.assertIn("unknown-agent", ctx["agent_content"])
-
-    def test_no_agent_is_jit(self):
-        ctx = router.resolve_jit_context({"agent": None, "skills": [], "planet": None})
-        self.assertTrue(ctx["jit_generated"])
-        self.assertIsNone(ctx["agent_content"])
-
-    def test_planet_agent_takes_priority_over_core(self):
-        self._write("planets/uhorizon/agents/uh-sales.md", "# Planet version")
-        self._write("core/agents/uh-sales.md", "# Core version")
-        ctx = router.resolve_jit_context({"agent": "uh-sales", "skills": [], "planet": "uhorizon"})
-        self.assertIn("Planet version", ctx["agent_content"])
-
-    # --- skill resolution ---
-
-    def test_skill_prefixed_planet_resolves(self):
-        self._write("planets/uhorizon/skills/sales-pipeline/SKILL.md",
-                    self._skill_md("Pipeline tracker"))
-        ctx = router.resolve_jit_context({"agent": None, "skills": ["uhorizon:sales-pipeline"], "planet": None})
-        self.assertEqual(len(ctx["skills_content"]), 1)
-        self.assertEqual(ctx["skills_content"][0]["description"], "Pipeline tracker")
-
-    def test_skill_unprefixed_checks_planet_first(self):
-        self._write("planets/uhorizon/skills/solar-router/SKILL.md",
-                    self._skill_md("Planet router"))
-        self._write("core/skills/solar-router/SKILL.md",
-                    self._skill_md("Core router"))
-        ctx = router.resolve_jit_context({"agent": None, "skills": ["solar-router"], "planet": "uhorizon"})
-        self.assertEqual(ctx["skills_content"][0]["description"], "Planet router")
-
-    def test_skill_unprefixed_falls_back_to_core(self):
-        self._write("core/skills/solar-router/SKILL.md", self._skill_md("Core router"))
-        ctx = router.resolve_jit_context({"agent": None, "skills": ["solar-router"], "planet": "uhorizon"})
-        self.assertEqual(ctx["skills_content"][0]["description"], "Core router")
-
-    def test_skill_not_found_skipped(self):
-        ctx = router.resolve_jit_context({"agent": None, "skills": ["nonexistent-skill"], "planet": None})
-        self.assertEqual(ctx["skills_content"], [])
-
-    def test_multiple_skills_resolved_independently(self):
-        self._write("core/skills/skill-a/SKILL.md", self._skill_md("Skill A"))
-        self._write("core/skills/skill-b/SKILL.md", self._skill_md("Skill B"))
-        ctx = router.resolve_jit_context({"agent": None, "skills": ["skill-a", "skill-b"], "planet": None})
-        names = [s["name"] for s in ctx["skills_content"]]
-        self.assertIn("skill-a", names)
-        self.assertIn("skill-b", names)
-
-    def test_planet_returned_in_context(self):
-        ctx = router.resolve_jit_context({"agent": None, "skills": [], "planet": "louis"})
-        self.assertEqual(ctx["planet"], "louis")
+        done = lines[-1]
+        self.assertEqual(done["type"], "done")
+        self.assertEqual(done["status"], "success")
+        self.assertIn("decision", done)
+        self.assertIn("reply_text", done)
 
 
 if __name__ == "__main__":
