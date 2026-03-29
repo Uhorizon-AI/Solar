@@ -121,17 +121,13 @@ class TestDecisionEngine(unittest.TestCase):
 
 class TestBuildPrompt(unittest.TestCase):
     def test_includes_telegram_routing_hint(self):
-        p = pathlib.Path("/tmp/nope.jsonl")
-        with patch.object(p.__class__, "exists", return_value=False):
-            result = router.build_prompt("hello", p, mode="auto", channel="telegram")
+        result = router.build_prompt("sys", "hello", "conv1", mode="auto", channel="telegram")
         self.assertIn("telegram", result)
         self.assertIn("solar_decision", result)
         self.assertIn("hello", result)
 
     def test_direct_only_hint(self):
-        p = pathlib.Path("/tmp/nope.jsonl")
-        with patch.object(p.__class__, "exists", return_value=False):
-            result = router.build_prompt("x", p, mode="direct_only", channel="other")
+        result = router.build_prompt("sys", "x", "conv1", mode="direct_only", channel="other")
         self.assertIn("direct_only", result)
 
 

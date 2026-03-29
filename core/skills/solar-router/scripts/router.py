@@ -45,6 +45,16 @@ _raw_runtime_dir = (
 _runtime_path = pathlib.Path(_raw_runtime_dir)
 RUNTIME_ROOT = _runtime_path if _runtime_path.is_absolute() else REPO_ROOT / _runtime_path
 
+_raw_system_prompt_file = (
+    os.getenv("SOLAR_ROUTER_SYSTEM_PROMPT_FILE")
+    or os.getenv("SOLAR_SYSTEM_PROMPT_FILE")
+    or "core/skills/solar-router/assets/system_prompt.md"
+)
+_system_prompt_path = pathlib.Path(_raw_system_prompt_file)
+SYSTEM_PROMPT_FILE = (
+    _system_prompt_path if _system_prompt_path.is_absolute() else REPO_ROOT / _system_prompt_path
+)
+
 RE_SOLAR_DECISION = re.compile(
     r"<solar_decision>\s*([a-z_]+)\s*</solar_decision>",
     re.IGNORECASE | re.DOTALL,
@@ -66,6 +76,15 @@ def sanitize_id(value: str) -> str:
 
 def conversation_file(conversation_id: str) -> pathlib.Path:
     return RUNTIME_ROOT / "conversations" / f"{sanitize_id(conversation_id)}.jsonl"
+
+
+def read_system_prompt() -> str:
+    if not SYSTEM_PROMPT_FILE.exists():
+        return (
+            "You are Solar, a practical AI assistant. Keep continuity with previous"
+            " conversation turns and answer with clear, useful output."
+        )
+    return SYSTEM_PROMPT_FILE.read_text(encoding="utf-8").strip()
 
 
 def append_message(path: pathlib.Path, role: str, text: str) -> None:
@@ -138,6 +157,92 @@ def create_async_draft(user_text: str, ai_output: str, request_id: str) -> Optio
         if line.startswith("ID:"):
             return line.split("ID:", 1)[1].strip()
     return None
+
+
+# ---------------------------------------------------------------------------
+# Skill metadata extraction
+# ---------------------------------------------------------------------------
+
+def _extract_skill_description(skill_path: pathlib.Path) -> Optional[str]:
+    try:
+        content = skill_path.read_text(encoding="utf-8")
+        match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
+        if not match:
+            return None
+        frontmatter = match.group(1)
+        desc_match = re.search(r"description:\s*[>|]?\s*\n?((?:[ \t]+.+\n?)+|.+)", frontmatter)
+        if desc_match:
+            raw = desc_match.group(1).strip()
+            return " ".join(line.strip() for line in raw.splitlines() if line.strip())
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# JIT Context Resolution
+# ---------------------------------------------------------------------------
+
+def resolve_jit_context(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    agent_name = metadata.get("agent")
+    raw_skills = metadata.get("skills") or []
+    if isinstance(raw_skills, str):
+        skill_names = [raw_skills]
+    elif isinstance(raw_skills, list):
+        skill_names = [str(s) for s in raw_skills if str(s).strip()]
+    else:
+        skill_names = []
+    planet = metadata.get("planet")
+
+    agent_content: Optional[str] = None
+    skills_content: List[Dict[str, str]] = []
+    jit_generated = False
+
+    if agent_name:
+        candidates = []
+        if planet:
+            candidates.append(REPO_ROOT / f"planets/{planet}/agents/{agent_name}.md")
+        candidates.append(REPO_ROOT / f"core/agents/{agent_name}.md")
+        for path in candidates:
+            if path.exists():
+                agent_content = path.read_text(encoding="utf-8").strip()
+                break
+        if not agent_content:
+            jit_generated = True
+            agent_content = (
+                f"# Role: {agent_name}\n"
+                f"You are a specialized agent for tasks related to {agent_name}. "
+                f"Apply domain expertise for the task requested."
+            )
+    else:
+        jit_generated = True
+
+    for skill in skill_names:
+        candidates = []
+        if ":" in skill:
+            skill_planet, skill_id = skill.split(":", 1)
+            candidates.append(REPO_ROOT / f"planets/{skill_planet}/skills/{skill_id}/SKILL.md")
+        else:
+            if planet:
+                candidates.append(REPO_ROOT / f"planets/{planet}/skills/{skill}/SKILL.md")
+            candidates.append(REPO_ROOT / f"core/skills/{skill}/SKILL.md")
+
+        for skill_path in candidates:
+            if skill_path.exists():
+                skill_description = _extract_skill_description(skill_path)
+                if skill_description:
+                    skills_content.append({"name": skill, "description": skill_description})
+                    break
+        else:
+            print(f"[solar-router] skill not found: {skill}", file=sys.stderr)
+
+    return {
+        "agent_name": agent_name,
+        "agent_content": agent_content,
+        "skills_content": skills_content,
+        "jit_generated": jit_generated,
+        "planet": planet,
+    }
 
 
 def resolve_decision(
@@ -240,51 +345,64 @@ def parse_ai_decision_output(ai_output: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Prompt building — minimal + routing hints for tag contract
+# Prompt building
 # ---------------------------------------------------------------------------
 
 def build_prompt(
-    text: str,
-    conv_path: pathlib.Path,
-    mode: str = "auto",
-    channel: str = "other",
+    system_prompt: str,
+    user_text: str,
+    conversation_id: str,
+    mode: str,
+    channel: str,
+    jit_context: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Minimal prompt: history pointer (if exists) + routing hints + user message."""
     lines: List[str] = []
-    if conv_path.exists():
-        rel_path = conv_path.relative_to(REPO_ROOT)
-        lines.append(
-            f"Before responding, read {rel_path} for conversation history. "
-            f"Then respond to the user message below."
-        )
-        lines.append("")
+    lines.append(system_prompt)
 
+    if jit_context and jit_context.get("agent_content"):
+        lines.append("")
+        lines.append("## Agent Role")
+        lines.append(jit_context["agent_content"])
+
+    if jit_context and jit_context.get("skills_content"):
+        lines.append("")
+        lines.append("## Available Skills")
+        lines.append("Invoke these skills by name when needed for the task:")
+        for skill in jit_context["skills_content"]:
+            lines.append(f"- {skill['name']}: {skill['description']}")
+
+    lines.append("")
+    lines.append("Conversation context")
+    lines.append(f"- conversation_id: {conversation_id}")
+    lines.append(f"- channel: {channel}")
+    lines.append(f"- mode: {mode}")
+    if jit_context and jit_context.get("planet"):
+        lines.append(f"- planet: {jit_context['planet']}")
+    if jit_context and jit_context.get("jit_generated"):
+        lines.append("- agent: jit (generated for this task)")
+    lines.append("")
+    lines.append("Current user message:")
+    lines.append(user_text)
+    lines.append("")
     mode_l = mode.strip().lower()
     channel_l = channel.strip().lower()
-
     if mode_l == "auto" and channel_l in ("telegram", "n8n"):
         lines.append(
             f"[Solar routing] channel={channel_l}, mode=auto. After your main answer, append "
             "exactly one line: <solar_decision>direct_reply</solar_decision> if the request is quick, "
-            "or <solar_decision>async_draft_created</solar_decision> if it needs substantial async work "
-            "(then explain you need more time, propose an async draft, and ask for confirmation per your instructions). "
+            "or <solar_decision>async_draft_created</solar_decision> if it needs substantial async work. "
             "Then append <solar_summary>...</solar_summary> as usual."
         )
-        lines.append("")
     elif mode_l == "auto" and channel_l != "async-task":
         lines.append(
             "[Solar routing] mode=auto. Append <solar_decision>direct_reply</solar_decision> or "
             "<solar_decision>async_draft_created</solar_decision> before <solar_summary>."
         )
-        lines.append("")
     elif mode_l == "direct_only":
         lines.append(
             "[Solar routing] mode=direct_only. Respond directly; include <solar_summary> but do not "
             "use <solar_decision> for async routing."
         )
-        lines.append("")
-
-    lines.append(text)
     return "\n".join(lines)
 
 
@@ -401,7 +519,10 @@ def route_stream(raw: str):
 
     conversation_id = user_id or session_id or "default"
     conv_path = conversation_file(conversation_id)
-    prompt = build_prompt(text, conv_path, mode=mode, channel=channel)
+    metadata = payload.get("metadata") or {}
+    jit_context = resolve_jit_context(metadata) if metadata else None
+    system_prompt = read_system_prompt()
+    prompt = build_prompt(system_prompt, text, conversation_id, mode, channel, jit_context)
 
     provider_used: Optional[str] = None
     usage: Optional[Dict[str, Any]] = None
@@ -487,12 +608,15 @@ def route(raw: str) -> Dict[str, Any]:
     conv_path = conversation_file(conversation_id)
 
     t_start = time.monotonic()
-    audit_log(router_id, "start", request_id=request_id, user_id=user_id, channel=channel, mode=mode)
+    metadata = payload.get("metadata") or {}
+    audit_log(router_id, "start", request_id=request_id, user_id=user_id, channel=channel, mode=mode, metadata=metadata)
 
     if mode == "async_only" and not async_tasks_enabled():
         return _failed(request_id, "async_tasks_disabled", "async-tasks feature not enabled in SOLAR_SYSTEM_FEATURES")
 
-    prompt = build_prompt(text, conv_path, mode=mode, channel=channel)
+    jit_context = resolve_jit_context(metadata) if metadata else None
+    system_prompt = read_system_prompt()
+    prompt = build_prompt(system_prompt, text, conversation_id, mode, channel, jit_context)
 
     provider_used: Optional[str] = None
     try:
@@ -518,6 +642,7 @@ def route(raw: str) -> Dict[str, Any]:
         duration_ms=int((time.monotonic() - t_start) * 1000),
         prompt_chars=len(prompt),
         decision_kind=decision.get("kind"),
+        jit_generated=bool(jit_context and jit_context.get("jit_generated")),
     )
 
     return {
