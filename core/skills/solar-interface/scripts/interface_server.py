@@ -33,6 +33,9 @@ def load_env() -> dict[str, str]:
 
 
 ENV = load_env()
+# Export .env vars to os.environ so subprocesses (router, providers) inherit them.
+for _k, _v in ENV.items():
+    os.environ.setdefault(_k, _v)
 HOST = ENV.get("SOLAR_INTERFACE_HOST", "127.0.0.1")
 PORT = int(ENV.get("SOLAR_INTERFACE_PORT", "7741"))
 CONTEXT_TURNS = int(ENV.get("SOLAR_ROUTER_CONTEXT_TURNS", "12"))
@@ -202,8 +205,6 @@ def create_thread(title: str | None = None, scope_layer: str = "sun", scope_plan
         conn.commit()
     finally:
         conn.close()
-    thread_doc = THREADS_DIR / f"{thread_id}.md"
-    thread_doc.write_text(f"# {final_title}\n", encoding="utf-8")
     return {
         "thread_id": thread_id,
         "title": final_title,

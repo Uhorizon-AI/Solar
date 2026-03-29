@@ -1,40 +1,30 @@
 """
 BaseProvider — shared subprocess execution logic for all provider adapters.
 
-Each subclass must set `name` and either `default_cmd` (str) or override
-`build_default_cmd()` for providers whose command depends on runtime paths.
-
-Contract: run(prompt) -> str
-  - Returns normalized stdout on success.
-  - Raises RuntimeError with a clear message on any failure.
-  - Never swallows errors silently.
+Contract: run(prompt) -> str, stream(prompt) -> generator
 """
 import os
 import pathlib
 import shlex
 import shutil
 import subprocess
+import sys
 from abc import ABC
 from typing import Dict, List
 
-# providers/base.py lives at core/skills/solar-router/scripts/providers/
-# parents: [0] providers/  [1] scripts/  [2] solar-router/  [3] skills/  [4] core/  [5] repo root
+# providers/base.py → [0] providers/ [1] scripts/ [2] solar-router/ [3] skills/ [4] core/ [5] repo root
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[5]
 FALLBACK_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
 
 
 class BaseProvider(ABC):
-    """Abstract base for provider adapters. Subclasses set name + default_cmd."""
-
     name: str = ""
     default_cmd: str = ""
 
     def build_default_cmd(self) -> str:
-        """Override in subclasses whose default command is computed at runtime."""
         return self.default_cmd
 
     def resolve_binary(self, binary: str) -> str:
-        """Return the absolute path to `binary`, searching FALLBACK_PATHS if needed."""
         found = shutil.which(binary)
         if found is None:
             current_path = os.getenv("PATH", "")
@@ -44,12 +34,11 @@ class BaseProvider(ABC):
             env_key = f"SOLAR_ROUTER_{self.name.upper()}_CMD"
             raise RuntimeError(
                 f"client binary not found: {binary} "
-                f"(provider={self.name}, env={env_key}, PATH={os.getenv('PATH', '')})"
+                f"(provider={self.name}, env={env_key})"
             )
         return found
 
     def get_cmd(self, prompt: str) -> List[str]:
-        """Build the full command list for this provider, including prompt."""
         new_key = f"SOLAR_ROUTER_{self.name.upper()}_CMD"
         old_key = f"SOLAR_AI_{self.name.upper()}_CMD"
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
@@ -60,37 +49,38 @@ class BaseProvider(ABC):
         return parts + [prompt]
 
     def prepare_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
-        """Return env dict for subprocess. Override to inject provider-specific vars."""
         return base_env
 
     def clean_output(self, output: str) -> str:
-        """Normalize raw stdout. Override to strip ANSI codes or detect error patterns."""
         return output
 
     def get_cwd(self) -> pathlib.Path:
-        """Working directory for the provider subprocess.
+        """Run from REPO_ROOT so CLIs auto-discover CLAUDE.md, GEMINI.md, profile.md, MEMORY.md."""
+        return REPO_ROOT
 
-        Defaults to the user's home directory so that Claude/Gemini/Codex do NOT
-        discover CLAUDE.md / GEMINI.md files from the Solar repo tree — those files
-        add thousands of redundant tokens per call since the router already supplies
-        all context via full_prompt. Override in subclasses if the provider needs
-        repo access.
-        """
-        return pathlib.Path.home()
+    def log_prompt(self, prompt: str, extra_flags: str = "") -> None:
+        """Write prompt to sun/runtime/router/prompts.log when SOLAR_ROUTER_LOG_PROMPTS=true."""
+        if os.getenv("SOLAR_ROUTER_LOG_PROMPTS", "false").lower() != "true":
+            return
+        new_key = f"SOLAR_ROUTER_{self.name.upper()}_CMD"
+        old_key = f"SOLAR_AI_{self.name.upper()}_CMD"
+        raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
+        entry = f"\n[solar-router][{self.name}] CMD: {raw}{extra_flags} <prompt>\n[PROMPT]\n{prompt}\n[/PROMPT]\n"
+        print(entry, file=sys.stderr, flush=True)
+        log_path = REPO_ROOT / "sun/runtime/router/prompts.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(entry)
 
     def stream(self, prompt: str):
-        """Yield output chunks as they arrive. Default: single chunk via run(). Override for real streaming."""
+        """Default: single chunk via run(). Override for real streaming."""
         yield self.run(prompt)
 
     def run(self, prompt: str) -> str:
-        """Execute the provider and return its output string.
-
-        Raises RuntimeError on non-zero exit, empty output, or output that
-        indicates a non-recoverable provider error (e.g. OAuth prompt).
-        """
         timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
         cmd = self.get_cmd(prompt)
         env = self.prepare_env(os.environ.copy())
+        self.log_prompt(prompt)
         proc = subprocess.run(
             cmd,
             text=True,

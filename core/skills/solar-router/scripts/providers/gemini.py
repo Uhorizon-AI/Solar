@@ -1,6 +1,5 @@
 import json
 import os
-import pathlib
 import re
 import shlex
 import subprocess
@@ -13,12 +12,6 @@ class GeminiProvider(BaseProvider):
     name = "gemini"
     default_cmd = "gemini -y"
     last_usage: dict | None = None
-
-    def prepare_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
-        env = base_env.copy()
-        env.setdefault("GEMINI_CLI_HOME", str(pathlib.Path.home()))
-        env.setdefault("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", "false")
-        return env
 
     def clean_output(self, output: str) -> str:
         cleaned = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", output)
@@ -33,20 +26,18 @@ class GeminiProvider(BaseProvider):
         return cleaned
 
     def stream(self, prompt: str):
-        """Stream using --output-format stream-json, yielding text chunks as they arrive."""
+        """Stream using --output-format stream-json."""
+        self.log_prompt(prompt, " --output-format stream-json")
         new_key = "SOLAR_ROUTER_GEMINI_CMD"
         old_key = "SOLAR_AI_GEMINI_CMD"
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.default_cmd).strip()
         if "--output-format" not in raw:
             raw += " --output-format stream-json"
         parts = shlex.split(raw)
-        
-        # Limpiar cualquier "-p" o "--prompt" suelto que carezca de parámetro asociado
         while "-p" in parts:
             parts.remove("-p")
         while "--prompt" in parts:
             parts.remove("--prompt")
-            
         parts[0] = self.resolve_binary(parts[0])
         cmd = parts + ["-p", prompt]
 
@@ -72,7 +63,6 @@ class GeminiProvider(BaseProvider):
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
-                    # Validar si saltó el prompt the OAuth silenciosamente
                     self.clean_output(line)
                     continue
 
@@ -83,7 +73,6 @@ class GeminiProvider(BaseProvider):
                         full_text.append(text)
                         yield text
                 elif event_type == "result":
-                    # Capture real usage from the final result event
                     stats = event.get("stats")
                     if isinstance(stats, dict):
                         self.last_usage = {

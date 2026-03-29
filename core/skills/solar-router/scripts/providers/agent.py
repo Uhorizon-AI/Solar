@@ -1,3 +1,8 @@
+import json
+import os
+import shlex
+import subprocess
+
 from .base import BaseProvider, REPO_ROOT
 
 
@@ -6,16 +11,11 @@ class AgentProvider(BaseProvider):
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
-        # Use /tmp as workspace so agent does NOT auto-load solar.ai context files.
-        return f"agent -p -f --approve-mcps --workspace /tmp"
+        return "agent -p -f --approve-mcps"
 
     def stream(self, prompt: str):
-        """Stream using --output-format stream-json, capturing usage from result event."""
-        import json
-        import os
-        import shlex
-        import subprocess
-
+        """Stream using --output-format stream-json."""
+        self.log_prompt(prompt, " --output-format stream-json")
         self.last_usage = None
         new_key = "SOLAR_ROUTER_AGENT_CMD"
         old_key = "SOLAR_AI_AGENT_CMD"
@@ -52,8 +52,7 @@ class AgentProvider(BaseProvider):
 
                 event_type = event.get("type")
                 if event_type == "assistant":
-                    message = event.get("message", {})
-                    for block in message.get("content", []):
+                    for block in event.get("message", {}).get("content", []):
                         if isinstance(block, dict) and block.get("type") == "text":
                             text = block.get("text", "")
                             if text:

@@ -12,7 +12,8 @@ class ClaudeProvider(BaseProvider):
     last_usage: dict | None = None
 
     def stream(self, prompt: str):
-        """Stream token-by-token using --include-partial-messages, yielding text_delta chunks."""
+        """Stream token-by-token using --include-partial-messages."""
+        self.log_prompt(prompt, " --output-format stream-json --include-partial-messages")
         new_key = "SOLAR_ROUTER_CLAUDE_CMD"
         old_key = "SOLAR_AI_CLAUDE_CMD"
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.default_cmd).strip()
@@ -50,7 +51,6 @@ class ClaudeProvider(BaseProvider):
 
                 event_type = event.get("type")
                 if event_type == "stream_event":
-                    # Token-level deltas from --include-partial-messages
                     inner = event.get("event", {})
                     if inner.get("type") == "content_block_delta":
                         delta = inner.get("delta", {})
@@ -60,7 +60,6 @@ class ClaudeProvider(BaseProvider):
                                 full_text.append(text)
                                 yield text
                 elif event_type == "result":
-                    # Capture real usage from the final result event
                     usage = event.get("usage")
                     if isinstance(usage, dict):
                         self.last_usage = {

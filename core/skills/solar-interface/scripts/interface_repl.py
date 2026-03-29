@@ -428,9 +428,10 @@ def send_and_print(base_url: str, state: dict, text: str) -> None:
 
     spinner_stop.set()
     spinner_thread.join(timeout=0.5)
-    with spinner_lock:
-        sys.stdout.write("\r\033[K")
-        sys.stdout.flush()
+    if not started:
+        with spinner_lock:
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
 
     provider_label = provider_used or "unknown"
     if started and saw_non_whitespace:

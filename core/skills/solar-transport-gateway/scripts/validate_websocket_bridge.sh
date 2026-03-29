@@ -1,30 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! command -v poetry >/dev/null 2>&1; then
-  echo "Missing dependency: poetry"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "Missing dependency: uv"
   exit 1
 fi
 
-export POETRY_VIRTUALENVS_IN_PROJECT=true
-export POETRY_CACHE_DIR="${POETRY_CACHE_DIR:-core/skills/solar-transport-gateway/.poetry-cache}"
-
-poetry -C core/skills/solar-transport-gateway check >/dev/null
-
-poetry -C core/skills/solar-transport-gateway run python - <<'PY'
+uv run --with websockets==12.0 python3 - <<'PY'
 import importlib.util
 import pathlib
 import sys
 
 if importlib.util.find_spec("websockets") is None:
     print("Missing dependency: websockets")
-    print("Install with: poetry -C core/skills/solar-transport-gateway install")
+    print("Install with: uv run --with websockets==12.0 python3 ...")
     sys.exit(1)
 
 script = pathlib.Path("scripts/run_websocket_bridge.py")
 src = script.read_text(encoding="utf-8")
 compile(src, str(script), "exec")
-print("OK: poetry project, websocket dependency, and script syntax are valid.")
+print("OK: uv runtime, websocket dependency, and script syntax are valid.")
 PY
 
 if ! command -v cloudflared >/dev/null 2>&1; then
