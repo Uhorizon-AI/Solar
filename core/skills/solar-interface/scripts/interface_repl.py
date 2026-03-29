@@ -2,6 +2,7 @@
 """Solar Interface interactive REPL — Claude-style TUI with / and @ completion."""
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import pathlib
@@ -12,16 +13,21 @@ import time
 import urllib.error
 import urllib.request
 
+from prompt_toolkit.application import Application
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.screen import Point
 from prompt_toolkit.styles import Style
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 SOLAR_DIR = pathlib.Path.home() / ".solar"
 HISTORY_FILE = SOLAR_DIR / "history"
+CURRENT_THREAD_FILE = REPO_ROOT / "sun" / "runtime" / "interface" / "state" / "current-thread.json"
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -41,7 +47,7 @@ def _load_providers() -> list[str]:
 
 
 BUILTIN_COMMANDS = {
-    "/resume": ("resume", None,   "Show past conversations and resume one"),
+    "/resume": ("resume", None,   "Browse conversations, resume one, or delete"),
     "/client": ("client", None,   "Show or switch AI client: /client [provider]"),
     "/thread": ("info",   None,   "Show current thread ID"),
     "/clear":  ("clear",  None,   "Clear the screen"),
@@ -310,6 +316,35 @@ def api_post(base_url: str, path: str, payload: dict) -> dict:
         return {"error": exc.read().decode("utf-8")}
 
 
+def api_delete(base_url: str, path: str) -> dict:
+    url = base_url + path
+    req = urllib.request.Request(url, method="DELETE")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read().decode("utf-8").strip()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        return {"error": exc.read().decode("utf-8"), "status": exc.code}
+
+
+def persist_current_thread(thread_id: str) -> None:
+    CURRENT_THREAD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "thread_id": thread_id,
+        "updated_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+    }
+    CURRENT_THREAD_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def create_thread(base_url: str, title: str) -> dict | None:
+    data = api_post(base_url, "/threads", {"title": title})
+    thread = data.get("thread")
+    return thread if isinstance(thread, dict) else None
+
+
 def get_last_provider_for_thread(base_url: str, thread_id: str) -> str | None:
     data = api_get(base_url, f"/threads/{thread_id}/runs")
     runs = data.get("runs", [])
@@ -460,6 +495,205 @@ def send_and_print(base_url: str, state: dict, text: str) -> None:
 
 # ── /resume ───────────────────────────────────────────────────────────────────
 
+def _thread_menu_label(thread: dict, is_active: bool) -> str:
+    updated = (thread.get("updated_at") or "")[:10]
+    title = " ".join(str(thread.get("title") or "Untitled").split())[:50]
+    marker = "  ◀ active" if is_active else ""
+    return f"{title:<52} {updated}  {thread['thread_id']}{marker}"
+
+
+def _extract_api_error(resp: dict) -> str:
+    raw = resp.get("error")
+    if not isinstance(raw, str) or not raw.strip():
+        return "Unknown API error"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw.strip()
+    if isinstance(parsed, dict):
+        msg = parsed.get("error")
+        if isinstance(msg, str) and msg.strip():
+            return msg.strip()
+    return raw.strip()
+
+
+def browse_threads(base_url: str, state: dict, threads: list[dict]) -> tuple[str, dict | None]:
+    items = list(threads)
+    if not items:
+        return "cancel", None
+
+    selected = next(
+        (idx for idx, thread in enumerate(items) if thread["thread_id"] == state["thread_id"]),
+        0,
+    )
+    pending_delete: str | None = None
+    status_message = ""
+    outcome: dict[str, object] = {"action": "cancel", "thread": None}
+    app_holder: dict[str, Application] = {}
+
+    def current_thread() -> dict:
+        return items[selected]
+
+    def set_status(message: str) -> None:
+        nonlocal status_message
+        status_message = message
+        app = app_holder.get("app")
+        if app is not None:
+            app.invalidate()
+
+    def render_header():
+        return [
+            ("bold", "  Recent conversations\n"),
+            ("#888888", "  ↑/↓ or j/k to move, Enter to open, d to delete, Esc to cancel\n"),
+        ]
+
+    def render_body():
+        fragments: list[tuple[str, str]] = []
+        for idx, thread in enumerate(items):
+            is_selected = idx == selected
+            is_active = thread["thread_id"] == state["thread_id"]
+            prefix = "›" if is_selected else " "
+            style = "reverse" if is_selected else ""
+            line = f"  {prefix} {idx + 1:>2}. {_thread_menu_label(thread, is_active)}"
+            fragments.append((style, line + "\n"))
+        return fragments
+
+    def body_cursor() -> Point:
+        return Point(x=0, y=selected)
+
+    def render_footer():
+        current = current_thread()
+        details = f"  Selected: {current['thread_id']}"
+        if pending_delete == current["thread_id"]:
+            return [
+                ("ansired", f"{details}\n  Delete this thread and its runs? Press y to confirm or n to cancel."),
+            ]
+        message = status_message or "  Tip: delete removes the thread, runs, approvals, artifacts, and stored outputs."
+        return [("", details + "\n"), ("#888888", message)]
+
+    kb = KeyBindings()
+
+    def move(delta: int) -> None:
+        nonlocal selected, pending_delete
+        if not items:
+            return
+        selected = max(0, min(len(items) - 1, selected + delta))
+        pending_delete = None
+        set_status("")
+
+    @kb.add("up")
+    @kb.add("k")
+    def _up(event):
+        move(-1)
+
+    @kb.add("down")
+    @kb.add("j")
+    def _down(event):
+        move(1)
+
+    @kb.add("home")
+    def _home(event):
+        nonlocal selected, pending_delete
+        selected = 0
+        pending_delete = None
+        set_status("")
+
+    @kb.add("end")
+    def _end(event):
+        nonlocal selected, pending_delete
+        selected = len(items) - 1
+        pending_delete = None
+        set_status("")
+
+    @kb.add("enter")
+    def _enter(event):
+        outcome["action"] = "select"
+        outcome["thread"] = current_thread()
+        event.app.exit()
+
+    @kb.add("d")
+    def _delete(event):
+        nonlocal pending_delete
+        pending_delete = current_thread()["thread_id"]
+        set_status("")
+
+    @kb.add("n")
+    def _cancel_delete(event):
+        nonlocal pending_delete
+        if pending_delete is not None:
+            pending_delete = None
+            set_status("Delete cancelled.")
+
+    @kb.add("y")
+    def _confirm_delete(event):
+        nonlocal selected, pending_delete, items
+        target = pending_delete
+        if target is None:
+            return
+
+        resp = api_delete(base_url, f"/threads/{target}")
+        if resp.get("status") != "deleted":
+            pending_delete = None
+            set_status(f"Delete failed: {_extract_api_error(resp)}")
+            return
+
+        deleted_active = target == state["thread_id"]
+        items = [thread for thread in items if thread["thread_id"] != target]
+        pending_delete = None
+
+        if not items:
+            new_thread = create_thread(base_url, "Solar Chat")
+            if not new_thread:
+                outcome["action"] = "cancel"
+                outcome["thread"] = None
+                set_status("Deleted the last thread, but failed to create a replacement.")
+                event.app.exit()
+                return
+            items = [new_thread]
+            selected = 0
+            state["thread_id"] = new_thread["thread_id"]
+            persist_current_thread(new_thread["thread_id"])
+            set_status("Deleted the last thread. Created a fresh empty thread.")
+            return
+
+        selected = min(selected, len(items) - 1)
+        if deleted_active:
+            state["thread_id"] = items[selected]["thread_id"]
+            persist_current_thread(items[selected]["thread_id"])
+            set_status("Deleted the active thread. Switched to the selected fallback thread.")
+        else:
+            set_status("Thread deleted.")
+
+    @kb.add("escape")
+    @kb.add("c-c", eager=True)
+    @kb.add("q")
+    def _cancel(event):
+        outcome["action"] = "cancel"
+        outcome["thread"] = None
+        event.app.exit()
+
+    body = FormattedTextControl(
+        text=render_body,
+        focusable=True,
+        get_cursor_position=body_cursor,
+    )
+    root = HSplit([
+        Window(content=FormattedTextControl(render_header), height=2, always_hide_cursor=True),
+        Window(content=body, always_hide_cursor=False),
+        Window(content=FormattedTextControl(render_footer), height=2, always_hide_cursor=True),
+    ])
+    app = Application(
+        layout=Layout(root, focused_element=root.children[1]),
+        key_bindings=kb,
+        mouse_support=False,
+        full_screen=False,
+        style=STYLE,
+    )
+    app_holder["app"] = app
+    app.run()
+    return str(outcome["action"]), outcome["thread"] if isinstance(outcome["thread"], dict) else None
+
+
 def cmd_resume(base_url: str, state: dict, session: PromptSession) -> None:
     data = api_get(base_url, "/threads")
     threads = data.get("threads", [])
@@ -468,40 +702,13 @@ def cmd_resume(base_url: str, state: dict, session: PromptSession) -> None:
         print("\n  No conversations yet.\n")
         return
 
-    print("\n  Recent conversations:\n")
-    for i, t in enumerate(threads[:20], 1):
-        updated = (t.get("updated_at") or "")[:10]
-        title = (t.get("title") or "Untitled")[:50]
-        active = "  ◀" if t["thread_id"] == state["thread_id"] else ""
-        print(f"  {i:>2}.  {title:<52} {updated}  {t['thread_id']}{active}")
-    print()
-
-    try:
-        raw = session.prompt(HTML(
-            '  <ansiblue>Select</ansiblue> (number or thread ID, Enter to cancel): '
-        )).strip()
-    except (EOFError, KeyboardInterrupt):
+    action, selected = browse_threads(base_url, state, threads)
+    if action != "select" or not selected:
         print()
         return
 
-    if not raw:
-        return
-
-    selected = None
-    if raw.isdigit():
-        idx = int(raw) - 1
-        if 0 <= idx < len(threads):
-            selected = threads[idx]
-        else:
-            print("  Invalid selection.\n")
-            return
-    else:
-        selected = next((t for t in threads if t["thread_id"] == raw), None)
-        if not selected:
-            print("  Thread not found.\n")
-            return
-
     state["thread_id"] = selected["thread_id"]
+    persist_current_thread(selected["thread_id"])
 
     print_thread_history(base_url, selected["thread_id"], selected.get("title", "Untitled"))
 

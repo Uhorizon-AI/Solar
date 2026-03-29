@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import os
 import pathlib
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -40,6 +41,9 @@ HOST = ENV.get("SOLAR_INTERFACE_HOST", "127.0.0.1")
 PORT = int(ENV.get("SOLAR_INTERFACE_PORT", "7741"))
 CONTEXT_TURNS = int(ENV.get("SOLAR_ROUTER_CONTEXT_TURNS", "12"))
 RUNTIME_DIR = REPO_ROOT / ENV.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/interface")
+_router_runtime_dir = pathlib.Path(ENV.get("SOLAR_ROUTER_RUNTIME_DIR", "sun/runtime/router"))
+ROUTER_RUNTIME_DIR = _router_runtime_dir if _router_runtime_dir.is_absolute() else REPO_ROOT / _router_runtime_dir
+ROUTER_CONVERSATIONS_DIR = ROUTER_RUNTIME_DIR / "conversations"
 DB_DIR = RUNTIME_DIR / "db"
 MIGRATIONS_DIR = DB_DIR / "migrations"
 DB_PATH = DB_DIR / "interface.sqlite"
@@ -52,6 +56,11 @@ ROUTER_SCRIPT = REPO_ROOT / "core" / "skills" / "solar-router" / "scripts" / "ru
 
 def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def sanitize_runtime_id(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
+    return cleaned[:120] if cleaned else "unknown"
 
 
 def _strip_solar_tags(text: str) -> str:
@@ -243,6 +252,126 @@ def update_thread_last_run(thread_id: str, run_id: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def is_run_stale(run: sqlite3.Row | dict) -> bool:
+    status = str(run["status"])
+    if status not in {"running", "queued"}:
+        return False
+
+    pid = run["pid"]
+    if isinstance(pid, int) and pid > 0:
+        try:
+            os.kill(pid, 0)
+            return False
+        except OSError:
+            return True
+
+    started_at = str(run["started_at"] or "")
+    if not started_at:
+        return True
+    try:
+        started = dt.datetime.fromisoformat(started_at)
+    except ValueError:
+        return True
+    return (dt.datetime.now(dt.timezone.utc) - started) > dt.timedelta(minutes=10)
+
+
+def delete_thread(thread_id: str) -> dict:
+    conn = connect_db()
+    try:
+        thread = conn.execute(
+            "SELECT * FROM threads WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+        if thread is None:
+            raise KeyError(thread_id)
+
+        candidate_active_runs = conn.execute(
+            """
+            SELECT run_id, status, pid, started_at
+            FROM runs
+            WHERE thread_id = ? AND status NOT IN ('success', 'succeeded', 'failed', 'rejected')
+            ORDER BY started_at DESC
+            """,
+            (thread_id,),
+        ).fetchall()
+
+        active_runs = []
+        stale_run_ids = []
+        for run in candidate_active_runs:
+            if is_run_stale(run):
+                stale_run_ids.append(run["run_id"])
+            else:
+                active_runs.append(run)
+
+        if stale_run_ids:
+            placeholders = ",".join("?" for _ in stale_run_ids)
+            conn.execute(
+                f"""
+                UPDATE runs
+                SET status = 'failed',
+                    ended_at = COALESCE(ended_at, ?),
+                    error = COALESCE(error, 'stale run auto-closed during thread delete')
+                WHERE run_id IN ({placeholders})
+                """,
+                (now_iso(), *stale_run_ids),
+            )
+
+        if active_runs:
+            raise ValueError(active_runs[0]["status"])
+
+        run_ids = [
+            row["run_id"]
+            for row in conn.execute(
+                "SELECT run_id FROM runs WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchall()
+        ]
+
+        if run_ids:
+            placeholders = ",".join("?" for _ in run_ids)
+            conn.execute(
+                f"DELETE FROM artifacts WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            )
+            conn.execute(
+                f"DELETE FROM approvals WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            )
+            conn.execute(
+                f"DELETE FROM runs WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            )
+
+        conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    deleted_dirs = 0
+    for run_id in run_ids:
+        run_dir = RUNS_DIR / run_id
+        if run_dir.exists():
+            shutil.rmtree(run_dir, ignore_errors=True)
+            deleted_dirs += 1
+
+    router_files_deleted = 0
+    sanitized_thread_id = sanitize_runtime_id(thread_id)
+    for router_file in (
+        ROUTER_CONVERSATIONS_DIR / f"{sanitized_thread_id}.jsonl",
+        ROUTER_CONVERSATIONS_DIR / f"{sanitized_thread_id}-summary.txt",
+    ):
+        if router_file.exists():
+            router_file.unlink()
+            router_files_deleted += 1
+
+    return {
+        "thread_id": thread_id,
+        "deleted_runs": len(run_ids),
+        "deleted_run_dirs": deleted_dirs,
+        "deleted_router_files": router_files_deleted,
+    }
 
 
 def run_router(thread_id: str, mode: str, text: str, provider: str = "auto") -> tuple[dict, dict]:
@@ -759,6 +888,28 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 conn.close()
             self._send({"status": "rejected", "approval_id": approval_id})
+            return
+
+        self._send({"error": "Not found"}, 404)
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+
+        if path.startswith("/threads/"):
+            thread_id = path.strip("/").split("/")[1]
+            try:
+                result = delete_thread(thread_id)
+            except KeyError:
+                self._send({"error": "Thread not found"}, 404)
+                return
+            except ValueError as exc:
+                self._send(
+                    {"error": f"Thread has a non-terminal run: {exc}"},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+
+            self._send({"status": "deleted", **result})
             return
 
         self._send({"error": "Not found"}, 404)
