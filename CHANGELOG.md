@@ -6,6 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(core/tests): centralized skill unit tests under `core/tests/skills/<skill-name>/` with `core/tests/pyproject.toml` + `uv.lock` (pytest via `uv run --project core/tests …`); `core/AGENTS.md` documents the policy.
+- feat(solar-skill-creator): exclude `tests/` directories from `.skill` zip packaging so skill archives stay minimal.
+
+### Changed
+- refactor(solar-router): move unit tests from `core/skills/solar-router/tests/` to `core/tests/skills/solar-router/` with `conftest.py` for `scripts/` import path.
+
 ## [0.5.0] - 2026-03-27
 
 ### Added

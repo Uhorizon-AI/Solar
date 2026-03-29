@@ -1,0 +1,12 @@
+[project]
+name = "solar-core-tests"
+version = "0.0.0"
+description = "Centralized automated tests for core/skills (not published to PyPI)"
+requires-python = ">=3.10,<4.0"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["skills"]

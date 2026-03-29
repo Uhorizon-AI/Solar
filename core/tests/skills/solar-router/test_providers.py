@@ -3,15 +3,8 @@ Unit tests for providers/*.py — subprocess.run is mocked throughout.
 No real AI binaries are called.
 """
 import io
-import pathlib
-import sys
 import unittest
 from unittest.mock import MagicMock, patch
-
-# Ensure scripts/ is importable
-_SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
 
 from providers.base import BaseProvider, REPO_ROOT, FALLBACK_PATHS
 from providers.claude import ClaudeProvider

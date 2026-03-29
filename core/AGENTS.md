@@ -187,3 +187,10 @@ This protocol is invoked by root `AGENTS.md` when `sun/MEMORY.md` or `sun/prefer
   - `python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /tmp`
 - Do not use `--no-validate` in normal flow.
 - This rule is per-skill (only the skill being modified), not repository-wide.
+
+## Core skills automated tests policy (required)
+- **Do not** add `tests/` inside `core/skills/<name>/`. Skill packages (`.skill` zips) must stay lean; `package_skill.py` excludes any stray `tests/` directory from archives.
+- **Do** add automated tests under **`core/tests/skills/<skill-name>/`** (one subdirectory per skill). Use `unittest` or `pytest` as the runner; shared dev dependencies live in **`core/tests/pyproject.toml`** with `uv run --project core/tests pytest …`.
+- Each skill test folder may ship a **`conftest.py`** that adds `core/skills/<skill-name>/scripts` to `sys.path` so imports match runtime (see `core/tests/skills/solar-router/conftest.py`).
+- After adding or moving tests, run the suite from the repo root before considering the change complete:
+  - `uv run --project core/tests pytest core/tests/skills/<skill-name> -q`

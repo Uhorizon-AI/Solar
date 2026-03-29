@@ -127,7 +127,7 @@ def package_skill(skill_path: Path, output_dir: Path) -> Path:
 
     skill_name = skill_path.name
     output_file = output_dir / f"{skill_name}.skill"
-    excluded_dirs = {".venv", ".poetry-cache", "__pycache__", ".git"}
+    excluded_dirs = {".venv", ".poetry-cache", "__pycache__", ".git", "tests"}
     excluded_files = {".DS_Store"}
 
     # Create zip file with .skill extension

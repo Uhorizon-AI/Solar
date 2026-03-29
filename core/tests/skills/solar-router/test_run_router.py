@@ -5,14 +5,8 @@ Calls route() directly (same as the entrypoint does) and validates that
 every response conforms to the RouterResponse v3 contract.
 """
 import json
-import pathlib
-import sys
 import unittest
 from unittest.mock import patch
-
-_SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
 
 from router import route
 
