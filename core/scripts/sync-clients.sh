@@ -465,6 +465,7 @@ for repo in existing_scan_repos + planet_repos:
 data['explorer.excludeGitIgnore'] = False
 data['search.useIgnoreFiles'] = False
 data['git.scanRepositories'] = merged_scan_repos
+data['python.terminal.activateEnvironment'] = False
 
 ignored_folders = data.get('git.repositoryScanIgnoredFolders')
 if isinstance(ignored_folders, list):
