@@ -366,6 +366,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
             update = json.loads(raw.decode("utf-8"))
 
             if channel == "telegram":
+                if not TELEGRAM_BOT_TOKEN:
+                    self.write_json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        {
+                            "status": "failed",
+                            "error": "Telegram not configured (set TELEGRAM_BOT_TOKEN)",
+                            "bridge": BRIDGE_NAME,
+                        },
+                    )
+                    return
                 parsed = parse_telegram_update(update)
                 if parsed is None:
                     raise ValueError("Unsupported Telegram payload")
@@ -493,7 +503,11 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
-        raise SystemExit("Missing TELEGRAM_BOT_TOKEN in environment.")
+        print(
+            "[http-bridge] TELEGRAM_BOT_TOKEN unset: /webhook/telegram disabled; "
+            "/webhook/n8n still works.",
+            flush=True,
+        )
     server = ThreadingHTTPServer((SOLAR_HTTP_HOST, SOLAR_HTTP_PORT), WebhookHandler)
     print(
         f"solar-webhook listening on http://{SOLAR_HTTP_HOST}:{SOLAR_HTTP_PORT}"
