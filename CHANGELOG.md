@@ -6,12 +6,23 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-29
+
 ### Added
 - feat(core/tests): centralized skill unit tests under `core/tests/skills/<skill-name>/` with `core/tests/pyproject.toml` + `uv.lock` (pytest via `uv run --project core/tests …`); `core/AGENTS.md` documents the policy.
 - feat(solar-skill-creator): exclude `tests/` directories from `.skill` zip packaging so skill archives stay minimal.
+- feat(solar-interface): add thread deletion with stale-run cleanup and router conversation cleanup so interface and router state stay aligned.
+- feat(transport-gateway): add async n8n HTTP polling flow (`202` + `poll_url`) to avoid proxy/origin timeout failures on long router runs.
 
 ### Changed
 - refactor(solar-router): move unit tests from `core/skills/solar-router/tests/` to `core/tests/skills/solar-router/` with `conftest.py` for `scripts/` import path.
+- refactor(solar-router): restore `read_system_prompt` and `resolve_jit_context`, keep the thin dispatcher design, and switch `auto` routing from JSON decision payloads to `<solar_decision>` / `<solar_summary>` tag parsing.
+- refactor(solar-interface): align thread context and router persistence around thread IDs, strip Solar tags from SSE/user-visible output, and export `.env` values to subprocesses for provider consistency.
+- refactor(providers): standardize provider execution around `REPO_ROOT`, keep Codex JSON-event streaming, and remove the unvalidated Gemini environment workaround.
+
+### Fixed
+- fix(solar-router): bring router behavior back in line with the documented JIT contract after the thin-dispatch refactor regression.
+- fix(transport-gateway): keep the HTTP webhook bridge usable without waiting on long-running router responses behind Cloudflare/proxy timeouts.
 
 ## [0.5.0] - 2026-03-27
 
