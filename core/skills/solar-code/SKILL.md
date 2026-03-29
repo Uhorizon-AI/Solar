@@ -48,8 +48,8 @@ Classify the change before acting:
 ## Workflow
 
 1. **Triage** — classify the change level (micro / standard / multi-repo).
-2. **Load repo policy** — read the target repo's policy file before writing anything.
-3. **Write task spec** (if standard or above) — use `references/task-spec.md`.
+2. **Load repo policy** — read the target repo's `CONTRIBUTING.md` file before writing anything.
+3. **Write task spec** (if standard or above) — use `references/task-spec.md` as template.
 4. **Apply change locally** — edit files in the working tree; do not push.
 5. **Run checks** — only commands declared in the repo policy allowlist.
 6. **Human review in IDE** — surface the diff; human decides to keep or discard.
@@ -66,12 +66,12 @@ only when there is evidence they are needed.
 
 ## Repo adoption contract
 
-Each repo target must declare a policy file. Format: `references/repo-policy.md`.
-The policy lives in the planet that operates the repo target.
+Each repo target must declare a policy file at its root. Format: `CONTRIBUTING.md`.
+This file defines the "rules of engagement" for both humans and AI agents.
 
 
 ## References
 
 - `references/task-spec.md` — minimal task spec template.
-- `references/repo-policy.md` — repo policy format for adopting repos.
+- `references/repo-policy.md` — repo policy template (rename to `CONTRIBUTING.md` when adopting a repo).
 - `references/local-review-guide.md` — how to use local-review mode.
