@@ -3,15 +3,8 @@ Unit tests for providers/*.py — subprocess.run is mocked throughout.
 No real AI binaries are called.
 """
 import io
-import pathlib
-import sys
 import unittest
 from unittest.mock import MagicMock, patch
-
-# Ensure scripts/ is importable
-_SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
 
 from providers.base import BaseProvider, REPO_ROOT, FALLBACK_PATHS
 from providers.claude import ClaudeProvider
@@ -99,11 +92,11 @@ class TestBaseProviderRun(unittest.TestCase):
 
     @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
     @patch("providers.base.subprocess.run")
-    def test_uses_home_as_default_cwd(self, mock_run, _):
+    def test_uses_repo_root_as_default_cwd(self, mock_run, _):
         mock_run.return_value = _mock_proc()
         self.provider.run("prompt")
         _, kwargs = mock_run.call_args
-        self.assertEqual(kwargs["cwd"], pathlib.Path.home())
+        self.assertEqual(kwargs["cwd"], REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -113,15 +106,6 @@ class TestBaseProviderRun(unittest.TestCase):
 class TestGeminiProvider(unittest.TestCase):
     def setUp(self):
         self.provider = GeminiProvider()
-
-    def test_prepare_env_sets_gemini_vars(self):
-        env = self.provider.prepare_env({})
-        self.assertIn("GEMINI_CLI_HOME", env)
-        self.assertEqual(env["GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"], "false")
-
-    def test_prepare_env_does_not_overwrite_existing(self):
-        env = self.provider.prepare_env({"GEMINI_CLI_HOME": "/custom"})
-        self.assertEqual(env["GEMINI_CLI_HOME"], "/custom")
 
     def test_clean_output_strips_ansi(self):
         raw = "\x1b[32mhello\x1b[0m"

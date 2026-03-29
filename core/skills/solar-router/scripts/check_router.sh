@@ -187,10 +187,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 10: parse_ai_decision_output — valid JSON with decision.kind
+# Test 10: parse_ai_decision_output — solar tags (async_draft_created)
 # ---------------------------------------------------------------------------
 echo ""
-echo "── Test 10: parse_ai_decision_output parses valid JSON"
+echo "── Test 10: parse_ai_decision_output parses solar_decision tags"
 parse_result="$($PYTHON -c "
 import sys
 import importlib.util
@@ -198,17 +198,18 @@ spec = importlib.util.spec_from_file_location('run_router', '$ROUTER_SCRIPT')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
-import json
-valid_output = json.dumps({'decision': {'kind': 'async_draft_created', 'priority_suggested': 'normal'}, 'reply_text': 'Creating async task'})
-result = mod.parse_ai_decision_output(valid_output)
+out = '''Creating async task
+<solar_decision>async_draft_created</solar_decision>
+<solar_summary>summary</solar_summary>'''
+result = mod.parse_ai_decision_output(out)
 assert result['decision']['kind'] == 'async_draft_created', f\"expected async_draft_created, got {result['decision']['kind']}\"
-assert result['reply_text'] == 'Creating async task', 'reply_text mismatch'
+assert 'Creating async task' in result['reply_text'], 'reply_text should strip tags but keep body'
 print('ok')
 " 2>&1 || echo "error")"
 if [[ "$parse_result" == "ok" ]]; then
-    pass "parse_ai_decision_output: parses valid JSON with decision.kind"
+    pass "parse_ai_decision_output: parses solar_decision tags"
 else
-    fail "parse_ai_decision_output valid JSON" "$parse_result"
+    fail "parse_ai_decision_output solar tags" "$parse_result"
 fi
 
 # ---------------------------------------------------------------------------
@@ -246,7 +247,9 @@ CREATE_SH="$REPO_ROOT/core/skills/solar-async-tasks/scripts/create.sh"
 if [[ ! -f "$CREATE_SH" ]]; then
     skip "async_only success path" "create.sh not found: $CREATE_SH"
 else
-    out="$(SOLAR_SYSTEM_FEATURES=async-tasks call_router '{"request_id":"t13","session_id":"s","user_id":"u","text":"smoke test async draft","channel":"other","mode":"async_only"}')"
+    # Mock provider (no real AI); create.sh still runs and must return an ID line.
+    out="$(SOLAR_SYSTEM_FEATURES=async-tasks SOLAR_ROUTER_CLAUDE_CMD="bash -c 'echo mock-async-body'" SOLAR_ROUTER_PROVIDER_PRIORITY=claude \
+        call_router '{"request_id":"t13","session_id":"s","user_id":"u","text":"smoke test async draft","channel":"other","mode":"async_only"}')"
     assert_json_valid "async_only success returns valid JSON" "$out"
     status13="$($PYTHON -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$out" 2>/dev/null || echo "unknown")"
     if [[ "$status13" == "success" ]]; then

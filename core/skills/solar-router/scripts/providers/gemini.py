@@ -1,23 +1,16 @@
 import json
 import os
-import pathlib
 import re
 import shlex
 import subprocess
-from typing import Dict
 
-from .base import BaseProvider, REPO_ROOT
+from .base import BaseProvider
 
 
 class GeminiProvider(BaseProvider):
     name = "gemini"
     default_cmd = "gemini -y"
-
-    def prepare_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
-        env = base_env.copy()
-        env.setdefault("GEMINI_CLI_HOME", str(pathlib.Path.home()))
-        env.setdefault("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", "false")
-        return env
+    last_usage: dict | None = None
 
     def clean_output(self, output: str) -> str:
         cleaned = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", output)
@@ -32,20 +25,18 @@ class GeminiProvider(BaseProvider):
         return cleaned
 
     def stream(self, prompt: str):
-        """Stream using --output-format stream-json, yielding text chunks as they arrive."""
+        """Stream using --output-format stream-json."""
+        self.log_prompt(prompt, " --output-format stream-json")
         new_key = "SOLAR_ROUTER_GEMINI_CMD"
         old_key = "SOLAR_AI_GEMINI_CMD"
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.default_cmd).strip()
         if "--output-format" not in raw:
             raw += " --output-format stream-json"
         parts = shlex.split(raw)
-        
-        # Limpiar cualquier "-p" o "--prompt" suelto que carezca de parámetro asociado
         while "-p" in parts:
             parts.remove("-p")
         while "--prompt" in parts:
             parts.remove("--prompt")
-            
         parts[0] = self.resolve_binary(parts[0])
         cmd = parts + ["-p", prompt]
 
@@ -71,7 +62,6 @@ class GeminiProvider(BaseProvider):
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
-                    # Validar si saltó el prompt the OAuth silenciosamente
                     self.clean_output(line)
                     continue
 
@@ -81,12 +71,19 @@ class GeminiProvider(BaseProvider):
                     if text:
                         full_text.append(text)
                         yield text
-                elif event_type == "result" and not full_text:
-                    # Fallback: result field when no assistant events produced text
-                    result = event.get("result", "")
-                    if result:
-                        full_text.append(result)
-                        yield result
+                elif event_type == "result":
+                    stats = event.get("stats")
+                    if isinstance(stats, dict):
+                        self.last_usage = {
+                            "input_tokens": stats.get("input_tokens", 0),
+                            "output_tokens": stats.get("output_tokens", 0),
+                            "cached_input_tokens": stats.get("cached", 0),
+                        }
+                    if not full_text:
+                        result = event.get("result", "")
+                        if result:
+                            full_text.append(result)
+                            yield result
                 elif not full_text and event_type not in {"message", "result", "progress"}:
                     text = event.get("text") or event.get("content") or ""
                     if text and isinstance(text, str):

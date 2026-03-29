@@ -75,7 +75,7 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
 | `async_only`  | any          | `async_draft_created`  | Requires `async-tasks` in SOLAR_SYSTEM_FEATURES |
 | `async_only`  | any          | `failed`               | If `async-tasks` not enabled                   |
 | `auto`        | `async-task` | `direct_reply`         | Already in queue, never re-propose async       |
-| `auto`        | other        | AI decides semantically | AI returns JSON with `decision.kind`           |
+| `auto`        | other        | AI decides semantically | Model emits `<solar_decision>` (see `system_prompt.md`) → router sets `decision.kind` |
 
 ## Async draft creation rule
 
@@ -172,6 +172,12 @@ EOF
 - HTTP webhook bridge for n8n exposes the router v3 JSON directly.
 - No legacy double-wrapper (`solar_status` / `solar_response`).
 - Only minimal bridge metadata (`bridge`, `route`) is added.
+
+### Cloudflare / proxy timeouts (HTTP 524)
+
+Proxies (including Cloudflare orange-cloud) often cut the origin after **~100 seconds** while the router may run until `SOLAR_ROUTER_TIMEOUT_SEC` (default 300s). That yields **524** (origin timed out) even when the stack is healthy.
+
+**Mitigation (transport-gateway HTTP bridge):** send `POST .../webhook/n8n?async=1` (or JSON `"async": true`). The bridge returns **202** immediately with `poll_url`. **GET** that URL (same host) until JSON has `"status": "done"` or `"status": "failed"`; the body then matches the usual router v3 response (plus `status`, `bridge`).
 
 ## Migration from v1/v2 to v3
 

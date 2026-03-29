@@ -40,10 +40,8 @@ scripts/
     codex.py           — build_default_cmd() with REPO_ROOT + CODEX_STATE_DIR
     gemini.py          — prepare_env (GEMINI_* vars) + clean_output (ANSI strip, OAuth guard)
     agent.py           — build_default_cmd() with REPO_ROOT
-tests/
-  test_providers.py    — unit tests for providers/ with subprocess.run mocked
-  test_router.py       — unit tests for router.py (no real AI calls)
-  test_run_router.py   — v3 contract tests via route()
+
+Automated tests live under `core/tests/skills/solar-router/` (framework-wide layout; see `core/AGENTS.md`).
 ```
 
 **Layer contract:**
@@ -87,8 +85,9 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 # Full error output when a provider fails (e.g. 401, binary not found)
 bash core/skills/solar-router/scripts/diagnose_router.sh --verbose
 
-# Unit tests: router logic + provider adapters (no real AI calls)
-python3 -m unittest discover -s core/skills/solar-router/tests -p "test_*.py" -v
+# Unit tests: router logic + provider adapters (centralized under core/tests; pytest runs unittest-style tests; no real AI calls)
+uv run --project core/tests pytest core/tests/skills/solar-router -q
+# Without uv: PYTHONPATH=core/skills/solar-router/scripts python3 -m unittest discover -s core/tests/skills/solar-router -p "test_*.py" -v
 
 # Smoke tests: validate router contract v3, bridge delegation, execute_active.py JSON parsing
 bash core/skills/solar-router/scripts/check_router.sh

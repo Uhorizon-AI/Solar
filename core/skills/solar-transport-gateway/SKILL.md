@@ -44,9 +44,6 @@ bash core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh
 # Validate skill quality and structure
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-transport-gateway /tmp
 
-# Install runtime dependencies
-poetry -C core/skills/solar-transport-gateway install
-
 # Bootstrap .env block for this skill
 bash core/skills/solar-transport-gateway/scripts/onboard_websocket_env.sh
 
@@ -70,14 +67,17 @@ bash core/skills/solar-transport-gateway/scripts/verify_telegram_webhook.sh
 # Configure stable named tunnel (recommended for production)
 bash core/skills/solar-transport-gateway/scripts/configure_named_tunnel.sh
 
+# Direct runtime check without local .venv
+uv run --with websockets==12.0 python3 -c "import websockets; print(websockets.__version__)"
+
 # Sync core changes to local clients
 bash core/scripts/sync-clients.sh
 ```
 
 ## Runtime requirements
 
-- `poetry`
-- Python dependency managed by Poetry: `websockets`
+- `uv`
+- Python dependency resolved at runtime by `uv`: `websockets==12.0`
 - At least one AI client CLI in `PATH`:
   - `codex`, `claude`, or `gemini`
 - Local runtime write access for conversation memory (default: `sun/runtime/router/`)
@@ -117,6 +117,12 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 3. For stable DNS, configure named tunnel with `configure_named_tunnel.sh` and set `SOLAR_TUNNEL_MODE=named`.
 4. All AI execution and routing policy is delegated to **solar-router** (`core/skills/solar-router/scripts/run_router.py`). This skill does not select providers or implement fallback.
 5. Use individual scripts only for troubleshooting or partial reconfiguration.
+
+## Dependency policy
+
+- This skill must not create or rely on an in-repo `.venv`.
+- Runtime Python dependencies are executed directly with `uv run --with ...`.
+- Install `uv` once on the host, for example `brew install uv`.
 
 ## Conversation continuity
 

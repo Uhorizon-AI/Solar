@@ -6,7 +6,7 @@ RUN_DIR="${SOLAR_GATEWAY_RUN_DIR:-/tmp/solar-transport-gateway}"
 mkdir -p "$RUN_DIR"
 
 # LaunchAgent jobs run with a minimal PATH. Add common Homebrew locations so
-# dependencies installed by brew (poetry/cloudflared) are resolvable.
+# dependencies installed by brew (uv/cloudflared) are resolvable.
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
 resolve_bin() {
@@ -66,8 +66,8 @@ if [[ "${1:-}" == "--prepare-only" ]]; then
   PREPARE_ONLY="true"
 fi
 
-POETRY_BIN="$(resolve_bin poetry /opt/homebrew/bin/poetry /usr/local/bin/poetry "$HOME/.local/bin/poetry")" || {
-  echo "Missing dependency: poetry"
+UV_BIN="$(resolve_bin uv /opt/homebrew/bin/uv /usr/local/bin/uv "$HOME/.local/bin/uv")" || {
+  echo "Missing dependency: uv"
   exit 1
 }
 CURL_BIN="$(resolve_bin curl /usr/bin/curl /usr/local/bin/curl)" || {
@@ -76,7 +76,7 @@ CURL_BIN="$(resolve_bin curl /usr/bin/curl /usr/local/bin/curl)" || {
 }
 
 bash core/skills/solar-transport-gateway/scripts/onboard_websocket_env.sh
-"$POETRY_BIN" -C core/skills/solar-transport-gateway install >/dev/null
+"$UV_BIN" run --with websockets==12.0 python3 -c "import websockets" >/dev/null
 bash core/skills/solar-transport-gateway/scripts/validate_websocket_bridge.sh
 
 if [[ "$PREPARE_ONLY" == "true" ]]; then

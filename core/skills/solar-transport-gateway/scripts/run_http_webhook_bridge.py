@@ -45,6 +45,13 @@ _processed_updates: Dict[str, float] = {}
 _inflight_updates: set[str] = set()
 _updates_lock = threading.Lock()
 
+# n8n async jobs (avoid Cloudflare ~100s origin timeout while router runs up to SOLAR_ROUTER_TIMEOUT_SEC)
+_N8N_JOB_TTL_SECONDS = int(os.getenv("SOLAR_N8N_JOB_TTL_SECONDS", "7200"))
+# Set SOLAR_N8N_DEFAULT_ASYNC=1 in .env so every POST /webhook/n8n returns 202 + poll_url without ?async=1 (n8n must poll poll_url).
+_SOLAR_N8N_DEFAULT_ASYNC = os.getenv("SOLAR_N8N_DEFAULT_ASYNC", "").strip().lower() in ("1", "true", "yes")
+_n8n_jobs: Dict[str, Dict[str, Any]] = {}
+_n8n_jobs_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # WS bridge communication
@@ -158,6 +165,53 @@ def parse_n8n_request(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
     }
 
 
+def n8n_wants_async(path: str, body: Dict[str, Any]) -> bool:
+    """True if client opted into fast ACK + poll (query ?async=1 or JSON async: true)."""
+    parsed = urllib.parse.urlparse(path)
+    qs = urllib.parse.parse_qs(parsed.query)
+    flag = (qs.get("async") or [""])[0].lower()
+    if flag in ("1", "true", "yes"):
+        return True
+    if body.get("async") is True:
+        return True
+    if str(body.get("async", "")).lower() in ("1", "true", "yes"):
+        return True
+    return False
+
+
+def _n8n_cleanup_jobs() -> None:
+    now = time()
+    with _n8n_jobs_lock:
+        expired = [
+            rid
+            for rid, row in _n8n_jobs.items()
+            if now - float(row.get("ts", 0)) > _N8N_JOB_TTL_SECONDS
+        ]
+        for rid in expired:
+            _n8n_jobs.pop(rid, None)
+
+
+def process_n8n_async_job(request_id: str, request_payload: Dict[str, Any]) -> None:
+    try:
+        response = asyncio.run(request_solar(request_payload))
+        with _n8n_jobs_lock:
+            _n8n_jobs[request_id] = {
+                "ts": time(),
+                "state": "done",
+                "response": response,
+                "error": None,
+            }
+    except Exception as exc:
+        print(f"[http-bridge] n8n async job failed ({request_id}): {exc}", flush=True)
+        with _n8n_jobs_lock:
+            _n8n_jobs[request_id] = {
+                "ts": time(),
+                "state": "failed",
+                "response": None,
+                "error": str(exc),
+            }
+
+
 # ---------------------------------------------------------------------------
 # Webhook handler
 # ---------------------------------------------------------------------------
@@ -186,6 +240,73 @@ class WebhookHandler(BaseHTTPRequestHandler):
         return channel
 
     @staticmethod
+    def n8n_result_path() -> str:
+        return f"{SOLAR_HTTP_WEBHOOK_BASE}/n8n/result"
+
+    def do_GET_n8n_result(self, parsed_path: urllib.parse.ParseResult) -> bool:
+        """Handle GET .../webhook/n8n/result?request_id=. Returns True if handled."""
+        clean = parsed_path.path.split("?", 1)[0].rstrip("/")
+        expected = self.n8n_result_path().rstrip("/")
+        if clean != expected:
+            return False
+        qs = urllib.parse.parse_qs(parsed_path.query)
+        request_id = (qs.get("request_id") or [None])[0]
+        if not request_id:
+            self.write_json(
+                HTTPStatus.BAD_REQUEST,
+                {"status": "failed", "error": "missing request_id"},
+            )
+            return True
+        _n8n_cleanup_jobs()
+        with _n8n_jobs_lock:
+            job = _n8n_jobs.get(request_id)
+        if job is None:
+            self.write_json(
+                HTTPStatus.NOT_FOUND,
+                {
+                    "status": "unknown",
+                    "request_id": request_id,
+                    "error": "job not found or expired",
+                    "bridge": BRIDGE_NAME,
+                },
+            )
+            return True
+        state = job.get("state")
+        if state == "pending":
+            self.write_json(
+                HTTPStatus.OK,
+                {
+                    "status": "pending",
+                    "request_id": request_id,
+                    "bridge": BRIDGE_NAME,
+                },
+            )
+            return True
+        if state == "failed":
+            self.write_json(
+                HTTPStatus.OK,
+                {
+                    "status": "failed",
+                    "request_id": request_id,
+                    "bridge": BRIDGE_NAME,
+                    "error": job.get("error"),
+                },
+            )
+            return True
+        # done
+        response = job.get("response") or {}
+        self.write_json(
+            HTTPStatus.OK,
+            {
+                "status": "done",
+                "bridge": BRIDGE_NAME,
+                "route": self.n8n_result_path(),
+                **response,
+            },
+        )
+        return True
+
+    @staticmethod
     def process_telegram_async(
         dedup_key: str,
         request_payload: Dict[str, Any],
@@ -210,7 +331,10 @@ class WebhookHandler(BaseHTTPRequestHandler):
             finish_telegram_update(dedup_key, success)
 
     def do_GET(self) -> None:
-        if self.path == "/health":
+        parsed = urllib.parse.urlparse(self.path)
+        if self.do_GET_n8n_result(parsed):
+            return
+        if parsed.path == "/health":
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -219,6 +343,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     "status": "ok",
                     "bridge": BRIDGE_NAME,
                     "route": BRIDGE_ROUTE_PATTERN,
+                    "n8n_async_poll": self.n8n_result_path(),
                 }
             ).encode("utf-8")
             self.wfile.write(body)
@@ -313,6 +438,38 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     "channel": "n8n",
                     "mode": "auto",
                 }
+                # Cloudflare (and many proxies) time out the origin after ~100s; the router
+                # may run up to SOLAR_ROUTER_TIMEOUT_SEC. Use async+poll to avoid HTTP 524.
+                if n8n_wants_async(self.path, update) or _SOLAR_N8N_DEFAULT_ASYNC:
+                    rid = request_payload["request_id"]
+                    with _n8n_jobs_lock:
+                        _n8n_jobs[rid] = {
+                            "ts": time(),
+                            "state": "pending",
+                            "response": None,
+                            "error": None,
+                        }
+                    threading.Thread(
+                        target=process_n8n_async_job,
+                        args=(rid, request_payload),
+                        daemon=True,
+                    ).start()
+                    q = urllib.parse.urlencode({"request_id": rid})
+                    poll_url = f"{self.n8n_result_path()}?{q}"
+                    self.write_json(
+                        HTTPStatus.ACCEPTED,
+                        {
+                            "status": "accepted",
+                            "bridge": BRIDGE_NAME,
+                            "route": self.path.split("?", 1)[0],
+                            "request_id": rid,
+                            "note": "Poll poll_url until top-level status is done or failed.",
+                            "poll_url": poll_url,
+                            "poll_method": "GET",
+                        },
+                    )
+                    return
+
                 response = asyncio.run(request_solar(request_payload))
 
                 # n8n: expose router v3 JSON directly, minimal bridge metadata only

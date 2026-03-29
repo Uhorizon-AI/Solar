@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import os
 import pathlib
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -33,10 +34,16 @@ def load_env() -> dict[str, str]:
 
 
 ENV = load_env()
+# Export .env vars to os.environ so subprocesses (router, providers) inherit them.
+for _k, _v in ENV.items():
+    os.environ.setdefault(_k, _v)
 HOST = ENV.get("SOLAR_INTERFACE_HOST", "127.0.0.1")
 PORT = int(ENV.get("SOLAR_INTERFACE_PORT", "7741"))
 CONTEXT_TURNS = int(ENV.get("SOLAR_ROUTER_CONTEXT_TURNS", "12"))
 RUNTIME_DIR = REPO_ROOT / ENV.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/interface")
+_router_runtime_dir = pathlib.Path(ENV.get("SOLAR_ROUTER_RUNTIME_DIR", "sun/runtime/router"))
+ROUTER_RUNTIME_DIR = _router_runtime_dir if _router_runtime_dir.is_absolute() else REPO_ROOT / _router_runtime_dir
+ROUTER_CONVERSATIONS_DIR = ROUTER_RUNTIME_DIR / "conversations"
 DB_DIR = RUNTIME_DIR / "db"
 MIGRATIONS_DIR = DB_DIR / "migrations"
 DB_PATH = DB_DIR / "interface.sqlite"
@@ -49,6 +56,19 @@ ROUTER_SCRIPT = REPO_ROOT / "core" / "skills" / "solar-router" / "scripts" / "ru
 
 def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def sanitize_runtime_id(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
+    return cleaned[:120] if cleaned else "unknown"
+
+
+def _strip_solar_tags(text: str) -> str:
+    """Remove <solar_summary> and <solar_decision> blocks from model output."""
+    import re
+    text = re.sub(r"\s*<solar_decision>[^<]*</solar_decision>", "", text)
+    text = re.sub(r"\s*<solar_summary>.*?</solar_summary>", "", text, flags=re.DOTALL)
+    return text.strip()
 
 
 def _extract_reply_text_from_wrapped_json(text: str) -> str | None:
@@ -171,54 +191,11 @@ def write_user_input(run_id: str, text: str) -> pathlib.Path:
 
 
 def build_thread_context(thread_id: str, current_text: str, mode: str) -> str:
-    conn = connect_db()
-    try:
-        rows = conn.execute(
-            """
-            SELECT run_id, started_at
-            FROM runs
-            WHERE thread_id = ?
-            ORDER BY started_at DESC
-            LIMIT ?
-            """,
-            (thread_id, CONTEXT_TURNS),
-        ).fetchall()
-    finally:
-        conn.close()
-
-    turns: list[str] = []
-    for row in reversed(rows):
-        run_dir = RUNS_DIR / row["run_id"]
-        input_file = run_dir / "input.md"
-        output_file = run_dir / "output.md"
-
-        if input_file.exists():
-            user_text = input_file.read_text(encoding="utf-8").strip()
-            if user_text:
-                turns.append(f"User: {user_text}")
-
-        if output_file.exists():
-            assistant_text = output_file.read_text(encoding="utf-8").strip()
-            if assistant_text:
-                turns.append(f"Assistant: {assistant_text}")
-
-    if not turns:
-        if mode == "plan":
-            return f"Return a concise actionable plan for:\n\n{current_text}"
-        return current_text
-
-    instruction = (
-        "Continue this conversation naturally, using the prior turns as context."
-        if mode != "plan"
-        else "Continue this conversation. The user is now asking for a concise actionable plan."
-    )
-
-    return (
-        f"{instruction}\n\n"
-        f"Conversation history:\n{chr(10).join(turns)}\n\n"
-        f"User: {current_text}\n"
-        f"Assistant:"
-    )
+    # Context is managed entirely by solar-router via rolling summary.
+    # The interface passes only the current message.
+    if mode == "plan":
+        return f"Return a concise actionable plan for:\n\n{current_text}"
+    return current_text
 
 
 def create_thread(title: str | None = None, scope_layer: str = "sun", scope_planet: str | None = None) -> dict:
@@ -237,8 +214,6 @@ def create_thread(title: str | None = None, scope_layer: str = "sun", scope_plan
         conn.commit()
     finally:
         conn.close()
-    thread_doc = THREADS_DIR / f"{thread_id}.md"
-    thread_doc.write_text(f"# {final_title}\n", encoding="utf-8")
     return {
         "thread_id": thread_id,
         "title": final_title,
@@ -279,6 +254,126 @@ def update_thread_last_run(thread_id: str, run_id: str) -> None:
         conn.close()
 
 
+def is_run_stale(run: sqlite3.Row | dict) -> bool:
+    status = str(run["status"])
+    if status not in {"running", "queued"}:
+        return False
+
+    pid = run["pid"]
+    if isinstance(pid, int) and pid > 0:
+        try:
+            os.kill(pid, 0)
+            return False
+        except OSError:
+            return True
+
+    started_at = str(run["started_at"] or "")
+    if not started_at:
+        return True
+    try:
+        started = dt.datetime.fromisoformat(started_at)
+    except ValueError:
+        return True
+    return (dt.datetime.now(dt.timezone.utc) - started) > dt.timedelta(minutes=10)
+
+
+def delete_thread(thread_id: str) -> dict:
+    conn = connect_db()
+    try:
+        thread = conn.execute(
+            "SELECT * FROM threads WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+        if thread is None:
+            raise KeyError(thread_id)
+
+        candidate_active_runs = conn.execute(
+            """
+            SELECT run_id, status, pid, started_at
+            FROM runs
+            WHERE thread_id = ? AND status NOT IN ('success', 'succeeded', 'failed', 'rejected')
+            ORDER BY started_at DESC
+            """,
+            (thread_id,),
+        ).fetchall()
+
+        active_runs = []
+        stale_run_ids = []
+        for run in candidate_active_runs:
+            if is_run_stale(run):
+                stale_run_ids.append(run["run_id"])
+            else:
+                active_runs.append(run)
+
+        if stale_run_ids:
+            placeholders = ",".join("?" for _ in stale_run_ids)
+            conn.execute(
+                f"""
+                UPDATE runs
+                SET status = 'failed',
+                    ended_at = COALESCE(ended_at, ?),
+                    error = COALESCE(error, 'stale run auto-closed during thread delete')
+                WHERE run_id IN ({placeholders})
+                """,
+                (now_iso(), *stale_run_ids),
+            )
+
+        if active_runs:
+            raise ValueError(active_runs[0]["status"])
+
+        run_ids = [
+            row["run_id"]
+            for row in conn.execute(
+                "SELECT run_id FROM runs WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchall()
+        ]
+
+        if run_ids:
+            placeholders = ",".join("?" for _ in run_ids)
+            conn.execute(
+                f"DELETE FROM artifacts WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            )
+            conn.execute(
+                f"DELETE FROM approvals WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            )
+            conn.execute(
+                f"DELETE FROM runs WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            )
+
+        conn.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    deleted_dirs = 0
+    for run_id in run_ids:
+        run_dir = RUNS_DIR / run_id
+        if run_dir.exists():
+            shutil.rmtree(run_dir, ignore_errors=True)
+            deleted_dirs += 1
+
+    router_files_deleted = 0
+    sanitized_thread_id = sanitize_runtime_id(thread_id)
+    for router_file in (
+        ROUTER_CONVERSATIONS_DIR / f"{sanitized_thread_id}.jsonl",
+        ROUTER_CONVERSATIONS_DIR / f"{sanitized_thread_id}-summary.txt",
+    ):
+        if router_file.exists():
+            router_file.unlink()
+            router_files_deleted += 1
+
+    return {
+        "thread_id": thread_id,
+        "deleted_runs": len(run_ids),
+        "deleted_run_dirs": deleted_dirs,
+        "deleted_router_files": router_files_deleted,
+    }
+
+
 def run_router(thread_id: str, mode: str, text: str, provider: str = "auto") -> tuple[dict, dict]:
     request_id = f"req_{uuid.uuid4().hex[:10]}"
     run_id = f"run_{uuid.uuid4().hex[:10]}"
@@ -309,7 +404,7 @@ def run_router(thread_id: str, mode: str, text: str, provider: str = "auto") -> 
     payload = {
         "request_id": request_id,
         "session_id": thread_id,
-        "user_id": "local-interface",
+        "user_id": thread_id,
         "text": router_text,
         "channel": "other",
         "mode": "direct_only",
@@ -585,7 +680,7 @@ class Handler(BaseHTTPRequestHandler):
         payload = {
             "request_id": request_id,
             "session_id": thread_id,
-            "user_id": "local-interface",
+            "user_id": thread_id,
             "text": router_text,
             "channel": "other",
             "mode": "direct_only",
@@ -613,13 +708,14 @@ class Handler(BaseHTTPRequestHandler):
         proc.stdin.close()  # type: ignore[union-attr]
 
         full_text_parts: list[str] = []
-        raw_text_parts: list[str] = []
         provider_used: str | None = None
         usage: dict | None = None
         status = "failed"
         error: str | None = None
-        hold_wrapped_json: bool | None = None
         client_disconnected = False
+        # Buffer chunks once a solar tag opening is detected; flushed/dropped at done.
+        tag_buffer: list[str] = []
+        in_solar_tag = False
 
         try:
             for raw_line in proc.stdout:  # type: ignore[union-attr]
@@ -633,19 +729,28 @@ class Handler(BaseHTTPRequestHandler):
 
                 if event.get("type") == "chunk":
                     chunk = event.get("text", "")
-                    if chunk:
-                        raw_text_parts.append(chunk)
-                        if hold_wrapped_json is None:
-                            probe = chunk.lstrip()
-                            hold_wrapped_json = probe.startswith("{") and (
-                                '"decision"' in probe or '"reply_text"' in probe
-                            )
-                        if hold_wrapped_json:
+                    if not chunk:
+                        continue
+                    full_text_parts.append(chunk)
+                    if in_solar_tag:
+                        # Already inside a tag block — buffer everything
+                        tag_buffer.append(chunk)
+                        continue
+                    # Check if this chunk contains the start of a solar tag
+                    tag_start = chunk.find("<solar_")
+                    if tag_start != -1:
+                        in_solar_tag = True
+                        visible = chunk[:tag_start]
+                        tag_buffer.append(chunk[tag_start:])
+                        if not visible:
                             continue
-                        full_text_parts.append(chunk)
+                        chunk = visible
+                    try:
                         sse = f"data: {json.dumps({'type': 'chunk', 'text': chunk}, ensure_ascii=False)}\n\n"
                         self.wfile.write(sse.encode("utf-8"))
                         self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        client_disconnected = True
                 elif event.get("type") == "done":
                     status = event.get("status", "failed")
                     provider_used = event.get("provider")
@@ -667,20 +772,8 @@ class Handler(BaseHTTPRequestHandler):
                     proc.kill()
                     proc.wait(timeout=2)
 
-        if hold_wrapped_json:
-            raw_joined = "".join(raw_text_parts)
-            unwrapped = _extract_reply_text_from_wrapped_json(raw_joined)
-            reply_text = unwrapped or raw_joined
-            if reply_text and not client_disconnected:
-                full_text_parts.append(reply_text)
-                try:
-                    sse = f"data: {json.dumps({'type': 'chunk', 'text': reply_text}, ensure_ascii=False)}\n\n"
-                    self.wfile.write(sse.encode("utf-8"))
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-        else:
-            reply_text = "".join(full_text_parts)
+        # Strip solar tags from the full accumulated text
+        reply_text = _strip_solar_tags("".join(full_text_parts))
         ended_at = now_iso()
         run_dir = RUNS_DIR / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -795,6 +888,28 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 conn.close()
             self._send({"status": "rejected", "approval_id": approval_id})
+            return
+
+        self._send({"error": "Not found"}, 404)
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+
+        if path.startswith("/threads/"):
+            thread_id = path.strip("/").split("/")[1]
+            try:
+                result = delete_thread(thread_id)
+            except KeyError:
+                self._send({"error": "Thread not found"}, 404)
+                return
+            except ValueError as exc:
+                self._send(
+                    {"error": f"Thread has a non-terminal run: {exc}"},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+
+            self._send({"status": "deleted", **result})
             return
 
         self._send({"error": "Not found"}, 404)

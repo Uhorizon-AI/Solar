@@ -5,14 +5,8 @@ Calls route() directly (same as the entrypoint does) and validates that
 every response conforms to the RouterResponse v3 contract.
 """
 import json
-import pathlib
-import sys
 import unittest
 from unittest.mock import patch
-
-_SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
 
 from router import route
 
@@ -113,7 +107,8 @@ class TestV3ContractOnSuccessPaths(unittest.TestCase):
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value="task-xyz")
-    def test_async_only_success(self, _):
+    @patch("router.run_with_fallback", return_value=("async ai body", "claude"))
+    def test_async_only_success(self, *_):
         result = route(_req(mode="async_only"))
         _assert_valid_v3(self, result)
         self.assertEqual(result["status"], "success")
