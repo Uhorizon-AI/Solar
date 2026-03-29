@@ -160,88 +160,50 @@ def create_async_draft(user_text: str, ai_output: str, request_id: str) -> Optio
 
 
 # ---------------------------------------------------------------------------
-# Skill metadata extraction
-# ---------------------------------------------------------------------------
-
-def _extract_skill_description(skill_path: pathlib.Path) -> Optional[str]:
-    try:
-        content = skill_path.read_text(encoding="utf-8")
-        match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
-        if not match:
-            return None
-        frontmatter = match.group(1)
-        desc_match = re.search(r"description:\s*[>|]?\s*\n?((?:[ \t]+.+\n?)+|.+)", frontmatter)
-        if desc_match:
-            raw = desc_match.group(1).strip()
-            return " ".join(line.strip() for line in raw.splitlines() if line.strip())
-    except Exception:
-        pass
-    return None
-
-
-# ---------------------------------------------------------------------------
 # JIT Context Resolution
 # ---------------------------------------------------------------------------
 
 def resolve_jit_context(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve agent context for this call.
+
+    - Agent file found  → return its repo-relative path; CLI reads it from REPO_ROOT.
+    - Agent not found   → generate role inline (JIT, ephemeral — no file written).
+    Skills/commands are discovered naturally by the CLI from REPO_ROOT.
+    """
     agent_name = metadata.get("agent")
-    raw_skills = metadata.get("skills") or []
-    if isinstance(raw_skills, str):
-        skill_names = [raw_skills]
-    elif isinstance(raw_skills, list):
-        skill_names = [str(s) for s in raw_skills if str(s).strip()]
-    else:
-        skill_names = []
     planet = metadata.get("planet")
 
-    agent_content: Optional[str] = None
-    skills_content: List[Dict[str, str]] = []
-    jit_generated = False
+    if not agent_name:
+        return {"agent_name": None, "planet": planet, "jit_generated": False, "agent_path": None, "agent_content": None}
 
-    if agent_name:
-        candidates = []
-        if planet:
-            candidates.append(REPO_ROOT / f"planets/{planet}/agents/{agent_name}.md")
-        candidates.append(REPO_ROOT / f"core/agents/{agent_name}.md")
-        for path in candidates:
-            if path.exists():
-                agent_content = path.read_text(encoding="utf-8").strip()
-                break
-        if not agent_content:
-            jit_generated = True
-            agent_content = (
-                f"# Role: {agent_name}\n"
-                f"You are a specialized agent for tasks related to {agent_name}. "
-                f"Apply domain expertise for the task requested."
-            )
-    else:
-        jit_generated = True
+    candidates: List[pathlib.Path] = []
+    if planet:
+        candidates.append(REPO_ROOT / f"planets/{planet}/agents/{agent_name}.md")
+    candidates.append(REPO_ROOT / f"core/agents/{agent_name}.md")
 
-    for skill in skill_names:
-        candidates = []
-        if ":" in skill:
-            skill_planet, skill_id = skill.split(":", 1)
-            candidates.append(REPO_ROOT / f"planets/{skill_planet}/skills/{skill_id}/SKILL.md")
-        else:
-            if planet:
-                candidates.append(REPO_ROOT / f"planets/{planet}/skills/{skill}/SKILL.md")
-            candidates.append(REPO_ROOT / f"core/skills/{skill}/SKILL.md")
+    for path in candidates:
+        if path.exists():
+            return {
+                "agent_name": agent_name,
+                "planet": planet,
+                "jit_generated": False,
+                "agent_path": str(path.relative_to(REPO_ROOT)),
+                "agent_content": None,
+            }
 
-        for skill_path in candidates:
-            if skill_path.exists():
-                skill_description = _extract_skill_description(skill_path)
-                if skill_description:
-                    skills_content.append({"name": skill, "description": skill_description})
-                    break
-        else:
-            print(f"[solar-router] skill not found: {skill}", file=sys.stderr)
-
+    # Not found → JIT inline (ephemeral, not persisted)
+    jit_content = (
+        f"# Role: {agent_name}\n"
+        f"You are a specialized agent for tasks related to {agent_name}. "
+        f"Apply domain expertise for the task requested. "
+        f"Discover available skills and commands from the Solar repository."
+    )
     return {
         "agent_name": agent_name,
-        "agent_content": agent_content,
-        "skills_content": skills_content,
-        "jit_generated": jit_generated,
         "planet": planet,
+        "jit_generated": True,
+        "agent_path": None,
+        "agent_content": jit_content,
     }
 
 
@@ -359,17 +321,17 @@ def build_prompt(
     lines: List[str] = []
     lines.append(system_prompt)
 
-    if jit_context and jit_context.get("agent_content"):
-        lines.append("")
-        lines.append("## Agent Role")
-        lines.append(jit_context["agent_content"])
-
-    if jit_context and jit_context.get("skills_content"):
-        lines.append("")
-        lines.append("## Available Skills")
-        lines.append("Invoke these skills by name when needed for the task:")
-        for skill in jit_context["skills_content"]:
-            lines.append(f"- {skill['name']}: {skill['description']}")
+    if jit_context:
+        if jit_context.get("agent_content"):
+            # JIT inline: agent file didn't exist, inject ephemeral role
+            lines.append("")
+            lines.append("## Agent Role (JIT)")
+            lines.append(jit_context["agent_content"])
+        elif jit_context.get("agent_path"):
+            # Agent file exists: reference it — CLI reads from REPO_ROOT
+            lines.append("")
+            lines.append(f"## Agent Role")
+            lines.append(f"Read {jit_context['agent_path']} for your role definition before responding.")
 
     lines.append("")
     lines.append("Conversation context")

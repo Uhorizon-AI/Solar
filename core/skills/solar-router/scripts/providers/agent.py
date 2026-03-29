@@ -11,7 +11,7 @@ class AgentProvider(BaseProvider):
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
-        return "agent -p -f --approve-mcps"
+        return f"agent -p -f --approve-mcps -C {REPO_ROOT}"
 
     def stream(self, prompt: str):
         """Stream using --output-format stream-json."""

@@ -3,9 +3,8 @@ import os
 import re
 import shlex
 import subprocess
-from typing import Dict
 
-from .base import BaseProvider, REPO_ROOT
+from .base import BaseProvider
 
 
 class GeminiProvider(BaseProvider):
