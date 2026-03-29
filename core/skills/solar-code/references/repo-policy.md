@@ -19,6 +19,7 @@
 
 - Before writing: run `git status`; do not overwrite unrelated human changes.
 - Rollback: run `git restore <modified-files>` to discard only agent-touched files. Do not use `git checkout .` or `git restore .`.
+- Changelog: If the repository contains a `CHANGELOG.md` file, update it concisely with the applied changes.
 
 ## Required checks before marking valid
 
