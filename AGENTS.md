@@ -108,6 +108,7 @@ When receiving a task, the AI must self-evaluate before responding:
 Check if available agents, skills, and commands are sufficient for the task:
 - **Sufficient** → execute directly.
 - **Insufficient or uncertain** → delegate to `solar-router` as a subprocess.
+- **Requires external resources** (internet, system binaries, MCPs, long-running operations) → create an async task via `solar-async-tasks` (create → plan → approve → queue). The system executes it automatically via the Solar LaunchAgent. Do NOT run `run_worker.sh` manually or attempt direct execution.
 
 ### 2. Validation Gate
 Before delegating to `solar-router`:
