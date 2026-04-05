@@ -23,7 +23,7 @@ All providers (Codex, Claude, Gemini, Agent) run with the same repo context: wor
 
 ## Environment keys
 
-- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `agent,codex,claude,gemini`)
+- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `agent,codex,claude,gemini,ollama`)
 - `SOLAR_SYSTEM_FEATURES` — CSV of enabled features (e.g., `async-tasks,transport-gateway`). Router reads this to check if `async-tasks` is enabled.
 
 ## Recommended defaults
@@ -37,7 +37,7 @@ SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 
 - The first provider in `SOLAR_ROUTER_PROVIDER_PRIORITY` is primary.
 - Remaining providers are fallback order if the previous provider fails.
-- Supported providers are enforced by the router implementation.
+- Supported providers are enforced by the router implementation: `codex`, `claude`, `gemini`, `agent`, `ollama`.
 - **Strict mode**: if `provider` field is set in the request, only that provider is used — no fallback. On failure → `error_code: provider_locked_failed`.
 - **Priority mode**: if `provider` is not set, router tries providers in order until one succeeds.
 
@@ -53,9 +53,11 @@ SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 - `SOLAR_ROUTER_CODEX_CMD`
 - `SOLAR_ROUTER_CLAUDE_CMD`
 - `SOLAR_ROUTER_GEMINI_CMD`
+- `SOLAR_ROUTER_OLLAMA_CMD`
 
 Default Agent command: `agent -p -f --approve-mcps --workspace <repo-root>`
 Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full-auto -C <repo-root> --add-dir ~/.codex --`
+Default Ollama command targets the local `solar` model: `ollama run solar --hidethinking --nowordwrap`
 
 ## Timeout keys
 
@@ -104,7 +106,7 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
   "text": "string",
   "channel": "telegram|n8n|async-task|other",
   "mode": "auto|direct_only|async_only",
-  "provider": "codex|claude|gemini|agent|null",
+  "provider": "codex|claude|gemini|agent|ollama|null",
   "metadata": {
     "agent": "agent-name|null",
     "skills": ["planet:skill-name", "core-skill-name"],
@@ -117,7 +119,7 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
 - `agent`: existing agent from `planets/<planet>/agents/` or `core/agents/`. Set to `null` to generate JIT role inline.
 - `skills`: `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; unprefixed `skill` resolves to `planets/<metadata.planet>/skills/<skill>/SKILL.md` first (if `metadata.planet` is set), then falls back to `core/skills/<skill>/SKILL.md`. Only the frontmatter `description` is injected — never the full file.
 - `planet`: planet that owns this task's domain. Used for agent and skill lookup.
-- `provider` (top-level): `claude` for reasoning/writing, `codex` for code, `gemini` for research. Omit to use priority order.
+- `provider` (top-level): `claude` for reasoning/writing, `codex` for code, `gemini` for research, `ollama` for local execution. `ollama` always targets the local model named `solar`. Omit to use priority order.
 
 ## Secure Invocation Protocol (Required)
 
@@ -155,7 +157,7 @@ EOF
 {
   "status": "success|failed",
   "request_id": "string",
-  "provider_used": "codex|claude|gemini|agent",
+  "provider_used": "codex|claude|gemini|agent|ollama",
   "reply_text": "string",
   "decision": {
     "kind": "direct_reply|async_draft_proposal|async_draft_created|async_activation_needed",

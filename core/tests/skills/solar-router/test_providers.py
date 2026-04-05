@@ -11,6 +11,7 @@ from providers.claude import ClaudeProvider
 from providers.codex import CodexProvider
 from providers.gemini import GeminiProvider
 from providers.agent import AgentProvider
+from providers.ollama import OllamaProvider
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +127,43 @@ class TestGeminiProvider(unittest.TestCase):
     def test_clean_output_passes_clean_text(self):
         result = self.provider.clean_output("normal response")
         self.assertEqual(result, "normal response")
+
+
+# ---------------------------------------------------------------------------
+# OllamaProvider
+# ---------------------------------------------------------------------------
+
+class TestOllamaProvider(unittest.TestCase):
+    def setUp(self):
+        self.provider = OllamaProvider()
+
+    def test_default_cmd_uses_solar_model(self):
+        self.assertEqual(
+            self.provider.build_default_cmd(),
+            "ollama run solar --hidethinking --nowordwrap",
+        )
+
+    def test_clean_output_strips_ansi_and_spinner_noise(self):
+        raw = "\x1b[?2026h\x1b[?25l\x1b[1G⠙ \x1b[K\x1b[?25h\x1b[?2026l\nOK\n"
+        self.assertEqual(self.provider.clean_output(raw), "OK")
+
+    def test_clean_output_detects_daemon_unavailable(self):
+        raw = 'Error: Head "http://127.0.0.1:11434/": dial tcp 127.0.0.1:11434: connect: operation not permitted'
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.clean_output(raw)
+        self.assertIn("ollama daemon unavailable", str(ctx.exception))
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/ollama")
+    @patch("providers.ollama.subprocess.run")
+    def test_run_normalizes_daemon_error_from_stderr(self, mock_run, _mock_which):
+        mock_run.return_value = _mock_proc(
+            returncode=1,
+            stdout="",
+            stderr='Error: Head "http://127.0.0.1:11434/": dial tcp 127.0.0.1:11434: connect: operation not permitted',
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.run("prompt")
+        self.assertIn("ollama daemon unavailable", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------

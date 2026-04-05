@@ -1,7 +1,7 @@
 ---
 name: solar-router
 description: >
-  Shared router that runs AI providers (Codex, Claude, Gemini, Agent) with Solar repo context.
+  Shared router that runs AI providers (Codex, Claude, Gemini, Agent, Ollama) with Solar repo context.
   Single source of truth for provider selection, fallback, and async routing policy.
   Use when transport-gateway, async-tasks, or other runtimes need to invoke an AI with
   cwd = repo root and paths resolved against REPO_ROOT.
@@ -61,7 +61,7 @@ bash core/skills/solar-router/scripts/onboard_router_env.sh
 ```
 
 **Key environment variables:**
-- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `codex,claude,gemini`)
+- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `codex,claude,gemini,ollama`)
 - `SOLAR_ROUTER_RUNTIME_DIR` — Where conversation history is stored (default: `sun/runtime/router`)
 - `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` — System prompt file path (default: `core/skills/solar-router/assets/system_prompt.md`)
 - `SOLAR_ROUTER_CONTEXT_TURNS` — Number of conversation turns to include (default: `12`)
@@ -71,6 +71,11 @@ Optional command overrides:
 - `SOLAR_ROUTER_CODEX_CMD`
 - `SOLAR_ROUTER_CLAUDE_CMD`
 - `SOLAR_ROUTER_GEMINI_CMD`
+- `SOLAR_ROUTER_OLLAMA_CMD`
+
+Ollama setup:
+- `provider=ollama` always targets the local model named `solar`
+- Build or refresh it with `bash core/skills/solar-router/scripts/setup_ollama.sh`
 
 ## Validation commands
 
@@ -109,7 +114,7 @@ bash core/skills/solar-router/scripts/status_router.sh --last 20
   "text": "string",
   "channel": "telegram|n8n|async-task|other",
   "mode": "auto|direct_only|async_only",
-  "provider": "codex|claude|gemini|agent|null",
+  "provider": "codex|claude|gemini|agent|ollama|null",
   "metadata": {
     "agent": "agent-name|null",
     "skills": ["planet:skill-name", "core-skill-name"],
@@ -161,7 +166,7 @@ EOF
 {
   "status": "success|failed",
   "request_id": "string",
-  "provider_used": "codex|claude|gemini|agent",
+  "provider_used": "codex|claude|gemini|agent|ollama",
   "reply_text": "string",
   "decision": {
     "kind": "direct_reply|async_draft_proposal|async_draft_created|async_activation_needed",

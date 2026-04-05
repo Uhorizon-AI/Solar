@@ -126,6 +126,7 @@ defaults = {
     "codex": codex_default,
     "claude": "claude -p --permission-mode bypassPermissions",
     "gemini": "gemini -y",
+    "ollama": "ollama run solar --hidethinking --nowordwrap",
 }
 if provider not in defaults:
     print(f"unsupported provider in priority: {provider}")
