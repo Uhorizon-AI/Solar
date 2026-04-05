@@ -102,6 +102,7 @@ The easiest way to create a new planet is using the helper script:
 
 ```bash
 bash core/scripts/create-planet.sh my-project
+bash core/scripts/create-planet.sh --code-repo my-app
 ```
 
 This automatically:
@@ -110,9 +111,14 @@ This automatically:
 - Creates CLAUDE.md and GEMINI.md symlinks
 - Shows next steps
 
+With `--code-repo`, it also:
+- Creates a starter `CONTRIBUTING.md` as the repo policy for `solar-code`
+- Creates `docs/tasks/` as the default location for task specs
+
 ## See Also
 
 - `/core/templates/planet-AGENTS.md` - AGENTS.md template
+- `/core/templates/planet-CONTRIBUTING.md` - CONTRIBUTING.md template for code repos
 - `/core/scripts/sync-clients.sh` - Resource sync script
 - `/core/scripts/create-planet.sh` - Planet creation helper script
 - `/AGENTS.md` - Root Solar governance

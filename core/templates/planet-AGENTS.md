@@ -16,6 +16,14 @@
 - Security/data rules:
 - Operational limits:
 
+## Code Repo Protocol (Optional)
+- If this planet is a code repository, declare `solar-code` as the mandatory protocol for automated code changes.
+- Set `CONTRIBUTING.md` as the repo policy file read before writing.
+- Declare where task specs live, for example `docs/tasks/`.
+- Keep governance split clear:
+  - `AGENTS.md` = planet governance and routing rules
+  - `CONTRIBUTING.md` = repo policy, checks, restrictions
+
 ## Input Contract (Sun -> Planet)
 - Objective:
 - Constraints:
