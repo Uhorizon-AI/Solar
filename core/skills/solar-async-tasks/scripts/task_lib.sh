@@ -182,6 +182,10 @@ scheduled_minutes() {
         echo "9999"
         return
     fi
+    if [[ "$stime" == "now" ]]; then
+        echo "0"
+        return
+    fi
     echo "$stime" | awk -F: '{ print $1*60+$2 }'
 }
 
@@ -197,6 +201,8 @@ is_scheduled_now() {
     sdays=$(extract_meta "$file" "scheduled_weekdays")
     # No schedule -> always eligible
     [[ -z "$stime" && -z "$sdays" ]] && return 0
+    # Explicit immediate run
+    [[ "$stime" == "now" ]] && return 0
     # Weekday check: if scheduled_weekdays set, current weekday must be in list
     if [[ -n "$sdays" ]]; then
         local current_dow

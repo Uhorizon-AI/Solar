@@ -117,3 +117,21 @@ def test_await_subtasks_preserves_detach_opt_out_field(tmp_path: Path) -> None:
     content = parent_file.read_text(encoding="utf-8")
     assert "detach_subtasks: true" in content
     assert 'blocked_by_task_ids: "child-1"' in content
+
+
+def test_start_next_treats_scheduled_time_now_as_immediately_eligible(tmp_path: Path) -> None:
+    task_root = tmp_path / "async-tasks"
+    write_task(
+        task_root,
+        "queued",
+        "run-now-task",
+        "task-now",
+        priority="high",
+        extra_meta='scheduled_time: "now"\n',
+    )
+
+    result = run_script("start_next.sh", task_root)
+
+    assert result.returncode == 0, result.stderr
+    assert (task_root / "active" / "run-now-task.md").exists()
+    assert "Started task" in result.stdout
