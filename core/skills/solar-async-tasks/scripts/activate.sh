@@ -110,6 +110,7 @@ fi
 NEW_FILE="$DIR_ACTIVE/$(basename "$TASK_FILE")"
 mv "$TASK_FILE" "$NEW_FILE"
 sed -i.bak 's/^status:.*/status: active/' "$NEW_FILE"
+sed -i.bak '/^blocked_by_task_ids:/d' "$NEW_FILE"
 rm -f "${NEW_FILE}.bak"
 
 echo "✅ Activated task: [$TASK_ID] $TITLE"

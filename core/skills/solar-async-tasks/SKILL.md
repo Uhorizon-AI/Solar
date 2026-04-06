@@ -15,10 +15,12 @@ Provide a local-first, filesystem-based task management system for Solar.
 - **Plan**: Detailed planning phase for tasks.
 - **Approve**: Prioritize and queue tasks for execution.
 - **Execute**: Track active and completed tasks.
+- **Wait on subtasks**: By default, a parent task pauses until spawned child tasks finish, then resumes automatically.
 
 ## Scope
 
 -   Manage task lifecycle: `draft` -> `planned` -> `queued` -> `active` -> `completed` -> `archive` (with optional `error` state).
+-   Support blocked parent tasks automatically via child-task detection + `blocked_by_task_ids`.
 -   **Recurring tasks**: Automatically re-queue tasks after completion with configurable intervals and limits.
 -   **Resource cleanup**: MCP resource lifecycle management (locks, cleanup hooks).
 -   Persist state in `sun/runtime/async-tasks/`.
@@ -50,6 +52,9 @@ bash core/skills/solar-async-tasks/scripts/list.sh
 
 # Worker: one-shot (e.g. for cron/launchd)
 bash core/skills/solar-async-tasks/scripts/run_worker.sh --once
+
+# Re-queue an active parent task until child tasks finish
+bash core/skills/solar-async-tasks/scripts/await_subtasks.sh <task_id> <child_id> [child_id...]
 
 # Deterministic manual activation by task ID (auto transitions draft/planned -> queued -> active)
 bash core/skills/solar-async-tasks/scripts/activate.sh <task_id>
@@ -114,7 +119,8 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 3.  **Approve**: `approve.sh` moves a planned task to `queued/` with a priority (high, normal, low).
 4.  **Start + Execute**: `run_worker.sh` picks the highest priority eligible task from `queued/`, moves it to `active/`, then executes one active task.
 5.  **Execute (manual/extra)**: `execute_active.sh` (wrapper) + `execute_active.py` (executor) process one `active/` task via `solar-router` v3 with `channel=async-task`, `mode=direct_only`.
-6.  **Complete**: `complete.sh` moves a task from `active/` to `completed/` (or recurring flow).
+6.  **Wait for children (default)**: if execution created new tasks, `await_subtasks.sh` re-queues the parent with `blocked_by_task_ids`, unless the task opted out.
+7.  **Complete**: `complete.sh` moves a task from `active/` to `completed/` (or recurring flow).
 
 ## Manual activation by task ID (optional)
 
@@ -122,7 +128,37 @@ Use this only when you want to activate one exact task manually (outside normal 
 
 - `activate.sh <task_id>`: auto-transitions `draft/planned -> queued -> active` for that specific task, using the task's existing `priority`.
 - Manual activation bypasses schedule and recurring interval gates by design (it still runs cleanup/resource hooks).
+- Manual activation also bypasses subtask blocking intentionally, for emergency/operator overrides.
 - The standard lifecycle remains queue-driven (`start_next.sh` / `run_worker.sh`).
+
+## Parent tasks waiting on subtasks
+
+This is the default behavior. Use it when a task should first create child tasks, let them finish, and only then continue its own flow.
+
+### Frontmatter
+
+- `blocked_by_task_ids: "id1,id2"` - Internal runtime field added automatically while the parent is waiting.
+- `detach_subtasks: true` - Opt-out. Use only when child tasks are fire-and-forget and the parent should finish immediately.
+
+### Behavior
+
+1. Task starts normally from `queued/`.
+2. During execution it creates one or more new tasks in `drafts/`, `planned/`, `queued/`, `active/`, or `error/`.
+3. Unless `detach_subtasks: true`, the executor detects those new task IDs and re-queues the parent instead of completing it.
+4. `start_next.sh` skips the parent while any `blocked_by_task_ids` task remains non-terminal.
+5. Once all child tasks are `completed` or `archived`, the parent becomes eligible again and resumes automatically.
+
+### Example
+
+```markdown
+---
+id: "..."
+title: "Daily Focus"
+status: queued
+priority: normal
+recurring: true
+---
+```
 
 ## Automatic execution (run_worker)
 
@@ -139,7 +175,7 @@ Use this only when you want to activate one exact task manually (outside normal 
 - Per-task provider override: if task frontmatter has `provider: <name>`, it is passed to the router as strict mode (no fallback).
 - Task body is used as semantic instruction source (including agent + skill directions in natural language).
 - **One log per task (traceability):** The log file has the **same name as the task file**, with `.log` extension (e.g. task `20260214-0100_Triage-diario-de-ofertas-LinkedIn.md` → log `logs/20260214-0100_Triage-diario-de-ofertas-LinkedIn.log`). Each run overwrites it, so the log always reflects the **last** execution (outcome, result or error). Logs older than 7 days are automatically deleted when the worker runs (`cleanup_old_logs`).
-- On success: `execute_active.py` writes log, `execute_active.sh` runs `complete.sh`.
+- On success: `execute_active.py` writes log, then `execute_active.sh` either re-queues the parent via `await_subtasks.sh` or completes it via `complete.sh`. Re-queue is the default when new child tasks appear.
 - On failure: `execute_active.py` moves task to `error/` and writes error log. To diagnose provider issues, run `bash core/skills/solar-router/scripts/diagnose_router.sh --verbose`.
 
 ## Scheduling (optional)

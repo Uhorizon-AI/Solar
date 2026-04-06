@@ -33,14 +33,34 @@ cleanup_old_logs
 
 run_one_task() {
     local task_file="$1"
-    local task_id title
+    local task_id title detach_subtasks before_ids after_ids child_ids child_id
 
     task_id="$(extract_meta "$task_file" "id")"
     title="$(extract_meta "$task_file" "title")"
+    detach_subtasks="$(extract_meta "$task_file" "detach_subtasks")"
+    before_ids="$(list_open_task_ids | grep -v "^${task_id}$" || true)"
 
     echo "▶ Executing task: [$task_id] $title" >&2
 
     if python3 "$EXECUTOR_SCRIPT" "$task_file" "$ROUTER_SCRIPT" "$task_id" "$title"; then
+        if [[ "$detach_subtasks" != "true" ]]; then
+            after_ids="$(list_open_task_ids | grep -v "^${task_id}$" || true)"
+            child_ids=""
+            while IFS= read -r child_id; do
+                [[ -z "$child_id" ]] && continue
+                if ! grep -qx "$child_id" <<< "$before_ids"; then
+                    child_ids+="${child_id}"$'\n'
+                fi
+            done <<< "$after_ids"
+
+            if [[ -n "$child_ids" ]]; then
+                mapfile -t child_id_array <<< "$child_ids"
+                "$SCRIPT_DIR/await_subtasks.sh" "$task_id" "${child_id_array[@]}"
+                echo "⏸️  Task paused until subtasks finish: [$task_id] $title"
+                return 0
+            fi
+        fi
+
         # execute_active.py succeeded: complete the task
         "$SCRIPT_DIR/complete.sh" "$task_id"
         echo "✅ Executed task: [$task_id] $title"

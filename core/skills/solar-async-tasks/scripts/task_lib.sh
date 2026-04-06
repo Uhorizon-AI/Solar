@@ -257,7 +257,55 @@ get_timeout_cmd() {
 # Parse CSV resources (compatible with extract_meta)
 parse_resources() {
     local resources_str="$1"
-    echo "$resources_str" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+    echo "$resources_str" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | awk 'NF'
+}
+
+parse_csv_meta() {
+    local raw="$1"
+    echo "$raw" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | awk 'NF'
+}
+
+is_task_terminal() {
+    local task_id="$1"
+    local task_file
+    task_file="$(find_task "$task_id")"
+    [[ -z "$task_file" ]] && return 0
+
+    case "$(get_status "$task_file")" in
+        completed|archived) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+list_unresolved_dependencies() {
+    local file="$1"
+    local blocked_by dep
+    blocked_by="$(extract_meta "$file" "blocked_by_task_ids")"
+    [[ -z "$blocked_by" ]] && return 0
+
+    for dep in $(parse_csv_meta "$blocked_by"); do
+        if ! is_task_terminal "$dep"; then
+            echo "$dep"
+        fi
+    done
+}
+
+has_unresolved_dependencies() {
+    local file="$1"
+    local dep
+    while IFS= read -r dep; do
+        [[ -n "$dep" ]] && return 0
+    done < <(list_unresolved_dependencies "$file")
+    return 1
+}
+
+list_open_task_ids() {
+    local f id
+    for f in "$DIR_DRAFTS"/*.md "$DIR_PLANNED"/*.md "$DIR_QUEUED"/*.md "$DIR_ACTIVE"/*.md "$DIR_ERROR"/*.md; do
+        [[ -e "$f" ]] || continue
+        id="$(extract_meta "$f" "id")"
+        [[ -n "$id" ]] && echo "$id"
+    done
 }
 
 # Check if recurring task is ready to run (race protection)
