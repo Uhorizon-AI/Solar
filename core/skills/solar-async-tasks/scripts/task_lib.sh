@@ -314,6 +314,27 @@ list_open_task_ids() {
     done
 }
 
+# Set or update a frontmatter key=value in a task file.
+# If the key exists, replaces it. If not, inserts it before the closing ---.
+# Usage: set_meta <file> <key> <value>
+set_meta() {
+    local file="$1"
+    local key="$2"
+    local value="$3"
+    if grep -q "^${key}:" "$file" 2>/dev/null; then
+        sed -i.bak "s|^${key}:.*|${key}: ${value}|" "$file"
+        rm -f "${file}.bak"
+    else
+        awk -v k="$key" -v v="$value" '
+            /^---$/ && ++count == 2 && !done {
+                print k ": " v
+                done = 1
+            }
+            { print }
+        ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    fi
+}
+
 # Check if recurring task is ready to run (race protection)
 is_recurring_ready() {
     local file="$1"

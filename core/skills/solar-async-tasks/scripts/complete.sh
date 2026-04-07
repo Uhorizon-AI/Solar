@@ -144,12 +144,10 @@ recurring_run_count: $recurring_run_count
 
         # Update metadata
         sed -i.bak 's/^status:.*/status: queued/' "$NEW_FILE"
-        sed -i.bak "/^recurring_run_count:.*/c\\
-recurring_run_count: $recurring_run_count
-" "$NEW_FILE"
+        rm -f "${NEW_FILE}.bak"
+        set_meta "$NEW_FILE" "recurring_run_count" "$recurring_run_count"
 
         mv "$NEW_FILE" "$QUEUED_FILE"
-        rm -f "${NEW_FILE}.bak"
         echo "✅ Recurring task re-queued (run $recurring_run_count): $TASK_ID"
     fi
 else

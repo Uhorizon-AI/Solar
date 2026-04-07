@@ -74,10 +74,7 @@ for NEXT_TASK in $QUEUED_TASKS; do
 
     # Task can start! Update recurring_last_run if needed
     if [[ "$(extract_meta "$NEXT_TASK" "recurring")" == "true" ]]; then
-        sed -i.bak "/^recurring_last_run:.*/c\\
-recurring_last_run: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-" "$NEXT_TASK"
-        rm -f "${NEXT_TASK}.bak"
+        set_meta "$NEXT_TASK" "recurring_last_run" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     fi
 
     # Move to active
