@@ -6,6 +6,21 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-09
+### Added
+- feat: enhance task creation script with new options and improved usage documentation
+- feat: allow immediate task execution with scheduled time set to "now"
+- feat: implement subtask handling with re-queueing and dependency management
+- feat: enhance create-planet script and templates for code repository support
+- feat: add Ollama provider support and update related documentation
+- feat: disable python terminal environment activation in synchronized VS Code settings
+
+### Fixed
+- fix(governance): prohibit identity data in MEMORY.md and update changelog
+- fix: update script permissions for diagnose_router.sh and setup_ollama.sh
+
+
+
 ### Added
 - feat(sync-clients): include `python.terminal.activateEnvironment: false` in `.vscode/settings.json` synchronization to ensure consistent terminal behavior.
 - feat(solar-async-tasks): implement subtask handling with re-queueing and dependency management — `await_subtasks.sh`, parent re-queue logic, and `subtasks:` frontmatter field. Includes 119-line test suite in `core/tests/skills/solar-async-tasks/`.
