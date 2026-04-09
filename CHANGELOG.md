@@ -8,6 +8,25 @@ The format is based on Keep a Changelog.
 
 ### Added
 - feat(sync-clients): include `python.terminal.activateEnvironment: false` in `.vscode/settings.json` synchronization to ensure consistent terminal behavior.
+- feat(solar-async-tasks): implement subtask handling with re-queueing and dependency management — `await_subtasks.sh`, parent re-queue logic, and `subtasks:` frontmatter field. Includes 119-line test suite in `core/tests/skills/solar-async-tasks/`.
+- feat(solar-async-tasks): allow immediate task execution by setting scheduled time to `"now"` — `task_lib.sh` treats `"now"` as always-eligible; test coverage added.
+- feat(solar-async-tasks): enhance `create.sh` with priority, scheduled time, body-file input, and direct-queue options; improved usage documentation.
+- feat(solar-router): add Ollama provider — `scripts/providers/ollama.py`, `assets/ollama_prompt.md`, `setup_ollama.sh` setup script, and 38 new unit tests in `test_providers.py`.
+- feat(create-planet): extend `create-planet.sh` and templates for code repository support — adds `planet-CONTRIBUTING.md` template and updates `planet-AGENTS.md` and `planet-structure.md`.
+- feat(docs): revamp `README.md` layout with improved descriptions, use cases, and SVG provider assets (Claude, Codex, Gemini, Cursor, Ollama, VS Code).
+- feat(AGENTS.md): clarify async task creation as the required path for tasks needing external resources.
+
+### Changed
+- refactor(solar-async-tasks): replace ad-hoc `sed` metadata writes with a `set_meta` function in `task_lib.sh` — used by `activate.sh`, `complete.sh`, and `start_next.sh`.
+- refactor(solar-transport-gateway): update environment variable sourcing and script paths to use repository root for consistency across all bridge and tunnel scripts.
+
+### Fixed
+- fix(solar-router): set executable permissions (`755`) on `diagnose_router.sh` and `setup_ollama.sh`.
+- fix(governance): prohibit identity data (user name, assistant name) in `MEMORY.md` — names belong exclusively in `sun/preferences/profile.md`. Stale references were persisting when actors renamed after initial onboarding. Adds **Identity Data Isolation Rule** and **Profile Update Protocol** to `core/onboarding-conversation-contract.md`; updates `core/AGENTS.md` memory protocol with explicit prohibition. Closes #1.
+
+### Docs
+- docs(solar-code): update `SKILL.md` and `task-spec.md` for clarity and structure improvements.
+- docs(solar-code): standardize workflow to use `CONTRIBUTING.md` as the repo policy file; add CHANGELOG update requirement to `repo-policy.md`.
 
 ## [0.6.0] - 2026-03-29
 

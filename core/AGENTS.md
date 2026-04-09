@@ -84,6 +84,7 @@ It defines contracts, templates, and operational rules shared by all users.
 - **Purpose** (CRITICAL):
   - MEMORY.md is for **operational learnings**, NOT configuration.
   - Configuration goes in: `AGENTS.md`, `sun/preferences/profile.md`.
+  - **NEVER write identity data** (user name, assistant name, model name) in MEMORY.md. These belong exclusively in `sun/preferences/profile.md`. Writing names to MEMORY.md causes stale references when names change.
   - `sun/MEMORY.md` is always created (bootstrap), planets create MEMORY.md only when domain is complex.
 - **Concision rules**:
   - **`sun/MEMORY.md`**: Max 200 lines (truncated after). Keep concise.
