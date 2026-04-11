@@ -8,7 +8,7 @@
 
 ## Feature dispatch
 
-- `async-tasks` -> `core/skills/solar-async-tasks/scripts/run_worker.sh --once`
+- `async-tasks` -> `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh`
 - `transport-gateway` -> `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
 - `interface` -> `core/skills/solar-interface/scripts/ensure_interface.sh`
 

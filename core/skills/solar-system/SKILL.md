@@ -84,7 +84,7 @@ SOLAR_SYSTEM_FEATURES=async-tasks
 2. reads `SOLAR_SYSTEM_FEATURES`,
 3. acquires a lock to avoid overlapping ticks,
 4. runs enabled features in order:
-   - async tasks: `run_worker.sh --once`
+   - async tasks: `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` (the script first checks whether async-tasks is already supervised by solar-system, then falls back to the local worker only when needed)
    - transport gateway: `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
    - interface: `core/skills/solar-interface/scripts/ensure_interface.sh`
 

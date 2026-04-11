@@ -104,7 +104,7 @@ failures=0
 
 if has_feature "async-tasks"; then
   echo "▶ Running feature: async-tasks"
-  if ! bash core/skills/solar-async-tasks/scripts/run_worker.sh --once; then
+  if ! bash core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh; then
     echo "❌ async-tasks feature failed." >&2
     failures=$((failures + 1))
   fi

@@ -50,9 +50,6 @@ bash core/skills/solar-async-tasks/scripts/create.sh "My Task" "Do something coo
 # List tasks (shows recurring 🔁, cleanup 🧹, error ❌)
 bash core/skills/solar-async-tasks/scripts/list.sh
 
-# Worker: one-shot (e.g. for cron/launchd)
-bash core/skills/solar-async-tasks/scripts/run_worker.sh --once
-
 # Re-queue an active parent task until child tasks finish
 bash core/skills/solar-async-tasks/scripts/await_subtasks.sh <task_id> <child_id> [child_id...]
 
@@ -93,6 +90,18 @@ bash core/skills/solar-async-tasks/scripts/validate_lifecycle.sh
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-async-tasks /tmp
 ```
 
+## Infrastructure commands (LaunchAgent / operator only)
+
+These commands are called by the Solar LaunchAgent or an operator. **The AI agent must never call them.**
+
+```bash
+# Async tasks entrypoint: one-shot cycle (called by LaunchAgent via solar-system)
+bash core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh
+
+# Worker: continuous loop (debugging only — not for production use)
+bash core/skills/solar-async-tasks/scripts/run_worker.sh --interval 60
+```
+
 ## Required environment variables
 
 None. (Uses default `sun/runtime/async-tasks` path, overridable via `SOLAR_TASK_ROOT`)
@@ -112,12 +121,30 @@ Then install the single Solar LaunchAgent:
 bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 ```
 
+## Execution Model (Required)
+
+**The AI agent's job ends at `approve`.** After `approve.sh` moves a task to `queued/`, the agent must stop. It must NOT call `run_worker.sh`, `execute_active.sh`, or any execution script directly.
+
+Execution is triggered via `ensure_async_tasks.sh` — the single entry point for task execution. Internally it first runs `check_async_tasks.sh`, which verifies whether `solar-system` is supervising the `async-tasks` feature:
+
+- **solar-system supervising async-tasks** → solar-system calls `ensure_async_tasks.sh` automatically on each LaunchAgent tick. The AI agent does nothing after `approve`.
+- **solar-system not supervising async-tasks** → the AI agent calls `ensure_async_tasks.sh` once after `approve` as fallback.
+
+```
+With solar-system:     create → plan → approve   ← agent stops here
+                       solar-system calls ensure_async_tasks.sh automatically
+
+Without solar-system:  create → plan → approve → ensure_async_tasks.sh
+```
+
+Never call `run_worker.sh --once` directly — always use `ensure_async_tasks.sh`.
+
 ## Workflow
 
 1.  **Draft**: `create.sh` creates a task in `drafts/`.
 2.  **Plan**: `plan.sh` prepares the task for execution, moving it to `planned/`.
-3.  **Approve**: `approve.sh` moves a planned task to `queued/` with a priority (high, normal, low).
-4.  **Start + Execute**: `run_worker.sh` picks the highest priority eligible task from `queued/`, moves it to `active/`, then executes one active task.
+3.  **Approve**: `approve.sh` moves a planned task to `queued/` with a priority (high, normal, low). **Agent stops here.**
+4.  **Start + Execute**: `ensure_async_tasks.sh` triggers execution — called automatically by solar-system when it supervises `async-tasks`, or by the agent as fallback otherwise. Internally it uses `check_async_tasks.sh` to decide whether execution is already supervised, and only then runs `run_worker.sh --once` if needed.
 5.  **Execute (manual/extra)**: `execute_active.sh` (wrapper) + `execute_active.py` (executor) process one `active/` task via `solar-router` v3 with `channel=async-task`, `mode=direct_only`.
 6.  **Wait for children (default)**: if execution created new tasks, `await_subtasks.sh` re-queues the parent with `blocked_by_task_ids`, unless the task opted out.
 7.  **Complete**: `complete.sh` moves a task from `active/` to `completed/` (or recurring flow).
@@ -162,10 +189,12 @@ recurring: true
 
 ## Automatic execution (run_worker)
 
+> **Invariant:** Do not call `run_worker.sh` directly. Always use `ensure_async_tasks.sh` — it is called automatically when solar-system supervises `async-tasks`, or by the agent as fallback otherwise.
+
 - **`run_worker.sh [--once] [--interval SECS]`**: Calls `start_next.sh` and then `execute_active.sh --once` in the same cycle.
-- **`--once`**: Run one cycle and exit. Useful for cron (e.g. `run_worker.sh --once` every 5 minutes).
-- Without `--once`: Loop every `SECS` (default 60). Use Ctrl+C to stop; trap ensures clean exit.
-- **Error handling**: If `start_next.sh` fails, the worker logs to stderr and in loop mode continues on the next interval. "No tasks in queue" is normal and not an error.
+- **`--once`**: Run one cycle and exit. This is the mode used by cron/launchd (e.g. Solar LaunchAgent calls `run_worker.sh --once` every N minutes).
+- Without `--once`: Loop every `SECS` (default 60). Use Ctrl+C to stop; trap ensures clean exit. For interactive debugging only.
+- **Error handling**: If `start_next.sh` fails, the worker logs to stderr and in loo[text](../solar-system/scripts/run_orchestrator.sh)p mode continues on the next interval. "No tasks in queue" is normal and not an error.
 
 ## Task execution (execute_active)
 
