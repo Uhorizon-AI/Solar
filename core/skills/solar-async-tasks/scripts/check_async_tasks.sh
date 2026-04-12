@@ -1,44 +1,28 @@
 #!/usr/bin/env bash
-# check_async_tasks.sh — Check whether solar-system is supervising async-tasks.
+# check_async_tasks.sh — Check if a run_worker.sh process is already running.
 #
 # Exit codes:
-#   0 — solar-system is active and supervising async-tasks (no action needed)
-#   1 — solar-system is not supervising async-tasks (caller should run fallback)
+#   0 — worker is already running (no action needed)
+#   1 — worker is not running (caller should start it)
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 QUIET=false
 [[ "${1:-}" == "--quiet" ]] && QUIET=true
 
 log() { $QUIET || echo "$*"; }
 
-# 1. Check if the Solar system supervisor is installed
-PLIST_PATH="$HOME/Library/LaunchAgents/com.solar.system.plist"
-if [[ ! -f "$PLIST_PATH" ]]; then
-  log "⏸️  solar-system supervisor not installed for async-tasks."
-  exit 1
+LOCK_FILE="${SOLAR_TASK_WORKER_LOCK:-/tmp/solar-async-tasks-worker.lock}"
+
+# Check lock file: exists and PID is alive
+if [[ -f "$LOCK_FILE" ]]; then
+  existing_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+  if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+    log "⏸️  run_worker.sh already running (pid=$existing_pid)."
+    exit 0
+  fi
+  # Stale lock — clean it up
+  rm -f "$LOCK_FILE"
 fi
 
-# 2. Check if the supervisor is active in launchctl
-if ! launchctl list 2>/dev/null | grep -q "com.solar.system"; then
-  log "⏸️  solar-system supervisor is installed but not active."
-  exit 1
-fi
-
-# 3. Check if async-tasks is delegated to solar-system in .env
-ENV_FILE="$REPO_ROOT/.env"
-if [[ ! -f "$ENV_FILE" ]]; then
-  log "⏸️  .env not found, cannot verify async-tasks supervision."
-  exit 1
-fi
-
-FEATURES="$(grep -E '^SOLAR_SYSTEM_FEATURES=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
-if [[ -z "$FEATURES" ]] || ! echo ",$FEATURES," | grep -q ",async-tasks,"; then
-  log "⏸️  solar-system is active but not configured to supervise async-tasks."
-  exit 1
-fi
-
-log "✅ solar-system is supervising async-tasks."
-exit 0
+log "✅ No worker running — safe to start."
+exit 1
