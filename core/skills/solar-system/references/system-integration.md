@@ -8,6 +8,7 @@
 
 ## Feature dispatch
 
+- `browser` -> `core/skills/solar-browser/scripts/ensure_browser.sh`
 - `async-tasks` -> `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh`
 - `transport-gateway` -> `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
 - `interface` -> `core/skills/solar-interface/scripts/ensure_interface.sh`

@@ -125,7 +125,7 @@ count_matching_processes() {
   local pattern="$1"
   local output
   set +e
-  output="$(pgrep -f "$pattern" 2>&1)"
+  output="$(pgrep -f -- "$pattern" 2>&1)"
   local code=$?
   set -e
 
@@ -139,6 +139,14 @@ count_matching_processes() {
       return 0
       ;;
     *)
+      set +e
+      output="$(ps -axo command= 2>/dev/null | awk -v pat="$pattern" '$0 ~ pat { count++ } END { print count + 0 }')"
+      code=$?
+      set -e
+      if [[ "$code" -eq 0 && "$output" =~ ^[0-9]+$ ]]; then
+        echo "$output"
+        return 0
+      fi
       return 1
       ;;
   esac
@@ -155,20 +163,6 @@ if cf_count="$(count_matching_processes "cloudflared tunnel")"; then
   fi
 else
   echo "  cloudflared: UNKNOWN (pgrep failed)"
-  proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
-fi
-
-if mcp_count="$(count_matching_processes "chrome-devtools-mcp")"; then
-  if [[ "$mcp_count" -gt 3 ]]; then
-    echo "  chrome-mcp:  MULTIPLE ($mcp_count running - possible leak)"
-    proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
-  elif [[ "$mcp_count" -gt 0 ]]; then
-    echo "  chrome-mcp:  healthy ($mcp_count active)"
-  else
-    echo "  chrome-mcp:  healthy (0 active)"
-  fi
-else
-  echo "  chrome-mcp:  UNKNOWN (pgrep failed)"
   proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
 fi
 
@@ -191,7 +185,38 @@ fi
 verdict="$(worst_severity "$verdict" "$proc_severity")"
 
 # ---------------------------------------------------------------------------
-# Check 3: transport-gateway feature
+# Check 3: browser feature
+# ---------------------------------------------------------------------------
+
+if feature_active "browser"; then
+  echo ""
+  echo "── Feature: browser"
+  browser_out=""
+  browser_code=0
+  set +e
+  browser_out="$(run_with_timeout bash core/skills/solar-browser/scripts/check_browser.sh 2>&1)"
+  browser_code=$?
+  set -e
+
+  case "$browser_code" in
+    0)
+      echo "  status: HEALTHY"
+      ;;
+    2)
+      echo "  status: PARTIAL"
+      echo "  detail: $browser_out"
+      verdict="$(worst_severity "$verdict" "PARTIAL")"
+      ;;
+    *)
+      echo "  status: DOWN"
+      echo "  detail: $browser_out"
+      verdict="$(worst_severity "$verdict" "DOWN")"
+      ;;
+  esac
+fi
+
+# ---------------------------------------------------------------------------
+# Check 4: transport-gateway feature
 # ---------------------------------------------------------------------------
 
 if feature_active "transport-gateway"; then
@@ -222,7 +247,7 @@ if feature_active "transport-gateway"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Check 4: async-tasks feature
+# Check 5: async-tasks feature
 # ---------------------------------------------------------------------------
 
 if feature_active "async-tasks"; then
@@ -277,7 +302,7 @@ if feature_active "async-tasks"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Check 5: interface feature
+# Check 6: interface feature
 # ---------------------------------------------------------------------------
 
 if feature_active "interface"; then
@@ -309,7 +334,7 @@ fi
 
 for f in "${FEATURES[@]}"; do
   case "$f" in
-    async-tasks|transport-gateway|interface) ;;
+    browser|async-tasks|transport-gateway|interface) ;;
     *) echo ""
        echo "  ⚠️  Unknown feature token ignored: $f" ;;
   esac
@@ -330,13 +355,17 @@ if [[ "$verdict" != "HEALTHY" ]]; then
   if [[ "$proc_severity" != "HEALTHY" ]]; then
     echo "  • Duplicate processes detected — cleanly kill instances to fix leaks:"
     [[ "$cf_count" -gt 1 ]] && echo "    pkill -f \"cloudflared tunnel\""
-    [[ "$mcp_count" -gt 3 ]] && echo "    pkill -f \"chrome-devtools-mcp\"; pkill -f \"\.cache/chrome-devtools-mcp\""
   fi
 
   # Supervisor issues
   if [[ ! -f "$PLIST" ]] || ! launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
     echo "  • LaunchAgent not installed or not loaded:"
     echo "    bash core/skills/solar-system/scripts/install_launchagent_macos.sh"
+  fi
+
+  if feature_active "browser" && [[ "${browser_code:-0}" != "0" ]]; then
+    echo "  • Browser runtime degraded — run recovery:"
+    echo "    bash core/skills/solar-browser/scripts/setup_browser.sh"
   fi
 
   # transport-gateway issues
