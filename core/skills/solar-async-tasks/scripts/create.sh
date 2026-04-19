@@ -14,6 +14,7 @@ DEST="drafts"
 PRIORITY="normal"
 SCHEDULED_TIME=""
 BODY_FILE=""
+PROVIDER=""
 
 # Parse flags
 while [[ $# -gt 0 ]]; do
@@ -22,6 +23,7 @@ while [[ $# -gt 0 ]]; do
         --priority)       PRIORITY="$2"; shift 2 ;;
         --scheduled-time) SCHEDULED_TIME="$2"; shift 2 ;;
         --body-file)      BODY_FILE="$2"; shift 2 ;;
+        --provider)       PROVIDER="$2"; shift 2 ;;
         --) shift; break ;;
         -*) echo "Unknown option: $1" >&2; exit 1 ;;
         *) break ;;
@@ -43,6 +45,9 @@ Options:
   --body-file FILE     Read task body from FILE instead of using Description arg.
                        Use this for multi-line prompts. The file content replaces
                        the body section; title heading is added automatically.
+  --provider P         Lock this task to a specific provider: codex | claude | gemini.
+                       The worker passes it to solar-router as strict mode (no fallback).
+                       Only valid with --queued.
 
 Examples:
   # Human workflow (draft → plan → approve)
@@ -50,6 +55,9 @@ Examples:
 
   # AI subtask: direct to queued with a body file
   create.sh --queued --priority normal --body-file /tmp/body.md "My Task"
+
+  # AI subtask: locked to a specific provider (strict mode)
+  create.sh --queued --provider claude --body-file /tmp/review.md "Claude review"
 
   # AI subtask: inline description, run immediately
   create.sh --queued --scheduled-time now "Quick Task" "Short one-liner prompt"
@@ -83,21 +91,22 @@ fi
 if [[ "$DEST" == "queued" ]]; then
     # --queued: full schema required for worker compatibility
     SCHED_TIME="${SCHEDULED_TIME:-now}"
-    cat > "$FILENAME" <<EOF
----
-id: "$ID"
-title: "$TITLE"
-created: "$(date -Iseconds)"
-status: queued
-priority: $PRIORITY
-scheduled_time: "$SCHED_TIME"
-recurring: false
----
-
-# $TITLE
-
-$BODY
-EOF
+    {
+        echo "---"
+        echo "id: \"$ID\""
+        echo "title: \"$TITLE\""
+        echo "created: \"$(date -Iseconds)\""
+        echo "status: queued"
+        echo "priority: $PRIORITY"
+        echo "scheduled_time: \"$SCHED_TIME\""
+        echo "recurring: false"
+        [[ -n "$PROVIDER" ]] && echo "provider: \"$PROVIDER\""
+        echo "---"
+        echo ""
+        echo "# $TITLE"
+        echo ""
+        echo "$BODY"
+    } > "$FILENAME"
 else
     # drafts: minimal schema (plan.sh / approve.sh add the rest)
     cat > "$FILENAME" <<EOF
