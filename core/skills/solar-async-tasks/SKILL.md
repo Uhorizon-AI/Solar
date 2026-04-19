@@ -158,22 +158,50 @@ Use this only when you want to activate one exact task manually (outside normal 
 - Manual activation also bypasses subtask blocking intentionally, for emergency/operator overrides.
 - The standard lifecycle remains queue-driven (`start_next.sh` / `run_worker.sh`).
 
+## Task Body Authoring
+
+The task body is the full instruction set the AI executes. A well-written body determines whether the task runs correctly, produces the right artifact, and handles multi-execution flows without ambiguity.
+
+**Result writing convention:** Use `## Result` in the task file when:
+- The task is a **child task** — a parent will read its output from the task file.
+- The body **does not define a concrete output path** — there is no specific file to write to.
+
+Do **not** use `## Result` when the body already defines where output goes (e.g. write to `planets/`, send Telegram, update a daily-log). In that case the artifact IS the output — appending `## Result` to the task file is redundant and breaks recurring tasks that re-enter the queue.
+
+When `## Result` is needed, find the task file by Task ID — the Task ID is injected into every prompt by `execute_active.py`:
+
+```bash
+TASK_FILE=$(grep -rl "id: \"<task_id>\"" sun/runtime/async-tasks/ | head -1)
+```
+
+Do not rely on a hardcoded path — the file moves between directories as it transitions through states.
+
+**Reference guides** (see `references/` for full examples):
+
+| Pattern | File | When to use |
+|---|---|---|
+| Single execution | `references/simple-task.md` | One run, one artifact, no dependencies |
+| Subtasks with synthesis | `references/task-with-subtasks.md` | Delegate to children, resume and synthesize results |
+| Recurring with gate | `references/recurring-with-gate.md` | Periodic loop requiring human validation between runs |
+| Detached subtasks | `references/detached-subtasks.md` | Fire-and-forget delegation, no synthesis needed |
+
 ## Parent tasks waiting on subtasks
 
-This is the default behavior. Use it when a task should first create child tasks, let them finish, and only then continue its own flow.
+This is the default behavior. Use it when a task should first create child tasks, let them finish, and only then continue its own flow. **The same task runs twice** — once to create the children, and once (after they complete) to synthesize their results.
 
 ### Frontmatter
 
-- `blocked_by_task_ids: "id1,id2"` - Internal runtime field added automatically while the parent is waiting.
+- `blocked_by_task_ids: "id1,id2"` - Internal runtime field added automatically while the parent is waiting. Removed by `start_next.sh` before execution 2 starts.
 - `detach_subtasks: true` - Opt-out. Use only when child tasks are fire-and-forget and the parent should finish immediately.
 
 ### Behavior
 
-1. Task starts normally from `queued/`.
-2. During execution it creates one or more new tasks in `drafts/`, `planned/`, `queued/`, `active/`, or `error/`.
+1. Task starts normally from `queued/` (execution 1).
+2. During execution it creates one or more new tasks via `create.sh`.
 3. Unless `detach_subtasks: true`, the executor detects those new task IDs and re-queues the parent instead of completing it.
 4. `start_next.sh` skips the parent while any `blocked_by_task_ids` task remains non-terminal.
-5. Once all child tasks are `completed` or `archived`, the parent becomes eligible again and resumes automatically.
+5. Once all child tasks are `completed` or `archived`, the parent becomes eligible again and resumes (execution 2).
+6. The task body must detect which execution it is in and behave accordingly. See `references/task-with-subtasks.md`.
 
 ### Example
 
@@ -203,7 +231,8 @@ recurring: true
 - All provider selection and fallback is handled by `solar-router`. No fallback loop in bash.
 - Per-task provider override: if task frontmatter has `provider: <name>`, it is passed to the router as strict mode (no fallback).
 - Task body is used as semantic instruction source (including agent + skill directions in natural language).
-- **One log per task (traceability):** The log file has the **same name as the task file**, with `.log` extension (e.g. task `20260214-0100_Triage-diario-de-ofertas-LinkedIn.md` → log `logs/20260214-0100_Triage-diario-de-ofertas-LinkedIn.log`). Each run overwrites it, so the log always reflects the **last** execution (outcome, result or error). Logs older than 7 days are automatically deleted when the worker runs (`cleanup_old_logs`).
+- **Result vs log:** The log at `logs/<slug>.log` records operational metadata only (timing, provider used, exit code, errors). The task body decides where output goes — see **Task Body Authoring** above for when to append `## Result` to the task file vs writing a dedicated artifact.
+- **One log per task (traceability):** The log file has the **same name as the task file**, with `.log` extension (e.g. task `20260214-0100_Triage-diario-de-ofertas-LinkedIn.md` → log `logs/20260214-0100_Triage-diario-de-ofertas-LinkedIn.log`). Each run overwrites it, so the log always reflects the **last** execution (outcome or error). Logs older than 7 days are automatically deleted when the worker runs (`cleanup_old_logs`).
 - On success: `execute_active.py` writes log, then `execute_active.sh` either re-queues the parent via `await_subtasks.sh` or completes it via `complete.sh`. Re-queue is the default when new child tasks appear.
 - On failure: `execute_active.py` moves task to `error/` and writes error log. To diagnose provider issues, run `bash core/skills/solar-router/scripts/diagnose_router.sh --verbose`.
 
