@@ -83,6 +83,11 @@ Ollama setup:
 # Validate skill structure
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-router /tmp
 
+# List configured providers (reads SOLAR_ROUTER_PROVIDER_PRIORITY)
+bash core/skills/solar-router/scripts/list_providers.sh
+bash core/skills/solar-router/scripts/list_providers.sh --exclude claude
+bash core/skills/solar-router/scripts/list_providers.sh --exclude claude --format csv
+
 # Diagnose router / preflight providers (native helper in this skill)
 bash core/skills/solar-router/scripts/diagnose_router.sh --dry-run
 bash core/skills/solar-router/scripts/diagnose_router.sh
