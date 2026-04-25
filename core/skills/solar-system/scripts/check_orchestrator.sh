@@ -185,38 +185,7 @@ fi
 verdict="$(worst_severity "$verdict" "$proc_severity")"
 
 # ---------------------------------------------------------------------------
-# Check 3: browser feature
-# ---------------------------------------------------------------------------
-
-if feature_active "browser"; then
-  echo ""
-  echo "── Feature: browser"
-  browser_out=""
-  browser_code=0
-  set +e
-  browser_out="$(run_with_timeout bash core/skills/solar-browser/scripts/check_browser.sh 2>&1)"
-  browser_code=$?
-  set -e
-
-  case "$browser_code" in
-    0)
-      echo "  status: HEALTHY"
-      ;;
-    2)
-      echo "  status: PARTIAL"
-      echo "  detail: $browser_out"
-      verdict="$(worst_severity "$verdict" "PARTIAL")"
-      ;;
-    *)
-      echo "  status: DOWN"
-      echo "  detail: $browser_out"
-      verdict="$(worst_severity "$verdict" "DOWN")"
-      ;;
-  esac
-fi
-
-# ---------------------------------------------------------------------------
-# Check 4: transport-gateway feature
+# Check 3: transport-gateway feature
 # ---------------------------------------------------------------------------
 
 if feature_active "transport-gateway"; then
@@ -247,7 +216,7 @@ if feature_active "transport-gateway"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Check 5: async-tasks feature
+# Check 4: async-tasks feature
 # ---------------------------------------------------------------------------
 
 if feature_active "async-tasks"; then
@@ -302,7 +271,7 @@ if feature_active "async-tasks"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Check 6: interface feature
+# Check 5: interface feature
 # ---------------------------------------------------------------------------
 
 if feature_active "interface"; then
@@ -334,7 +303,7 @@ fi
 
 for f in "${FEATURES[@]}"; do
   case "$f" in
-    browser|async-tasks|transport-gateway|interface) ;;
+    async-tasks|transport-gateway|interface) ;;
     *) echo ""
        echo "  ⚠️  Unknown feature token ignored: $f" ;;
   esac
@@ -361,11 +330,6 @@ if [[ "$verdict" != "HEALTHY" ]]; then
   if [[ ! -f "$PLIST" ]] || ! launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
     echo "  • LaunchAgent not installed or not loaded:"
     echo "    bash core/skills/solar-system/scripts/install_launchagent_macos.sh"
-  fi
-
-  if feature_active "browser" && [[ "${browser_code:-0}" != "0" ]]; then
-    echo "  • Browser runtime degraded — run recovery:"
-    echo "    bash core/skills/solar-browser/scripts/setup_browser.sh"
   fi
 
   # transport-gateway issues
