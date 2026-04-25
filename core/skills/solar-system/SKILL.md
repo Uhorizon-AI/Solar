@@ -58,7 +58,6 @@ SOLAR_SYSTEM_FEATURES=async-tasks
 ```
 
 `SOLAR_SYSTEM_FEATURES` is a CSV selector. Supported values:
-- `browser`
 - `async-tasks`
 - `transport-gateway`
 - `interface`
@@ -71,7 +70,7 @@ SOLAR_SYSTEM_FEATURES=async-tasks
    - `bash core/skills/solar-system/scripts/onboard_system_env.sh`
 2. Install or update LaunchAgent:
    - `bash core/skills/solar-system/scripts/install_launchagent_macos.sh`
-   - Feature-specific runtime blocks stay in the owning skill, for example `solar-browser`.
+   - Feature-specific runtime blocks stay in the owning skill, for example `solar-router`.
 3. Check current status:
    - `bash core/skills/solar-system/scripts/status_launchagent_macos.sh` — supervisor only (plist + launchctl + logs)
    - `bash core/skills/solar-system/scripts/check_orchestrator.sh` — full orchestrator + feature health (daily operational check)
@@ -86,7 +85,6 @@ SOLAR_SYSTEM_FEATURES=async-tasks
 2. reads `SOLAR_SYSTEM_FEATURES`,
 3. acquires a lock to avoid overlapping ticks,
 4. runs enabled features in order:
-   - browser: `core/skills/solar-browser/scripts/ensure_browser.sh`
    - async tasks: `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` (the script first checks whether async-tasks is already supervised by solar-system, then falls back to the local worker only when needed)
    - transport gateway: `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
    - interface: `core/skills/solar-interface/scripts/ensure_interface.sh`

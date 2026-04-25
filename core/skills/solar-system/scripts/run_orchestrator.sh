@@ -102,14 +102,6 @@ echo "Solar system tick started. Features: $FEATURES"
 
 failures=0
 
-if has_feature "browser"; then
-  echo "▶ Running feature: browser"
-  if ! bash core/skills/solar-browser/scripts/ensure_browser.sh; then
-    echo "❌ browser feature failed." >&2
-    failures=$((failures + 1))
-  fi
-fi
-
 if has_feature "async-tasks"; then
   echo "▶ Running feature: async-tasks"
   if ! bash core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh; then
@@ -136,7 +128,7 @@ fi
 
 for token in $(echo "$FEATURES" | tr ',' ' '); do
   case "$token" in
-    browser|async-tasks|transport-gateway|interface) ;;
+    async-tasks|transport-gateway|interface) ;;
     *) echo "⚠️  Unknown feature token ignored: $token" ;;
   esac
 done
