@@ -121,6 +121,64 @@ ensure_dir() {
   mkdir -p "$1"
 }
 
+index_has_name() {
+  local index_file="$1"
+  local wanted="$2"
+  [ -f "$index_file" ] || return 1
+  while IFS='|' read -r indexed_name _; do
+    [ "$indexed_name" = "$wanted" ] && return 0
+  done < "$index_file"
+  return 1
+}
+
+index_has_toml_name() {
+  local index_file="$1"
+  local wanted="$2"
+  [ -f "$index_file" ] || return 1
+  while IFS='|' read -r indexed_name _; do
+    local toml_name="${indexed_name%.md}.toml"
+    [ "$toml_name" = "$wanted" ] && return 0
+  done < "$index_file"
+  return 1
+}
+
+prune_target_dir_to_index() {
+  local index_file="$1"
+  local target_dir="$2"
+  local mode="${3:-direct}" # direct | md-to-toml
+
+  [ -d "$target_dir" ] || return 0
+
+  local removed=0
+  shopt -s nullglob dotglob
+  for item in "$target_dir"/*; do
+    [ -e "$item" ] || continue
+    local name
+    name="$(basename "$item")"
+
+    local should_keep=false
+    if [ "$mode" = "md-to-toml" ]; then
+      if index_has_toml_name "$index_file" "$name"; then
+        should_keep=true
+      fi
+    else
+      if index_has_name "$index_file" "$name"; then
+        should_keep=true
+      fi
+    fi
+
+    if [ "$should_keep" = false ]; then
+      rm -rf "$item"
+      removed=$((removed + 1))
+    fi
+  done
+  shopt -u dotglob nullglob
+
+  if [ "$removed" -gt 0 ]; then
+    log_ok "Pruned $removed stale entries from $target_dir"
+  fi
+}
+
 clean_symlinks_from_prefix() {
   local target_dir="$1"
   local prefix="$2"
@@ -281,9 +339,8 @@ sync_resources_as_symlink() {
 
   ensure_dir "$target_dir"
 
-  # Clean old symlinks from core and planets to handle deleted resources
-  clean_symlinks_from_prefix "$target_dir" "$ROOT_DIR/core"
-  clean_symlinks_from_prefix "$target_dir" "$ROOT_DIR/planets"
+  # Strict mirror for managed folders: remove everything not in current index.
+  prune_target_dir_to_index "$index_file" "$target_dir" "direct"
 
   [ -f "$index_file" ] || return 0
 
@@ -310,6 +367,8 @@ sync_resources_as_copy() {
   local branch="${5:-mid}"
 
   ensure_dir "$target_dir"
+  # Strict mirror for managed folders: remove everything not in current index.
+  prune_target_dir_to_index "$index_file" "$target_dir" "direct"
 
   [ -f "$index_file" ] || return 0
 
@@ -363,10 +422,8 @@ sync_gemini_commands() {
 
   ensure_dir "$target_dir"
 
-  # Clean old generated toml files and old md symlinks
-  find "$target_dir" -name "*.toml" -type f -delete
-  clean_symlinks_from_prefix "$target_dir" "$ROOT_DIR/core"
-  clean_symlinks_from_prefix "$target_dir" "$ROOT_DIR/planets"
+  # Strict mirror for managed folders: keep only expected .toml command files.
+  prune_target_dir_to_index "$index_file" "$target_dir" "md-to-toml"
 
   [ -f "$index_file" ] || return 0
 
