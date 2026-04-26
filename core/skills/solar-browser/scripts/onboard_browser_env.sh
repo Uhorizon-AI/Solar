@@ -22,7 +22,7 @@ browser_host="127.0.0.1"
 browser_port="9222"
 browser_profile_dir="/tmp/com.solar.browser-profile"
 browser_log_path="/tmp/com.solar.browser.log"
-max_mcp_procs="3"
+mcp_leak_threshold="3"
 
 if existing="$(read_key "SOLAR_BROWSER_DEBUG_HOST")"; then
   browser_host="$existing"
@@ -36,8 +36,10 @@ fi
 if existing="$(read_key "SOLAR_BROWSER_LOG_PATH")"; then
   browser_log_path="$existing"
 fi
-if existing="$(read_key "SOLAR_SYSTEM_MAX_BROWSER_MCP_PROCS")"; then
-  max_mcp_procs="$existing"
+if existing="$(read_key "SOLAR_BROWSER_MCP_LEAK_THRESHOLD")"; then
+  mcp_leak_threshold="$existing"
+elif existing="$(read_key "SOLAR_SYSTEM_MAX_BROWSER_MCP_PROCS")"; then
+  mcp_leak_threshold="$existing"
 fi
 
 tmp="$(mktemp)"
@@ -47,6 +49,7 @@ awk '
   $0 ~ /^SOLAR_BROWSER_DEBUG_PORT=/ { next }
   $0 ~ /^SOLAR_BROWSER_PROFILE_DIR=/ { next }
   $0 ~ /^SOLAR_BROWSER_LOG_PATH=/ { next }
+  $0 ~ /^SOLAR_BROWSER_MCP_LEAK_THRESHOLD=/ { next }
   $0 ~ /^SOLAR_SYSTEM_MAX_BROWSER_MCP_PROCS=/ { next }
   { print }
 ' "$ROOT_ENV_FILE" >"$tmp"
@@ -67,13 +70,21 @@ awk '
 ' "$ROOT_ENV_FILE" >"$tmp"
 mv "$tmp" "$ROOT_ENV_FILE"
 
+# Insert [solar-browser] immediately after the [solar-system] block (before the
+# next # […] required environment header). If [solar-system] is missing, append
+# at end of file.
+SYSTEM_HEADER='# [solar-system] required environment'
 insert_line="$(
-  awk -v block="$BLOCK_HEADER" '
-    $0 ~ /^# \[[^]]+\] required environment$/ {
-      if ($0 > block) {
-        print NR
-        exit
-      }
+  awk -v sys_hdr="$SYSTEM_HEADER" '
+    { lineno = NR }
+    $0 == sys_hdr { in_sys = 1; next }
+    in_sys && $0 ~ /^# \[[^]]+\] required environment$/ {
+      print NR
+      found = 1
+      exit
+    }
+    END {
+      if (in_sys && !found) print lineno + 1
     }
   ' "$ROOT_ENV_FILE"
 )"
@@ -82,13 +93,16 @@ tmp="$(mktemp)"
 if [[ -n "$insert_line" ]]; then
   if (( insert_line > 1 )); then
     sed -n "1,$((insert_line - 1))p" "$ROOT_ENV_FILE" >"$tmp"
+  else
+    : >"$tmp"
   fi
   echo "$BLOCK_HEADER" >>"$tmp"
   echo "SOLAR_BROWSER_DEBUG_HOST=${browser_host}" >>"$tmp"
   echo "SOLAR_BROWSER_DEBUG_PORT=${browser_port}" >>"$tmp"
   echo "SOLAR_BROWSER_PROFILE_DIR=${browser_profile_dir}" >>"$tmp"
   echo "SOLAR_BROWSER_LOG_PATH=${browser_log_path}" >>"$tmp"
-  echo "SOLAR_SYSTEM_MAX_BROWSER_MCP_PROCS=${max_mcp_procs}" >>"$tmp"
+  echo "SOLAR_BROWSER_MCP_LEAK_THRESHOLD=${mcp_leak_threshold}" >>"$tmp"
+  printf '\n' >>"$tmp"
   sed -n "${insert_line},\$p" "$ROOT_ENV_FILE" >>"$tmp"
 else
   cat "$ROOT_ENV_FILE" >"$tmp"
@@ -100,7 +114,9 @@ else
   echo "SOLAR_BROWSER_DEBUG_PORT=${browser_port}" >>"$tmp"
   echo "SOLAR_BROWSER_PROFILE_DIR=${browser_profile_dir}" >>"$tmp"
   echo "SOLAR_BROWSER_LOG_PATH=${browser_log_path}" >>"$tmp"
-  echo "SOLAR_SYSTEM_MAX_BROWSER_MCP_PROCS=${max_mcp_procs}" >>"$tmp"
+  echo "SOLAR_BROWSER_MCP_LEAK_THRESHOLD=${mcp_leak_threshold}" >>"$tmp"
+  printf '\n' >>"$tmp"
+  echo "Note: no # [solar-system] block found; appended solar-browser at EOF. Run onboard_system_env.sh first for canonical order." >&2
 fi
 mv "$tmp" "$ROOT_ENV_FILE"
 

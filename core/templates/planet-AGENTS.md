@@ -16,6 +16,17 @@
 - Security/data rules:
 - Operational limits:
 
+## Chrome DevTools MCP Policy (Required when browser channels are used)
+
+- Use shared runtime via `chrome-devtools-mcp --browserUrl` (do not require always-on Chrome).
+- Agent lifecycle for browser workflows:
+  1. `bash ../../core/skills/solar-browser/scripts/ensure_browser.sh --start`
+  2. Reuse during the workflow.
+  3. `bash ../../core/skills/solar-browser/scripts/ensure_browser.sh --stop` at natural completion.
+- Safe stop semantics: block shutdown only when **other** MCP clients are active; use `--stop --force` only with explicit operational certainty.
+- Never ask the user to keep Chrome/debugging on 24/7.
+- Domain skills should keep browser prerequisites minimal and inherit lifecycle policy from this file + `../../AGENTS.md`.
+
 ## Code Repo Protocol (Optional)
 - If this planet is a code repository, declare `solar-code` as the mandatory protocol for automated code changes.
 - Set `CONTRIBUTING.md` as the repo policy file read before writing.

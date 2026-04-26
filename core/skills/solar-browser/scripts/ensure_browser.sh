@@ -1,9 +1,46 @@
 #!/usr/bin/env bash
+# Without --start: only MCP cleanup + readiness check; does NOT launch Chrome.
+# With --start: launch Chrome if the debug port is not already responding.
+# With --stop: terminate Chrome using this profile + debug port (see list_daemon_pids).
+# Usage: ensure_browser.sh [--start|--stop] [--force]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 cd "$REPO_ROOT"
+
+WANT_START=false
+WANT_STOP=false
+WANT_FORCE=false
+for arg in "$@"; do
+  case "$arg" in
+    --start) WANT_START=true ;;
+    --stop) WANT_STOP=true ;;
+    --force) WANT_FORCE=true ;;
+    -h|--help)
+      echo "Usage: $(basename "$0") [--start|--stop] [--force]" >&2
+      echo "  (default)  Clean up excess MCP helpers; exit 0 if Chrome answers on the debug port, else 1 without launching." >&2
+      echo "  --start    Launch Chrome (if needed) until the debug port is ready." >&2
+      echo "  --stop     Stop Chrome bound to SOLAR_BROWSER_PROFILE_DIR + debug port." >&2
+      echo "  --force    With --stop, force shutdown even if active chrome-devtools-mcp processes are detected." >&2
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $arg (try --start, --stop, --force, or --help)" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ "$WANT_START" == "true" && "$WANT_STOP" == "true" ]]; then
+  echo "Use either --start or --stop, not both." >&2
+  exit 1
+fi
+
+if [[ "$WANT_FORCE" == "true" && "$WANT_STOP" != "true" ]]; then
+  echo "--force is only valid together with --stop." >&2
+  exit 1
+fi
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
@@ -19,7 +56,7 @@ BROWSER_PORT="${SOLAR_BROWSER_DEBUG_PORT:-9222}"
 BROWSER_PROFILE_DIR="${SOLAR_BROWSER_PROFILE_DIR:-/tmp/com.solar.browser-profile}"
 BROWSER_LOG_PATH="${SOLAR_BROWSER_LOG_PATH:-/tmp/com.solar.browser.log}"
 START_TIMEOUT="${SOLAR_BROWSER_START_TIMEOUT_SECS:-15}"
-MAX_MCP_PROCS="${SOLAR_SYSTEM_MAX_BROWSER_MCP_PROCS:-3}"
+MCP_LEAK_THRESHOLD="${SOLAR_BROWSER_MCP_LEAK_THRESHOLD:-${SOLAR_SYSTEM_MAX_BROWSER_MCP_PROCS:-3}}"
 
 browser_debug_url() {
   echo "http://${BROWSER_HOST}:${BROWSER_PORT}/json/version"
@@ -55,9 +92,9 @@ find_browser_binary() {
 }
 
 cleanup_excess_browser_mcp_processes() {
-  local keep="$MAX_MCP_PROCS"
+  local keep="$MCP_LEAK_THRESHOLD"
   if ! [[ "$keep" =~ ^[0-9]+$ ]]; then
-    echo "⚠️  Invalid browser MCP process cap=$keep, skipping browser MCP cleanup."
+    echo "⚠️  Invalid browser MCP leak threshold=$keep, skipping browser MCP cleanup."
     return 0
   fi
 
@@ -105,6 +142,10 @@ cleanup_excess_browser_mcp_processes() {
   rm -f "$tmp"
 }
 
+count_browser_mcp_processes() {
+  ps -axo command= | awk 'index($0, "chrome-devtools-mcp"){c++} END{print c+0}'
+}
+
 list_daemon_pids() {
   ps -axo pid=,command= | awk -v profile="$BROWSER_PROFILE_DIR" -v port="$BROWSER_PORT" '
     index($0, "--remote-debugging-port=" port) && index($0, "--user-data-dir=" profile) {
@@ -128,11 +169,36 @@ kill_stale_daemons() {
   fi
 }
 
+if [[ "$WANT_STOP" == "true" ]]; then
+  mcp_count="$(count_browser_mcp_processes)"
+  if [[ "$WANT_FORCE" != "true" && "${mcp_count:-0}" -gt 1 ]]; then
+    other_count=$((mcp_count - 1))
+    echo "❌ Refusing to stop shared browser: detected ${other_count} other active chrome-devtools-mcp process(es)." >&2
+    echo "   Safe stop allows only your current MCP session. Use --force only when you are sure no other workflow needs this runtime." >&2
+    exit 1
+  fi
+  cleanup_excess_browser_mcp_processes
+  kill_stale_daemons
+  if [[ "$WANT_FORCE" == "true" ]]; then
+    echo "✅ Solar browser force-stopped (port ${BROWSER_PORT}, profile ${BROWSER_PROFILE_DIR})."
+  else
+    echo "✅ Solar browser stopped (port ${BROWSER_PORT}, profile ${BROWSER_PROFILE_DIR})."
+  fi
+  exit 0
+fi
+
 cleanup_excess_browser_mcp_processes
 
 if browser_ready; then
   echo "✅ Solar browser already healthy at $(browser_debug_url)"
   exit 0
+fi
+
+if [[ "$WANT_START" != "true" ]]; then
+  echo "ℹ️  Chrome is not listening at $(browser_debug_url) (nothing was started)." >&2
+  echo "   Run: bash $SCRIPT_DIR/ensure_browser.sh --start" >&2
+  echo "   …when you are about to use browser MCP (right before that work)." >&2
+  exit 1
 fi
 
 mkdir -p "$BROWSER_PROFILE_DIR"

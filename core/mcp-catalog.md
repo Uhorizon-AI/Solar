@@ -62,6 +62,7 @@ For each MCP entry:
 - Purpose: browser automation, page inspection, and UI validation.
 - Typical skills: web QA, scraping with browser context, troubleshooting frontend flows.
 - Validation: open a page, read title, and run one deterministic interaction.
+- Solar note: with `--browserUrl`, the browser is **not** expected to run 24/7. Do **not** instruct users to leave remote debugging “always on” for convenience; use `core/skills/solar-browser` (`ensure_browser.sh --start` / `--stop`) and root `AGENTS.md`.
 
 ## Skill Requirements Contract
 
