@@ -104,6 +104,29 @@ It defines contracts, templates, and operational rules shared by all users.
 - First-run trigger and user-facing conversation are owned by root `AGENTS.md`.
 - `core/AGENTS.md` defines setup execution rules only when root delegates.
 
+## Profile Sync Protocol (required)
+
+This protocol is invoked when root `AGENTS.md` detects an explicit user update to personal operating context.
+
+### Trigger conditions
+- User corrects or updates profile facts in conversation (identity handshake, professional mode, role, dates, priorities, time constraints, communication preferences, decision criteria).
+- User explicitly asks to update profile/preferences.
+- Agent detects a conflict between current user statements and `sun/preferences/profile.md`.
+
+### Execution steps
+1. Update `sun/preferences/profile.md` first, preserving existing structure when possible.
+2. Keep entries concise, operational, and current. Remove stale or superseded statements.
+3. If the change introduces stable operational behavior, update `sun/MEMORY.md` with pattern-level guidance (not identity/config duplication).
+4. Confirm back to the user:
+   - what was updated,
+   - what was removed/replaced,
+   - and the operational impact on prioritization/routing.
+
+### Guardrails
+- Do not store identity/config duplicates in `sun/MEMORY.md`; those belong in `sun/preferences/profile.md`.
+- Do not defer profile changes to weekly consolidation when explicitly provided by the user.
+- If the request is ambiguous, ask one short clarification before writing files.
+
 ## Governance delegation rule (required)
 
 **This layer (core/AGENTS.md):**

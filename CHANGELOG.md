@@ -6,6 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(governance): add root-level preference update delegation in `AGENTS.md` so explicit user profile/context changes are delegated to core protocol execution.
+- feat(governance): add `Profile Sync Protocol (required)` to `core/AGENTS.md` with trigger conditions, execution steps, and guardrails for `sun/preferences/profile.md` and `sun/MEMORY.md` synchronization.
+
+### Changed
+- chore(governance): move `Preference Update Delegation (Required)` section in root `AGENTS.md` next to governance delegation for clearer root-to-core ownership flow.
+
 ### Fixed
 - fix(sync-clients): enforce strict mirror sync for managed client folders (`skills`, `agents`, `commands`) by pruning stale entries before sync across `.cursor`, `.claude`, `.codex`, and `.gemini`.
 - fix(sync-clients): harden Gemini command sync cleanup to remove stale non-`.toml` leftovers in `.gemini/commands` and keep only index-backed generated command files.

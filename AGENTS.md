@@ -37,6 +37,12 @@ Solar operates with a three-layer governance structure:
 
 **Key principle:** Each AGENTS.md owns its scope. Delegate what you don't own to your immediate parent or specialist layer.
 
+## Preference Update Delegation (Required)
+
+If the user explicitly updates personal operating context (for example: role, start date, priorities, availability, decision criteria, communication preferences), root must delegate execution to the **Profile Sync Protocol** in `core/AGENTS.md`.
+
+Root keeps conversation ownership, but profile sync execution rules are owned by core.
+
 ### 1. The Sun (Personal Agent)
 - **Location:** `/sun/`
 - **Role:** Interface & Router - routes tasks, maintains user context
