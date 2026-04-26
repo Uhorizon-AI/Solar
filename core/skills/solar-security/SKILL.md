@@ -54,9 +54,8 @@ Planet-specific dictionaries (e.g. extra regex or literal replacements) can
 live under `planets/<planet>/` and be merged manually or via a future flag; core
 V1 ships with built-in patterns only.
 
-For stable placeholders across runs, use a planet-local mapping file and keep it
-ignored in that planet repo, for example:
-`planets/<planet>/.solar/security/placeholders.json`.
+For stable placeholders across runs, use the global Solar runtime mapping file:
+`sun/runtime/security-map.json`.
 
 ## Script usage (`scripts/`)
 
@@ -80,11 +79,10 @@ python3 core/skills/solar-security/scripts/sanitize_context.py \
   --output /tmp/sanitized.md \
   --report /tmp/sanitize-report.json
 
-# Persist mapping in a planet-local ignored file
+# Persist mapping in global Solar runtime state
 python3 core/skills/solar-security/scripts/sanitize_context.py \
   --input planets/uhorizon/operations/example.md \
-  --output /tmp/example.sanitized.md \
-  --planet uhorizon
+  --output /tmp/example.sanitized.md
 ```
 
 **Dependencies:** Python 3.9+ from the host. No third-party packages.

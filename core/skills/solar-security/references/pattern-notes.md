@@ -21,7 +21,7 @@ length. Adjust `SPECS` order deliberately when extending.
 
 ## Mapping file (optional)
 
-Use `--planet <name>` to persist original normalized values to placeholders
-across runs. Mapping location per planet:
-`planets/<planet>/.solar/security/placeholders.json` and add `.solar/`
-to that planet's `.gitignore`.
+Mappings persist automatically across runs in:
+`sun/runtime/security-map.json`.
+This file lives under `sun/` runtime state and is not committed in the
+framework repository.

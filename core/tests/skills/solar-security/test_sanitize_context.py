@@ -40,6 +40,11 @@ def test_sanitize_reuses_existing_mapping():
     assert counts["EMAIL"] == 2
 
 
-def test_planet_mapping_path_is_canonical():
-    path = mod._planet_mapping_path("uhorizon")
-    assert str(path) == "planets/uhorizon/.solar/security/placeholders.json"
+def test_default_mapping_path_is_canonical():
+    assert str(mod.DEFAULT_MAPPING_PATH) == "sun/runtime/security-map.json"
+
+
+def test_wrap_placeholders_for_markdown():
+    text = "Contact [EMAIL_001] and [PHONE_INTL_003]."
+    out = mod._wrap_placeholders_for_markdown(text)
+    assert out == "Contact `[EMAIL_001]` and `[PHONE_INTL_003]`."
