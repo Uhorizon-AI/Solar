@@ -67,32 +67,22 @@ python3 core/skills/solar-security/scripts/sanitize_context.py --help
 
 # File in → file out
 python3 core/skills/solar-security/scripts/sanitize_context.py \
-  planets/uhorizon/operations/example.md \
-  /tmp/example.sanitized.md
-
-# In-place: overwrite the source file
-python3 core/skills/solar-security/scripts/sanitize_context.py \
-  planets/uhorizon/operations/example.md
+  --input planets/uhorizon/operations/example.md \
+  --output /tmp/example.sanitized.md
 
 # Stdin → stdout (shell pipe)
 cat some-context.md | python3 core/skills/solar-security/scripts/sanitize_context.py
 
-# Optional: force backticks around `[PLACEHOLDER]` tokens in markdown
-python3 core/skills/solar-security/scripts/sanitize_context.py \
-  planets/uhorizon/operations/example.md \
-  /tmp/example.sanitized.md \
-  --md on
-
 # Emit a JSON sidecar report (counts + mapping of original→placeholder)
 python3 core/skills/solar-security/scripts/sanitize_context.py \
-  some-context.md \
-  /tmp/sanitized.md \
+  --input some-context.md \
+  --output /tmp/sanitized.md \
   --report /tmp/sanitize-report.json
 
-# Write mapping in global Solar runtime state (sun/runtime/security-map.json)
+# Persist mapping in global Solar runtime state
 python3 core/skills/solar-security/scripts/sanitize_context.py \
-  planets/uhorizon/operations/example.md \
-  /tmp/example.sanitized.md
+  --input planets/uhorizon/operations/example.md \
+  --output /tmp/example.sanitized.md
 ```
 
 **Dependencies:** Python 3.9+ from the host. No third-party packages.

@@ -84,7 +84,7 @@ class CustomRegexRule:
     placeholder: str
 
 def _load_custom_rules_from_mapping(
-    loaded_mapping: Dict[str, object],
+    loaded_mapping: Dict[str, Dict[str, str]],
 ) -> Tuple[List[CustomLiteralRule], List[CustomRegexRule]]:
     if not isinstance(loaded_mapping, dict):
         return [], []
@@ -145,16 +145,7 @@ def _load_custom_rules_from_mapping(
                 )
             )
 
-    # New preferred format:
-    # {
-    #   "REGEX": [
-    #     {"pattern": "...", "placeholder": "[TAG]", "flags": "i"}
-    #   ]
-    # }
-    # Backward compatible fallback: "regex_replacements"
-    regex_section = loaded_mapping.get("REGEX")
-    if not isinstance(regex_section, list):
-        regex_section = loaded_mapping.get("regex_replacements", [])
+    regex_section = loaded_mapping.get("regex_replacements", [])
     if isinstance(regex_section, list):
         for item in regex_section:
             if not isinstance(item, dict):
@@ -313,16 +304,16 @@ def main() -> int:
         description="Sanitize markdown/plain text for safer AI context (regex V1)."
     )
     p.add_argument(
-        "input",
-        nargs="?",
+        "--input",
+        "-i",
         default="-",
         help="Input file path, or '-' for stdin (default).",
     )
     p.add_argument(
-        "output",
-        nargs="?",
+        "--output",
+        "-o",
         default=None,
-        help="Output file path, or '-' for stdout.",
+        help="Output file path (if omitted and input is a file, overwrites input file).",
     )
     p.add_argument(
         "--report",
@@ -331,13 +322,13 @@ def main() -> int:
         help="Optional JSON path with mapping and counts (handle as sensitive).",
     )
     p.add_argument(
-        "--markdown",
-        "--md",
+        "--markdown-placeholders",
         choices=["auto", "on", "off"],
         default="auto",
         help="Wrap placeholders with backticks in markdown outputs (default: auto).",
     )
     args = p.parse_args()
+
 
     if args.input == "-":
         data = sys.stdin.read()
@@ -347,7 +338,7 @@ def main() -> int:
 
     mapping_file = DEFAULT_MAPPING_PATH
     existing_mapping: Dict[str, Dict[str, str]] = {}
-    loaded_map_raw: Dict[str, object] = {}
+    loaded_map_raw: Dict[str, Dict[str, str]] = {}
     if mapping_file.exists():
         with open(mapping_file, "r", encoding="utf-8") as f:
             loaded = json.load(f)
@@ -380,9 +371,9 @@ def main() -> int:
         output_target = "-"
 
     use_markdown_wrapping = False
-    if args.markdown == "on":
+    if args.markdown_placeholders == "on":
         use_markdown_wrapping = True
-    elif args.markdown == "auto":
+    elif args.markdown_placeholders == "auto":
         if output_target != "-" and str(output_target).lower().endswith(".md"):
             use_markdown_wrapping = True
     if use_markdown_wrapping:
@@ -403,15 +394,9 @@ def main() -> int:
             json.dump(payload, f, indent=2, ensure_ascii=False)
             f.write("\n")
 
-    # Preserve non-mapping config sections (e.g. REGEX rules) across runs.
-    persisted_mapping: Dict[str, object] = {k: v for k, v in mapping.items() if v}
-    for passthrough_key in ("REGEX", "regex_replacements", "literal_replacements"):
-        if passthrough_key in loaded_map_raw:
-            persisted_mapping[passthrough_key] = loaded_map_raw[passthrough_key]
-
     mapping_file.parent.mkdir(parents=True, exist_ok=True)
     with open(mapping_file, "w", encoding="utf-8") as f:
-        json.dump(persisted_mapping, f, indent=2, ensure_ascii=False)
+        json.dump({k: v for k, v in mapping.items() if v}, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
     return 0
