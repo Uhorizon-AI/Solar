@@ -54,12 +54,17 @@ Planet-specific dictionaries (e.g. extra regex or literal replacements) can
 live under `planets/<planet>/` and be merged manually or via a future flag; core
 V1 ships with built-in patterns only.
 
+For repository path consistency (rename files with placeholder tokens and
+rewrite markdown links), use `scripts/sanitize_paths.py`.
+
 For stable placeholders across runs, use the global Solar runtime mapping file:
 `sun/runtime/security-map.json`.
 
 ## Script usage (`scripts/`)
 
 Run from repo root (paths below assume `REPO_ROOT` is the Solar repository root).
+Examples below use `planets/<planet>/...` as a generic Solar pattern, the scripts
+also accept any valid file or directory path.
 
 ```bash
 # Show options
@@ -67,19 +72,19 @@ python3 core/skills/solar-security/scripts/sanitize_context.py --help
 
 # File in → file out
 python3 core/skills/solar-security/scripts/sanitize_context.py \
-  planets/uhorizon/operations/example.md \
+  planets/<planet>/operations/example.md \
   /tmp/example.sanitized.md
 
 # In-place: overwrite the source file
 python3 core/skills/solar-security/scripts/sanitize_context.py \
-  planets/uhorizon/operations/example.md
+  planets/<planet>/operations/example.md
 
 # Stdin → stdout (shell pipe)
 cat some-context.md | python3 core/skills/solar-security/scripts/sanitize_context.py
 
 # Optional: force backticks around `[PLACEHOLDER]` tokens in markdown
 python3 core/skills/solar-security/scripts/sanitize_context.py \
-  planets/uhorizon/operations/example.md \
+  planets/<planet>/operations/example.md \
   /tmp/example.sanitized.md \
   --md on
 
@@ -91,11 +96,41 @@ python3 core/skills/solar-security/scripts/sanitize_context.py \
 
 # Write mapping in global Solar runtime state (sun/runtime/security-map.json)
 python3 core/skills/solar-security/scripts/sanitize_context.py \
-  planets/uhorizon/operations/example.md \
+  planets/<planet>/operations/example.md \
   /tmp/example.sanitized.md
 ```
 
 **Dependencies:** Python 3.9+ from the host. No third-party packages.
+
+### Path sanitizer (`sanitize_paths.py`)
+
+```bash
+# Preview only (no writes)
+python3 core/skills/solar-security/scripts/sanitize_paths.py \
+  planets/<planet>/workspace \
+  --dry-run
+
+# Apply rename + markdown reference updates
+python3 core/skills/solar-security/scripts/sanitize_paths.py \
+  planets/<planet>/workspace
+
+# Explicit one-off override rule
+python3 core/skills/solar-security/scripts/sanitize_paths.py \
+  planets/<planet>/workspace \
+  --old TOKEN_SOURCE \
+  --new TOKEN_TARGET
+
+# Optional: load replacement rules from a mapping file
+python3 core/skills/solar-security/scripts/sanitize_paths.py \
+  planets/<planet>/workspace \
+  --use-mapping \
+  --mapping /path/to/security-map.json
+
+# Single-file mode
+python3 core/skills/solar-security/scripts/sanitize_paths.py \
+  planets/<planet>/workspace/pipeline.md \
+  --dry-run
+```
 
 ## Examples
 
