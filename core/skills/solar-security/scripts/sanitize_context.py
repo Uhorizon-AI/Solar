@@ -64,6 +64,24 @@ def _build_specs() -> List[PatternSpec]:
 
 SPECS: List[PatternSpec] = _build_specs()
 DEFAULT_MAPPING_PATH = Path("sun/runtime/security-map.json")
+
+SKIP_DIR_NAMES = frozenset({".git", "__pycache__", "node_modules", ".venv"})
+DEFAULT_BATCH_EXTENSIONS = frozenset(
+    {
+        ".md",
+        ".txt",
+        ".markdown",
+        ".html",
+        ".htm",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".csv",
+        ".rst",
+        ".adoc",
+        ".xml",
+    }
+)
 # Matches placeholders like [EMAIL_001], [COM], [UH-NAME], [SIGN_DATE]
 PLACEHOLDER_PATTERN = re.compile(r"\[([A-Z0-9][A-Z0-9_-]*)\]")
 # Matches placeholders wrapped with 1+ backticks on both sides.
@@ -299,6 +317,37 @@ def sanitize(
     return out, per_type_maps, counts
 
 
+def _parse_extensions_arg(raw: Optional[str]) -> frozenset[str]:
+    if raw is None or raw.strip() == "":
+        return DEFAULT_BATCH_EXTENSIONS
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    normalized: set[str] = set()
+    for p in parts:
+        normalized.add(p if p.startswith(".") else f".{p}")
+    return frozenset(normalized)
+
+
+def _iter_batch_files(root: Path, extensions: frozenset[str]) -> List[Path]:
+    out: List[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in SKIP_DIR_NAMES for part in path.parts):
+            continue
+        if path.suffix.lower() not in extensions:
+            continue
+        out.append(path)
+    out.sort(key=lambda p: str(p))
+    return out
+
+
+def _merge_count_dicts(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
+    merged = dict(a)
+    for k, v in b.items():
+        merged[k] = merged.get(k, 0) + v
+    return merged
+
+
 def _wrap_placeholders_for_markdown(text: str) -> str:
     """Render placeholders as inline code in an idempotent way."""
     # 1) Normalize already wrapped placeholders to exactly one backtick pair.
@@ -308,21 +357,44 @@ def _wrap_placeholders_for_markdown(text: str) -> str:
     return bare_pattern.sub(r"`[\1]`", normalized)
 
 
+def _resolve_markdown_wrap(
+    mode: str,
+    output_target: str,
+    paths_for_auto: Tuple[Path, ...],
+) -> bool:
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    if output_target != "-" and str(output_target).lower().endswith(".md"):
+        return True
+    return any(p.suffix.lower() == ".md" for p in paths_for_auto)
+
+
+def _write_text_output(new_text: str, output_target: str) -> None:
+    if output_target == "-":
+        sys.stdout.write(new_text)
+    else:
+        with open(output_target, "w", encoding="utf-8") as f:
+            f.write(new_text)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Sanitize markdown/plain text for safer AI context (regex V1)."
     )
     p.add_argument(
-        "input",
+        "target",
         nargs="?",
         default="-",
-        help="Input file path, or '-' for stdin (default).",
+        help="File path, directory (recursive in-place), or '-' for stdin (default: '-').",
     )
     p.add_argument(
         "output",
         nargs="?",
         default=None,
-        help="Output file path, or '-' for stdout.",
+        help="Optional output for stdin or single-file mode only ('-' = stdout). "
+        "Not allowed when target is a directory.",
     )
     p.add_argument(
         "--report",
@@ -337,13 +409,13 @@ def main() -> int:
         default="auto",
         help="Wrap placeholders with backticks in markdown outputs (default: auto).",
     )
+    p.add_argument(
+        "--extensions",
+        default=None,
+        help="Directory mode only: comma-separated suffixes to include (default: common text "
+        "formats such as md, txt, html, json). Leading dots optional.",
+    )
     args = p.parse_args()
-
-    if args.input == "-":
-        data = sys.stdin.read()
-    else:
-        with open(args.input, "r", encoding="utf-8") as f:
-            data = f.read()
 
     mapping_file = DEFAULT_MAPPING_PATH
     existing_mapping: Dict[str, Dict[str, str]] = {}
@@ -363,40 +435,88 @@ def main() -> int:
                 }
 
     custom_literals, custom_regexes = _load_custom_rules_from_mapping(loaded_map_raw)
-    new_text, mapping, counts = sanitize(
-        data,
-        existing_mapping=existing_mapping,
-        custom_literals=custom_literals,
-        custom_regexes=custom_regexes,
-    )
 
-    if args.output is not None:
-        output_target = args.output
-    elif args.input != "-":
-        # Default behavior for file inputs: overwrite source file.
-        output_target = args.input
+    if args.target == "-":
+        data = sys.stdin.read()
+        new_text, mapping, counts = sanitize(
+            data,
+            existing_mapping=existing_mapping,
+            custom_literals=custom_literals,
+            custom_regexes=custom_regexes,
+        )
+        output_target = args.output if args.output is not None else "-"
+        use_md = _resolve_markdown_wrap(
+            args.markdown, output_target=output_target, paths_for_auto=()
+        )
+        if use_md:
+            new_text = _wrap_placeholders_for_markdown(new_text)
+        _write_text_output(new_text, output_target)
+        total_counts = counts
     else:
-        # stdin input defaults to stdout output.
-        output_target = "-"
+        target_path = Path(args.target)
+        if not target_path.exists():
+            print(f"Not found: {target_path}", file=sys.stderr)
+            return 2
 
-    use_markdown_wrapping = False
-    if args.markdown == "on":
-        use_markdown_wrapping = True
-    elif args.markdown == "auto":
-        if output_target != "-" and str(output_target).lower().endswith(".md"):
-            use_markdown_wrapping = True
-    if use_markdown_wrapping:
-        new_text = _wrap_placeholders_for_markdown(new_text)
-
-    if output_target == "-":
-        sys.stdout.write(new_text)
-    else:
-        with open(output_target, "w", encoding="utf-8") as f:
-            f.write(new_text)
+        if target_path.is_dir():
+            if args.output is not None:
+                print(
+                    "output path is not supported when target is a directory (in-place only)",
+                    file=sys.stderr,
+                )
+                return 2
+            extensions = _parse_extensions_arg(args.extensions)
+            files = _iter_batch_files(target_path.resolve(), extensions)
+            running_mapping: Dict[str, Dict[str, str]] = existing_mapping
+            total_counts: Dict[str, int] = {}
+            written = 0
+            for fp in files:
+                try:
+                    data = fp.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                new_text, running_mapping, counts = sanitize(
+                    data,
+                    existing_mapping=running_mapping,
+                    custom_literals=custom_literals,
+                    custom_regexes=custom_regexes,
+                )
+                total_counts = _merge_count_dicts(total_counts, counts)
+                use_md = _resolve_markdown_wrap(
+                    args.markdown, output_target=str(fp), paths_for_auto=(fp,)
+                )
+                if use_md:
+                    new_text = _wrap_placeholders_for_markdown(new_text)
+                if new_text != data:
+                    fp.write_text(new_text, encoding="utf-8")
+                    written += 1
+            mapping = running_mapping
+            print(f"sanitized_files={written} scanned_files={len(files)}")
+        else:
+            with open(target_path, "r", encoding="utf-8") as f:
+                data = f.read()
+            new_text, mapping, counts = sanitize(
+                data,
+                existing_mapping=existing_mapping,
+                custom_literals=custom_literals,
+                custom_regexes=custom_regexes,
+            )
+            total_counts = counts
+            output_target = (
+                args.output if args.output is not None else str(target_path)
+            )
+            use_md = _resolve_markdown_wrap(
+                args.markdown,
+                output_target=output_target,
+                paths_for_auto=(target_path,),
+            )
+            if use_md:
+                new_text = _wrap_placeholders_for_markdown(new_text)
+            _write_text_output(new_text, output_target)
 
     if args.report:
         payload = {
-            "counts": counts,
+            "counts": total_counts,
             "mapping": {k: v for k, v in mapping.items() if v},
         }
         with open(args.report, "w", encoding="utf-8") as f:
@@ -405,7 +525,7 @@ def main() -> int:
 
     # Preserve non-mapping config sections (e.g. REGEX rules) across runs.
     persisted_mapping: Dict[str, object] = {k: v for k, v in mapping.items() if v}
-    for passthrough_key in ("REGEX", "regex_replacements", "literal_replacements"):
+    for passthrough_key in ("REGEX", "regex_replacements", "literal_replacements", "CUSTOM"):
         if passthrough_key in loaded_map_raw:
             persisted_mapping[passthrough_key] = loaded_map_raw[passthrough_key]
 

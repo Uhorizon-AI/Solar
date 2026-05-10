@@ -43,9 +43,9 @@ None
 
 ## Workflow
 
-1. **Identify** the text to sanitize (file path or stdin).
+1. **Identify** the text to sanitize (single file path, directory for recursive in-place, or stdin).
 2. **Run** `scripts/sanitize_context.py` (see below). Prefer writing output to a
-   new file (e.g. `*.sanitized.md`) and keeping originals untouched.
+   new file (e.g. `*.sanitized.md`) when not using directory in-place mode.
 3. **Review** the optional JSON report for counts and placeholder mapping (do not
    commit reports that contain reversible mappings if your policy forbids it).
 4. **Use** the sanitized text as the only input passed to the model for that task.
@@ -70,14 +70,23 @@ also accept any valid file or directory path.
 # Show options
 python3 core/skills/solar-security/scripts/sanitize_context.py --help
 
-# File in → file out
+# File in → file out (`target` + optional output path)
 python3 core/skills/solar-security/scripts/sanitize_context.py \
   planets/<planet>/operations/example.md \
   /tmp/example.sanitized.md
 
-# In-place: overwrite the source file
+# In-place: overwrite the single file
 python3 core/skills/solar-security/scripts/sanitize_context.py \
   planets/<planet>/operations/example.md
+
+# Directory: recursive in-place only (same idea as sanitize_paths target)
+python3 core/skills/solar-security/scripts/sanitize_context.py \
+  planets/<planet>/operations/meetings
+
+# Directory: restrict suffixes (default: md, txt, html, json, yaml, etc.)
+python3 core/skills/solar-security/scripts/sanitize_context.py \
+  planets/<planet>/workspace \
+  --extensions md,txt,html
 
 # Stdin → stdout (shell pipe)
 cat some-context.md | python3 core/skills/solar-security/scripts/sanitize_context.py
@@ -93,12 +102,12 @@ python3 core/skills/solar-security/scripts/sanitize_context.py \
   some-context.md \
   /tmp/sanitized.md \
   --report /tmp/sanitize-report.json
-
-# Write mapping in global Solar runtime state (sun/runtime/security-map.json)
-python3 core/skills/solar-security/scripts/sanitize_context.py \
-  planets/<planet>/operations/example.md \
-  /tmp/example.sanitized.md
 ```
+
+**Mapping file (automatic):** every run also reads and then **rewrites** `sun/runtime/security-map.json`
+(paths are relative to the shell’s current working directory; from repo root that is `sun/runtime/security-map.json`).
+That file stores stable placeholder assignments (for example `[EMAIL_001]`) across runs and for directory mode
+is updated **once after processing all files**. It is separate from the sanitized document path (for example `/tmp/example.sanitized.md` above).
 
 **Dependencies:** Python 3.9+ from the host. No third-party packages.
 
