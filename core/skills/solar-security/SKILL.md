@@ -83,10 +83,10 @@ python3 core/skills/solar-security/scripts/sanitize_context.py \
 python3 core/skills/solar-security/scripts/sanitize_context.py \
   planets/<planet>/operations/meetings
 
-# Directory: restrict suffixes (default: md, txt, html, json, yaml, etc.)
+# Directory: default is *.md only; add other suffixes explicitly when needed
 python3 core/skills/solar-security/scripts/sanitize_context.py \
   planets/<planet>/workspace \
-  --extensions md,txt,html
+  --extensions md,txt,html,json
 
 # Stdin → stdout (shell pipe)
 cat some-context.md | python3 core/skills/solar-security/scripts/sanitize_context.py

@@ -14,6 +14,7 @@ The format is based on Keep a Changelog.
 - test(solar-security): add `core/tests/skills/solar-security/test_sanitize_paths.py` covering dry-run behavior, apply mode rename/link rewrites, and mapping-driven rules.
 
 ### Changed
+- change(solar-security): directory mode in `sanitize_context.py` defaults to `*.md` only; use `--extensions` to include html, json, txt, etc.
 - docs(solar-security): extend `sanitize_context.py` CLI and `SKILL.md` usage for directory mode (aligned naming with `sanitize_paths.py`'s `target`).
 - chore(governance): move `Preference Update Delegation (Required)` section in root `AGENTS.md` next to governance delegation for clearer root-to-core ownership flow.
 - docs(solar-security): document `sanitize_paths.py` usage in `core/skills/solar-security/SKILL.md`, including dry-run, apply mode, explicit overrides, and single-file execution.

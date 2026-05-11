@@ -66,22 +66,9 @@ SPECS: List[PatternSpec] = _build_specs()
 DEFAULT_MAPPING_PATH = Path("sun/runtime/security-map.json")
 
 SKIP_DIR_NAMES = frozenset({".git", "__pycache__", "node_modules", ".venv"})
-DEFAULT_BATCH_EXTENSIONS = frozenset(
-    {
-        ".md",
-        ".txt",
-        ".markdown",
-        ".html",
-        ".htm",
-        ".json",
-        ".yaml",
-        ".yml",
-        ".csv",
-        ".rst",
-        ".adoc",
-        ".xml",
-    }
-)
+# Directory mode scans only these suffixes by default (narrow on purpose).
+# Use --extensions to add txt, html, json, etc. when needed.
+DEFAULT_BATCH_EXTENSIONS = frozenset({".md"})
 # Matches placeholders like [EMAIL_001], [COM], [UH-NAME], [SIGN_DATE]
 PLACEHOLDER_PATTERN = re.compile(r"\[([A-Z0-9][A-Z0-9_-]*)\]")
 # Matches placeholders wrapped with 1+ backticks on both sides.
@@ -412,8 +399,8 @@ def main() -> int:
     p.add_argument(
         "--extensions",
         default=None,
-        help="Directory mode only: comma-separated suffixes to include (default: common text "
-        "formats such as md, txt, html, json). Leading dots optional.",
+        help="Directory mode only: comma-separated suffixes to include "
+        "(default: md only). Leading dots optional.",
     )
     args = p.parse_args()
 
