@@ -79,3 +79,26 @@ def test_mapping_rules_are_used_for_renames(tmp_path: Path):
     assert not old_file.exists()
     assert (docs_dir / "x_TOKEN_TARGET.md").exists()
     assert "x_TOKEN_TARGET.md" in md.read_text(encoding="utf-8")
+
+
+def test_use_mapping_without_mapping_path_uses_default_file(monkeypatch, tmp_path: Path):
+    """When mapping_path is None, rules load from DEFAULT_MAPPING_PATH (same contract as sanitize_context)."""
+    mapping = tmp_path / "security-map.json"
+    mapping.write_text('{"CUSTOM":{"TOKEN_SOURCE":"TOKEN_TARGET"}}', encoding="utf-8")
+    monkeypatch.setattr(mod, "DEFAULT_MAPPING_PATH", mapping)
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir(parents=True)
+    old_file = docs_dir / "note_TOKEN_SOURCE.md"
+    old_file.write_text("# n\n", encoding="utf-8")
+
+    renamed, updated_docs = mod.run(
+        target=tmp_path,
+        dry_run=True,
+        mapping_path=None,
+        use_mapping=True,
+    )
+
+    assert renamed == 1
+    assert updated_docs == 0
+    assert old_file.exists()

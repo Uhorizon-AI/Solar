@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
+# Same default as sanitize_context.py (paths relative to process cwd, usually repo root).
+DEFAULT_MAPPING_PATH = Path("sun/runtime/security-map.json")
+
 
 @dataclass(frozen=True)
 class RenamePlan:
@@ -155,15 +158,17 @@ def run(
 
     rules: List[Tuple[str, str]] = []
     if use_mapping:
-        if mapping_path is None:
-            raise ValueError("Mapping mode requires --mapping <path>.")
-        rules.extend(_load_rules_from_mapping(mapping_path))
+        resolved_mapping = mapping_path if mapping_path is not None else DEFAULT_MAPPING_PATH
+        rules.extend(_load_rules_from_mapping(resolved_mapping))
     if old is not None or new is not None:
         if not old or not new:
             raise ValueError("Both --old and --new must be provided together.")
         rules.insert(0, (old, new))
     if not rules:
-        raise ValueError("No replacement rules provided. Use mapping and/or --old/--new.")
+        raise ValueError(
+            "No replacement rules provided. Use --use-mapping (optional --mapping PATH; "
+            "default: sun/runtime/security-map.json) and/or --old/--new."
+        )
 
     dedup: dict[str, str] = {}
     for src, dst in rules:
@@ -197,12 +202,13 @@ def main() -> int:
     parser.add_argument(
         "--mapping",
         default=None,
-        help="Optional path to mapping JSON with CUSTOM replacements.",
+        help="JSON with CUSTOM / literal_replacements (default with --use-mapping: "
+        "sun/runtime/security-map.json).",
     )
     parser.add_argument(
         "--use-mapping",
         action="store_true",
-        help="Enable loading replacements from --mapping JSON.",
+        help="Load replacement rules from --mapping, or from the default file if --mapping is omitted.",
     )
     parser.add_argument(
         "--dry-run",

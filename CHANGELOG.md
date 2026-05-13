@@ -14,6 +14,9 @@ The format is based on Keep a Changelog.
 - test(solar-security): add `core/tests/skills/solar-security/test_sanitize_paths.py` covering dry-run behavior, apply mode rename/link rewrites, and mapping-driven rules.
 
 ### Changed
+- change(solar-security): `sanitize_paths.py` loads `sun/runtime/security-map.json` when `--use-mapping` is set and `--mapping` is omitted, matching the default mapping path used by `sanitize_context.py` (paths relative to the process working directory).
+- docs(solar-security): correct `SKILL.md` examples for `sanitize_paths.py` so every command includes required rules (`--use-mapping` and/or `--old` / `--new`); document the default mapping file.
+- test(solar-security): extend `core/tests/skills/solar-security/test_sanitize_paths.py` with coverage for default mapping resolution when `mapping_path` is unset.
 - change(solar-security): directory mode in `sanitize_context.py` defaults to `*.md` only; use `--extensions` to include html, json, txt, etc.
 - docs(solar-security): extend `sanitize_context.py` CLI and `SKILL.md` usage for directory mode (aligned naming with `sanitize_paths.py`'s `target`).
 - chore(governance): move `Preference Update Delegation (Required)` section in root `AGENTS.md` next to governance delegation for clearer root-to-core ownership flow.

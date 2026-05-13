@@ -113,31 +113,36 @@ is updated **once after processing all files**. It is separate from the sanitize
 
 ### Path sanitizer (`sanitize_paths.py`)
 
+Requires replacement rules: either `--use-mapping` (reads `sun/runtime/security-map.json` by default when run from repo root) and/or `--old` / `--new`. Paths are relative to the shell’s current working directory, same as `sanitize_context.py`.
+
 ```bash
-# Preview only (no writes)
+# Preview: rules from default sun/runtime/security-map.json (no --mapping needed)
 python3 core/skills/solar-security/scripts/sanitize_paths.py \
   planets/<planet>/workspace \
+  --use-mapping \
   --dry-run
 
-# Apply rename + markdown reference updates
+# Apply rename + markdown reference updates (same default mapping file)
 python3 core/skills/solar-security/scripts/sanitize_paths.py \
-  planets/<planet>/workspace
+  planets/<planet>/workspace \
+  --use-mapping
 
-# Explicit one-off override rule
+# Explicit one-off rule (no mapping file)
 python3 core/skills/solar-security/scripts/sanitize_paths.py \
   planets/<planet>/workspace \
   --old TOKEN_SOURCE \
   --new TOKEN_TARGET
 
-# Optional: load replacement rules from a mapping file
+# Optional: non-default mapping path
 python3 core/skills/solar-security/scripts/sanitize_paths.py \
   planets/<planet>/workspace \
   --use-mapping \
-  --mapping /path/to/security-map.json
+  --mapping /path/to/other-security-map.json
 
 # Single-file mode
 python3 core/skills/solar-security/scripts/sanitize_paths.py \
   planets/<planet>/workspace/pipeline.md \
+  --use-mapping \
   --dry-run
 ```
 
