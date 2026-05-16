@@ -106,26 +106,7 @@ It defines contracts, templates, and operational rules shared by all users.
 
 ## Profile Sync Protocol (required)
 
-This protocol is invoked when root `AGENTS.md` detects an explicit user update to personal operating context.
-
-### Trigger conditions
-- User corrects or updates profile facts in conversation (identity handshake, professional mode, role, dates, priorities, time constraints, communication preferences, decision criteria).
-- User explicitly asks to update profile/preferences.
-- Agent detects a conflict between current user statements and `sun/preferences/profile.md`.
-
-### Execution steps
-1. Update `sun/preferences/profile.md` first, preserving existing structure when possible.
-2. Keep entries concise, operational, and current. Remove stale or superseded statements.
-3. If the change introduces stable operational behavior, update `sun/MEMORY.md` with pattern-level guidance (not identity/config duplication).
-4. Confirm back to the user:
-   - what was updated,
-   - what was removed/replaced,
-   - and the operational impact on prioritization/routing.
-
-### Guardrails
-- Do not store identity/config duplicates in `sun/MEMORY.md`; those belong in `sun/preferences/profile.md`.
-- Do not defer profile changes to weekly consolidation when explicitly provided by the user.
-- If the request is ambiguous, ask one short clarification before writing files.
+Invoked when root detects an explicit user update to personal operating context. Update `sun/preferences/profile.md` first, then `sun/MEMORY.md` only if a stable operational pattern emerges. Confirm changes back to the user. See `core/docs/profile-sync-protocol.md` for trigger conditions, execution steps, and guardrails.
 
 ## Governance delegation rule (required)
 
@@ -137,21 +118,7 @@ This protocol is invoked when root `AGENTS.md` detects an explicit user update t
 
 ## Setup Protocol
 
-This protocol is invoked by root `AGENTS.md` when `sun/MEMORY.md` or `sun/preferences/profile.md` are missing.
-
-**Setup menu:**
-1. `Configure now (Recommended)`
-2. `I already configured it`
-3. `Show help`
-
-**Execution:**
-- **Option 1:** Run `bash core/bootstrap.sh`, confirm completion, then start onboarding
-- **Option 2:** Re-attempt to read `sun/preferences/profile.md`; if still missing, offer option 1 again
-- **Option 3:** Explain what setup does and why it is needed
-
-**Post-setup handoff:**
-- Onboarding conversation remains governed by root `AGENTS.md`
-- Apply `core/onboarding-conversation-contract.md` as the detailed conversation contract
+Invoked when `sun/MEMORY.md` or `sun/preferences/profile.md` are missing. Offer three options: configure now (run `bash core/bootstrap.sh`), already configured (re-read profile), or show help. See `core/docs/setup-protocol.md` for full menu and post-setup handoff.
 
 ## Core self-management rule (required)
 - `core/` must be operated autonomously by the agent.

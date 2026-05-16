@@ -115,26 +115,7 @@ Access `sun/` and `planets/*/` directly. See `core/AGENTS.md` for workspace rule
 
 ## Chrome DevTools MCP — browser on demand (Required)
 
-Goal: keep `browserUrl` shared for multi-agent stability, without keeping Chrome on all day.
-
-**Required flow (no user prompt):**
-1. Before first Chrome DevTools MCP call in a task (or after MCP connect error), run:
-
-```bash
-bash core/skills/solar-browser/scripts/ensure_browser.sh --start
-```
-
-2. Reuse the same runtime during the browser workflow (do not stop between MCP tool calls).
-3. At natural completion of that browser workflow, run:
-
-```bash
-bash core/skills/solar-browser/scripts/ensure_browser.sh --stop
-```
-
-4. Never ask the user to keep Chrome/debugging running 24/7.
-5. `--stop` should block only when **other** MCP clients are active (safe default assumes your current session). If blocked, do not force-close by default; use `--stop --force` only when you are sure no other active workflow should keep the shared runtime.
-
-If sandbox blocks `ensure_browser.sh` (for example `ps: Operation not permitted`), re-run the same command with full permissions.
+Before any Chrome DevTools MCP call: run `ensure_browser.sh --start`. After workflow completes: run `ensure_browser.sh --stop`. Never keep Chrome running between tasks. See `core/docs/browser-protocol.md` for full flow.
 
 ## Workspace Doctor Policy (Required)
 
@@ -142,43 +123,7 @@ Git setup in `sun/` and `planets/*` is optional. See `core/AGENTS.md` for doctor
 
 ## JIT Delegation Protocol (Required)
 
-When receiving a task, the AI must self-evaluate before responding:
-
-### 1. Self-Assessment
-Check if available agents, skills, and commands are sufficient for the task:
-- **Sufficient** → execute directly.
-- **Insufficient or uncertain** → delegate to `solar-router` as a subprocess.
-- **Requires external resources** (internet, system binaries, MCPs, long-running operations) → create an async task via `solar-async-tasks` (create → plan → approve → queue). The system executes it automatically via the Solar LaunchAgent. Do NOT run `run_worker.sh` manually or attempt direct execution.
-
-### 2. Validation Gate
-Before delegating to `solar-router`:
-- Task is **read / analysis only** → delegate automatically.
-- Task **modifies data or sends messages** → show the user which agent + skills will be used and wait for explicit approval before proceeding.
-
-### 3. Subprocess Invocation
-Call `solar-router` using the v3 contract via stdin. Always use `mode: direct_only` and `channel: other` in subprocesses to prevent recursion:
-
-```bash
-echo '{
-  "request_id": "<uuid>",
-  "session_id": "<session_id>",
-  "user_id": "<user_id>",
-  "text": "<task description>",
-  "channel": "other",
-  "mode": "direct_only",
-  "provider": "<claude|gemini|codex>",
-  "metadata": {
-    "agent": "<agent-name or null>",
-    "skills": ["<skill-1>", "<skill-2>"],
-    "planet": "<planet-name>"
-  }
-}' | python3 core/skills/solar-router/scripts/run_router.py
-```
-
-For full field rules, JIT protocol, metadata format, and invariants see `core/skills/solar-router/references/routing-policy.md`.
-
-### 4. When No Agent or Skill Exists
-Set `metadata.agent` to `null` — the router generates a role JIT. Frequently used JIT resources are persisted to the correct planet and synced via `sync-clients.sh`.
+Self-assess before responding: sufficient → execute directly; insufficient → delegate to `solar-router`; requires external resources → use `solar-async-tasks`. Read/analysis tasks delegate automatically; data-modifying tasks require explicit user approval first. See `core/docs/jit-delegation-protocol.md` for subprocess invocation contract and field rules.
 
 ## Workflow Orchestration (Required)
 
