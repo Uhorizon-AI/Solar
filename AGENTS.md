@@ -2,13 +2,24 @@
 
 ## First-Run / Session start Protocol (Required)
 
-**First thing in every session, before responding to the first user message:** read in this order:
+**First thing in every session, detect the session level from the first user message, then load only what that level requires. Do not mention this step in your reply.**
 
-1. **This file** (root `AGENTS.md`) in full.
-2. **`sun/preferences/profile.md`** — so you know who you are talking to.
-3. **`sun/MEMORY.md`** — so you have context and learnings to remember.
+Session levels (see `core/docs/token-budget-protocol.md` for full spec):
 
-If `sun/preferences/profile.md` or `sun/MEMORY.md` are missing, delegate to `core/AGENTS.md` setup protocol instead of answering. Do not mention this step in your reply.
+**Level 1 — Light** (question, quick task, no planet or framework reference):
+- Read: `sun/preferences/profile.md` only.
+
+**Level 2 — Planet** (task involves a specific planet, company, project, or planet-scoped skill):
+- Read: `sun/preferences/profile.md` + `sun/MEMORY.md` + `planets/<active-planet>/AGENTS.md`.
+- Do NOT load other planets' AGENTS.md or `core/AGENTS.md`.
+
+**Level 3 — Framework** (task modifies `core/`, governance files, scripts, or Solar architecture):
+- Read: `sun/preferences/profile.md` + `sun/MEMORY.md` + `core/AGENTS.md`.
+- Load active planet AGENTS.md only if applicable.
+
+Detection order: check L3 signals first (mentions core/, AGENTS.md, scripts, Solar itself), then L2 (mentions planet name, company, project, planet skill), default to L1.
+
+If `sun/preferences/profile.md` or `sun/MEMORY.md` are missing when required, delegate to `core/AGENTS.md` setup protocol instead of answering.
 
 ## Core Directive: Solar Architecture
 

@@ -98,7 +98,7 @@ It defines contracts, templates, and operational rules shared by all users.
   - When fixing mistakes that could be common.
   - When making architectural decisions during work.
   - When learning domain-specific context not captured in AGENTS.md.
-- **First-run protocol**: On first interaction, silently read `sun/MEMORY.md`. If missing, delegate to setup protocol.
+- **First-run protocol**: On first interaction, load `sun/MEMORY.md` only when the session level requires it (L2 or L3). See `core/docs/token-budget-protocol.md` for level detection. If missing when required, delegate to setup protocol.
 
 ## Runtime interaction ownership
 - First-run trigger and user-facing conversation are owned by root `AGENTS.md`.
