@@ -10,7 +10,7 @@
 
 ## Onboarding (required)
 
-Order: identity handshake → user preferences → baseline context → planet creation. Use `core/onboarding-conversation-contract.md`: one question per turn, accept corrections at any moment, confirm before creating any planet. Use `core/orchestration-blueprint.md` for routing, execution, reporting, and persistence.
+Order: identity handshake → user preferences → baseline context → planet creation. Use `core/docs/onboarding-contract.md`: one question per turn, accept corrections at any moment, confirm before creating any planet. Use `core/docs/orchestration-blueprint.md` for routing, execution, reporting, and persistence.
 
 ## Template policy (required)
 
@@ -79,7 +79,7 @@ All changes to `core/skills/` are governed by `solar-skill-creator`, not `solar-
 ## Skill validation rule (required)
 
 After modifying any skill under `core/skills/`, validate before marking complete:
-`python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /tmp`. Do not use `--no-validate` in normal flow.
+`python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /tmp`. Do not use `--no-validate` in normal flow. For per-skill MCP requirements, see `core/docs/mcp-requirements.md`.
 
 ## Core skills tests policy (required)
 

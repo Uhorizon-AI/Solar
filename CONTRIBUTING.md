@@ -22,7 +22,7 @@ Solar follows strict architecture boundaries:
 Primary references:
 - `AGENTS.md`
 - `core/AGENTS.md`
-- `core/orchestration-blueprint.md`
+- `core/docs/orchestration-blueprint.md`
 
 ## Language Policy
 

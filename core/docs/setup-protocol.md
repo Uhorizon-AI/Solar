@@ -17,4 +17,4 @@ Invoked by root `AGENTS.md` when `sun/MEMORY.md` or `sun/preferences/profile.md`
 ## Post-Setup Handoff
 
 - Onboarding conversation remains governed by root `AGENTS.md`.
-- Apply `core/onboarding-conversation-contract.md` as the detailed conversation contract.
+- Apply `core/docs/onboarding-contract.md` as the detailed conversation contract.

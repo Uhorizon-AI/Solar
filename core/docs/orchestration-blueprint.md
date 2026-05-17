@@ -15,9 +15,9 @@ Keep execution simple, traceable, and reusable for any user.
 ## Orchestration Cycle
 1. Understand user intent in one sentence.
 2. Route to the correct planet using scope in `planets/<planet-name>/AGENTS.md`.
-3. Build a Sun -> Planet request with `core/transport-contract.md`.
+3. Build a Sun -> Planet request with objective, constraints, and context.
 4. Execute task in the selected planet.
-5. Capture Planet -> Sun response with `core/report-template.md`.
+5. Capture Planet -> Sun response with status, deliverables, risks, and next steps.
 6. Persist learnings:
    - Stable user-level decisions -> `sun/MEMORY.md`
    - Domain decisions and facts -> `planets/<planet-name>/MEMORY.md`
@@ -66,7 +66,7 @@ Before creating a new planet, Sun must:
 - Continue from latest valid state without restarting onboarding.
 
 ## Minimum Quality Bar per Task
-- Request has `objective`, `constraints`, `context`.
-- Response has `status`, `deliverables`, `risks`, `next_steps`.
+- Sun -> Planet request has `objective`, `constraints`, and `context`.
+- Planet -> Sun response has `status`, `deliverables`, `risks`, and `next_steps`.
 - At least one memory update occurs when a new durable decision appears.
 - Output to user is brief and actionable.

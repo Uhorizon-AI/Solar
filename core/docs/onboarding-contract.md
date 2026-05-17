@@ -33,6 +33,8 @@ This contract defines how Sun conducts onboarding with any user.
   - Proposed planet name and objective.
 - Sun must ask for explicit confirmation: `Do you want to create this planet now?`
 - Planet creation starts only after a clear yes.
+- Use `bash core/scripts/create-planet.sh <planet-name>` for automated setup.
+- After creation, confirm the planet `AGENTS.md` defines governance and boundaries.
 
 ## Identity Data Isolation Rule (required)
 - **Never** write user names, assistant names, or model names into `sun/MEMORY.md` or any planet MEMORY file.
@@ -61,3 +63,4 @@ Onboarding is complete when all required identity fields and minimum working con
 - Time constraints.
 - Top 1 current focus.
 - Pre-planet summary validated by user.
+- If a planet is created, one pilot task has run end-to-end.

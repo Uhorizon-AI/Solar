@@ -58,7 +58,7 @@ The format is based on Keep a Changelog.
 
 ### Fixed
 - fix(solar-router): set executable permissions (`755`) on `diagnose_router.sh` and `setup_ollama.sh`.
-- fix(governance): prohibit identity data (user name, assistant name) in `MEMORY.md` — names belong exclusively in `sun/preferences/profile.md`. Stale references were persisting when actors renamed after initial onboarding. Adds **Identity Data Isolation Rule** and **Profile Update Protocol** to `core/onboarding-conversation-contract.md`; updates `core/AGENTS.md` memory protocol with explicit prohibition. Closes #1.
+- fix(governance): prohibit identity data (user name, assistant name) in `MEMORY.md` — names belong exclusively in `sun/preferences/profile.md`. Stale references were persisting when actors renamed after initial onboarding. Adds **Identity Data Isolation Rule** and **Profile Update Protocol** to `core/docs/onboarding-contract.md`; updates `core/AGENTS.md` memory protocol with explicit prohibition. Closes #1.
 
 ### Docs
 - docs(solar-code): update `SKILL.md` and `task-spec.md` for clarity and structure improvements.
