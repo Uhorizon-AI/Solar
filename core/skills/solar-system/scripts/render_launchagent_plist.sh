@@ -2,7 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+# shellcheck source=system_lib.sh
+source "$SCRIPT_DIR/system_lib.sh"
+REPO_ROOT="$(solar_system_repo_root)"
 TEMPLATE="$SCRIPT_DIR/../assets/com.solar.system.plist.template"
 
 if [[ ! -f "$TEMPLATE" ]]; then
@@ -10,12 +12,14 @@ if [[ ! -f "$TEMPLATE" ]]; then
   exit 1
 fi
 
+solar_system_load_env "$REPO_ROOT"
+
 OUT_FILE="${1:-/tmp/com.solar.system.plist}"
 LABEL="${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}"
 START_INTERVAL="${SOLAR_SYSTEM_LAUNCHD_START_INTERVAL:-60}"
 STDOUT_PATH="${SOLAR_SYSTEM_STDOUT_PATH:-$HOME/Library/Logs/com.solar.system/stdout.log}"
 STDERR_PATH="${SOLAR_SYSTEM_STDERR_PATH:-$HOME/Library/Logs/com.solar.system/stderr.log}"
-ENTRYPOINT_PATH="$REPO_ROOT/core/skills/solar-system/scripts/Solar"
+ENTRYPOINT_PATH="$(solar_system_entrypoint "$REPO_ROOT")"
 WORKING_DIRECTORY="$REPO_ROOT"
 
 escape_sed() {

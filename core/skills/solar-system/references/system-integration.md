@@ -3,7 +3,9 @@
 ## Phase 1: macOS
 
 - Supervisor model: one LaunchAgent (`com.solar.system`) with `StartInterval=60`.
-- Orchestrator entrypoint: `core/skills/solar-system/scripts/run_orchestrator.sh --once`.
+- LaunchAgent binary: `sun/runtime/system/Solar` (compiled from `Solar.c` on install; resolves `run_orchestrator.sh` under `core/`).
+- Orchestrator script: `core/skills/solar-system/scripts/run_orchestrator.sh --once`.
+- Runtime dir override: `SOLAR_SYSTEM_RUNTIME_DIR` (default `sun/runtime/system`).
 - Feature selector: `SOLAR_SYSTEM_FEATURES` (CSV).
 
 ## Feature dispatch

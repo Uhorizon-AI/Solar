@@ -3,11 +3,16 @@
 # Usage: run from repo root: bash core/skills/solar-system/scripts/diagnose_launchagent.sh
 set -euo pipefail
 
-REPO_ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
-cd "$REPO_ROOT"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=system_lib.sh
+source "$SCRIPT_DIR/system_lib.sh"
 
-ENTRYPOINT="$REPO_ROOT/core/skills/solar-system/scripts/Solar"
-ORCHESTRATOR="$REPO_ROOT/core/skills/solar-system/scripts/run_orchestrator.sh"
+REPO_ROOT="${1:-$(solar_system_repo_root)}"
+cd "$REPO_ROOT"
+solar_system_load_env "$REPO_ROOT"
+
+ENTRYPOINT="$(solar_system_entrypoint "$REPO_ROOT")"
+ORCHESTRATOR="$(solar_system_orchestrator_script "$REPO_ROOT")"
 STDOUT="${SOLAR_SYSTEM_STDOUT_PATH:-$HOME/Library/Logs/com.solar.system/stdout.log}"
 STDERR="${SOLAR_SYSTEM_STDERR_PATH:-$HOME/Library/Logs/com.solar.system/stderr.log}"
 LABEL="${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}"
@@ -44,4 +49,4 @@ launchctl print "$DOMAIN/$LABEL" 2>/dev/null | head -5 || echo "Job not loaded (
 
 echo ""
 echo "=== 7. Run entrypoint manually (sanity) ==="
-"$ENTRYPOINT" 2>&1 | head -3 && echo "OK: runs" || true
+(cd "$REPO_ROOT" && "$ENTRYPOINT") 2>&1 | head -3 && echo "OK: runs" || true

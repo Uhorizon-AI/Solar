@@ -57,6 +57,8 @@ Block format:
 SOLAR_SYSTEM_FEATURES=async-tasks
 ```
 
+The LaunchAgent entrypoint is built at `sun/runtime/system/Solar` during install (default path in code; not versioned in `core/`). Override only if needed: `SOLAR_SYSTEM_RUNTIME_DIR` (absolute or relative to repo root).
+
 `SOLAR_SYSTEM_FEATURES` is a CSV selector. Supported values:
 - `async-tasks`
 - `transport-gateway`

@@ -3,35 +3,49 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <libgen.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+static int resolve_repo_root(char *buf, size_t len) {
+    const char *env = getenv("SOLAR_REPO_ROOT");
+    if (env != NULL && env[0] != '\0') {
+        if (strlen(env) >= len) {
+            return -1;
+        }
+        strncpy(buf, env, len - 1);
+        buf[len - 1] = '\0';
+        return 0;
+    }
+    if (getcwd(buf, len) == NULL) {
+        return -1;
+    }
+    return 0;
+}
 
 int main(int argc, char *argv[]) {
-    char exe_path[PATH_MAX];
+    (void)argc;
+    (void)argv;
+
+    char repo_root[PATH_MAX];
     char script_path[PATH_MAX];
-    
-    // Get the path of the current executable
-    if (realpath(argv[0], exe_path) == NULL) {
-        perror("realpath");
+
+    if (resolve_repo_root(repo_root, sizeof(repo_root)) != 0) {
+        perror("resolve_repo_root");
         return 1;
     }
-    
-    // Calculate the script path (adjacent to this executable)
-    char *dir = dirname(exe_path);
-    snprintf(script_path, sizeof(script_path), "%s/run_orchestrator.sh", dir);
-    
-    // Prepare arguments for execv
-    // argv[0] should be the script name or a custom name
-    // We pass the original arguments as well
-    
-    // Allocate new argv array: [bash, script_path, --once, NULL]
-    // The orchestration script expects --once
+
+    snprintf(
+        script_path,
+        sizeof(script_path),
+        "%s/core/skills/solar-system/scripts/run_orchestrator.sh",
+        repo_root
+    );
+
     char *new_argv[] = { "/bin/bash", script_path, "--once", NULL };
-    
-    // Execute the script using bash
-    // We use /bin/bash explicitly to ensure compatibility
     execv("/bin/bash", new_argv);
-    
-    // If execv returns, it failed
+
     perror("execv");
     return 1;
 }

@@ -14,6 +14,7 @@ The format is based on Keep a Changelog.
 - test(solar-security): add `core/tests/skills/solar-security/test_sanitize_paths.py` covering dry-run behavior, apply mode rename/link rewrites, and mapping-driven rules.
 
 ### Changed
+- change(solar-system): build LaunchAgent entrypoint at `sun/runtime/system/Solar` (via `SOLAR_SYSTEM_RUNTIME_DIR`); stop tracking compiled binary under `core/skills/solar-system/scripts/`.
 - change(solar-security): `sanitize_paths.py` loads `sun/runtime/security-map.json` when `--use-mapping` is set and `--mapping` is omitted, matching the default mapping path used by `sanitize_context.py` (paths relative to the process working directory).
 - docs(solar-security): correct `SKILL.md` examples for `sanitize_paths.py` so every command includes required rules (`--use-mapping` and/or `--old` / `--new`); document the default mapping file.
 - test(solar-security): extend `core/tests/skills/solar-security/test_sanitize_paths.py` with coverage for default mapping resolution when `mapping_path` is unset.
