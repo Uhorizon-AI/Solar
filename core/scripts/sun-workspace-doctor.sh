@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SUN_DIR="$ROOT_DIR/sun"
 CHECK_GIT=false
+CHECK_PLANS=false
 
 error_count=0
 warn_count=0
@@ -29,11 +30,12 @@ info() {
 usage() {
   cat <<'EOF'
 Usage:
-  bash core/scripts/sun-workspace-doctor.sh [--check-git]
+  bash core/scripts/sun-workspace-doctor.sh [--check-git] [--check-plans]
 
 Options:
-  --check-git  Include optional git checks (.git, commit, remote, upstream)
-  -h, --help   Show this help
+  --check-git    Include optional git checks (.git, commit, remote, upstream)
+  --check-plans  Validate sun/plans/YYYY/MM/YYYY-MM-DD_* layout (warning-only)
+  -h, --help     Show this help
 EOF
 }
 
@@ -41,6 +43,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --check-git)
       CHECK_GIT=true
+      shift
+      ;;
+    --check-plans)
+      CHECK_PLANS=true
       shift
       ;;
     -h|--help)
@@ -64,6 +70,62 @@ require_file() {
   fi
 }
 
+has_plan_timeline_marker() {
+  local file="$1"
+  sed -n '1,40p' "$file" | grep -Eq '^(run_at|created_at):[[:space:]]*"?[0-9]{4}-[0-9]{2}-[0-9]{2}|Created:[*[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}|Deferred to:[*[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}'
+}
+
+check_plans_layout() {
+  local plans_dir="$SUN_DIR/plans"
+  local today
+  today="$(date +%Y-%m-%d)"
+
+  if [ ! -d "$plans_dir" ]; then
+    warn "sun/plans directory is missing"
+    return
+  fi
+
+  local checked=0
+  local rel year month filename file_date file_year file_month expected_dir
+
+  while IFS= read -r -d '' file; do
+    checked=$((checked + 1))
+    rel="${file#$SUN_DIR/}"
+
+    case "$rel" in
+      plans/[0-9][0-9][0-9][0-9]/[0-9][0-9]/*.md)
+        year="$(printf '%s\n' "$rel" | cut -d/ -f2)"
+        month="$(printf '%s\n' "$rel" | cut -d/ -f3)"
+        filename="$(basename "$rel")"
+        ;;
+      *)
+        warn "plans_layout: $rel should live under plans/YYYY/MM/"
+        continue
+        ;;
+    esac
+
+    if [[ "$filename" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})[_-].*\.md$ ]]; then
+      file_year="${BASH_REMATCH[1]}"
+      file_month="${BASH_REMATCH[2]}"
+      file_date="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
+    else
+      warn "plans_filename: $rel should start with YYYY-MM-DD_ or YYYY-MM-DD-"
+      continue
+    fi
+
+    expected_dir="plans/${file_year}/${file_month}"
+    if [ "$year/$month" != "$file_year/$file_month" ]; then
+      warn "plans_month_mismatch: $rel should live under $expected_dir/"
+    fi
+
+    if [[ "$file_date" > "$today" ]] && ! has_plan_timeline_marker "$file"; then
+      warn "plans_future_without_timestamp: $rel has future filename date and no run_at/created_at/Created/Deferred marker"
+    fi
+  done < <(find "$plans_dir" -type f -name '*.md' -print0)
+
+  ok "Checked $checked plan file(s)"
+}
+
 if [ ! -d "$SUN_DIR" ]; then
   err "Missing sun workspace: $SUN_DIR"
   echo "Summary: ${error_count} error(s), ${warn_count} warning(s)"
@@ -73,6 +135,12 @@ fi
 ok "Sun workspace exists"
 require_file "preferences/profile.md"
 require_file "MEMORY.md"
+
+if $CHECK_PLANS; then
+  check_plans_layout
+else
+  info "Plan checks skipped (use --check-plans to enable)"
+fi
 
 if $CHECK_GIT; then
   if [ -d "$SUN_DIR/.git" ]; then
