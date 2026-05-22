@@ -79,6 +79,12 @@ Default Ollama command targets the local `solar` model: `ollama run solar --hide
 | `auto`        | `async-task` | `direct_reply`         | Already in queue, never re-propose async       |
 | `auto`        | other        | AI decides semantically | Model emits `<solar_decision>` (see `system_prompt.md`) → router sets `decision.kind` |
 
+For `channel=async-task`, execution consent is defined by
+`core/skills/solar-async-tasks/references/execution-consent.md`: queued/active
+tasks may execute their approved body and write declared artifacts, while external
+sends, destructive deletes, credentials, irreversible actions, and out-of-scope
+changes still require explicit approval.
+
 ## Async draft creation rule
 
 - Router calls `core/skills/solar-async-tasks/scripts/create.sh` directly via subprocess.

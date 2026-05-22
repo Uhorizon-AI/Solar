@@ -365,6 +365,13 @@ def build_prompt(
             "[Solar routing] mode=direct_only. Respond directly; include <solar_summary> but do not "
             "use <solar_decision> for async routing."
         )
+        if channel_l == "async-task":
+            lines.append(
+                "[Solar async-task consent] This active task has already been approved to execute its "
+                "task body and write declared artifacts/output paths. Ask for explicit approval only for "
+                "external sends, deletions, credentials, irreversible actions, or changes outside the "
+                "declared task scope."
+            )
     return "\n".join(lines)
 
 

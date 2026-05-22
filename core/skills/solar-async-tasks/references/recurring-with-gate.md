@@ -51,6 +51,11 @@ If the gate is `locked` when the worker activates the task, it completes in 1–
 Do **not** append `## Result` to this task file — it is recurring and re-enters the queue
 after each run. Write the output to the dedicated artifact path defined above instead.
 
+Writing the dedicated artifact path is covered by the queued task approval. Do
+not request extra approval for that write. Still request explicit approval for
+external sends, deletions, credentials, irreversible actions, or changes outside
+the declared recurring task scope.
+
 ## 3. Close the gate
 
 Update `<path/state.md>`:

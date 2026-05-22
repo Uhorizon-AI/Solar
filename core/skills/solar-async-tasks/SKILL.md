@@ -231,6 +231,7 @@ recurring: true
 - All provider selection and fallback is handled by `solar-router`. No fallback loop in bash.
 - Per-task provider override: if task frontmatter has `provider: <name>`, it is passed to the router as strict mode (no fallback).
 - Task body is used as semantic instruction source (including agent + skill directions in natural language).
+- **Execution consent:** queued/active tasks are already approved to execute their body and write declared artifacts/output paths. Sensitive or out-of-scope actions still require explicit approval. See `references/execution-consent.md`.
 - **Result vs log:** The log at `logs/<slug>.log` records operational metadata only (timing, provider used, exit code, errors). The task body decides where output goes — see **Task Body Authoring** above for when to append `## Result` to the task file vs writing a dedicated artifact.
 - **One log per task (traceability):** The log file has the **same name as the task file**, with `.log` extension (e.g. task `20260214-0100_Triage-diario-de-ofertas-LinkedIn.md` → log `logs/20260214-0100_Triage-diario-de-ofertas-LinkedIn.log`). Each run overwrites it, so the log always reflects the **last** execution (outcome or error). Logs older than 7 days are automatically deleted when the worker runs (`cleanup_old_logs`).
 - On success: `execute_active.py` writes log, then `execute_active.sh` either re-queues the parent via `await_subtasks.sh` or completes it via `complete.sh`. Re-queue is the default when new child tasks appear.

@@ -124,6 +124,24 @@ class TestBuildPrompt(unittest.TestCase):
         result = router.build_prompt("sys", "x", "conv1", mode="direct_only", channel="other")
         self.assertIn("direct_only", result)
 
+    def test_async_task_direct_only_includes_execution_consent(self):
+        system_prompt = (
+            "## Validation Gate (mandatory)\n"
+            "- Task modifies data or sends messages -> wait for approval."
+        )
+        result = router.build_prompt(
+            system_prompt,
+            "write the declared artifact",
+            "conv1",
+            mode="direct_only",
+            channel="async-task",
+        )
+        self.assertIn("Validation Gate", result)
+        self.assertIn("already been approved", result)
+        self.assertIn("declared artifacts/output paths", result)
+        self.assertIn("external sends", result)
+        self.assertIn("outside the declared task scope", result)
+
 
 # ---------------------------------------------------------------------------
 # async_tasks_enabled

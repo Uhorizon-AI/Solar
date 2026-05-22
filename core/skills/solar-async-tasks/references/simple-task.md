@@ -38,6 +38,11 @@ Write the output to `<path/final-artifact.md>`.
 - Plans → `sun/plans/YYYY/MM/`
 ```
 
+Because this task is queued/active, writing the declared deliverable path is
+already approved. Do not request extra approval just to write that artifact.
+Still request explicit approval for external sends, deletions, credentials,
+irreversible actions, or changes outside the task body scope.
+
 > **When to add `## Result`:** Only include a `## Result` section in the task file if this task has **no defined output path** above (i.e. the response text itself is the deliverable, not a file). If the body already specifies where to write the artifact, skip `## Result` — the artifact is the output. Never use `## Result` on recurring tasks; it would accumulate across runs.
 >
 > When needed, find the task file by Task ID:

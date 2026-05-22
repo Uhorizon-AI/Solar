@@ -15,6 +15,12 @@ Before delegating to `solar-router`:
 - Task is **read / analysis only** → delegate automatically.
 - Task **modifies data or sends messages** → show the user which agent + skills will be used and wait for explicit approval before proceeding.
 
+Exception: tasks already executing from `solar-async-tasks` with `channel=async-task`
+are approved to run their task body and write declared artifacts. They still require
+explicit approval for external sends, destructive deletes, credentials, irreversible
+actions, or changes outside the declared task scope. See
+`core/skills/solar-async-tasks/references/execution-consent.md`.
+
 ## 3. Subprocess Invocation
 
 Call `solar-router` using the v3 contract via stdin. Always use `mode: direct_only` and `channel: other` in subprocesses to prevent recursion:
