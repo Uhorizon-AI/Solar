@@ -14,7 +14,13 @@ from typing import Dict, List
 
 # providers/base.py → [0] providers/ [1] scripts/ [2] solar-router/ [3] skills/ [4] core/ [5] repo root
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[5]
-FALLBACK_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+FALLBACK_PATHS = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    str(pathlib.Path.home() / ".local/bin"),
+    "/usr/bin",
+    "/bin",
+]
 
 
 class BaseProvider(ABC):

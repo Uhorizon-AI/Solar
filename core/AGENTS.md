@@ -8,6 +8,20 @@
 
 `core/docs/` is for framework reference only (architecture, contracts, protocols). User-specific plans and design docs go in `sun/plans/`. When in doubt, default to `sun/plans/` unless the artifact is meant for multi-user reuse.
 
+## Context sustainability rule (required)
+
+Core governance should keep active context small and route detail to canonical references. Solar optimizes for finding context on demand, not loading every detail by default.
+
+When adding or expanding framework artifacts:
+- `AGENTS.md` files hold active rules only, not historical explanations.
+- `MEMORY.md` holds stable operational learnings only, not logs, plans, or configuration.
+- `SKILL.md` files are concise operational indexes; long examples, variants, and background go in `references/` inside the same skill.
+- Commands and agents should point to canonical docs or references instead of copying long procedures.
+- New docs in `core/docs/` must be reusable framework references, not user-specific planning.
+- Leave breadcrumbs to the source of truth whenever detail is moved out of active context.
+
+Use `core/scripts/context-report.sh` before and after broad governance or skill refactors to spot unusually large active-context files. Treat the token estimate as directional only; do not infer provider billing from it.
+
 ## Onboarding (required)
 
 Order: identity handshake → user preferences → baseline context → planet creation. Use `core/docs/onboarding-contract.md`: one question per turn, accept corrections at any moment, confirm before creating any planet. Use `core/docs/orchestration-blueprint.md` for routing, execution, reporting, and persistence.
@@ -75,6 +89,8 @@ Root `CHANGELOG.md` is for Solar framework-level changes only (`core/`, root con
 ## Skill governance rule (required)
 
 All changes to `core/skills/` are governed by `solar-skill-creator`, not `solar-code`. `solar-code` applies exclusively to planet repos.
+
+`solar-skill-creator` is also the context-sustainability gate for skills. When creating or editing a skill, it must preserve capability while keeping `SKILL.md` lean, moving long detail to `references/`, scripts to `scripts/`, and templates/assets to `assets/`.
 
 ## Skill validation rule (required)
 

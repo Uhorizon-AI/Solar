@@ -63,6 +63,9 @@ class TestBaseProviderGetCmd(unittest.TestCase):
         cmd = self.provider.get_cmd("hello")
         self.assertEqual(cmd[0], "/usr/bin/claude")
 
+    def test_fallback_paths_include_user_local_bin_for_launchagent(self):
+        self.assertIn("/.local/bin", ":".join(FALLBACK_PATHS))
+
 
 class TestBaseProviderRun(unittest.TestCase):
     def setUp(self):

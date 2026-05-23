@@ -34,6 +34,7 @@ cleanup_old_logs
 run_one_task() {
     local task_file="$1"
     local task_id title detach_subtasks before_ids after_ids child_ids child_id
+    local child_id_array=()
 
     task_id="$(extract_meta "$task_file" "id")"
     title="$(extract_meta "$task_file" "title")"
@@ -54,7 +55,10 @@ run_one_task() {
             done <<< "$after_ids"
 
             if [[ -n "$child_ids" ]]; then
-                mapfile -t child_id_array <<< "$child_ids"
+                while IFS= read -r child_id; do
+                    [[ -z "$child_id" ]] && continue
+                    child_id_array+=("$child_id")
+                done <<< "$child_ids"
                 "$SCRIPT_DIR/await_subtasks.sh" "$task_id" "${child_id_array[@]}"
                 echo "⏸️  Task paused until subtasks finish: [$task_id] $title"
                 return 0

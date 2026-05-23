@@ -27,6 +27,10 @@ Three-layer governance: root (global orchestration) → `core/AGENTS.md` (framew
 
 Sun (`/sun/`) is the personal interface and router. Planets (`/planets/<name>/`) are autonomous domain specialists. Each AGENTS.md owns its scope; delegate what you don't own to the next layer.
 
+## Context Sustainability (Required)
+
+Solar optimizes for finding context, not loading context. For detailed framework rules on context size, memory, docs, skills, agents, commands, and measurement, delegate to `core/AGENTS.md`.
+
 ## Preference Update Delegation (Required)
 
 If the user explicitly updates personal operating context, delegate execution to the Profile Sync Protocol in `core/AGENTS.md`. See `core/docs/profile-sync-protocol.md`. Root keeps conversation ownership.

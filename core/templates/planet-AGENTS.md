@@ -16,6 +16,15 @@
 - Security/data rules:
 - Operational limits:
 
+## Context Sustainability
+
+- Keep this `AGENTS.md` focused on active domain rules and routing.
+- Store stable operational learnings in `MEMORY.md`, not here.
+- Store historical work in plans/logs, not governance.
+- Keep planet skills, agents, and commands concise; move long detail to nearby `references/`.
+- Link or name canonical sources instead of duplicating long procedures.
+- Prefer breadcrumbs that help Solar find detail on demand over always-loaded context.
+
 ## Chrome DevTools MCP Policy (Required when browser channels are used)
 
 - Use shared runtime via `chrome-devtools-mcp --browserUrl` (do not require always-on Chrome).

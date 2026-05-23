@@ -1,30 +1,25 @@
 ---
 name: solar-async-tasks
 description: >
-  Manage asynchronous tasks within Solar. Create drafts, plan them, approve for execution,
-  then run from a priority-ordered queue (manual or automatic). Plan → approve → queue by
-  priority → execute when ready (start_next or run_worker).
+  Manage asynchronous tasks within Solar. Use for approved deferred work,
+  long-running requests, recurring jobs, provider-backed execution, and parent
+  tasks that wait on subtasks before synthesizing results.
 ---
 
 # Solar Async Tasks
 
 ## Purpose
 
-Provide a local-first, filesystem-based task management system for Solar.
-- **Capture**: Quickly create task drafts.
-- **Plan**: Detailed planning phase for tasks.
-- **Approve**: Prioritize and queue tasks for execution.
-- **Execute**: Track active and completed tasks.
-- **Wait on subtasks**: By default, a parent task pauses until spawned child tasks finish, then resumes automatically.
+Provide a local-first, filesystem task runtime for Solar:
 
-## Scope
+- capture work as drafts,
+- plan and approve work before execution,
+- queue tasks by priority and schedule,
+- execute approved tasks through `solar-router`,
+- pause parent tasks until child tasks finish,
+- preserve task state under `sun/runtime/async-tasks/`.
 
--   Manage task lifecycle: `draft` -> `planned` -> `queued` -> `active` -> `completed` -> `archive` (with optional `error` state).
--   Support blocked parent tasks automatically via child-task detection + `blocked_by_task_ids`.
--   **Recurring tasks**: Automatically re-queue tasks after completion with configurable intervals and limits.
--   **Resource cleanup**: MCP resource lifecycle management (locks, cleanup hooks).
--   Persist state in `sun/runtime/async-tasks/`.
--   No external database dependency.
+Use this skill when the work should not block the current conversation, needs provider execution, spans multiple AI providers, waits on subtasks, recurs over time, or depends on external resources.
 
 ## Required MCP
 
@@ -32,449 +27,165 @@ None
 
 ## Dependencies
 
-- **solar-router:** Task execution uses `solar-router` to invoke AI providers. Ensure `solar-router` is configured:
-  ```bash
-  bash core/skills/solar-router/scripts/onboard_router_env.sh
-  bash core/skills/solar-router/scripts/diagnose_router.sh
-  ```
+- `solar-router`: executes active tasks with `channel=async-task` and `mode=direct_only`.
+- `solar-system`: optional but preferred host supervisor for automatic queue processing.
 
-## Validation commands
+Router diagnostics:
+
+```bash
+bash core/skills/solar-router/scripts/onboard_router_env.sh
+bash core/skills/solar-router/scripts/diagnose_router.sh
+```
+
+## Core Commands
 
 ```bash
 # Setup runtime directories
 bash core/skills/solar-async-tasks/scripts/setup_async_tasks.sh
 
-# Create a task
-bash core/skills/solar-async-tasks/scripts/create.sh "My Task" "Do something cool"
+# Create a task draft
+bash core/skills/solar-async-tasks/scripts/create.sh "My Task" "Do something useful"
 
-# List tasks (shows recurring 🔁, cleanup 🧹, error ❌)
+# Plan and approve
+bash core/skills/solar-async-tasks/scripts/plan.sh <task_id>
+bash core/skills/solar-async-tasks/scripts/approve.sh <task_id> normal
+
+# List task state
 bash core/skills/solar-async-tasks/scripts/list.sh
 
-# Re-queue an active parent task until child tasks finish
-bash core/skills/solar-async-tasks/scripts/await_subtasks.sh <task_id> <child_id> [child_id...]
-
-# Deterministic manual activation by task ID (auto transitions draft/planned -> queued -> active)
-bash core/skills/solar-async-tasks/scripts/activate.sh <task_id>
-
-# Optional: execute active tasks directly
-bash core/skills/solar-async-tasks/scripts/execute_active.sh --once
-
-# Optional: set schedule for a task (weekdays 1–7, e.g. 1,2,3,4,5 = Mon–Fri)
+# Schedule or recur
 bash core/skills/solar-async-tasks/scripts/schedule.sh <task_id> "10:00" "1,2,3,4,5"
-
-# Optional: make task recurring (unlimited runs, 24h interval)
 bash core/skills/solar-async-tasks/scripts/set_recurring.sh <task_id>
 
-# Optional: install hook templates for a resource (first time only)
-bash core/skills/solar-async-tasks/scripts/install_hooks.sh <resource-name>
-
-# Optional: configure resource cleanup (requires hooks installed)
-bash core/skills/solar-async-tasks/scripts/set_cleanup.sh <task_id> <resource-name>
-
-# Check locks (resource availability)
-ls -la $SOLAR_TASK_ROOT/.locks/
-
-# Check error state tasks (runtime location)
-ls -la $SOLAR_TASK_ROOT/error/
-
-# Re-queue a task that failed (after fixing cause)
+# Requeue after fixing an error
 bash core/skills/solar-async-tasks/scripts/requeue_from_error.sh <task_id>
 
-# List execution logs (one .log per task, same name as task; >7 days auto-deleted)
-ls -la $SOLAR_TASK_ROOT/logs/*.log 2>/dev/null || true
-
-# Validate task lifecycle (structure + state transitions)
+# Validate lifecycle and packaging
 bash core/skills/solar-async-tasks/scripts/validate_lifecycle.sh
-
-# Verify skill packaging
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-async-tasks /tmp
 ```
 
-## Infrastructure commands (LaunchAgent / operator only)
-
-These commands are called by the Solar LaunchAgent or an operator. **The AI agent must never call them.**
+Operator-only execution entrypoint:
 
 ```bash
-# Async tasks entrypoint: one-shot cycle (called by LaunchAgent via solar-system)
 bash core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh
-
-# Worker: continuous loop (debugging only — not for production use)
-bash core/skills/solar-async-tasks/scripts/run_worker.sh --interval 60
 ```
 
-## Required environment variables
+Do not call `run_worker.sh` directly. `ensure_async_tasks.sh` is the only execution entrypoint, and normally `solar-system` calls it automatically.
 
-None. (Uses default `sun/runtime/async-tasks` path, overridable via `SOLAR_TASK_ROOT`)
+## System Activation
 
-## System activation (via solar-system)
-
-For automatic host-level execution, enable this feature through `solar-system`:
+For automatic host-level execution, enable `async-tasks` through `solar-system`:
 
 ```dotenv
-# [solar-system] required environment
 SOLAR_SYSTEM_FEATURES=async-tasks
 ```
 
-Then install the single Solar LaunchAgent:
+Install or check the host orchestrator through `solar-system`:
 
 ```bash
 bash core/skills/solar-system/scripts/install_launchagent_macos.sh
+bash core/skills/solar-system/scripts/check_orchestrator.sh
 ```
 
-## Execution Model (Required)
+When `solar-system` supervises `async-tasks`, the agent stops after `approve.sh`; the LaunchAgent picks up the queued task on its tick.
 
-**The AI agent's job ends at `approve`.** After `approve.sh` moves a task to `queued/`, the agent must stop. It must NOT call `run_worker.sh`, `execute_active.sh`, or any execution script directly.
-
-Execution is triggered via `ensure_async_tasks.sh` — the single entry point for task execution. Internally it first runs `check_async_tasks.sh`, which verifies whether `solar-system` is supervising the `async-tasks` feature:
-
-- **solar-system supervising async-tasks** → solar-system calls `ensure_async_tasks.sh` automatically on each LaunchAgent tick. The AI agent does nothing after `approve`.
-- **solar-system not supervising async-tasks** → the AI agent calls `ensure_async_tasks.sh` once after `approve` as fallback.
-
-```
-With solar-system:     create → plan → approve   ← agent stops here
-                       solar-system calls ensure_async_tasks.sh automatically
-
-Without solar-system:  create → plan → approve → ensure_async_tasks.sh
-```
-
-Never call `run_worker.sh --once` directly — always use `ensure_async_tasks.sh`.
+Fallback rule: if `solar-system` is not supervising `async-tasks`, use `ensure_async_tasks.sh` once as documented fallback. Do not bypass the runtime with direct provider CLIs.
 
 ## Workflow
 
-1.  **Draft**: `create.sh` creates a task in `drafts/`.
-2.  **Plan**: `plan.sh` prepares the task for execution, moving it to `planned/`.
-3.  **Approve**: `approve.sh` moves a planned task to `queued/` with a priority (high, normal, low). **Agent stops here.**
-4.  **Start + Execute**: `ensure_async_tasks.sh` triggers execution — called automatically by solar-system when it supervises `async-tasks`, or by the agent as fallback otherwise. Internally it uses `check_async_tasks.sh` to decide whether execution is already supervised, and only then runs `run_worker.sh --once` if needed.
-5.  **Execute (manual/extra)**: `execute_active.sh` (wrapper) + `execute_active.py` (executor) process one `active/` task via `solar-router` v3 with `channel=async-task`, `mode=direct_only`.
-6.  **Wait for children (default)**: if execution created new tasks, `await_subtasks.sh` re-queues the parent with `blocked_by_task_ids`, unless the task opted out.
-7.  **Complete**: `complete.sh` moves a task from `active/` to `completed/` (or recurring flow).
+1. Draft: `create.sh` writes to `drafts/`.
+2. Plan: `plan.sh` moves the task to `planned/`.
+3. Approve: `approve.sh` moves it to `queued/` with priority.
+4. Execute: `solar-system` calls `ensure_async_tasks.sh`, which starts one eligible queued task and executes it.
+5. Complete: success moves to `completed/`, recurrence may requeue, failure moves to `error/`.
 
-## Manual activation by task ID (optional)
+For user-facing work, approval ends the conversational agent's execution role. The system runtime owns actual execution.
 
-Use this only when you want to activate one exact task manually (outside normal queue selection):
+## Execution Consent
 
-- `activate.sh <task_id>`: auto-transitions `draft/planned -> queued -> active` for that specific task, using the task's existing `priority`.
-- Manual activation bypasses schedule and recurring interval gates by design (it still runs cleanup/resource hooks).
-- Manual activation also bypasses subtask blocking intentionally, for emergency/operator overrides.
-- The standard lifecycle remains queue-driven (`start_next.sh` / `run_worker.sh`).
+Queued or active tasks are already approved to execute their declared body and write declared artifacts/output paths.
+
+Still request explicit approval for:
+
+- external sends,
+- deletions,
+- credential changes,
+- irreversible actions,
+- writes outside the declared task scope.
+
+See `references/execution-consent.md`.
 
 ## Task Body Authoring
 
-The task body is the full instruction set the AI executes. A well-written body determines whether the task runs correctly, produces the right artifact, and handles multi-execution flows without ambiguity.
+The task body is the instruction set executed by the provider.
 
-**Result writing convention:** Use `## Result` in the task file when:
-- The task is a **child task** — a parent will read its output from the task file.
-- The body **does not define a concrete output path** — there is no specific file to write to.
+Use `## Result` in the task file when:
 
-Do **not** use `## Result` when the body already defines where output goes (e.g. write to `planets/`, send Telegram, update a daily-log). In that case the artifact IS the output — appending `## Result` to the task file is redundant and breaks recurring tasks that re-enter the queue.
+- the task is a child task whose parent will read its output,
+- the body does not define a concrete output path.
 
-When `## Result` is needed, find the task file by Task ID — the Task ID is injected into every prompt by `execute_active.py`:
+Do not append `## Result` when the task writes a dedicated artifact such as a plan, report, message draft, or recurring run output. In that case, the artifact is the result.
+
+Find the current task file by Task ID because files move between state folders:
 
 ```bash
 TASK_FILE=$(grep -rl "id: \"<task_id>\"" sun/runtime/async-tasks/ | head -1)
 ```
 
-Do not rely on a hardcoded path — the file moves between directories as it transitions through states.
+## Parent Tasks With Subtasks
 
-**Reference guides** (see `references/` for full examples):
+Use parent tasks when final output depends on independent child tasks, such as multiprovider feedback.
 
-| Pattern | File | When to use |
-|---|---|---|
-| Single execution | `references/simple-task.md` | One run, one artifact, no dependencies |
-| Subtasks with synthesis | `references/task-with-subtasks.md` | Delegate to children, resume and synthesize results |
-| Recurring with gate | `references/recurring-with-gate.md` | Periodic loop requiring human validation between runs |
-| Detached subtasks | `references/detached-subtasks.md` | Fire-and-forget delegation, no synthesis needed |
+Rules:
 
-## Parent tasks waiting on subtasks
+- Execution 1 creates child tasks and stops.
+- The runtime requeues the parent with `blocked_by_task_ids`.
+- `start_next.sh` skips the parent until child tasks are terminal.
+- `completed`, `archived`, and `error` are terminal for dependency purposes.
+- Execution 2 reads child `## Result` sections and synthesizes the final artifact.
+- Do not use `blocked_by_task_ids` as the task body's execution-2 signal; it is internal runtime metadata and is removed before activation.
 
-This is the default behavior. Use it when a task should first create child tasks, let them finish, and only then continue its own flow. **The same task runs twice** — once to create the children, and once (after they complete) to synthesize their results.
+See `references/task-with-subtasks.md`.
 
-### Frontmatter
+## Reference Guides
 
-- `blocked_by_task_ids: "id1,id2"` - Internal runtime field added automatically while the parent is waiting. Removed by `start_next.sh` before execution 2 starts.
-- `detach_subtasks: true` - Opt-out. Use only when child tasks are fire-and-forget and the parent should finish immediately.
+| Pattern | File |
+|---|---|
+| Single execution | `references/simple-task.md` |
+| Subtasks with synthesis | `references/task-with-subtasks.md` |
+| Detached subtasks | `references/detached-subtasks.md` |
+| Recurring task with validation gate | `references/recurring-with-gate.md` |
+| Execution consent | `references/execution-consent.md` |
+| Scheduling, recurrence, cleanup, notifications, errors | `references/runtime-operations.md` |
+| Resource hook system | `references/hook-system.md` |
 
-### Behavior
+## Runtime States
 
-1. Task starts normally from `queued/` (execution 1).
-2. During execution it creates one or more new tasks via `create.sh`.
-3. Unless `detach_subtasks: true`, the executor detects those new task IDs and re-queues the parent instead of completing it.
-4. `start_next.sh` skips the parent while any `blocked_by_task_ids` task remains non-terminal.
-5. Once all child tasks are `completed` or `archived`, the parent becomes eligible again and resumes (execution 2).
-6. The task body must detect which execution it is in and behave accordingly. See `references/task-with-subtasks.md`.
+Default root: `sun/runtime/async-tasks/`
 
-### Example
+- `drafts/`: captured, not executable.
+- `planned/`: ready for review, not executable.
+- `queued/`: approved and eligible for execution.
+- `active/`: currently executing.
+- `completed/`: finished successfully.
+- `error/`: failed and requires manual fix/requeue.
+- `archive/`: historical or max-run recurring tasks.
 
-```markdown
----
-id: "..."
-title: "Daily Focus"
-status: queued
-priority: normal
-recurring: true
----
-```
+Only `queued/` is worker input.
 
-## Automatic execution (run_worker)
+## Validation
 
-> **Invariant:** Do not call `run_worker.sh` directly. Always use `ensure_async_tasks.sh` — it is called automatically when solar-system supervises `async-tasks`, or by the agent as fallback otherwise.
-
-- **`run_worker.sh [--once] [--interval SECS]`**: Calls `start_next.sh` and then `execute_active.sh --once` in the same cycle.
-- **`--once`**: Run one cycle and exit. This is the mode used by cron/launchd (e.g. Solar LaunchAgent calls `run_worker.sh --once` every N minutes).
-- Without `--once`: Loop every `SECS` (default 60). Use Ctrl+C to stop; trap ensures clean exit. For interactive debugging only.
-- **Error handling**: If `start_next.sh` fails, the worker logs to stderr and in loo[text](../solar-system/scripts/run_orchestrator.sh)p mode continues on the next interval. "No tasks in queue" is normal and not an error.
-
-## Task execution (execute_active)
-
-- **`execute_active.sh [--once|--all]`**: Lightweight wrapper that sets up paths/env and calls `execute_active.py`.
-- **`execute_active.py`**: Python executor — builds router v3 request with `channel=async-task`, `mode=direct_only`, calls `run_router.py`, parses JSON response, writes structured log.
-- All provider selection and fallback is handled by `solar-router`. No fallback loop in bash.
-- Per-task provider override: if task frontmatter has `provider: <name>`, it is passed to the router as strict mode (no fallback).
-- Task body is used as semantic instruction source (including agent + skill directions in natural language).
-- **Execution consent:** queued/active tasks are already approved to execute their body and write declared artifacts/output paths. Sensitive or out-of-scope actions still require explicit approval. See `references/execution-consent.md`.
-- **Result vs log:** The log at `logs/<slug>.log` records operational metadata only (timing, provider used, exit code, errors). The task body decides where output goes — see **Task Body Authoring** above for when to append `## Result` to the task file vs writing a dedicated artifact.
-- **One log per task (traceability):** The log file has the **same name as the task file**, with `.log` extension (e.g. task `20260214-0100_Triage-diario-de-ofertas-LinkedIn.md` → log `logs/20260214-0100_Triage-diario-de-ofertas-LinkedIn.log`). Each run overwrites it, so the log always reflects the **last** execution (outcome or error). Logs older than 7 days are automatically deleted when the worker runs (`cleanup_old_logs`).
-- On success: `execute_active.py` writes log, then `execute_active.sh` either re-queues the parent via `await_subtasks.sh` or completes it via `complete.sh`. Re-queue is the default when new child tasks appear.
-- On failure: `execute_active.py` moves task to `error/` and writes error log. To diagnose provider issues, run `bash core/skills/solar-router/scripts/diagnose_router.sh --verbose`.
-
-## Scheduling (optional)
-
-Tasks can be scheduled to run only at a specific time and on specific weekdays (e.g. weekdays at 10:00).
-
-- **Frontmatter** (optional): `scheduled_time: "10:00"` (HH:MM or HH:MM:SS), `scheduled_weekdays: "1,2,3,4,5"` (ISO 1=Monday … 7=Sunday). Store only numeric weekdays; display in `list.sh` uses L,M,X,J,V,S,D.
-- **Window**: A ±15 minute margin applies so that if the worker runs every 60s and the scheduled time is 10:00, the task stays eligible from 09:45 to 10:15.
-- **Eligibility**: `start_next.sh` and `run_worker.sh` only pick a task when it is within its scheduled window (and by priority). Tasks without `scheduled_time` / `scheduled_weekdays` are always eligible.
-- **Set schedule**: `schedule.sh <task_id> ["HH:MM"] ["1,2,3,4,5"]` adds or updates the schedule in the task frontmatter. Example: `schedule.sh 20250211-120000 "10:00" "1,2,3,4,5"` for weekdays at 10:00.
-
-## Recurring Tasks
-
-Tasks can be configured to automatically re-queue after completion, enabling periodic execution (e.g., daily job search, weekly reports).
-
-### Configuration
-
-Use `set_recurring.sh` to mark a task as recurring:
+After modifying this skill:
 
 ```bash
-# Unlimited runs, 24h minimum interval between executions
-bash core/skills/solar-async-tasks/scripts/set_recurring.sh <task_id>
-
-# Max 10 runs, 24h interval
-bash core/skills/solar-async-tasks/scripts/set_recurring.sh <task_id> 10
-
-# Unlimited runs, 1h interval
-bash core/skills/solar-async-tasks/scripts/set_recurring.sh <task_id> 0 3600
+uv run --project core/tests pytest core/tests/skills/solar-async-tasks -q
+bash core/skills/solar-async-tasks/scripts/validate_lifecycle.sh
+python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-async-tasks /tmp
 ```
 
-### Frontmatter Fields
-
-- `recurring: true|false` - Whether task should re-queue after completion
-- `recurring_max_runs: N` - Maximum runs (0 = unlimited)
-- `recurring_run_count: N` - Current run counter (auto-incremented)
-- `recurring_last_run: ISO8601` - Timestamp of last execution start
-- `recurring_min_interval: seconds` - Minimum time between runs (default: 86400 = 24h)
-
-### Behavior
-
-1. Task completes normally → `complete.sh` checks `recurring: true`
-2. If `recurring_run_count < recurring_max_runs` (or unlimited):
-   - Increment `recurring_run_count`
-   - Update `status: queued`
-   - Move back to `queued/`
-3. If max runs reached:
-   - Update `status: archived`
-   - Move to `archive/`
-
-### Race Protection
-
-`recurring_last_run` + `recurring_min_interval` prevent double execution:
-- Worker checks if `(now - recurring_last_run) >= recurring_min_interval`
-- If not ready, task is skipped and remains in queue
-- On start, `recurring_last_run` is updated to current timestamp
-
-### Example: Daily LinkedIn Job Search
+After any `core/skills/` change, run:
 
 ```bash
-# 1. Create and plan task
-bash core/skills/solar-async-tasks/scripts/create.sh \
-  "Revisar LinkedIn Jobs" \
-  "Buscar nuevos puestos y evaluar según mi perfil"
-
-TASK_ID="<from_output>"
-bash core/skills/solar-async-tasks/scripts/plan.sh $TASK_ID
-
-# 2. Schedule: Mon-Fri at 9am
-bash core/skills/solar-async-tasks/scripts/schedule.sh $TASK_ID "09:00" "1,2,3,4,5"
-
-# 3. Make recurring (unlimited, 24h interval)
-bash core/skills/solar-async-tasks/scripts/set_recurring.sh $TASK_ID
-
-# 4. Approve with normal priority
-bash core/skills/solar-async-tasks/scripts/approve.sh $TASK_ID normal
-
-# Task will now run Mon-Fri at 9am indefinitely
+bash core/scripts/sync-clients.sh
 ```
-
-## Resource Cleanup
-
-Tasks using MCP resources (e.g., `chrome-dev-tools`, databases) can define cleanup requirements to prevent resource leaks.
-
-### Configuration
-
-Use `set_cleanup.sh` to configure cleanup for a task:
-
-```bash
-# Single resource, 30s timeout (default)
-bash core/skills/solar-async-tasks/scripts/set_cleanup.sh <task_id> chrome-dev-tools
-
-# Multiple resources (CSV)
-bash core/skills/solar-async-tasks/scripts/set_cleanup.sh <task_id> chrome-dev-tools,postgres
-
-# Custom timeout
-bash core/skills/solar-async-tasks/scripts/set_cleanup.sh <task_id> chrome-dev-tools 60
-```
-
-### Frontmatter Fields
-
-- `resources: "res1,res2"` - CSV string of MCP resource names
-- `cleanup_required: true|false` - Whether cleanup hooks should run
-- `cleanup_timeout: N` - Timeout in seconds for cleanup operations (default: 30)
-
-### Hook System
-
-**Important:** Hooks are **user-defined** and live in your runtime workspace (`$SOLAR_TASK_ROOT/hooks/`), not in the core skill. This allows you to manage hooks for the specific MCPs and resources you have configured.
-
-**Hook types:**
-1. `pre_start.sh` - Run before task starts (e.g., acquire resource lock)
-2. `post_complete.sh` - Run after task completes (e.g., close connections, release locks)
-3. `on_error.sh` - Run if cleanup fails (e.g., force kill processes)
-
-**Hook location:**
-
-Hooks should be placed in your runtime workspace:
-
-```
-$SOLAR_TASK_ROOT/
-├── hooks/
-│   └── <resource-name>/
-│       ├── pre_start.sh       (optional)
-│       ├── post_complete.sh   (optional)
-│       └── on_error.sh        (optional)
-└── .locks/
-    └── <resource-name>.lock
-```
-
-**Installing hooks:**
-
-1. **Quick start** (install templates):
-   ```bash
-   bash core/skills/solar-async-tasks/scripts/install_hooks.sh <resource-name>
-   ```
-   This copies templates from `assets/` to `$SOLAR_TASK_ROOT/hooks/<resource-name>/`
-
-2. **Customize** the installed hooks to add your cleanup logic
-
-3. **Use** the resource in tasks via `set_cleanup.sh`
-
-For detailed documentation see `references/hook-system.md`.
-
-### Execution Flow
-
-1. **On task start** (`start_next.sh`):
-   - Runs `pre_start.sh` hooks for each resource
-   - If hook fails (e.g., resource locked), task is skipped and worker tries next task
-   - If successful, task moves to `active/`
-
-2. **On task completion** (`complete.sh`):
-   - Runs `post_complete.sh` hooks for each resource
-   - If hook fails: runs `on_error.sh` hooks → moves task to `error/`
-   - If successful: moves task to `completed/` (or re-queues if recurring)
-
-### Resource Locks (Queue-Wait)
-
-Pre-start hooks can acquire locks to prevent concurrent usage:
-- Lock file created at `$SOLAR_TASK_ROOT/.locks/<resource>.lock`
-- Contains task ID and timestamp
-- If lock exists, task is skipped (worker will retry later)
-- No fail-fast: worker continues to next task in queue
-
-**Note:** Lock management is implemented in user-defined hooks, not in the core skill. See hook examples for reference implementations.
-
-### Error State
-
-If cleanup fails, task moves to `error/` state:
-- Requires manual intervention (review logs, fix issue)
-- Can be moved back to `queued/` or `archive/` manually
-- Task frontmatter includes `cleanup_error: true` and `cleanup_error_time`
-
-### Example: Resource Cleanup Task
-
-```bash
-# 1. Install hook templates for your resource (first time only)
-bash core/skills/solar-async-tasks/scripts/install_hooks.sh my-resource
-
-# 2. Edit hooks to add cleanup logic
-# Edit: $SOLAR_TASK_ROOT/hooks/my-resource/post_complete.sh
-# Edit: $SOLAR_TASK_ROOT/hooks/my-resource/on_error.sh
-
-# 3. Create task
-bash core/skills/solar-async-tasks/scripts/create.sh \
-  "Process data" \
-  "Execute data processing with resource management"
-
-TASK_ID="<from_output>"
-bash core/skills/solar-async-tasks/scripts/plan.sh $TASK_ID
-
-# Configure cleanup for your resource
-bash core/skills/solar-async-tasks/scripts/set_cleanup.sh $TASK_ID <your-resource-name>
-
-# Approve
-bash core/skills/solar-async-tasks/scripts/approve.sh $TASK_ID high
-
-# Worker will:
-# 1. Acquire resource lock (pre_start.sh from your hooks)
-# 2. Execute task
-# 3. Cleanup and release lock (post_complete.sh from your hooks)
-# 4. On failure: emergency cleanup (on_error.sh from your hooks)
-```
-
-
-## When to suggest async (e.g. Telegram)
-
-When the user’s request (e.g. via Telegram) is long-running or complex:
-
-1. **Offer**: Tell the user you can create an async task and notify them when it’s ready or when it’s completed.
-2. **Describe**: Briefly say how you’ll create it: task title, one-line objective, and priority (high/normal/low).
-3. **Confirm**: Ask for confirmation (e.g. “¿La creo como tarea asíncrona y te aviso cuando esté lista?”).
-4. **Create**: If they confirm: run create → plan → approve, then run `add_notify.sh <task_id>` to set `notify_when: completed` in the task frontmatter so the user is notified on completion.
-
-**Task metadata**: Only `notify_when: completed` is stored on the task. The notification channel is **not** stored per task; it is read from the user’s preferences (see below).
-
-**On completion**: If a task has `notify_when: completed`, send an alert using the channel defined in preferences. In v1 the agent can do this when it sees the task in `completed/`. Optionally, `complete.sh` can call `notify_if_configured.sh` so that notifications are sent automatically when a task is completed.
-
-### Notification (Telegram)
-
-- **Default**: `notify_if_configured.sh` (called by `complete.sh`) uses **`.env`** in the repo root: `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. If those are set, completing a task with `notify_when: completed` sends "Tarea completada: [title]" via solar-telegram.
-- **Override** (optional): `sun/preferences/profile.md` or `notifications.md` can define `telegram_chat_id` to override the chat; otherwise the script uses `TELEGRAM_CHAT_ID` from `.env`.
-
-## Runtime Structure
-
-Default: `sun/runtime/async-tasks/`
--   `drafts/`: Initial capture; not yet planned or approved. Worker never picks from here.
--   `planned/`: Ready for review; awaiting approval to move to queue. Worker never picks from here.
--   `queued/`: Approved and prioritized (high, normal, low). **Worker only picks tasks from here.**
--   `active/`: Currently in progress.
--   `completed/`: Finished (or moved back to `queued/` if recurring and not at max_runs).
--   `error/`: Execution or cleanup failure. **Not re-run automatically**; use `requeue_from_error.sh <task_id>` to move back to `queued/` after fixing the cause.
--   `archive/`: Old tasks or recurring tasks that reached `recurring_max_runs`. Historical only; worker does not use.
-
-**Folder purpose summary:** drafts/planned = “pending your approval”; queued = “ready to run”; archive = “done for good / history”.
-
-## Error State and Recurrence
-
--   **Tasks in `error/` are never re-executed automatically.** The worker only reads from `queued/`. Recurrence (re-queue after completion) only applies when a task **completes successfully**; if it fails, it is moved to `error/` and stays there until you act.
--   **To run a failed task again:** fix the underlying issue (env, provider binary, skill, etc.), then run `requeue_from_error.sh <task_id>` to move it from `error/` to `queued/`. It will run in the next eligible schedule window (or immediately if it has no schedule).
--   **One log per task (same name as task, .log):** The log has the same base name as the task file (e.g. `queued/20260214-0100_Triage-....md` → `logs/20260214-0100_Triage-....log`). Each run overwrites it; the log always reflects the last execution. **Cleanup:** Logs older than 7 days are removed when the worker runs (`cleanup_old_logs`).
-
-## Output format
-
-Scripts output JSON or simple text depending on flags, optimized for both human reading and machine parsing.

@@ -7,6 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- feat(context): add `core/scripts/context-report.sh` to report lines, characters, directional token estimates, and large active-context files across governance, memory, skills, agents, and commands.
 - feat(solar-async-tasks, solar-router): add async-task execution consent contract so queued tasks can write declared artifacts without re-approval while preserving gates for external, destructive, credential, irreversible, or out-of-scope actions; link the contract from JIT delegation and router policy docs.
 - feat(sun-workspace-doctor): add optional `--check-plans` validation for `sun/plans/YYYY/MM/YYYY-MM-DD_*` layout, month-folder alignment, and future-date timeline markers.
 - feat(solar-security): `sanitize_context.py` accepts a positional `target` (file, directory, or `-` for stdin) with recursive **in-place** directory sanitization; optional `--extensions` for suffix filtering; summarizes `sanitized_files` / `scanned_files`.
@@ -16,6 +17,10 @@ The format is based on Keep a Changelog.
 - test(solar-security): add `core/tests/skills/solar-security/test_sanitize_paths.py` covering dry-run behavior, apply mode rename/link rewrites, and mapping-driven rules.
 
 ### Changed
+- docs(governance): add context sustainability rules to root `AGENTS.md`, `core/AGENTS.md`, and the planet AGENTS template so Solar favors breadcrumbs and references over always-loaded context.
+- docs(solar-skill-creator): make `solar-skill-creator` the skill context-sustainability gate for lean `SKILL.md` files and in-skill `references/`.
+- refactor(solar-async-tasks): reduce `SKILL.md` into a concise operational index and move detailed scheduling, recurrence, cleanup, notification, runtime, and error recovery guidance to `references/runtime-operations.md`.
+- change(solar-router): include `~/.local/bin` in provider fallback binary resolution so LaunchAgent runs can find Cursor Agent's `agent` CLI.
 - change(solar-system): build LaunchAgent entrypoint at `sun/runtime/system/Solar` (via `SOLAR_SYSTEM_RUNTIME_DIR`); stop tracking compiled binary under `core/skills/solar-system/scripts/`.
 - change(solar-security): `sanitize_paths.py` loads `sun/runtime/security-map.json` when `--use-mapping` is set and `--mapping` is omitted, matching the default mapping path used by `sanitize_context.py` (paths relative to the process working directory).
 - docs(solar-security): correct `SKILL.md` examples for `sanitize_paths.py` so every command includes required rules (`--use-mapping` and/or `--old` / `--new`); document the default mapping file.
@@ -26,6 +31,9 @@ The format is based on Keep a Changelog.
 - docs(solar-security): document `sanitize_paths.py` usage in `core/skills/solar-security/SKILL.md`, including dry-run, apply mode, explicit overrides, and single-file execution.
 
 ### Fixed
+- fix(solar-async-tasks): treat errored child tasks as terminal dependencies so parent tasks can resume and record unavailable providers instead of staying blocked forever.
+- fix(solar-async-tasks): remove Bash 4-only `mapfile` from `execute_active.sh` so LaunchAgent execution works on macOS Bash 3.2.
+- fix(solar-async-tasks): parse `blocked_by_task_ids` in both canonical CSV inline and YAML list formats so parent tasks do not resume before child tasks complete.
 - fix(solar-security): persist `"CUSTOM"` from `sun/runtime/security-map.json` across `sanitize_context.py` runs alongside existing `REGEX` / literal passthrough keys.
 - fix(sync-clients): enforce strict mirror sync for managed client folders (`skills`, `agents`, `commands`) by pruning stale entries before sync across `.cursor`, `.claude`, `.codex`, and `.gemini`.
 - fix(sync-clients): harden Gemini command sync cleanup to remove stale non-`.toml` leftovers in `.gemini/commands` and keep only index-backed generated command files.

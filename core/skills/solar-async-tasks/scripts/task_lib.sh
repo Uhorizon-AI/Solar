@@ -271,6 +271,51 @@ parse_csv_meta() {
     echo "$raw" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | awk 'NF'
 }
 
+# Extract blocked_by_task_ids from frontmatter.
+# Canonical format is CSV inline:
+#   blocked_by_task_ids: "id1,id2"
+# Also supports YAML list format for resilience:
+#   blocked_by_task_ids:
+#     - "id1"
+#     - "id2"
+extract_blocked_by_task_ids() {
+    local file="$1"
+    awk '
+        BEGIN { in_fm = 0; in_blocked = 0 }
+        /^---[[:space:]]*$/ {
+            if (in_fm == 0) {
+                in_fm = 1
+                next
+            }
+            exit
+        }
+        in_fm == 0 { next }
+        /^blocked_by_task_ids:[[:space:]]*/ {
+            value = $0
+            sub(/^blocked_by_task_ids:[[:space:]]*/, "", value)
+            gsub(/["'\''[:space:]]/, "", value)
+            if (value != "") {
+                print value
+                exit
+            }
+            in_blocked = 1
+            next
+        }
+        in_blocked == 1 && /^[[:space:]]*-[[:space:]]*/ {
+            value = $0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+            gsub(/["'\''[:space:]]/, "", value)
+            if (value != "") {
+                print value
+            }
+            next
+        }
+        in_blocked == 1 {
+            exit
+        }
+    ' "$file" | paste -sd ',' -
+}
+
 is_task_terminal() {
     local task_id="$1"
     local task_file
@@ -278,7 +323,7 @@ is_task_terminal() {
     [[ -z "$task_file" ]] && return 0
 
     case "$(get_status "$task_file")" in
-        completed|archived) return 0 ;;
+        completed|archived|error) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -286,7 +331,7 @@ is_task_terminal() {
 list_unresolved_dependencies() {
     local file="$1"
     local blocked_by dep
-    blocked_by="$(extract_meta "$file" "blocked_by_task_ids")"
+    blocked_by="$(extract_blocked_by_task_ids "$file")"
     [[ -z "$blocked_by" ]] && return 0
 
     for dep in $(parse_csv_meta "$blocked_by"); do
