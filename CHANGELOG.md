@@ -6,6 +6,33 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-24
+### Added
+- feat(changelog): update CHANGELOG.md with new features and documentation improvements
+- feat(governance): enhance context sustainability and reporting in AGENTS.md
+- feat(solar-async-tasks, solar-router): introduce async-task execution consent contract
+- feat(sun-workspace-doctor): add `--check-plans` option for validating plans layout and future date markers
+- feat(solar-system): refactor LaunchAgent setup and enhance documentation
+- feat(agents): streamline protocols for browser management and task delegation
+- feat(agents): implement session-level loading protocol to optimize context management
+- feat(solar-security): enhance sanitize_paths.py and update documentation for default mapping behavior
+- feat(solar-security): enhance sanitize_context.py for directory sanitization and update documentation
+- feat(solar-security): add sanitize_paths.py script and update SKILL.md documentation
+- feat(governance): implement preference update delegation and Profile Sync Protocol in AGENTS.md
+- feat: enhance solar-browser skill with detailed lifecycle management and validation
+- feat: expand task authoring documentation and introduce new reference guides
+- feat: add script to list configured AI providers
+- feat: add provider option to task creation script
+- feat: integrate browser feature into solar system orchestrator
+- feat: introduce solar-browser skill for shared browser runtime
+
+### Fixed
+- fix(docs): update file references and enhance onboarding documentation
+- fix(solar-security): update default behavior for directory mode in sanitize_context.py and documentation
+- fix(sync-clients): enforce strict mirroring for managed client folders and enhance cleanup processes
+
+
+
 ### Added
 - feat(context): add `core/scripts/context-report.sh` to report lines, characters, directional token estimates, and large active-context files across governance, memory, skills, agents, and commands.
 - feat(solar-async-tasks, solar-router): add async-task execution consent contract so queued tasks can write declared artifacts without re-approval while preserving gates for external, destructive, credential, irreversible, or out-of-scope actions; link the contract from JIT delegation and router policy docs.
