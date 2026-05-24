@@ -69,6 +69,14 @@ Do you want to create this release? [y/N]:
 
 **Single decision point:** Accept (`y`) or reject (`N`).
 
+### 3b. Curated `[Unreleased]` (preferred)
+
+Before running the script, maintain release notes under `## [Unreleased]` in `CHANGELOG.md` (Keep a Changelog sections: Added, Changed, Fixed, etc.).
+
+On release, the script **promotes** that curated block to `## [X.Y.Z] - date` and clears `[Unreleased]`. It does **not** append auto-generated commit subjects on top.
+
+If `[Unreleased]` is empty, the script falls back to conventional-commit subjects (`feat` → Added, `fix` → Fixed), excluding meta commits such as `chore(release):` and `*changelog*`.
+
 ### 4. Automated Execution (if confirmed)
 
 If you confirm, script executes all steps automatically:

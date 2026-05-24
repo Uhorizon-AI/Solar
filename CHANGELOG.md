@@ -6,32 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-05-24
-### Added
-- feat(changelog): update CHANGELOG.md with new features and documentation improvements
-- feat(governance): enhance context sustainability and reporting in AGENTS.md
-- feat(solar-async-tasks, solar-router): introduce async-task execution consent contract
-- feat(sun-workspace-doctor): add `--check-plans` option for validating plans layout and future date markers
-- feat(solar-system): refactor LaunchAgent setup and enhance documentation
-- feat(agents): streamline protocols for browser management and task delegation
-- feat(agents): implement session-level loading protocol to optimize context management
-- feat(solar-security): enhance sanitize_paths.py and update documentation for default mapping behavior
-- feat(solar-security): enhance sanitize_context.py for directory sanitization and update documentation
-- feat(solar-security): add sanitize_paths.py script and update SKILL.md documentation
-- feat(governance): implement preference update delegation and Profile Sync Protocol in AGENTS.md
-- feat: enhance solar-browser skill with detailed lifecycle management and validation
-- feat: expand task authoring documentation and introduce new reference guides
-- feat: add script to list configured AI providers
-- feat: add provider option to task creation script
-- feat: integrate browser feature into solar system orchestrator
-- feat: introduce solar-browser skill for shared browser runtime
+### Docs
+- docs(changelog): consolidate duplicated `0.8.0` release notes into a single Added/Changed/Fixed structure.
 
 ### Fixed
-- fix(docs): update file references and enhance onboarding documentation
-- fix(solar-security): update default behavior for directory mode in sanitize_context.py and documentation
-- fix(sync-clients): enforce strict mirroring for managed client folders and enhance cleanup processes
+- fix(release): `create-release.sh` promotes curated `[Unreleased]` content when present; auto-generates from commits only when `[Unreleased]` is empty; skips `chore(release)` and changelog meta commits.
 
-
+## [0.8.0] - 2026-05-24
 
 ### Added
 - feat(context): add `core/scripts/context-report.sh` to report lines, characters, directional token estimates, and large active-context files across governance, memory, skills, agents, and commands.
@@ -57,9 +38,10 @@ The format is based on Keep a Changelog.
 - docs(onboarding): relocate onboarding and orchestration docs under `core/docs/`; add `mcp-requirements.md`; remove obsolete agent/onboarding checklist files.
 - docs(governance): add context sustainability rules to root `AGENTS.md`, `core/AGENTS.md`, and the planet AGENTS template so Solar favors breadcrumbs and references over always-loaded context.
 - docs(solar-skill-creator): make `solar-skill-creator` the skill context-sustainability gate for lean `SKILL.md` files and in-skill `references/`.
-- refactor(solar-async-tasks): reduce `SKILL.md` into a concise operational index and move detailed scheduling, recurrence, cleanup, notification, runtime, and error recovery guidance to `references/runtime-operations.md`.
+- refactor(agents): restructure root and `core/AGENTS.md` for clarity; move detailed rules to protocol docs.
+- refactor(solar-async-tasks): reduce `SKILL.md` into a concise operational index and move detailed scheduling, recurrence, cleanup, notification, runtime, and error recovery guidance to `references/runtime-operations.md`; streamline task scripts and execution-flow documentation.
 - change(solar-router): include `~/.local/bin` in provider fallback binary resolution so LaunchAgent runs can find Cursor Agent's `agent` CLI.
-- change(solar-system): build LaunchAgent entrypoint at `sun/runtime/system/Solar` (via `SOLAR_SYSTEM_RUNTIME_DIR`); stop tracking compiled binary under `core/skills/solar-system/scripts/`.
+- change(solar-system): refactor LaunchAgent setup; build entrypoint at `sun/runtime/system/Solar` (via `SOLAR_SYSTEM_RUNTIME_DIR`); stop tracking compiled binary under `core/skills/solar-system/scripts/`.
 - change(solar-security): `sanitize_paths.py` loads `sun/runtime/security-map.json` when `--use-mapping` is set and `--mapping` is omitted, matching the default mapping path used by `sanitize_context.py` (paths relative to the process working directory).
 - docs(solar-security): correct `SKILL.md` examples for `sanitize_paths.py` so every command includes required rules (`--use-mapping` and/or `--old` / `--new`); document the default mapping file.
 - test(solar-security): extend `core/tests/skills/solar-security/test_sanitize_paths.py` with coverage for default mapping resolution when `mapping_path` is unset.

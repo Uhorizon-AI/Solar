@@ -178,12 +178,52 @@ function calculate_version() {
 }
 
 # ============================================================================
+# CHANGELOG helpers ([Unreleased] vs commit subjects)
+# ============================================================================
+
+# Skip release/changelog housekeeping commits when auto-generating notes.
+function is_meta_changelog_commit() {
+  local subject="$1"
+  [[ "$subject" =~ ^chore\(release\): ]] && return 0
+  [[ "$subject" =~ ^chore\(changelog\): ]] && return 0
+  [[ "$subject" =~ ^feat\(changelog\): ]] && return 0
+  [[ "$subject" =~ ^docs\(changelog\): ]] && return 0
+  return 1
+}
+
+function extract_unreleased_body() {
+  awk '
+    /^## \[Unreleased\]/ { in_unreleased=1; next }
+    in_unreleased && /^## \[/ { exit }
+    in_unreleased { print }
+  ' "$CHANGELOG_FILE"
+}
+
+function unreleased_has_content() {
+  local body
+  body="$(extract_unreleased_body)"
+  [[ -n "${body//[[:space:]]/}" ]]
+}
+
+# ============================================================================
 # Generate CHANGELOG Entry
 # ============================================================================
 
 function generate_changelog() {
-  local today=$(date +%Y-%m-%d)
+  local today
+  today=$(date +%Y-%m-%d)
   CHANGELOG_ENTRY="## [${MAJOR}.${MINOR}.${PATCH}] - $today"
+  CHANGELOG_SOURCE="commits"
+
+  if unreleased_has_content; then
+    info "Using curated [Unreleased] content (skipping commit-subject generation)"
+    CHANGELOG_SOURCE="unreleased"
+    CHANGELOG_ENTRY+=$'\n'"$(extract_unreleased_body)"
+    return 0
+  fi
+
+  warn "No curated [Unreleased] content — generating release notes from conventional commits"
+  warn "Tip: maintain [Unreleased] in CHANGELOG.md before running this script for richer notes."
 
   # Get commits grouped by type
   if [[ "$FIRST_RELEASE" == true ]]; then
@@ -199,33 +239,31 @@ function generate_changelog() {
   # Build changelog sections
   CHANGELOG_SECTIONS=""
 
-  # Breaking changes section
-  if [[ -n "$BREAKING_COMMITS" ]]; then
-    CHANGELOG_SECTIONS+=$'\n### Breaking Changes\n'
-    while IFS= read -r line; do
-      # Remove hash, keep message
-      MSG=$(echo "$line" | sed -E 's/^[a-f0-9]+ //')
-      CHANGELOG_SECTIONS+="- $MSG"$'\n'
-    done <<< "$BREAKING_COMMITS"
-  fi
+  append_filtered_commits() {
+    local section_header="$1"
+    local commits="$2"
+    local wrote_header=false
+    local line msg
 
-  # Added section (feat commits)
-  if [[ -n "$FEAT_COMMITS" ]]; then
-    CHANGELOG_SECTIONS+=$'\n### Added\n'
-    while IFS= read -r line; do
-      MSG=$(echo "$line" | sed -E 's/^[a-f0-9]+ //')
-      CHANGELOG_SECTIONS+="- $MSG"$'\n'
-    done <<< "$FEAT_COMMITS"
-  fi
+    [[ -z "$commits" ]] && return 0
 
-  # Fixed section (fix commits)
-  if [[ -n "$FIX_COMMITS" ]]; then
-    CHANGELOG_SECTIONS+=$'\n### Fixed\n'
     while IFS= read -r line; do
-      MSG=$(echo "$line" | sed -E 's/^[a-f0-9]+ //')
-      CHANGELOG_SECTIONS+="- $MSG"$'\n'
-    done <<< "$FIX_COMMITS"
-  fi
+      [[ -z "$line" ]] && continue
+      msg=$(echo "$line" | sed -E 's/^[a-f0-9]+ //')
+      if is_meta_changelog_commit "$msg"; then
+        continue
+      fi
+      if [[ "$wrote_header" == false ]]; then
+        CHANGELOG_SECTIONS+=$'\n'"$section_header"$'\n'
+        wrote_header=true
+      fi
+      CHANGELOG_SECTIONS+="- $msg"$'\n'
+    done <<< "$commits"
+  }
+
+  append_filtered_commits "### Breaking Changes" "$BREAKING_COMMITS"
+  append_filtered_commits "### Added" "$FEAT_COMMITS"
+  append_filtered_commits "### Fixed" "$FIX_COMMITS"
 
   CHANGELOG_ENTRY+="$CHANGELOG_SECTIONS"
 }
@@ -263,31 +301,38 @@ function show_preview_and_confirm() {
 function update_changelog() {
   info "Updating CHANGELOG.md..."
 
-  # Create temp files
-  TEMP_FILE=$(mktemp)
-  ENTRY_FILE=$(mktemp)
+  local temp_file entry_file
+  temp_file=$(mktemp)
+  entry_file=$(mktemp)
 
-  # Write the changelog entry to a temp file
-  echo "$CHANGELOG_ENTRY" > "$ENTRY_FILE"
+  printf '%s\n' "$CHANGELOG_ENTRY" > "$entry_file"
 
-  # Read CHANGELOG and insert new entry after [Unreleased]
-  awk -v entry_file="$ENTRY_FILE" '
+  # Insert the new version after [Unreleased] and drop prior [Unreleased] body.
+  awk -v entry_file="$entry_file" '
+    BEGIN { inserted=0; in_unreleased=0 }
     /^## \[Unreleased\]/ {
       print
       print ""
-      while ((getline line < entry_file) > 0) {
-        print line
+      if (!inserted) {
+        while ((getline line < entry_file) > 0) {
+          print line
+        }
+        close(entry_file)
+        print ""
+        inserted=1
       }
-      close(entry_file)
-      print ""
+      in_unreleased=1
       next
     }
+    in_unreleased && /^## \[/ {
+      in_unreleased=0
+    }
+    in_unreleased { next }
     { print }
-  ' "$CHANGELOG_FILE" > "$TEMP_FILE"
+  ' "$CHANGELOG_FILE" > "$temp_file"
 
-  # Replace original and cleanup
-  mv "$TEMP_FILE" "$CHANGELOG_FILE"
-  rm -f "$ENTRY_FILE"
+  mv "$temp_file" "$CHANGELOG_FILE"
+  rm -f "$entry_file"
 
   success "CHANGELOG.md updated"
 }
