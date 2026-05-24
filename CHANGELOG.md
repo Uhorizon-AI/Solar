@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-24
+
 ### Docs
 - docs(changelog): consolidate duplicated `0.8.0` release notes into a single Added/Changed/Fixed structure.
 
