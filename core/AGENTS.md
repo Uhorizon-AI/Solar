@@ -48,6 +48,16 @@ Solar uses AI-agnostic filesystem memory accessible by any AI client.
 
 First-run trigger and user-facing conversation are owned by root `AGENTS.md`. `core/AGENTS.md` defines setup and sync execution rules only when root delegates.
 
+## Provider invocation roles (required)
+
+`solar-router` is the shared execution backend for provider selection, fallback, JIT context, and audit records. It is called by Solar runtimes, not used as a general-purpose workaround from the conversational turn when a safer Solar workflow exists.
+
+`solar-async-tasks` is the operational channel for deferred work, multiprovider feedback, external resources, long waits, and work that can block the conversation. Use its draft/plan/approve/queue lifecycle instead of direct provider CLIs.
+
+`solar-system` owns automatic queue pickup when `async-tasks` is enabled in `SOLAR_SYSTEM_FEATURES`. In that setup, agents stop after approval and let the orchestrator execute the queue. If the feature is not supervised, use the documented `solar-async-tasks` fallback only.
+
+See `core/docs/jit-delegation-protocol.md` for the detailed decision flow.
+
 ## Profile Sync Protocol (required)
 
 Invoked when root detects an explicit user update to personal operating context. Update `sun/preferences/profile.md` first, then `sun/MEMORY.md` only if a stable operational pattern emerges. Confirm changes back to the user. See `core/docs/profile-sync-protocol.md` for full steps and guardrails.

@@ -16,6 +16,12 @@ Single source of truth for all AI execution in Solar:
 - **Async routing policy** (`direct_reply` vs `async_draft_created`) lives only here.
 - Used by solar-transport-gateway (WebSocket/bridge) and solar-async-tasks (task execution).
 
+## Operational boundary
+
+Use this skill as infrastructure for Solar runtimes and controlled diagnostics. Do not use `solar-router` or provider CLIs as the normal path for work that is deferred, multiprovider, browser/MCP-dependent, network/auth/keychain-dependent, long-running, or likely to block the conversation.
+
+For that work, create or propose a task through `solar-async-tasks`. When `solar-system` supervises `async-tasks`, approve/queue the task and let the system runtime execute it.
+
 ## Scope
 
 - Accept JSON payload (router contract v3) on stdin; output structured JSON on stdout.

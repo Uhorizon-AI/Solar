@@ -102,6 +102,14 @@ Fallback rule: if `solar-system` is not supervising `async-tasks`, use `ensure_a
 
 For user-facing work, approval ends the conversational agent's execution role. The system runtime owns actual execution.
 
+Use this workflow for:
+
+- Multiprovider review of a plan or proposal, where child tasks may target specific providers and the parent synthesizes results;
+- External provider execution that may require network, auth, keychain, browser, or MCP resources;
+- Long-running analysis where unavailable providers should be recorded as errors without blocking synthesis from available results.
+
+If the user asked for review before final edits, write a proposal or result artifact and wait for approval before modifying the final target file.
+
 ## Execution Consent
 
 Queued or active tasks are already approved to execute their declared body and write declared artifacts/output paths.

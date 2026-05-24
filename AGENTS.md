@@ -64,7 +64,7 @@ Git setup in `sun/` and `planets/*` is optional. See `core/AGENTS.md` for doctor
 
 ## JIT Delegation Protocol (Required)
 
-Self-assess before responding: sufficient → execute directly; insufficient → delegate to `solar-router`; requires external resources → use `solar-async-tasks`. Read/analysis tasks delegate automatically; data-modifying tasks require explicit user approval first. See `core/docs/jit-delegation-protocol.md` for subprocess invocation contract and field rules.
+Self-assess before responding: sufficient → execute directly; deferred/multiprovider/external/browser/MCP/long-running/blocking → use `solar-async-tasks`; insufficient but short/local/non-blocking → delegate to `solar-router`. Read/analysis tasks delegate automatically; data-modifying tasks require explicit user approval first. See `core/docs/jit-delegation-protocol.md` for subprocess invocation contract, provider invocation boundaries, and field rules.
 
 ## Workflow Orchestration (Required)
 

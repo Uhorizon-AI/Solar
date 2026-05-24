@@ -6,8 +6,10 @@ When receiving a task, the AI must self-evaluate before responding:
 
 Check if available agents, skills, and commands are sufficient for the task:
 - **Sufficient** → execute directly.
-- **Insufficient or uncertain** → delegate to `solar-router` as a subprocess.
-- **Requires external resources** (internet, system binaries, MCPs, long-running operations) → create an async task via `solar-async-tasks` (create → plan → approve → queue). The system executes it automatically via the Solar LaunchAgent. Do NOT run `run_worker.sh` manually or attempt direct execution.
+- **Deferred, multiprovider, external-resource, browser/MCP, long-running, or blocking work** → create an async task via `solar-async-tasks` (create → plan → approve → queue). The system executes it automatically via the Solar LaunchAgent. Do NOT run `run_worker.sh` manually or attempt direct execution.
+- **Insufficient or uncertain, but short/local/non-blocking** → delegate to `solar-router` as a subprocess.
+
+See `core/AGENTS.md` → `Provider invocation roles` for the ownership boundary between `solar-router`, `solar-async-tasks`, and `solar-system`.
 
 ## 2. Validation Gate
 
@@ -24,6 +26,8 @@ actions, or changes outside the declared task scope. See
 ## 3. Subprocess Invocation
 
 Call `solar-router` using the v3 contract via stdin. Always use `mode: direct_only` and `channel: other` in subprocesses to prevent recursion:
+
+For complex prompts with quotes, newlines, or file content, prefer the secure temporary JSON file method documented in `core/skills/solar-router/SKILL.md` → `Secure Invocation Protocol`.
 
 ```bash
 echo '{

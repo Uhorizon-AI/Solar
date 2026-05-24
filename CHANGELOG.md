@@ -17,6 +17,7 @@ The format is based on Keep a Changelog.
 - test(solar-security): add `core/tests/skills/solar-security/test_sanitize_paths.py` covering dry-run behavior, apply mode rename/link rewrites, and mapping-driven rules.
 
 ### Changed
+- docs(governance): clarify provider invocation roles and JIT delegation so deferred, multiprovider, external-resource, or blocking work goes through `solar-async-tasks` before considering direct provider/router calls.
 - docs(governance): add context sustainability rules to root `AGENTS.md`, `core/AGENTS.md`, and the planet AGENTS template so Solar favors breadcrumbs and references over always-loaded context.
 - docs(solar-skill-creator): make `solar-skill-creator` the skill context-sustainability gate for lean `SKILL.md` files and in-skill `references/`.
 - refactor(solar-async-tasks): reduce `SKILL.md` into a concise operational index and move detailed scheduling, recurrence, cleanup, notification, runtime, and error recovery guidance to `references/runtime-operations.md`.
