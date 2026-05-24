@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../skills/solar-interface/scripts" && pwd)/resolve_solar_home.sh"
+# shellcheck source=/dev/null
+source "$RESOLVE_SCRIPT"
+solar_resolve_home --quiet
+
+ROOT_DIR="$SOLAR_HOME"
 SUN_DIR="$ROOT_DIR/sun"
 CHECK_GIT=false
 CHECK_PLANS=false

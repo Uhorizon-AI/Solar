@@ -24,7 +24,13 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.screen import Point
 from prompt_toolkit.styles import Style
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+_SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from solar_paths import resolve_solar_home  # noqa: E402
+
+REPO_ROOT, _SOLAR_CORE_ROOT = resolve_solar_home()
 SOLAR_DIR = pathlib.Path.home() / ".solar"
 HISTORY_FILE = SOLAR_DIR / "history"
 CURRENT_THREAD_FILE = REPO_ROOT / "sun" / "runtime" / "interface" / "state" / "current-thread.json"

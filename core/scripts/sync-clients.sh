@@ -24,11 +24,15 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../skills/solar-interface/scripts" && pwd)/resolve_solar_home.sh"
+# shellcheck source=/dev/null
+source "$RESOLVE_SCRIPT"
+solar_resolve_home --quiet
 
-SRC_SKILLS="$ROOT_DIR/core/skills"
-SRC_AGENTS="$ROOT_DIR/core/agents"
-SRC_COMMANDS="$ROOT_DIR/core/commands"
+ROOT_DIR="$SOLAR_HOME"
+SRC_SKILLS="$SOLAR_CORE_ROOT/skills"
+SRC_AGENTS="$SOLAR_CORE_ROOT/agents"
+SRC_COMMANDS="$SOLAR_CORE_ROOT/commands"
 PLANETS_DIR="$ROOT_DIR/planets"
 
 CODEX_DIR="${CODEX_HOME:-$ROOT_DIR/.codex}"
@@ -486,8 +490,8 @@ sync_vscode() {
   log_section "🔄 VS Code / Cursor Workspace Settings (.vscode)"
   local vscode_dir="$ROOT_DIR/.vscode"
   local vscode_settings="$vscode_dir/settings.json"
-  
-  python3 -c "
+
+  if ! python3 -c "
 import json
 import os
 import glob
@@ -524,6 +528,13 @@ data['search.useIgnoreFiles'] = False
 data['git.scanRepositories'] = merged_scan_repos
 data['python.terminal.activateEnvironment'] = False
 
+for exclude_key in ('files.exclude', 'search.exclude'):
+    existing = data.get(exclude_key, {})
+    if not isinstance(existing, dict):
+        existing = {}
+    existing['.solar'] = True
+    data[exclude_key] = existing
+
 ignored_folders = data.get('git.repositoryScanIgnoredFolders')
 if isinstance(ignored_folders, list):
     filtered_ignored_folders = [item for item in ignored_folders if item != 'planets']
@@ -537,10 +548,15 @@ else:
 os.makedirs(os.path.dirname(vscode_settings), exist_ok=True)
 with open(vscode_settings, 'w') as f:
     json.dump(data, f, indent=2)
-" "$vscode_settings" "$PLANETS_DIR"
+" "$vscode_settings" "$PLANETS_DIR"; then
+    log_tree_mid "⚙️  Settings" "${RED}✗${NC} Failed to update $vscode_settings"
+    return 1
+  fi
 
-  local planet_count
-  planet_count="$(ls -1d "$PLANETS_DIR"/*/ 2>/dev/null | wc -l | tr -d ' ')"
+  local planet_count=0
+  if [[ -d "$PLANETS_DIR" ]]; then
+    planet_count="$(find "$PLANETS_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+  fi
   log_tree_mid "⚙️  Settings" "${GREEN}✓${NC} Updated $vscode_settings"
   log_tree_end "📁 Git scan" "${GREEN}✓${NC} Registered $planet_count planet repositories"
   echo

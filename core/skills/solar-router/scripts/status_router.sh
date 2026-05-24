@@ -6,7 +6,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
+RESOLVE_SCRIPT="$(cd "$SCRIPT_DIR/../../solar-interface/scripts" && pwd)/resolve_solar_home.sh"
+# shellcheck source=/dev/null
+source "$RESOLVE_SCRIPT"
+solar_resolve_home --quiet
+REPO_ROOT="${REPO_ROOT:-$SOLAR_HOME}"
 AUDIT_LOG="$REPO_ROOT/sun/runtime/router/audit.jsonl"
 PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 LAST_N=10

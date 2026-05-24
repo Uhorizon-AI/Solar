@@ -12,8 +12,14 @@ import sys
 from abc import ABC
 from typing import Dict, List
 
-# providers/base.py → [0] providers/ [1] scripts/ [2] solar-router/ [3] skills/ [4] core/ [5] repo root
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[5]
+_SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1]
+_INTERFACE_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-interface" / "scripts"
+if str(_INTERFACE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_INTERFACE_SCRIPTS))
+
+from solar_paths import resolve_solar_home  # noqa: E402
+
+REPO_ROOT, _SOLAR_CORE_ROOT = resolve_solar_home()
 FALLBACK_PATHS = [
     "/opt/homebrew/bin",
     "/usr/local/bin",

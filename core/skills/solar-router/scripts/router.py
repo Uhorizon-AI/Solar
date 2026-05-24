@@ -22,10 +22,14 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
+_INTERFACE_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-interface" / "scripts"
+if str(_INTERFACE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_INTERFACE_SCRIPTS))
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from providers import PROVIDERS  # noqa: E402
+from solar_paths import resolve_solar_home, resolve_under_home as _resolve_under_home  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -35,7 +39,8 @@ SUPPORTED_PROVIDERS = set(PROVIDERS.keys())
 VALID_MODES = {"auto", "direct_only", "async_only"}
 VALID_CHANNELS = {"telegram", "n8n", "async-task", "other"}
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+REPO_ROOT, SOLAR_CORE_ROOT = resolve_solar_home()
+
 
 _raw_runtime_dir = (
     os.getenv("SOLAR_ROUTER_RUNTIME_DIR")
@@ -52,7 +57,9 @@ _raw_system_prompt_file = (
 )
 _system_prompt_path = pathlib.Path(_raw_system_prompt_file)
 SYSTEM_PROMPT_FILE = (
-    _system_prompt_path if _system_prompt_path.is_absolute() else REPO_ROOT / _system_prompt_path
+    _system_prompt_path
+    if _system_prompt_path.is_absolute()
+    else _resolve_under_home(str(_system_prompt_path))
 )
 
 RE_SOLAR_DECISION = re.compile(
@@ -134,7 +141,7 @@ def async_tasks_enabled() -> bool:
 def create_async_draft(user_text: str, ai_output: str, request_id: str) -> Optional[str]:
     """Create a draft via solar-async-tasks create.sh; return task id or None."""
     _ = request_id  # reserved for future correlation
-    script = REPO_ROOT / "core/skills/solar-async-tasks/scripts/create.sh"
+    script = _resolve_under_home("core/skills/solar-async-tasks/scripts/create.sh")
     if not script.is_file():
         return None
     title = (user_text.strip() or "async task")[:120]
@@ -179,7 +186,7 @@ def resolve_jit_context(metadata: Dict[str, Any]) -> Dict[str, Any]:
     candidates: List[pathlib.Path] = []
     if planet:
         candidates.append(REPO_ROOT / f"planets/{planet}/agents/{agent_name}.md")
-    candidates.append(REPO_ROOT / f"core/agents/{agent_name}.md")
+    candidates.append(_resolve_under_home(f"core/agents/{agent_name}.md"))
 
     for path in candidates:
         if path.exists():

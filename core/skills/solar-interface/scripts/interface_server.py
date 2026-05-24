@@ -17,7 +17,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+_SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from solar_paths import resolve_solar_home, resolve_under_home  # noqa: E402
+
+REPO_ROOT, SOLAR_CORE_ROOT = resolve_solar_home()
+
 ENV_PATH = REPO_ROOT / ".env"
 MIGRATION_SOURCE = pathlib.Path(__file__).resolve().parent.parent / "references" / "001_initial.sql"
 
@@ -51,7 +58,7 @@ STATE_DIR = RUNTIME_DIR / "state"
 THREADS_DIR = RUNTIME_DIR / "threads"
 RUNS_DIR = RUNTIME_DIR / "runs"
 PID_FILE = STATE_DIR / "interface.pid"
-ROUTER_SCRIPT = REPO_ROOT / "core" / "skills" / "solar-router" / "scripts" / "run_router.py"
+ROUTER_SCRIPT = resolve_under_home("core/skills/solar-router/scripts/run_router.py")
 
 
 def now_iso() -> str:

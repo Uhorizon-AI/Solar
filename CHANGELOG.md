@@ -6,6 +6,32 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+> **Release note:** Solar Client Fase 1 lives here until go/no-go closes the phase; then promote this section to `[0.8.2]` (or `[0.9.0]`). Tag `v0.8.1` covers release-script fixes only, not Fase 1.
+
+### Added
+- feat(solar-client): add `core/scripts/smoke-solar-client-fase1.sh` go/no-go smoke (#11–#17, inline #13, stderr on failure).
+- feat(solar-client): add `resolve_solar_home.sh` with `.solar/core` + legacy `core/` discovery, export conflict detection, and `--home` override.
+- feat(solar-client): add `solar client init|sync|doctor`, `solar status` (5 blocks), and `solar paths` via the `solar` CLI.
+- feat(solar-client): add `package_solar_bundle.sh` allowlisted bundling and `client_init.sh --from-dev` for new workspaces.
+- feat(solar-client): add workspace templates `workspace-AGENTS.md` and `workspace.env.example`.
+
+### Changed
+- change(solar-interface): resolve `SOLAR_HOME` / `SOLAR_CORE_ROOT` / `REPO_ROOT` in interface, router, sync-clients, doctor, and async-tasks.
+- change(sync-clients): read skills/agents/commands from `SOLAR_CORE_ROOT`; exclude `.solar/` in VS Code/Cursor settings during sync.
+- change(solar-interface): bump CLI `SOLAR_VERSION` to `0.8.1`.
+
+### Fixed
+- fix(tests): `test_resolve_solar_home.sh` captures output without `$(...)` subshell; `_assert_run` uses `|| code=$?` (bash `if` clears exit status).
+- fix(sync-clients): `sync_vscode` no longer exits 1 on workspaces with an empty `planets/` dir (`ls` + `pipefail` under `set -e`).
+- fix(smoke): Phase 1 smoke script counts PASS/FAIL in `#11`/`#12` blocks (no subshell); Summary matches printed `FAIL:` lines.
+- fix(solar-interface): `solar status` system block no longer false-WARN when LaunchAgent is loaded (`status_launchagent` exit code vs pipefail).
+- fix(solar-interface): `solar client doctor` treats ports in use by solar-interface / solar-transport-gateway as OK (health check, pid file, process args).
+- fix(solar-interface): `solar_paths.py` always runs shell resolver (no stale `SOLAR_HOME` bypass); router status/list_providers always resolve from cwd.
+- fix(solar-interface): `client_init` preserves existing governance files unless `--force-governance` (backup before replace).
+- fix(solar-interface): resolver errors always print to stderr even with `--quiet`.
+- fix(solar-interface): `solar status` adds `client` block for symlink/port WARNs; fixes Python IndentationError in chat payloads.
+- fix(solar-interface): `solar paths` shows `.solar/core/skills/` on new workspaces; resolver tests count PASS/FAIL correctly.
+
 ## [0.8.1] - 2026-05-24
 
 ### Docs

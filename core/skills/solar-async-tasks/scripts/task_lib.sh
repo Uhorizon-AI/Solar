@@ -3,9 +3,21 @@
 # Shared library for solar-async-tasks
 # Sourced by other scripts
 
-# Default Root: prefer (pwd)/sun/... when run from repo (e.g. LaunchAgent); else $HOME path
+# NOTE: Worker inherits SOLAR_HOME from parent caller; skip re-discovery when set.
+# CLI and sync paths always run discovery (resolve_solar_home.sh). Intentional exception.
+if [[ -z "${SOLAR_HOME:-}" ]]; then
+  _TASK_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-interface/scripts" && pwd)/resolve_solar_home.sh"
+  if [[ -f "$_TASK_RESOLVE_SCRIPT" ]]; then
+    # shellcheck source=/dev/null
+    source "$_TASK_RESOLVE_SCRIPT"
+    solar_resolve_home --quiet 2>/dev/null || true
+  fi
+fi
+
 if [[ -z "${SOLAR_TASK_ROOT:-}" ]]; then
-  if [[ -d "$(pwd)/sun/runtime/async-tasks" ]]; then
+  if [[ -n "${SOLAR_HOME:-}" ]]; then
+    export SOLAR_TASK_ROOT="$SOLAR_HOME/sun/runtime/async-tasks"
+  elif [[ -d "$(pwd)/sun/runtime/async-tasks" ]]; then
     export SOLAR_TASK_ROOT="$(pwd)/sun/runtime/async-tasks"
   else
     export SOLAR_TASK_ROOT="${HOME:-}/Sites/solar.ai/sun/runtime/async-tasks"

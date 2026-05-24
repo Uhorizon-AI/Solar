@@ -1,9 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOLAR_VERSION="0.2.0"
+SOLAR_VERSION="0.8.1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Workspace / client commands (before chat REPL wiring)
+case "${1:-}" in
+  client)
+    shift
+    case "${1:-}" in
+      init)
+        shift
+        exec bash "$SCRIPT_DIR/client_init.sh" "$@"
+        ;;
+      sync)
+        shift
+        exec bash "$SCRIPT_DIR/client_sync.sh" "$@"
+        ;;
+      doctor)
+        shift
+        exec bash "$SCRIPT_DIR/client_doctor.sh" "$@"
+        ;;
+      update)
+        echo "solar client update is planned for Fase 2 (manifest + tarball)." >&2
+        exit 2
+        ;;
+      "")
+        echo "Usage: solar client {init|sync|doctor|update}" >&2
+        exit 2
+        ;;
+      *)
+        echo "Unknown client subcommand: $1" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  status)
+    shift
+    exec bash "$SCRIPT_DIR/solar_status.sh" "$@"
+    ;;
+  paths)
+    shift
+    exec bash "$SCRIPT_DIR/solar_paths.sh" "$@"
+    ;;
+esac
+
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/interface_lib.sh"
 
@@ -24,8 +66,10 @@ Flags:
   -h, --help               Show help
 
 Subcommands:
+  client init|sync|doctor  Workspace lifecycle (Solar Client)
+  status [--verbose]       Compact workspace health (5 blocks)
+  paths                    Resolvable paths for IDE @ references
   new [title]              Start a new thread and enter chat
-  status                   Daemon health and recent runs
   runs                     List recent runs
   approvals                List pending approvals
   approve <id>             Approve a pending run
@@ -132,7 +176,7 @@ send_message() {
   payload="$(python3 - <<'PY' "$mode" "$text" "$provider"
 import json, sys
 obj = {"mode": sys.argv[1], "text": sys.argv[2]}
-  if sys.argv[3]:
+if sys.argv[3]:
     obj["provider"] = sys.argv[3]
 print(json.dumps(obj))
 PY
@@ -165,7 +209,7 @@ print_message() {
   payload="$(python3 - <<'PY' "$text" "$provider"
 import json, sys
 obj = {"mode": "ask", "text": sys.argv[1]}
-  if sys.argv[2]:
+if sys.argv[2]:
     obj["provider"] = sys.argv[2]
 print(json.dumps(obj))
 PY
@@ -253,9 +297,6 @@ done
 cmd="${POSITIONAL[0]:-}"
 
 case "$cmd" in
-  status)
-    bash "$SCRIPT_DIR/status_interface.sh"
-    ;;
   runs)
     require_daemon
     api_get "/runs" | python3 -c '
