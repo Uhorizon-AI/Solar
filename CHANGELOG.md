@@ -7,6 +7,11 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ## [0.10.1] - 2026-05-25
+### Added
+- feat(solar-client): release v0.10.1 with upgrade enhancements and install hygiene
+
+
+## [0.10.1] - 2026-05-25
 
 ### Added
 - feat(solar-client): extend `solar client upgrade` with install-root report, prune of IDE/agent artifacts under `SOLAR_ROOT`, and optional `--restructure` for legacy monorepo layouts.
