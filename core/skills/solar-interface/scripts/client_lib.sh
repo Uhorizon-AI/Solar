@@ -99,3 +99,130 @@ with open(path, "w", encoding="utf-8") as fh:
     fh.write("\n")
 PY
 }
+
+solar_client_paths_equal() {
+  local a b
+  a="$(_resolve_abs "$1" 2>/dev/null || echo "$1")"
+  b="$(_resolve_abs "$2" 2>/dev/null || echo "$2")"
+  [[ "$a" == "$b" ]]
+}
+
+solar_client_workspace_layout() {
+  local ws="$1"
+  if [[ -f "$ws/.solar/manifest.json" ]]; then
+    echo "client"
+    return 0
+  fi
+  if [[ -d "$ws/solar/core" && -f "$ws/solar/core/AGENTS.md" ]]; then
+    echo "legacy_solar"
+    return 0
+  fi
+  if [[ -d "$ws/core" && -f "$ws/core/AGENTS.md" ]]; then
+    echo "legacy_root"
+    return 0
+  fi
+  return 1
+}
+
+solar_client_install_prune_denylist() {
+  printf '%s\n' .claude .codex .cursor .gemini .vscode sun .env .pytest_cache .DS_Store
+}
+
+solar_client_list_install_artifacts() {
+  local root="$1"
+  local name
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    if [[ -e "$root/$name" ]]; then
+      echo "$root/$name"
+    fi
+  done < <(solar_client_install_prune_denylist)
+}
+
+solar_client_prune_install_root() {
+  local root="$1"
+  local dry_run="${2:-false}"
+  local path
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    if [[ "$dry_run" == true ]]; then
+      echo "would remove: $path"
+    else
+      rm -rf "$path"
+      echo "OK: removed $path"
+    fi
+  done < <(solar_client_list_install_artifacts "$root")
+}
+
+solar_client_print_upgrade_report() {
+  local ws="$1"
+  local root="$2"
+  local layout manifest_layout git_ver git_commit
+  layout="$(solar_client_workspace_layout "$ws" 2>/dev/null || echo "unknown")"
+  read -r git_ver git_commit < <(solar_client_git_identity "$root")
+  manifest_layout=""
+  if [[ -f "$ws/.solar/manifest.json" ]]; then
+    manifest_layout="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("layout",""))' "$ws/.solar/manifest.json" 2>/dev/null || true)"
+  fi
+  echo "Solar Client upgrade"
+  echo "  SOLAR_WORKSPACE=$ws"
+  echo "  SOLAR_ROOT=$root"
+  echo "  workspace_layout=$layout"
+  echo "  install_git=$git_ver (${git_commit:0:12})"
+  echo "  manifest.layout=${manifest_layout:-<none>}"
+  if [[ "$git_ver" == v0.8.* ]] || [[ "$git_ver" == v0.9.* ]]; then
+    echo "  HINT: update framework repo: cd \"$root\" && git fetch && git checkout v0.10.0"
+  fi
+}
+
+solar_client_restructure_needed() {
+  local ws="$1"
+  local layout
+  layout="$(solar_client_workspace_layout "$ws" 2>/dev/null || return 1)"
+  [[ "$layout" == "legacy_root" ]] || return 1
+  [[ ! -d "$ws/solar/core" ]]
+}
+
+solar_client_restructure_plan() {
+  local ws="$1"
+  solar_client_restructure_needed "$ws" || return 1
+  echo "mkdir -p $ws/solar"
+  echo "mv $ws/core $ws/solar/core"
+  if [[ -d "$ws/.git" ]]; then
+    echo "mv $ws/.git $ws/solar/.git"
+  fi
+}
+
+solar_client_restructure_apply() {
+  local ws="$1"
+  local dry_run="${2:-false}"
+  local backup=""
+
+  if ! solar_client_restructure_needed "$ws"; then
+    if [[ -d "$ws/solar/core" ]]; then
+      echo "INFO: restructure skipped (already has solar/core/)"
+    else
+      echo "INFO: restructure skipped (workspace layout is not legacy_root monorepo)"
+    fi
+    return 0
+  fi
+
+  if [[ "$dry_run" == true ]]; then
+    solar_client_restructure_plan "$ws" | while read -r line; do
+      echo "  would: $line"
+    done
+    return 0
+  fi
+
+  backup="${ws}.pre-upgrade.$(date +%Y%m%d%H%M%S)"
+  echo "OK: backup workspace tree at $backup (cp -a; may take a moment)"
+  cp -a "$ws" "$backup"
+
+  mkdir -p "$ws/solar"
+  mv "$ws/core" "$ws/solar/core"
+  echo "OK: moved core/ -> solar/core/"
+  if [[ -d "$ws/.git" && ! -e "$ws/solar/.git" ]]; then
+    mv "$ws/.git" "$ws/solar/.git"
+    echo "OK: moved .git -> solar/.git"
+  fi
+}

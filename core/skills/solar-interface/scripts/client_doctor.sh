@@ -16,6 +16,20 @@ if [[ -d "$SOLAR_WORKSPACE/.solar/core" ]]; then
   err "obsolete .solar/core/ exists — run: solar client upgrade"
 fi
 
+if ! solar_client_paths_equal "$SOLAR_ROOT" "$SOLAR_WORKSPACE"; then
+  artifact_count=0
+  while IFS= read -r apath; do
+    [[ -n "$apath" ]] || continue
+    warn "install artifact under SOLAR_ROOT (not workspace): $apath — run: solar client upgrade"
+    artifact_count=$((artifact_count + 1))
+  done < <(solar_client_list_install_artifacts "$SOLAR_ROOT")
+  if [[ "$artifact_count" -eq 0 ]]; then
+    ok "SOLAR_ROOT has no IDE/agent prune artifacts"
+  fi
+else
+  ok "SOLAR_ROOT equals SOLAR_WORKSPACE (no separate install prune needed)"
+fi
+
 if [[ -f "$SOLAR_WORKSPACE/.env" ]]; then
   set -a
   # shellcheck source=/dev/null

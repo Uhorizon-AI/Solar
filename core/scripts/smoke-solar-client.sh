@@ -33,11 +33,13 @@ done
 
 if [[ -z "$ROOT" ]]; then
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+else
+  ROOT="$(cd "$ROOT" && pwd -P)"
 fi
 
-SOLAR="$ROOT/core/skills/solar-interface/scripts/solar"
-RESOLVE="$ROOT/core/skills/solar-interface/scripts/resolve_solar_paths.sh"
-INSTALL_ROOT="$(cd "$ROOT" && pwd -P)"
+INSTALL_ROOT="$ROOT"
+SOLAR="$INSTALL_ROOT/core/skills/solar-interface/scripts/solar"
+RESOLVE="$INSTALL_ROOT/core/skills/solar-interface/scripts/resolve_solar_paths.sh"
 
 PASS=0
 FAIL=0
@@ -86,8 +88,9 @@ echo "=== Preflight ($INSTALL_ROOT) ==="
 run_expect_ok "bash -n solar CLI" bash -n "$SOLAR"
 run_expect_ok "bash -n resolve_solar_paths.sh" bash -n "$RESOLVE"
 
-UNIT_RESOLVE="$ROOT/core/tests/skills/solar-interface/test_resolve_solar_paths.sh"
-UNIT_PATHS_PY="$ROOT/core/tests/skills/solar-interface/test_solar_paths_py.sh"
+UNIT_RESOLVE="$INSTALL_ROOT/core/tests/skills/solar-interface/test_resolve_solar_paths.sh"
+UNIT_PATHS_PY="$INSTALL_ROOT/core/tests/skills/solar-interface/test_solar_paths_py.sh"
+UNIT_UPGRADE="$INSTALL_ROOT/core/tests/skills/solar-interface/test_client_upgrade.sh"
 if [[ -f "$UNIT_RESOLVE" ]]; then
   bash "$UNIT_RESOLVE" >/dev/null 2>&1 && pass "unit: test_resolve_solar_paths.sh" || fail "unit: test_resolve_solar_paths.sh"
 else
@@ -97,6 +100,11 @@ if [[ -f "$UNIT_PATHS_PY" ]]; then
   bash "$UNIT_PATHS_PY" >/dev/null 2>&1 && pass "unit: test_solar_paths_py.sh" || fail "unit: test_solar_paths_py.sh"
 else
   skip "test_solar_paths_py.sh not found"
+fi
+if [[ -f "$UNIT_UPGRADE" ]]; then
+  bash "$UNIT_UPGRADE" >/dev/null 2>&1 && pass "unit: test_client_upgrade.sh" || fail "unit: test_client_upgrade.sh"
+else
+  fail "missing test_client_upgrade.sh"
 fi
 
 echo "=== Workspace conflict (exported vs cwd) ==="
@@ -192,6 +200,32 @@ else
   fail "doctor upgrade hint (got: $doc_out)"
 fi
 popd >/dev/null
+
+echo "=== upgrade prune install (temp) ==="
+PRUNE_INSTALL="$TMP/prune-install"
+PRUNE_WS="$TMP/prune-ws"
+mkdir -p "$PRUNE_INSTALL" "$PRUNE_WS/sun" "$PRUNE_WS/.solar"
+cp -R "$INSTALL_ROOT/core" "$PRUNE_INSTALL/core"
+echo '{"layout":"solar-client-v1.1","core_source":"global"}' > "$PRUNE_WS/.solar/manifest.json"
+mkdir -p "$PRUNE_INSTALL/.cursor/skills/smoke-dummy"
+PRUNE_SOLAR="$PRUNE_INSTALL/core/skills/solar-interface/scripts/solar"
+pushd "$PRUNE_WS" >/dev/null
+if bash "$PRUNE_SOLAR" client upgrade >/dev/null 2>&1; then
+  if [[ ! -d "$PRUNE_INSTALL/.cursor" ]]; then
+    pass "upgrade: pruned .cursor from isolated install"
+  else
+    fail "upgrade: .cursor still on install mimic"
+  fi
+else
+  fail "solar client upgrade on prune fixture"
+fi
+popd >/dev/null
+
+if [[ -d "$INSTALL_ROOT/.cursor/skills" ]]; then
+  skip "INSTALL_ROOT still has .cursor/ (run: solar client upgrade from ~/Solar)"
+else
+  pass "INSTALL_ROOT has no .cursor/skills"
+fi
 
 echo ""
 echo "=== Go / No-Go ==="

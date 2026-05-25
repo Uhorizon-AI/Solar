@@ -72,12 +72,16 @@ Resolve paths before any command (`resolve_solar_paths.sh` exports `SOLAR_WORKSP
 
 ```bash
 solar client init                 # new workspace (manifest + sun; no .solar/core/)
-solar client upgrade              # migrate v0.9.0 workspaces (removes .solar/core/)
+solar client upgrade              # solar-client-v1.1 manifest; prune SOLAR_ROOT IDE artifacts (Fase 1.2)
+solar client upgrade --check      # dry-run: report paths + planned actions
+solar client upgrade --restructure   # legacy monorepo: move core/ under solar/ (v0.8.1-style tree)
 solar client sync
 solar client doctor
 solar status                      # 5 blocks: interface, sun, system, router, browser
 solar paths                       # @path hints for IDE
 ```
+
+Repo tag (`v0.8.1` → `v0.10.x`) is separate from layout: `cd <SOLAR_ROOT> && git fetch && git checkout v0.10.0`, then `solar client upgrade` from `SOLAR_WORKSPACE`.
 
 Solar Client go/no-go smoke (v1.1 layout):
 

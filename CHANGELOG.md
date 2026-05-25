@@ -6,6 +6,20 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-25
+
+### Added
+- feat(solar-client): extend `solar client upgrade` with install-root report, prune of IDE/agent artifacts under `SOLAR_ROOT`, and optional `--restructure` for legacy monorepo layouts.
+- feat(solar-client): `test_client_upgrade.sh` unit tests for install prune helpers.
+
+### Changed
+- change(solar-client): `client_doctor` warns when pruneable artifacts exist under `SOLAR_ROOT` (hint: `solar client upgrade`).
+- change(solar-interface): bump CLI `SOLAR_VERSION` to `0.10.1`.
+- change(solar-client): `smoke-solar-client.sh` runs upgrade unit test and isolated install prune check.
+
+### Fixed
+- fix(solar-client): `smoke-solar-client.sh` canonicalizes `INSTALL_ROOT` before `SOLAR`, `RESOLVE`, and unit-test paths (relative arg e.g. `solar` works).
+
 ## [0.10.0] - 2026-05-25
 
 ### Added

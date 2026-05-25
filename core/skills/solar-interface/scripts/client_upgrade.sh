@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# client_upgrade.sh — upgrade workspace to solar-client-v1.1 (idempotent).
+# client_upgrade.sh — upgrade workspace to solar-client-v1.1 + install hygiene (Fase 1.2).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,20 +9,27 @@ source "$SCRIPT_DIR/client_lib.sh"
 CHECK_ONLY=false
 REPAIR_GOVERNANCE=false
 FORCE_WORKSPACE=""
+RESTRUCTURE=false
+SKIP_PRUNE_INSTALL=false
 
 usage() {
   cat <<'EOF'
 Usage:
   solar client upgrade [--check] [--repair-governance] [--workspace <path>]
+                     [--restructure] [--skip-prune-install]
 
-Upgrades the workspace layout:
-  - Removes obsolete .solar/core/ and orphan .solar/.env
-  - Writes/updates .solar/manifest.json (solar-client-v1.1, core_source: global)
+Upgrades to the Solar Client model (solar-client-v1.1):
+  - Reports SOLAR_WORKSPACE, SOLAR_ROOT, layout, install git tag
+  - Workspace: removes obsolete .solar/core/ and orphan .solar/.env; writes manifest
+  - Install hygiene: removes IDE/agent artifacts under SOLAR_ROOT when distinct from workspace
+  - Optional --restructure: legacy monorepo (core/ at workspace root) -> solar/ subdirectory
 
 Options:
   --check               Dry-run: print planned actions only
   --repair-governance   Replace AGENTS.md and IDE symlinks from template (backs up first)
   --workspace <path>    Target workspace (default: discover from cwd)
+  --restructure         Move core/ (+ .git) under solar/ for legacy_root layout only
+  --skip-prune-install  Skip removing IDE dirs under SOLAR_ROOT
 EOF
 }
 
@@ -30,6 +37,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) CHECK_ONLY=true; shift ;;
     --repair-governance) REPAIR_GOVERNANCE=true; shift ;;
+    --restructure) RESTRUCTURE=true; shift ;;
+    --skip-prune-install) SKIP_PRUNE_INSTALL=true; shift ;;
     --workspace|--home)
       shift
       [[ $# -gt 0 ]] || { echo "ERROR: --workspace requires a path" >&2; exit 2; }
@@ -47,17 +56,50 @@ _resolve_args+=(--relaxed --quiet)
 solar_resolve_paths "${_resolve_args[@]}"
 
 INSTALL_ROOT="$SOLAR_ROOT"
+DRY_RUN=false
+[[ "$CHECK_ONLY" == true ]] && DRY_RUN=true
 
 actions=()
+
+solar_client_print_upgrade_report "$SOLAR_WORKSPACE" "$SOLAR_ROOT"
+echo ""
+
+if [[ "$RESTRUCTURE" == true ]]; then
+  if [[ "$DRY_RUN" == true ]]; then
+    if solar_client_restructure_needed "$SOLAR_WORKSPACE"; then
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && actions+=("restructure: $line")
+      done < <(solar_client_restructure_plan "$SOLAR_WORKSPACE")
+    else
+      actions+=("restructure: skip (not legacy_root or solar/core/ exists)")
+    fi
+  else
+    solar_client_restructure_apply "$SOLAR_WORKSPACE" false
+    _resolve_args=()
+    [[ -n "$FORCE_WORKSPACE" ]] && _resolve_args+=(--workspace "$FORCE_WORKSPACE")
+    _resolve_args+=(--relaxed --quiet)
+    solar_resolve_paths "${_resolve_args[@]}"
+    INSTALL_ROOT="$SOLAR_ROOT"
+    solar_client_print_upgrade_report "$SOLAR_WORKSPACE" "$SOLAR_ROOT"
+    echo ""
+  fi
+fi
+
 [[ -d "$SOLAR_WORKSPACE/.solar/core" ]] && actions+=("remove .solar/core/")
 [[ -f "$SOLAR_WORKSPACE/.solar/.env" ]] && actions+=("remove orphan .solar/.env")
 actions+=("write .solar/manifest.json (solar-client-v1.1)")
 [[ "$REPAIR_GOVERNANCE" == true ]] && actions+=("repair governance (AGENTS.md + IDE symlinks)")
 
+if [[ "$SKIP_PRUNE_INSTALL" != true ]] && ! solar_client_paths_equal "$SOLAR_ROOT" "$SOLAR_WORKSPACE"; then
+  while IFS= read -r path; do
+    [[ -n "$path" ]] && actions+=("prune install: $path")
+  done < <(solar_client_list_install_artifacts "$SOLAR_ROOT")
+elif [[ "$SKIP_PRUNE_INSTALL" == true ]]; then
+  actions+=("prune install: skipped (--skip-prune-install)")
+fi
+
 if [[ "$CHECK_ONLY" == true ]]; then
   echo "solar client upgrade --check"
-  echo "  SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
-  echo "  SOLAR_ROOT=$SOLAR_ROOT"
   for a in "${actions[@]}"; do
     echo "  would: $a"
   done
@@ -92,10 +134,15 @@ if [[ "$REPAIR_GOVERNANCE" == true ]]; then
   echo "OK: refreshed IDE governance symlinks"
 fi
 
+if [[ "$SKIP_PRUNE_INSTALL" != true ]] && ! solar_client_paths_equal "$SOLAR_ROOT" "$SOLAR_WORKSPACE"; then
+  solar_client_prune_install_root "$SOLAR_ROOT" false
+fi
+
 echo ""
 echo "Next steps:"
 echo "  solar client sync"
-echo "  solar status"
+echo "  solar client doctor"
+echo "  bash \"$(solar_core_dir)/scripts/smoke-solar-client.sh\" \"$SOLAR_ROOT\""
 if [[ "$(uname -s)" == "Darwin" ]]; then
   echo "  bash \"$(solar_core_dir)/skills/solar-system/scripts/install_launchagent_macos.sh\""
 fi
