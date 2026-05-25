@@ -6,6 +6,29 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-25
+### Added
+- feat(solar-client): Fase 2 — global update, manifest repair, router audit fix
+
+
+## [0.11.0] - 2026-05-25
+
+### Added
+- feat(solar-client): `solar client update` — global install update via git (full `SOLAR_ROOT` repo) or `--bundle` (core/ only).
+- feat(solar-client): `client_update.sh` with backup under `$SOLAR_ROOT/backups/`, `--tag`, `--repair` (OneDrive manifest), `--check` report.
+- feat(solar-client): `test_client_update.sh` unit tests for update helpers.
+- feat(solar-router): audit `end` event on failed routes after early-exit (fixes stale in-flight).
+- feat(solar-router): `status_router.sh --stale-count` for compact status.
+
+### Changed
+- change(solar-client): `client_doctor --strict` fails on manifest drift after global update.
+- change(solar-interface): `solar status` shows router stale in-flight count; `--verbose` adds MCP path hint.
+- change(solar-interface): bump CLI `SOLAR_VERSION` to `0.11.0`.
+- change(solar-client): `smoke-solar-client.sh` runs `update --check`, update unit test, and `--bundle` fixture.
+
+### Fixed
+- fix(solar-router): `route()` writes audit `end` on `async_only` disabled and provider failures (Test 14).
+
 ## [0.10.1] - 2026-05-25
 ### Added
 - feat(solar-client): release v0.10.1 with upgrade enhancements and install hygiene
