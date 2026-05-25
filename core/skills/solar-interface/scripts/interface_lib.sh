@@ -2,11 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=resolve_solar_home.sh
-source "$SCRIPT_DIR/resolve_solar_home.sh"
-solar_resolve_home --quiet
-REPO_ROOT="$SOLAR_HOME"
-cd "$REPO_ROOT"
+# shellcheck source=resolve_solar_paths.sh
+source "$SCRIPT_DIR/resolve_solar_paths.sh"
+solar_resolve_paths --quiet
+SOLAR_WORKSPACE="$SOLAR_WORKSPACE"
+cd "$SOLAR_WORKSPACE"
 
 if [[ -f ".env" ]]; then
   set -a
@@ -18,7 +18,7 @@ fi
 SOLAR_INTERFACE_HOST="${SOLAR_INTERFACE_HOST:-127.0.0.1}"
 SOLAR_INTERFACE_PORT="${SOLAR_INTERFACE_PORT:-7741}"
 SOLAR_INTERFACE_RUNTIME_DIR="${SOLAR_INTERFACE_RUNTIME_DIR:-sun/runtime/interface}"
-SOLAR_INTERFACE_RUNTIME_DIR_ABS="$REPO_ROOT/${SOLAR_INTERFACE_RUNTIME_DIR#./}"
+SOLAR_INTERFACE_RUNTIME_DIR_ABS="$SOLAR_WORKSPACE/${SOLAR_INTERFACE_RUNTIME_DIR#./}"
 SOLAR_INTERFACE_DB_DIR="$SOLAR_INTERFACE_RUNTIME_DIR_ABS/db"
 SOLAR_INTERFACE_MIGRATIONS_DIR="$SOLAR_INTERFACE_DB_DIR/migrations"
 SOLAR_INTERFACE_STATE_DIR="$SOLAR_INTERFACE_RUNTIME_DIR_ABS/state"

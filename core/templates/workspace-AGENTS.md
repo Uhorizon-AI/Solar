@@ -2,7 +2,7 @@
 
 ## Scope (required)
 
-This file governs the **workspace** opened as `SOLAR_HOME`. Operational rules for the embedded framework live under `.solar/core/` (read-only for agents and IDEs).
+This file governs the **workspace** opened as `SOLAR_WORKSPACE`. Framework code lives in the Solar install (`SOLAR_ROOT/core/`); only `.solar/manifest.json` is maintained by Solar Client in this tree.
 
 ## `.solar/` is read-only (required)
 

@@ -4,7 +4,7 @@ description: >
   Shared router that runs AI providers (Codex, Claude, Gemini, Agent, Ollama) with Solar repo context.
   Single source of truth for provider selection, fallback, and async routing policy.
   Use when transport-gateway, async-tasks, or other runtimes need to invoke an AI with
-  cwd = repo root and paths resolved against REPO_ROOT.
+  cwd = SOLAR_WORKSPACE and paths resolved against the active workspace.
 ---
 
 # Solar Router
@@ -25,8 +25,8 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 ## Scope
 
 - Accept JSON payload (router contract v3) on stdin; output structured JSON on stdout.
-- Run the selected provider with `cwd=REPO_ROOT` so all providers see `sun/`, `planets/`, `core/`, `AGENTS.md`.
-- Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `REPO_ROOT` when relative.
+- Run the selected provider with `cwd=SOLAR_WORKSPACE` so all providers see `sun/`, `planets/`, and workspace `AGENTS.md`.
+- Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `SOLAR_WORKSPACE` when relative.
 - Codex default command includes `-C <repo-root>` and `--add-dir ~/.codex`.
 - Persist conversation turns in runtime dir (JSONL) for continuity.
 - Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output.
@@ -43,9 +43,9 @@ scripts/
     __init__.py        — PROVIDERS dict, exports all adapters
     base.py            — BaseProvider: resolve_binary, get_cmd, prepare_env, clean_output, run
     claude.py          — static default_cmd
-    codex.py           — build_default_cmd() with REPO_ROOT + CODEX_STATE_DIR
+    codex.py           — build_default_cmd() with SOLAR_WORKSPACE + CODEX_STATE_DIR
     gemini.py          — prepare_env (GEMINI_* vars) + clean_output (ANSI strip, OAuth guard)
-    agent.py           — build_default_cmd() with REPO_ROOT
+    agent.py           — build_default_cmd() with SOLAR_WORKSPACE
 
 Automated tests live under `core/tests/skills/solar-router/` (framework-wide layout; see `core/AGENTS.md`).
 ```

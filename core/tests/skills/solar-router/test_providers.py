@@ -6,7 +6,7 @@ import io
 import unittest
 from unittest.mock import MagicMock, patch
 
-from providers.base import BaseProvider, REPO_ROOT, FALLBACK_PATHS
+from providers.base import BaseProvider, SOLAR_WORKSPACE, FALLBACK_PATHS
 from providers.claude import ClaudeProvider
 from providers.codex import CodexProvider
 from providers.gemini import GeminiProvider
@@ -100,7 +100,7 @@ class TestBaseProviderRun(unittest.TestCase):
         mock_run.return_value = _mock_proc()
         self.provider.run("prompt")
         _, kwargs = mock_run.call_args
-        self.assertEqual(kwargs["cwd"], REPO_ROOT)
+        self.assertEqual(kwargs["cwd"], SOLAR_WORKSPACE)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ class TestOllamaProvider(unittest.TestCase):
 class TestCodexProvider(unittest.TestCase):
     def test_default_cmd_contains_repo_root(self):
         p = CodexProvider()
-        self.assertIn(str(REPO_ROOT), p.build_default_cmd())
+        self.assertIn(str(SOLAR_WORKSPACE), p.build_default_cmd())
 
     def test_default_cmd_contains_skip_git(self):
         p = CodexProvider()
@@ -325,7 +325,7 @@ class TestCodexProvider(unittest.TestCase):
 class TestAgentProvider(unittest.TestCase):
     def test_default_cmd_contains_repo_root(self):
         p = AgentProvider()
-        self.assertIn(str(REPO_ROOT), p.build_default_cmd())
+        self.assertIn(str(SOLAR_WORKSPACE), p.build_default_cmd())
 
     def test_default_cmd_contains_approve_mcps(self):
         p = AgentProvider()

@@ -17,9 +17,9 @@ _INTERFACE_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-interface" / "scripts"
 if str(_INTERFACE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_INTERFACE_SCRIPTS))
 
-from solar_paths import resolve_solar_home  # noqa: E402
+from solar_paths import resolve_solar_paths  # noqa: E402
 
-REPO_ROOT, _SOLAR_CORE_ROOT = resolve_solar_home()
+SOLAR_WORKSPACE, _SOLAR_ROOT = resolve_solar_paths()
 FALLBACK_PATHS = [
     "/opt/homebrew/bin",
     "/usr/local/bin",
@@ -67,8 +67,8 @@ class BaseProvider(ABC):
         return output
 
     def get_cwd(self) -> pathlib.Path:
-        """Run from REPO_ROOT so CLIs auto-discover CLAUDE.md, GEMINI.md, profile.md, MEMORY.md."""
-        return REPO_ROOT
+        """Run from SOLAR_WORKSPACE so CLIs auto-discover CLAUDE.md, GEMINI.md, profile.md, MEMORY.md."""
+        return SOLAR_WORKSPACE
 
     def log_prompt(self, prompt: str, extra_flags: str = "") -> None:
         """Write prompt to sun/runtime/router/prompts.log when SOLAR_ROUTER_LOG_PROMPTS=true."""
@@ -79,7 +79,7 @@ class BaseProvider(ABC):
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
         entry = f"\n[solar-router][{self.name}] CMD: {raw}{extra_flags} <prompt>\n[PROMPT]\n{prompt}\n[/PROMPT]\n"
         print(entry, file=sys.stderr, flush=True)
-        log_path = REPO_ROOT / "sun/runtime/router/prompts.log"
+        log_path = SOLAR_WORKSPACE / "sun/runtime/router/prompts.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(entry)

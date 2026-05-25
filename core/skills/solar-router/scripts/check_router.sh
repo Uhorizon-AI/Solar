@@ -6,7 +6,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+# shellcheck source=../../solar-interface/scripts/resolve_solar_paths.sh
+source "$SCRIPT_DIR/../../solar-interface/scripts/resolve_solar_paths.sh"
+solar_resolve_paths --quiet
 ROUTER_SCRIPT="$SCRIPT_DIR/run_router.py"
 PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 
@@ -130,7 +132,7 @@ assert_json_field "status=failed when async-tasks not enabled" "$out" "['status'
 # ---------------------------------------------------------------------------
 echo ""
 echo "── Test 8: execute_active.py parses router v3 JSON correctly"
-EXECUTE_PY="$REPO_ROOT/core/skills/solar-async-tasks/scripts/execute_active.py"
+EXECUTE_PY="$(solar_core_dir)/skills/solar-async-tasks/scripts/execute_active.py"
 if [[ ! -f "$EXECUTE_PY" ]]; then
     skip "execute_active.py parse test" "script not found: $EXECUTE_PY"
 else
@@ -243,7 +245,7 @@ assert_json_field "error_code=all_providers_failed" "$out" "['error_code']" "all
 # ---------------------------------------------------------------------------
 echo ""
 echo "── Test 13: mode=async_only + async-tasks enabled → async_draft_created"
-CREATE_SH="$REPO_ROOT/core/skills/solar-async-tasks/scripts/create.sh"
+CREATE_SH="$(solar_core_dir)/skills/solar-async-tasks/scripts/create.sh"
 if [[ ! -f "$CREATE_SH" ]]; then
     skip "async_only success path" "create.sh not found: $CREATE_SH"
 else

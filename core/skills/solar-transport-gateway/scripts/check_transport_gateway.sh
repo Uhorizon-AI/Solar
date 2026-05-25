@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_ENV_FILE=".env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=transport_gateway_lib.sh
+source "$SCRIPT_DIR/transport_gateway_lib.sh"
+transport_gateway_bind_workspace
+
 RUN_DIR="${SOLAR_GATEWAY_RUN_DIR:-/tmp/solar-transport-gateway}"
 BRIDGE_NAME="solar-transport-gateway"
-
-if [[ -f "$ROOT_ENV_FILE" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$ROOT_ENV_FILE"
-  set +a
-fi
 
 http_host="${SOLAR_HTTP_HOST:-127.0.0.1}"
 http_port="${SOLAR_HTTP_PORT:-8787}"
@@ -102,14 +99,14 @@ fi
 if [[ "$ws_ok" != true || "$http_ok" != true || "$local_ok" != true ]]; then
   echo ""
   echo "DOWN: local transport is not healthy."
-  echo "Run: bash core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh"
+  echo "Run: bash $(transport_gateway_script setup_transport_gateway.sh)"
   exit 1
 fi
 
 if [[ -n "$public_health_url" && "$public_ok" != true ]]; then
   echo ""
   echo "PARTIAL: local transport is healthy but public tunnel/route is down."
-  echo "Run: bash core/skills/solar-transport-gateway/scripts/start_cloudflared_tunnel.sh"
+  echo "Run: bash $(transport_gateway_script start_cloudflared_tunnel.sh)"
   exit 2
 fi
 

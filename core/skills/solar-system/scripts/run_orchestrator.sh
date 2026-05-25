@@ -2,8 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-cd "$REPO_ROOT"
+# shellcheck source=system_lib.sh
+source "$SCRIPT_DIR/system_lib.sh"
+solar_system_bind_workspace
+SOLAR_WORKSPACE="$SOLAR_WORKSPACE"
+cd "$SOLAR_WORKSPACE"
 
 # LaunchAgent shells can have a minimal PATH (missing Homebrew paths).
 # Set a deterministic baseline so provider CLIs are discoverable.
@@ -25,12 +28,7 @@ if [[ "${1:-}" != "--once" ]]; then
   exit 1
 fi
 
-if [[ -f ".env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source ".env"
-  set +a
-fi
+solar_system_load_env
 
 normalize_csv() {
   local raw="$1"
@@ -104,7 +102,7 @@ failures=0
 
 if has_feature "async-tasks"; then
   echo "▶ Running feature: async-tasks"
-  if ! bash core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh; then
+  if ! bash "$(solar_system_skill_script solar-async-tasks ensure_async_tasks.sh)"; then
     echo "❌ async-tasks feature failed." >&2
     failures=$((failures + 1))
   fi
@@ -112,7 +110,7 @@ fi
 
 if has_feature "transport-gateway"; then
   echo "▶ Running feature: transport-gateway"
-  if ! bash core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh; then
+  if ! bash "$(solar_system_skill_script solar-transport-gateway ensure_transport_gateway.sh)"; then
     echo "❌ transport-gateway feature failed." >&2
     failures=$((failures + 1))
   fi
@@ -120,7 +118,7 @@ fi
 
 if has_feature "interface"; then
   echo "▶ Running feature: interface"
-  if ! bash core/skills/solar-interface/scripts/ensure_interface.sh; then
+  if ! bash "$(solar_system_skill_script solar-interface ensure_interface.sh)"; then
     echo "❌ interface feature failed." >&2
     failures=$((failures + 1))
   fi

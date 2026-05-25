@@ -1,35 +1,40 @@
 #!/usr/bin/env bash
-# client_init.sh — idempotent Solar Client workspace bootstrap.
+# client_init.sh — idempotent Solar Client workspace bootstrap (v1.1).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=resolve_solar_home.sh
-source "$SCRIPT_DIR/resolve_solar_home.sh"
+# shellcheck source=client_lib.sh
+source "$SCRIPT_DIR/client_lib.sh"
 
-FROM_DEV=false
 FORCE_LEGACY=false
 FORCE_GOVERNANCE=false
 WORKSPACE="$(pwd -P)"
-FRAMEWORK_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash client_init.sh [--from-dev] [--force]
+  solar client init [--force] [--force-governance]
 
-Creates in the current directory (SOLAR_HOME):
-  .solar/ + manifest, sun/, planets/, .env.example, AGENTS.md, IDE symlinks, .cursorignore
+Creates in the current directory (SOLAR_WORKSPACE):
+  .solar/manifest.json, sun/, planets/, .env.example, AGENTS.md, IDE symlinks, .cursorignore
+
+Framework skills/agents come from the global Solar Client install (solar client sync).
+Does NOT copy core/ into .solar/core/ (obsolete in v1.1).
 
 Options:
-  --from-dev            Package core/ from the development framework checkout
   --force               Allow init when legacy core/ already exists at workspace root
   --force-governance    Replace existing CLAUDE.md, GEMINI.md, .cursorrules (backs up first)
+
+For framework development, use a monorepo with core/ or solar/core/ at the repo root — not client init --from-dev.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --from-dev) FROM_DEV=true; shift ;;
+    --from-dev)
+      echo "ERROR: --from-dev is removed in v1.1 (no .solar/core/). Use a dev monorepo or solar client upgrade." >&2
+      exit 2
+      ;;
     --force) FORCE_LEGACY=true; shift ;;
     --force-governance) FORCE_GOVERNANCE=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -37,12 +42,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -d "$WORKSPACE/core" && -f "$WORKSPACE/core/AGENTS.md" && ! -d "$WORKSPACE/.solar" ]]; then
+if [[ -d "$WORKSPACE/.solar/core" ]]; then
+  echo "ERROR: obsolete .solar/core/ present. Run: solar client upgrade" >&2
+  exit 1
+fi
+
+if [[ -d "$WORKSPACE/core" && -f "$WORKSPACE/core/AGENTS.md" && ! -f "$WORKSPACE/.solar/manifest.json" ]]; then
   if [[ "$FORCE_LEGACY" != true ]]; then
     echo "ERROR: legacy layout (core/ at root). Use a new directory or --force (not recommended on dev monorepo)." >&2
     exit 1
   fi
 fi
+
+INSTALL_ROOT="$(solar_client_install_root)"
+CORE_DIR="$INSTALL_ROOT/core"
 
 stable_hash() {
   printf '%s' "$1" | cksum | awk '{print $1}'
@@ -58,35 +71,10 @@ read -r IFACE_PORT HTTP_PORT < <(port_offsets)
 
 mkdir -p "$WORKSPACE/sun/preferences" "$WORKSPACE/sun/daily-log" "$WORKSPACE/planets" "$WORKSPACE/.solar"
 
-# Bundle core into .solar/core
-if [[ "$FROM_DEV" == true ]]; then
-  STAGING="$(mktemp -d)"
-  trap 'rm -rf "$STAGING"' EXIT
-  bash "$FRAMEWORK_ROOT/core/scripts/package_solar_bundle.sh" --output "$STAGING" --from-dev --force
-  rsync -a "$STAGING/core/" "$WORKSPACE/.solar/core/"
-  if [[ -f "$STAGING/manifest.json" ]]; then
-    cp "$STAGING/manifest.json" "$WORKSPACE/.solar/manifest.json"
-  fi
-elif [[ ! -d "$WORKSPACE/.solar/core/skills" ]]; then
-  echo "ERROR: .solar/core missing. Run with --from-dev from a framework checkout." >&2
-  exit 1
-fi
-
 if [[ ! -f "$WORKSPACE/.solar/manifest.json" ]]; then
-  VERSION="$(git -C "$FRAMEWORK_ROOT" describe --tags --always 2>/dev/null || echo "dev")"
-  COMMIT="$(git -C "$FRAMEWORK_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
-  cat > "$WORKSPACE/.solar/manifest.json" <<EOF
-{
-  "version": "$VERSION",
-  "commit": "$COMMIT",
-  "channel": "stable",
-  "packaged_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "layout": "solar-client-v1"
-}
-EOF
+  solar_client_write_manifest_v11 "$WORKSPACE" "$INSTALL_ROOT"
 fi
 
-# sun bootstrap (minimal)
 if [[ ! -f "$WORKSPACE/sun/preferences/profile.md" ]]; then
   cat > "$WORKSPACE/sun/preferences/profile.md" <<'EOF'
 # User Profile
@@ -113,16 +101,14 @@ Operational learnings only (max 200 lines).
 EOF
 fi
 
-# AGENTS.md workspace
 if [[ ! -f "$WORKSPACE/AGENTS.md" ]]; then
-  if [[ -f "$FRAMEWORK_ROOT/core/templates/workspace-AGENTS.md" ]]; then
-    cp "$FRAMEWORK_ROOT/core/templates/workspace-AGENTS.md" "$WORKSPACE/AGENTS.md"
+  if [[ -f "$CORE_DIR/templates/workspace-AGENTS.md" ]]; then
+    cp "$CORE_DIR/templates/workspace-AGENTS.md" "$WORKSPACE/AGENTS.md"
   else
     echo "# Solar Workspace" > "$WORKSPACE/AGENTS.md"
   fi
 fi
 
-# Symlinks with fallback stubs (never overwrite regular files without --force-governance)
 SYMLINK_WARN=false
 GOVERNANCE_SKIPPED=false
 link_governance() {
@@ -175,8 +161,8 @@ EOF
 fi
 
 if [[ ! -f "$WORKSPACE/.env.example" ]]; then
-  if [[ -f "$FRAMEWORK_ROOT/core/templates/workspace.env.example" ]]; then
-    cp "$FRAMEWORK_ROOT/core/templates/workspace.env.example" "$WORKSPACE/.env.example"
+  if [[ -f "$CORE_DIR/templates/workspace.env.example" ]]; then
+    cp "$CORE_DIR/templates/workspace.env.example" "$WORKSPACE/.env.example"
   fi
   {
     echo ""
@@ -190,14 +176,11 @@ if [[ ! -f "$WORKSPACE/.env" ]]; then
   cp "$WORKSPACE/.env.example" "$WORKSPACE/.env"
 fi
 
-export SOLAR_HOME="$WORKSPACE"
-export SOLAR_CORE_ROOT="$WORKSPACE/.solar/core"
-export REPO_ROOT="$WORKSPACE"
-
 echo "OK: Solar Client init at $WORKSPACE"
-echo "  .solar/core  framework bundle"
+echo "  .solar/      manifest only (framework via global client)"
 echo "  sun/         personal context"
 echo "  planets/     domain workspaces"
+echo "  Next: solar client sync"
 if [[ "$SYMLINK_WARN" == true ]]; then
   echo "WARN: IDE symlinks unavailable; stub files created (see solar client doctor)"
 fi

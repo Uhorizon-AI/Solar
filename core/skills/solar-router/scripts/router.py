@@ -5,7 +5,7 @@ Exposes route(raw: str) -> dict and route_stream(raw: str) -> generator.
 The thin run_router.py entrypoint handles stdin/stdout/exit.
 
 Architecture: thin dispatcher + decision extraction.
-- Each CLI loads repo context from cwd=REPO_ROOT (CLAUDE.md, profile.md, MEMORY.md).
+- Each CLI loads repo context from cwd=SOLAR_WORKSPACE (CLAUDE.md, profile.md, MEMORY.md).
 - The router passes the user message + optional history pointer + routing hints.
 - For mode=auto and channels telegram/n8n, the model emits <solar_decision> tags;
   the router parses them into decision.kind for transport consumers.
@@ -29,7 +29,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from providers import PROVIDERS  # noqa: E402
-from solar_paths import resolve_solar_home, resolve_under_home as _resolve_under_home  # noqa: E402
+from solar_paths import resolve_solar_paths, resolve_under_home as _resolve_under_home  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -39,7 +39,7 @@ SUPPORTED_PROVIDERS = set(PROVIDERS.keys())
 VALID_MODES = {"auto", "direct_only", "async_only"}
 VALID_CHANNELS = {"telegram", "n8n", "async-task", "other"}
 
-REPO_ROOT, SOLAR_CORE_ROOT = resolve_solar_home()
+SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
 
 
 _raw_runtime_dir = (
@@ -48,7 +48,7 @@ _raw_runtime_dir = (
     or "sun/runtime/router"
 )
 _runtime_path = pathlib.Path(_raw_runtime_dir)
-RUNTIME_ROOT = _runtime_path if _runtime_path.is_absolute() else REPO_ROOT / _runtime_path
+RUNTIME_ROOT = _runtime_path if _runtime_path.is_absolute() else SOLAR_WORKSPACE / _runtime_path
 
 _raw_system_prompt_file = (
     os.getenv("SOLAR_ROUTER_SYSTEM_PROMPT_FILE")
@@ -151,7 +151,7 @@ def create_async_draft(user_text: str, ai_output: str, request_id: str) -> Optio
             ["bash", str(script), title, desc],
             capture_output=True,
             text=True,
-            cwd=str(REPO_ROOT),
+            cwd=str(SOLAR_WORKSPACE),
             timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -173,9 +173,9 @@ def create_async_draft(user_text: str, ai_output: str, request_id: str) -> Optio
 def resolve_jit_context(metadata: Dict[str, Any]) -> Dict[str, Any]:
     """Resolve agent context for this call.
 
-    - Agent file found  → return its repo-relative path; CLI reads it from REPO_ROOT.
+    - Agent file found  → return its repo-relative path; CLI reads it from SOLAR_WORKSPACE.
     - Agent not found   → generate role inline (JIT, ephemeral — no file written).
-    Skills/commands are discovered naturally by the CLI from REPO_ROOT.
+    Skills/commands are discovered naturally by the CLI from SOLAR_WORKSPACE.
     """
     agent_name = metadata.get("agent")
     planet = metadata.get("planet")
@@ -185,7 +185,7 @@ def resolve_jit_context(metadata: Dict[str, Any]) -> Dict[str, Any]:
 
     candidates: List[pathlib.Path] = []
     if planet:
-        candidates.append(REPO_ROOT / f"planets/{planet}/agents/{agent_name}.md")
+        candidates.append(SOLAR_WORKSPACE / f"planets/{planet}/agents/{agent_name}.md")
     candidates.append(_resolve_under_home(f"core/agents/{agent_name}.md"))
 
     for path in candidates:
@@ -194,7 +194,7 @@ def resolve_jit_context(metadata: Dict[str, Any]) -> Dict[str, Any]:
                 "agent_name": agent_name,
                 "planet": planet,
                 "jit_generated": False,
-                "agent_path": str(path.relative_to(REPO_ROOT)),
+                "agent_path": str(path.relative_to(SOLAR_WORKSPACE)),
                 "agent_content": None,
             }
 
@@ -335,7 +335,7 @@ def build_prompt(
             lines.append("## Agent Role (JIT)")
             lines.append(jit_context["agent_content"])
         elif jit_context.get("agent_path"):
-            # Agent file exists: reference it — CLI reads from REPO_ROOT
+            # Agent file exists: reference it — CLI reads from SOLAR_WORKSPACE
             lines.append("")
             lines.append(f"## Agent Role")
             lines.append(f"Read {jit_context['agent_path']} for your role definition before responding.")

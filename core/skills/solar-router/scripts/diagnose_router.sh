@@ -2,10 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# From core/skills/solar-router/scripts/ -> 4 levels up to repo root
-REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
-ROOT_ENV_FILE="$REPO_ROOT/.env"
-ROUTER_SCRIPT="$REPO_ROOT/core/skills/solar-router/scripts/run_router.py"
+# shellcheck source=../../solar-interface/scripts/resolve_solar_paths.sh
+source "$SCRIPT_DIR/../../solar-interface/scripts/resolve_solar_paths.sh"
+solar_resolve_paths --quiet
+ROOT_ENV_FILE="$SOLAR_WORKSPACE/.env"
+ROUTER_SCRIPT="$(solar_core_dir)/skills/solar-router/scripts/run_router.py"
 PROMPT_DEFAULT="Respond with OK"
 
 dry_run="false"
@@ -55,8 +56,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ! -f "$REPO_ROOT/AGENTS.md" ]]; then
-  echo "ERROR: Repo root not found (missing $REPO_ROOT/AGENTS.md). Run this script from the Solar repo root or set REPO_ROOT." >&2
+if [[ ! -f "$SOLAR_WORKSPACE/AGENTS.md" ]]; then
+  echo "ERROR: Repo root not found (missing $SOLAR_WORKSPACE/AGENTS.md). Run this script from the Solar repo root or set SOLAR_WORKSPACE." >&2
   exit 1
 fi
 
@@ -109,7 +110,7 @@ for provider in "${providers[@]}"; do
   [[ -z "$provider" ]] && continue
 
   if [[ "$dry_run" == "true" ]]; then
-    if python3 - <<PY "$provider" "$REPO_ROOT"
+    if python3 - <<PY "$provider" "$SOLAR_WORKSPACE"
 import os
 import shlex
 import shutil

@@ -10,11 +10,14 @@ Interactive command to create framework releases with automatic version calculat
 ## Usage
 
 ```bash
-bash core/scripts/create-release.sh [--push]
+# From framework repo (solar/) or Solar workspace (script resolves solar/.git):
+bash core/scripts/create-release.sh [--push] [--yes] [--version vX.Y.Z]
 ```
 
 **Options:**
 - `--push`: Automatically push tag and commit to remote after creation (optional)
+- `--yes`: Skip confirmation prompt (required in non-interactive shells)
+- `--version vX.Y.Z`: Force version (e.g. `v0.10.0`) instead of auto bump
 
 **When to use:**
 - After completing 2-3 significant framework features
@@ -138,14 +141,21 @@ Next steps:
 
 ## Common Issues and Fixes
 
+### Issue: "Not a git repository"
+- **Fix:** The framework git repo lives under `solar/`. Run:
+  `bash solar/core/scripts/create-release.sh` from `~/Solar`, or `cd ~/Solar/solar` first.
+
 ### Issue: "Working tree not clean"
 - **Fix:** Commit or stash uncommitted changes before releasing
 
 ### Issue: "Not on main branch"
 - **Fix:** `git checkout main` before running release
 
+### Issue: "No commits since last release"
+- **Fix:** Commit your changes first. If `HEAD` is still on the last tag but `[Unreleased]` is filled, the script now allows a curated-only release (maintain `feat:` lines under Added when you want a MINOR bump).
+
 ### Issue: Proposed version doesn't match expectations
-- **Fix:** Check commit messages use conventional commits format:
+- **Fix:** Use `--version v0.10.0`, or check commit messages use conventional commits format:
   - `feat:` for new features (MINOR)
   - `fix:` for bug fixes (PATCH)
   - `feat!:` or `BREAKING CHANGE:` for breaking changes (MAJOR)

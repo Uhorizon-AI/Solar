@@ -7,15 +7,12 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-cd "$REPO_ROOT"
-
-if [[ -f ".env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source ".env"
-  set +a
-fi
+# shellcheck source=system_lib.sh
+source "$SCRIPT_DIR/system_lib.sh"
+solar_system_bind_workspace
+SOLAR_WORKSPACE="$SOLAR_WORKSPACE"
+cd "$SOLAR_WORKSPACE"
+solar_system_load_env
 
 LABEL="${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}"
 DOMAIN="gui/${UID}"

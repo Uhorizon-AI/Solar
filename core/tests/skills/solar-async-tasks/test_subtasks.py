@@ -5,8 +5,8 @@ import subprocess
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-SCRIPTS_DIR = REPO_ROOT / "core" / "skills" / "solar-async-tasks" / "scripts"
+SOLAR_WORKSPACE = Path(__file__).resolve().parents[4]
+SCRIPTS_DIR = SOLAR_WORKSPACE / "core" / "skills" / "solar-async-tasks" / "scripts"
 
 
 def write_task(

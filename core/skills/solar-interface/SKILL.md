@@ -68,23 +68,22 @@ SOLAR_INTERFACE_RUNTIME_DIR=sun/runtime/interface
 
 ## Solar Client (workspace lifecycle)
 
-Resolve workspace root before any command (`resolve_solar_home.sh` exports `SOLAR_HOME`, `SOLAR_CORE_ROOT`, `REPO_ROOT`):
+Resolve paths before any command (`resolve_solar_paths.sh` exports `SOLAR_WORKSPACE`, `SOLAR_ROOT`; `solar_core_dir` → `$SOLAR_ROOT/core`):
 
 ```bash
-solar client init --from-dev    # new directory only (not legacy dev monorepo)
+solar client init                 # new workspace (manifest + sun; no .solar/core/)
+solar client upgrade              # migrate v0.9.0 workspaces (removes .solar/core/)
 solar client sync
 solar client doctor
 solar status                      # 5 blocks: interface, sun, system, router, browser
 solar paths                       # @path hints for IDE
 ```
 
-Bundling for init: `bash core/scripts/package_solar_bundle.sh --output /tmp/bundle --from-dev --force`
-
-Phase 1 go/no-go smoke (criteria #11–#17):
+Solar Client go/no-go smoke (v1.1 layout):
 
 ```bash
-bash core/scripts/smoke-solar-client-fase1.sh ~/Solar
-# Fast: --skip-slow  |  Only legacy: --legacy-only  |  Only new workspace: --new-only
+bash core/scripts/smoke-solar-client.sh ~/Solar/solar
+# Ends with GO or NO-GO. Fast iteration: --skip-slow (skip client sync)
 ```
 
 ## Workflow

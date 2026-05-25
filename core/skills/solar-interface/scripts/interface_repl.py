@@ -28,18 +28,19 @@ _SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from solar_paths import resolve_solar_home  # noqa: E402
+from solar_paths import resolve_solar_paths  # noqa: E402
 
-REPO_ROOT, _SOLAR_CORE_ROOT = resolve_solar_home()
+SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
+CORE_SKILLS_DIR = SOLAR_ROOT / "core" / "skills"
 SOLAR_DIR = pathlib.Path.home() / ".solar"
 HISTORY_FILE = SOLAR_DIR / "history"
-CURRENT_THREAD_FILE = REPO_ROOT / "sun" / "runtime" / "interface" / "state" / "current-thread.json"
+CURRENT_THREAD_FILE = SOLAR_WORKSPACE / "sun" / "runtime" / "interface" / "state" / "current-thread.json"
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def _load_providers() -> list[str]:
-    env_file = REPO_ROOT / ".env"
+    env_file = SOLAR_WORKSPACE / ".env"
     try:
         for line in env_file.read_text(encoding="utf-8").splitlines():
             if line.startswith("SOLAR_ROUTER_PROVIDER_PRIORITY="):
@@ -116,13 +117,13 @@ def _load_slash_items() -> list[dict]:
             seen.add(key)
             items.append({"name": name, "kind": kind, "source": source, "description": desc})
 
-    core_skills = REPO_ROOT / "core" / "skills"
+    core_skills = CORE_SKILLS_DIR
     if core_skills.exists():
         for d in sorted(core_skills.iterdir()):
             if d.is_dir() and not d.name.startswith("."):
                 add(d.name, "skill", "core", _first_line(d / "SKILL.md"))
 
-    planets = REPO_ROOT / "planets"
+    planets = SOLAR_WORKSPACE / "planets"
     if planets.exists():
         for planet in sorted(planets.iterdir()):
             if not planet.is_dir() or planet.name.startswith("."):
@@ -154,9 +155,9 @@ def _format_slash_list(items: list[dict]) -> str:
 
 def _load_file_items() -> list[tuple[str, bool, float]]:
     items: list[tuple[str, bool, float]] = []
-    for root, dirs, files in os.walk(REPO_ROOT):
+    for root, dirs, files in os.walk(SOLAR_WORKSPACE):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
-        rel_root = pathlib.Path(root).relative_to(REPO_ROOT)
+        rel_root = pathlib.Path(root).relative_to(SOLAR_WORKSPACE)
 
         for dirname in dirs:
             entry = pathlib.Path(root) / dirname
@@ -724,7 +725,7 @@ def print_thread_history(base_url: str, thread_id: str, title: str | None = None
     runs = runs_data.get("runs", [])
 
     for run in runs:
-        run_dir = REPO_ROOT / "sun" / "runtime" / "interface" / "runs" / run["run_id"]
+        run_dir = SOLAR_WORKSPACE / "sun" / "runtime" / "interface" / "runs" / run["run_id"]
         input_file = run_dir / "input.md"
         output_file = run_dir / "output.md"
 

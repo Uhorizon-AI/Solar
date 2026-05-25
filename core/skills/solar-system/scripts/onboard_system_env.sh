@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_ENV_FILE=".env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=system_lib.sh
+source "$SCRIPT_DIR/system_lib.sh"
+solar_system_resolve_workspace
+cd "$SOLAR_WORKSPACE"
+
+ROOT_ENV_FILE="$SOLAR_WORKSPACE/.env"
 BLOCK_HEADER="# [solar-system] required environment"
 
 if [[ ! -f "$ROOT_ENV_FILE" ]]; then

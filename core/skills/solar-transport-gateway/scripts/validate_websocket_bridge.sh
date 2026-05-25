@@ -2,7 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+# shellcheck source=transport_gateway_lib.sh
+source "$SCRIPT_DIR/transport_gateway_lib.sh"
+transport_gateway_bind_workspace
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "Missing dependency: uv"
@@ -28,13 +30,6 @@ PY
 
 if ! command -v cloudflared >/dev/null 2>&1; then
   echo "WARN: cloudflared not found (required for public Telegram webhook tunnel)."
-fi
-
-if [[ -f "${REPO_ROOT}/.env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "${REPO_ROOT}/.env"
-  set +a
 fi
 
 if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then

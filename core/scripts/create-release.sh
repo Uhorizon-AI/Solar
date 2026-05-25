@@ -3,78 +3,100 @@ set -euo pipefail
 
 # Solar Release Creation Script
 # Creates framework releases with semantic versioning and changelog generation
-# Usage: bash core/scripts/create-release.sh [--push]
+#
+# Usage (from framework repo or Solar workspace):
+#   bash core/scripts/create-release.sh [--push] [--yes] [--version vX.Y.Z]
+#
+# Git root is always resolved from this script's location (…/solar/), not from cwd.
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CHANGELOG_FILE="$ROOT_DIR/CHANGELOG.md"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GIT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+CHANGELOG_FILE="$GIT_ROOT/CHANGELOG.md"
+
 PUSH_AFTER_RELEASE=false
+AUTO_CONFIRM=false
+FORCE_VERSION=""
 
-# Parse arguments
 while [[ $# -gt 0 ]]; do
-  case $1 in
+  case "$1" in
     --push)
       PUSH_AFTER_RELEASE=true
       shift
       ;;
+    --yes|-y)
+      AUTO_CONFIRM=true
+      shift
+      ;;
+    --version)
+      shift
+      [[ $# -gt 0 ]] || { echo "ERROR: --version requires vX.Y.Z" >&2; exit 2; }
+      FORCE_VERSION="$1"
+      shift
+      ;;
+    -h|--help)
+      sed -n '1,12p' "$0"
+      echo ""
+      echo "Options:"
+      echo "  --push              Push main and tags after release"
+      echo "  --yes, -y           Skip confirmation prompt"
+      echo "  --version vX.Y.Z    Use this version (must match vMAJOR.MINOR.PATCH)"
+      exit 0
+      ;;
     *)
-      echo "Unknown option: $1"
-      echo "Usage: bash core/scripts/create-release.sh [--push]"
+      echo "Unknown option: $1" >&2
+      echo "Usage: bash core/scripts/create-release.sh [--push] [--yes] [--version vX.Y.Z]" >&2
       exit 2
       ;;
   esac
 done
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-function error() {
-  echo -e "${RED}✗ $1${NC}" >&2
-}
+error() { echo -e "${RED}✗ $1${NC}" >&2; }
+success() { echo -e "${GREEN}✓ $1${NC}"; }
+info() { echo -e "${BLUE}ℹ $1${NC}"; }
+warn() { echo -e "${YELLOW}⚠ $1${NC}"; }
 
-function success() {
-  echo -e "${GREEN}✓ $1${NC}"
-}
-
-function info() {
-  echo -e "${BLUE}ℹ $1${NC}"
-}
-
-function warn() {
-  echo -e "${YELLOW}⚠ $1${NC}"
-}
-
-# ============================================================================
-# Pre-flight Checks
-# ============================================================================
+FIRST_RELEASE=false
+LAST_TAG=""
+COMMITS=""
+BUMP_TYPE=""
+CHANGELOG_SOURCE="commits"
+CHANGELOG_ENTRY=""
+NEW_VERSION=""
+MAJOR=0
+MINOR=0
+PATCH=0
+FEAT_COUNT=0
+FIX_COUNT=0
+TOTAL_BREAKING=0
 
 function preflight_checks() {
+  info "Framework repo: $GIT_ROOT"
   info "Running pre-flight checks..."
 
-  # Check we're in git repo
-  if ! git rev-parse --git-dir > /dev/null 2>&1; then
-    error "Not a git repository"
+  if ! git -C "$GIT_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    error "Not a git repository: $GIT_ROOT"
+    error "Run from the Solar framework checkout (directory solar/ with .git)."
     exit 2
   fi
 
-  # Check working tree is clean
-  if [[ -n $(git status --porcelain) ]]; then
+  if [[ -n $(git -C "$GIT_ROOT" status --porcelain) ]]; then
     error "Working tree is not clean. Commit or stash changes first."
-    git status --short
+    git -C "$GIT_ROOT" status --short
     exit 2
   fi
 
-  # Check we're on main branch
-  CURRENT_BRANCH=$(git branch --show-current)
+  CURRENT_BRANCH=$(git -C "$GIT_ROOT" branch --show-current)
   if [[ "$CURRENT_BRANCH" != "main" ]]; then
     error "Not on main branch (current: $CURRENT_BRANCH)"
     exit 2
   fi
 
-  # Check CHANGELOG.md exists
   if [[ ! -f "$CHANGELOG_FILE" ]]; then
     error "CHANGELOG.md not found at $CHANGELOG_FILE"
     exit 2
@@ -83,13 +105,8 @@ function preflight_checks() {
   success "Pre-flight checks passed"
 }
 
-# ============================================================================
-# Get Last Release Tag
-# ============================================================================
-
 function get_last_tag() {
-  # Get last tag matching v*.*.* pattern
-  LAST_TAG=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n 1 || echo "")
+  LAST_TAG=$(git -C "$GIT_ROOT" tag --list 'v*.*.*' --sort=-v:refname | head -n 1 || echo "")
 
   if [[ -z "$LAST_TAG" ]]; then
     warn "No previous release tag found"
@@ -101,87 +118,6 @@ function get_last_tag() {
   fi
 }
 
-# ============================================================================
-# Analyze Commits (Conventional Commits)
-# ============================================================================
-
-function analyze_commits() {
-  info "Analyzing commits since $LAST_TAG..."
-
-  # Get commits since last tag
-  if [[ "$FIRST_RELEASE" == true ]]; then
-    COMMITS=$(git log --oneline --no-merges)
-  else
-    COMMITS=$(git log "${LAST_TAG}..HEAD" --oneline --no-merges)
-  fi
-
-  if [[ -z "$COMMITS" ]]; then
-    error "No commits since last release"
-    exit 2
-  fi
-
-  # Count commit types
-  BREAKING_COUNT=$(echo "$COMMITS" | grep -cE '^[a-f0-9]+ [a-z]+(\([^)]+\))?!:' || true)
-  FEAT_COUNT=$(echo "$COMMITS" | grep -cE '^[a-f0-9]+ feat(\([^)]+\))?:' || true)
-  FIX_COUNT=$(echo "$COMMITS" | grep -cE '^[a-f0-9]+ fix(\([^)]+\))?:' || true)
-
-  # Check for BREAKING CHANGE in commit bodies
-  if [[ "$FIRST_RELEASE" == true ]]; then
-    BREAKING_BODY_COUNT=$(git log --format=%B --no-merges | grep -c "^BREAKING CHANGE:" || true)
-  else
-    BREAKING_BODY_COUNT=$(git log "${LAST_TAG}..HEAD" --format=%B --no-merges | grep -c "^BREAKING CHANGE:" || true)
-  fi
-
-  TOTAL_BREAKING=$((BREAKING_COUNT + BREAKING_BODY_COUNT))
-
-  echo ""
-  echo "   - $TOTAL_BREAKING BREAKING changes  → MAJOR bump"
-  echo "   - $FEAT_COUNT feat commits     → MINOR bump"
-  echo "   - $FIX_COUNT fix commits      → PATCH bump"
-  echo ""
-}
-
-# ============================================================================
-# Calculate Version Bump
-# ============================================================================
-
-function calculate_version() {
-  # Parse current version (remove 'v' prefix)
-  if [[ "$LAST_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    MAJOR="${BASH_REMATCH[1]}"
-    MINOR="${BASH_REMATCH[2]}"
-    PATCH="${BASH_REMATCH[3]}"
-  else
-    # Default to 0.0.0 if no valid tag
-    MAJOR=0
-    MINOR=0
-    PATCH=0
-  fi
-
-  # Calculate bump based on precedence: MAJOR > MINOR > PATCH
-  if [[ $TOTAL_BREAKING -gt 0 ]]; then
-    MAJOR=$((MAJOR + 1))
-    MINOR=0
-    PATCH=0
-    BUMP_TYPE="MAJOR"
-  elif [[ $FEAT_COUNT -gt 0 ]]; then
-    MINOR=$((MINOR + 1))
-    PATCH=0
-    BUMP_TYPE="MINOR"
-  else
-    PATCH=$((PATCH + 1))
-    BUMP_TYPE="PATCH"
-  fi
-
-  NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
-  info "Proposed version: $NEW_VERSION ($BUMP_TYPE bump)"
-}
-
-# ============================================================================
-# CHANGELOG helpers ([Unreleased] vs commit subjects)
-# ============================================================================
-
-# Skip release/changelog housekeeping commits when auto-generating notes.
 function is_meta_changelog_commit() {
   local subject="$1"
   [[ "$subject" =~ ^chore\(release\): ]] && return 0
@@ -205,9 +141,104 @@ function unreleased_has_content() {
   [[ -n "${body//[[:space:]]/}" ]]
 }
 
-# ============================================================================
-# Generate CHANGELOG Entry
-# ============================================================================
+function unreleased_suggests_minor() {
+  local body
+  body="$(extract_unreleased_body)"
+  echo "$body" | grep -qE '^- feat(\(|:)|^[[:space:]]*- feat(\(|:)' || \
+    echo "$body" | grep -qE '^### Added'
+}
+
+function analyze_commits() {
+  info "Analyzing commits since $LAST_TAG..."
+
+  if [[ "$FIRST_RELEASE" == true ]]; then
+    COMMITS=$(git -C "$GIT_ROOT" log --oneline --no-merges)
+  else
+    COMMITS=$(git -C "$GIT_ROOT" log "${LAST_TAG}..HEAD" --oneline --no-merges 2>/dev/null || true)
+  fi
+
+  if [[ -z "$COMMITS" ]]; then
+    if unreleased_has_content; then
+      warn "No commits since $LAST_TAG — will release curated [Unreleased] only"
+      COMMITS=""
+    else
+      error "No commits since $LAST_TAG and [Unreleased] is empty"
+      exit 2
+    fi
+  fi
+
+  if [[ -n "$COMMITS" ]]; then
+    BREAKING_COUNT=$(echo "$COMMITS" | grep -cE '^[a-f0-9]+ [a-z]+(\([^)]+\))?!:' || true)
+    FEAT_COUNT=$(echo "$COMMITS" | grep -cE '^[a-f0-9]+ feat(\([^)]+\))?:' || true)
+    FIX_COUNT=$(echo "$COMMITS" | grep -cE '^[a-f0-9]+ fix(\([^)]+\))?:' || true)
+
+    if [[ "$FIRST_RELEASE" == true ]]; then
+      BREAKING_BODY_COUNT=$(git -C "$GIT_ROOT" log --format=%B --no-merges | grep -c "^BREAKING CHANGE:" || true)
+    else
+      BREAKING_BODY_COUNT=$(git -C "$GIT_ROOT" log "${LAST_TAG}..HEAD" --format=%B --no-merges | grep -c "^BREAKING CHANGE:" || true)
+    fi
+    TOTAL_BREAKING=$((BREAKING_COUNT + BREAKING_BODY_COUNT))
+  else
+    FEAT_COUNT=0
+    FIX_COUNT=0
+    TOTAL_BREAKING=0
+  fi
+
+  # Curated [Unreleased] with feat/Added lines → treat as MINOR when commits omit feat:
+  if [[ $FEAT_COUNT -eq 0 ]] && unreleased_has_content && unreleased_suggests_minor; then
+    FEAT_COUNT=1
+    info "Bumping MINOR from [Unreleased] Added/feat entries (commit subjects may use change/fix only)"
+  fi
+
+  echo ""
+  echo "   - $TOTAL_BREAKING BREAKING changes  → MAJOR bump"
+  echo "   - $FEAT_COUNT feat (or [Unreleased]) → MINOR bump"
+  echo "   - $FIX_COUNT fix commits             → PATCH bump"
+  echo ""
+}
+
+function calculate_version() {
+  if [[ -n "$FORCE_VERSION" ]]; then
+    if [[ ! "$FORCE_VERSION" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+      error "Invalid --version (expected vMAJOR.MINOR.PATCH): $FORCE_VERSION"
+      exit 2
+    fi
+    NEW_VERSION="$FORCE_VERSION"
+    MAJOR="${BASH_REMATCH[1]}"
+    MINOR="${BASH_REMATCH[2]}"
+    PATCH="${BASH_REMATCH[3]}"
+    BUMP_TYPE="manual"
+    info "Using forced version: $NEW_VERSION"
+    return 0
+  fi
+
+  if [[ "$LAST_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    MAJOR="${BASH_REMATCH[1]}"
+    MINOR="${BASH_REMATCH[2]}"
+    PATCH="${BASH_REMATCH[3]}"
+  else
+    MAJOR=0
+    MINOR=0
+    PATCH=0
+  fi
+
+  if [[ $TOTAL_BREAKING -gt 0 ]]; then
+    MAJOR=$((MAJOR + 1))
+    MINOR=0
+    PATCH=0
+    BUMP_TYPE="MAJOR"
+  elif [[ $FEAT_COUNT -gt 0 ]]; then
+    MINOR=$((MINOR + 1))
+    PATCH=0
+    BUMP_TYPE="MINOR"
+  else
+    PATCH=$((PATCH + 1))
+    BUMP_TYPE="PATCH"
+  fi
+
+  NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+  info "Proposed version: $NEW_VERSION ($BUMP_TYPE bump)"
+}
 
 function generate_changelog() {
   local today
@@ -225,28 +256,25 @@ function generate_changelog() {
   warn "No curated [Unreleased] content — generating release notes from conventional commits"
   warn "Tip: maintain [Unreleased] in CHANGELOG.md before running this script for richer notes."
 
-  # Get commits grouped by type
+  local FEAT_COMMITS FIX_COMMITS BREAKING_COMMITS
   if [[ "$FIRST_RELEASE" == true ]]; then
-    FEAT_COMMITS=$(git log --oneline --no-merges --grep="^feat" || true)
-    FIX_COMMITS=$(git log --oneline --no-merges --grep="^fix" || true)
-    BREAKING_COMMITS=$(git log --oneline --no-merges --grep="^[a-z]+(\([^)]+\))?!:" || true)
+    FEAT_COMMITS=$(git -C "$GIT_ROOT" log --oneline --no-merges --grep="^feat" || true)
+    FIX_COMMITS=$(git -C "$GIT_ROOT" log --oneline --no-merges --grep="^fix" || true)
+    BREAKING_COMMITS=$(git -C "$GIT_ROOT" log --oneline --no-merges --grep="^[a-z]+(\([^)]+\))?!:" || true)
   else
-    FEAT_COMMITS=$(git log "${LAST_TAG}..HEAD" --oneline --no-merges --grep="^feat" || true)
-    FIX_COMMITS=$(git log "${LAST_TAG}..HEAD" --oneline --no-merges --grep="^fix" || true)
-    BREAKING_COMMITS=$(git log "${LAST_TAG}..HEAD" --oneline --no-merges --grep="^[a-z]+(\([^)]+\))?!:" || true)
+    FEAT_COMMITS=$(git -C "$GIT_ROOT" log "${LAST_TAG}..HEAD" --oneline --no-merges --grep="^feat" || true)
+    FIX_COMMITS=$(git -C "$GIT_ROOT" log "${LAST_TAG}..HEAD" --oneline --no-merges --grep="^fix" || true)
+    BREAKING_COMMITS=$(git -C "$GIT_ROOT" log "${LAST_TAG}..HEAD" --oneline --no-merges --grep="^[a-z]+(\([^)]+\))?!:" || true)
   fi
 
-  # Build changelog sections
-  CHANGELOG_SECTIONS=""
+  local CHANGELOG_SECTIONS=""
+  local section_header commits line msg wrote_header
 
   append_filtered_commits() {
-    local section_header="$1"
-    local commits="$2"
-    local wrote_header=false
-    local line msg
-
+    section_header="$1"
+    commits="$2"
+    wrote_header=false
     [[ -z "$commits" ]] && return 0
-
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       msg=$(echo "$line" | sed -E 's/^[a-f0-9]+ //')
@@ -268,14 +296,10 @@ function generate_changelog() {
   CHANGELOG_ENTRY+="$CHANGELOG_SECTIONS"
 }
 
-# ============================================================================
-# Show Preview and Confirm
-# ============================================================================
-
 function show_preview_and_confirm() {
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo -e "${BLUE}📌 Proposed version: $NEW_VERSION${NC}"
+  echo -e "${BLUE}📌 Proposed version: $NEW_VERSION${NC} ($BUMP_TYPE)"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
   echo "CHANGELOG preview:"
@@ -284,19 +308,24 @@ function show_preview_and_confirm() {
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
 
-  # Ask for confirmation
-  read -p "Do you want to create this release? [y/N]: " -n 1 -r
+  if [[ "$AUTO_CONFIRM" == true ]]; then
+    info "Auto-confirmed (--yes)"
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    error "Non-interactive shell: use --yes to confirm release"
+    exit 2
+  fi
+
+  read -r -p "Do you want to create this release? [y/N]: " -n 1 REPLY
   echo ""
 
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+  if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
     warn "Release cancelled by user"
     exit 1
   fi
 }
-
-# ============================================================================
-# Update CHANGELOG.md
-# ============================================================================
 
 function update_changelog() {
   info "Updating CHANGELOG.md..."
@@ -307,7 +336,6 @@ function update_changelog() {
 
   printf '%s\n' "$CHANGELOG_ENTRY" > "$entry_file"
 
-  # Insert the new version after [Unreleased] and drop prior [Unreleased] body.
   awk -v entry_file="$entry_file" '
     BEGIN { inserted=0; in_unreleased=0 }
     /^## \[Unreleased\]/ {
@@ -337,45 +365,28 @@ function update_changelog() {
   success "CHANGELOG.md updated"
 }
 
-# ============================================================================
-# Create Git Tag and Commit
-# ============================================================================
-
 function create_tag_and_commit() {
   info "Creating git tag $NEW_VERSION..."
 
-  # Stage CHANGELOG
-  git add "$CHANGELOG_FILE"
-
-  # Create commit
-  git commit -m "chore(release): $NEW_VERSION"
-
-  # Create tag
-  git tag "$NEW_VERSION"
+  git -C "$GIT_ROOT" add "$CHANGELOG_FILE"
+  git -C "$GIT_ROOT" commit -m "chore(release): $NEW_VERSION"
+  git -C "$GIT_ROOT" tag "$NEW_VERSION"
 
   success "Tag $NEW_VERSION created"
 }
 
-# ============================================================================
-# Push to Remote (optional)
-# ============================================================================
-
 function push_to_remote() {
   if [[ "$PUSH_AFTER_RELEASE" == true ]]; then
     info "Pushing to remote..."
-    git push origin main --tags
+    git -C "$GIT_ROOT" push origin main --tags
     success "Pushed to remote"
   else
     info "Not pushing to remote (use --push flag to auto-push)"
     echo ""
     echo "To push manually:"
-    echo "  git push origin main --tags"
+    echo "  cd $GIT_ROOT && git push origin main --tags"
   fi
 }
-
-# ============================================================================
-# Main Execution
-# ============================================================================
 
 function main() {
   echo ""
@@ -407,11 +418,10 @@ function main() {
 
   if [[ "$PUSH_AFTER_RELEASE" == false ]]; then
     echo "Next steps:"
-    echo "  1. Push to remote: git push origin main --tags"
-    echo "  2. Create GitHub release (manual or via Actions)"
+    echo "  cd $GIT_ROOT"
+    echo "  git push origin main --tags"
     echo ""
   fi
 }
 
-# Run main
 main

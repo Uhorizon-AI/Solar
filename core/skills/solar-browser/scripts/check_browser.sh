@@ -2,8 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-cd "$REPO_ROOT"
+# shellcheck source=../../solar-interface/scripts/resolve_solar_paths.sh
+source "$SCRIPT_DIR/../../solar-interface/scripts/resolve_solar_paths.sh"
+solar_resolve_paths --quiet
+cd "$SOLAR_WORKSPACE"
 
 if [[ -f ".env" ]]; then
   set -a

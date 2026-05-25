@@ -6,6 +6,32 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-client): Fase 1.1 — `solar client upgrade` (workspace layout, removes obsolete `.solar/core/`, writes `solar-client-v1.1` manifest).
+- feat(solar-client): `client_lib.sh` shared manifest/version helpers; `solar client update --check` compares global vs workspace manifest.
+- feat(solar-client): `smoke-solar-client.sh` go/no-go for manifest-only workspaces.
+
+### Changed
+- change(solar-client): two-path model — `SOLAR_WORKSPACE` (active agent) + `SOLAR_ROOT` (install root containing `core/`); `resolve_solar_paths.sh` replaces `resolve_solar_home.sh`; removed `SOLAR_HOME`, `REPO_ROOT`, `SOLAR_CORE_ROOT`.
+- change(solar-client): `client_init` no longer copies framework into `.solar/core/`; `--from-dev` removed.
+- change(solar-client): `client_sync` updates `manifest.synced_at` and `core_version` after IDE sync.
+- change(solar-client): `client_doctor` validates manifest v1.1, drift vs global client, `.env` tracked in git → FAIL.
+- change(solar-interface): `solar paths` references global `@core/skills/` (no `.solar/core/` alias).
+- change(solar-system): `solar_system_bind_workspace` fixes resolver exports lost in `$(solar_system_repo_root)` subshell.
+- change(solar-interface): bump CLI `SOLAR_VERSION` to `0.10.0`.
+
+### Removed
+- remove(solar-client): embedded `.solar/core/` vendor layout and `init --from-dev` workspace bundling (use `solar client upgrade` on v0.9.0 workspaces).
+- remove(solar-client): obsolete `smoke-solar-client-fase1.sh` and `smoke-solar-client-v1.1.sh` (consolidated into `smoke-solar-client.sh`).
+
+### Fixed
+- fix(solar-system): LaunchAgent plist exports `SOLAR_WORKSPACE` and `SOLAR_ROOT` for `Solar.c` wrapper.
+- fix(solar-interface): chat/stream invoke router via resolved `ROUTER_SCRIPT` under `SOLAR_ROOT/core/`.
+- fix(solar-transport-gateway): gateway scripts bind active workspace via `solar_resolve_paths` (not install root as workspace).
+- fix(solar-router): `diagnose_router.sh` and `check_router.sh` resolve cwd workspace + `SOLAR_ROOT` for router/async paths.
+- fix(solar-browser): `check_browser.sh` and `ensure_browser.sh` load `.env` from active workspace.
+- fix(solar-interface): REPL skill discovery uses `SOLAR_ROOT/core/skills` on v1.1 workspaces.
+
 ## [0.9.0] - 2026-05-24
 
 > **Release note:** Solar Client Fase 1 lives here until go/no-go closes the phase; then promote this section to `[0.8.2]` (or `[0.9.0]`). Tag `v0.8.1` covers release-script fixes only, not Fase 1.

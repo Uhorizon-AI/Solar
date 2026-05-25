@@ -3,9 +3,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=resolve_solar_home.sh
-source "$SCRIPT_DIR/resolve_solar_home.sh"
-solar_resolve_home --quiet
+# shellcheck source=resolve_solar_paths.sh
+source "$SCRIPT_DIR/resolve_solar_paths.sh"
+solar_resolve_paths --quiet
 
 VERBOSE=false
 JSON=false
@@ -52,7 +52,7 @@ else
 fi
 
 # sun (profile + memory)
-if [[ -f "$SOLAR_HOME/sun/preferences/profile.md" && -f "$SOLAR_HOME/sun/MEMORY.md" ]]; then
+if [[ -f "$SOLAR_WORKSPACE/sun/preferences/profile.md" && -f "$SOLAR_WORKSPACE/sun/MEMORY.md" ]]; then
   sun_state="OK"
 else
   sun_state="WARN"
@@ -60,8 +60,8 @@ fi
 
 # system (LaunchAgent) — capture output first: status_launchagent may exit 1
 # after printing launchctl_loaded (e.g. stderr log awk) which breaks pipefail in "cmd | grep".
-if [[ -f "$SOLAR_CORE_ROOT/skills/solar-system/scripts/status_launchagent_macos.sh" ]]; then
-  system_out="$(bash "$SOLAR_CORE_ROOT/skills/solar-system/scripts/status_launchagent_macos.sh" 2>/dev/null || true)"
+if [[ -f "$(solar_core_dir)/skills/solar-system/scripts/status_launchagent_macos.sh" ]]; then
+  system_out="$(bash "$(solar_core_dir)/skills/solar-system/scripts/status_launchagent_macos.sh" 2>/dev/null || true)"
   if echo "$system_out" | grep -q "launchctl_loaded: true"; then
     system_state="OK"
   elif echo "$system_out" | grep -q "launchctl_loaded: false"; then
@@ -69,8 +69,8 @@ if [[ -f "$SOLAR_CORE_ROOT/skills/solar-system/scripts/status_launchagent_macos.
   else
     system_state="WARN"
   fi
-elif [[ -f "$SOLAR_CORE_ROOT/skills/solar-system/scripts/check_orchestrator.sh" ]]; then
-  orch_out="$(bash "$SOLAR_CORE_ROOT/skills/solar-system/scripts/check_orchestrator.sh" 2>/dev/null || true)"
+elif [[ -f "$(solar_core_dir)/skills/solar-system/scripts/check_orchestrator.sh" ]]; then
+  orch_out="$(bash "$(solar_core_dir)/skills/solar-system/scripts/check_orchestrator.sh" 2>/dev/null || true)"
   if echo "$orch_out" | grep -q "Verdict: HEALTHY"; then
     system_state="OK"
   elif echo "$orch_out" | grep -q "Verdict: PARTIAL"; then
@@ -83,8 +83,8 @@ else
 fi
 
 # router
-if [[ -f "$SOLAR_CORE_ROOT/skills/solar-router/scripts/status_router.sh" ]]; then
-  router_out="$(bash "$SOLAR_CORE_ROOT/skills/solar-router/scripts/status_router.sh" 2>/dev/null | head -5 || true)"
+if [[ -f "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" ]]; then
+  router_out="$(bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" 2>/dev/null | head -5 || true)"
   if echo "$router_out" | grep -qi "stale\|warn"; then
     router_state="WARN"
   else
@@ -95,8 +95,8 @@ else
 fi
 
 # browser (on-demand; INFO by default per plan)
-if [[ -f "$SOLAR_CORE_ROOT/skills/solar-browser/scripts/check_browser.sh" ]]; then
-  if bash "$SOLAR_CORE_ROOT/skills/solar-browser/scripts/check_browser.sh" 2>/dev/null | grep -qi "running\|ok\|healthy"; then
+if [[ -f "$(solar_core_dir)/skills/solar-browser/scripts/check_browser.sh" ]]; then
+  if bash "$(solar_core_dir)/skills/solar-browser/scripts/check_browser.sh" 2>/dev/null | grep -qi "running\|ok\|healthy"; then
     browser_state="OK"
   else
     browser_state="INFO"
@@ -104,10 +104,10 @@ if [[ -f "$SOLAR_CORE_ROOT/skills/solar-browser/scripts/check_browser.sh" ]]; th
 fi
 
 # workspace client checks (symlinks, foreign port listeners) — criteria #6/#17
-if [[ -f "$SOLAR_HOME/.env" ]]; then
+if [[ -f "$SOLAR_WORKSPACE/.env" ]]; then
   set -a
   # shellcheck source=/dev/null
-  source "$SOLAR_HOME/.env"
+  source "$SOLAR_WORKSPACE/.env"
   set +a
 fi
 SOLAR_CLIENT_SCRIPT_DIR="$SCRIPT_DIR"
@@ -130,8 +130,8 @@ if [[ "$JSON" == true ]]; then
   python3 - <<PY
 import json
 print(json.dumps({
-  "SOLAR_HOME": "$SOLAR_HOME",
-  "SOLAR_CORE_ROOT": "$SOLAR_CORE_ROOT",
+  "SOLAR_WORKSPACE": "$SOLAR_WORKSPACE",
+  "SOLAR_ROOT": "$SOLAR_ROOT",
   "interface": "$iface_state",
   "sun": "$sun_state",
   "system": "$system_state",
@@ -144,7 +144,7 @@ PY
   exit 0
 fi
 
-echo "Solar status  SOLAR_HOME=$SOLAR_HOME"
+echo "Solar status  SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
 block_line "interface" "$iface_state"
 block_line "sun" "$sun_state"
 block_line "system" "$system_state"
@@ -155,8 +155,8 @@ block_line "client" "$client_state" "$client_detail"
 if [[ "$VERBOSE" == true ]]; then
   echo "---"
   bash "$SCRIPT_DIR/status_interface.sh" 2>/dev/null || true
-  if [[ -f "$SOLAR_CORE_ROOT/skills/solar-router/scripts/status_router.sh" ]]; then
-    bash "$SOLAR_CORE_ROOT/skills/solar-router/scripts/status_router.sh" 2>/dev/null | head -20 || true
+  if [[ -f "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" ]]; then
+    bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" 2>/dev/null | head -20 || true
   fi
 fi
 

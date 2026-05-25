@@ -24,15 +24,15 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../skills/solar-interface/scripts" && pwd)/resolve_solar_home.sh"
+RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../skills/solar-interface/scripts" && pwd)/resolve_solar_paths.sh"
 # shellcheck source=/dev/null
 source "$RESOLVE_SCRIPT"
-solar_resolve_home --quiet
+solar_resolve_paths --quiet
 
-ROOT_DIR="$SOLAR_HOME"
-SRC_SKILLS="$SOLAR_CORE_ROOT/skills"
-SRC_AGENTS="$SOLAR_CORE_ROOT/agents"
-SRC_COMMANDS="$SOLAR_CORE_ROOT/commands"
+ROOT_DIR="$SOLAR_WORKSPACE"
+SRC_SKILLS="$(solar_core_dir)/skills"
+SRC_AGENTS="$(solar_core_dir)/agents"
+SRC_COMMANDS="$(solar_core_dir)/commands"
 PLANETS_DIR="$ROOT_DIR/planets"
 
 CODEX_DIR="${CODEX_HOME:-$ROOT_DIR/.codex}"

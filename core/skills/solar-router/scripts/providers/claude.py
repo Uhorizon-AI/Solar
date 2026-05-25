@@ -3,7 +3,7 @@ import os
 import shlex
 import subprocess
 
-from .base import BaseProvider, REPO_ROOT
+from .base import BaseProvider, SOLAR_WORKSPACE
 
 
 class ClaudeProvider(BaseProvider):

@@ -62,7 +62,7 @@ For stable placeholders across runs, use the global Solar runtime mapping file:
 
 ## Script usage (`scripts/`)
 
-Run from repo root (paths below assume `REPO_ROOT` is the Solar repository root).
+Run from the active workspace (`SOLAR_WORKSPACE`; framework under `SOLAR_ROOT/core`).
 Examples below use `planets/<planet>/...` as a generic Solar pattern, the scripts
 also accept any valid file or directory path.
 

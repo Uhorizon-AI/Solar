@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import traceback
 from typing import Any, Dict
 
@@ -31,9 +32,15 @@ AI_ROUTER_TIMEOUT_SEC = int(
     or "310"
 )
 
-# Router script path: repo root is 4 levels up from this script
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
-_ROUTER_SCRIPT = _REPO_ROOT / "core/skills/solar-router/scripts/run_router.py"
+_SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+_INTERFACE_SCRIPTS = _SCRIPT_DIR.parent.parent / "solar-interface" / "scripts"
+if str(_INTERFACE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_INTERFACE_SCRIPTS))
+
+from solar_paths import resolve_solar_paths  # noqa: E402
+
+_SOLAR_WORKSPACE, _SOLAR_ROOT = resolve_solar_paths()
+_ROUTER_SCRIPT = _SOLAR_ROOT / "core/skills/solar-router/scripts/run_router.py"
 
 REQUIRED_FIELDS = {"type", "request_id", "session_id", "user_id", "text"}
 
@@ -69,6 +76,7 @@ def call_router(payload: Dict[str, Any]) -> Dict[str, Any]:
         text=True,
         capture_output=True,
         timeout=AI_ROUTER_TIMEOUT_SEC,
+        cwd=str(_SOLAR_WORKSPACE),
     )
     stdout = proc.stdout.strip()
 

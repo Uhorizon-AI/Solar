@@ -21,11 +21,11 @@ _SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from solar_paths import resolve_solar_home, resolve_under_home  # noqa: E402
+from solar_paths import resolve_solar_paths, resolve_under_home  # noqa: E402
 
-REPO_ROOT, SOLAR_CORE_ROOT = resolve_solar_home()
+SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
 
-ENV_PATH = REPO_ROOT / ".env"
+ENV_PATH = SOLAR_WORKSPACE / ".env"
 MIGRATION_SOURCE = pathlib.Path(__file__).resolve().parent.parent / "references" / "001_initial.sql"
 
 
@@ -47,9 +47,9 @@ for _k, _v in ENV.items():
 HOST = ENV.get("SOLAR_INTERFACE_HOST", "127.0.0.1")
 PORT = int(ENV.get("SOLAR_INTERFACE_PORT", "7741"))
 CONTEXT_TURNS = int(ENV.get("SOLAR_ROUTER_CONTEXT_TURNS", "12"))
-RUNTIME_DIR = REPO_ROOT / ENV.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/interface")
+RUNTIME_DIR = SOLAR_WORKSPACE / ENV.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/interface")
 _router_runtime_dir = pathlib.Path(ENV.get("SOLAR_ROUTER_RUNTIME_DIR", "sun/runtime/router"))
-ROUTER_RUNTIME_DIR = _router_runtime_dir if _router_runtime_dir.is_absolute() else REPO_ROOT / _router_runtime_dir
+ROUTER_RUNTIME_DIR = _router_runtime_dir if _router_runtime_dir.is_absolute() else SOLAR_WORKSPACE / _router_runtime_dir
 ROUTER_CONVERSATIONS_DIR = ROUTER_RUNTIME_DIR / "conversations"
 DB_DIR = RUNTIME_DIR / "db"
 MIGRATIONS_DIR = DB_DIR / "migrations"
@@ -420,8 +420,8 @@ def run_router(thread_id: str, mode: str, text: str, provider: str = "auto") -> 
     }
 
     proc = subprocess.run(
-        ["python3", "core/skills/solar-router/scripts/run_router.py"],
-        cwd=str(REPO_ROOT),
+        ["python3", str(ROUTER_SCRIPT)],
+        cwd=str(SOLAR_WORKSPACE),
         input=json.dumps(payload, ensure_ascii=False),
         text=True,
         capture_output=True,
@@ -466,14 +466,14 @@ def run_router(thread_id: str, mode: str, text: str, provider: str = "auto") -> 
                 INSERT INTO artifacts(artifact_id, run_id, kind, path, title, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (artifact_id, run_id, "response", str((run_dir / "output.md").relative_to(REPO_ROOT)), "Run output", ended_at),
+                (artifact_id, run_id, "response", str((run_dir / "output.md").relative_to(SOLAR_WORKSPACE)), "Run output", ended_at),
             )
         conn.execute(
             """
             INSERT INTO artifacts(artifact_id, run_id, kind, path, title, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "request", str(input_path.relative_to(REPO_ROOT)), "User input", started_at),
+            (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "request", str(input_path.relative_to(SOLAR_WORKSPACE)), "User input", started_at),
         )
         conn.commit()
     finally:
@@ -627,8 +627,8 @@ class Handler(BaseHTTPRequestHandler):
                 "pid": os.getpid(),
                 "host": HOST,
                 "port": PORT,
-                "runtime_dir": str(RUNTIME_DIR.relative_to(REPO_ROOT)),
-                "db_path": str(DB_PATH.relative_to(REPO_ROOT)),
+                "runtime_dir": str(RUNTIME_DIR.relative_to(SOLAR_WORKSPACE)),
+                "db_path": str(DB_PATH.relative_to(SOLAR_WORKSPACE)),
                 "checks": checks,
                 "runs": runs,
             })
@@ -704,8 +704,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         proc = subprocess.Popen(
-            ["python3", "core/skills/solar-router/scripts/run_router.py"],
-            cwd=str(REPO_ROOT),
+            ["python3", str(ROUTER_SCRIPT)],
+            cwd=str(SOLAR_WORKSPACE),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -795,12 +795,12 @@ class Handler(BaseHTTPRequestHandler):
             )
             conn.execute(
                 "INSERT INTO artifacts(artifact_id, run_id, kind, path, title, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "request", str(input_path.relative_to(REPO_ROOT)), "User input", started_at),
+                (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "request", str(input_path.relative_to(SOLAR_WORKSPACE)), "User input", started_at),
             )
             if reply_text and not client_disconnected:
                 conn.execute(
                     "INSERT INTO artifacts(artifact_id, run_id, kind, path, title, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "response", str((run_dir / "output.md").relative_to(REPO_ROOT)), "Run output", ended_at),
+                    (f"artifact_{uuid.uuid4().hex[:10]}", run_id, "response", str((run_dir / "output.md").relative_to(SOLAR_WORKSPACE)), "Run output", ended_at),
                 )
             conn.commit()
         finally:

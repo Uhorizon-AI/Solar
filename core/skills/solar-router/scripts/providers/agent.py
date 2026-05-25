@@ -3,7 +3,7 @@ import os
 import shlex
 import subprocess
 
-from .base import BaseProvider, REPO_ROOT
+from .base import BaseProvider, SOLAR_WORKSPACE
 
 
 class AgentProvider(BaseProvider):
@@ -11,7 +11,7 @@ class AgentProvider(BaseProvider):
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
-        return f"agent -p -f --approve-mcps -C {REPO_ROOT}"
+        return f"agent -p -f --approve-mcps -C {SOLAR_WORKSPACE}"
 
     def stream(self, prompt: str):
         """Stream using --output-format stream-json."""

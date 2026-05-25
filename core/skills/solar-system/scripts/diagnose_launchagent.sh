@@ -7,12 +7,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=system_lib.sh
 source "$SCRIPT_DIR/system_lib.sh"
 
-REPO_ROOT="${1:-$(solar_system_repo_root)}"
-cd "$REPO_ROOT"
-solar_system_load_env "$REPO_ROOT"
+if [[ -n "${1:-}" ]]; then
+  SOLAR_WORKSPACE="$1"
+else
+  solar_system_bind_workspace
+  SOLAR_WORKSPACE="$SOLAR_WORKSPACE"
+fi
+cd "$SOLAR_WORKSPACE"
+solar_system_load_env
 
-ENTRYPOINT="$(solar_system_entrypoint "$REPO_ROOT")"
-ORCHESTRATOR="$(solar_system_orchestrator_script "$REPO_ROOT")"
+ENTRYPOINT="$(solar_system_entrypoint "$SOLAR_WORKSPACE")"
+ORCHESTRATOR="$(solar_system_orchestrator_script "$SOLAR_WORKSPACE")"
 STDOUT="${SOLAR_SYSTEM_STDOUT_PATH:-$HOME/Library/Logs/com.solar.system/stdout.log}"
 STDERR="${SOLAR_SYSTEM_STDERR_PATH:-$HOME/Library/Logs/com.solar.system/stderr.log}"
 LABEL="${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}"
@@ -40,7 +45,7 @@ echo ""
 echo "=== 5. Plist lint ==="
 tmp_plist=$(mktemp)
 trap 'rm -f "$tmp_plist"' EXIT
-bash core/skills/solar-system/scripts/render_launchagent_plist.sh "$tmp_plist" >/dev/null
+bash "$SOLAR_ROOT/core/skills/solar-system/scripts/render_launchagent_plist.sh" "$tmp_plist" >/dev/null
 plutil -lint "$tmp_plist" && echo "OK: plist valid"
 
 echo ""
@@ -49,4 +54,4 @@ launchctl print "$DOMAIN/$LABEL" 2>/dev/null | head -5 || echo "Job not loaded (
 
 echo ""
 echo "=== 7. Run entrypoint manually (sanity) ==="
-(cd "$REPO_ROOT" && "$ENTRYPOINT") 2>&1 | head -3 && echo "OK: runs" || true
+(cd "$SOLAR_WORKSPACE" && "$ENTRYPOINT") 2>&1 | head -3 && echo "OK: runs" || true

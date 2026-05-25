@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_ENV_FILE=".env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=transport_gateway_lib.sh
+source "$SCRIPT_DIR/transport_gateway_lib.sh"
+transport_gateway_bind_workspace
+
+ROOT_ENV_FILE="$SOLAR_WORKSPACE/.env"
 RUN_DIR="${SOLAR_GATEWAY_RUN_DIR:-/tmp/solar-transport-gateway}"
 mkdir -p "$RUN_DIR"
 
@@ -40,9 +45,9 @@ listener_pid_for_port() {
 }
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage:
-  bash core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh [--prepare-only]
+  bash $(transport_gateway_script setup_transport_gateway.sh) [--prepare-only]
 
 Default behavior:
 1) Prepare env + dependencies
@@ -75,9 +80,9 @@ CURL_BIN="$(resolve_bin curl /usr/bin/curl /usr/local/bin/curl)" || {
   exit 1
 }
 
-bash core/skills/solar-transport-gateway/scripts/onboard_websocket_env.sh
+bash "$(transport_gateway_script onboard_websocket_env.sh)"
 "$UV_BIN" run --with websockets==12.0 python3 -c "import websockets" >/dev/null
-bash core/skills/solar-transport-gateway/scripts/validate_websocket_bridge.sh
+bash "$(transport_gateway_script validate_websocket_bridge.sh)"
 
 if [[ "$PREPARE_ONLY" == "true" ]]; then
   echo "Prepare-only completed."
@@ -128,7 +133,7 @@ existing_ws_pid="$(listener_pid_for_port "$ws_port" || true)"
 if [[ -n "$existing_ws_pid" ]]; then
   echo "$existing_ws_pid" >"$RUN_DIR/ws.pid"
 else
-  nohup bash core/skills/solar-transport-gateway/scripts/run_websocket_bridge.sh \
+  nohup bash "$(transport_gateway_script run_websocket_bridge.sh)" \
     >"$RUN_DIR/ws.log" 2>&1 &
   echo $! >"$RUN_DIR/ws.pid"
 fi
@@ -137,7 +142,7 @@ existing_http_pid="$(listener_pid_for_port "$http_port" || true)"
 if [[ -n "$existing_http_pid" ]]; then
   echo "$existing_http_pid" >"$RUN_DIR/http.pid"
 else
-  nohup bash core/skills/solar-transport-gateway/scripts/run_http_webhook_bridge.sh \
+  nohup bash "$(transport_gateway_script run_http_webhook_bridge.sh)" \
     >"$RUN_DIR/http.log" 2>&1 &
   echo $! >"$RUN_DIR/http.pid"
 fi
@@ -165,7 +170,7 @@ if [[ "$tunnel_mode" == "named" ]]; then
   tunnel_hostname="${SOLAR_CLOUDFLARED_HOSTNAME:-REPLACE_ME}"
   if [[ ! -f "$tunnel_config" ]]; then
     echo "Missing named tunnel config: $tunnel_config"
-    echo "Run: bash core/skills/solar-transport-gateway/scripts/configure_named_tunnel.sh"
+    echo "Run: bash $(transport_gateway_script configure_named_tunnel.sh)"
     exit 1
   fi
   nohup cloudflared tunnel --config "$tunnel_config" run "$tunnel_name" \
@@ -209,8 +214,8 @@ if [[ -z "$public_url" ]]; then
 fi
 
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-  bash core/skills/solar-transport-gateway/scripts/set_telegram_webhook.sh >/dev/null
-  bash core/skills/solar-transport-gateway/scripts/verify_telegram_webhook.sh >/dev/null
+  bash "$(transport_gateway_script set_telegram_webhook.sh)" >/dev/null
+  bash "$(transport_gateway_script verify_telegram_webhook.sh)" >/dev/null
 fi
 
 echo "Transport gateway setup completed."

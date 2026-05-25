@@ -2,11 +2,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-cd "$REPO_ROOT"
+# shellcheck source=transport_gateway_lib.sh
+source "$SCRIPT_DIR/transport_gateway_lib.sh"
+transport_gateway_bind_workspace
 
-check_cmd="bash core/skills/solar-transport-gateway/scripts/check_transport_gateway.sh"
-setup_cmd="bash core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh"
+check_cmd="bash $(transport_gateway_script "check_transport_gateway.sh")"
+setup_cmd="bash $(transport_gateway_script "setup_transport_gateway.sh")"
+start_tunnel_cmd="bash $(transport_gateway_script "start_cloudflared_tunnel.sh")"
 run_dir="${SOLAR_GATEWAY_RUN_DIR:-/tmp/solar-transport-gateway}"
 
 stop_existing_tunnel() {
@@ -41,13 +43,10 @@ case "$check_code" in
     $setup_cmd
     ;;
   2)
-    # Partial = local bridge healthy, public tunnel degraded.
-    # Use tunnel-only recovery to avoid full setup side effects (for example .env rewrites).
     echo "⚠️  Transport gateway partial state detected. Restarting tunnel only..."
     mkdir -p "$run_dir"
     stop_existing_tunnel
-    nohup bash core/skills/solar-transport-gateway/scripts/start_cloudflared_tunnel.sh \
-      >"$run_dir/cloudflared.log" 2>&1 &
+    nohup $start_tunnel_cmd >"$run_dir/cloudflared.log" 2>&1 &
     echo $! >"$run_dir/cloudflared.pid"
     sleep 1
     if ! kill -0 "$(cat "$run_dir/cloudflared.pid")" 2>/dev/null; then

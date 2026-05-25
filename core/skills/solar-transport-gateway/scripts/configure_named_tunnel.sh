@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_ENV_FILE=".env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=transport_gateway_lib.sh
+source "$SCRIPT_DIR/transport_gateway_lib.sh"
+transport_gateway_bind_workspace
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  cat <<'EOF'
+  cat <<EOF
 Usage:
-  bash core/skills/solar-transport-gateway/scripts/configure_named_tunnel.sh
+  bash $(transport_gateway_script configure_named_tunnel.sh)
 
 Requirements in .env:
   SOLAR_CLOUDFLARED_TUNNEL_NAME
@@ -21,13 +24,6 @@ fi
 if ! command -v cloudflared >/dev/null 2>&1; then
   echo "Missing dependency: cloudflared"
   exit 1
-fi
-
-if [[ -f "$ROOT_ENV_FILE" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$ROOT_ENV_FILE"
-  set +a
 fi
 
 name="${SOLAR_CLOUDFLARED_TUNNEL_NAME:-solar-gateway}"

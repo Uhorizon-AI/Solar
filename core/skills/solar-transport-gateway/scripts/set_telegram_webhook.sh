@@ -2,14 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-
-if [[ -f "${REPO_ROOT}/.env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "${REPO_ROOT}/.env"
-  set +a
-fi
+# shellcheck source=transport_gateway_lib.sh
+source "$SCRIPT_DIR/transport_gateway_lib.sh"
+transport_gateway_bind_workspace
 
 if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
   echo "Missing TELEGRAM_BOT_TOKEN in .env"

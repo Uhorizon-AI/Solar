@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # client_doctor_lib.sh — shared workspace checks (doctor + solar status).
-# Expects: SOLAR_HOME, SOLAR_CORE_ROOT; optional .env already sourced.
+# Expects: SOLAR_WORKSPACE, SOLAR_ROOT; optional .env already sourced.
 
 _solar_client_port_listener_pid() {
   local port="$1"
@@ -65,12 +65,12 @@ solar_client_check_governance_symlinks() {
   local issues=()
   local f
   for f in CLAUDE.md GEMINI.md .cursorrules; do
-    if [[ -L "$SOLAR_HOME/$f" ]]; then
+    if [[ -L "$SOLAR_WORKSPACE/$f" ]]; then
       continue
     fi
-    if [[ -f "$SOLAR_HOME/$f" ]] && grep -q "symlink unavailable" "$SOLAR_HOME/$f" 2>/dev/null; then
+    if [[ -f "$SOLAR_WORKSPACE/$f" ]] && grep -q "symlink unavailable" "$SOLAR_WORKSPACE/$f" 2>/dev/null; then
       issues+=("$f stub")
-    elif [[ -f "$SOLAR_HOME/$f" ]]; then
+    elif [[ -f "$SOLAR_WORKSPACE/$f" ]]; then
       issues+=("$f not symlink")
     fi
   done
