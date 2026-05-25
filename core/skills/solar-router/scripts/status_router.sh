@@ -15,12 +15,44 @@ AUDIT_LOG="$SOLAR_WORKSPACE/sun/runtime/router/audit.jsonl"
 PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 LAST_N=10
 
+STALE_COUNT_ONLY=false
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --last) shift; LAST_N="${1:-10}"; shift ;;
+    --stale-count) STALE_COUNT_ONLY=true; shift ;;
     *) shift ;;
   esac
 done
+
+if [[ "$STALE_COUNT_ONLY" == true ]]; then
+  if [[ ! -f "$AUDIT_LOG" ]]; then
+    echo "0"
+    exit 0
+  fi
+  $PYTHON - "$AUDIT_LOG" <<'PYEOF'
+import json, sys
+audit_path = sys.argv[1]
+starts = {}
+ends = set()
+with open(audit_path, encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rid = row.get("router_id", "")
+        if row.get("event") == "start":
+            starts[rid] = row
+        elif row.get("event") == "end":
+            ends.add(rid)
+print(len([rid for rid in starts if rid not in ends]))
+PYEOF
+  exit 0
+fi
 
 echo ""
 echo "══════════════════════════════════════════════"

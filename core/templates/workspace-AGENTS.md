@@ -27,6 +27,14 @@ solar paths          # resolvable paths for @ references
 solar client doctor  # integrity checks
 ```
 
+## OneDrive / multi-machine sync (required)
+
+- **`.solar/manifest.json`** may live in a synced folder; do not edit it manually on multiple machines at once.
+- **Primary machine** runs `solar client update` (updates `SOLAR_ROOT` / the framework repo).
+- **Other machines** run `solar client update --check` then `solar client sync` only.
+- If the manifest has merge conflicts or invalid JSON, run `solar client update --repair` from the primary machine.
+- Do not sync `.env` via cloud without encryption.
+
 ## Version control (optional)
 
 Git in this workspace is optional. Never commit `.env` or secrets. Prefer `.solar/` in `.gitignore` when using git at workspace root.

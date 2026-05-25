@@ -3,6 +3,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=client_lib.sh
 source "$SCRIPT_DIR/client_lib.sh"
+
+STRICT=false
+DOCTOR_EXTRA=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --strict) STRICT=true; shift ;;
+    --check-plans|--check-git) DOCTOR_EXTRA+=("$1"); shift ;;
+    -h|--help)
+      echo "Usage: solar client doctor [--strict] [--check-plans] [--check-git]"
+      exit 0
+      ;;
+    *) DOCTOR_EXTRA+=("$1"); shift ;;
+  esac
+done
+
 solar_resolve_paths --quiet
 
 warn_count=0
@@ -56,9 +71,16 @@ if [[ -f "$MANIFEST" ]]; then
   global_ver="$(solar_client_git_identity "$SOLAR_ROOT" | awk '{print $1}')"
   manifest_ver="$(solar_client_manifest_core_version "$MANIFEST")"
   if [[ -n "$manifest_ver" && -n "$global_ver" && "$manifest_ver" != "$global_ver" && "$global_ver" != dev* ]]; then
-    warn "manifest core_version=$manifest_ver but global client is $global_ver (run solar client sync)"
+    warn "manifest core_version=$manifest_ver but global client is $global_ver — run: solar client sync"
+    if [[ "$STRICT" == true ]]; then
+      err "strict: workspace manifest out of sync with SOLAR_ROOT after global update"
+    fi
   elif [[ -n "$manifest_ver" ]]; then
     ok "manifest core_version=$manifest_ver matches global client"
+  fi
+  if solar_client_manifest_needs_repair "$MANIFEST"; then
+    warn "manifest needs repair (invalid JSON, merge markers, or missing fields) — run: solar client update --repair"
+    [[ "$STRICT" == true ]] && err "strict: manifest repair required"
   fi
 else
   warn ".solar/manifest.json missing (run solar client init or upgrade)"
@@ -69,7 +91,11 @@ if [[ "$(solar_core_dir)" == "$SOLAR_WORKSPACE/.solar/core" ]]; then
 fi
 
 if [[ -f "$(solar_core_dir)/scripts/sun-workspace-doctor.sh" ]]; then
-  bash "$(solar_core_dir)/scripts/sun-workspace-doctor.sh" "$@" || err_count=$((err_count + 1))
+  if [[ ${#DOCTOR_EXTRA[@]} -gt 0 ]]; then
+    bash "$(solar_core_dir)/scripts/sun-workspace-doctor.sh" "${DOCTOR_EXTRA[@]}" || err_count=$((err_count + 1))
+  else
+    bash "$(solar_core_dir)/scripts/sun-workspace-doctor.sh" || err_count=$((err_count + 1))
+  fi
 else
   err "sun-workspace-doctor.sh not found under SOLAR_ROOT=$SOLAR_ROOT"
 fi

@@ -227,6 +227,37 @@ else
   pass "INSTALL_ROOT has no .cursor/skills"
 fi
 
+echo "=== client update --check ==="
+run_expect_ok "update --check" bash "$SOLAR" client update --check
+
+echo "=== client update unit test ==="
+UPDATE_TEST="$INSTALL_ROOT/core/tests/skills/solar-interface/test_client_update.sh"
+if [[ -f "$UPDATE_TEST" ]]; then
+  run_expect_ok "unit: test_client_update.sh" bash "$UPDATE_TEST"
+else
+  fail "test_client_update.sh missing"
+fi
+
+echo "=== client update --bundle (temp install) ==="
+BUNDLE_INSTALL="$TMP/bundle-install"
+BUNDLE_WS="$TMP/bundle-ws"
+mkdir -p "$BUNDLE_INSTALL/core" "$BUNDLE_WS/sun" "$BUNDLE_WS/.solar"
+cp -R "$INSTALL_ROOT/core/skills" "$BUNDLE_INSTALL/core/"
+cp -R "$INSTALL_ROOT/core/scripts" "$BUNDLE_INSTALL/core/"
+cp -R "$INSTALL_ROOT/core/agents" "$BUNDLE_INSTALL/core/" 2>/dev/null || mkdir -p "$BUNDLE_INSTALL/core/agents"
+cp -R "$INSTALL_ROOT/core/commands" "$BUNDLE_INSTALL/core/" 2>/dev/null || mkdir -p "$BUNDLE_INSTALL/core/commands"
+cp -R "$INSTALL_ROOT/core/templates" "$BUNDLE_INSTALL/core/" 2>/dev/null || mkdir -p "$BUNDLE_INSTALL/core/templates"
+echo '{"layout":"solar-client-v1.1","core_source":"global"}' > "$BUNDLE_WS/.solar/manifest.json"
+echo "before-bundle" > "$BUNDLE_INSTALL/core/.marker"
+BUNDLE_SOLAR="$BUNDLE_INSTALL/core/skills/solar-interface/scripts/solar"
+pushd "$BUNDLE_WS" >/dev/null
+if bash "$BUNDLE_SOLAR" client update --bundle --yes >/dev/null 2>&1; then
+  pass "update --bundle on install without .git"
+else
+  fail "update --bundle on install without .git"
+fi
+popd >/dev/null
+
 echo ""
 echo "=== Go / No-Go ==="
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"

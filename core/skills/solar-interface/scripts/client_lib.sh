@@ -193,6 +193,214 @@ solar_client_restructure_plan() {
   fi
 }
 
+solar_client_backups_dir() {
+  echo "$1/backups"
+}
+
+solar_client_backup_label() {
+  local version="$1"
+  version="${version#v}"
+  version="${version//\//-}"
+  echo "${version}-$(date +%Y%m%d-%H%M%S)"
+}
+
+solar_client_rotate_backups() {
+  local root="$1"
+  local keep="${2:-5}"
+  local bdir
+  bdir="$(solar_client_backups_dir "$root")"
+  [[ -d "$bdir" ]] || return 0
+  local count=0
+  while IFS= read -r dir; do
+    [[ -n "$dir" ]] || continue
+    count=$((count + 1))
+    if [[ "$count" -gt "$keep" ]]; then
+      rm -rf "$dir"
+      echo "OK: pruned old backup $dir"
+    fi
+  done < <(find "$bdir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+}
+
+solar_client_backup_install_git() {
+  local root="$1"
+  local version="$2"
+  local label dest
+  label="$(solar_client_backup_label "$version")"
+  dest="$(solar_client_backups_dir "$root")/$label"
+  mkdir -p "$(dirname "$dest")"
+  rsync -a \
+    --exclude '.git/objects' \
+    --exclude 'backups' \
+    "$root/" "$dest/"
+  echo "$dest"
+}
+
+solar_client_backup_install_core() {
+  local root="$1"
+  local version="$2"
+  local label dest
+  label="$(solar_client_backup_label "$version")"
+  dest="$(solar_client_backups_dir "$root")/$label/core"
+  mkdir -p "$dest"
+  if [[ -d "$root/core" ]]; then
+    rsync -a "$root/core/" "$dest/"
+  fi
+  echo "$(solar_client_backups_dir "$root")/$label"
+}
+
+solar_client_git_dirty() {
+  local root="$1"
+  git -C "$root" diff --quiet 2>/dev/null && git -C "$root" diff --cached --quiet 2>/dev/null
+}
+
+solar_client_git_fetch() {
+  local root="$1"
+  if git -C "$root" remote get-url origin >/dev/null 2>&1; then
+    git -C "$root" fetch --tags origin
+  else
+    git -C "$root" fetch --tags 2>/dev/null || true
+  fi
+}
+
+solar_client_git_remote_tag_version() {
+  local root="$1"
+  local ref="${2:-}"
+  if [[ -z "$ref" ]]; then
+    git -C "$root" describe --tags origin/main 2>/dev/null \
+      || git -C "$root" describe --tags origin/master 2>/dev/null \
+      || git -C "$root" describe --tags --abbrev=0 2>/dev/null \
+      || echo ""
+  else
+    git -C "$root" describe --tags "$ref" 2>/dev/null || echo "$ref"
+  fi
+}
+
+solar_client_apply_git_update() {
+  local root="$1"
+  local tag="${2:-}"
+  local yes="${3:-false}"
+
+  if ! git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "ERROR: SOLAR_ROOT is not a git repository: $root" >&2
+    return 1
+  fi
+
+  if ! solar_client_git_dirty "$root"; then
+    echo "WARN: SOLAR_ROOT has uncommitted changes"
+    if [[ "$yes" != true ]]; then
+      echo "ERROR: re-run with --yes to update anyway" >&2
+      return 1
+    fi
+  fi
+
+  solar_client_git_fetch "$root"
+
+  if [[ -n "$tag" ]]; then
+    if ! git -C "$root" rev-parse "$tag^{commit}" >/dev/null 2>&1; then
+      echo "ERROR: tag/ref not found after fetch: $tag" >&2
+      return 1
+    fi
+    git -C "$root" checkout "$tag"
+  else
+    if git -C "$root" show-ref --verify --quiet refs/remotes/origin/main; then
+      git -C "$root" checkout main 2>/dev/null || git -C "$root" checkout -B main
+      git -C "$root" pull --ff-only origin main
+    elif git -C "$root" show-ref --verify --quiet refs/remotes/origin/master; then
+      git -C "$root" checkout master 2>/dev/null || git -C "$root" checkout -B master
+      git -C "$root" pull --ff-only origin master
+    else
+      echo "WARN: no origin/main or origin/master; staying on current branch"
+    fi
+  fi
+  return 0
+}
+
+solar_client_apply_bundle_update() {
+  local root="$1"
+  local from_dev="${2:-true}"
+  local from_tag="${3:-}"
+  local bundle_script="$4"
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+
+  local -a bundle_args=(--output "$tmpdir" --force)
+  if [[ -n "$from_tag" ]]; then
+    bundle_args+=(--from-tag "$from_tag")
+  else
+    bundle_args+=(--from-dev)
+  fi
+
+  bash "$bundle_script" "${bundle_args[@]}"
+  mkdir -p "$root/core"
+  rsync -a --delete \
+    --exclude '.venv' --exclude '__pycache__' --exclude 'node_modules' \
+    "$tmpdir/core/" "$root/core/"
+  rm -rf "$tmpdir"
+}
+
+solar_client_manifest_needs_repair() {
+  local manifest="$1"
+  [[ -f "$manifest" ]] || return 0
+  if grep -q '^<<<<<<<' "$manifest" 2>/dev/null; then
+    return 0
+  fi
+  python3 - <<'PY' "$manifest"
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(0)  # needs repair
+layout = data.get("layout", "")
+core = data.get("core_version") or data.get("version") or ""
+if layout != "solar-client-v1.1" or not core:
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+solar_client_repair_manifest() {
+  local workspace="$1"
+  local install_root="$2"
+  solar_client_write_manifest_v11 "$workspace" "$install_root" preserve_synced=1
+}
+
+solar_client_update_check_report() {
+  local install_root="$1"
+  local workspace="${2:-}"
+
+  read -r gv gc < <(solar_client_git_identity "$install_root")
+  echo "Global Solar Client (SOLAR_ROOT):"
+  echo "  path=$install_root"
+  echo "  version=$gv commit=${gc:0:12}"
+
+  if [[ -d "$install_root/.git" ]]; then
+    solar_client_git_fetch "$install_root" 2>/dev/null || true
+    local remote_ver
+    remote_ver="$(solar_client_git_remote_tag_version "$install_root" "")"
+    if [[ -n "$remote_ver" && "$remote_ver" != "$gv" ]]; then
+      echo "  remote_available=$remote_ver"
+      echo "  HINT: solar client update --tag $remote_ver"
+    fi
+  fi
+
+  if [[ -n "$workspace" && -f "$workspace/.solar/manifest.json" ]]; then
+    local mv
+    mv="$(solar_client_manifest_core_version "$workspace/.solar/manifest.json")"
+    echo "Workspace manifest core_version=${mv:-<none>}"
+    if [[ -n "$mv" && "$gv" != "$mv" && "$gv" != dev* ]]; then
+      echo "WARN: global client updated — run: solar client sync"
+    fi
+    if solar_client_manifest_needs_repair "$workspace/.solar/manifest.json"; then
+      echo "WARN: manifest may need repair — run: solar client update --repair"
+    fi
+  elif [[ -n "$workspace" ]]; then
+    echo "Workspace manifest=<none>"
+  fi
+}
+
 solar_client_restructure_apply() {
   local ws="$1"
   local dry_run="${2:-false}"

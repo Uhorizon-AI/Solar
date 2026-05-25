@@ -40,9 +40,11 @@ iface_state="FAIL"
 sun_state="FAIL"
 system_state="INFO"
 router_state="INFO"
+router_detail=""
 browser_state="INFO"
 client_state="OK"
 client_detail=""
+mcp_info=""
 
 # interface
 if bash "$SCRIPT_DIR/check_interface.sh" --quiet 2>/dev/null; then
@@ -84,9 +86,11 @@ fi
 
 # router
 if [[ -f "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" ]]; then
-  router_out="$(bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" 2>/dev/null | head -5 || true)"
-  if echo "$router_out" | grep -qi "stale\|warn"; then
+  stale_n=0
+  stale_n="$(bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" --stale-count 2>/dev/null || echo 0)"
+  if [[ "${stale_n:-0}" -gt 0 ]]; then
     router_state="WARN"
+    router_detail="${stale_n} stale in-flight"
   else
     router_state="OK"
   fi
@@ -136,6 +140,7 @@ print(json.dumps({
   "sun": "$sun_state",
   "system": "$system_state",
   "router": "$router_state",
+  "router_detail": "$router_detail",
   "browser": "$browser_state",
   "client": "$client_state",
   "client_detail": "$client_detail",
@@ -148,7 +153,7 @@ echo "Solar status  SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
 block_line "interface" "$iface_state"
 block_line "sun" "$sun_state"
 block_line "system" "$system_state"
-block_line "router" "$router_state"
+block_line "router" "$router_state" "$router_detail"
 block_line "browser" "$browser_state"
 block_line "client" "$client_state" "$client_detail"
 
@@ -157,6 +162,12 @@ if [[ "$VERBOSE" == true ]]; then
   bash "$SCRIPT_DIR/status_interface.sh" 2>/dev/null || true
   if [[ -f "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" ]]; then
     bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" 2>/dev/null | head -20 || true
+    [[ -n "$router_detail" ]] && echo "router stale: $router_detail"
+  fi
+  if [[ -f "$SOLAR_WORKSPACE/.cursor/mcp.json" ]]; then
+    echo "mcp: $SOLAR_WORKSPACE/.cursor/mcp.json (configure servers in Cursor Settings)"
+  else
+    echo "mcp: INFO no .cursor/mcp.json in workspace"
   fi
 fi
 

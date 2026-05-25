@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOLAR_VERSION="0.10.1"
+SOLAR_VERSION="0.11.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -28,31 +28,7 @@ case "${1:-}" in
         ;;
       update)
         shift
-        case "${1:-}" in
-          --check)
-            # shellcheck source=client_lib.sh
-            source "$SCRIPT_DIR/client_lib.sh"
-            core="$(solar_client_install_root)"
-            read -r gv gc < <(solar_client_git_identity "$core")
-            echo "Global Solar Client: version=$gv commit=${gc:0:12}"
-            if solar_resolve_paths --quiet 2>/dev/null; then
-              mv="$(solar_client_manifest_core_version "$SOLAR_WORKSPACE/.solar/manifest.json" 2>/dev/null || true)"
-              echo "Workspace manifest core_version=${mv:-<none>}"
-              if [[ -n "$mv" && "$gv" != "$mv" && "$gv" != dev* ]]; then
-                echo "WARN: run solar client sync in this workspace after global update"
-              fi
-            fi
-            exit 0
-            ;;
-          "")
-            echo "solar client update (global tarball) is planned for Fase 2. Use: solar client update --check" >&2
-            exit 2
-            ;;
-          *)
-            echo "solar client update: only --check is available in v1.1 (full update: Fase 2)" >&2
-            exit 2
-            ;;
-        esac
+        exec bash "$SCRIPT_DIR/client_update.sh" "$@"
         ;;
       "")
         echo "Usage: solar client {init|sync|doctor|upgrade|update}" >&2

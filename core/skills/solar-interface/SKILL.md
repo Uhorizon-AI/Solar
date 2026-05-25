@@ -72,16 +72,23 @@ Resolve paths before any command (`resolve_solar_paths.sh` exports `SOLAR_WORKSP
 
 ```bash
 solar client init                 # new workspace (manifest + sun; no .solar/core/)
-solar client upgrade              # solar-client-v1.1 manifest; prune SOLAR_ROOT IDE artifacts (Fase 1.2)
-solar client upgrade --check      # dry-run: report paths + planned actions
-solar client upgrade --restructure   # legacy monorepo: move core/ under solar/ (v0.8.1-style tree)
+solar client update               # update SOLAR_ROOT (full git repo by default)
+solar client update --check       # compare global vs workspace manifest
+solar client update --repair      # fix .solar/manifest.json (OneDrive conflicts)
+solar client update --tag vX.Y.Z  # checkout tag in SOLAR_ROOT
+solar client update --bundle      # rsync core/ only (no .git install)
+solar client upgrade              # workspace manifest + prune SOLAR_ROOT IDE artifacts
+solar client upgrade --check
+solar client upgrade --restructure
 solar client sync
 solar client doctor
-solar status                      # 5 blocks: interface, sun, system, router, browser
-solar paths                       # @path hints for IDE
+solar status [--verbose]          # 5 blocks; verbose adds router detail + MCP hint
+solar paths
 ```
 
-Repo tag (`v0.8.1` → `v0.10.x`) is separate from layout: `cd <SOLAR_ROOT> && git fetch && git checkout v0.10.0`, then `solar client upgrade` from `SOLAR_WORKSPACE`.
+**OneDrive:** primary machine runs `update`; others run `update --check` + `sync`. Manifest conflicts → `update --repair`.
+
+After `update` on `SOLAR_ROOT`: `solar client sync` in each `SOLAR_WORKSPACE`.
 
 Solar Client go/no-go smoke (v1.1 layout):
 

@@ -263,15 +263,11 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 14: audit early exit — start written, end NOT written (known bug)
+# Test 14: audit early exit — start and end both written (Fase 2 fix)
 # Triggers async_tasks_disabled early exit in an isolated temp runtime dir.
-# Verifies that a 'start' audit event IS written. Verifies 'end' is NOT
-# written, documenting the known bug: early exits skip the audit end record.
-# This test PASSES when the bug is present (expected current state).
-# Flip the end assertion once the bug is fixed.
 # ---------------------------------------------------------------------------
 echo ""
-echo "── Test 14: audit early exit — start written, end NOT written (known bug)"
+echo "── Test 14: audit early exit — start and end written on failure"
 AUDIT_TMP="$(mktemp -d)"
 SOLAR_ROUTER_RUNTIME_DIR="$AUDIT_TMP" SOLAR_SYSTEM_FEATURES="" \
     call_router '{"request_id":"t14","session_id":"s","user_id":"u","text":"hello","channel":"other","mode":"async_only"}' > /dev/null
@@ -294,10 +290,10 @@ print(sum(1 for l in lines if json.loads(l).get('event') == 'end'))
     else
         fail "audit early exit: start event" "expected ≥1 start event, got $start_count"
     fi
-    if [[ "$end_count" -eq 0 ]]; then
-        pass "audit early exit: end event NOT written (known bug — expected)"
+    if [[ "$end_count" -ge 1 ]]; then
+        pass "audit early exit: end event written on failure"
     else
-        fail "audit early exit: end event" "expected 0 end events (known bug), got $end_count — bug may be fixed, update this test"
+        fail "audit early exit: end event" "expected ≥1 end event after failed route, got $end_count"
     fi
 fi
 rm -rf "$AUDIT_TMP"

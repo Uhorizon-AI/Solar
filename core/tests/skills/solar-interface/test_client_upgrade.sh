@@ -3,9 +3,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GLOBAL_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-UPGRADE="$GLOBAL_ROOT/skills/solar-interface/scripts/client_upgrade.sh"
-SOLAR="$GLOBAL_ROOT/skills/solar-interface/scripts/solar"
+CORE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+UPGRADE="$CORE_ROOT/skills/solar-interface/scripts/client_upgrade.sh"
+SOLAR="$CORE_ROOT/skills/solar-interface/scripts/solar"
 PASS=0
 FAIL=0
 
@@ -39,7 +39,7 @@ trap 'rm -rf "$TMP"' EXIT
 INSTALL="$TMP/install"
 WS="$TMP/workspace"
 mkdir -p "$INSTALL" "$WS/sun" "$WS/.solar"
-cp -R "$GLOBAL_ROOT/core" "$INSTALL/core"
+cp -R "$CORE_ROOT" "$INSTALL/core"
 INSTALL_SOLAR="$INSTALL/core/skills/solar-interface/scripts/solar"
 echo '{"layout":"solar-client-v1.1","core_source":"global"}' > "$WS/.solar/manifest.json"
 mkdir -p "$INSTALL/.cursor/skills/dummy-skill"

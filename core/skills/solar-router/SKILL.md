@@ -31,7 +31,7 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 - Persist conversation turns in runtime dir (JSONL) for continuity.
 - Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output.
 - Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
-- Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability. **Known bug:** some early-exit paths (e.g. `async_only`) write `start` but not `end`. Tracked separately — Test 14 in `check_router.sh` documents and guards this behavior.
+- Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability (including failed early-exit paths).
 
 ## Internal architecture
 
@@ -205,7 +205,7 @@ EOF
 ## Runtime files
 
 - `sun/runtime/router/conversations/<user_id>.jsonl` — conversation history per user (for context continuity).
-- `sun/runtime/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`. **Known bug:** `end` record is not written on early-exit paths — tracked in Test 14 of `check_router.sh`.
+- `sun/runtime/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`.
 
 ## References
 

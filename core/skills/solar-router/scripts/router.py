@@ -455,6 +455,28 @@ def _failed(request_id: str, error_code: str, error: str, provider_used: Any = N
     }
 
 
+def _failed_after_audit(
+    router_id: str,
+    t_start: float,
+    request_id: str,
+    error_code: str,
+    error: str,
+    provider_used: Any = None,
+    prompt_chars: int = 0,
+) -> Dict[str, Any]:
+    audit_log(
+        router_id,
+        "end",
+        status="failed",
+        error_code=error_code,
+        error=error,
+        provider=provider_used,
+        duration_ms=int((time.monotonic() - t_start) * 1000),
+        prompt_chars=prompt_chars,
+    )
+    return _failed(request_id, error_code, error, provider_used)
+
+
 # ---------------------------------------------------------------------------
 # Core routing — streaming
 # ---------------------------------------------------------------------------
@@ -588,7 +610,13 @@ def route(raw: str) -> Dict[str, Any]:
     audit_log(router_id, "start", request_id=request_id, user_id=user_id, channel=channel, mode=mode, metadata=metadata)
 
     if mode == "async_only" and not async_tasks_enabled():
-        return _failed(request_id, "async_tasks_disabled", "async-tasks feature not enabled in SOLAR_SYSTEM_FEATURES")
+        return _failed_after_audit(
+            router_id,
+            t_start,
+            request_id,
+            "async_tasks_disabled",
+            "async-tasks feature not enabled in SOLAR_SYSTEM_FEATURES",
+        )
 
     jit_context = resolve_jit_context(metadata) if metadata else None
     system_prompt = read_system_prompt()
@@ -602,8 +630,24 @@ def route(raw: str) -> Dict[str, Any]:
             ai_output, provider_used = run_with_fallback(prompt)
     except Exception as exc:
         if provider_override:
-            return _failed(request_id, "provider_locked_failed", str(exc))
-        return _failed(request_id, "all_providers_failed", str(exc))
+            return _failed_after_audit(
+                router_id,
+                t_start,
+                request_id,
+                "provider_locked_failed",
+                str(exc),
+                provider_used,
+                prompt_chars=len(prompt),
+            )
+        return _failed_after_audit(
+            router_id,
+            t_start,
+            request_id,
+            "all_providers_failed",
+            str(exc),
+            provider_used,
+            prompt_chars=len(prompt),
+        )
 
     decision, reply_text = resolve_decision(mode, channel, ai_output, text, request_id)
 
