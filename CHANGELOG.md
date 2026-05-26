@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-05-27
+
 ### Changed
 - change(solar-client): `solar client sync` updates manifest `core_commit` (and version) from `SOLAR_ROOT` via `solar_client_bump_manifest_from_install`.
 - change(solar-client): `solar client doctor --strict` fails when manifest `core_commit` drifts from `SOLAR_ROOT` HEAD.
