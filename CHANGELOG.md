@@ -6,6 +6,20 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- change(solar-client): `solar client sync` updates manifest `core_commit` (and version) from `SOLAR_ROOT` via `solar_client_bump_manifest_from_install`.
+- change(solar-client): `solar client doctor --strict` fails when manifest `core_commit` drifts from `SOLAR_ROOT` HEAD.
+- change(solar-client): `sun-workspace-doctor` supports `--no-summary` when embedded in `solar client doctor` (single final summary).
+- change(solar-interface): bump CLI `SOLAR_VERSION` to `0.11.1`.
+
+### Fixed
+- fix(solar-client): `solar_client_rotate_backups` prunes oldest backups (mtime), not newest.
+- fix(solar-client): git install backup includes `.git/objects` for restorable `SOLAR_ROOT` snapshots.
+- fix(solar-client): `solar client update --tag` without value exits 2 with a clear error (no unbound variable).
+
+### Tests
+- test(solar-client): extend `test_client_update.sh` — backup `.git/objects`, `--tag` error, rotate order, manifest `core_commit` bump.
+
 ## [0.11.0] - 2026-05-25
 
 ### Added

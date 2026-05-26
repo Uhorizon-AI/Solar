@@ -68,8 +68,9 @@ if [[ -f "$MANIFEST" ]]; then
   elif [[ -n "$core_source" ]]; then
     warn "manifest core_source=$core_source (expected global)"
   fi
-  global_ver="$(solar_client_git_identity "$SOLAR_ROOT" | awk '{print $1}')"
+  read -r global_ver global_commit < <(solar_client_git_identity "$SOLAR_ROOT")
   manifest_ver="$(solar_client_manifest_core_version "$MANIFEST")"
+  manifest_commit="$(solar_client_manifest_core_commit "$MANIFEST")"
   if [[ -n "$manifest_ver" && -n "$global_ver" && "$manifest_ver" != "$global_ver" && "$global_ver" != dev* ]]; then
     warn "manifest core_version=$manifest_ver but global client is $global_ver — run: solar client sync"
     if [[ "$STRICT" == true ]]; then
@@ -77,6 +78,12 @@ if [[ -f "$MANIFEST" ]]; then
     fi
   elif [[ -n "$manifest_ver" ]]; then
     ok "manifest core_version=$manifest_ver matches global client"
+  fi
+  if [[ -n "$global_commit" && "$global_commit" != unknown && -n "$manifest_commit" && "$manifest_commit" != "$global_commit" ]]; then
+    warn "manifest core_commit=${manifest_commit:0:12} but SOLAR_ROOT HEAD is ${global_commit:0:12} — run: solar client sync"
+    [[ "$STRICT" == true ]] && err "strict: manifest core_commit out of sync with SOLAR_ROOT"
+  elif [[ -n "$manifest_commit" && -n "$global_commit" && "$global_commit" != unknown ]]; then
+    ok "manifest core_commit matches SOLAR_ROOT HEAD"
   fi
   if solar_client_manifest_needs_repair "$MANIFEST"; then
     warn "manifest needs repair (invalid JSON, merge markers, or missing fields) — run: solar client update --repair"
@@ -91,11 +98,9 @@ if [[ "$(solar_core_dir)" == "$SOLAR_WORKSPACE/.solar/core" ]]; then
 fi
 
 if [[ -f "$(solar_core_dir)/scripts/sun-workspace-doctor.sh" ]]; then
-  if [[ ${#DOCTOR_EXTRA[@]} -gt 0 ]]; then
-    bash "$(solar_core_dir)/scripts/sun-workspace-doctor.sh" "${DOCTOR_EXTRA[@]}" || err_count=$((err_count + 1))
-  else
-    bash "$(solar_core_dir)/scripts/sun-workspace-doctor.sh" || err_count=$((err_count + 1))
-  fi
+  _sun_doctor=(--no-summary)
+  [[ ${#DOCTOR_EXTRA[@]} -gt 0 ]] && _sun_doctor+=("${DOCTOR_EXTRA[@]}")
+  bash "$(solar_core_dir)/scripts/sun-workspace-doctor.sh" "${_sun_doctor[@]}" || err_count=$((err_count + 1))
 else
   err "sun-workspace-doctor.sh not found under SOLAR_ROOT=$SOLAR_ROOT"
 fi

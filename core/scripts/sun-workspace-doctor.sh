@@ -10,6 +10,7 @@ ROOT_DIR="$SOLAR_WORKSPACE"
 SUN_DIR="$ROOT_DIR/sun"
 CHECK_GIT=false
 CHECK_PLANS=false
+PRINT_SUMMARY=true
 
 error_count=0
 warn_count=0
@@ -35,12 +36,13 @@ info() {
 usage() {
   cat <<'EOF'
 Usage:
-  bash core/scripts/sun-workspace-doctor.sh [--check-git] [--check-plans]
+  bash core/scripts/sun-workspace-doctor.sh [--check-git] [--check-plans] [--no-summary]
 
 Options:
-  --check-git    Include optional git checks (.git, commit, remote, upstream)
-  --check-plans  Validate sun/plans/YYYY/MM/YYYY-MM-DD_* layout (warning-only)
-  -h, --help     Show this help
+  --check-git     Include optional git checks (.git, commit, remote, upstream)
+  --check-plans   Validate sun/plans/YYYY/MM/YYYY-MM-DD_* layout (warning-only)
+  --no-summary    Omit final Summary line (used when embedded in solar client doctor)
+  -h, --help      Show this help
 EOF
 }
 
@@ -52,6 +54,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --check-plans)
       CHECK_PLANS=true
+      shift
+      ;;
+    --no-summary)
+      PRINT_SUMMARY=false
       shift
       ;;
     -h|--help)
@@ -133,7 +139,7 @@ check_plans_layout() {
 
 if [ ! -d "$SUN_DIR" ]; then
   err "Missing sun workspace: $SUN_DIR"
-  echo "Summary: ${error_count} error(s), ${warn_count} warning(s)"
+  $PRINT_SUMMARY && echo "Summary: ${error_count} error(s), ${warn_count} warning(s)"
   exit 1
 fi
 
@@ -180,7 +186,9 @@ else
   info "Git checks skipped (use --check-git to enable)"
 fi
 
-echo "Summary: ${error_count} error(s), ${warn_count} warning(s)"
+if $PRINT_SUMMARY; then
+  echo "Summary: ${error_count} error(s), ${warn_count} warning(s)"
+fi
 
 if [ "$error_count" -gt 0 ]; then
   exit 1

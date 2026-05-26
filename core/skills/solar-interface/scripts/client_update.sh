@@ -58,8 +58,9 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --tag|--version)
+      opt="$1"
       shift
-      [[ $# -gt 0 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }
+      [[ $# -gt 0 ]] || { echo "ERROR: $opt requires a value" >&2; exit 2; }
       TARGET_TAG="$1"
       shift
       ;;

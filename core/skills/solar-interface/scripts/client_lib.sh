@@ -80,6 +80,42 @@ except Exception:
 PY
 }
 
+solar_client_manifest_core_commit() {
+  local manifest="$1"
+  python3 - <<'PY' "$manifest" 2>/dev/null || echo ""
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        data = json.load(fh)
+    print(data.get("core_commit") or "")
+except Exception:
+    print("")
+PY
+}
+
+# After sync: align manifest core_version/client_version/core_commit with SOLAR_ROOT.
+solar_client_bump_manifest_from_install() {
+  local workspace="$1"
+  local client_root="$2"
+  local manifest="$workspace/.solar/manifest.json"
+  [[ -f "$manifest" ]] || return 0
+  local version commit
+  read -r version commit < <(solar_client_git_identity "$client_root")
+  python3 - <<PY "$manifest" "$version" "$commit"
+import json, sys
+path, version, commit = sys.argv[1:4]
+with open(path, encoding="utf-8") as fh:
+    data = json.load(fh)
+data["core_version"] = version
+data["client_version"] = version
+data["core_commit"] = commit
+data["core_source"] = "global"
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+PY
+}
+
 solar_client_touch_manifest_synced() {
   local workspace="$1"
   local manifest="$workspace/.solar/manifest.json"
@@ -218,7 +254,16 @@ solar_client_rotate_backups() {
       rm -rf "$dir"
       echo "OK: pruned old backup $dir"
     fi
-  done < <(find "$bdir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+  done < <(
+    find "$bdir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while IFS= read -r d; do
+      [[ -n "$d" ]] || continue
+      if stat -c '%Y' "$d" >/dev/null 2>&1; then
+        printf '%s\t%s\n' "$(stat -c '%Y' "$d")" "$d"
+      else
+        printf '%s\t%s\n' "$(stat -f '%m' "$d" 2>/dev/null || echo 0)" "$d"
+      fi
+    done | sort -t$'\t' -k1 -rn | cut -f2-
+  )
 }
 
 solar_client_backup_install_git() {
@@ -228,8 +273,8 @@ solar_client_backup_install_git() {
   label="$(solar_client_backup_label "$version")"
   dest="$(solar_client_backups_dir "$root")/$label"
   mkdir -p "$(dirname "$dest")"
+  # Full install tree (including .git/objects) for restorable SOLAR_ROOT snapshots.
   rsync -a \
-    --exclude '.git/objects' \
     --exclude 'backups' \
     "$root/" "$dest/"
   echo "$dest"
