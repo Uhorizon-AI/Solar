@@ -7,11 +7,6 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ## [0.11.0] - 2026-05-25
-### Added
-- feat(solar-client): Fase 2 — global update, manifest repair, router audit fix
-
-
-## [0.11.0] - 2026-05-25
 
 ### Added
 - feat(solar-client): `solar client update` — global install update via git (full `SOLAR_ROOT` repo) or `--bundle` (core/ only).
@@ -28,11 +23,6 @@ The format is based on Keep a Changelog.
 
 ### Fixed
 - fix(solar-router): `route()` writes audit `end` on `async_only` disabled and provider failures (Test 14).
-
-## [0.10.1] - 2026-05-25
-### Added
-- feat(solar-client): release v0.10.1 with upgrade enhancements and install hygiene
-
 
 ## [0.10.1] - 2026-05-25
 
