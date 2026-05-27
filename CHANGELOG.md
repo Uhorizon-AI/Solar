@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-05-27
+
 ### Changed
 - change(solar-client): `solar client upgrade --restructure` moves the full framework install into `solar/` (not only `core/` + `.git`); post-restructure next steps remain manual (`client init`, `sync`, `doctor`).
 
