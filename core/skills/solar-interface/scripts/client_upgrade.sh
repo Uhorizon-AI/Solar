@@ -10,6 +10,7 @@ CHECK_ONLY=false
 REPAIR_GOVERNANCE=false
 FORCE_WORKSPACE=""
 RESTRUCTURE=false
+RESTRUCTURE_APPLIED=false
 SKIP_PRUNE_INSTALL=false
 
 usage() {
@@ -22,13 +23,13 @@ Upgrades to the Solar Client model (solar-client-v1.1):
   - Reports SOLAR_WORKSPACE, SOLAR_ROOT, layout, install git tag
   - Workspace: removes obsolete .solar/core/ and orphan .solar/.env; writes manifest
   - Install hygiene: removes IDE/agent artifacts under SOLAR_ROOT when distinct from workspace
-  - Optional --restructure: legacy monorepo (core/ at workspace root) -> solar/ subdirectory
+  - Optional --restructure: mv full framework repo -> solar/ (then run client init + sync yourself)
 
 Options:
   --check               Dry-run: print planned actions only
   --repair-governance   Replace AGENTS.md and IDE symlinks from template (backs up first)
   --workspace <path>    Target workspace (default: discover from cwd)
-  --restructure         Move core/ (+ .git) under solar/ for legacy_root layout only
+  --restructure         mv framework repo into solar/ (keeps sun/, planets/, .solar/ at workspace root)
   --skip-prune-install  Skip removing IDE dirs under SOLAR_ROOT
 EOF
 }
@@ -71,10 +72,18 @@ if [[ "$RESTRUCTURE" == true ]]; then
         [[ -n "$line" ]] && actions+=("restructure: $line")
       done < <(solar_client_restructure_plan "$SOLAR_WORKSPACE")
     else
-      actions+=("restructure: skip (not legacy_root or solar/core/ exists)")
+      actions+=("restructure: skip (install already under solar/ or nothing to move)")
+    fi
+    if solar_client_restructure_needed "$SOLAR_WORKSPACE"; then
+      actions+=("next (manual): solar client init")
+      actions+=("next (manual): solar client sync")
+      actions+=("next (manual): solar client doctor")
     fi
   else
-    solar_client_restructure_apply "$SOLAR_WORKSPACE" false
+    if solar_client_restructure_needed "$SOLAR_WORKSPACE"; then
+      solar_client_restructure_apply "$SOLAR_WORKSPACE" false
+      RESTRUCTURE_APPLIED=true
+    fi
     _resolve_args=()
     [[ -n "$FORCE_WORKSPACE" ]] && _resolve_args+=(--workspace "$FORCE_WORKSPACE")
     _resolve_args+=(--relaxed --quiet)
@@ -139,9 +148,19 @@ if [[ "$SKIP_PRUNE_INSTALL" != true ]] && ! solar_client_paths_equal "$SOLAR_ROO
 fi
 
 echo ""
-echo "Next steps:"
-echo "  solar client sync"
-echo "  solar client doctor"
+if [[ "$RESTRUCTURE_APPLIED" == true ]]; then
+  echo "Restructure done. Run these from the workspace root ($SOLAR_WORKSPACE):"
+  echo "  cd \"$SOLAR_WORKSPACE\""
+  echo "  bash solar/core/skills/solar-interface/scripts/solar client init"
+  echo "  bash solar/core/skills/solar-interface/scripts/solar client sync"
+  echo "  bash solar/core/skills/solar-interface/scripts/solar client doctor"
+  echo ""
+  echo "init is idempotent: it adds workspace AGENTS.md, IDE symlinks, and .env.example without touching sun/ or planets/."
+else
+  echo "Next steps:"
+  echo "  solar client sync"
+  echo "  solar client doctor"
+fi
 echo "  bash \"$(solar_core_dir)/scripts/smoke-solar-client.sh\" \"$SOLAR_ROOT\""
 if [[ "$(uname -s)" == "Darwin" ]]; then
   echo "  bash \"$(solar_core_dir)/skills/solar-system/scripts/install_launchagent_macos.sh\""

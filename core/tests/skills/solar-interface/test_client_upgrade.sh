@@ -73,6 +73,45 @@ popd >/dev/null
 assert_ok "upgrade prunes .cursor" test ! -d "$INSTALL/.cursor"
 assert_ok "upgrade keeps core/" test -f "$INSTALL/core/skills/solar-interface/scripts/solar"
 
+LEGACY="$TMP/legacy-mono"
+mkdir -p "$LEGACY/sun" "$LEGACY/planets/demo" "$LEGACY/core/skills" "$LEGACY/.github" "$LEGACY/docs"
+printf '%s\n' '# workspace core' > "$LEGACY/core/AGENTS.md"
+printf '%s\n' '# root agents' > "$LEGACY/AGENTS.md"
+printf '%s\n' '# changelog' > "$LEGACY/CHANGELOG.md"
+
+assert_ok "restructure needed (legacy root)" solar_client_restructure_needed "$LEGACY"
+
+MANIFEST_LEGACY="$TMP/legacy-manifest"
+cp -a "$LEGACY" "$MANIFEST_LEGACY"
+mkdir -p "$MANIFEST_LEGACY/.solar"
+echo '{"layout":"solar-client-v1.1"}' > "$MANIFEST_LEGACY/.solar/manifest.json"
+assert_ok "restructure needed with manifest" solar_client_restructure_needed "$MANIFEST_LEGACY"
+
+plan="$(solar_client_restructure_plan "$LEGACY")"
+assert_ok "plan mkdir solar" bash -c "printf '%s' \"$plan\" | grep -q 'mkdir -p.*/solar'"
+assert_ok "plan mv core" bash -c "printf '%s' \"$plan\" | grep -q 'mv.*/core.*/solar/'"
+assert_ok "plan mv AGENTS.md" bash -c "printf '%s' \"$plan\" | grep -q 'mv.*/AGENTS.md.*/solar/'"
+assert_ok "plan mv .github" bash -c "printf '%s' \"$plan\" | grep -q 'mv.*/.github.*/solar/'"
+assert_ok "plan keeps sun" bash -c "! printf '%s' \"$plan\" | grep -Eq 'mv.*/sun(/| )'"
+assert_ok "plan keeps planets" bash -c "! printf '%s' \"$plan\" | grep -Eq 'mv.*/planets(/| )'"
+
+RESTRUCT="$TMP/restructure-apply"
+cp -a "$LEGACY" "$RESTRUCT"
+solar_client_restructure_apply "$RESTRUCT" false
+assert_ok "apply: no core at workspace root" test ! -d "$RESTRUCT/core"
+assert_ok "apply: solar has core" test -f "$RESTRUCT/solar/core/AGENTS.md"
+assert_ok "apply: solar has root AGENTS.md" test -f "$RESTRUCT/solar/AGENTS.md"
+assert_ok "apply: sun stays at workspace root" test -d "$RESTRUCT/sun"
+assert_fail "apply: not needed after restructure" solar_client_restructure_needed "$RESTRUCT"
+
+# Simulate client init: workspace AGENTS.md at root must not re-trigger restructure.
+if [[ -f "$INSTALL/core/templates/workspace-AGENTS.md" ]]; then
+  cp "$INSTALL/core/templates/workspace-AGENTS.md" "$RESTRUCT/AGENTS.md"
+else
+  printf '%s\n' '# Solar Workspace' > "$RESTRUCT/AGENTS.md"
+fi
+assert_fail "not needed after init workspace AGENTS.md at root" solar_client_restructure_needed "$RESTRUCT"
+
 echo "---"
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

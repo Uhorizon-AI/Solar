@@ -54,7 +54,13 @@ if [[ -d "$WORKSPACE/core" && -f "$WORKSPACE/core/AGENTS.md" && ! -f "$WORKSPACE
   fi
 fi
 
-INSTALL_ROOT="$(solar_client_install_root)"
+if solar_resolve_paths --workspace "$WORKSPACE" --relaxed --quiet 2>/dev/null; then
+  INSTALL_ROOT="$SOLAR_ROOT"
+else
+  INSTALL_ROOT="$(solar_client_install_root)"
+  export SOLAR_WORKSPACE="$WORKSPACE"
+  export SOLAR_ROOT="$INSTALL_ROOT"
+fi
 CORE_DIR="$INSTALL_ROOT/core"
 
 stable_hash() {

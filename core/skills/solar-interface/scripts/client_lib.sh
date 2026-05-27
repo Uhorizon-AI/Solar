@@ -211,22 +211,68 @@ solar_client_print_upgrade_report() {
   fi
 }
 
+# Workspace entries that stay at SOLAR_WORKSPACE root (runtime / client metadata).
+solar_client_restructure_should_keep() {
+  local base="$1"
+  case "$base" in
+    sun|planets|.solar|solar|scratch|.DS_Store|.pytest_cache) return 0 ;;
+    .env|.env.clean|.env.mac) return 0 ;;
+    .claude|.codex|.cursor|.gemini|.vscode) return 0 ;;
+  esac
+  [[ "$base" == .venv* ]] && return 0
+  [[ "$base" == *.pre-upgrade.* ]] && return 0
+  return 1
+}
+
+# True when framework/install artifacts still live at workspace root (not workspace governance).
+# Root AGENTS.md from client init is workspace governance and must not count as framework.
+solar_client_framework_at_workspace_root() {
+  local ws="$1"
+  [[ -d "$ws/core" && -f "$ws/core/AGENTS.md" ]] && return 0
+  [[ -d "$ws/.git" && ! -d "$ws/solar/.git" ]] && return 0
+  [[ -d "$ws/.github" && ! -d "$ws/solar/.github" ]] && return 0
+  [[ -f "$ws/CHANGELOG.md" && ! -f "$ws/solar/CHANGELOG.md" ]] && return 0
+  return 1
+}
+
+solar_client_restructure_complete() {
+  local ws="$1"
+  [[ -d "$ws/solar/core" && -f "$ws/solar/core/AGENTS.md" ]] \
+    && ! solar_client_framework_at_workspace_root "$ws"
+}
+
 solar_client_restructure_needed() {
   local ws="$1"
-  local layout
-  layout="$(solar_client_workspace_layout "$ws" 2>/dev/null || return 1)"
-  [[ "$layout" == "legacy_root" ]] || return 1
-  [[ ! -d "$ws/solar/core" ]]
+  solar_client_restructure_complete "$ws" && return 1
+  solar_client_framework_at_workspace_root "$ws"
+}
+
+solar_client_restructure_iter_entries() {
+  local ws="$1"
+  local entry base
+  shopt -s nullglob
+  for entry in "$ws"/* "$ws"/.[!.]* "$ws"/..?*; do
+    [[ -e "$entry" ]] || continue
+    base="$(basename "$entry")"
+    solar_client_restructure_should_keep "$base" && continue
+    if [[ -e "$ws/solar/$base" ]]; then
+      echo "WARN: skip $base (already exists under solar/)" >&2
+      continue
+    fi
+    printf '%s\n' "$entry"
+  done
+  shopt -u nullglob
 }
 
 solar_client_restructure_plan() {
   local ws="$1"
   solar_client_restructure_needed "$ws" || return 1
   echo "mkdir -p $ws/solar"
-  echo "mv $ws/core $ws/solar/core"
-  if [[ -d "$ws/.git" ]]; then
-    echo "mv $ws/.git $ws/solar/.git"
-  fi
+  local entry
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    echo "mv $entry $ws/solar/"
+  done < <(solar_client_restructure_iter_entries "$ws")
 }
 
 solar_client_backups_dir() {
@@ -452,10 +498,10 @@ solar_client_restructure_apply() {
   local backup=""
 
   if ! solar_client_restructure_needed "$ws"; then
-    if [[ -d "$ws/solar/core" ]]; then
-      echo "INFO: restructure skipped (already has solar/core/)"
+    if solar_client_restructure_complete "$ws"; then
+      echo "INFO: restructure skipped (full install already under solar/)"
     else
-      echo "INFO: restructure skipped (workspace layout is not legacy_root monorepo)"
+      echo "INFO: restructure skipped (no framework files at workspace root)"
     fi
     return 0
   fi
@@ -472,10 +518,17 @@ solar_client_restructure_apply() {
   cp -a "$ws" "$backup"
 
   mkdir -p "$ws/solar"
-  mv "$ws/core" "$ws/solar/core"
-  echo "OK: moved core/ -> solar/core/"
-  if [[ -d "$ws/.git" && ! -e "$ws/solar/.git" ]]; then
-    mv "$ws/.git" "$ws/solar/.git"
-    echo "OK: moved .git -> solar/.git"
+  local entry base moved=0
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    base="$(basename "$entry")"
+    mv "$entry" "$ws/solar/"
+    echo "OK: moved $base -> solar/"
+    moved=$((moved + 1))
+  done < <(solar_client_restructure_iter_entries "$ws")
+
+  if [[ "$moved" -eq 0 ]]; then
+    echo "WARN: restructure found nothing to move (check solar/ for conflicts)" >&2
+    return 1
   fi
 }

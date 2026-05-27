@@ -79,7 +79,7 @@ solar client update --tag vX.Y.Z  # checkout tag in SOLAR_ROOT
 solar client update --bundle      # rsync core/ only (no .git install)
 solar client upgrade              # workspace manifest + prune SOLAR_ROOT IDE artifacts
 solar client upgrade --check
-solar client upgrade --restructure
+solar client upgrade --restructure   # mv full framework repo -> solar/ (sun/, planets/, .solar/ stay at workspace root)
 solar client sync
 solar client doctor
 solar status [--verbose]          # 5 blocks; verbose adds router detail + MCP hint

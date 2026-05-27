@@ -28,7 +28,3 @@ planets/
 .vscode/
 .cursor/
 .agents/ # Antigravity
-
-# Temporary files
-brain.ai
-brain.code-workspace

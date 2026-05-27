@@ -6,6 +6,16 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- change(solar-client): `solar client upgrade --restructure` moves the full framework install into `solar/` (not only `core/` + `.git`); post-restructure next steps remain manual (`client init`, `sync`, `doctor`).
+
+### Fixed
+- fix(solar-client): restructure idempotency no longer treats workspace-root `AGENTS.md` (from `client init`) as framework still at root.
+- fix(solar-client): `client init` resolves `SOLAR_ROOT` via `solar_resolve_paths` when `solar/core/` exists (legacy_solar layout).
+
+### Tests
+- test(solar-client): extend `test_client_upgrade.sh` for full restructure plan/apply and post-init idempotency.
+
 ## [0.11.1] - 2026-05-27
 
 ### Changed
