@@ -497,13 +497,31 @@ import os
 import glob
 import sys
 
-vscode_settings = sys.argv[1]
-planets_dir = sys.argv[2]
-planet_repos = sorted([f'planets/{os.path.basename(p)}' for p in glob.glob(os.path.join(planets_dir, '*')) if os.path.isdir(p)])
+workspace_root = sys.argv[1]
+vscode_settings = sys.argv[2]
+planets_dir = sys.argv[3]
+
+def repo_has_git(rel_path: str) -> bool:
+    return os.path.isdir(os.path.join(workspace_root, rel_path, '.git'))
+
+discovered_repos = []
+for name in ('sun', 'solar'):
+    if repo_has_git(name):
+        discovered_repos.append(name)
+
+if os.path.isdir(planets_dir):
+    for planet_path in glob.glob(os.path.join(planets_dir, '*')):
+        if not os.path.isdir(planet_path):
+            continue
+        rel = f'planets/{os.path.basename(planet_path)}'
+        if repo_has_git(rel):
+            discovered_repos.append(rel)
+
+discovered_repos = sorted(discovered_repos)
 
 if os.path.exists(vscode_settings):
     try:
-        with open(vscode_settings, 'r') as f:
+        with open(vscode_settings, 'r', encoding='utf-8') as f:
             data = json.load(f)
     except Exception:
         data = {}
@@ -516,28 +534,39 @@ if not isinstance(existing_scan_repos, list):
 
 merged_scan_repos = []
 seen = set()
-for repo in existing_scan_repos + planet_repos:
+for repo in discovered_repos + existing_scan_repos:
     if not isinstance(repo, str):
         continue
-    if repo not in seen:
-        merged_scan_repos.append(repo)
-        seen.add(repo)
+    repo = repo.strip().strip('/')
+    if not repo or repo in seen:
+        continue
+    if not repo_has_git(repo):
+        continue
+    merged_scan_repos.append(repo)
+    seen.add(repo)
 
 data['explorer.excludeGitIgnore'] = False
 data['search.useIgnoreFiles'] = False
+data['git.autoRepositoryDetection'] = 'subFolders'
+data['git.repositoryScanMaxDepth'] = 2
 data['git.scanRepositories'] = merged_scan_repos
 data['python.terminal.activateEnvironment'] = False
 
 for exclude_key in ('files.exclude', 'search.exclude'):
-    existing = data.get(exclude_key, {})
-    if not isinstance(existing, dict):
-        existing = {}
-    existing['.solar'] = True
-    data[exclude_key] = existing
+    existing = data.get(exclude_key)
+    if isinstance(existing, dict):
+        existing.pop('.solar', None)
+        if existing:
+            data[exclude_key] = existing
+        else:
+            data.pop(exclude_key, None)
 
 ignored_folders = data.get('git.repositoryScanIgnoredFolders')
 if isinstance(ignored_folders, list):
-    filtered_ignored_folders = [item for item in ignored_folders if item != 'planets']
+    filtered_ignored_folders = [
+        item for item in ignored_folders
+        if item not in ('planets', 'sun', 'solar')
+    ]
     if filtered_ignored_folders:
         data['git.repositoryScanIgnoredFolders'] = filtered_ignored_folders
     else:
@@ -546,19 +575,24 @@ else:
     data.pop('git.repositoryScanIgnoredFolders', None)
 
 os.makedirs(os.path.dirname(vscode_settings), exist_ok=True)
-with open(vscode_settings, 'w') as f:
+with open(vscode_settings, 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2)
-" "$vscode_settings" "$PLANETS_DIR"; then
+    f.write('\n')
+" "$ROOT_DIR" "$vscode_settings" "$PLANETS_DIR"; then
     log_tree_mid "⚙️  Settings" "${RED}✗${NC} Failed to update $vscode_settings"
     return 1
   fi
 
-  local planet_count=0
-  if [[ -d "$PLANETS_DIR" ]]; then
-    planet_count="$(find "$PLANETS_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
-  fi
+  local git_repo_count=0
+  git_repo_count="$(python3 -c "
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    data = json.load(f)
+repos = data.get('git.scanRepositories', [])
+print(len(repos) if isinstance(repos, list) else 0)
+" "$vscode_settings" 2>/dev/null || echo 0)"
   log_tree_mid "⚙️  Settings" "${GREEN}✓${NC} Updated $vscode_settings"
-  log_tree_end "📁 Git scan" "${GREEN}✓${NC} Registered $planet_count planet repositories"
+  log_tree_end "📁 Git scan" "${GREEN}✓${NC} ${git_repo_count} subfolder repositories (sun, solar, planets/*)"
   echo
 }
 
