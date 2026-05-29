@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-29
+
 ### Added
 - feat(solar-client): Fase 3 dual-mode workspace — `core_source: global | workspace-snapshot` in manifest with `requires_global_client` and `portable_capabilities`.
 - feat(solar-client): `solar client bundle create|verify` — opt-in portable bundle under `.solar/bundle/` with transitive allowlist, `index.json`, and checksums.
