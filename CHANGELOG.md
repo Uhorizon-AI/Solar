@@ -6,6 +6,27 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-client): Fase 3 dual-mode workspace — `core_source: global | workspace-snapshot` in manifest with `requires_global_client` and `portable_capabilities`.
+- feat(solar-client): `solar client bundle create|verify` — opt-in portable bundle under `.solar/bundle/` with transitive allowlist, `index.json`, and checksums.
+- feat(solar-client): `solar client sync --portable` — sync IDE + bundle create in one step.
+- feat(solar-client): `solar client self-update` — alias for global `client update`.
+- feat(solar-client): `install_solar_client.sh` and `bootstrap_solar_client.sh` for PATH install without monorepo familiarity.
+- feat(solar-client): `solar_runtime_core_dir` / resolver uses bundle when `workspace-snapshot` (FAIL if bundle invalid).
+
+### Changed
+- change(solar-client): `solar status` and `solar client doctor` report `core_source` mode and portable bundle health.
+- change(solar-client): `solar client sync` preserves `workspace-snapshot` manifest on bump (no silent reset to global).
+
+### Fixed
+- fix(solar-client): `bundle create` reads global `core/` via `solar_global_core_dir` so portable refresh no longer deletes its own source tree.
+- fix(solar-client): export `SOLAR_GLOBAL_ROOT` in portable mode; `snapshot_outdated` and manifest version bump compare against the real framework install.
+- fix(solar-client): bundle secret scan only flags `.env` files and literal `sk-ant`/`sk-proj` tokens (no false positives on framework scripts).
+
+### Tests
+- test(solar-client): `test_client_manifest.sh`, `test_client_bundle.sh`; smoke asserts default global contract.
+- test(solar-client): `test_client_bundle.sh` covers second `bundle create` refresh and quiet doctor after create.
+
 ## [0.11.2] - 2026-05-27
 
 ### Changed

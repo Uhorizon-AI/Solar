@@ -5,6 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=resolve_solar_paths.sh
 source "$SCRIPT_DIR/resolve_solar_paths.sh"
+# shellcheck source=client_lib.sh
+source "$SCRIPT_DIR/client_lib.sh"
 solar_resolve_paths --quiet
 
 VERBOSE=false
@@ -127,6 +129,25 @@ if ! solar_client_check_ports; then
     client_detail="$client_detail; ${SOLAR_CLIENT_PORTS_MSG}"
   else
     client_detail="${SOLAR_CLIENT_PORTS_MSG}"
+  fi
+fi
+
+MANIFEST="$SOLAR_WORKSPACE/.solar/manifest.json"
+if [[ -f "$MANIFEST" ]]; then
+  _core_src="$(solar_client_manifest_core_source "$MANIFEST")"
+  if [[ "$_core_src" == "workspace-snapshot" ]]; then
+    _core_line="core_source=workspace-snapshot (portable)"
+    if solar_client_check_snapshot_outdated "$SOLAR_WORKSPACE" "$(solar_global_install_root 2>/dev/null || true)" 2>/dev/null; then
+      _core_line="$_core_line snapshot_outdated"
+      [[ "$client_state" == "OK" ]] && client_state="WARN"
+    fi
+  else
+    _core_line="core_source=global (requires SOLAR_ROOT)"
+  fi
+  if [[ -n "$client_detail" ]]; then
+    client_detail="$client_detail; $_core_line"
+  else
+    client_detail="$_core_line"
   fi
 fi
 

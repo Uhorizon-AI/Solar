@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOLAR_VERSION="0.11.1"
+SOLAR_VERSION="0.14.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -30,8 +30,16 @@ case "${1:-}" in
         shift
         exec bash "$SCRIPT_DIR/client_update.sh" "$@"
         ;;
+      bundle)
+        shift
+        exec bash "$SCRIPT_DIR/client_bundle.sh" "$@"
+        ;;
+      self-update)
+        shift
+        exec bash "$SCRIPT_DIR/client_self_update.sh" "$@"
+        ;;
       "")
-        echo "Usage: solar client {init|sync|doctor|upgrade|update}" >&2
+        echo "Usage: solar client {init|sync|doctor|upgrade|update|bundle|self-update}" >&2
         exit 2
         ;;
       *)
@@ -70,7 +78,7 @@ Flags:
   -h, --help               Show help
 
 Subcommands:
-  client init|sync|doctor|upgrade  Workspace lifecycle (Solar Client)
+  client init|sync|doctor|upgrade|update|bundle|self-update  Workspace lifecycle (Solar Client)
   status [--verbose]       Compact workspace health (5 blocks)
   paths                    Resolvable paths for IDE @ references
   new [title]              Start a new thread and enter chat

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # resolve_solar_paths.sh — Solar workspace + install root resolution.
 # Source and call: solar_resolve_paths [--workspace <path>] [--quiet] [--export] [--relaxed]
-# Exports: SOLAR_WORKSPACE, SOLAR_ROOT (install root; core/ lives at $SOLAR_ROOT/core)
+# Exports: SOLAR_WORKSPACE, SOLAR_ROOT (runtime root; may be .solar/bundle in portable mode)
+#          SOLAR_GLOBAL_ROOT (framework git install when discoverable; optional in portable-only)
 set -euo pipefail
 
 _RESOLVE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,11 +18,13 @@ Usage (source this file):
   solar_resolve_paths [--workspace <path>] [--quiet] [--export] [--relaxed]
 
 Exports on success:
-  SOLAR_WORKSPACE   Active agent (sun/, planets/, .env, .solar/manifest.json)
-  SOLAR_ROOT        Solar install root (always contains core/)
+  SOLAR_WORKSPACE      Active agent (sun/, planets/, .env, .solar/manifest.json)
+  SOLAR_ROOT             Runtime install root (global framework or .solar/bundle in portable mode)
+  SOLAR_GLOBAL_ROOT      Global framework install when discoverable (optional)
 
 Helper (after resolve):
-  solar_core_dir    Prints $SOLAR_ROOT/core
+  solar_core_dir         Active runtime core (bundle or $SOLAR_ROOT/core)
+  solar_global_core_dir  Global framework core/ (for bundle create, snapshot_outdated)
 
 Exit codes:
   0  success
@@ -30,11 +33,81 @@ EOF
 }
 
 solar_core_dir() {
+  solar_runtime_core_dir
+}
+
+solar_runtime_core_dir() {
   [[ -n "${SOLAR_ROOT:-}" ]] || {
     echo "ERROR: SOLAR_ROOT not set (run solar_resolve_paths first)" >&2
     return 1
   }
+  if [[ "${SOLAR_CORE_SOURCE:-global}" == "workspace-snapshot" ]]; then
+    local bundle_core="${SOLAR_WORKSPACE:-}/.solar/bundle/core"
+    if [[ -f "$bundle_core/skills/solar-interface/scripts/solar" ]]; then
+      printf '%s' "$bundle_core"
+      return 0
+    fi
+    echo "ERROR: workspace-snapshot declared but bundle invalid — run: solar client bundle create" >&2
+    return 1
+  fi
   printf '%s/core' "$SOLAR_ROOT"
+}
+
+_resolve_is_workspace_bundle_root() {
+  local root="$1"
+  local ws="$2"
+  [[ -n "$root" && -n "$ws" ]] || return 1
+  local r b
+  r="$(_resolve_abs "$root" 2>/dev/null || echo "$root")"
+  b="$(_resolve_abs "$ws/.solar/bundle" 2>/dev/null || echo "")"
+  [[ -n "$b" && "$r" == "$b" ]]
+}
+
+solar_global_install_root() {
+  if [[ -n "${SOLAR_GLOBAL_ROOT:-}" ]]; then
+    printf '%s' "$SOLAR_GLOBAL_ROOT"
+    return 0
+  fi
+  if [[ -n "${SOLAR_ROOT:-}" && -n "${SOLAR_WORKSPACE:-}" ]] \
+    && ! _resolve_is_workspace_bundle_root "$SOLAR_ROOT" "$SOLAR_WORKSPACE" \
+    && _resolve_validate_root "$(_resolve_abs "$SOLAR_ROOT")"; then
+    printf '%s' "$(_resolve_abs "$SOLAR_ROOT")"
+    return 0
+  fi
+  local saved_root="${SOLAR_ROOT:-}"
+  if [[ -n "$saved_root" && -n "${SOLAR_WORKSPACE:-}" ]] \
+    && _resolve_is_workspace_bundle_root "$saved_root" "$SOLAR_WORKSPACE"; then
+    unset SOLAR_ROOT
+  fi
+  _resolve_global_root
+}
+
+solar_global_core_dir() {
+  local root
+  root="$(solar_global_install_root)" || return 1
+  printf '%s/core' "$root"
+}
+
+_resolve_manifest_core_source() {
+  local ws="$1"
+  local manifest="$ws/.solar/manifest.json"
+  [[ -f "$manifest" ]] || { echo "global"; return 0; }
+  python3 - <<'PY' "$manifest" 2>/dev/null || echo "global"
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        print(json.load(fh).get("core_source", "global") or "global")
+except Exception:
+    print("global")
+PY
+}
+
+_resolve_bundle_valid() {
+  local ws="$1"
+  local bundle_core="$ws/.solar/bundle/core"
+  [[ -f "$bundle_core/skills/solar-interface/scripts/resolve_solar_paths.sh" \
+    && -f "$bundle_core/scripts/sync-clients.sh" \
+    && -f "$ws/.solar/bundle/index.json" ]]
 }
 
 _resolve_abs() {
@@ -176,11 +249,43 @@ _resolve_set_paths() {
   }
 
   export SOLAR_WORKSPACE="$ws"
+  export SOLAR_CORE_SOURCE="$(_resolve_manifest_core_source "$ws")"
 
   case "$layout" in
     client)
-      SOLAR_ROOT="$(_resolve_global_root)" || return 1
-      export SOLAR_ROOT
+      local global_root=""
+      if [[ -n "${SOLAR_ROOT:-}" ]]; then
+        local r
+        r="$(_resolve_abs "$SOLAR_ROOT")"
+        if _resolve_validate_root "$r" && ! _resolve_is_workspace_bundle_root "$r" "$ws"; then
+          global_root="$r"
+        fi
+      fi
+      if [[ -z "$global_root" ]]; then
+        local saved="${SOLAR_ROOT:-}"
+        if [[ -n "$saved" ]] && _resolve_is_workspace_bundle_root "$saved" "$ws"; then
+          unset SOLAR_ROOT
+        fi
+        global_root="$(_resolve_global_root 2>/dev/null || true)"
+      fi
+      if [[ -n "$global_root" ]]; then
+        export SOLAR_GLOBAL_ROOT="$(_resolve_abs "$global_root")"
+      else
+        unset SOLAR_GLOBAL_ROOT
+      fi
+      if [[ "$SOLAR_CORE_SOURCE" == "workspace-snapshot" ]]; then
+        if _resolve_bundle_valid "$ws"; then
+          export SOLAR_ROOT="$(_resolve_abs "$ws/.solar/bundle")"
+        else
+          echo "ERROR: core_source=workspace-snapshot but bundle is missing or invalid" >&2
+          echo "HINT: run solar client bundle create on the primary machine" >&2
+          return 1
+        fi
+      else
+        SOLAR_ROOT="${SOLAR_GLOBAL_ROOT:-}"
+        SOLAR_ROOT="${SOLAR_ROOT:-$(_resolve_global_root)}"
+        export SOLAR_ROOT
+      fi
       ;;
     legacy_solar)
       export SOLAR_ROOT="$(_resolve_abs "$ws/solar")"
@@ -205,9 +310,11 @@ _resolve_emit() {
   if [[ "$_RESOLVE_EXPORT" == true ]]; then
     echo "SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
     echo "SOLAR_ROOT=$SOLAR_ROOT"
+    [[ -n "${SOLAR_GLOBAL_ROOT:-}" ]] && echo "SOLAR_GLOBAL_ROOT=$SOLAR_GLOBAL_ROOT"
   elif [[ "$_RESOLVE_QUIET" != true ]]; then
     echo "SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
     echo "SOLAR_ROOT=$SOLAR_ROOT"
+    [[ -n "${SOLAR_GLOBAL_ROOT:-}" ]] && echo "SOLAR_GLOBAL_ROOT=$SOLAR_GLOBAL_ROOT"
   fi
 }
 

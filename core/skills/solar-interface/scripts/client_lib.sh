@@ -60,6 +60,8 @@ data = {
     "channel": "stable",
     "synced_at": synced_at,
     "core_source": "global",
+    "requires_global_client": True,
+    "portable_capabilities": [],
 }
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
@@ -109,7 +111,9 @@ with open(path, encoding="utf-8") as fh:
 data["core_version"] = version
 data["client_version"] = version
 data["core_commit"] = commit
-data["core_source"] = "global"
+if data.get("core_source") != "workspace-snapshot":
+    data["core_source"] = "global"
+    data["requires_global_client"] = True
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")
@@ -458,6 +462,258 @@ solar_client_repair_manifest() {
   solar_client_write_manifest_v11 "$workspace" "$install_root" preserve_synced=1
 }
 
+solar_client_manifest_field() {
+  local manifest="$1"
+  local field="$2"
+  python3 - <<'PY' "$manifest" "$field" 2>/dev/null || echo ""
+import json, sys
+path, field = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    val = data.get(field, "")
+    if isinstance(val, bool):
+        print("true" if val else "false")
+    elif isinstance(val, list):
+        print(",".join(str(x) for x in val))
+    else:
+        print(val or "")
+except Exception:
+    print("")
+PY
+}
+
+solar_client_manifest_core_source() {
+  solar_client_manifest_field "$1" "core_source"
+}
+
+solar_client_bundle_dir() {
+  printf '%s/.solar/bundle' "$1"
+}
+
+solar_client_bundle_core_dir() {
+  printf '%s/core' "$(solar_client_bundle_dir "$1")"
+}
+
+solar_client_max_bundle_mb() {
+  local from_env="${SOLAR_MAX_BUNDLE_MB:-}"
+  if [[ -n "$from_env" && "$from_env" =~ ^[0-9]+$ ]]; then
+    echo "$from_env"
+    return 0
+  fi
+  echo "200"
+}
+
+solar_client_bundle_size_mb() {
+  local bundle_dir="$1"
+  [[ -d "$bundle_dir" ]] || { echo "0"; return 0; }
+  local bytes
+  if du -sk "$bundle_dir" >/dev/null 2>&1; then
+    bytes="$(du -sk "$bundle_dir" | awk '{print $1 * 1024}')"
+  else
+    bytes="$(find "$bundle_dir" -type f -print0 2>/dev/null | xargs -0 stat -f '%z' 2>/dev/null | awk '{s+=$1} END {print s+0}')"
+  fi
+  python3 - <<PY "$bytes"
+import sys
+b = int(sys.argv[1] or 0)
+print(f"{b / (1024*1024):.2f}")
+PY
+}
+
+solar_client_check_snapshot_outdated() {
+  local workspace="$1"
+  local install_root="${2:-}"
+  local manifest="$workspace/.solar/manifest.json"
+  [[ -f "$manifest" ]] || return 1
+  [[ "$(solar_client_manifest_core_source "$manifest")" == "workspace-snapshot" ]] || return 1
+  local bundle_ver global_ver
+  bundle_ver="$(solar_client_manifest_core_version "$manifest")"
+  if [[ -n "$install_root" ]] && _resolve_is_workspace_bundle_root "$install_root" "$workspace" 2>/dev/null; then
+    install_root=""
+  fi
+  if [[ -z "$install_root" ]]; then
+    install_root="$(solar_global_install_root 2>/dev/null || true)"
+  fi
+  [[ -n "$install_root" ]] || return 1
+  read -r global_ver _ < <(solar_client_git_identity "$install_root")
+  [[ -n "$bundle_ver" && -n "$global_ver" && "$bundle_ver" != "$global_ver" && "$global_ver" != dev* ]]
+}
+
+solar_client_write_manifest_portable() {
+  local workspace="$1"
+  local bundle_checksum="$2"
+  local capabilities="${3:-}"
+  local manifest="$workspace/.solar/manifest.json"
+  local snapshot_at synced_at existing_ver existing_commit global_root
+  snapshot_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  synced_at="$snapshot_at"
+  existing_ver=""
+  existing_commit=""
+  if [[ -f "$manifest" ]]; then
+    synced_at="$(solar_client_manifest_field "$manifest" synced_at)"
+    [[ -n "$synced_at" ]] || synced_at="$snapshot_at"
+  fi
+  if global_root="$(solar_global_install_root 2>/dev/null || true)" && [[ -n "$global_root" ]]; then
+    read -r existing_ver existing_commit < <(solar_client_git_identity "$global_root")
+  elif [[ -f "$manifest" ]]; then
+    existing_ver="$(solar_client_manifest_core_version "$manifest")"
+    existing_commit="$(solar_client_manifest_core_commit "$manifest")"
+  fi
+  python3 - <<PY "$manifest" "$bundle_checksum" "$snapshot_at" "$synced_at" "$existing_ver" "$existing_commit" "$capabilities"
+import json, sys
+path, checksum, snapshot_at, synced_at, ver, commit, caps = sys.argv[1:8]
+caps_list = [c.strip() for c in caps.split(",") if c.strip()] if caps else []
+data = {}
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    pass
+data.update({
+    "layout": "solar-client-v1.1",
+    "core_source": "workspace-snapshot",
+    "requires_global_client": False,
+    "portable_capabilities": caps_list,
+    "bundle_path": ".solar/bundle",
+    "bundle_checksum": checksum,
+    "snapshot_at": snapshot_at,
+    "snapshot_outdated": False,
+    "synced_at": synced_at,
+    "channel": data.get("channel") or "stable",
+})
+if ver:
+    data["core_version"] = ver
+    data["client_version"] = ver
+if commit:
+    data["core_commit"] = commit
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+PY
+}
+
+solar_client_mark_snapshot_outdated() {
+  local manifest="$1"
+  local outdated="${2:-true}"
+  [[ -f "$manifest" ]] || return 0
+  python3 - <<PY "$manifest" "$outdated"
+import json, sys
+path, outdated = sys.argv[1], sys.argv[2] == "true"
+with open(path, encoding="utf-8") as fh:
+    data = json.load(fh)
+data["snapshot_outdated"] = outdated
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+PY
+}
+
+solar_client_bundle_validate() {
+  local workspace="$1"
+  local strict="${2:-false}"
+  local bundle_dir manifest index checksums
+  bundle_dir="$(solar_client_bundle_dir "$workspace")"
+  manifest="$workspace/.solar/manifest.json"
+  index="$bundle_dir/index.json"
+  checksums="$bundle_dir/checksums.sha256"
+
+  [[ -d "$bundle_dir" ]] || { echo "missing bundle directory"; return 1; }
+  [[ -f "$index" ]] || { echo "missing index.json"; return 1; }
+  [[ -f "$checksums" ]] || { echo "missing checksums.sha256"; return 1; }
+  [[ -d "$bundle_dir/core/skills" ]] || { echo "missing bundle core/skills/"; return 1; }
+
+  python3 - <<'PY' "$index" "$checksums" "$bundle_dir" "$strict"
+import hashlib, json, os, sys
+
+index_path, sums_path, bundle_dir, strict = sys.argv[1:5]
+strict = strict == "true"
+
+with open(index_path, encoding="utf-8") as fh:
+    index = json.load(fh)
+
+entries = index.get("files") or index.get("entries") or []
+if not entries:
+    print("index.json has no file entries")
+    sys.exit(1)
+
+expected = {}
+if os.path.isfile(sums_path):
+    with open(sums_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                expected[parts[1]] = parts[0]
+
+missing = []
+bad = []
+for item in entries:
+    rel = item.get("path") or item.get("rel") or ""
+    if not rel:
+        continue
+    full = os.path.join(bundle_dir, rel)
+    if not os.path.isfile(full):
+        missing.append(rel)
+        continue
+    if rel in expected:
+        h = hashlib.sha256()
+        with open(full, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        if h.hexdigest() != expected[rel]:
+            bad.append(rel)
+
+if missing:
+    print("missing bundled files: " + ", ".join(missing[:5]))
+    sys.exit(1)
+if bad:
+    print("checksum mismatch: " + ", ".join(bad[:5]))
+    sys.exit(1)
+
+if strict:
+    for item in entries:
+        rel = item.get("path") or item.get("rel") or ""
+        base = os.path.basename(rel)
+        if base == ".env" or base.endswith(".env") or "/.env" in rel:
+            print(f"secret denylist: {rel}")
+            sys.exit(1)
+PY
+}
+
+solar_client_bundle_scan_secrets() {
+  local workspace="$1"
+  local bundle_dir
+  bundle_dir="$(solar_client_bundle_dir "$workspace")"
+  [[ -f "$bundle_dir/index.json" ]] || return 0
+  python3 - <<'PY' "$bundle_dir/index.json" "$bundle_dir"
+import json, os, re, sys
+index_path, bundle_dir = sys.argv[1:3]
+with open(index_path, encoding="utf-8") as fh:
+    entries = json.load(fh).get("files") or []
+literal_pat = re.compile(r"sk-(?:ant|proj)-[a-z0-9-]{20,}")
+found = []
+for item in entries:
+    rel = item.get("path") or ""
+    if rel.endswith(".env") or "/.env" in rel:
+        found.append(rel)
+        continue
+    full = os.path.join(bundle_dir, rel)
+    if not os.path.isfile(full):
+        continue
+    try:
+        with open(full, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(65536)
+        if literal_pat.search(text):
+            found.append(f"{rel}:literal-token")
+    except OSError:
+        pass
+for f in found:
+    print(f)
+PY
+}
+
 solar_client_update_check_report() {
   local install_root="$1"
   local workspace="${2:-}"
@@ -478,10 +734,17 @@ solar_client_update_check_report() {
   fi
 
   if [[ -n "$workspace" && -f "$workspace/.solar/manifest.json" ]]; then
-    local mv
+    local mv core_src
     mv="$(solar_client_manifest_core_version "$workspace/.solar/manifest.json")"
-    echo "Workspace manifest core_version=${mv:-<none>}"
-    if [[ -n "$mv" && "$gv" != "$mv" && "$gv" != dev* ]]; then
+    core_src="$(solar_client_manifest_core_source "$workspace/.solar/manifest.json")"
+    echo "Workspace manifest core_version=${mv:-<none>} core_source=${core_src:-global}"
+    if [[ "$core_src" == "workspace-snapshot" ]]; then
+      if solar_client_check_snapshot_outdated "$workspace" "$install_root"; then
+        echo "WARN: workspace bundle snapshot_outdated (global=$gv bundle=$mv) — run: solar client bundle create"
+        solar_client_mark_snapshot_outdated "$workspace/.solar/manifest.json" true
+      fi
+    fi
+    if [[ -n "$mv" && "$gv" != "$mv" && "$gv" != dev* && "$core_src" == "global" ]]; then
       echo "WARN: global client updated — run: solar client sync"
     fi
     if solar_client_manifest_needs_repair "$workspace/.solar/manifest.json"; then

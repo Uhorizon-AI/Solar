@@ -55,7 +55,6 @@ fi
 MANIFEST="$SOLAR_WORKSPACE/.solar/manifest.json"
 if [[ -f "$MANIFEST" ]]; then
   layout="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("layout",""))' "$MANIFEST" 2>/dev/null || true)"
-  core_source="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("core_source",""))' "$MANIFEST" 2>/dev/null || true)"
   if [[ "$layout" == "solar-client-v1.1" ]]; then
     ok "manifest layout=$layout"
   elif [[ -n "$layout" ]]; then
@@ -63,15 +62,53 @@ if [[ -f "$MANIFEST" ]]; then
   else
     warn "manifest missing layout field (run solar client upgrade)"
   fi
+  core_source="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("core_source",""))' "$MANIFEST" 2>/dev/null || true)"
+  requires_global="$(solar_client_manifest_field "$MANIFEST" requires_global_client)"
+  bundle_present=false
+  [[ -d "$SOLAR_WORKSPACE/.solar/bundle" ]] && bundle_present=true
+
   if [[ "$core_source" == "global" ]]; then
-    ok "manifest core_source=global"
+    ok "manifest core_source=global (requires SOLAR_ROOT)"
+    if [[ "$requires_global" == "false" ]]; then
+      warn "manifest requires_global_client=false but core_source=global (drift)"
+    fi
+    if [[ "$bundle_present" == true ]]; then
+      warn ".solar/bundle/ exists but manifest still global — run: solar client bundle create or remove bundle"
+    fi
+  elif [[ "$core_source" == "workspace-snapshot" ]]; then
+    ok "manifest core_source=workspace-snapshot (portable)"
+    if solar_client_bundle_validate "$SOLAR_WORKSPACE" true 2>/dev/null; then
+      ok "workspace bundle valid"
+    else
+      err "workspace-snapshot bundle invalid — run: solar client bundle create"
+    fi
+    while IFS= read -r secret_hit; do
+      [[ -n "$secret_hit" ]] || continue
+      warn "bundle secret scan: $secret_hit"
+    done < <(solar_client_bundle_scan_secrets "$SOLAR_WORKSPACE" 2>/dev/null || true)
+    if solar_client_check_snapshot_outdated "$SOLAR_WORKSPACE" "$(solar_global_install_root 2>/dev/null || true)" 2>/dev/null; then
+      warn "snapshot_outdated: global client newer than bundle — run: solar client bundle create"
+    fi
+    size_mb="$(solar_client_bundle_size_mb "$(solar_client_bundle_dir "$SOLAR_WORKSPACE")")"
+    max_mb="$(solar_client_max_bundle_mb)"
+    if python3 - <<PY "$size_mb" "$max_mb"
+import sys
+sys.exit(0 if float(sys.argv[1]) <= float(sys.argv[2]) else 1)
+PY
+    then
+      ok "bundle size ${size_mb}MB (max ${max_mb}MB)"
+    else
+      warn "bundle size ${size_mb}MB exceeds max ${max_mb}MB"
+      [[ "$STRICT" == true ]] && err "strict: bundle too large"
+    fi
   elif [[ -n "$core_source" ]]; then
-    warn "manifest core_source=$core_source (expected global)"
+    warn "manifest core_source=$core_source (expected global or workspace-snapshot)"
   fi
-  read -r global_ver global_commit < <(solar_client_git_identity "$SOLAR_ROOT")
+  read -r global_ver global_commit < <(solar_client_git_identity "$SOLAR_ROOT" 2>/dev/null || echo "unknown unknown")
   manifest_ver="$(solar_client_manifest_core_version "$MANIFEST")"
   manifest_commit="$(solar_client_manifest_core_commit "$MANIFEST")"
-  if [[ -n "$manifest_ver" && -n "$global_ver" && "$manifest_ver" != "$global_ver" && "$global_ver" != dev* ]]; then
+  if [[ "$core_source" != "workspace-snapshot" ]]; then
+  if [[ -n "$manifest_ver" && -n "$global_ver" && "$manifest_ver" != "$global_ver" && "$global_ver" != dev* && "$global_ver" != unknown ]]; then
     warn "manifest core_version=$manifest_ver but global client is $global_ver — run: solar client sync"
     if [[ "$STRICT" == true ]]; then
       err "strict: workspace manifest out of sync with SOLAR_ROOT after global update"
@@ -84,6 +121,7 @@ if [[ -f "$MANIFEST" ]]; then
     [[ "$STRICT" == true ]] && err "strict: manifest core_commit out of sync with SOLAR_ROOT"
   elif [[ -n "$manifest_commit" && -n "$global_commit" && "$global_commit" != unknown ]]; then
     ok "manifest core_commit matches SOLAR_ROOT HEAD"
+  fi
   fi
   if solar_client_manifest_needs_repair "$MANIFEST"; then
     warn "manifest needs repair (invalid JSON, merge markers, or missing fields) — run: solar client update --repair"

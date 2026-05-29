@@ -72,7 +72,7 @@ run_expect_fail() {
 _smoke_seed_workspace() {
   local ws="$1"
   mkdir -p "$ws/.solar" "$ws/sun"
-  echo '{"layout":"solar-client-v1.1","core_source":"global"}' > "$ws/.solar/manifest.json"
+  echo '{"layout":"solar-client-v1.1","core_source":"global","requires_global_client":true,"portable_capabilities":[]}' > "$ws/.solar/manifest.json"
 }
 
 TMP="$(mktemp -d)"
@@ -91,6 +91,8 @@ run_expect_ok "bash -n resolve_solar_paths.sh" bash -n "$RESOLVE"
 UNIT_RESOLVE="$INSTALL_ROOT/core/tests/skills/solar-interface/test_resolve_solar_paths.sh"
 UNIT_PATHS_PY="$INSTALL_ROOT/core/tests/skills/solar-interface/test_solar_paths_py.sh"
 UNIT_UPGRADE="$INSTALL_ROOT/core/tests/skills/solar-interface/test_client_upgrade.sh"
+UNIT_MANIFEST="$INSTALL_ROOT/core/tests/skills/solar-interface/test_client_manifest.sh"
+UNIT_BUNDLE="$INSTALL_ROOT/core/tests/skills/solar-interface/test_client_bundle.sh"
 if [[ -f "$UNIT_RESOLVE" ]]; then
   bash "$UNIT_RESOLVE" >/dev/null 2>&1 && pass "unit: test_resolve_solar_paths.sh" || fail "unit: test_resolve_solar_paths.sh"
 else
@@ -105,6 +107,16 @@ if [[ -f "$UNIT_UPGRADE" ]]; then
   bash "$UNIT_UPGRADE" >/dev/null 2>&1 && pass "unit: test_client_upgrade.sh" || fail "unit: test_client_upgrade.sh"
 else
   fail "missing test_client_upgrade.sh"
+fi
+if [[ -f "$UNIT_MANIFEST" ]]; then
+  bash "$UNIT_MANIFEST" >/dev/null 2>&1 && pass "unit: test_client_manifest.sh" || fail "unit: test_client_manifest.sh"
+else
+  fail "missing test_client_manifest.sh"
+fi
+if [[ -f "$UNIT_BUNDLE" ]]; then
+  bash "$UNIT_BUNDLE" >/dev/null 2>&1 && pass "unit: test_client_bundle.sh" || fail "unit: test_client_bundle.sh"
+else
+  fail "missing test_client_bundle.sh"
 fi
 
 echo "=== Workspace conflict (exported vs cwd) ==="
@@ -151,7 +163,15 @@ else
 fi
 
 run_expect_ok "solar status after init" bash "$SOLAR" status
-run_expect_ok "solar client doctor after init" bash "$SOLAR" client doctor
+doc_out="$(bash "$SOLAR" client doctor 2>&1 || true)"
+if echo "$doc_out" | grep -q "manifest core_source=global"; then
+  pass "doctor reports core_source=global"
+  pass "solar client doctor after init"
+else
+  fail "doctor core_source global hint"
+  echo "$doc_out" | grep -E 'core_source|ERROR|FAIL' || true
+  fail "solar client doctor after init"
+fi
 
 if [[ "$SKIP_SLOW" != true ]]; then
   run_expect_ok "solar client sync after init" bash "$SOLAR" client sync

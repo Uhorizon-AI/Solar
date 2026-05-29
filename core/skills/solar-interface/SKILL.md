@@ -81,12 +81,30 @@ solar client upgrade              # workspace manifest + prune SOLAR_ROOT IDE ar
 solar client upgrade --check
 solar client upgrade --restructure   # mv full framework repo -> solar/ (sun/, planets/, .solar/ stay at workspace root)
 solar client sync
+solar client sync --portable   # sync IDE + bundle create (opt-in portable publish)
+solar client bundle create [--check]
+solar client bundle verify
 solar client doctor
+solar client self-update         # alias: solar client update (global install)
 solar status [--verbose]          # 5 blocks; verbose adds router detail + MCP hint
 solar paths
 ```
 
-**OneDrive:** primary machine runs `update`; others run `update --check` + `sync`. Manifest conflicts → `update --repair`.
+### Workspace modes (`core_source`)
+
+| Mode | Command to enter | `doctor` expectation |
+|------|------------------|----------------------|
+| **global** (default) | `solar client init` | OK without `.solar/bundle/` |
+| **workspace-snapshot** | `solar client bundle create` | OK on machine **without** `SOLAR_ROOT` |
+
+**OneDrive:** primary runs `update` + optional `bundle create`; secondary runs `doctor` only (do not edit manifest). Manifest conflicts → `update --repair`.
+
+**Install (no monorepo clone):**
+
+```bash
+bash core/scripts/install_solar_client.sh
+# or: curl -fsSL .../bootstrap_solar_client.sh | bash
+```
 
 After `update` on `SOLAR_ROOT`: `solar client sync` in each `SOLAR_WORKSPACE`.
 
