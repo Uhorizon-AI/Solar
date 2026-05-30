@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-05-31
+
 ### Added
 - feat(solar-client): new skill `solar-client` — workspace lifecycle scripts moved from `solar-interface`.
 - feat(solar-workspace): new skill `solar-workspace` — `solar workspace doctor` for `sun/` and `planets/`.
