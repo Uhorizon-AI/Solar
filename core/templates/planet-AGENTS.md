@@ -68,7 +68,7 @@ After creating or updating `agents/`, `commands/`, or `skills/`:
 
 **2. Sync command:**
 ```bash
-bash ../../core/scripts/sync-clients.sh
+solar client sync
 ```
 
 **What it does:**

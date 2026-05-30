@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# solar_status.sh — compact workspace health (5 blocks).
+# solar_status.sh — compact workspace health (Client + Workspace + runtime).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLIENT_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)"
 # shellcheck source=resolve_solar_paths.sh
 source "$SCRIPT_DIR/resolve_solar_paths.sh"
 # shellcheck source=client_lib.sh
-source "$SCRIPT_DIR/client_lib.sh"
+source "$CLIENT_SCRIPTS/client_lib.sh"
 solar_resolve_paths --quiet
 
 VERBOSE=false
@@ -39,7 +40,7 @@ block_line() {
 }
 
 iface_state="FAIL"
-sun_state="FAIL"
+workspace_state="FAIL"
 system_state="INFO"
 router_state="INFO"
 router_detail=""
@@ -55,11 +56,17 @@ else
   iface_state="DOWN"
 fi
 
-# sun (profile + memory)
+# workspace content (sun/ + planets/)
+workspace_detail=""
 if [[ -f "$SOLAR_WORKSPACE/sun/preferences/profile.md" && -f "$SOLAR_WORKSPACE/sun/MEMORY.md" ]]; then
-  sun_state="OK"
+  workspace_state="OK"
 else
-  sun_state="WARN"
+  workspace_state="WARN"
+  workspace_detail="missing profile.md or MEMORY.md"
+fi
+if [[ ! -d "$SOLAR_WORKSPACE/planets" ]]; then
+  workspace_state="WARN"
+  workspace_detail="${workspace_detail:+$workspace_detail; }planets/ missing"
 fi
 
 # system (LaunchAgent) — capture output first: status_launchagent may exit 1
@@ -116,9 +123,9 @@ if [[ -f "$SOLAR_WORKSPACE/.env" ]]; then
   source "$SOLAR_WORKSPACE/.env"
   set +a
 fi
-SOLAR_CLIENT_SCRIPT_DIR="$SCRIPT_DIR"
+SOLAR_CLIENT_SCRIPT_DIR="$CLIENT_SCRIPTS"
 # shellcheck source=client_doctor_lib.sh
-source "$SCRIPT_DIR/client_doctor_lib.sh"
+source "$CLIENT_SCRIPTS/client_doctor_lib.sh"
 if ! solar_client_check_governance_symlinks; then
   client_state="WARN"
   client_detail="${SOLAR_CLIENT_GOV_MSG}"
@@ -158,7 +165,8 @@ print(json.dumps({
   "SOLAR_WORKSPACE": "$SOLAR_WORKSPACE",
   "SOLAR_ROOT": "$SOLAR_ROOT",
   "interface": "$iface_state",
-  "sun": "$sun_state",
+  "workspace": "$workspace_state",
+  "workspace_detail": "$workspace_detail",
   "system": "$system_state",
   "router": "$router_state",
   "router_detail": "$router_detail",
@@ -172,11 +180,18 @@ fi
 
 echo "Solar status  SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
 block_line "interface" "$iface_state"
-block_line "sun" "$sun_state"
+block_line "client" "$client_state" "$client_detail"
+block_line "workspace" "$workspace_state" "$workspace_detail"
 block_line "system" "$system_state"
 block_line "router" "$router_state" "$router_detail"
 block_line "browser" "$browser_state"
-block_line "client" "$client_state" "$client_detail"
+
+if [[ "$client_state" == "WARN" ]]; then
+  echo "hint: solar client doctor"
+fi
+if [[ "$workspace_state" == "WARN" ]]; then
+  echo "hint: solar workspace doctor"
+fi
 
 if [[ "$VERBOSE" == true ]]; then
   echo "---"
@@ -193,11 +208,11 @@ if [[ "$VERBOSE" == true ]]; then
 fi
 
 fail=0
-for s in "$iface_state" "$sun_state"; do
+for s in "$iface_state" "$workspace_state"; do
   [[ "$s" == "FAIL" ]] && fail=1
 done
 if [[ "$STRICT" == true ]]; then
-  for s in "$iface_state" "$sun_state" "$system_state" "$router_state"; do
+  for s in "$iface_state" "$workspace_state" "$client_state" "$system_state" "$router_state"; do
     [[ "$s" == "FAIL" || "$s" == "WARN" ]] && fail=1
   done
 fi

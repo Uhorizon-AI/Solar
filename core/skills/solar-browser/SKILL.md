@@ -48,7 +48,7 @@ bash -n core/skills/solar-browser/scripts/check_browser.sh
 bash -n core/skills/solar-browser/scripts/validate_mcp.sh
 
 # Sync core changes to local clients
-bash core/scripts/sync-clients.sh
+solar client sync
 ```
 
 ## Runtime configuration

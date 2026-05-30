@@ -39,7 +39,7 @@ bash -n core/skills/solar-system/scripts/install_launchagent_macos.sh
 bash -n core/skills/solar-system/scripts/check_orchestrator.sh
 
 # Sync core changes to local clients
-bash core/scripts/sync-clients.sh
+solar client sync
 ```
 
 ## Runtime configuration
@@ -88,7 +88,7 @@ The LaunchAgent entrypoint is built at `sun/runtime/system/Solar` during install
 3. acquires a lock to avoid overlapping ticks,
 4. runs enabled features in order:
    - async tasks: `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` (the script first checks whether async-tasks is already supervised by solar-system, then falls back to the local worker only when needed)
-   - transport gateway: `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
+   - transport gateway: `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
    - interface: `core/skills/solar-interface/scripts/ensure_interface.sh`
 
 ## Design notes

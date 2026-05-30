@@ -106,7 +106,7 @@ _resolve_bundle_valid() {
   local ws="$1"
   local bundle_core="$ws/.solar/bundle/core"
   [[ -f "$bundle_core/skills/solar-interface/scripts/resolve_solar_paths.sh" \
-    && -f "$bundle_core/scripts/sync-clients.sh" \
+    && -f "$bundle_core/skills/solar-client/scripts/sync-clients.sh" \
     && -f "$ws/.solar/bundle/index.json" ]]
 }
 

@@ -3,7 +3,7 @@ name: solar-router
 description: >
   Shared router that runs AI providers (Codex, Claude, Gemini, Agent, Ollama) with Solar repo context.
   Single source of truth for provider selection, fallback, and async routing policy.
-  Use when transport-gateway, async-tasks, or other runtimes need to invoke an AI with
+  Use when solar-gateway, async-tasks, or other runtimes need to invoke an AI with
   cwd = SOLAR_WORKSPACE and paths resolved against the active workspace.
 ---
 
@@ -14,7 +14,7 @@ description: >
 Single source of truth for all AI execution in Solar:
 - **Provider selection and fallback** live only here.
 - **Async routing policy** (`direct_reply` vs `async_draft_created`) lives only here.
-- Used by solar-transport-gateway (WebSocket/bridge) and solar-async-tasks (task execution).
+- Used by solar-gateway (WebSocket/bridge) and solar-async-tasks (task execution).
 
 ## Operational boundary
 
@@ -199,7 +199,7 @@ EOF
 
 ## Consumers
 
-- **solar-transport-gateway:** `run_websocket_bridge.py` and HTTP webhook bridge call the router with full v3 contract.
+- **solar-gateway:** `run_websocket_bridge.py` and HTTP webhook bridge call the router with full v3 contract.
 - **solar-async-tasks:** `execute_active.py` (via `execute_active.sh`) calls the router with `channel=async-task`, `mode=direct_only`.
 
 ## Runtime files

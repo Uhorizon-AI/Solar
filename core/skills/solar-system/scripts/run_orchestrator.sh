@@ -110,7 +110,7 @@ fi
 
 if has_feature "transport-gateway"; then
   echo "▶ Running feature: transport-gateway"
-  if ! bash "$(solar_system_skill_script solar-transport-gateway ensure_transport_gateway.sh)"; then
+  if ! bash "$(solar_system_skill_script solar-gateway ensure_transport_gateway.sh)"; then
     echo "❌ transport-gateway feature failed." >&2
     failures=$((failures + 1))
   fi

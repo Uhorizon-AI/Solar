@@ -13,7 +13,7 @@
 Supported `SOLAR_SYSTEM_FEATURES` tokens (orchestrator tick only):
 
 - `async-tasks` -> `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh`
-- `transport-gateway` -> `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
+- `transport-gateway` -> `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
 - `interface` -> `core/skills/solar-interface/scripts/ensure_interface.sh`
 
 ## Why check-first recovery

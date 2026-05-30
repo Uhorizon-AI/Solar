@@ -59,12 +59,12 @@ fi
 
 # daily-log: on demand only (do not auto-create). User creates when planning/follow-up needed.
 
-SYNC_SCRIPT="$ROOT_DIR/core/scripts/sync-clients.sh"
+SYNC_SCRIPT="$ROOT_DIR/core/skills/solar-client/scripts/sync-clients.sh"
 if [ -x "$SYNC_SCRIPT" ]; then
   echo "Running client sync..."
   if ! "$SYNC_SCRIPT"; then
     echo "Warning: client sync failed. You can retry manually:"
-    echo "  bash core/scripts/sync-clients.sh"
+    echo "  bash core/skills/solar-client/scripts/sync-clients.sh"
   fi
 fi
 
@@ -77,7 +77,7 @@ if [ "$RUN_DOCTOR" = "1" ]; then
     doctor_args+=(--check-git)
   fi
 
-  SUN_DOCTOR_SCRIPT="$ROOT_DIR/core/scripts/sun-workspace-doctor.sh"
+  SUN_DOCTOR_SCRIPT="$ROOT_DIR/core/skills/solar-workspace/scripts/sun-workspace-doctor.sh"
   if [ -x "$SUN_DOCTOR_SCRIPT" ]; then
     echo "Running sun workspace doctor..."
     if ! "$SUN_DOCTOR_SCRIPT" "${doctor_args[@]}"; then
@@ -85,7 +85,7 @@ if [ "$RUN_DOCTOR" = "1" ]; then
     fi
   fi
 
-  PLANETS_DOCTOR_SCRIPT="$ROOT_DIR/core/scripts/planets-workspace-doctor.sh"
+  PLANETS_DOCTOR_SCRIPT="$ROOT_DIR/core/skills/solar-workspace/scripts/planets-workspace-doctor.sh"
   if [ -x "$PLANETS_DOCTOR_SCRIPT" ]; then
     echo "Running planets workspace doctor..."
     if ! "$PLANETS_DOCTOR_SCRIPT" "${doctor_args[@]}"; then
@@ -95,16 +95,16 @@ if [ "$RUN_DOCTOR" = "1" ]; then
 else
   echo "Workspace doctor checks are on-demand."
   echo "Run manually when needed:"
-  echo "  bash core/scripts/sun-workspace-doctor.sh"
-  echo "  bash core/scripts/planets-workspace-doctor.sh"
+  echo "  solar workspace doctor"
+  echo "  bash core/skills/solar-workspace/scripts/sun-workspace-doctor.sh"
+  echo "  bash core/skills/solar-workspace/scripts/planets-workspace-doctor.sh"
   echo "Optional git checks:"
-  echo "  bash core/scripts/sun-workspace-doctor.sh --check-git"
-  echo "  bash core/scripts/planets-workspace-doctor.sh --check-git"
+  echo "  solar workspace doctor --check-git"
 fi
 
 echo "Solar bootstrap complete."
 echo "Next steps:"
-echo "1) Create a planet: bash core/scripts/create-planet.sh <planet-name>"
+echo "1) Create a planet: bash core/skills/solar-workspace/scripts/create-planet.sh <planet-name>"
 echo "2) Edit planets/<planet-name>/AGENTS.md to define scope and governance"
 echo "3) (Optional) Add planet resources (skills/agents/commands), keep AGENTS.md in sync, then:"
-echo "   bash core/scripts/sync-clients.sh"
+echo "   solar client sync"

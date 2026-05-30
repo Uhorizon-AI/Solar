@@ -5,6 +5,8 @@ description: Validate Solar governance structure coherence across all AGENTS.md 
 
 # Solar Governance Validation
 
+> Merged into `core/skills/solar-skill-creator/references/governance-validation.md`. This command remains as a Cursor/Claude shortcut.
+
 Interactive validation command to verify governance coherence across root, core, and planet layers.
 
 ## Usage

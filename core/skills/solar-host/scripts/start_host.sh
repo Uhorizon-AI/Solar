@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=host_lib.sh
+source "$SCRIPT_DIR/host_lib.sh"
+solar_host_load_env
+RUNTIME="$(solar_host_runtime_dir)"
+PID_FILE="$SOLAR_HOST_PID_FILE"
+LOG_FILE="$RUNTIME/host.log"
+
+host_health_ok() {
+  curl -fsS --max-time 3 "$SOLAR_HOST_BASE_URL/health" >/dev/null 2>&1
+}
+
+if [[ -f "$PID_FILE" ]]; then
+  old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+    if host_health_ok; then
+      echo "Solar Host already running (pid $old_pid) — $SOLAR_HOST_BASE_URL"
+      exit 0
+    fi
+    echo "WARN: stale Solar Host pid $old_pid (health check failed) — stopping" >&2
+    kill "$old_pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "$old_pid" 2>/dev/null || break
+      sleep 0.2
+    done
+    if kill -0 "$old_pid" 2>/dev/null; then
+      kill -9 "$old_pid" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$PID_FILE"
+fi
+
+export SOLAR_CLI="$SOLAR_WORKSPACE/core/skills/solar-interface/scripts/solar"
+if [[ ! -f "$SOLAR_CLI" ]] && [[ -f "$(solar_core_dir)/skills/solar-interface/scripts/solar" ]]; then
+  export SOLAR_CLI="$(solar_core_dir)/skills/solar-interface/scripts/solar"
+fi
+
+: >>"$LOG_FILE"
+nohup python3 "$SCRIPT_DIR/host_server.py" >>"$LOG_FILE" 2>&1 &
+new_pid=$!
+echo "$new_pid" >"$PID_FILE"
+
+ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 0.2
+  if ! kill -0 "$new_pid" 2>/dev/null; then
+    break
+  fi
+  if host_health_ok; then
+    ready=true
+    break
+  fi
+done
+
+if [[ "$ready" != true ]]; then
+  rm -f "$PID_FILE"
+  echo "ERROR: Solar Host failed to start (pid $new_pid)" >&2
+  if [[ -f "$LOG_FILE" ]]; then
+    echo "--- last lines of $LOG_FILE ---" >&2
+    tail -n 20 "$LOG_FILE" >&2 || true
+  fi
+  if kill -0 "$new_pid" 2>/dev/null; then
+    kill "$new_pid" 2>/dev/null || true
+  fi
+  exit 1
+fi
+
+echo "OK: Solar Host started at $SOLAR_HOST_BASE_URL (pid $new_pid, log $LOG_FILE)"

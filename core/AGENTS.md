@@ -20,7 +20,7 @@ When adding or expanding framework artifacts:
 - New docs in `core/docs/` must be reusable framework references, not user-specific planning.
 - Leave breadcrumbs to the source of truth whenever detail is moved out of active context.
 
-Use `core/scripts/context-report.sh` before and after broad governance or skill refactors to spot unusually large active-context files. Treat the token estimate as directional only; do not infer provider billing from it.
+Use `core/skills/solar-skill-creator/scripts/context-report.sh` before and after broad governance or skill refactors to spot unusually large active-context files. Treat the token estimate as directional only; do not infer provider billing from it.
 
 ## Onboarding (required)
 
@@ -72,7 +72,7 @@ Invoked when `sun/MEMORY.md` or `sun/preferences/profile.md` are missing. Offer 
 
 ## Workspace doctor policy (required)
 
-Doctor runs are on-demand only. Git checks are opt-in: `bash core/scripts/sun-workspace-doctor.sh --check-git`. Missing `.git` in `sun/` or `planets/*` is not a blocking issue unless git validation was explicitly requested.
+Doctor runs are on-demand only. Git checks are opt-in: `solar workspace doctor --check-git`. Missing `.git` in `sun/` or `planets/*` is not a blocking issue unless git validation was explicitly requested.
 
 ## Environment block policy (required)
 
@@ -84,13 +84,13 @@ Skills that expose long-running local endpoints must include a short `Laptop run
 
 ## Planet management rule (required)
 
-- Create planets: `bash core/scripts/create-planet.sh <planet-name>` (AGENTS.md template + CLAUDE.md/GEMINI.md symlinks).
+- Create planets: `bash core/skills/solar-workspace/scripts/create-planet.sh <planet-name>` (AGENTS.md template + CLAUDE.md/GEMINI.md symlinks).
 - See `core/templates/planet-structure.md` for structure reference and sync best practices.
-- After adding or modifying resources in `planets/*/skills/`, `planets/*/agents/`, or `planets/*/commands/`, run `bash core/scripts/sync-clients.sh`. Planet resources are prefixed `<planet-name>:<resource-name>`; only `core/` resources remain unprefixed.
+- After adding or modifying resources in `planets/*/skills/`, `planets/*/agents/`, or `planets/*/commands/`, run `solar client sync`. Planet resources are prefixed `<planet-name>:<resource-name>`; only `core/` resources remain unprefixed.
 
 ## Client sync rule (required)
 
-After any change to `core/skills/`, `core/agents/`, or `core/commands/`, run `bash core/scripts/sync-clients.sh` before considering the change complete.
+After any change to `core/skills/`, `core/agents/`, or `core/commands/`, run `solar client sync` before considering the change complete.
 
 ## Changelog policy (required)
 

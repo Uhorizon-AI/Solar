@@ -191,7 +191,7 @@ if feature_active "transport-gateway"; then
   gw_out=""
   gw_code=0
   set +e
-  gw_out="$(run_with_timeout bash "$(solar_system_skill_script solar-transport-gateway check_transport_gateway.sh)" 2>&1)"
+  gw_out="$(run_with_timeout bash "$(solar_system_skill_script solar-gateway check_transport_gateway.sh)" 2>&1)"
   gw_code=$?
   set -e
 
@@ -348,23 +348,23 @@ if [[ "$verdict" != "HEALTHY" ]]; then
         echo "  • Named tunnel rejected by Cloudflare (invalid token or deleted tunnel):"
         echo "    1. Check status at: https://one.dash.cloudflare.com → Networks → Tunnels"
         echo "    2. If the tunnel is inactive or deleted, reconfigure it:"
-        echo "       bash \"$(solar_system_suggest_script "skills/solar-transport-gateway/scripts/configure_named_tunnel.sh")\""
+        echo "       bash \"$(solar_system_suggest_script "skills/solar-gateway/scripts/configure_named_tunnel.sh")\""
       elif echo "$tunnel_error" | grep -qi "token\|credential\|auth"; then
         echo "  • Tunnel authentication error — regenerate the token in Cloudflare dashboard:"
         echo "    1. https://one.dash.cloudflare.com → Networks → Tunnels → solar-ai.uhorizon.ai"
         echo "    2. Copy the new token and update CLOUDFLARED_TUNNEL_TOKEN in .env"
-        echo "    3. bash \"$(solar_system_suggest_script "skills/solar-transport-gateway/scripts/configure_named_tunnel.sh")\""
+        echo "    3. bash \"$(solar_system_suggest_script "skills/solar-gateway/scripts/configure_named_tunnel.sh")\""
       elif echo "$tunnel_error" | grep -qi "control stream\|QUIC stream\|Application error 0x0"; then
         echo "  • Tunnel down due to QUIC/control stream protocol error (may be transient):"
-        _suggest_script "skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh"
+        _suggest_script "skills/solar-gateway/scripts/ensure_transport_gateway.sh"
         echo "  • If it persists, reconfigure the named tunnel:"
-        _suggest_script "skills/solar-transport-gateway/scripts/configure_named_tunnel.sh"
+        _suggest_script "skills/solar-gateway/scripts/configure_named_tunnel.sh"
       elif echo "$tunnel_error" | grep -qi "connection refused\|dial\|network"; then
         echo "  • Tunnel has no network connectivity — check your internet connection and retry:"
-        _suggest_script "skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh"
+        _suggest_script "skills/solar-gateway/scripts/ensure_transport_gateway.sh"
       else
         echo "  • Tunnel degraded — restart the tunnel:"
-        _suggest_script "skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh"
+        _suggest_script "skills/solar-gateway/scripts/ensure_transport_gateway.sh"
         if [[ -n "$tunnel_error" ]]; then
           echo "  • Last error in cloudflared.log:"
           echo "$tunnel_error" | sed 's/^/    /'
@@ -372,7 +372,7 @@ if [[ "$verdict" != "HEALTHY" ]]; then
       fi
     else
       echo "  • Transport gateway down — run full setup/recovery:"
-      _suggest_script "skills/solar-transport-gateway/scripts/setup_transport_gateway.sh"
+      _suggest_script "skills/solar-gateway/scripts/setup_transport_gateway.sh"
     fi
   fi
 

@@ -66,54 +66,18 @@ SOLAR_INTERFACE_PORT=7741
 SOLAR_INTERFACE_RUNTIME_DIR=sun/runtime/interface
 ```
 
-## Solar Client (workspace lifecycle)
+## Human entry (D6)
 
-Resolve paths before any command (`resolve_solar_paths.sh` exports `SOLAR_WORKSPACE`, `SOLAR_ROOT`; `solar_core_dir` → `$SOLAR_ROOT/core`):
+Prefer **`solar host start`** (Solar Host on `:9000`) or the IDE for conversation. The daemon on `:7741` remains the API backend; REPL/chat here is legacy UX.
 
-```bash
-solar client init                 # new workspace (manifest + sun; no .solar/core/)
-solar client update               # update SOLAR_ROOT (full git repo by default)
-solar client update --check       # compare global vs workspace manifest
-solar client update --repair      # fix .solar/manifest.json (OneDrive conflicts)
-solar client update --tag vX.Y.Z  # checkout tag in SOLAR_ROOT
-solar client update --bundle      # rsync core/ only (no .git install)
-solar client upgrade              # workspace manifest + prune SOLAR_ROOT IDE artifacts
-solar client upgrade --check
-solar client upgrade --restructure   # mv full framework repo -> solar/ (sun/, planets/, .solar/ stay at workspace root)
-solar client sync
-solar client sync --portable   # sync IDE + bundle create (opt-in portable publish)
-solar client bundle create [--check]
-solar client bundle verify
-solar client doctor
-solar client self-update         # alias: solar client update (global install)
-solar status [--verbose]          # 5 blocks; verbose adds router detail + MCP hint
-solar paths
-```
+## Related skills (not this skill)
 
-### Workspace modes (`core_source`)
+- **`solar-client`** — `solar client *` (init, sync, update, bundle, client doctor). See `core/skills/solar-client/SKILL.md`.
+- **`solar-workspace`** — `solar workspace doctor` (`sun/`, `planets/`). See `core/skills/solar-workspace/SKILL.md`.
+- **`solar-host`** — control plane UI (`solar host *`). See `core/skills/solar-host/SKILL.md`.
+- **`solar` CLI** — entrypoint in `scripts/solar`; `solar status` and `solar paths` live here; client/workspace/host subcommands delegate to those skills.
 
-| Mode | Command to enter | `doctor` expectation |
-|------|------------------|----------------------|
-| **global** (default) | `solar client init` | OK without `.solar/bundle/` |
-| **workspace-snapshot** | `solar client bundle create` | OK on machine **without** `SOLAR_ROOT` |
-
-**OneDrive:** primary runs `update` + optional `bundle create`; secondary runs `doctor` only (do not edit manifest). Manifest conflicts → `update --repair`.
-
-**Install (no monorepo clone):**
-
-```bash
-bash core/scripts/install_solar_client.sh
-# or: curl -fsSL .../bootstrap_solar_client.sh | bash
-```
-
-After `update` on `SOLAR_ROOT`: `solar client sync` in each `SOLAR_WORKSPACE`.
-
-Solar Client go/no-go smoke (v1.1 layout):
-
-```bash
-bash core/scripts/smoke-solar-client.sh ~/Solar/solar
-# Ends with GO or NO-GO. Fast iteration: --skip-slow (skip client sync)
-```
+Path resolution: `resolve_solar_paths.sh` in this skill (shared by client and workspace).
 
 ## Workflow
 

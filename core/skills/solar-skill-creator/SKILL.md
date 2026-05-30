@@ -43,8 +43,12 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /t
 python3 core/skills/solar-skill-creator/scripts/init_skill.py <skill-name> --path <target-dir>
 
 # Sync resource changes to local clients (when core/ resources changed)
-bash core/scripts/sync-clients.sh
+solar client sync
 ```
+
+## Governance validation
+
+After changing `AGENTS.md` at root, core, or planet level, use the checklist in `references/governance-validation.md` (formerly command `solar-validate-governance`).
 
 ## Skill Structure
 

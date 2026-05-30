@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOLAR_VERSION="0.14.0"
+SOLAR_VERSION="0.15.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLIENT_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)"
+WORKSPACE_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-workspace/scripts" && pwd)"
+HOST_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-host/scripts" && pwd)"
 
 # Workspace / client commands (before chat REPL wiring)
 case "${1:-}" in
@@ -12,31 +15,31 @@ case "${1:-}" in
     case "${1:-}" in
       init)
         shift
-        exec bash "$SCRIPT_DIR/client_init.sh" "$@"
+        exec bash "$CLIENT_SCRIPTS/client_init.sh" "$@"
         ;;
       sync)
         shift
-        exec bash "$SCRIPT_DIR/client_sync.sh" "$@"
+        exec bash "$CLIENT_SCRIPTS/client_sync.sh" "$@"
         ;;
       doctor)
         shift
-        exec bash "$SCRIPT_DIR/client_doctor.sh" "$@"
+        exec bash "$CLIENT_SCRIPTS/client_doctor.sh" "$@"
         ;;
       upgrade)
         shift
-        exec bash "$SCRIPT_DIR/client_upgrade.sh" "$@"
+        exec bash "$CLIENT_SCRIPTS/client_upgrade.sh" "$@"
         ;;
       update)
         shift
-        exec bash "$SCRIPT_DIR/client_update.sh" "$@"
+        exec bash "$CLIENT_SCRIPTS/client_update.sh" "$@"
         ;;
       bundle)
         shift
-        exec bash "$SCRIPT_DIR/client_bundle.sh" "$@"
+        exec bash "$CLIENT_SCRIPTS/client_bundle.sh" "$@"
         ;;
       self-update)
         shift
-        exec bash "$SCRIPT_DIR/client_self_update.sh" "$@"
+        exec bash "$CLIENT_SCRIPTS/client_self_update.sh" "$@"
         ;;
       "")
         echo "Usage: solar client {init|sync|doctor|upgrade|update|bundle|self-update}" >&2
@@ -44,6 +47,57 @@ case "${1:-}" in
         ;;
       *)
         echo "Unknown client subcommand: $1" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  workspace)
+    shift
+    case "${1:-}" in
+      doctor)
+        shift
+        exec bash "$WORKSPACE_SCRIPTS/workspace_doctor.sh" "$@"
+        ;;
+      "")
+        echo "Usage: solar workspace {doctor}" >&2
+        exit 2
+        ;;
+      *)
+        echo "Unknown workspace subcommand: $1" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  host)
+    shift
+    case "${1:-}" in
+      start)
+        shift
+        exec bash "$HOST_SCRIPTS/start_host.sh" "$@"
+        ;;
+      stop)
+        shift
+        exec bash "$HOST_SCRIPTS/stop_host.sh" "$@"
+        ;;
+      status)
+        shift
+        exec bash "$HOST_SCRIPTS/check_host.sh" "$@"
+        ;;
+      open)
+        _host_url="$(bash -c "source \"$HOST_SCRIPTS/host_lib.sh\" && solar_host_load_env && printf '%s' \"\$SOLAR_HOST_BASE_URL\"")"
+        if command -v open >/dev/null 2>&1; then
+          open "$_host_url"
+        else
+          echo "Open: $_host_url"
+        fi
+        exit 0
+        ;;
+      "")
+        echo "Usage: solar host {start|stop|status|open}" >&2
+        exit 2
+        ;;
+      *)
+        echo "Unknown host subcommand: $1" >&2
         exit 2
         ;;
     esac
@@ -78,9 +132,13 @@ Flags:
   -h, --help               Show help
 
 Subcommands:
-  client init|sync|doctor|upgrade|update|bundle|self-update  Workspace lifecycle (Solar Client)
-  status [--verbose]       Compact workspace health (5 blocks)
+  client init|sync|doctor|upgrade|update|bundle|self-update  Solar Client (manifest, bundle, IDE sync)
+  workspace doctor         Workspace content health (sun/, planets/)
+  host start|stop|status|open  Solar Host control plane UI (default :9000 — preferred human entry)
+  status [--verbose]       Compact workspace health (Client + Workspace + runtime)
   paths                    Resolvable paths for IDE @ references
+
+Note: Interactive chat on :7741 is legacy; prefer Solar Host or your IDE for conversation.
   new [title]              Start a new thread and enter chat
   runs                     List recent runs
   approvals                List pending approvals

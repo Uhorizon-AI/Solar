@@ -49,21 +49,21 @@ planets/<planet-name>/
 2. Add a `SKILL.md` file (required)
 3. Add implementation files as needed
 4. **Update `AGENTS.md`** — Add/update Skills section so routing stays accurate
-5. Run sync: `bash ../../core/scripts/sync-clients.sh`
+5. Run sync: `solar client sync`
 
 ### Creating an Agent
 
 1. Create a `.md` file in `planets/<planet-name>/agents/<agent-name>.md`
 2. Define the agent's purpose, capabilities, and protocols
 3. **Update `AGENTS.md`** — Add/update Agents section; add to Request Routing if needed
-4. Run sync: `bash ../../core/scripts/sync-clients.sh`
+4. Run sync: `solar client sync`
 
 ### Creating a Command
 
 1. Create a `.md` file in `planets/<planet-name>/commands/<command-name>.md`
 2. Define the command's behavior and usage
 3. **Update `AGENTS.md`** — Add to Request Routing if user requests should trigger it
-4. Run sync: `bash ../../core/scripts/sync-clients.sh`
+4. Run sync: `solar client sync`
 
 ## Resource Sync
 
@@ -73,7 +73,7 @@ After creating or updating resources:
 2. Run sync:
 
 ```bash
-bash ../../core/scripts/sync-clients.sh
+solar client sync
 ```
 
 This syncs your planet's resources to:
@@ -101,8 +101,8 @@ This syncs your planet's resources to:
 The easiest way to create a new planet is using the helper script:
 
 ```bash
-bash core/scripts/create-planet.sh my-project
-bash core/scripts/create-planet.sh --code-repo my-app
+bash core/skills/solar-workspace/scripts/create-planet.sh my-project
+bash core/skills/solar-workspace/scripts/create-planet.sh --code-repo my-app
 ```
 
 This automatically:
@@ -119,6 +119,6 @@ With `--code-repo`, it also:
 
 - `/core/templates/planet-AGENTS.md` - AGENTS.md template
 - `/core/templates/planet-CONTRIBUTING.md` - CONTRIBUTING.md template for code repos
-- `/core/scripts/sync-clients.sh` - Resource sync script
-- `/core/scripts/create-planet.sh` - Planet creation helper script
+- `solar client sync` — publish skills/agents/commands to IDEs
+- `core/skills/solar-workspace/scripts/create-planet.sh` — planet scaffold helper
 - `/AGENTS.md` - Root Solar governance

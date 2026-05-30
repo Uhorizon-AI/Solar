@@ -17,7 +17,7 @@ If a skill does not require an MCP server, set `Required MCP` to `None`.
 Before using a skill that declares MCP requirements:
 
 1. Read the skill's `Required MCP` section.
-2. Run `bash core/scripts/check-mcp.sh --skill <skill-path>` when local client config validation is useful.
+2. Run `bash core/skills/solar-skill-creator/scripts/check-mcp.sh --skill <skill-path>` when local client config validation is useful.
 3. If an MCP is missing, use the skill's fallback mode or ask the user to configure the specific missing server.
 
 ## Canonical Browser Exception

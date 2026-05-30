@@ -195,5 +195,5 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 After any `core/skills/` change, run:
 
 ```bash
-bash core/scripts/sync-clients.sh
+solar client sync
 ```

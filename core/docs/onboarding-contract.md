@@ -33,7 +33,7 @@ This contract defines how Sun conducts onboarding with any user.
   - Proposed planet name and objective.
 - Sun must ask for explicit confirmation: `Do you want to create this planet now?`
 - Planet creation starts only after a clear yes.
-- Use `bash core/scripts/create-planet.sh <planet-name>` for automated setup.
+- Use `bash core/skills/solar-workspace/scripts/create-planet.sh <planet-name>` for automated setup.
 - After creation, confirm the planet `AGENTS.md` defines governance and boundaries.
 
 ## Identity Data Isolation Rule (required)

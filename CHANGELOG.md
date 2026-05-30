@@ -6,6 +6,36 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-client): new skill `solar-client` — workspace lifecycle scripts moved from `solar-interface`.
+- feat(solar-workspace): new skill `solar-workspace` — `solar workspace doctor` for `sun/` and `planets/`.
+- test(solar-workspace): `test_workspace_doctor.sh`.
+
+### Changed
+- change(solar-interface): daemon/REPL only; client lifecycle documented in `solar-client` / `solar-workspace`.
+- change(solar-cli): `solar client doctor` is client-only; workspace checks use `solar workspace doctor`.
+- change(solar-cli): `solar status` shows `client` and `workspace` blocks with doctor hints (`v0.15.0`).
+- change(solar-client): runtime scripts moved from `core/scripts/` to skill-owned paths; shims remain one release.
+- change(solar-client): portable bundle allowlist seeds `solar-client` + `solar-interface` + `solar-workspace` only (`v0.16.0`).
+- change(solar-gateway): renamed from `solar-transport-gateway` (deprecation stub retained).
+- change(solar-migration): renamed from `solar-migration-playbook` (stub retained).
+
+### Removed
+- remove(solar-n8n-workflow): skill removed from core; use `POST /webhook/n8n` via solar-gateway + router.
+- remove(core/templates): sales commercial templates (`sales-*`, `lead-discovery-5q`); use planet skills instead.
+
+### Fixed
+- fix(solar-host): `start_host.sh` verifies `/health` before reporting success; stops stale pid when health fails; shows log tail on failure.
+- fix(solar-host): dashboard escapes HTML; approval actions use `data-*` handlers and validated approval IDs (XSS-safe).
+- fix(solar-migration): validation command targets `core/skills/solar-migration`.
+- fix(docs): planet templates and onboarding/mcp docs use skill paths instead of legacy `core/scripts/`.
+- fix(solar-client): `package_solar_bundle.sh` resolves framework repo root (`../../../..`); no longer copies `core/scripts/` into release bundles.
+- fix(solar-workspace): `create-planet.sh` and `planet-git-bootstrap.sh` use `SOLAR_WORKSPACE` + `solar_core_dir` for templates/planets.
+- fix(solar-skill-creator): `check-mcp.sh` and `context-report.sh` resolve workspace via `resolve_solar_paths.sh`.
+
+### Added
+- feat(solar-host): MVP local control plane UI on `SOLAR_HOST_PORT` (default 9000) — status, approvals, workspace overview.
+
 ## [0.12.0] - 2026-05-29
 
 ### Added

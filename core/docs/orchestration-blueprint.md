@@ -24,11 +24,6 @@ Keep execution simple, traceable, and reusable for any user.
    - Daily actions and follow-ups -> `sun/daily-log/YYYY-MM-DD.md` (on demand or execution trace; see `core/templates/daily-log.md`)
 7. Return concise result to user and ask next decision only if needed.
 
-## Discovery Standard (for sales/commercial planets)
-- Use `core/templates/lead-discovery-5q.md` for first-call qualification.
-- Persist score, package recommendation, and next action in planet memory.
-- Use `core/templates/sales-record.md` and `core/templates/sales-pipeline-board.md` as the baseline structure for sales records and stage tracking across planets.
-
 ## Routing Rules
 - If task is identity, communication style, or personal constraints -> Sun.
 - If task is domain execution -> matching planet.
