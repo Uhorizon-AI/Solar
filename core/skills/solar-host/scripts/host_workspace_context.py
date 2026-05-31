@@ -120,20 +120,16 @@ def _pid_command(pid: int) -> str | None:
 def _should_stop_legacy_pid(
     pid: int,
     *,
-    port: int,
     pid_file_pid: int | None,
     listener_pids: set[int],
 ) -> bool:
     if pid <= 0:
         return False
-    # Primary: pidfile matches the listener on this workspace's legacy port.
+    # Trusted without ps: pidfile matches the listener on this workspace's legacy port.
     if pid_file_pid is not None and pid == pid_file_pid and pid in listener_pids:
         return True
     cmd = _pid_command(pid)
     if cmd and "interface_server.py" in cmd:
-        return True
-    # ps blocked/unavailable — still stop whatever holds the workspace legacy port.
-    if cmd is None and pid in listener_pids:
         return True
     return False
 
@@ -168,7 +164,6 @@ def stop_legacy_interface_daemon(ws: Path | str) -> None:
     for pid in candidates:
         if _should_stop_legacy_pid(
             pid,
-            port=port,
             pid_file_pid=pid_file_pid,
             listener_pids=listener_pids,
         ):
@@ -183,7 +178,6 @@ def stop_legacy_interface_daemon(ws: Path | str) -> None:
         for pid in listener_pids:
             if _should_stop_legacy_pid(
                 pid,
-                port=port,
                 pid_file_pid=pid_file_pid,
                 listener_pids=listener_pids,
             ):
