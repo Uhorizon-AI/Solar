@@ -94,6 +94,7 @@ def _normalize_path(path: str) -> str:
 
 def list_workspaces(data: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     reg = data or load_registry()
+    active = str(reg.get("active_path", "")).strip()
     out: list[dict[str, Any]] = []
     for item in reg.get("workspaces", []):
         if not isinstance(item, dict):
@@ -102,18 +103,15 @@ def list_workspaces(data: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         if not path:
             continue
         p = Path(path)
-        iface, gw = port_offsets(path)
-        iface_port = _interface_port_from_env(path) or iface
+        iface_base = "in-process" if path == active else "offline"
         out.append(
             {
                 "path": path,
                 "label": item.get("label") or p.name,
                 "added_at": item.get("added_at", ""),
                 "exists": p.is_dir(),
-                "active": path == reg.get("active_path"),
-                "interface_port": iface_port,
-                "gateway_port": gw,
-                "interface_base": f"http://127.0.0.1:{iface_port}",
+                "active": path == active,
+                "interface_base": iface_base,
             }
         )
     return out
@@ -230,10 +228,27 @@ def workspace_health(workspace: str, timeout: float = 8.0) -> dict[str, Any]:
     ws = _normalize_path(workspace)
     if not Path(ws).is_dir():
         return {"path": ws, "severity": "DOWN", "detail": "path missing"}
-    iface_port = _interface_port_from_env(ws) or port_offsets(ws)[0]
-    iface_base = f"http://127.0.0.1:{iface_port}"
-    code, _ = _fetch_json(f"{iface_base}/health", timeout=min(timeout, 4.0))
-    iface_ok = code == 200
+
+    active = get_active_path()
+    if ws == active:
+        iface_base = "in-process"
+        try:
+            import host_interface as hi  # noqa: PLC0415
+
+            store = hi.get_store(ws)
+            ready, _ = store.readiness()
+            iface_ok = ready
+        except Exception:  # noqa: BLE001
+            iface_ok = False
+    else:
+        iface_base = "offline"
+        try:
+            import host_workspace_context as ctx  # noqa: PLC0415
+
+            iface_ok = ctx.legacy_interface_db_path(ws).is_file()
+        except Exception:  # noqa: BLE001
+            iface_ok = False
+
     solar_bin = solar_cli_for(ws)
     status_snip = ""
     severity = "OK"
@@ -253,7 +268,6 @@ def workspace_health(workspace: str, timeout: float = 8.0) -> dict[str, Any]:
         status_snip = f"status error: {exc}"
         severity = "WARN"
     if not iface_ok and severity == "OK":
-        # Host (:9000) is the product entry; legacy workspace API down is WARN, not Host DOWN.
         severity = "WARN"
     return {
         "path": ws,

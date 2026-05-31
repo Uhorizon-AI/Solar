@@ -54,7 +54,7 @@ sys.path.insert(0, str(scripts))
 
 import host_registry as reg
 import host_workspace_context as ctx
-import host_server
+import host_interface as hi
 
 reg.add_workspace(ws_a, "a")
 reg.add_workspace(ws_b, "b")
@@ -66,6 +66,10 @@ assert mounted == ws_a, (mounted, ws_a)
 assert db_a == Path(ws_a) / "sun/runtime/interface/db/interface.sqlite"
 assert db_a.parent.is_dir(), "runtime db dir should exist"
 
+store_a = hi.get_store(ws_a)
+ready_a, _ = store_a.readiness()
+assert ready_a, "store should be ready after mount"
+
 ctx.switch_workspace(ws_b)
 db_b = ctx.legacy_interface_db_path(ws_b)
 assert ctx.get_mounted() == ws_b
@@ -73,18 +77,17 @@ assert db_a != db_b
 assert os.environ.get("SOLAR_INTERFACE_PORT") == "8802", os.environ.get("SOLAR_INTERFACE_PORT")
 assert os.environ.get("CUSTOM_KEY") is None, os.environ.get("CUSTOM_KEY")
 
-base_a = host_server._interface_base(Path(ws_a))
-base_b = host_server._interface_base(Path(ws_b))
-assert "8801" in base_a, base_a
-assert "8802" in base_b, base_b
+store_b = hi.get_store(ws_b)
+assert store_b.workspace == Path(ws_b)
+assert store_b is not store_a
 
-active_base = host_server._interface_base()
-assert "8802" in active_base, (active_base, ctx.get_mounted())
-
-print("OK: mount/switch/interface_base")
+print("OK: mount/switch/in-process store")
 PY
 
 assert_ok "python mount/switch unit" test "$MOUNT_EXIT" -eq 0
+
+# Static: host_server should not proxy approvals in default (non-legacy) path
+assert_ok "host_server uses in-process store" bash -c "grep -q '_active_store' '$SCRIPTS/host_server.py' && grep -q 'store.list_approvals' '$SCRIPTS/host_server.py'"
 
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

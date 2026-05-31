@@ -8,9 +8,7 @@ import os
 import re
 import subprocess
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,8 +17,15 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+_INTERFACE_SCRIPTS = _SCRIPT_DIR.parent.parent / "solar-interface" / "scripts"
+if str(_INTERFACE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_INTERFACE_SCRIPTS))
+
+import host_events  # noqa: E402
+import host_interface as hi  # noqa: E402
 import host_registry as reg  # noqa: E402
 import host_workspace_context as ctx  # noqa: E402
+from interface_http import HttpAdapter, InterfaceHttpDispatcher, is_interface_path  # noqa: E402
 
 HOST = os.environ.get("SOLAR_HOST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SOLAR_HOST_PORT", "9000"))
@@ -47,10 +52,36 @@ def _active_workspace() -> Path:
     return Path(path).resolve()
 
 
-def _interface_base(ws: Path | None = None) -> str:
-    w = str(ws or _active_workspace())
-    iface = reg._interface_port_from_env(w) or reg.port_offsets(w)[0]
-    return f"http://127.0.0.1:{iface}"
+def _active_store():
+    return hi.get_store(str(_active_workspace()))
+
+
+def _interface_dispatcher() -> InterfaceHttpDispatcher:
+    store = _active_store()
+    return InterfaceHttpDispatcher(store, on_event=host_events.emit)
+
+
+def _http_adapter(handler: BaseHTTPRequestHandler) -> HttpAdapter:
+    return HttpAdapter(handler, service_name="host", host_port=PORT)
+
+
+def _dispatch_interface_get(handler: BaseHTTPRequestHandler, path: str, *, route_path: str | None = None) -> bool:
+    if not is_interface_path(path):
+        return False
+    raw = route_path if route_path is not None else handler.path
+    return _interface_dispatcher().dispatch_get(_http_adapter(handler), raw)
+
+
+def _dispatch_interface_post(handler: BaseHTTPRequestHandler, path: str) -> bool:
+    if not is_interface_path(path):
+        return False
+    return _interface_dispatcher().dispatch_post(_http_adapter(handler), handler.path)
+
+
+def _dispatch_interface_delete(handler: BaseHTTPRequestHandler, path: str) -> bool:
+    if not is_interface_path(path):
+        return False
+    return _interface_dispatcher().dispatch_delete(_http_adapter(handler), handler.path)
 
 
 def _solar_bin(ws: Path | None = None) -> str:
@@ -63,30 +94,6 @@ def _esc(text: object) -> str:
 
 def _valid_approval_id(approval_id: str) -> bool:
     return bool(approval_id and _APPROVAL_ID_RE.fullmatch(approval_id))
-
-
-def fetch_json(
-    url: str, method: str = "GET", body: dict | None = None, timeout: float = 8.0
-) -> tuple[int, object]:
-    data = None
-    headers = {"Accept": "application/json"}
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            return resp.status, json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            payload = json.loads(raw) if raw else {"error": exc.reason}
-        except json.JSONDecodeError:
-            payload = {"error": raw or exc.reason}
-        return exc.code, payload
-    except Exception as exc:  # noqa: BLE001
-        return 0, {"error": str(exc)}
 
 
 def run_solar_status(ws: Path | None = None) -> str:
@@ -105,7 +112,7 @@ def run_solar_status(ws: Path | None = None) -> str:
         return f"status error: {exc}"
 
 
-def _approval_row(a: dict, iface: str) -> str:
+def _approval_row(a: dict, store) -> str:
     aid = str(a.get("approval_id", ""))
     run_id = str(a.get("run_id", ""))
     if not _valid_approval_id(aid):
@@ -113,9 +120,9 @@ def _approval_row(a: dict, iface: str) -> str:
     summary = str(a.get("summary") or a.get("reason") or run_id)
     run_ctx = ""
     if run_id:
-        _, run_payload = fetch_json(f"{iface}/runs/{urllib.parse.quote(run_id, safe='')}")
-        if isinstance(run_payload, dict):
-            run_ctx = str(run_payload.get("summary") or run_payload.get("status") or "")[:200]
+        run = store.get_run(run_id)
+        if run:
+            run_ctx = str(run.get("summary") or run.get("status") or "")[:200]
     ctx_line = f"<br/><span class='muted'>run context: {_esc(run_ctx)}</span>" if run_ctx else ""
     return (
         '<div class="approval-item" style="margin:12px 0">'
@@ -155,10 +162,11 @@ def _fleet_rows() -> str:
 def dashboard_html() -> str:
     reg.record_metric("dashboard_view")
     ws = _active_workspace()
-    iface = _interface_base(ws)
-    iface_code, _ = fetch_json(f"{iface}/health")
-    _, approvals_payload = fetch_json(f"{iface}/approvals")
-    approvals = approvals_payload.get("approvals", []) if isinstance(approvals_payload, dict) else []
+    store = _active_store()
+    ready, _checks = store.readiness()
+    approvals = store.list_approvals()
+    api_label = "OK" if ready else "DOWN"
+    api_class = "ok" if ready else "warn"
     pending = [a for a in approvals if a.get("status") == "pending"]
     status_text = run_solar_status(ws)
     jobs = reg.list_async_jobs(str(ws))
@@ -167,11 +175,16 @@ def dashboard_html() -> str:
         f"<span class='muted'>{_esc(j.get('file', ''))}</span></li>"
         for j in jobs[:15]
     ) or "<li class='muted'>No async jobs found.</li>"
-    pending_html = "".join(_approval_row(a, iface) for a in pending[:20])
+    pending_html = "".join(_approval_row(a, store) for a in pending[:20])
     if not pending_html:
         pending_html = "<p class='muted'>No pending approvals.</p>"
-    api_label = "OK" if iface_code == 200 else "DOWN"
-    api_class = "ok" if iface_code == 200 else "warn"
+    events = host_events.list_recent(20)
+    inbox_html = "".join(
+        f"<li><strong>{_esc(e.get('type'))}</strong> "
+        f"<span class='muted'>{_esc(e.get('ts', ''))}</span> "
+        f"{_esc(json.dumps(e.get('payload', {}), ensure_ascii=False))}</li>"
+        for e in events
+    ) or "<li class='muted'>No recent events.</li>"
     host_url = f"http://{HOST}:{PORT}"
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -198,22 +211,27 @@ def dashboard_html() -> str:
   <p>Host: <span class="ok">OK</span> <span class="muted">({_esc(host_url)} — this page)</span></p>
   <section>
     <h2>Fleet</h2>
-    <p class="muted">Health = workspace + legacy API. Host stays up on :{PORT} even if workspace API is stopped.</p>
-    <table><thead><tr><th>Health</th><th>Workspace</th><th>Workspace API</th><th>Actions</th></tr></thead>
+    <p class="muted">Health = workspace + in-process runtime. Host stays up on :{PORT}.</p>
+    <table><thead><tr><th>Health</th><th>Workspace</th><th>Runtime</th><th>Actions</th></tr></thead>
     <tbody>{_fleet_rows()}</tbody></table>
   </section>
   <section>
     <h2>Runtime (active)</h2>
     <p>Host: <span class="ok">OK</span> <span class="muted">({_esc(host_url)})</span></p>
-    <p>Workspace API: <span class="{api_class}">{api_label}</span> <span class="muted">({_esc(iface)} — threads/approvals until MVP-b)</span></p>
+    <p>Workspace runtime: <span class="{api_class}">{api_label}</span> <span class="muted">(in-process on :9000)</span></p>
     <pre>{_esc(status_text)}</pre>
-    <button type="button" id="btnKill">Kill switch (stop workspace API + gateway)</button>
-    <button type="button" id="btnEnsureIface">Start workspace API</button>
+    <button type="button" id="btnKill">Kill switch (stop gateway)</button>
     <button type="button" id="btnEnsureGw">Start gateway</button>
   </section>
   <section>
     <h2>Approvals ({len(pending)} pending)</h2>
     {pending_html}
+  </section>
+  <section>
+    <h2>Inbox</h2>
+    <p class="muted">Recent runtime events (poll every 10s or refresh manually).</p>
+    <button type="button" id="btnInboxRefresh">Refresh inbox</button>
+    <ul id="inboxList">{inbox_html}</ul>
   </section>
   <section>
     <h2>Async monitor</h2>
@@ -253,12 +271,9 @@ def dashboard_html() -> str:
       }});
     }});
     document.getElementById("btnKill").onclick = async () => {{
-      if (!confirm("Emergency stop runtime for active workspace?")) return;
+      if (!confirm("Emergency stop gateway for active workspace?")) return;
       const r = await postJson("/api/kill", {{}});
       alert(await r.text()); location.reload();
-    }};
-    document.getElementById("btnEnsureIface").onclick = async () => {{
-      const r = await postJson("/api/runtime/interface/start", {{}}); alert(await r.text());
     }};
     document.getElementById("btnEnsureGw").onclick = async () => {{
       const r = await postJson("/api/runtime/gateway/start", {{}}); alert(await r.text());
@@ -280,6 +295,17 @@ def dashboard_html() -> str:
       }});
       alert(r.ok ? "Saved" : await r.text());
     }};
+    async function refreshInbox() {{
+      const r = await fetch("/api/events?limit=20");
+      if (!r.ok) return;
+      const data = await r.json();
+      const ul = document.getElementById("inboxList");
+      ul.innerHTML = (data.events || []).map(e =>
+        `<li><strong>${{e.type}}</strong> <span class="muted">${{e.ts}}</span> ${{JSON.stringify(e.payload || {{}})}}</li>`
+      ).join("") || "<li class='muted'>No recent events.</li>";
+    }}
+    document.getElementById("btnInboxRefresh").onclick = refreshInbox;
+    setInterval(refreshInbox, 10000);
   </script>
 </body>
 </html>"""
@@ -291,7 +317,6 @@ def _read_body(handler: BaseHTTPRequestHandler) -> bytes:
 
 
 def _run_script(script_rel: str, ws: Path) -> tuple[int, str]:
-    # script_rel like "solar-interface/scripts/ensure_interface.sh"
     parts = script_rel.split("/", 1)
     skill = parts[0]
     name = parts[1] if len(parts) > 1 else ""
@@ -313,8 +338,6 @@ def _run_script(script_rel: str, ws: Path) -> tuple[int, str]:
 
 def _kill_runtime(ws: Path) -> dict[str, object]:
     results = []
-    code, out = _run_script("solar-interface/scripts/stop_interface_daemon.sh", ws)
-    results.append({"step": "stop_interface", "code": code, "out": out[:500]})
     gw_port = reg.port_offsets(str(ws))[1]
     try:
         proc = subprocess.run(
@@ -356,7 +379,9 @@ class HostHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         ws = _active_workspace()
-        iface = _interface_base(ws)
+
+        if _dispatch_interface_get(self, path):
+            return
 
         if path in ("/", "/dashboard"):
             self._send(dashboard_html().encode("utf-8"))
@@ -373,9 +398,30 @@ class HostHandler(BaseHTTPRequestHandler):
         if path == "/api/fleet/health":
             self._send_json(reg.fleet_health())
             return
+        if path == "/api/runtime/health":
+            if _dispatch_interface_get(self, "/ready", route_path="/ready"):
+                return
+            store = _active_store()
+            ready, checks = store.readiness()
+            status = HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE
+            self._send_json(
+                {
+                    "status": "ready" if ready else "not_ready",
+                    "service": "solar-host",
+                    "mode": "in-process",
+                    "workspace": str(ws),
+                    "checks": checks,
+                },
+                status,
+            )
+            return
+        if path == "/api/events":
+            limit = int((qs.get("limit") or ["50"])[0])
+            self._send_json({"events": host_events.list_recent(limit)})
+            return
         if path == "/api/approvals":
-            code, payload = fetch_json(f"{iface}/approvals")
-            self._send_json(payload, code or HTTPStatus.BAD_GATEWAY)
+            store = _active_store()
+            self._send_json({"approvals": store.list_approvals()})
             return
         if path == "/api/async/jobs":
             self._send_json({"jobs": reg.list_async_jobs(str(ws))})
@@ -391,6 +437,12 @@ class HostHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
                 return
             self._send(target.read_text(encoding="utf-8").encode("utf-8"), 200, "text/plain; charset=utf-8")
+            return
+        self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def do_DELETE(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if _dispatch_interface_delete(self, path):
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -413,7 +465,10 @@ class HostHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
         ws = _active_workspace()
-        iface = _interface_base(ws)
+
+        if _dispatch_interface_post(self, path):
+            return
+
         body_raw = _read_body(self)
         body: dict = {}
         if body_raw:
@@ -435,45 +490,56 @@ class HostHandler(BaseHTTPRequestHandler):
         if path == "/api/kill":
             self._send_json(_kill_runtime(ws))
             return
-        if path == "/api/runtime/interface/start":
-            code, out = _run_script("solar-interface/scripts/ensure_interface.sh", ws)
-            self._send_json({"code": code, "output": out})
-            return
         if path == "/api/runtime/gateway/start":
             code, out = _run_script("solar-gateway/scripts/ensure_transport_gateway.sh", ws)
             self._send_json({"code": code, "output": out})
+            return
+        if path == "/api/runtime/interface/start":
+            self._send_json(
+                {
+                    "deprecated": True,
+                    "ok": True,
+                    "hint": "API is in-process on :9000",
+                }
+            )
             return
         if path == "/api/chat":
             msg = str(body.get("message", "")).strip()
             if not msg:
                 self._send_json({"error": "empty message"}, HTTPStatus.BAD_REQUEST)
                 return
-            code, thread_payload = fetch_json(f"{iface}/threads", "POST", {"title": "Host scoped"})
-            if code not in (200, 201) or not isinstance(thread_payload, dict):
-                self._send_json({"error": "thread create failed", "detail": thread_payload}, HTTPStatus.BAD_GATEWAY)
-                return
-            tid = thread_payload.get("thread_id") or thread_payload.get("id")
-            if not tid:
-                self._send_json({"error": "no thread id", "detail": thread_payload}, HTTPStatus.BAD_GATEWAY)
-                return
             scoped = (
                 f"[Solar Host scoped chat — workspace {ws}]\n"
                 f"Use only context from sun/, planets/, skills. User question:\n{msg}"
             )
-            run_code, run_payload = fetch_json(
-                f"{iface}/threads/{urllib.parse.quote(str(tid), safe='')}/runs",
-                "POST",
-                {"message": scoped, "mode": "auto"},
+            store = _active_store()
+            thread = store.create_thread(title="Host scoped")
+            run_record, router_response = store.run_thread_message(
+                thread_id=thread["thread_id"],
+                text=scoped,
+                mode="ask",
             )
-            self._send_json(run_payload, run_code or HTTPStatus.BAD_GATEWAY)
+            status = HTTPStatus.OK if run_record.get("status") == "succeeded" else HTTPStatus.BAD_GATEWAY
+            self._send_json(
+                {
+                    "run": run_record,
+                    "reply_text": router_response.get("reply_text", ""),
+                    "router": router_response,
+                },
+                status,
+            )
             return
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "approvals" and parts[3] in ("approve", "reject"):
             aid = parts[2]
             if not _valid_approval_id(aid):
                 self._send_json({"error": "invalid approval id"}, HTTPStatus.BAD_REQUEST)
                 return
-            code, payload = fetch_json(f"{iface}/approvals/{aid}/{parts[3]}", "POST", {})
-            self._send_json(payload, code or HTTPStatus.BAD_GATEWAY)
+            store = _active_store()
+            if parts[3] == "approve":
+                payload, err_code = store.approve(aid)
+            else:
+                payload, err_code = store.reject(aid)
+            self._send_json(payload, err_code or HTTPStatus.OK)
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -501,6 +567,7 @@ def main() -> int:
         return 1
     try:
         ctx.mount(active)
+        hi.get_store(active)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

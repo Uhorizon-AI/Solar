@@ -63,8 +63,8 @@ The LaunchAgent entrypoint is built at `sun/runtime/system/Solar` during install
 `SOLAR_SYSTEM_FEATURES` is a CSV selector. Supported values:
 - `async-tasks`
 - `transport-gateway`
-- `host` — preferred on workstations (panel `:9000` + daemon `:7741`)
-- `interface` — legacy; only when you need the API daemon without Host
+- `host` — preferred on workstations (panel + API on `:9000` in-process)
+- `interface` — optional dev daemon on `:7741` when you need legacy listener without Host
 
 **Note:** `SOLAR_SYSTEM_FEATURES` is also read by `solar-router` to determine if `async-tasks` is available for async draft creation. Keep this value consistent with your active runtime configuration.
 

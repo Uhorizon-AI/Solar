@@ -752,7 +752,8 @@ def print_thread_history(base_url: str, thread_id: str, title: str | None = None
 # ── REPL main ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    base_url = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:7741"
+    default_base = os.environ.get("SOLAR_HOST_BASE_URL", "http://127.0.0.1:9000")
+    base_url = sys.argv[1] if len(sys.argv) > 1 else default_base
     initial_thread = sys.argv[2] if len(sys.argv) > 2 else ""
     provider = sys.argv[3] if len(sys.argv) > 3 else ""
     initial = sys.argv[4] if len(sys.argv) > 4 else ""

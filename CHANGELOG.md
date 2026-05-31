@@ -7,6 +7,24 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- feat(solar-interface): `InterfaceStore` — workspace-scoped threads/runs/approvals DB (shared by Host and legacy daemon).
+- feat(solar-interface): `interface_http.py` — shared HTTP dispatcher for threads/runs/approvals/SSE (Host `:9000` + legacy `:7741`).
+- feat(solar-host): in-process workspace API on `:9000` (`host_interface.py`); full interface routes at root paths.
+- feat(solar-host): `host_events.py` + `GET /api/events` + dashboard Inbox section (polling).
+- test(solar-host): `test_host_interface_routes.sh` — threads/runs/ready/delete on Host.
+- test(solar-host): MVP-b smoke (`test_host_api_smoke.sh`, `test_no_legacy_listener_after_switch.sh`, `test_fleet_api_contract.sh`).
+
+### Changed
+- change(solar-host): **MVP-b.1** — full `interface_server` API on `:9000` via `InterfaceHttpDispatcher`; `do_DELETE` for threads; `GET /threads/{id}`.
+- change(solar-host): workspace switch calls `stop_legacy_interface_daemon()` (MVP-b b2 — no stale `:7741` listeners).
+- change(solar-host): `POST /api/runtime/interface/start` returns **200** with `{ deprecated: true }` (no longer 404).
+- change(solar-host): **MVP-b.0** — Host serves approvals/chat in-process; no `:7741` proxy or escape-hatch flags.
+- change(solar-interface): `interface_repl.py` default base URL → `http://127.0.0.1:9000` (`SOLAR_HOST_BASE_URL`).
+- change(solar-host): `host_tray.py` pending count via `/api/approvals` on Host (not legacy `:7741`).
+- change(solar-system): `host` feature = `:9000` only; `interface` token optional for dev daemon.
+- change(solar-host): fleet health uses in-process `readiness()` for active workspace; `list_workspaces` omits `interface_port` (CLI `ports` retained).
+- change(solar-interface): `interface_server.py` delegates to `interface_http.py` (legacy `:7741` compat).
+- **Deprecated (public API):** `SOLAR_INTERFACE_PORT` / `port_offsets` in Host-facing responses — canonical API is Host `:9000`.
 - feat(solar-host): multi-workspace registry (`~/Library/Application Support/Solar/workspaces.json`), `solar host workspace *`, fleet health API and dashboard.
 - feat(solar-host): async monitor, kill switch, runtime start (interface/gateway), scoped chat, governance markdown editor.
 - feat(solar-host): optional macOS tray (`host_tray.py`, requires `rumps`).

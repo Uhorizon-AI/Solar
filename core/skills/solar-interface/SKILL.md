@@ -46,6 +46,7 @@ bash -n core/skills/solar-interface/scripts/status_interface.sh
 bash -n core/skills/solar-interface/scripts/solar
 
 # Python syntax
+python3 -m py_compile core/skills/solar-interface/scripts/interface_http.py
 python3 -m py_compile core/skills/solar-interface/scripts/interface_server.py
 ```
 
@@ -68,7 +69,11 @@ SOLAR_INTERFACE_RUNTIME_DIR=sun/runtime/interface
 
 ## Human entry (D6)
 
-Prefer **`solar host start`** / **`solar host open`** (Solar Host on `:9000`) for human UX. The daemon on `:7741` remains the API backend; the `:7741` web landing redirects to Host.
+Prefer **`solar host start`** / **`solar host open`** (Solar Host on `:9000`) for human UX and canonical API. The optional daemon on `:7741` is for explicit dev/CLI only; its web landing redirects to Host.
+
+## API surface (MVP-b.1)
+
+Canonical HTTP routes (`/ready`, `/status`, `/threads`, `/runs`, `/approvals`, SSE `/threads/{id}/stream`) are served **in-process on Host `:9000`**. The legacy `interface_server.py` on `:7741` delegates to the same `interface_http.py` dispatcher.
 
 ## Related skills (not this skill)
 

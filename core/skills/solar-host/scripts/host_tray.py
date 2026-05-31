@@ -10,7 +10,6 @@ from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-import host_registry as reg  # noqa: E402
 
 
 def _host_url() -> str:
@@ -20,16 +19,8 @@ def _host_url() -> str:
 
 
 def _pending_count() -> int:
-    active = reg.get_active_path()
-    if not active:
-        return 0
-    iface = reg.list_workspaces()
-    base = next((w["interface_base"] for w in iface if w.get("path") == active), None)
-    if not base:
-        iface_port = reg._interface_port_from_env(active) or reg.port_offsets(active)[0]
-        base = f"http://127.0.0.1:{iface_port}"
     try:
-        with urllib.request.urlopen(f"{base}/approvals", timeout=4) as resp:
+        with urllib.request.urlopen(f"{_host_url()}/api/approvals", timeout=4) as resp:
             import json
 
             data = json.loads(resp.read().decode())

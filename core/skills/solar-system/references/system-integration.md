@@ -14,8 +14,8 @@ Supported `SOLAR_SYSTEM_FEATURES` tokens (orchestrator tick only):
 
 - `async-tasks` -> `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh`
 - `transport-gateway` -> `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
-- `host` -> `ensure_host.sh` (Host UI `:9000` + chains `ensure_interface.sh` for API `:7741`)
-- `interface` -> `ensure_interface.sh` (legacy token; API-only without Host)
+- `host` -> `ensure_host.sh` (Host UI `:9000`; workspace API in-process on same port)
+- `interface` -> `ensure_interface.sh` (optional dev daemon `:7741`; not started by `host` feature)
 
 ## Why check-first recovery
 

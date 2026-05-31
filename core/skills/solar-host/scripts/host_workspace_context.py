@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -74,27 +75,120 @@ def ensure_workspace_runtime(ws: Path | str) -> None:
     (base / "db" / "migrations").mkdir(parents=True, exist_ok=True)
 
 
-def _workspace_subprocess_env(ws: str) -> dict[str, str]:
-    """Subprocess env scoped to one workspace (no SOLAR_* leak from another mount)."""
+def legacy_interface_pid_file(ws: Path | str) -> Path:
+    env = parse_workspace_env_file(ws)
+    runtime_rel = env.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/interface").lstrip("./")
+    return Path(ws).resolve() / runtime_rel / "state" / "interface.pid"
+
+
+def legacy_interface_port(ws: Path | str) -> int:
+    env = parse_workspace_env_file(ws)
+    if env.get("SOLAR_INTERFACE_PORT"):
+        return int(env["SOLAR_INTERFACE_PORT"])
+    return reg.port_offsets(str(Path(ws).resolve()))[0]
+
+
+def _listener_pids(port: int) -> set[int]:
+    proc = subprocess.run(
+        ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return {int(line.strip()) for line in (proc.stdout or "").split() if line.strip().isdigit()}
+
+
+def _pid_command(pid: int) -> str | None:
+    """Return command line, '' if process gone, None if ps is unavailable (e.g. sandbox)."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    err = (proc.stderr or "").lower()
+    if "not permitted" in err or "not permitted" in (proc.stdout or "").lower():
+        return None
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def _should_stop_legacy_pid(
+    pid: int,
+    *,
+    port: int,
+    pid_file_pid: int | None,
+    listener_pids: set[int],
+) -> bool:
+    if pid <= 0:
+        return False
+    # Primary: pidfile matches the listener on this workspace's legacy port.
+    if pid_file_pid is not None and pid == pid_file_pid and pid in listener_pids:
+        return True
+    cmd = _pid_command(pid)
+    if cmd and "interface_server.py" in cmd:
+        return True
+    # ps blocked/unavailable — still stop whatever holds the workspace legacy port.
+    if cmd is None and pid in listener_pids:
+        return True
+    return False
+
+
+def _kill_pid(pid: int) -> None:
+    subprocess.run(["kill", str(pid)], check=False)
+    for _ in range(20):
+        if subprocess.run(["kill", "-0", str(pid)], check=False).returncode != 0:
+            return
+        time.sleep(0.25)
+    subprocess.run(["kill", "-9", str(pid)], check=False)
+
+
+def stop_legacy_interface_daemon(ws: Path | str) -> None:
+    """Stop interface_server.py for a workspace (MVP-b b2: no stale listeners after switch)."""
     ws_path = Path(ws).resolve()
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if isinstance(v, str) and not k.startswith("SOLAR_")
-    }
-    env.update(parse_workspace_env_file(ws_path))
-    env["SOLAR_WORKSPACE"] = str(ws_path)
-    return env
+    pid_file = legacy_interface_pid_file(ws_path)
+    port = legacy_interface_port(ws_path)
+    listener_pids = _listener_pids(port)
 
+    pid_file_pid: int | None = None
+    if pid_file.is_file():
+        try:
+            pid_file_pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            pid_file_pid = None
 
-def _stop_interface_script() -> Path | None:
-    root = os.environ.get("SOLAR_ROOT", "").strip()
-    if root:
-        candidate = Path(root) / "core/skills/solar-interface/scripts/stop_interface_daemon.sh"
-        if candidate.is_file():
-            return candidate
-    candidate = _CORE_DIR / "skills/solar-interface/scripts/stop_interface_daemon.sh"
-    return candidate if candidate.is_file() else None
+    candidates: set[int] = set(listener_pids)
+    if pid_file_pid is not None and pid_file_pid > 0:
+        candidates.add(pid_file_pid)
+
+    for pid in candidates:
+        if _should_stop_legacy_pid(
+            pid,
+            port=port,
+            pid_file_pid=pid_file_pid,
+            listener_pids=listener_pids,
+        ):
+            _kill_pid(pid)
+
+    pid_file.unlink(missing_ok=True)
+
+    for _ in range(20):
+        listener_pids = _listener_pids(port)
+        if not listener_pids:
+            return
+        for pid in listener_pids:
+            if _should_stop_legacy_pid(
+                pid,
+                port=port,
+                pid_file_pid=pid_file_pid,
+                listener_pids=listener_pids,
+            ):
+                _kill_pid(pid)
+        time.sleep(0.25)
 
 
 def get_mounted() -> str | None:
@@ -109,6 +203,11 @@ def mount(path: str) -> str:
     ensure_workspace_runtime(norm)
     load_workspace_env(norm)
     _mounted = norm
+    if os.environ.get("SOLAR_ROOT", "").strip():
+        import host_interface as hi  # noqa: PLC0415
+
+        hi.invalidate_store(norm)
+        hi.get_store(norm)
     return norm
 
 
@@ -117,21 +216,11 @@ def unmount() -> None:
     old = _mounted
     if not old:
         return
+    stop_legacy_interface_daemon(old)
     reg.invalidate_fleet_cache()
-    script = _stop_interface_script()
-    if script is not None:
-        try:
-            subprocess.run(
-                ["bash", str(script)],
-                cwd=old,
-                env=_workspace_subprocess_env(old),
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+    import host_interface as hi  # noqa: PLC0415
+
+    hi.invalidate_store(old)
     _clear_workspace_env()
     _mounted = None
 
