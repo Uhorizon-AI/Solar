@@ -31,7 +31,7 @@ trap 'kill $HOST_PID $IFACE_PID 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 export SOLAR_APP_DATA="$TMP/appdata"
 export SOLAR_HOST_OFFLINE=1
-export SOLAR_HOST_PORT=19003
+export SOLAR_HOST_PORT=19006
 export SOLAR_HOST_HOST=127.0.0.1
 mkdir -p "$SOLAR_APP_DATA"
 

@@ -117,6 +117,14 @@ def list_workspaces(data: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     return out
 
 
+def workspace_label(path: str, data: dict[str, Any] | None = None) -> str:
+    norm = _normalize_path(path)
+    for ws in list_workspaces(data):
+        if ws.get("path") == norm:
+            return str(ws.get("label") or Path(norm).name)
+    return Path(norm).name
+
+
 def get_active_path(data: dict[str, Any] | None = None) -> str:
     reg = data or load_registry()
     active = str(reg.get("active_path", "")).strip()

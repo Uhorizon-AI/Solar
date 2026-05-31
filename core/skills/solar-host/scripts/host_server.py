@@ -96,6 +96,53 @@ def _valid_approval_id(approval_id: str) -> bool:
     return bool(approval_id and _APPROVAL_ID_RE.fullmatch(approval_id))
 
 
+INBOX_FILTER_TYPES = (
+    ("approval.pending", "Pending approvals"),
+    ("approval.resolved", "Resolved"),
+    ("run.failed", "Failed runs"),
+    ("run.completed", "Completed runs"),
+    ("workspace.activated", "Workspace switch"),
+)
+
+
+def _parse_event_types(qs: dict) -> set[str] | None:
+    raw = (qs.get("types") or [""])[0].strip()
+    if not raw:
+        return None
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
+
+def _inbox_event_li(e: dict) -> str:
+    etype = str(e.get("type", ""))
+    payload = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+    summary = str(payload.get("summary") or payload.get("label") or payload.get("run_id") or "")
+    aid = str(payload.get("approval_id", ""))
+    li_id = f' id="inbox-approval-{aid}"' if aid and _valid_approval_id(aid) else ""
+    actions = ""
+    if etype == "approval.pending" and _valid_approval_id(aid):
+        actions = (
+            f'<span class="inbox-actions">'
+            f'<button type="button" class="inbox-act" data-id="{_esc(aid)}" data-action="approve">Approve</button> '
+            f'<button type="button" class="inbox-act" data-id="{_esc(aid)}" data-action="reject">Reject</button>'
+            f"</span>"
+        )
+    focus_cls = " inbox-focus" if aid else ""
+    return (
+        f"<li class='inbox-item{focus_cls}' data-type='{_esc(etype)}'{li_id}>"
+        f"<strong>{_esc(etype)}</strong> "
+        f"<span class='muted'>{_esc(e.get('ts', ''))}</span> "
+        f"{_esc(summary)} {actions}</li>"
+    )
+
+
+def _inbox_filter_html() -> str:
+    boxes = "".join(
+        f'<label><input type="checkbox" class="inbox-filter" value="{_esc(t)}" checked /> {_esc(label)}</label> '
+        for t, label in INBOX_FILTER_TYPES
+    )
+    return f'<div id="inboxFilters" class="muted">{boxes}</div>'
+
+
 def run_solar_status(ws: Path | None = None) -> str:
     workspace = ws or _active_workspace()
     try:
@@ -179,12 +226,7 @@ def dashboard_html() -> str:
     if not pending_html:
         pending_html = "<p class='muted'>No pending approvals.</p>"
     events = host_events.list_recent(20)
-    inbox_html = "".join(
-        f"<li><strong>{_esc(e.get('type'))}</strong> "
-        f"<span class='muted'>{_esc(e.get('ts', ''))}</span> "
-        f"{_esc(json.dumps(e.get('payload', {}), ensure_ascii=False))}</li>"
-        for e in events
-    ) or "<li class='muted'>No recent events.</li>"
+    inbox_html = "".join(_inbox_event_li(e) for e in events) or "<li class='muted'>No recent events.</li>"
     host_url = f"http://{HOST}:{PORT}"
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -200,6 +242,9 @@ def dashboard_html() -> str:
     button {{ margin-right: 8px; padding: 6px 12px; cursor: pointer; }}
     .ok {{ color: #6dd58c; }}
     .warn {{ color: #e8b84a; }}
+    .inbox-focus {{ outline: 2px solid #e8b84a; border-radius: 6px; padding: 4px; }}
+    #inboxFilters label {{ margin-right: 12px; display: inline-block; }}
+    .badge {{ background: #e8b84a; color: #0f1419; padding: 2px 8px; border-radius: 999px; font-size: 12px; }}
     table {{ width: 100%; border-collapse: collapse; }}
     td, th {{ padding: 8px; border-bottom: 1px solid #2a3542; text-align: left; }}
     #chatOut {{ min-height: 120px; }}
@@ -224,12 +269,13 @@ def dashboard_html() -> str:
     <button type="button" id="btnEnsureGw">Start gateway</button>
   </section>
   <section>
-    <h2>Approvals ({len(pending)} pending)</h2>
+    <h2>Approvals <span class="badge" id="pendingBadge">{len(pending)}</span></h2>
     {pending_html}
   </section>
   <section>
     <h2>Inbox</h2>
-    <p class="muted">Recent runtime events (poll every 10s or refresh manually).</p>
+    <p class="muted">Recent runtime events (poll every 10s). Deep-link: <code>?focus=approval:&lt;id&gt;</code></p>
+    {_inbox_filter_html()}
     <button type="button" id="btnInboxRefresh">Refresh inbox</button>
     <ul id="inboxList">{inbox_html}</ul>
   </section>
@@ -256,13 +302,15 @@ def dashboard_html() -> str:
       const r = await fetch(url, {{ method: "POST", headers: {{ "Content-Type": "application/json" }}, body: JSON.stringify(body || {{}}) }});
       return r;
     }}
-    document.querySelectorAll(".approval-act").forEach((btn) => {{
-      btn.addEventListener("click", async () => {{
-        const id = btn.dataset.id;
-        const action = btn.dataset.action;
-        const r = await fetch(`/api/approvals/${{encodeURIComponent(id)}}/${{action}}`, {{ method: "POST" }});
-        if (r.ok) location.reload(); else alert(await r.text());
-      }});
+    function esc(s) {{
+      return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+    }}
+    async function actApproval(id, action) {{
+      const r = await fetch(`/api/approvals/${{encodeURIComponent(id)}}/${{action}}`, {{ method: "POST" }});
+      if (r.ok) location.reload(); else alert(await r.text());
+    }}
+    document.querySelectorAll(".approval-act, .inbox-act").forEach((btn) => {{
+      btn.addEventListener("click", () => actApproval(btn.dataset.id, btn.dataset.action));
     }});
     document.querySelectorAll(".ws-use").forEach((btn) => {{
       btn.addEventListener("click", async () => {{
@@ -295,17 +343,56 @@ def dashboard_html() -> str:
       }});
       alert(r.ok ? "Saved" : await r.text());
     }};
+    function selectedInboxTypes() {{
+      return Array.from(document.querySelectorAll(".inbox-filter:checked")).map((el) => el.value);
+    }}
+    function inboxItemHtml(e) {{
+      const p = e.payload || {{}};
+      const summary = p.summary || p.label || p.run_id || "";
+      const aid = p.approval_id || "";
+      let actions = "";
+      if (e.type === "approval.pending" && aid) {{
+        actions = `<span class="inbox-actions">`
+          + `<button type="button" class="inbox-act" data-id="${{esc(aid)}}" data-action="approve">Approve</button> `
+          + `<button type="button" class="inbox-act" data-id="${{esc(aid)}}" data-action="reject">Reject</button></span>`;
+      }}
+      const liId = aid ? ` id="inbox-approval-${{esc(aid)}}"` : "";
+      return `<li class="inbox-item" data-type="${{esc(e.type)}}"${{liId}}>`
+        + `<strong>${{esc(e.type)}}</strong> <span class="muted">${{esc(e.ts)}}</span> `
+        + `${{esc(summary)}} ${{actions}}</li>`;
+    }}
     async function refreshInbox() {{
-      const r = await fetch("/api/events?limit=20");
+      const types = selectedInboxTypes();
+      const qs = new URLSearchParams({{ limit: "20" }});
+      if (types.length) qs.set("types", types.join(","));
+      const r = await fetch("/api/events?" + qs.toString());
       if (!r.ok) return;
       const data = await r.json();
       const ul = document.getElementById("inboxList");
-      ul.innerHTML = (data.events || []).map(e =>
-        `<li><strong>${{e.type}}</strong> <span class="muted">${{e.ts}}</span> ${{JSON.stringify(e.payload || {{}})}}</li>`
-      ).join("") || "<li class='muted'>No recent events.</li>";
+      const events = (data.events || []).filter((e) => !types.length || types.includes(e.type));
+      ul.innerHTML = events.map(inboxItemHtml).join("") || "<li class='muted'>No recent events.</li>";
+      ul.querySelectorAll(".inbox-act").forEach((btn) => {{
+        btn.addEventListener("click", () => actApproval(btn.dataset.id, btn.dataset.action));
+      }});
+      applyInboxFocus();
     }}
+    function applyInboxFocus() {{
+      const params = new URLSearchParams(location.search);
+      const focus = params.get("focus") || "";
+      if (!focus.startsWith("approval:")) return;
+      const id = focus.slice("approval:".length);
+      const el = document.getElementById("inbox-approval-" + id);
+      if (el) {{
+        el.classList.add("inbox-focus");
+        el.scrollIntoView({{ behavior: "smooth", block: "center" }});
+      }}
+    }}
+    document.querySelectorAll(".inbox-filter").forEach((el) => {{
+      el.addEventListener("change", refreshInbox);
+    }});
     document.getElementById("btnInboxRefresh").onclick = refreshInbox;
     setInterval(refreshInbox, 10000);
+    applyInboxFocus();
   </script>
 </body>
 </html>"""
@@ -417,7 +504,8 @@ class HostHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/events":
             limit = int((qs.get("limit") or ["50"])[0])
-            self._send_json({"events": host_events.list_recent(limit)})
+            types = _parse_event_types(qs)
+            self._send_json({"events": host_events.list_recent(limit, types=types)})
             return
         if path == "/api/approvals":
             store = _active_store()
@@ -539,6 +627,17 @@ class HostHandler(BaseHTTPRequestHandler):
                 payload, err_code = store.approve(aid)
             else:
                 payload, err_code = store.reject(aid)
+            if err_code is None or err_code == HTTPStatus.OK:
+                host_events.emit(
+                    "approval.resolved",
+                    {
+                        "approval_id": aid,
+                        "action": parts[3],
+                        "status": payload.get("status"),
+                        "summary": aid,
+                    },
+                    workspace=str(ws),
+                )
             self._send_json(payload, err_code or HTTPStatus.OK)
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)

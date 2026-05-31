@@ -7,6 +7,10 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- feat(solar-host): enriched inbox — `workspace.activated`, `approval.pending`, payloads with `workspace`/`summary`; `GET /api/events?types=`.
+- feat(solar-host): dashboard inbox filters, pending badge, deep-link `?focus=approval:<id>`, inline approve/reject.
+- feat(solar-interface): `InterfaceStore.create_approval()` + `POST /approvals`; event hook for pending approvals.
+- test(solar-host): `test_host_events_contract.sh`, `test_host_approvals_two_workspaces.sh` (MVP-a a4).
 - feat(solar-interface): `InterfaceStore` — workspace-scoped threads/runs/approvals DB (shared by Host and legacy daemon).
 - feat(solar-interface): `interface_http.py` — shared HTTP dispatcher for threads/runs/approvals/SSE (Host `:9000` + legacy `:7741`).
 - feat(solar-host): in-process workspace API on `:9000` (`host_interface.py`); full interface routes at root paths.

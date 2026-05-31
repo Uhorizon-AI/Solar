@@ -11,7 +11,10 @@ import shutil
 import sqlite3
 import subprocess
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+
+EventHook = Callable[[str, dict], None]
 
 MIGRATION_SOURCE = Path(__file__).resolve().parent.parent / "references" / "001_initial.sql"
 
@@ -60,6 +63,10 @@ class InterfaceStore:
         self.pid_file = self.state_dir / "interface.pid"
         self.router_script = self._resolve_under_home("core/skills/solar-router/scripts/run_router.py")
         self.context_turns = int(self.env.get("SOLAR_ROUTER_CONTEXT_TURNS", "12"))
+        self._event_hook: EventHook | None = None
+
+    def set_event_hook(self, hook: EventHook | None) -> None:
+        self._event_hook = hook
 
     def _load_env(self) -> dict[str, str]:
         env: dict[str, str] = {}
@@ -227,6 +234,50 @@ class InterfaceStore:
             "updated_at": created_at,
             "last_run_id": None,
         }
+
+    def create_approval(
+        self,
+        run_id: str,
+        *,
+        reason: str | None = None,
+        summary: str | None = None,
+    ) -> dict:
+        approval_id = f"appr_{uuid.uuid4().hex[:12]}"
+        requested_at = now_iso()
+        text = summary or reason or run_id
+        conn = self.connect_db()
+        try:
+            conn.execute(
+                """
+                INSERT INTO approvals(approval_id, run_id, status, reason, requested_at)
+                VALUES (?, ?, 'pending', ?, ?)
+                """,
+                (approval_id, run_id, text, requested_at),
+            )
+            conn.execute(
+                "UPDATE runs SET status = 'awaiting_approval' WHERE run_id = ?",
+                (run_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        record = {
+            "approval_id": approval_id,
+            "run_id": run_id,
+            "status": "pending",
+            "reason": text,
+            "requested_at": requested_at,
+        }
+        if self._event_hook:
+            self._event_hook(
+                "approval.pending",
+                {
+                    "approval_id": approval_id,
+                    "run_id": run_id,
+                    "summary": text,
+                },
+            )
+        return record
 
     def approve(self, approval_id: str) -> tuple[dict, int | None]:
         conn = self.connect_db()

@@ -16,6 +16,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 from interface_store import InterfaceStore  # noqa: E402
 
+import host_events  # noqa: E402
 import host_registry as reg  # noqa: E402
 import host_workspace_context as ctx  # noqa: E402
 
@@ -29,11 +30,19 @@ def _workspace_path(workspace: str | None = None) -> str:
     return str(Path(ws).resolve())
 
 
+def _bind_event_hook(store: InterfaceStore, workspace: str) -> None:
+    def _hook(event_type: str, payload: dict) -> None:
+        host_events.emit(event_type, payload, workspace=workspace)
+
+    store.set_event_hook(_hook)
+
+
 def get_store(workspace: str | None = None) -> InterfaceStore:
     norm = _workspace_path(workspace)
     if norm not in _cache:
         store = InterfaceStore(norm)
         store.ensure_runtime()
+        _bind_event_hook(store, norm)
         _cache[norm] = store
     return _cache[norm]
 

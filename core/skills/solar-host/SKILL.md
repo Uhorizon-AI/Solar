@@ -69,6 +69,8 @@ bash core/tests/skills/solar-host/test_fleet_api_contract.sh
 bash core/tests/skills/solar-host/test_host_platform_import.sh
 bash core/tests/skills/solar-host/test_workspace_mount.sh
 bash core/tests/skills/solar-host/test_host_api_smoke.sh
+bash core/tests/skills/solar-host/test_host_events_contract.sh
+bash core/tests/skills/solar-host/test_host_approvals_two_workspaces.sh
 bash core/tests/skills/solar-host/test_host_interface_routes.sh
 bash core/tests/skills/solar-host/test_host_stream_smoke.sh
 bash core/tests/skills/solar-host/test_no_legacy_listener_after_switch.sh

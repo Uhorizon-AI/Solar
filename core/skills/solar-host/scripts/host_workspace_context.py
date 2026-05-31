@@ -12,6 +12,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+import host_events  # noqa: E402
 import host_registry as reg  # noqa: E402
 
 _mounted: str | None = None
@@ -226,6 +227,12 @@ def switch_workspace(path: str) -> str:
         unmount()
     reg.set_active(path)
     mounted = mount(path)
+    label = reg.workspace_label(mounted)
+    host_events.emit(
+        "workspace.activated",
+        {"path": mounted, "label": label},
+        workspace=mounted,
+    )
     reg.record_metric(
         "workspace.switch",
         {"from": old or "", "to": mounted},

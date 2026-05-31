@@ -106,7 +106,8 @@ class InterfaceHttpDispatcher:
 
     def _emit(self, event_type: str, payload: dict) -> None:
         if self.on_event:
-            self.on_event(event_type, payload)
+            body = {"workspace": str(self.store.workspace), **payload}
+            self.on_event(event_type, body)
 
     def _service_label(self, adapter: HttpAdapter) -> str:
         if adapter.service_name == "host":
@@ -245,6 +246,7 @@ class InterfaceHttpDispatcher:
                     "run_id": run_record.get("run_id"),
                     "thread_id": thread_id,
                     "status": run_status,
+                    "summary": (run_record.get("summary") or "")[:200] or None,
                 },
             )
             adapter.send_json(
@@ -253,13 +255,34 @@ class InterfaceHttpDispatcher:
             )
             return True
 
+        if path == "/approvals":
+            run_id = str(data.get("run_id", "")).strip()
+            if not run_id:
+                adapter.send_json({"error": "run_id required"}, 400)
+                return True
+            if not store.get_run(run_id):
+                adapter.send_json({"error": "Run not found"}, 404)
+                return True
+            record = store.create_approval(
+                run_id,
+                reason=data.get("reason"),
+                summary=data.get("summary"),
+            )
+            adapter.send_json({"approval": record}, 201)
+            return True
+
         if path.startswith("/approvals/") and path.endswith("/approve"):
             approval_id = path.strip("/").split("/")[1]
             payload, err_code = store.approve(approval_id)
             if err_code is None or err_code == 200:
                 self._emit(
                     "approval.resolved",
-                    {"approval_id": approval_id, "action": "approve", "status": payload.get("status")},
+                    {
+                        "approval_id": approval_id,
+                        "action": "approve",
+                        "status": payload.get("status"),
+                        "summary": approval_id,
+                    },
                 )
             adapter.send_json(payload, err_code or 200)
             return True
@@ -270,7 +293,12 @@ class InterfaceHttpDispatcher:
             if err_code is None or err_code == 200:
                 self._emit(
                     "approval.resolved",
-                    {"approval_id": approval_id, "action": "reject", "status": payload.get("status")},
+                    {
+                        "approval_id": approval_id,
+                        "action": "reject",
+                        "status": payload.get("status"),
+                        "summary": approval_id,
+                    },
                 )
             adapter.send_json(payload, err_code or 200)
             return True
@@ -470,6 +498,7 @@ class InterfaceHttpDispatcher:
                 "thread_id": thread_id,
                 "status": status,
                 "provider": provider_used,
+                "summary": (reply_text[:200] if reply_text else None),
             },
         )
 
