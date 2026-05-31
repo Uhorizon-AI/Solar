@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-cli): align `SOLAR_VERSION` with release tag `0.16.0` (was `0.15.0` in `solar` bin).
+
 ## [0.16.0] - 2026-06-01
 
 ### Added
