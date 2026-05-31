@@ -39,7 +39,8 @@ block_line() {
   echo
 }
 
-iface_state="FAIL"
+host_state="DOWN"
+host_detail=""
 workspace_state="FAIL"
 system_state="INFO"
 router_state="INFO"
@@ -49,11 +50,29 @@ client_state="OK"
 client_detail=""
 mcp_info=""
 
-# interface
-if bash "$SCRIPT_DIR/check_interface.sh" --quiet 2>/dev/null; then
-  iface_state="OK"
-else
-  iface_state="DOWN"
+# host (Solar App :9000 in-process) — fallback to legacy interface daemon for dev
+HOST_SCRIPTS="$(solar_core_dir)/skills/solar-host/scripts"
+if [[ -f "$HOST_SCRIPTS/check_host.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$HOST_SCRIPTS/host_lib.sh"
+  solar_host_load_env
+  if bash "$HOST_SCRIPTS/check_host.sh" --quiet 2>/dev/null; then
+    host_state="OK"
+    host_detail="$SOLAR_HOST_BASE_URL"
+    if command -v curl >/dev/null 2>&1; then
+      runtime_json="$(curl -fsS --max-time 3 "$SOLAR_HOST_BASE_URL/api/runtime/health" 2>/dev/null || true)"
+      if [[ -n "$runtime_json" ]] && echo "$runtime_json" | grep -q '"status"[[:space:]]*:[[:space:]]*"not_ready"'; then
+        host_state="WARN"
+        host_detail="$SOLAR_HOST_BASE_URL in-process not ready"
+      fi
+    fi
+  elif bash "$SCRIPT_DIR/check_interface.sh" --quiet 2>/dev/null; then
+    host_state="OK"
+    host_detail="legacy daemon ${SOLAR_INTERFACE_BASE_URL:-:7741}"
+  fi
+elif bash "$SCRIPT_DIR/check_interface.sh" --quiet 2>/dev/null; then
+  host_state="OK"
+  host_detail="legacy daemon"
 fi
 
 # workspace content (sun/ + planets/)
@@ -93,13 +112,18 @@ else
   system_state="INFO"
 fi
 
-# router
+# router — WARN only for recent orphans (default last 24h); historical noise ignored
 if [[ -f "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" ]]; then
   stale_n=0
   stale_n="$(bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" --stale-count 2>/dev/null || echo 0)"
+  stale_all=0
+  stale_all="$(bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" --stale-count-all 2>/dev/null || echo 0)"
   if [[ "${stale_n:-0}" -gt 0 ]]; then
     router_state="WARN"
-    router_detail="${stale_n} stale in-flight"
+    router_detail="${stale_n} stale in-flight (<24h)"
+  elif [[ "${stale_all:-0}" -gt 0 ]]; then
+    router_state="OK"
+    router_detail="${stale_all} historical orphan(s); run reconcile_router_audit.sh"
   else
     router_state="OK"
   fi
@@ -164,7 +188,8 @@ import json
 print(json.dumps({
   "SOLAR_WORKSPACE": "$SOLAR_WORKSPACE",
   "SOLAR_ROOT": "$SOLAR_ROOT",
-  "interface": "$iface_state",
+  "host": "$host_state",
+  "host_detail": "$host_detail",
   "workspace": "$workspace_state",
   "workspace_detail": "$workspace_detail",
   "system": "$system_state",
@@ -179,13 +204,19 @@ PY
 fi
 
 echo "Solar status  SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
-block_line "interface" "$iface_state"
+block_line "host" "$host_state" "$host_detail"
 block_line "client" "$client_state" "$client_detail"
 block_line "workspace" "$workspace_state" "$workspace_detail"
 block_line "system" "$system_state"
 block_line "router" "$router_state" "$router_detail"
 block_line "browser" "$browser_state"
 
+if [[ "$host_state" == "WARN" ]]; then
+  echo "hint: curl \$SOLAR_HOST_BASE_URL/api/runtime/health"
+fi
+if [[ -n "$router_detail" ]] && echo "$router_detail" | grep -q "historical orphan"; then
+  echo "hint: bash core/skills/solar-router/scripts/reconcile_router_audit.sh --dry-run"
+fi
 if [[ "$client_state" == "WARN" ]]; then
   echo "hint: solar client doctor"
 fi
@@ -195,7 +226,11 @@ fi
 
 if [[ "$VERBOSE" == true ]]; then
   echo "---"
-  bash "$SCRIPT_DIR/status_interface.sh" 2>/dev/null || true
+  if [[ -f "$HOST_SCRIPTS/check_host.sh" ]]; then
+    bash "$HOST_SCRIPTS/check_host.sh" 2>/dev/null || true
+  else
+    bash "$SCRIPT_DIR/status_interface.sh" 2>/dev/null || true
+  fi
   if [[ -f "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" ]]; then
     bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" 2>/dev/null | head -20 || true
     [[ -n "$router_detail" ]] && echo "router stale: $router_detail"
@@ -208,11 +243,11 @@ if [[ "$VERBOSE" == true ]]; then
 fi
 
 fail=0
-for s in "$iface_state" "$workspace_state"; do
+for s in "$host_state" "$workspace_state"; do
   [[ "$s" == "FAIL" ]] && fail=1
 done
 if [[ "$STRICT" == true ]]; then
-  for s in "$iface_state" "$workspace_state" "$client_state" "$system_state" "$router_state"; do
+  for s in "$host_state" "$workspace_state" "$client_state" "$system_state" "$router_state"; do
     [[ "$s" == "FAIL" || "$s" == "WARN" ]] && fail=1
   done
 fi

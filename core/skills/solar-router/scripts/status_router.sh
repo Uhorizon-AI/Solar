@@ -16,11 +16,19 @@ PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 LAST_N=10
 
 STALE_COUNT_ONLY=false
+STALE_ALL=false
+STALE_MAX_AGE_HOURS="${SOLAR_ROUTER_STALE_WARN_MAX_AGE_HOURS:-24}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --last) shift; LAST_N="${1:-10}"; shift ;;
     --stale-count) STALE_COUNT_ONLY=true; shift ;;
+    --stale-count-all) STALE_COUNT_ONLY=true; STALE_ALL=true; shift ;;
+    --max-age-hours)
+      shift
+      STALE_MAX_AGE_HOURS="${1:-24}"
+      shift
+      ;;
     *) shift ;;
   esac
 done
@@ -30,9 +38,15 @@ if [[ "$STALE_COUNT_ONLY" == true ]]; then
     echo "0"
     exit 0
   fi
+  export STALE_ALL STALE_MAX_AGE_HOURS
   $PYTHON - "$AUDIT_LOG" <<'PYEOF'
-import json, sys
+import json, os, sys
+from datetime import datetime, timezone
+
 audit_path = sys.argv[1]
+count_all = os.environ.get("STALE_ALL", "false").lower() == "true"
+max_age_h = float(os.environ.get("STALE_MAX_AGE_HOURS", "24"))
+
 starts = {}
 ends = set()
 with open(audit_path, encoding="utf-8") as f:
@@ -49,7 +63,26 @@ with open(audit_path, encoding="utf-8") as f:
             starts[rid] = row
         elif row.get("event") == "end":
             ends.add(rid)
-print(len([rid for rid in starts if rid not in ends]))
+
+now = datetime.now(timezone.utc)
+stale = 0
+for rid, row in starts.items():
+    if rid in ends:
+        continue
+    if count_all:
+        stale += 1
+        continue
+    ts_raw = row.get("ts", "")
+    try:
+        ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except Exception:
+        continue
+    age_h = (now - ts).total_seconds() / 3600.0
+    if age_h <= max_age_h:
+        stale += 1
+print(stale)
 PYEOF
   exit 0
 fi

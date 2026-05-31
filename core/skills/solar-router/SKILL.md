@@ -111,6 +111,10 @@ bash core/skills/solar-router/scripts/check_router.sh
 # Live status: provider health, in-flight processes, last executions
 bash core/skills/solar-router/scripts/status_router.sh
 bash core/skills/solar-router/scripts/status_router.sh --last 20
+
+# Close historical orphan audit records (append reconciled end events)
+bash core/skills/solar-router/scripts/reconcile_router_audit.sh --dry-run
+bash core/skills/solar-router/scripts/reconcile_router_audit.sh
 ```
 
 ## Router contract v3

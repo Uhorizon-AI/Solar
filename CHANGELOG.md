@@ -7,6 +7,10 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Fixed
+- fix(solar-cli): `solar status` reports **host** (`:9000` in-process) instead of legacy `interface` daemon check; runtime health via `/api/runtime/health`.
+- fix(solar-router): stale in-flight WARN counts only recent orphans (<24h); `reconcile_router_audit.sh` closes historical audit orphans.
+
+### Fixed
 - fix(solar-cli): align `SOLAR_VERSION` with release tag `0.16.0` (was `0.15.0` in `solar` bin).
 
 ## [0.16.0] - 2026-06-01
