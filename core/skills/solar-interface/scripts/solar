@@ -68,6 +68,22 @@ case "${1:-}" in
         ;;
     esac
     ;;
+  voice)
+    shift
+    case "${1:-}" in
+      once|paste|command|read)
+        exec python3 "$HOST_SCRIPTS/voice_cli.py" "$@"
+        ;;
+      "")
+        echo "Usage: solar voice {once|paste|command|read}" >&2
+        exit 2
+        ;;
+      *)
+        echo "Unknown voice subcommand: $1" >&2
+        exit 2
+        ;;
+    esac
+    ;;
   host)
     shift
     case "${1:-}" in
@@ -92,8 +108,12 @@ case "${1:-}" in
         fi
         exit 0
         ;;
+      workspace)
+        shift
+        exec bash "$HOST_SCRIPTS/host_workspace.sh" "$@"
+        ;;
       "")
-        echo "Usage: solar host {start|stop|status|open}" >&2
+        echo "Usage: solar host {start|stop|status|open|workspace ...}" >&2
         exit 2
         ;;
       *)

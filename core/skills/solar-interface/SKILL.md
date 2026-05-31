@@ -68,7 +68,7 @@ SOLAR_INTERFACE_RUNTIME_DIR=sun/runtime/interface
 
 ## Human entry (D6)
 
-Prefer **`solar host start`** (Solar Host on `:9000`) or the IDE for conversation. The daemon on `:7741` remains the API backend; REPL/chat here is legacy UX.
+Prefer **`solar host start`** / **`solar host open`** (Solar Host on `:9000`) for human UX. The daemon on `:7741` remains the API backend; the `:7741` web landing redirects to Host.
 
 ## Related skills (not this skill)
 

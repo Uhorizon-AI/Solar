@@ -525,12 +525,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/":
+            host_port = ENV.get("SOLAR_HOST_PORT", "9000")
+            host_url = f"http://127.0.0.1:{host_port}"
             self._send_html(
                 f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="3;url={host_url}">
   <title>Solar Interface</title>
   <style>
     :root {{
@@ -588,7 +591,8 @@ class Handler(BaseHTTPRequestHandler):
 <body>
   <main>
     <h1>Solar Interface</h1>
-    <p>Local interactive entrypoint for threads, runs, approvals, and runtime inspection.</p>
+    <p><strong>Primary human UX:</strong> <a href="{host_url}">Solar Host</a> (redirecting in 3s). This daemon remains the API backend on :7741.</p>
+    <p>Local API for threads, runs, approvals, and runtime inspection.</p>
     <ul>
       <li><a href="/status">/status</a> for daemon health and recent runs.</li>
       <li><a href="/threads">/threads</a> for persisted threads.</li>

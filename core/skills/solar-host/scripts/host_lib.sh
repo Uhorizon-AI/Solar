@@ -7,13 +7,32 @@ _INTERFACE_SCRIPTS="$(cd "$_HOST_LIB_DIR/../../solar-interface/scripts" && pwd)"
 # shellcheck source=resolve_solar_paths.sh
 source "$_INTERFACE_SCRIPTS/resolve_solar_paths.sh"
 
+solar_host_workspace_ports() {
+  local ws="$1"
+  python3 "$_HOST_LIB_DIR/host_registry.py" ports "$ws"
+}
+
+solar_host_apply_active_registry() {
+  local active=""
+  active="$(python3 "$_HOST_LIB_DIR/host_registry.py" active 2>/dev/null || true)"
+  if [[ -n "$active" && -d "$active" ]]; then
+    export SOLAR_WORKSPACE="$active"
+  fi
+}
+
 solar_host_load_env() {
   solar_resolve_paths --quiet
+  solar_host_apply_active_registry
   if [[ -f "$SOLAR_WORKSPACE/.env" ]]; then
     set -a
     # shellcheck source=/dev/null
     source "$SOLAR_WORKSPACE/.env"
     set +a
+  fi
+  if [[ -z "${SOLAR_INTERFACE_PORT:-}" || "${SOLAR_INTERFACE_PORT:-}" == "7741" ]]; then
+    read -r _iface _gw < <(solar_host_workspace_ports "$SOLAR_WORKSPACE")
+    export SOLAR_INTERFACE_PORT="${_iface:-7741}"
+    export SOLAR_HTTP_PORT="${SOLAR_HTTP_PORT:-${_gw:-8787}}"
   fi
   export SOLAR_HOST_HOST="${SOLAR_HOST_HOST:-127.0.0.1}"
   export SOLAR_HOST_PORT="${SOLAR_HOST_PORT:-9000}"

@@ -295,12 +295,39 @@ if feature_active "interface"; then
 fi
 
 # ---------------------------------------------------------------------------
+# Check 6: host feature
+# ---------------------------------------------------------------------------
+
+if feature_active "host"; then
+  echo ""
+  echo "── Feature: host"
+  host_out=""
+  host_code=0
+  set +e
+  host_out="$(run_with_timeout bash "$(solar_system_skill_script solar-host check_host.sh)" 2>&1)"
+  host_code=$?
+  set -e
+
+  case "$host_code" in
+    0)
+      echo "  status: HEALTHY"
+      echo "  url:    ${SOLAR_HOST_BASE_URL:-http://127.0.0.1:9000}"
+      ;;
+    *)
+      echo "  status: DOWN"
+      echo "  detail: $host_out"
+      verdict="$(worst_severity "$verdict" "DOWN")"
+      ;;
+  esac
+fi
+
+# ---------------------------------------------------------------------------
 # Warn on unknown features
 # ---------------------------------------------------------------------------
 
 for f in "${FEATURES[@]}"; do
   case "$f" in
-    async-tasks|transport-gateway|interface) ;;
+    async-tasks|transport-gateway|interface|host) ;;
     *) echo ""
        echo "  ⚠️  Unknown feature token ignored: $f" ;;
   esac

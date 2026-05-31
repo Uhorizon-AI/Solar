@@ -6,6 +6,18 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-host): multi-workspace registry (`~/Library/Application Support/Solar/workspaces.json`), `solar host workspace *`, fleet health API and dashboard.
+- feat(solar-host): async monitor, kill switch, runtime start (interface/gateway), scoped chat, governance markdown editor.
+- feat(solar-host): optional macOS tray (`host_tray.py`, requires `rumps`).
+- feat(solar-host): `voice_cli.py` inside solar-host; `solar voice *` CLI (solar-voice skill stub only).
+- feat(solar-system): `host` feature token and `ensure_host.sh` in orchestrator (`host` also ensures `solar-interface` daemon).
+
+### Changed
+- change(solar-interface): `:7741` landing redirects users to Solar Host (`:9000`).
+- change(solar-client): portable bundle seeds `solar-host` only for app+voice (removed `solar-voice` seed).
+- change(plans): product plan [2026-05-31_solar-app-plan.md](../../sun/plans/2026/05/2026-05-31_solar-app-plan.md) (replaces solar-host-plan).
+
 ## [0.15.0] - 2026-05-31
 
 ### Added

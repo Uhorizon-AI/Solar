@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Solar Host MVP — single localhost control plane (default :9000)."""
+"""Solar Host — local control plane (default :9000), multi-workspace fleet."""
 from __future__ import annotations
 
 import html
@@ -15,17 +15,46 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+import host_registry as reg  # noqa: E402
+import host_workspace_context as ctx  # noqa: E402
+
 HOST = os.environ.get("SOLAR_HOST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SOLAR_HOST_PORT", "9000"))
-WORKSPACE = Path(os.environ["SOLAR_WORKSPACE"]).resolve()
-INTERFACE_BASE = os.environ.get(
-    "SOLAR_INTERFACE_BASE_URL", "http://127.0.0.1:7741"
-).rstrip("/")
-SOLAR_BIN = os.environ.get(
-    "SOLAR_CLI",
-    str(WORKSPACE / "core/skills/solar-interface/scripts/solar"),
-)
 _APPROVAL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$")
+_CORE_DIR = _SCRIPT_DIR.parent.parent.parent
+
+
+def _skill_script(skill: str, script: str) -> Path:
+    root = os.environ.get("SOLAR_ROOT", "").strip()
+    if root:
+        candidate = Path(root) / "core" / "skills" / skill / "scripts" / script
+        if candidate.is_file():
+            return candidate
+    return _CORE_DIR / "skills" / skill / "scripts" / script
+
+
+def _active_workspace() -> Path:
+    mounted = ctx.get_mounted()
+    if mounted:
+        return Path(mounted).resolve()
+    path = reg.get_active_path()
+    if not path:
+        path = os.environ.get("SOLAR_WORKSPACE", "")
+    return Path(path).resolve()
+
+
+def _interface_base(ws: Path | None = None) -> str:
+    w = str(ws or _active_workspace())
+    iface = reg._interface_port_from_env(w) or reg.port_offsets(w)[0]
+    return f"http://127.0.0.1:{iface}"
+
+
+def _solar_bin(ws: Path | None = None) -> str:
+    return reg.solar_cli_for(str(ws or _active_workspace()))
 
 
 def _esc(text: object) -> str:
@@ -36,7 +65,9 @@ def _valid_approval_id(approval_id: str) -> bool:
     return bool(approval_id and _APPROVAL_ID_RE.fullmatch(approval_id))
 
 
-def fetch_json(url: str, method: str = "GET", body: dict | None = None) -> tuple[int, object]:
+def fetch_json(
+    url: str, method: str = "GET", body: dict | None = None, timeout: float = 8.0
+) -> tuple[int, object]:
     data = None
     headers = {"Accept": "application/json"}
     if body is not None:
@@ -44,7 +75,7 @@ def fetch_json(url: str, method: str = "GET", body: dict | None = None) -> tuple
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             return resp.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
@@ -58,11 +89,12 @@ def fetch_json(url: str, method: str = "GET", body: dict | None = None) -> tuple
         return 0, {"error": str(exc)}
 
 
-def run_solar_status() -> str:
+def run_solar_status(ws: Path | None = None) -> str:
+    workspace = ws or _active_workspace()
     try:
         proc = subprocess.run(
-            ["bash", SOLAR_BIN, "status"],
-            cwd=str(WORKSPACE),
+            ["bash", _solar_bin(workspace), "status"],
+            cwd=str(workspace),
             capture_output=True,
             text=True,
             timeout=30,
@@ -73,35 +105,74 @@ def run_solar_status() -> str:
         return f"status error: {exc}"
 
 
-def _approval_row(a: dict) -> str:
+def _approval_row(a: dict, iface: str) -> str:
     aid = str(a.get("approval_id", ""))
     run_id = str(a.get("run_id", ""))
     if not _valid_approval_id(aid):
         return ""
     summary = str(a.get("summary") or a.get("reason") or run_id)
+    run_ctx = ""
+    if run_id:
+        _, run_payload = fetch_json(f"{iface}/runs/{urllib.parse.quote(run_id, safe='')}")
+        if isinstance(run_payload, dict):
+            run_ctx = str(run_payload.get("summary") or run_payload.get("status") or "")[:200]
+    ctx_line = f"<br/><span class='muted'>run context: {_esc(run_ctx)}</span>" if run_ctx else ""
     return (
         '<div class="approval-item" style="margin:12px 0">'
         f"<strong>{_esc(summary)}</strong><br/>"
-        f'<span class="muted">approval {_esc(aid)} · run {_esc(run_id)}</span><br/>'
+        f'<span class="muted">approval {_esc(aid)} · run {_esc(run_id)}</span>'
+        f"{ctx_line}<br/>"
         f'<button type="button" class="approval-act" data-id="{_esc(aid)}" data-action="approve">Approve</button> '
         f'<button type="button" class="approval-act" data-id="{_esc(aid)}" data-action="reject">Reject</button>'
         "</div>"
     )
 
 
+def _fleet_rows() -> str:
+    fleet = reg.fleet_health()
+    rows = []
+    for ws in fleet.get("workspaces", []):
+        path = ws.get("path", "")
+        label = ws.get("label", "")
+        sev = ws.get("severity", "DOWN")
+        cls = {"OK": "ok", "WARN": "warn"}.get(sev, "warn")
+        active = " (active)" if ws.get("active") else ""
+        cursor_href = "cursor://file/" + urllib.parse.quote(path, safe="/")
+        rows.append(
+            f"<tr>"
+            f"<td><span class='{cls}'>{_esc(sev)}</span></td>"
+            f"<td><strong>{_esc(label)}</strong>{_esc(active)}<br/>"
+            f"<span class='muted'>{_esc(path)}</span></td>"
+            f"<td>{_esc(ws.get('interface_base', ''))}</td>"
+            f"<td>"
+            f'<button type="button" class="ws-use" data-path="{_esc(path)}">Use</button> '
+            f'<a href="{_esc(cursor_href)}">Cursor</a>'
+            f"</td></tr>"
+        )
+    return "\n".join(rows) if rows else "<tr><td colspan='4'>No workspaces registered.</td></tr>"
+
+
 def dashboard_html() -> str:
-    iface_code, _iface_health = fetch_json(f"{INTERFACE_BASE}/health")
-    _, approvals_payload = fetch_json(f"{INTERFACE_BASE}/approvals")
+    reg.record_metric("dashboard_view")
+    ws = _active_workspace()
+    iface = _interface_base(ws)
+    iface_code, _ = fetch_json(f"{iface}/health")
+    _, approvals_payload = fetch_json(f"{iface}/approvals")
     approvals = approvals_payload.get("approvals", []) if isinstance(approvals_payload, dict) else []
     pending = [a for a in approvals if a.get("status") == "pending"]
-    status_text = run_solar_status()
-    ws = str(WORKSPACE)
-    cursor_href = "cursor://file/" + urllib.parse.quote(ws, safe="/")
-    iface_label = "OK" if iface_code == 200 else "DOWN"
-    iface_class = "ok" if iface_code == 200 else "warn"
-    pending_html = "".join(_approval_row(a) for a in pending[:20])
+    status_text = run_solar_status(ws)
+    jobs = reg.list_async_jobs(str(ws))
+    jobs_html = "".join(
+        f"<li><strong>{_esc(j.get('state'))}</strong> {_esc(j.get('summary', j.get('id')))} "
+        f"<span class='muted'>{_esc(j.get('file', ''))}</span></li>"
+        for j in jobs[:15]
+    ) or "<li class='muted'>No async jobs found.</li>"
+    pending_html = "".join(_approval_row(a, iface) for a in pending[:20])
     if not pending_html:
         pending_html = "<p class='muted'>No pending approvals.</p>"
+    api_label = "OK" if iface_code == 200 else "DOWN"
+    api_class = "ok" if iface_code == 200 else "warn"
+    host_url = f"http://{HOST}:{PORT}"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -109,46 +180,161 @@ def dashboard_html() -> str:
   <title>Solar Host</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 24px; background: #0f1419; color: #e7ecf3; }}
-    h1 {{ margin: 0 0 8px; }}
+    h1,h2 {{ margin: 0 0 8px; }}
     .muted {{ color: #9aa7b5; }}
     section {{ margin: 20px 0; padding: 16px; border: 1px solid #2a3542; border-radius: 10px; }}
-    pre {{ white-space: pre-wrap; background: #1a222c; padding: 12px; border-radius: 8px; }}
+    pre, textarea {{ white-space: pre-wrap; background: #1a222c; padding: 12px; border-radius: 8px; width: 100%; box-sizing: border-box; color: #e7ecf3; }}
     button {{ margin-right: 8px; padding: 6px 12px; cursor: pointer; }}
     .ok {{ color: #6dd58c; }}
     .warn {{ color: #e8b84a; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    td, th {{ padding: 8px; border-bottom: 1px solid #2a3542; text-align: left; }}
+    #chatOut {{ min-height: 120px; }}
   </style>
 </head>
 <body>
   <h1>Solar Host</h1>
-  <p class="muted">Control plane for workspace <code>{_esc(ws)}</code> — port {PORT}. IDE handles code; Host handles operations.</p>
+  <p class="muted">Control plane — active workspace <code>{_esc(ws)}</code></p>
+  <p>Host: <span class="ok">OK</span> <span class="muted">({_esc(host_url)} — this page)</span></p>
   <section>
-    <h2>Runtime</h2>
-    <p>Interface daemon: <span class="{iface_class}">{iface_label}</span> ({_esc(INTERFACE_BASE)})</p>
-    <pre>{_esc(status_text)}</pre>
+    <h2>Fleet</h2>
+    <p class="muted">Health = workspace + legacy API. Host stays up on :{PORT} even if workspace API is stopped.</p>
+    <table><thead><tr><th>Health</th><th>Workspace</th><th>Workspace API</th><th>Actions</th></tr></thead>
+    <tbody>{_fleet_rows()}</tbody></table>
   </section>
   <section>
-    <h2>Approvals inbox ({len(pending)} pending)</h2>
+    <h2>Runtime (active)</h2>
+    <p>Host: <span class="ok">OK</span> <span class="muted">({_esc(host_url)})</span></p>
+    <p>Workspace API: <span class="{api_class}">{api_label}</span> <span class="muted">({_esc(iface)} — threads/approvals until MVP-b)</span></p>
+    <pre>{_esc(status_text)}</pre>
+    <button type="button" id="btnKill">Kill switch (stop workspace API + gateway)</button>
+    <button type="button" id="btnEnsureIface">Start workspace API</button>
+    <button type="button" id="btnEnsureGw">Start gateway</button>
+  </section>
+  <section>
+    <h2>Approvals ({len(pending)} pending)</h2>
     {pending_html}
   </section>
   <section>
-    <h2>Quick actions</h2>
-    <p><a href="{_esc(cursor_href)}">Open workspace in Cursor</a></p>
-    <p class="muted">Voice: <code>solar voice once</code> (planned; see solar-host-plan). Chat REPL on :7741 is deprecated as primary UX — use this Host UI or your IDE.</p>
+    <h2>Async monitor</h2>
+    <ul>{jobs_html}</ul>
+  </section>
+  <section>
+    <h2>Scoped chat</h2>
+    <p class="muted">Context: active workspace agent (not generalist chat).</p>
+    <textarea id="chatIn" rows="3" placeholder="Ask about this workspace..."></textarea>
+    <button type="button" id="btnChat">Send</button>
+    <pre id="chatOut"></pre>
+  </section>
+  <section>
+    <h2>Governance editor</h2>
+    <input id="govPath" value="sun/MEMORY.md" style="width:100%;padding:8px;margin-bottom:8px"/>
+    <button type="button" id="btnGovLoad">Load</button>
+    <button type="button" id="btnGovSave">Save</button>
+    <textarea id="govBody" rows="12"></textarea>
   </section>
   <script>
+    async function postJson(url, body) {{
+      const r = await fetch(url, {{ method: "POST", headers: {{ "Content-Type": "application/json" }}, body: JSON.stringify(body || {{}}) }});
+      return r;
+    }}
     document.querySelectorAll(".approval-act").forEach((btn) => {{
       btn.addEventListener("click", async () => {{
         const id = btn.dataset.id;
         const action = btn.dataset.action;
-        if (!id || !action) return;
         const r = await fetch(`/api/approvals/${{encodeURIComponent(id)}}/${{action}}`, {{ method: "POST" }});
-        if (r.ok) location.reload();
-        else alert(await r.text());
+        if (r.ok) location.reload(); else alert(await r.text());
       }});
     }});
+    document.querySelectorAll(".ws-use").forEach((btn) => {{
+      btn.addEventListener("click", async () => {{
+        const r = await postJson("/api/workspaces/active", {{ path: btn.dataset.path }});
+        if (r.ok) location.reload(); else alert(await r.text());
+      }});
+    }});
+    document.getElementById("btnKill").onclick = async () => {{
+      if (!confirm("Emergency stop runtime for active workspace?")) return;
+      const r = await postJson("/api/kill", {{}});
+      alert(await r.text()); location.reload();
+    }};
+    document.getElementById("btnEnsureIface").onclick = async () => {{
+      const r = await postJson("/api/runtime/interface/start", {{}}); alert(await r.text());
+    }};
+    document.getElementById("btnEnsureGw").onclick = async () => {{
+      const r = await postJson("/api/runtime/gateway/start", {{}}); alert(await r.text());
+    }};
+    document.getElementById("btnChat").onclick = async () => {{
+      const msg = document.getElementById("chatIn").value;
+      const r = await postJson("/api/chat", {{ message: msg }});
+      document.getElementById("chatOut").textContent = await r.text();
+    }};
+    document.getElementById("btnGovLoad").onclick = async () => {{
+      const p = document.getElementById("govPath").value;
+      const r = await fetch("/api/governance/file?path=" + encodeURIComponent(p));
+      document.getElementById("govBody").value = await r.text();
+    }};
+    document.getElementById("btnGovSave").onclick = async () => {{
+      const p = document.getElementById("govPath").value;
+      const r = await fetch("/api/governance/file?path=" + encodeURIComponent(p), {{
+        method: "PUT", headers: {{ "Content-Type": "text/plain" }}, body: document.getElementById("govBody").value
+      }});
+      alert(r.ok ? "Saved" : await r.text());
+    }};
   </script>
 </body>
 </html>"""
+
+
+def _read_body(handler: BaseHTTPRequestHandler) -> bytes:
+    length = int(handler.headers.get("Content-Length", 0))
+    return handler.rfile.read(length) if length else b""
+
+
+def _run_script(script_rel: str, ws: Path) -> tuple[int, str]:
+    # script_rel like "solar-interface/scripts/ensure_interface.sh"
+    parts = script_rel.split("/", 1)
+    skill = parts[0]
+    name = parts[1] if len(parts) > 1 else ""
+    script = _skill_script(skill, name)
+    if not script.is_file():
+        return 1, f"missing script: {script}"
+    proc = subprocess.run(
+        ["bash", str(script)],
+        cwd=str(ws),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={**os.environ, "SOLAR_WORKSPACE": str(ws)},
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return proc.returncode, out.strip()
+
+
+def _kill_runtime(ws: Path) -> dict[str, object]:
+    results = []
+    code, out = _run_script("solar-interface/scripts/stop_interface_daemon.sh", ws)
+    results.append({"step": "stop_interface", "code": code, "out": out[:500]})
+    gw_port = reg.port_offsets(str(ws))[1]
+    try:
+        proc = subprocess.run(
+            ["lsof", "-ti", f"tcp:{gw_port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        for pid in (proc.stdout or "").split():
+            if pid.strip().isdigit():
+                subprocess.run(["kill", pid.strip()], check=False)
+                results.append({"step": "kill_gateway", "pid": pid.strip()})
+    except Exception as exc:  # noqa: BLE001
+        results.append({"step": "kill_gateway", "error": str(exc)})
+    lock = "/tmp/com.solar.system.lock"
+    if Path(lock).exists():
+        subprocess.run(["rm", "-rf", lock], check=False)
+        results.append({"step": "clear_orchestrator_lock"})
+    reg.record_metric("kill_switch", {"workspace": str(ws)})
+    return {"ok": True, "results": results}
 
 
 class HostHandler(BaseHTTPRequestHandler):
@@ -168,6 +354,10 @@ class HostHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        ws = _active_workspace()
+        iface = _interface_base(ws)
+
         if path in ("/", "/dashboard"):
             self._send(dashboard_html().encode("utf-8"))
             return
@@ -175,35 +365,148 @@ class HostHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "ok", "service": "solar-host", "port": PORT})
             return
         if path == "/api/status":
-            self._send_json({"text": run_solar_status(), "workspace": str(WORKSPACE)})
+            self._send_json({"text": run_solar_status(ws), "workspace": str(ws)})
+            return
+        if path == "/api/workspaces":
+            self._send_json({"workspaces": reg.list_workspaces(), "active_path": reg.get_active_path()})
+            return
+        if path == "/api/fleet/health":
+            self._send_json(reg.fleet_health())
             return
         if path == "/api/approvals":
-            code, payload = fetch_json(f"{INTERFACE_BASE}/approvals")
+            code, payload = fetch_json(f"{iface}/approvals")
             self._send_json(payload, code or HTTPStatus.BAD_GATEWAY)
+            return
+        if path == "/api/async/jobs":
+            self._send_json({"jobs": reg.list_async_jobs(str(ws))})
+            return
+        if path == "/api/system/check":
+            code, out = _run_script("solar-system/scripts/check_orchestrator.sh", ws)
+            self._send_json({"code": code, "output": out})
+            return
+        if path == "/api/governance/file":
+            rel = (qs.get("path") or [""])[0]
+            target = reg.governance_resolve(str(ws), rel)
+            if not target or not target.is_file():
+                self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+                return
+            self._send(target.read_text(encoding="utf-8").encode("utf-8"), 200, "text/plain; charset=utf-8")
+            return
+        self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def do_PUT(self) -> None:
+        path = self.path.split("?", 1)[0]
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        ws = _active_workspace()
+        if path == "/api/governance/file":
+            rel = (qs.get("path") or [""])[0]
+            target = reg.governance_resolve(str(ws), rel)
+            if not target:
+                self._send_json({"error": "invalid path"}, HTTPStatus.BAD_REQUEST)
+                return
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(_read_body(self).decode("utf-8"), encoding="utf-8")
+            self._send_json({"ok": True, "path": rel})
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
+        ws = _active_workspace()
+        iface = _interface_base(ws)
+        body_raw = _read_body(self)
+        body: dict = {}
+        if body_raw:
+            try:
+                body = json.loads(body_raw.decode("utf-8"))
+            except json.JSONDecodeError:
+                body = {}
+
         parts = path.strip("/").split("/")
+        if path == "/api/workspaces/active":
+            target = str(body.get("path", ""))
+            try:
+                active_path = ctx.switch_workspace(target)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"ok": True, "active_path": active_path})
+            return
+        if path == "/api/kill":
+            self._send_json(_kill_runtime(ws))
+            return
+        if path == "/api/runtime/interface/start":
+            code, out = _run_script("solar-interface/scripts/ensure_interface.sh", ws)
+            self._send_json({"code": code, "output": out})
+            return
+        if path == "/api/runtime/gateway/start":
+            code, out = _run_script("solar-gateway/scripts/ensure_transport_gateway.sh", ws)
+            self._send_json({"code": code, "output": out})
+            return
+        if path == "/api/chat":
+            msg = str(body.get("message", "")).strip()
+            if not msg:
+                self._send_json({"error": "empty message"}, HTTPStatus.BAD_REQUEST)
+                return
+            code, thread_payload = fetch_json(f"{iface}/threads", "POST", {"title": "Host scoped"})
+            if code not in (200, 201) or not isinstance(thread_payload, dict):
+                self._send_json({"error": "thread create failed", "detail": thread_payload}, HTTPStatus.BAD_GATEWAY)
+                return
+            tid = thread_payload.get("thread_id") or thread_payload.get("id")
+            if not tid:
+                self._send_json({"error": "no thread id", "detail": thread_payload}, HTTPStatus.BAD_GATEWAY)
+                return
+            scoped = (
+                f"[Solar Host scoped chat — workspace {ws}]\n"
+                f"Use only context from sun/, planets/, skills. User question:\n{msg}"
+            )
+            run_code, run_payload = fetch_json(
+                f"{iface}/threads/{urllib.parse.quote(str(tid), safe='')}/runs",
+                "POST",
+                {"message": scoped, "mode": "auto"},
+            )
+            self._send_json(run_payload, run_code or HTTPStatus.BAD_GATEWAY)
+            return
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "approvals" and parts[3] in ("approve", "reject"):
             aid = parts[2]
-            action = parts[3]
             if not _valid_approval_id(aid):
                 self._send_json({"error": "invalid approval id"}, HTTPStatus.BAD_REQUEST)
                 return
-            code, payload = fetch_json(f"{INTERFACE_BASE}/approvals/{aid}/{action}", "POST", {})
+            code, payload = fetch_json(f"{iface}/approvals/{aid}/{parts[3]}", "POST", {})
             self._send_json(payload, code or HTTPStatus.BAD_GATEWAY)
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
 
 def main() -> int:
-    if "SOLAR_WORKSPACE" not in os.environ:
-        print("ERROR: SOLAR_WORKSPACE required", file=sys.stderr)
+    active = reg.get_active_path()
+    if not active:
+        seed = os.environ.get("SOLAR_WORKSPACE", "").strip()
+        if seed:
+            seed_path = Path(seed).expanduser()
+            if seed_path.is_dir():
+                norm = str(seed_path.resolve())
+                try:
+                    reg.add_workspace(norm)
+                    reg.set_active(norm)
+                    active = reg.get_active_path()
+                except ValueError:
+                    pass
+    if not active:
+        print(
+            "ERROR: no active workspace in registry; "
+            "run: solar host workspace add <path>",
+            file=sys.stderr,
+        )
         return 1
+    try:
+        ctx.mount(active)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    ws = _active_workspace()
     server = ThreadingHTTPServer((HOST, PORT), HostHandler)
-    print(f"Solar Host listening on http://{HOST}:{PORT} (workspace={WORKSPACE})")
+    print(f"Solar Host listening on http://{HOST}:{PORT} (workspace={ws})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -20,7 +20,8 @@ Provide one system-level control point for Solar runtime operations:
 - Orchestrate enabled features from `.env`:
   - `async-tasks`
   - `transport-gateway`
-  - `interface`
+  - `host` (starts Host UI **and** `solar-interface` daemon backend)
+  - `interface` (optional, legacy token — API-only without Host UI; omit if you use `host`)
 - Keep orchestration deterministic and non-overlapping.
 
 ## Required MCP
@@ -62,7 +63,8 @@ The LaunchAgent entrypoint is built at `sun/runtime/system/Solar` during install
 `SOLAR_SYSTEM_FEATURES` is a CSV selector. Supported values:
 - `async-tasks`
 - `transport-gateway`
-- `interface`
+- `host` — preferred on workstations (panel `:9000` + daemon `:7741`)
+- `interface` — legacy; only when you need the API daemon without Host
 
 **Note:** `SOLAR_SYSTEM_FEATURES` is also read by `solar-router` to determine if `async-tasks` is available for async draft creation. Keep this value consistent with your active runtime configuration.
 
@@ -90,6 +92,7 @@ The LaunchAgent entrypoint is built at `sun/runtime/system/Solar` during install
    - async tasks: `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` (the script first checks whether async-tasks is already supervised by solar-system, then falls back to the local worker only when needed)
    - transport gateway: `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
    - interface: `core/skills/solar-interface/scripts/ensure_interface.sh`
+   - host: `core/skills/solar-host/scripts/ensure_host.sh`
 
 ## Design notes
 
