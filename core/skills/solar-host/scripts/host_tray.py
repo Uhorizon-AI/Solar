@@ -1,66 +1,15 @@
 #!/usr/bin/env python3
-"""Optional macOS menu bar helper for Solar Host (requires rumps)."""
+"""Thin entrypoint — delegates to host_platform/macos/tray.py."""
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_SCRIPT_DIR))
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
-
-def _host_url() -> str:
-    host = os.environ.get("SOLAR_HOST_HOST", "127.0.0.1")
-    port = os.environ.get("SOLAR_HOST_PORT", "9000")
-    return f"http://{host}:{port}"
-
-
-def _pending_count() -> int:
-    try:
-        with urllib.request.urlopen(f"{_host_url()}/api/approvals", timeout=4) as resp:
-            import json
-
-            data = json.loads(resp.read().decode())
-            approvals = data.get("approvals", []) if isinstance(data, dict) else []
-            return sum(1 for a in approvals if a.get("status") == "pending")
-    except Exception:  # noqa: BLE001
-        return 0
-
-
-def main() -> int:
-    try:
-        import rumps  # type: ignore
-    except ImportError:
-        print("WARN: rumps not installed — tray unavailable. Use: pip install rumps", file=sys.stderr)
-        print(f"Open Host in browser: {_host_url()}", file=sys.stderr)
-        return 0
-
-    class SolarHostApp(rumps.App):
-        def __init__(self) -> None:
-            title = "Solar"
-            super().__init__(title, quit_button="Quit")
-            self.menu = ["Open Host", "Refresh", None, "Quit"]
-
-        @rumps.timer(30)
-        def refresh_badge(self, _: object) -> None:
-            n = _pending_count()
-            self.title = f"Solar ({n})" if n else "Solar"
-
-        @rumps.clicked("Open Host")
-        def open_host(self, _: object) -> None:
-            url = _host_url()
-            subprocess.run(["open", url], check=False)
-
-        @rumps.clicked("Refresh")
-        def refresh(self, _: object) -> None:
-            self.refresh_badge(None)
-
-    SolarHostApp().run()
-    return 0
-
+from host_platform.macos.tray import main  # noqa: E402
 
 if __name__ == "__main__":
     raise SystemExit(main())

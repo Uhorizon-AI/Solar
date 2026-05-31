@@ -68,3 +68,7 @@ if [[ "$ready" != true ]]; then
 fi
 
 echo "OK: Solar Host started at $SOLAR_HOST_BASE_URL (pid $new_pid, log $LOG_FILE)"
+
+if [[ "${SOLAR_HOST_TRAY:-}" == "1" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+  python3 "$SCRIPT_DIR/host_platform/macos/launch.py" start-tray 2>/dev/null || true
+fi

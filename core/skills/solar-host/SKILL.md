@@ -38,9 +38,40 @@ None
 solar host start|stop|status|open
 solar host workspace list|add|remove|use <path>
 solar voice once|paste|command|read
-python3 core/skills/solar-host/scripts/host_tray.py   # optional; needs rumps
 bash core/skills/solar-host/scripts/onboard_host_env.sh
 ```
+
+## macOS tray + notifications (Host-1)
+
+**Dependencies (once):**
+
+| Tool | Command | Why |
+|------|---------|-----|
+| uv | `brew install uv` | run tray |
+| terminal-notifier | `brew install terminal-notifier` | **required** for alerts (dev + Solar.app); never osascript/rumps.notification |
+| Solar.app | `bash …/build_solar_tray_app.sh` | menu bar UI (rumps); alerts via terminal-notifier `-sender ai.uhorizon.solar.host` |
+
+**Run tray** (workspace paths use `solar/` prefix when framework is nested):
+
+```bash
+# Dev — menu bar via rumps; alerts via terminal-notifier
+uv run --with rumps python3 solar/core/skills/solar-host/scripts/host_tray.py
+
+# Product — same notification path; Solar.app for menu bar identity
+open solar/core/skills/solar-host/scripts/host_platform/macos/dist/Solar.app
+```
+
+- `SOLAR_HOST_TRAY=1` — `start_host.sh` launches built `Solar.app` if present, else `uv run --with rumps`.
+- Inbox web on `:9000` works without tray.
+
+**Remove stale "Python" from System Settings → Notifications** (after old dev tray runs):
+
+```bash
+bash core/skills/solar-host/scripts/host_platform/macos/clean_python_notifications.sh --list
+bash core/skills/solar-host/scripts/host_platform/macos/clean_python_notifications.sh --apply
+```
+
+Requires **Full Disk Access** for the terminal (Cursor/Terminal). If Python still appears, log out/in once.
 
 ## LaunchAgent
 
@@ -71,6 +102,7 @@ bash core/tests/skills/solar-host/test_workspace_mount.sh
 bash core/tests/skills/solar-host/test_host_api_smoke.sh
 bash core/tests/skills/solar-host/test_host_events_contract.sh
 bash core/tests/skills/solar-host/test_host_approvals_two_workspaces.sh
+bash core/tests/skills/solar-host/test_host_macos_notifications_unit.sh
 bash core/tests/skills/solar-host/test_host_interface_routes.sh
 bash core/tests/skills/solar-host/test_host_stream_smoke.sh
 bash core/tests/skills/solar-host/test_no_legacy_listener_after_switch.sh

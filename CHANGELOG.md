@@ -7,6 +7,8 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- feat(solar-host): Host-1 macOS — `host_platform/macos/` (tray, notifications, `SOLAR_HOST_TRAY=1` on start).
+- test(solar-host): `test_host_macos_notifications_unit.sh`.
 - feat(solar-host): enriched inbox — `workspace.activated`, `approval.pending`, payloads with `workspace`/`summary`; `GET /api/events?types=`.
 - feat(solar-host): dashboard inbox filters, pending badge, deep-link `?focus=approval:<id>`, inline approve/reject.
 - feat(solar-interface): `InterfaceStore.create_approval()` + `POST /approvals`; event hook for pending approvals.
