@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-06-01
+
 ### Added
 - feat(solar-host): Host-1 macOS — `host_platform/macos/` (tray, notifications, `SOLAR_HOST_TRAY=1` on start).
 - test(solar-host): `test_host_macos_notifications_unit.sh`.
