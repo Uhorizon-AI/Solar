@@ -12,6 +12,7 @@ The format is based on Keep a Changelog.
 - feat(solar-host): in-process workspace API on `:9000` (`host_interface.py`); full interface routes at root paths.
 - feat(solar-host): `host_events.py` + `GET /api/events` + dashboard Inbox section (polling).
 - test(solar-host): `test_host_interface_routes.sh` — threads/runs/ready/delete on Host.
+- test(solar-host): `test_host_stream_smoke.sh` — SSE `POST /threads/{id}/stream` headers + `data:` event.
 - test(solar-host): MVP-b smoke (`test_host_api_smoke.sh`, `test_no_legacy_listener_after_switch.sh`, `test_fleet_api_contract.sh`).
 
 ### Changed
