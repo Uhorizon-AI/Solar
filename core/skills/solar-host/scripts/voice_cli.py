@@ -85,7 +85,7 @@ def main() -> int:
         description="Dictado y comandos de voz contra Solar Host.",
         epilog=(
             "Producto Wispr: Solar.app (barra de menú). doctor: deps + voice.json. "
-            "CLI once/paste: solo debug. Hotkey default: Right ⌥ mantener."
+            "CLI once/paste: solo debug. Atajo global: bug conocido — usa menú Voice en Solar.app."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -109,13 +109,13 @@ def main() -> int:
 
     if args.cmd == "once":
         print(
-            "Tip: dictado Wispr → Solar.app (menú Voice o Right ⌥). CLI = debug.",
+            "Tip: en Solar.app solo Voice → Push to talk (paste) → Detener grabación.",
             file=sys.stderr,
         )
         return cmd_once(paste=False)
     if args.cmd == "paste":
         print(
-            "Tip: dictado Wispr → Solar.app (menú Voice o Right ⌥). CLI = debug.",
+            "Tip: en Solar.app solo Voice → Push to talk (paste) → Detener grabación.",
             file=sys.stderr,
         )
         return cmd_once(paste=True)

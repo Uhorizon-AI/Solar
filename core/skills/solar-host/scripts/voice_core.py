@@ -647,15 +647,20 @@ def run_intent(
         return 0, f"Opened {base}/dashboard"
 
     thread_id = host.get_or_create_thread_id()
-    if thread_id:
+    stream_err = ""
+    if not thread_id:
+        stream_err = "could not create voice thread on Host"
+    else:
         parts: List[str] = []
         for evt in stream_ask(utterance, thread_id, client=host, on_chunk=on_chunk):
             if evt.get("type") == "chunk":
                 parts.append(str(evt.get("text", "")))
             if evt.get("type") == "error":
+                stream_err = str(evt.get("error", "stream error"))
                 break
             if evt.get("type") in ("done", "run.failed"):
                 if evt.get("status") == "failed" or evt.get("type") == "run.failed":
+                    stream_err = str(evt.get("error", "run failed"))
                     break
         reply = "".join(parts).strip()
         if reply:
@@ -665,6 +670,12 @@ def run_intent(
 
     code, reply = host.chat(utterance)
     if code != 0:
+        if stream_err:
+            return (
+                1,
+                f"Ask failed — stream: {stream_err}; chat fallback: {reply}. "
+                "Use dashboard chat at :9000 (Ask Solar not validated E2E).",
+            )
         return 1, reply
     if speak and reply:
         speak_brief(reply)

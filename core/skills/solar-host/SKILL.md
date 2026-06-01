@@ -79,7 +79,16 @@ Add `host` to `SOLAR_SYSTEM_FEATURES`. Orchestrator runs `ensure_host.sh` (works
 
 ## Voice (part of this skill)
 
-Wispr-like flows: tray push-to-talk (copy/paste/ask), CLI intents, SSE ask against Host `:9000`. Optional macOS **Fn** hold-to-talk (`host_platform/macos/hotkey.py`; default — **not F5**, often bound to Siri) and phrase-stream TTS (`voice_tts.py`).
+Voice in Solar.app: **tray → Voice → Push to talk (paste)** then **■ Detener grabación** (transcribe + ⌘V in active app). CLI intents and TTS exist but are not the validated path.
+
+### Known bugs
+
+| Issue | Workaround |
+|-------|------------|
+| **Only paste PTT works** in Solar.app (v0.17.0) | **Voice → Push to talk (paste)** → speak → **■ Detener grabación**. Needs Mic + Accessibility. |
+| **Push to talk (copy)** | Not validated in tray — use paste or CLI `solar voice paste`. |
+| **Ask Solar** | Not validated — transcription only; no reliable Host/router reply. Use dashboard chat `:9000`. |
+| **Global hotkey** | Disabled (`SOLAR_VOICE_HOTKEY_ENABLE=1` experimental). |
 
 Scripts: `scripts/voice_core.py` (shared), `scripts/voice_cli.py` — not a separate bundle skill (`solar-voice` is a deprecation stub only).
 
@@ -90,7 +99,8 @@ Scripts: `scripts/voice_core.py` (shared), `scripts/voice_cli.py` — not a sepa
 | `SOLAR_VOICE_TEXT` | Skip mic — inject utterance (tests) |
 | `SOLAR_VOICE_MOCK_STREAM=1` | SSE mock fixture (CI; no LLM) |
 | `SOLAR_VOICE_TTS` | `stream` \| `batch` \| `off` |
-| `SOLAR_VOICE_HOTKEY` | Global hotkey: default **`right_option`** (Right ⌥ hold). Alt `f8`. Avoid `fn`/`f5` (system) |
+| `SOLAR_VOICE_HOTKEY` | Key spec when hotkey enabled (`right_option`, `f8`, …) — **disabled by default** (known bug) |
+| `SOLAR_VOICE_HOTKEY_ENABLE` | Set `1` to attempt global hotkey (experimental; usually broken) |
 | `~/Library/.../Solar/voice.json` | Tool paths for Solar.app (`solar voice doctor` writes this) |
 
 **Deps (install once):**
@@ -106,14 +116,12 @@ solar voice doctor --no-fix # report only
 | whisper | optional | local STT |
 | terminal-notifier | `brew install terminal-notifier` | tray alerts |
 | uv | `brew install uv` | **required** for Python voice deps |
-| PyObjC Quartz | `solar voice doctor` (uv → `~/Library/.../Solar/voice-uv/.venv`) | **Fn** hotkey; rebuild Solar.app after install |
+| PyObjC Quartz | `solar voice doctor` (uv venv) | hotkey module only; global shortcut **known broken** |
 | rumps | `solar voice doctor` | dev tray (`run_host_tray.sh`) |
 
-**CLI `solar voice paste`:** records until you press **Enter** (not Ctrl+C). **Tray Voice:** two clicks (start/stop). **Fn (hold):** Wispr-like in Solar.app — release to finish (Input Monitoring). Do not use F5 if macOS assigned it to Siri.
+**macOS permissions:** **Microphone** (record) and **Accessibility** (paste via ⌘V). System Settings → Privacy.
 
-**macOS permissions:** Microphone, Accessibility (paste), Input Monitoring (global hotkey).
-
-**Tray menu:** Voice → Push to talk (copy/paste), Ask Solar. Toggle: start/stop `rec` in a worker thread (never block rumps main thread).
+**Tray menu (v0.17.0):** Voice → **Push to talk (paste)** → **■ Detener grabación**. No copy / ask / hotkey in menu until fixed.
 
 ## Validation
 

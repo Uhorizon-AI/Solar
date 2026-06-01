@@ -144,7 +144,7 @@ class VoiceSession:
         notifications.show_notification(
             "Solar",
             "Grabando…",
-            "Menú Voice → ■ Detener y pegar (o segundo clic).",
+            "Voice → ■ Detener grabación para transcribir y pegar (⌘V).",
         )
         return True
 
@@ -209,11 +209,21 @@ class VoiceSession:
                     vc.paste_via_osascript()
                     notifications.show_notification("Solar", "Pegado", text[:80])
                 elif mode == "ask":
+                    notifications.show_notification(
+                        "Solar",
+                        "Ask Solar (experimental)",
+                        "Enviando al Host… Si falla, usa el chat del dashboard :9000.",
+                    )
                     code, out = vc.run_intent(text, speak=False)
                     summary = (out[:200] + "…") if len(out) > 200 else out
                     _voice_log(f"ask result code={code} preview={summary[:120]!r}")
                     if code != 0:
-                        notifications.show_notification("Solar", "Ask falló", summary)
+                        notifications.show_notification(
+                            "Solar",
+                            "Ask no validado",
+                            summary[:220]
+                            or "Backend/router sin validar. Usa dashboard o solar ask.",
+                        )
                     else:
                         notifications.show_notification("Solar", "Ask Solar", summary)
             except Exception as exc:  # noqa: BLE001
@@ -286,18 +296,13 @@ def main() -> int:
             self._refresh_workspaces()
             self.refresh_badge(_)
             self._setup_voice_menu()
-            self._setup_hotkey()
+            if os.environ.get("SOLAR_VOICE_HOTKEY_ENABLE", "").strip() == "1":
+                self._setup_hotkey()
 
         def _setup_voice_menu(self) -> None:
             import rumps  # type: ignore
 
             def refresh_voice_menu() -> None:
-                try:
-                    from host_platform.macos.hotkey import hotkey_human_name  # noqa: PLC0415
-
-                    hk = hotkey_human_name()
-                except Exception:  # noqa: BLE001
-                    hk = "Right Option"
                 voice = self._voice_menu
                 if getattr(voice, "_menu", None) is None:
                     return
@@ -310,18 +315,7 @@ def main() -> int:
                         )
                     )
                 else:
-                    voice.add(
-                        rumps.MenuItem(
-                            f"Atajo: {hk}",
-                            callback=lambda *_: None,
-                        )
-                    )
-                    voice.add(
-                        rumps.MenuItem(
-                            "Abrir permisos de teclado",
-                            callback=lambda *_: _open_privacy_pane(),
-                        )
-                    )
+                    # v0.17.0: only paste PTT validated in Solar.app (copy / ask / hotkey: known bugs).
                     voice.add(
                         rumps.MenuItem(
                             "Push to talk (paste)",
@@ -330,14 +324,8 @@ def main() -> int:
                     )
                     voice.add(
                         rumps.MenuItem(
-                            "Push to talk (copy)",
-                            callback=lambda *_: self._voice.toggle("copy"),
-                        )
-                    )
-                    voice.add(
-                        rumps.MenuItem(
-                            "Ask Solar",
-                            callback=lambda *_: self._voice.toggle("ask"),
+                            "Permisos (mic + pegar)",
+                            callback=lambda *_: _open_privacy_pane(),
                         )
                     )
 

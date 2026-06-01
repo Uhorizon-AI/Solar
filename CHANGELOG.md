@@ -6,37 +6,28 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
-## [0.17.0] - 2026-06-01
-### Added
-- feat(solar-host): add voice features and macOS hotkey support
-
-### Fixed
-- fix(solar-status): update host state reporting and router stale count handling
-
-
-## [0.18.0] - 2026-06-01
-
-### Added
-- feat(solar-host): macOS global hotkey hold-to-talk (`host_platform/macos/hotkey.py`, default F5; Fn experimental).
-- feat(solar-host): phrase-stream TTS (`voice_tts.py`, `AVSpeechSynthesizer` + `PhraseBuffer`; fallback `say`).
-- test(solar-host): `test_voice_macos_imports.sh`.
+### Known issues
+- **Solar.app Voice:** only **Push to talk (paste)** + **Detener grabación** validated; copy, Ask Solar, and global hotkey not working / not validated.
+- Use dashboard chat at `:9000` for agent questions until voice ask is fixed.
 
 ## [0.17.0] - 2026-06-01
 
 ### Added
-- feat(solar-host): `voice_core.py` — Host client, intents, SSE `stream_ask`, session per workspace.
+- feat(solar-host): `voice_core.py` — Host client, intents, SSE `stream_ask`, `session.json` per active workspace.
 - feat(solar-host): voice intents approve/reject/switch/open dashboard; `switch_active_workspace` fix.
 - feat(solar-host): tray Voice menu — toggle PTT copy/paste, Ask Solar (worker threads).
+- feat(solar-host): macOS global hold-to-talk module (`hotkey.py`) — **known broken in production**; tray PTT is the supported path.
+- feat(solar-host): phrase-stream TTS (`voice_tts.py`, `AVSpeechSynthesizer` + `PhraseBuffer`; fallback `say`).
+- feat(solar-host): `voice_config.py`, `voice_doctor.sh`, `solar voice doctor` CLI.
 - feat(solar-interface): `SOLAR_VOICE_MOCK_STREAM` static SSE fixture for CI (no router/LLM).
 - feat(solar-host): `solar voice ask` CLI subcommand.
-- test(solar-host): `test_voice_core_unit.sh`, `test_voice_cli_host_api.sh`, `test_voice_stream_contract.sh`.
+- test(solar-host): `test_voice_core_unit.sh`, `test_voice_cli_host_api.sh`, `test_voice_stream_contract.sh`, `test_voice_macos_imports.sh`.
+- test(solar-interface): `test_solar_status_host.sh` (host block + router stale age filter).
+- feat(solar-router): `reconcile_router_audit.sh` — close orphan audit `start` records.
 
 ### Fixed
 - fix(solar-cli): `solar status` reports **host** (`:9000` in-process) instead of legacy `interface` daemon check; runtime health via `/api/runtime/health`.
-- fix(solar-router): stale in-flight WARN counts only recent orphans (<24h); `reconcile_router_audit.sh` closes historical audit orphans.
-
-### Fixed
-- fix(solar-cli): align `SOLAR_VERSION` with release tag `0.16.0` (was `0.15.0` in `solar` bin).
+- fix(solar-router): stale in-flight WARN counts only recent orphans (<24h).
 
 ## [0.16.0] - 2026-06-01
 

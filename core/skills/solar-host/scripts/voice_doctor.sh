@@ -254,9 +254,9 @@ if [[ "$(uname -s)" == "Darwin" ]] && have_uv; then
   fi
 
   if [[ -n "$py" ]] && venv_python_import Quartz; then
-    ok "PyObjC Quartz — voice-uv venv (Right ⌥ hotkey / rebuild Solar.app)"
+    ok "PyObjC Quartz — voice-uv venv (hotkey module; global shortcut known broken)"
   else
-    warn "PyObjC Quartz missing in voice-uv venv — Fn hotkey needs uv env or Solar.app rebuild"
+    warn "PyObjC Quartz missing in voice-uv venv — optional; global hotkey is a known bug anyway"
     if uv_install_into_voice_venv pyobjc-framework-Quartz && venv_python_import Quartz; then
       ok "PyObjC Quartz — installed in voice-uv venv"
       warn_count=$((warn_count - 1))
@@ -279,7 +279,8 @@ echo ""
 echo "Usage:"
 echo "  solar voice paste              # Enter = stop recording"
 echo "  bash …/run_host_tray.sh        # dev tray (voice-uv venv)"
-echo "  Solar.app → Voice              # two clicks; Right ⌥ = hold (rebuild .app after doctor)"
+echo "  Solar.app → Voice → Push to talk (paste) → Detener grabación  # only validated path"
+echo "  copy / Ask Solar / hotkey        # known bugs"
 
 if [[ "$err_count" -gt 0 ]]; then
   exit 1

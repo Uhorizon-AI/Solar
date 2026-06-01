@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Global hold-to-talk hotkey for Solar.app (CGEventTap via PyObjC Quartz)."""
+"""Global hold-to-talk hotkey for Solar.app (CGEventTap via PyObjC Quartz).
+
+KNOWN BUG (v0.17.0): global hotkey does not work reliably in production (event tap /
+permissions / rumps thread). Use tray Voice menu (two-click PTT) or CLI. Code kept for
+future fix; tray skips listener unless SOLAR_VOICE_HOTKEY_ENABLE=1.
+"""
 from __future__ import annotations
 
 import os
