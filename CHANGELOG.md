@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-06-01
+
 ### Known issues
 - **Solar.app Voice:** only **Push to talk (paste)** + **Detener grabación** validated; copy, Ask Solar, and global hotkey not working / not validated.
 - Use dashboard chat at `:9000` for agent questions until voice ask is fixed.
