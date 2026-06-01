@@ -8,6 +8,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,7 +23,9 @@ _INTERFACE_SCRIPTS = _SCRIPT_DIR.parent.parent / "solar-interface" / "scripts"
 if str(_INTERFACE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_INTERFACE_SCRIPTS))
 
+import host_client_actions as client_actions  # noqa: E402
 import host_events  # noqa: E402
+import host_health_monitor as health_monitor  # noqa: E402
 import host_interface as hi  # noqa: E402
 import host_registry as reg  # noqa: E402
 import host_workspace_context as ctx  # noqa: E402
@@ -102,6 +106,9 @@ INBOX_FILTER_TYPES = (
     ("run.failed", "Failed runs"),
     ("run.completed", "Completed runs"),
     ("workspace.activated", "Workspace switch"),
+    ("health.degraded", "Health degraded"),
+    ("gateway.error", "Gateway errors"),
+    ("client.action.failed", "Client action failed"),
 )
 
 
@@ -147,7 +154,7 @@ def run_solar_status(ws: Path | None = None) -> str:
     workspace = ws or _active_workspace()
     try:
         proc = subprocess.run(
-            ["bash", _solar_bin(workspace), "status"],
+            reg.solar_cli_argv(str(workspace), "status"),
             cwd=str(workspace),
             capture_output=True,
             text=True,
@@ -206,9 +213,17 @@ def _fleet_rows() -> str:
     return "\n".join(rows) if rows else "<tr><td colspan='4'>No workspaces registered.</td></tr>"
 
 
+def _refresh_health_events(ws: Path) -> None:
+    try:
+        health_monitor.scan_fleet(str(ws))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def dashboard_html() -> str:
     reg.record_metric("dashboard_view")
     ws = _active_workspace()
+    _refresh_health_events(ws)
     store = _active_store()
     ready, _checks = store.readiness()
     approvals = store.list_approvals()
@@ -259,6 +274,15 @@ def dashboard_html() -> str:
     <p class="muted">Health = workspace + in-process runtime. Host stays up on :{PORT}.</p>
     <table><thead><tr><th>Health</th><th>Workspace</th><th>Runtime</th><th>Actions</th></tr></thead>
     <tbody>{_fleet_rows()}</tbody></table>
+  </section>
+  <section>
+    <h2>Fleet operations</h2>
+    <p class="muted">Run Solar Client / workspace doctors on the active workspace (localhost only).</p>
+    <button type="button" class="client-act" data-action="sync" id="btnClientSync">Sync skills</button>
+    <button type="button" class="client-act" data-action="client_doctor" id="btnClientDoctor">Client doctor</button>
+    <button type="button" class="client-act" data-action="workspace_doctor" id="btnWsDoctor">Workspace doctor</button>
+    <label class="muted" style="margin-left:12px"><input type="checkbox" id="clientStrict" /> strict</label>
+    <pre id="clientActOut" class="muted">(no output yet)</pre>
   </section>
   <section>
     <h2>Runtime (active)</h2>
@@ -326,6 +350,26 @@ def dashboard_html() -> str:
     document.getElementById("btnEnsureGw").onclick = async () => {{
       const r = await postJson("/api/runtime/gateway/start", {{}}); alert(await r.text());
     }};
+    async function runClientAction(action) {{
+      const strict = document.getElementById("clientStrict").checked;
+      document.querySelectorAll(".client-act").forEach((b) => {{ b.disabled = true; }});
+      const out = document.getElementById("clientActOut");
+      out.textContent = "Running " + action + "…";
+      try {{
+        const r = await postJson("/api/actions/client", {{ action, strict }});
+        const data = await r.json();
+        out.textContent = data.output || JSON.stringify(data);
+        if (!r.ok) alert(data.error || r.status);
+        refreshInbox();
+      }} catch (e) {{
+        out.textContent = String(e);
+      }} finally {{
+        document.querySelectorAll(".client-act").forEach((b) => {{ b.disabled = false; }});
+      }}
+    }}
+    document.querySelectorAll(".client-act").forEach((btn) => {{
+      btn.addEventListener("click", () => runClientAction(btn.dataset.action));
+    }});
     document.getElementById("btnChat").onclick = async () => {{
       const msg = document.getElementById("chatIn").value;
       const r = await postJson("/api/chat", {{ message: msg }});
@@ -483,6 +527,7 @@ class HostHandler(BaseHTTPRequestHandler):
             self._send_json({"workspaces": reg.list_workspaces(), "active_path": reg.get_active_path()})
             return
         if path == "/api/fleet/health":
+            _refresh_health_events(ws)
             self._send_json(reg.fleet_health())
             return
         if path == "/api/runtime/health":
@@ -591,6 +636,18 @@ class HostHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/api/actions/client":
+            if not client_actions.is_loopback_client(self):
+                self._send_json({"error": "forbidden"}, HTTPStatus.FORBIDDEN)
+                return
+            if not client_actions.validate_client_request(self, PORT):
+                self._send_json({"error": "forbidden Host/Origin"}, HTTPStatus.FORBIDDEN)
+                return
+            action = str(body.get("action", "")).strip()
+            strict = bool(body.get("strict"))
+            code, payload = client_actions.run_action(str(ws), action, strict=strict)
+            self._send_json(payload, code)
+            return
         if path == "/api/chat":
             msg = str(body.get("message", "")).strip()
             if not msg:
@@ -607,15 +664,24 @@ class HostHandler(BaseHTTPRequestHandler):
                 text=scoped,
                 mode="ask",
             )
+            if run_record.get("status") != "succeeded":
+                host_events.emit(
+                    "run.failed",
+                    {
+                        "summary": str(run_record.get("error") or run_record.get("status") or "chat run failed"),
+                        "run_id": run_record.get("run_id"),
+                    },
+                    workspace=str(ws),
+                )
             status = HTTPStatus.OK if run_record.get("status") == "succeeded" else HTTPStatus.BAD_GATEWAY
-            self._send_json(
-                {
-                    "run": run_record,
-                    "reply_text": router_response.get("reply_text", ""),
-                    "router": router_response,
-                },
-                status,
-            )
+            body_out: dict[str, object] = {
+                "run": run_record,
+                "reply_text": router_response.get("reply_text", ""),
+                "router": router_response,
+            }
+            if status != HTTPStatus.OK:
+                body_out["error"] = router_response.get("error") or "router failed — check solar router doctor"
+            self._send_json(body_out, status)
             return
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "approvals" and parts[3] in ("approve", "reject"):
             aid = parts[2]
@@ -671,6 +737,19 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     ws = _active_workspace()
+
+    def _health_poller() -> None:
+        while True:
+            time.sleep(60)
+            try:
+                active = reg.get_active_path()
+                if active:
+                    health_monitor.scan_fleet(active)
+            except Exception:  # noqa: BLE001
+                pass
+
+    threading.Thread(target=_health_poller, daemon=True, name="host-health").start()
+
     server = ThreadingHTTPServer((HOST, PORT), HostHandler)
     print(f"Solar Host listening on http://{HOST}:{PORT} (workspace={ws})")
     try:

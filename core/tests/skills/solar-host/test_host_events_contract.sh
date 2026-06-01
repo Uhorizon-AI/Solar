@@ -113,6 +113,39 @@ assert "workspace.activated" not in types, types
 assert types <= {"approval.pending", "approval.resolved"}, types
 PY
 
+assert_ok "host-2 event types unit" python3 - "$SCRIPTS" <<'PY'
+import sys
+from pathlib import Path
+
+scripts = Path(sys.argv[1])
+sys.path.insert(0, str(scripts))
+
+import host_events
+import host_health_monitor
+
+host_events.clear()
+host_events.emit_deduped(
+    "gateway.error",
+    {"summary": "simulated gateway down", "dedupe_key": "gw-test"},
+    workspace="/tmp/ws-events",
+)
+dup = host_events.emit_deduped(
+    "gateway.error",
+    {"summary": "simulated gateway down", "dedupe_key": "gw-test"},
+    workspace="/tmp/ws-events",
+)
+assert dup is None, "dedupe should suppress second gateway.error"
+host_events.emit_deduped(
+    "health.degraded",
+    {"summary": "simulated warn", "severity": "WARN"},
+    workspace="/tmp/ws-events",
+)
+types = {e["type"] for e in host_events.list_recent(10)}
+assert "gateway.error" in types
+assert "health.degraded" in types
+host_events.clear()
+PY
+
 kill "$HOST_PID" 2>/dev/null || true
 wait "$HOST_PID" 2>/dev/null || true
 HOST_PID=""

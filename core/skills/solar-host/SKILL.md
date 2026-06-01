@@ -134,6 +134,8 @@ python3 -m py_compile core/skills/solar-interface/scripts/interface_store.py
 python3 -m py_compile core/skills/solar-interface/scripts/interface_http.py
 python3 -m py_compile core/skills/solar-interface/scripts/interface_server.py
 python3 -m py_compile core/skills/solar-host/scripts/host_events.py
+python3 -m py_compile core/skills/solar-host/scripts/host_health_monitor.py
+python3 -m py_compile core/skills/solar-host/scripts/host_client_actions.py
 python3 -m py_compile core/skills/solar-host/scripts/host_server.py
 python3 -m py_compile core/skills/solar-host/scripts/host_registry.py
 python3 -m py_compile core/skills/solar-host/scripts/voice_core.py
@@ -153,12 +155,21 @@ bash core/tests/skills/solar-host/test_host_platform_import.sh
 bash core/tests/skills/solar-host/test_workspace_mount.sh
 bash core/tests/skills/solar-host/test_host_api_smoke.sh
 bash core/tests/skills/solar-host/test_host_events_contract.sh
+bash core/tests/skills/solar-host/test_host_fleet_client_actions.sh
+bash core/tests/skills/solar-host/test_host_chat_e2e.sh
 bash core/tests/skills/solar-host/test_host_approvals_two_workspaces.sh
 bash core/tests/skills/solar-host/test_host_macos_notifications_unit.sh
 bash core/tests/skills/solar-host/test_host_interface_routes.sh
 bash core/tests/skills/solar-host/test_host_stream_smoke.sh
 bash core/tests/skills/solar-host/test_no_legacy_listener_after_switch.sh
 ```
+
+## Fleet operations (Host-2)
+
+Dashboard `:9000` — sección **Fleet operations**:
+
+- `POST /api/actions/client` — body `{"action":"sync"|"client_doctor"|"workspace_doctor","strict":false}`; respuesta `{ok, exit_code, output}`; solo loopback; `Host`/`Origin` deben ser `localhost` o `127.0.0.1` (+ puerto); `409` si hay otra acción en curso.
+- Inbox: `health.degraded`, `gateway.error`, `client.action.failed` (dedupe 5 min).
 
 ## Frontera
 

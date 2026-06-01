@@ -20,16 +20,25 @@ if [[ -f "$PID_FILE" ]]; then
       exit 0
     fi
     echo "WARN: stale Solar Host pid $old_pid (health check failed) — stopping" >&2
-    kill "$old_pid" 2>/dev/null || true
-    for _ in 1 2 3 4 5; do
-      kill -0 "$old_pid" 2>/dev/null || break
-      sleep 0.2
-    done
-    if kill -0 "$old_pid" 2>/dev/null; then
-      kill -9 "$old_pid" 2>/dev/null || true
-    fi
+    solar_host_stop_pid "$old_pid"
   fi
   rm -f "$PID_FILE"
+fi
+
+if host_health_ok; then
+  orphan_pid=""
+  orphan_pid="$(solar_host_port_listener_pids | head -n1 || true)"
+  if [[ -n "$orphan_pid" ]] && solar_host_pid_looks_like_server "$orphan_pid"; then
+    echo "$orphan_pid" >"$PID_FILE"
+    echo "Solar Host already running (orphan pid $orphan_pid, recovered pid file) — $SOLAR_HOST_BASE_URL"
+    exit 0
+  fi
+fi
+
+if solar_host_port_listener_pids | grep -q .; then
+  echo "WARN: port :$SOLAR_HOST_PORT in use — stopping orphan host_server listeners" >&2
+  solar_host_stop_orphan_listeners || true
+  sleep 0.3
 fi
 
 export SOLAR_CLI="$SOLAR_WORKSPACE/core/skills/solar-interface/scripts/solar"

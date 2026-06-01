@@ -9,6 +9,26 @@ The format is based on Keep a Changelog.
 ### Known issues
 - **Solar.app Voice:** only **Push to talk (paste)** + **Detener grabación** validated; copy, Ask Solar, and global hotkey not working / not validated.
 - Use dashboard chat at `:9000` for agent questions until voice ask is fixed.
+- **Governance editor:** path tree/autocomplete under `sun/` and `planets/` not shipped yet (Host-3 polish).
+
+### Added
+- feat(solar-host): **Host-2** fleet operations on dashboard — `POST /api/actions/client` (`sync`, `client_doctor`, `workspace_doctor`) with allowlist, global lock (`409`), 120s/60s timeouts, 32 KB output cap, loopback-only client.
+- feat(solar-host): **Host-2** request hardening — `Host` and `Origin` must target `127.0.0.1` / `localhost` (and matching port); rejects cross-origin and DNS-rebinding-style `Host` values.
+- feat(solar-host): **Host-2** inbox events — `health.degraded`, `gateway.error`, `client.action.failed`; `emit_deduped()` with 5 min cooldown per `(type, workspace, key)`.
+- feat(solar-host): `host_health_monitor.py` — fleet/status/async-failed scans; gateway check via `solar status` heuristics + `check_transport_gateway.sh`; background poller follows active workspace.
+- feat(solar-host): `host_client_actions.py`, `reg.solar_cli_argv()` — invoke `solar` script via `bash` or PATH executable (no broken `bash solar` fallback).
+- feat(solar-host): dashboard **Fleet operations** section (Sync skills, Client doctor, Workspace doctor + output `<pre>`); inbox filters for new event types.
+- feat(solar-host): scoped chat — clearer `502` body when router fails; emits `run.failed` on chat errors.
+- test(solar-host): `test_host_fleet_client_actions.sh` — allowlist, loopback, `Origin`/`Host` forbidden, `client.action.failed`.
+- test(solar-host): **Host-3** `test_host_chat_e2e.sh` — `POST /api/chat` happy path with mock router (`SOLAR_ROUTER_CLAUDE_CMD`), not `SOLAR_VOICE_MOCK_STREAM`.
+- test(solar-host): `test_host_events_contract.sh` extended — `gateway.error`, `health.degraded`, dedupe unit check.
+
+### Fixed
+- fix(solar-host): `solar host stop` stops orphan `host_server.py` listeners on `SOLAR_HOST_PORT` when `host.pid` is missing; `start` recovers pid file or clears port before bind.
+- fix(solar-host): health poller no longer pins workspace from process start — rescans `get_active_path()` every 60s.
+
+### Changed
+- change(solar-host): `SKILL.md` Validation — documents Host-2 tests and Fleet operations API.
 
 ## [0.17.0] - 2026-06-01
 

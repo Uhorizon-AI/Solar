@@ -5,14 +5,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/host_lib.sh"
 solar_host_load_env
 PID_FILE="$SOLAR_HOST_PID_FILE"
-if [[ ! -f "$PID_FILE" ]]; then
-  echo "Solar Host not running (no pid file)"
-  exit 0
+stopped=0
+if [[ -f "$PID_FILE" ]]; then
+  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    solar_host_stop_pid "$pid"
+    stopped=1
+  fi
+  rm -f "$PID_FILE"
+else
+  if solar_host_stop_orphan_listeners; then
+    stopped=1
+  fi
 fi
-pid="$(cat "$PID_FILE")"
-if kill -0 "$pid" 2>/dev/null; then
-  kill "$pid" 2>/dev/null || true
-  sleep 0.2
+if [[ "$stopped" -eq 1 ]]; then
+  echo "OK: Solar Host stopped"
+else
+  echo "Solar Host not running (no pid file, no listener on :${SOLAR_HOST_PORT})"
 fi
-rm -f "$PID_FILE"
-echo "OK: Solar Host stopped"

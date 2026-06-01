@@ -220,6 +220,14 @@ def solar_cli_for(workspace: str) -> str:
     return "solar"
 
 
+def solar_cli_argv(workspace: str, *args: str) -> list[str]:
+    """Argv to invoke solar: bash <script> when path exists, else PATH executable."""
+    solar_bin = solar_cli_for(workspace)
+    if Path(solar_bin).is_file():
+        return ["bash", solar_bin, *args]
+    return [solar_bin, *args]
+
+
 def _fetch_json(url: str, method: str = "GET", timeout: float = 5.0) -> tuple[int, Any]:
     req = urllib.request.Request(url, method=method, headers={"Accept": "application/json"})
     try:
@@ -257,12 +265,11 @@ def workspace_health(workspace: str, timeout: float = 8.0) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             iface_ok = False
 
-    solar_bin = solar_cli_for(ws)
     status_snip = ""
     severity = "OK"
     try:
         proc = subprocess.run(
-            ["bash", solar_bin, "status"],
+            solar_cli_argv(ws, "status"),
             cwd=ws,
             capture_output=True,
             text=True,
