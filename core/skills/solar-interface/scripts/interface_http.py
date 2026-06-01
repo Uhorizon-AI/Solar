@@ -339,7 +339,46 @@ class InterfaceHttpDispatcher:
         path = urlparse(raw_path).path
         return self.handle_delete(adapter, path)
 
+    def _stream_run_mock(self, adapter: HttpAdapter, thread_id: str) -> None:
+        """Serve static SSE fixture — no router/LLM (CI voice contract tests)."""
+        from pathlib import Path
+
+        fixture_raw = os.environ.get("SOLAR_VOICE_MOCK_STREAM_FIXTURE", "").strip()
+        if fixture_raw:
+            fixture = Path(fixture_raw)
+        else:
+            core_root = Path(__file__).resolve().parent.parent.parent.parent
+            fixture = (
+                core_root
+                / "tests"
+                / "skills"
+                / "solar-host"
+                / "fixtures"
+                / "voice_mock_stream.sse"
+            )
+        run_id = f"run_{uuid.uuid4().hex[:10]}"
+        adapter.send_sse_headers(run_id)
+        wfile = adapter.raw_wfile
+        if not fixture.is_file():
+            err = json.dumps({"type": "error", "error": "mock fixture missing"})
+            wfile.write(f"data: {err}\n\n".encode("utf-8"))
+            wfile.flush()
+            return
+        for line in fixture.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("data:"):
+                wfile.write(f"{stripped}\n\n".encode("utf-8"))
+                wfile.flush()
+
     def _stream_run(self, adapter: HttpAdapter, thread_id: str, data: dict) -> None:
+        if os.environ.get("SOLAR_VOICE_MOCK_STREAM", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            self._stream_run_mock(adapter, thread_id)
+            return
+
         store = self.store
         run_id = f"run_{uuid.uuid4().hex[:10]}"
         request_id = f"req_{uuid.uuid4().hex[:10]}"

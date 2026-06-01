@@ -24,11 +24,15 @@ rsync -a \
   --exclude __pycache__ \
   --exclude '*.pyc' \
   "$SCRIPT_DIR/host_platform/" "$STAGE/scripts/host_platform/"
+# Tray imports voice_core + registry (not under host_platform/).
+for mod in voice_core.py voice_config.py voice_mic.py host_registry.py host_workspace_context.py; do
+  cp "$SCRIPT_DIR/$mod" "$STAGE/scripts/$mod"
+done
 cp "$APP_DIR/setup.py" "$APP_DIR/tray_entry.py" "$STAGE/"
 
 (
   cd "$STAGE"
-  uv run --with py2app --with rumps python setup.py py2app
+  uv run --with py2app --with rumps --with pyobjc-framework-Quartz python setup.py py2app
 )
 
 if [[ ! -d "$STAGE/dist/Solar.app" ]]; then
@@ -54,6 +58,10 @@ if command -v /usr/libexec/PlistBuddy >/dev/null 2>&1; then
   if [[ "$patched" -gt 0 ]]; then
     echo "Patched $patched embedded Python.framework Info.plist (notifications → Solar only)."
   fi
+fi
+
+if command -v codesign >/dev/null 2>&1; then
+  codesign --force --deep --sign - "$DIST/Solar.app" >/dev/null
 fi
 
 echo "OK: $DIST/Solar.app"

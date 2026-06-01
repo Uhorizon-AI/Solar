@@ -7,15 +7,18 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 0
 fi
 
-if ! command -v uv >/dev/null 2>&1; then
-  echo "Missing dependency: uv (brew install uv)" >&2
-  exit 1
-fi
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOLAR_APP="$SCRIPT_DIR/host_platform/macos/dist/Solar.app"
 
-uv run --with rumps python3 -c "import rumps; print('OK: rumps', rumps.__version__)"
+# shellcheck source=voice_uv_lib.sh
+source "$SCRIPT_DIR/voice_uv_lib.sh"
+export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:$PYTHONPATH}"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "FAIL: uv required — brew install uv && solar voice doctor" >&2
+  exit 1
+fi
+PY="$(voice_uv_python 2>/dev/null || voice_uv_ensure)"
+"$PY" -c "import rumps; print('OK: rumps', rumps.__version__, '(voice-uv venv)')"
 
 terminal_notifier_path() {
   local p
@@ -39,6 +42,6 @@ echo "OK: terminal-notifier ($TN)"
 if [[ -d "$SOLAR_APP" ]]; then
   echo "OK: Solar.app present — menu bar tray; alerts via terminal-notifier (-sender Solar)"
 else
-  echo "OK: dev tray — run: uv run --with rumps python3 …/host_tray.py"
+  echo "OK: dev tray — run: bash $SCRIPT_DIR/run_host_tray.sh"
   echo "     optional: bash core/skills/solar-host/scripts/build_solar_tray_app.sh"
 fi

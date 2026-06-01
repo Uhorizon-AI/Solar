@@ -25,3 +25,8 @@ fi
 } >"$ENV_FILE"
 rm -f "$tmp"
 echo "OK: solar-host block written to .env"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  echo ""
+  echo "Voice (dictation) — run once:"
+  echo "  solar voice doctor"
+fi

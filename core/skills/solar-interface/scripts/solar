@@ -71,11 +71,11 @@ case "${1:-}" in
   voice)
     shift
     case "${1:-}" in
-      once|paste|command|read)
+      once|paste|command|read|ask|doctor|check)
         exec python3 "$HOST_SCRIPTS/voice_cli.py" "$@"
         ;;
       "")
-        echo "Usage: solar voice {once|paste|command|read}" >&2
+        echo "Usage: solar voice {once|paste|command|read|ask|doctor}" >&2
         exit 2
         ;;
       *)

@@ -37,7 +37,7 @@ None
 ```bash
 solar host start|stop|status|open
 solar host workspace list|add|remove|use <path>
-solar voice once|paste|command|read
+solar voice once|paste|command|ask|read
 bash core/skills/solar-host/scripts/onboard_host_env.sh
 ```
 
@@ -54,14 +54,14 @@ bash core/skills/solar-host/scripts/onboard_host_env.sh
 **Run tray** (workspace paths use `solar/` prefix when framework is nested):
 
 ```bash
-# Dev — menu bar via rumps; alerts via terminal-notifier
-uv run --with rumps python3 solar/core/skills/solar-host/scripts/host_tray.py
+# Dev — menu bar via rumps (no uv required)
+bash solar/core/skills/solar-host/scripts/run_host_tray.sh
 
 # Product — same notification path; Solar.app for menu bar identity
 open solar/core/skills/solar-host/scripts/host_platform/macos/dist/Solar.app
 ```
 
-- `SOLAR_HOST_TRAY=1` — `start_host.sh` launches built `Solar.app` if present, else `uv run --with rumps`.
+- `SOLAR_HOST_TRAY=1` — `start_host.sh` launches built `Solar.app` if present, else `run_host_tray.sh`.
 - Inbox web on `:9000` works without tray.
 
 **Remove stale "Python" from System Settings → Notifications** (after old dev tray runs):
@@ -79,7 +79,41 @@ Add `host` to `SOLAR_SYSTEM_FEATURES`. Orchestrator runs `ensure_host.sh` (works
 
 ## Voice (part of this skill)
 
-Scripts: `scripts/voice_cli.py` — not a separate bundle skill (`solar-voice` is a deprecation stub only).
+Wispr-like flows: tray push-to-talk (copy/paste/ask), CLI intents, SSE ask against Host `:9000`. Optional macOS **Fn** hold-to-talk (`host_platform/macos/hotkey.py`; default — **not F5**, often bound to Siri) and phrase-stream TTS (`voice_tts.py`).
+
+Scripts: `scripts/voice_core.py` (shared), `scripts/voice_cli.py` — not a separate bundle skill (`solar-voice` is a deprecation stub only).
+
+| Env | Purpose |
+|-----|---------|
+| `SOLAR_HOST_BASE_URL` | Override Host URL (voice + tests) |
+| `SOLAR_HOST_HOST` / `SOLAR_HOST_PORT` | Host address (default `127.0.0.1:9000`) |
+| `SOLAR_VOICE_TEXT` | Skip mic — inject utterance (tests) |
+| `SOLAR_VOICE_MOCK_STREAM=1` | SSE mock fixture (CI; no LLM) |
+| `SOLAR_VOICE_TTS` | `stream` \| `batch` \| `off` |
+| `SOLAR_VOICE_HOTKEY` | Global hotkey: default **`right_option`** (Right ⌥ hold). Alt `f8`. Avoid `fn`/`f5` (system) |
+| `~/Library/.../Solar/voice.json` | Tool paths for Solar.app (`solar voice doctor` writes this) |
+
+**Deps (install once):**
+
+```bash
+solar voice doctor          # check + auto-install (brew + uv → voice-uv venv)
+solar voice doctor --no-fix # report only
+```
+
+| Tool | Install | Required |
+|------|---------|----------|
+| SoX `rec` | `brew install sox` | **yes** for mic dictation |
+| whisper | optional | local STT |
+| terminal-notifier | `brew install terminal-notifier` | tray alerts |
+| uv | `brew install uv` | **required** for Python voice deps |
+| PyObjC Quartz | `solar voice doctor` (uv → `~/Library/.../Solar/voice-uv/.venv`) | **Fn** hotkey; rebuild Solar.app after install |
+| rumps | `solar voice doctor` | dev tray (`run_host_tray.sh`) |
+
+**CLI `solar voice paste`:** records until you press **Enter** (not Ctrl+C). **Tray Voice:** two clicks (start/stop). **Fn (hold):** Wispr-like in Solar.app — release to finish (Input Monitoring). Do not use F5 if macOS assigned it to Siri.
+
+**macOS permissions:** Microphone, Accessibility (paste), Input Monitoring (global hotkey).
+
+**Tray menu:** Voice → Push to talk (copy/paste), Ask Solar. Toggle: start/stop `rec` in a worker thread (never block rumps main thread).
 
 ## Validation
 
@@ -94,7 +128,17 @@ python3 -m py_compile core/skills/solar-interface/scripts/interface_server.py
 python3 -m py_compile core/skills/solar-host/scripts/host_events.py
 python3 -m py_compile core/skills/solar-host/scripts/host_server.py
 python3 -m py_compile core/skills/solar-host/scripts/host_registry.py
+python3 -m py_compile core/skills/solar-host/scripts/voice_core.py
+python3 -m py_compile core/skills/solar-host/scripts/voice_config.py
 python3 -m py_compile core/skills/solar-host/scripts/voice_cli.py
+python3 -m py_compile core/skills/solar-host/scripts/host_platform/macos/voice_tts.py
+python3 -m py_compile core/skills/solar-host/scripts/host_platform/macos/hotkey.py
+bash core/tests/skills/solar-host/test_voice_core_unit.sh
+bash core/tests/skills/solar-host/test_voice_cli_host_api.sh
+bash core/tests/skills/solar-host/test_voice_stream_contract.sh
+bash core/tests/skills/solar-host/test_voice_macos_imports.sh
+bash -n core/skills/solar-host/scripts/voice_doctor.sh
+bash -n core/skills/solar-host/scripts/voice_uv_lib.sh
 bash core/tests/skills/solar-host/test_fleet_registry.sh
 bash core/tests/skills/solar-host/test_fleet_api_contract.sh
 bash core/tests/skills/solar-host/test_host_platform_import.sh

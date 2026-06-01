@@ -22,15 +22,26 @@ OPTIONS = {
         "CFBundleIdentifier": "ai.uhorizon.solar.host",
         "LSUIElement": True,
         "NSHumanReadableCopyright": "Solar Host",
+        "NSMicrophoneUsageDescription": (
+            "Solar usa el micrófono para dictado por voz (transcripción local con Whisper)."
+        ),
     },
     "packages": ["rumps", "host_platform"],
     "includes": [
+        "host_platform",
         "host_platform.macos",
         "host_platform.macos.tray",
         "host_platform.macos.client",
         "host_platform.macos.notifications",
         "host_platform.macos.launch",
+        "host_platform.macos.hotkey",
+        "host_platform.macos.voice_tts",
         "host_platform.paths",
+        "voice_core",
+        "voice_config",
+        "voice_mic",
+        "host_registry",
+        "host_workspace_context",
     ],
 }
 

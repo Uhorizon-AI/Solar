@@ -12,18 +12,16 @@ _TRAY_SCRIPT = Path(__file__).resolve().parent.parent.parent / "host_tray.py"
 
 
 def _tray_command() -> List[str]:
-    """Prefer built Solar.app (py2app), else `uv run --with rumps`."""
-    import shutil
-
+    """Prefer built Solar.app (py2app), else run_host_tray.sh (no uv required)."""
     from host_platform.macos.notifications import solar_app_bundle
 
     bundle = solar_app_bundle()
     if bundle is not None:
-        return [str(bundle / "Contents" / "MacOS" / "Solar")]
-    script = str(_TRAY_SCRIPT)
-    if shutil.which("uv"):
-        return ["uv", "run", "--with", "rumps", "python3", script]
-    return [sys.executable, script]
+        return ["open", "-a", str(bundle)]
+    runner = _TRAY_SCRIPT.parent / "run_host_tray.sh"
+    if runner.is_file():
+        return ["/bin/bash", str(runner)]
+    return [sys.executable, str(_TRAY_SCRIPT)]
 
 
 def start_tray_detached() -> bool:
