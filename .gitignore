@@ -23,6 +23,9 @@ core/skills/solar-host/scripts/host_platform/macos/dist/
 sun/
 planets/
 
+# Client update snapshots (legacy path when install root = SOLAR_ROOT)
+backups/
+
 # Local AI client runtime/config
 .claude/
 .codex/

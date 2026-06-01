@@ -11,6 +11,7 @@ REPAIR_ONLY=false
 USE_BUNDLE=false
 FROM_DEV=true
 AUTO_YES=false
+FORCE_BACKUP=false
 FORCE_WORKSPACE=""
 TARGET_TAG=""
 CHANNEL=""
@@ -33,6 +34,7 @@ Options:
   --from-dev           Bundle from current SOLAR_ROOT checkout (default with --bundle)
   --from-tag <tag>     Bundle from git tag (with --bundle)
   --channel <name>     Reserved (stable only; beta not implemented)
+  --backup             Rsync snapshot before update (git mode only; default: no rsync, use git tags)
   --yes, -y            Proceed if SOLAR_ROOT git working tree is dirty
   -h, --help           Show help
 
@@ -70,6 +72,7 @@ while [[ $# -gt 0 ]]; do
       CHANNEL="$1"
       shift
       ;;
+    --backup) FORCE_BACKUP=true; shift ;;
     --yes|-y) AUTO_YES=true; shift ;;
     --workspace|--home)
       shift
@@ -129,17 +132,29 @@ echo "  current=$cur_ver (${cur_commit:0:12})"
 [[ -n "$TARGET_TAG" ]] && echo "  target=$TARGET_TAG"
 echo ""
 
+DID_BACKUP=false
 if [[ "$use_git" == true ]]; then
-  backup_path="$(solar_client_backup_install_git "$INSTALL_ROOT" "$cur_ver")"
-  echo "OK: backup at $backup_path"
+  if solar_client_should_rsync_backup_git "$INSTALL_ROOT" "$FORCE_BACKUP"; then
+    backup_path="$(solar_client_backup_install_git "$INSTALL_ROOT" "$cur_ver" "$SOLAR_WORKSPACE")"
+    echo "OK: backup at $backup_path"
+    DID_BACKUP=true
+  else
+    if solar_client_git_dirty "$INSTALL_ROOT"; then
+      echo "SKIP: git install — no rsync snapshot (uncommitted changes; commit/stash or --backup)"
+    else
+      echo "SKIP: git install — no rsync snapshot (rollback: git -C \"$INSTALL_ROOT\" checkout <tag>)"
+    fi
+    echo "      use --backup to force an rsync snapshot"
+  fi
   solar_client_apply_git_update "$INSTALL_ROOT" "$TARGET_TAG" "$AUTO_YES"
 else
   if [[ ! -f "$BUNDLE_SCRIPT" ]]; then
     echo "ERROR: bundle script not found: $BUNDLE_SCRIPT" >&2
     exit 1
   fi
-  backup_path="$(solar_client_backup_install_core "$INSTALL_ROOT" "$cur_ver")"
+  backup_path="$(solar_client_backup_install_core "$INSTALL_ROOT" "$cur_ver" "$SOLAR_WORKSPACE")"
   echo "OK: backup core/ at $backup_path"
+  DID_BACKUP=true
   tag_arg=""
   [[ -n "$TARGET_TAG" ]] && tag_arg="$TARGET_TAG"
   if [[ "$FROM_DEV" == true && -z "$tag_arg" ]]; then
@@ -149,7 +164,9 @@ else
   fi
 fi
 
-solar_client_rotate_backups "$INSTALL_ROOT" 5
+if [[ "$DID_BACKUP" == true ]]; then
+  solar_client_rotate_backups "$INSTALL_ROOT" 5 "$SOLAR_WORKSPACE"
+fi
 
 read -r new_ver new_commit < <(solar_client_git_identity "$INSTALL_ROOT")
 echo ""

@@ -53,6 +53,20 @@ git -C "$INSTALL2" add README && git -C "$INSTALL2" commit -q -m "init"
 report="$(solar_client_update_check_report "$INSTALL2" "$WS")"
 assert_ok "check report mentions SOLAR_ROOT" grep -q 'SOLAR_ROOT' <<< "$report"
 
+# --- nested workspace: backups under workspace root, not under solar/ ---
+NEST_WS="$TMP/nest-ws"
+NEST_INSTALL="$NEST_WS/solar"
+mkdir -p "$NEST_INSTALL/core"
+NEST_WS="$(cd "$NEST_WS" && pwd -P)"
+NEST_INSTALL="$(cd "$NEST_INSTALL" && pwd -P)"
+echo "nested" > "$NEST_INSTALL/core/.nested-probe"
+nested_dir="$(solar_client_backups_dir "$NEST_INSTALL" "$NEST_WS")"
+assert_ok "nested backups dir is workspace/backups" test "$nested_dir" = "$NEST_WS/backups"
+nested_backup="$(solar_client_backup_install_core "$NEST_INSTALL" "v0.0-nested" "$NEST_WS")"
+assert_ok "nested backup under workspace/backups" test "${nested_backup#"$NEST_WS/backups/"}" != "$nested_backup"
+assert_ok "nested backup preserves probe" test -f "$nested_backup/core/.nested-probe"
+assert_ok "no backup under install root" test ! -d "$NEST_INSTALL/backups"
+
 # --- bundle backup core only ---
 INSTALL3="$TMP/install-bundle"
 mkdir -p "$INSTALL3/core"
@@ -60,6 +74,29 @@ echo "probe" > "$INSTALL3/core/.bundle-probe"
 backup_path="$(solar_client_backup_install_core "$INSTALL3" "v0.0-test")"
 assert_ok "bundle backup creates core subtree" test -d "$backup_path/core"
 assert_ok "bundle backup preserves probe" test -f "$backup_path/core/.bundle-probe"
+
+# --- Fase 2.1: skip rsync backup on clean git unless --backup ---
+INSTALL_GIT_CLEAN="$TMP/install-git-clean"
+mkdir -p "$INSTALL_GIT_CLEAN/core"
+git -C "$INSTALL_GIT_CLEAN" init -q
+git -C "$INSTALL_GIT_CLEAN" config user.email "test@test"
+git -C "$INSTALL_GIT_CLEAN" config user.name "Test"
+echo "clean" > "$INSTALL_GIT_CLEAN/README"
+git -C "$INSTALL_GIT_CLEAN" add README && git -C "$INSTALL_GIT_CLEAN" commit -q -m "init"
+set +e
+solar_client_should_rsync_backup_git "$INSTALL_GIT_CLEAN" false
+ec_clean=$?
+solar_client_should_rsync_backup_git "$INSTALL_GIT_CLEAN" true
+ec_force=$?
+set -e
+assert_ok "git mode skips backup unless --backup (clean)" test "$ec_clean" -ne 0
+assert_ok "git mode backs up with --backup" test "$ec_force" -eq 0
+echo "dirty" >> "$INSTALL_GIT_CLEAN/README"
+set +e
+solar_client_should_rsync_backup_git "$INSTALL_GIT_CLEAN" false
+ec_dirty=$?
+set -e
+assert_ok "git mode skips backup unless --backup (dirty)" test "$ec_dirty" -ne 0
 
 # --- git install backup includes .git/objects (restorable snapshot) ---
 INSTALL5="$TMP/install-git-backup"

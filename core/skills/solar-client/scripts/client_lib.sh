@@ -280,8 +280,19 @@ solar_client_restructure_plan() {
   done < <(solar_client_restructure_iter_entries "$ws")
 }
 
+# Install snapshots: nested layout (workspace + solar/ child) → $SOLAR_WORKSPACE/backups.
 solar_client_backups_dir() {
-  echo "$1/backups"
+  local install_root="$1"
+  local workspace="${2:-}"
+  install_root="$(_resolve_abs "$install_root" 2>/dev/null || echo "$install_root")"
+  if [[ -n "$workspace" ]]; then
+    workspace="$(_resolve_abs "$workspace" 2>/dev/null || echo "$workspace")"
+    if [[ "$install_root" != "$workspace" && "$install_root" == "$workspace/"* ]]; then
+      echo "$workspace/backups"
+      return 0
+    fi
+  fi
+  echo "$install_root/backups"
 }
 
 solar_client_backup_label() {
@@ -294,8 +305,9 @@ solar_client_backup_label() {
 solar_client_rotate_backups() {
   local root="$1"
   local keep="${2:-5}"
+  local workspace="${3:-}"
   local bdir
-  bdir="$(solar_client_backups_dir "$root")"
+  bdir="$(solar_client_backups_dir "$root" "$workspace")"
   [[ -d "$bdir" ]] || return 0
   local count=0
   while IFS= read -r dir; do
@@ -320,9 +332,10 @@ solar_client_rotate_backups() {
 solar_client_backup_install_git() {
   local root="$1"
   local version="$2"
+  local workspace="${3:-}"
   local label dest
   label="$(solar_client_backup_label "$version")"
-  dest="$(solar_client_backups_dir "$root")/$label"
+  dest="$(solar_client_backups_dir "$root" "$workspace")/$label"
   mkdir -p "$(dirname "$dest")"
   # Full install tree (including .git/objects) for restorable SOLAR_ROOT snapshots.
   rsync -a \
@@ -334,19 +347,27 @@ solar_client_backup_install_git() {
 solar_client_backup_install_core() {
   local root="$1"
   local version="$2"
+  local workspace="${3:-}"
   local label dest
   label="$(solar_client_backup_label "$version")"
-  dest="$(solar_client_backups_dir "$root")/$label/core"
+  dest="$(solar_client_backups_dir "$root" "$workspace")/$label/core"
   mkdir -p "$dest"
   if [[ -d "$root/core" ]]; then
     rsync -a "$root/core/" "$dest/"
   fi
-  echo "$(solar_client_backups_dir "$root")/$label"
+  echo "$(solar_client_backups_dir "$root" "$workspace")/$label"
 }
 
 solar_client_git_dirty() {
   local root="$1"
   git -C "$root" diff --quiet 2>/dev/null && git -C "$root" diff --cached --quiet 2>/dev/null
+}
+
+# Fase 2.1: git install — rsync snapshot only with explicit --backup (rollback = git tags).
+solar_client_should_rsync_backup_git() {
+  local _root="$1"
+  local force_backup="${2:-false}"
+  [[ "$force_backup" == true ]]
 }
 
 solar_client_git_fetch() {

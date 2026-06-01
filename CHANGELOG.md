@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- change(solar-client): **Fase 2.1 restored** — `client update` in git mode never rsync-backs up by default (clean or dirty); rollback = `git checkout <tag>`; `--backup` forces snapshot; `--bundle` still always backs up `core/`.
+
+### Fixed
+- fix(solar-client): `client update` backups for nested layout (`SOLAR_WORKSPACE` + `solar/` install) go to `$SOLAR_WORKSPACE/backups/`, not `$SOLAR_ROOT/backups/`.
+
 ## [0.17.1] - 2026-06-01
 
 ### Known issues
