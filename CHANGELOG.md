@@ -9,6 +9,7 @@ The format is based on Keep a Changelog.
 ## [0.17.2] - 2026-06-01
 
 ### Changed
+- change(solar-interface): bump CLI `SOLAR_VERSION` to `0.17.2` (`solar --version` aligned with latest tag).
 - change(solar-client): **Fase 2.1 restored** — `client update` in git mode never rsync-backs up by default (clean or dirty); rollback = `git checkout <tag>`; `--backup` forces snapshot; `--bundle` still always backs up `core/`.
 
 ### Fixed
