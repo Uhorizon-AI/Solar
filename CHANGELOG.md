@@ -6,6 +6,14 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-06-01
+### Added
+- feat(solar-host): add voice features and macOS hotkey support
+
+### Fixed
+- fix(solar-status): update host state reporting and router stale count handling
+
+
 ## [0.18.0] - 2026-06-01
 
 ### Added
