@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-06-02
+
 ### Known issues
 - **Solar.app Voice:** only **Push to talk (paste)** validated; copy, Ask Solar, global hotkey — see voice bug register.
 - **Governance editor:** path tree shipped (`GET /api/governance/tree`); autocomplete / polish still pending (Host-3).
