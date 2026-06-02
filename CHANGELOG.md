@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-cli): `solar --version` stayed at `0.17.2` on tag `v0.18.0` — `SOLAR_VERSION` aligned with framework tag (`0.18.1`).
+- fix(release): `create-release.sh` bumps `SOLAR_VERSION` in the same `chore(release)` commit as the tag (avoids post-tag bump commits).
+
 ## [0.18.0] - 2026-06-02
 
 ### Known issues
