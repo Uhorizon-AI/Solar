@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GIT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CHANGELOG_FILE="$GIT_ROOT/CHANGELOG.md"
+SOLAR_CLI="$GIT_ROOT/core/skills/solar-interface/scripts/solar"
 
 PUSH_AFTER_RELEASE=false
 AUTO_CONFIRM=false
@@ -327,6 +328,24 @@ function show_preview_and_confirm() {
   fi
 }
 
+function bump_solar_cli_version() {
+  local ver="${NEW_VERSION#v}"
+  if [[ ! -f "$SOLAR_CLI" ]]; then
+    warn "solar CLI not found at $SOLAR_CLI — skip SOLAR_VERSION bump"
+    return 0
+  fi
+  if ! grep -q '^SOLAR_VERSION="' "$SOLAR_CLI"; then
+    warn "SOLAR_VERSION line not found in $SOLAR_CLI — skip bump"
+    return 0
+  fi
+  info "Bumping SOLAR_VERSION in solar CLI to $ver..."
+  local tmp
+  tmp=$(mktemp)
+  sed "s/^SOLAR_VERSION=\".*\"/SOLAR_VERSION=\"$ver\"/" "$SOLAR_CLI" > "$tmp"
+  mv "$tmp" "$SOLAR_CLI"
+  success "SOLAR_VERSION=$ver"
+}
+
 function update_changelog() {
   info "Updating CHANGELOG.md..."
 
@@ -369,6 +388,7 @@ function create_tag_and_commit() {
   info "Creating git tag $NEW_VERSION..."
 
   git -C "$GIT_ROOT" add "$CHANGELOG_FILE"
+  [[ -f "$SOLAR_CLI" ]] && git -C "$GIT_ROOT" add "$SOLAR_CLI"
   git -C "$GIT_ROOT" commit -m "chore(release): $NEW_VERSION"
   git -C "$GIT_ROOT" tag "$NEW_VERSION"
 
@@ -407,6 +427,7 @@ function main() {
   echo ""
 
   update_changelog
+  bump_solar_cli_version
   create_tag_and_commit
   push_to_remote
 

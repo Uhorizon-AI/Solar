@@ -104,6 +104,7 @@ Next steps:
 
 **Files updated:**
 - `CHANGELOG.md` - New version entry prepended
+- `core/skills/solar-interface/scripts/solar` - `SOLAR_VERSION` aligned with the new tag (`solar --version`)
 - `.git/refs/tags/` - New git tag created
 
 **Git operations:**
