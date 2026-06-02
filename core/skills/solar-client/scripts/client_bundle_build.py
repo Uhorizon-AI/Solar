@@ -88,13 +88,11 @@ def refs_from_text(text: str, skill_dir: Path, core: Path) -> tuple[set[str], se
     return deps_skills, scripts
 
 
-# solar-host = Solar App (UI :9000 + voice_cli.py). Voice is not a separate bundle seed.
-# solar-interface remains until API is absorbed into host (see sun/plans/2026/05/2026-05-31_solar-app-plan.md).
+# R2: no backward compatibility — bundle only canonical app stack.
 BUNDLE_SEED_SKILLS = (
     "solar-client",
-    "solar-interface",
     "solar-workspace",
-    "solar-host",
+    "solar-app",
 )
 
 

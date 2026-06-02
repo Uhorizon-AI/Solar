@@ -13,7 +13,7 @@ description: >
 Provide the interactive runtime layer for Solar:
 - local daemon with HTTP + JSON + SSE-ready interface,
 - thin CLI wrapper (`solar`) over the same daemon,
-- runtime state in `sun/runtime/interface/`,
+- runtime state in `sun/runtime/app/`,
 - execution delegated to `solar-router`,
 - host lifecycle supervised by `solar-system`.
 
@@ -64,12 +64,12 @@ Block format:
 # [solar-interface] required environment
 SOLAR_INTERFACE_HOST=127.0.0.1
 SOLAR_INTERFACE_PORT=7741
-SOLAR_INTERFACE_RUNTIME_DIR=sun/runtime/interface
+SOLAR_INTERFACE_RUNTIME_DIR=sun/runtime/app
 ```
 
 ## Human entry (D6)
 
-Prefer **`solar host start`** / **`solar host open`** (Solar Host on `:9000`) for human UX and canonical API. The optional daemon on `:7741` is for explicit dev/CLI only; its web landing redirects to Host.
+Prefer **`solar app start`** / **`solar app open`** (Solar App on `:9000`) for human UX and canonical API. The optional daemon on `:7741` is for explicit dev/CLI only; its web landing redirects to Host. (`solar host` is not a subcommand — use `solar app`.)
 
 ## API surface (MVP-b.1)
 
@@ -79,10 +79,10 @@ Canonical HTTP routes (`/ready`, `/status`, `/threads`, `/runs`, `/approvals`, S
 
 - **`solar-client`** — `solar client *` (init, sync, update, bundle, client doctor). See `core/skills/solar-client/SKILL.md`.
 - **`solar-workspace`** — `solar workspace doctor` (`sun/`, `planets/`). See `core/skills/solar-workspace/SKILL.md`.
-- **`solar-host`** — control plane UI (`solar host *`). See `core/skills/solar-host/SKILL.md`.
-- **`solar` CLI** — entrypoint in `scripts/solar`; `solar status` and `solar paths` live here; client/workspace/host subcommands delegate to those skills.
+- **`solar-app`** — control plane on `:9000` (`solar app *`); runtime in `core/skills/solar-app/scripts/`.
+- **`solar` CLI** — entrypoint in `scripts/solar`; `solar status` and `solar paths` live here; `app` / `client` / `workspace` delegate to those skills.
 
-Path resolution: `resolve_solar_paths.sh` in this skill (shared by client and workspace).
+Path resolution: canonical in `solar-client/scripts/` (`resolve_solar_paths.sh`, `solar_paths.py`); this skill ships a one-release shim re-exporting client.
 
 ## Workflow
 

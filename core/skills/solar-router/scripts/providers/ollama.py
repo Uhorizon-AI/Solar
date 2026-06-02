@@ -2,7 +2,7 @@ import os
 import re
 import subprocess
 
-from .base import BaseProvider
+from .base import BaseProvider, env_int
 
 
 class OllamaProvider(BaseProvider):
@@ -44,7 +44,7 @@ class OllamaProvider(BaseProvider):
         return cleaned
 
     def run(self, prompt: str) -> str:
-        timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
+        timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
         cmd = self.get_cmd(prompt)
         env = self.prepare_env(os.environ.copy())
         self.log_prompt(prompt)

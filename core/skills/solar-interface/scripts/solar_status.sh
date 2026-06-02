@@ -50,8 +50,8 @@ client_state="OK"
 client_detail=""
 mcp_info=""
 
-# host (Solar App :9000 in-process) — fallback to legacy interface daemon for dev
-HOST_SCRIPTS="$(solar_core_dir)/skills/solar-host/scripts"
+# host (Solar App :9000 in-process)
+HOST_SCRIPTS="$(solar_core_dir)/skills/solar-app/scripts"
 if [[ -f "$HOST_SCRIPTS/check_host.sh" ]]; then
   # shellcheck source=/dev/null
   source "$HOST_SCRIPTS/host_lib.sh"
@@ -66,13 +66,7 @@ if [[ -f "$HOST_SCRIPTS/check_host.sh" ]]; then
         host_detail="$SOLAR_HOST_BASE_URL in-process not ready"
       fi
     fi
-  elif bash "$SCRIPT_DIR/check_interface.sh" --quiet 2>/dev/null; then
-    host_state="OK"
-    host_detail="legacy daemon ${SOLAR_INTERFACE_BASE_URL:-:7741}"
   fi
-elif bash "$SCRIPT_DIR/check_interface.sh" --quiet 2>/dev/null; then
-  host_state="OK"
-  host_detail="legacy daemon"
 fi
 
 # workspace content (sun/ + planets/)

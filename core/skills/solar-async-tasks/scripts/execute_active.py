@@ -76,6 +76,16 @@ def build_prompt(task_id: str, title: str, body: str) -> str:
     )
 
 
+def _env_int_with_comment(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    value = raw.split("#", 1)[0].strip()
+    if not value:
+        return default
+    return int(value)
+
+
 def call_router(
     router_script: pathlib.Path,
     task_id: str,
@@ -87,10 +97,9 @@ def call_router(
     Returns parsed router v3 response dict.
     """
     router_python = os.getenv("SOLAR_AI_ROUTER_PYTHON", "python3")
-    timeout_sec = int(
-        os.getenv("SOLAR_ROUTER_TIMEOUT_SEC")
-        or os.getenv("SOLAR_AI_ROUTER_TIMEOUT_SEC")
-        or "310"
+    timeout_sec = _env_int_with_comment(
+        "SOLAR_ROUTER_TIMEOUT_SEC",
+        _env_int_with_comment("SOLAR_AI_ROUTER_TIMEOUT_SEC", 310),
     )
 
     payload: Dict[str, Any] = {

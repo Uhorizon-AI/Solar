@@ -61,24 +61,43 @@ def load_workspace_env(ws: Path | str) -> None:
     _managed_env_keys.add("SOLAR_WORKSPACE")
 
 
+def app_runtime_db_path(ws: Path | str) -> Path:
+    return Path(ws) / "sun/runtime/app/db/interface.sqlite"
+
+
+def app_runtime_dir(ws: Path | str) -> Path:
+    return Path(ws) / "sun/runtime/app"
+
+
+# Backward-compatible aliases (Host-4 transition).
 def legacy_interface_db_path(ws: Path | str) -> Path:
-    return Path(ws) / "sun/runtime/interface/db/interface.sqlite"
+    return app_runtime_db_path(ws)
 
 
 def legacy_interface_runtime_dir(ws: Path | str) -> Path:
-    return Path(ws) / "sun/runtime/interface"
+    return app_runtime_dir(ws)
 
 
 def ensure_workspace_runtime(ws: Path | str) -> None:
-    base = legacy_interface_runtime_dir(ws)
+    base = app_runtime_dir(ws)
     (base / "db").mkdir(parents=True, exist_ok=True)
     (base / "state").mkdir(parents=True, exist_ok=True)
     (base / "db" / "migrations").mkdir(parents=True, exist_ok=True)
+    # One-release compatibility: migrate legacy runtime tree if present.
+    legacy = Path(ws) / "sun/runtime/interface"
+    if legacy.is_dir() and not any(base.iterdir()):
+        import shutil
+
+        for name in ("db", "state", "threads", "runs", "logs"):
+            src = legacy / name
+            dst = base / name
+            if src.exists() and not dst.exists():
+                shutil.move(str(src), str(dst))
 
 
 def legacy_interface_pid_file(ws: Path | str) -> Path:
     env = parse_workspace_env_file(ws)
-    runtime_rel = env.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/interface").lstrip("./")
+    runtime_rel = env.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/app").lstrip("./")
     return Path(ws).resolve() / runtime_rel / "state" / "interface.pid"
 
 

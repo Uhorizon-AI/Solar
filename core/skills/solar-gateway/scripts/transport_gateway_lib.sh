@@ -3,7 +3,7 @@
 set -euo pipefail
 
 _TGW_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_RESOLVE_SCRIPT="$_TGW_LIB_DIR/../../solar-interface/scripts/resolve_solar_paths.sh"
+_RESOLVE_SCRIPT="$_TGW_LIB_DIR/../../solar-client/scripts/resolve_solar_paths.sh"
 
 transport_gateway_bind_workspace() {
   if [[ -n "${_TGW_BOUND:-}" ]]; then

@@ -111,7 +111,7 @@ class InterfaceHttpDispatcher:
 
     def _service_label(self, adapter: HttpAdapter) -> str:
         if adapter.service_name == "host":
-            return "solar-host"
+            return "solar-app"
         return "solar-interface"
 
     def _status_port(self, adapter: HttpAdapter, env: dict) -> int:
@@ -352,7 +352,7 @@ class InterfaceHttpDispatcher:
                 core_root
                 / "tests"
                 / "skills"
-                / "solar-host"
+                / "solar-app"
                 / "fixtures"
                 / "voice_mock_stream.sse"
             )

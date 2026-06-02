@@ -27,7 +27,7 @@ cat >>"$tmp" <<'EOF'
 # [solar-interface] required environment
 SOLAR_INTERFACE_HOST=127.0.0.1
 SOLAR_INTERFACE_PORT=7741
-SOLAR_INTERFACE_RUNTIME_DIR=sun/runtime/interface
+SOLAR_INTERFACE_RUNTIME_DIR=sun/runtime/app
 EOF
 mv "$tmp" "$ROOT_ENV_FILE"
 

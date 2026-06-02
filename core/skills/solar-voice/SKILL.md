@@ -1,14 +1,14 @@
 ---
 name: solar-voice
-description: Deprecated — voice ships inside solar-host (Solar App). Use solar-host / solar voice CLI.
+description: Deprecated — voice ships inside solar-app (Solar App). Use solar-app / solar voice CLI.
 ---
 
 # Renamed / merged: Solar App voice
 
-Voice is part of **`solar-host`** (product name: **Solar App**).
+Voice is part of **`solar-app`** (product name: **Solar App**).
 
-- Scripts: `core/skills/solar-host/scripts/voice_cli.py`
+- Scripts: `core/skills/solar-app/scripts/voice_cli.py`
 - CLI: `solar voice once|paste|command|read`
-- Portable bundle: included via **`solar-host`** seed only (not a separate bundle skill).
+- Portable bundle: included via **`solar-app`** seed only (not a separate bundle skill).
 
-Invoke **`solar-host`** for voice workflows.
+Invoke **`solar-app`** for voice workflows.

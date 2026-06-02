@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Solar App voice CLI (part of solar-host skill). Local-first when whisper available."""
+"""Solar App voice CLI (part of solar-app skill). Local-first when whisper available."""
 from __future__ import annotations
 
 import argparse

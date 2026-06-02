@@ -46,9 +46,17 @@ class InterfaceStore:
             raise RuntimeError("SOLAR_ROOT is not set")
         self.solar_root = Path(root).resolve()
 
-        runtime_rel = self.env.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/interface")
-        runtime_path = Path(runtime_rel)
-        self.runtime_dir = runtime_path if runtime_path.is_absolute() else self.workspace / runtime_rel
+        runtime_rel = self.env.get("SOLAR_INTERFACE_RUNTIME_DIR")
+        if runtime_rel:
+            runtime_path = Path(runtime_rel)
+        else:
+            # Prefer new runtime path; fall back to legacy if existing.
+            app_default = self.workspace / "sun/runtime/app"
+            legacy_default = self.workspace / "sun/runtime/interface"
+            runtime_path = (
+                legacy_default if legacy_default.exists() and not app_default.exists() else app_default
+            )
+        self.runtime_dir = runtime_path if runtime_path.is_absolute() else self.workspace / runtime_path
 
         router_rel = Path(self.env.get("SOLAR_ROUTER_RUNTIME_DIR", "sun/runtime/router"))
         self.router_runtime_dir = router_rel if router_rel.is_absolute() else self.workspace / router_rel

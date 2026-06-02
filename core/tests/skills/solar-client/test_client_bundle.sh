@@ -47,7 +47,7 @@ assert_ok "doctor no secret scan noise" bash -c "! echo \"$doc_refresh\" | grep 
 
 unset SOLAR_ROOT SOLAR_WORKSPACE
 assert_ok "resolve portable without global install" bash -c "
-  source \"$INSTALL/core/skills/solar-interface/scripts/resolve_solar_paths.sh\"
+  source \"$INSTALL/core/skills/solar-client/scripts/resolve_solar_paths.sh\"
   solar_resolve_paths --workspace \"$WS\" --quiet
   got=\"\$(solar_core_dir)\"
   want=\"$WS/.solar/bundle/core\"

@@ -10,8 +10,8 @@ __pycache__/
 .venv/
 .poetry-cache/
 
-# solar-host macOS tray (py2app build artifacts — local only)
-core/skills/solar-host/scripts/host_platform/macos/dist/
+# solar-app macOS tray (py2app build artifacts — local only)
+**/host_platform/macos/dist/
 
 # Local secrets and env
 .env

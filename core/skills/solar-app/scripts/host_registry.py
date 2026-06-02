@@ -32,6 +32,8 @@ def invalidate_fleet_cache() -> None:
     _FLEET_CACHE = {"ts": 0.0, "payload": None}
 
 _GOVERNANCE_PREFIXES = ("sun/", "planets/")
+_GOVERNANCE_ALLOWED_SUFFIXES = (".md", ".json")
+_GOVERNANCE_ALLOWED_NAMES = frozenset({"AGENTS.md", "MEMORY.md"})
 
 
 def _now_iso() -> str:
@@ -339,6 +341,13 @@ def list_async_jobs(workspace: str) -> list[dict[str, Any]]:
     return jobs[:50]
 
 
+def _governance_rel_allowed(rel: str) -> bool:
+    name = Path(rel).name
+    if name in _GOVERNANCE_ALLOWED_NAMES:
+        return True
+    return rel.endswith(_GOVERNANCE_ALLOWED_SUFFIXES)
+
+
 def governance_resolve(workspace: str, rel_path: str) -> Path | None:
     rel = rel_path.strip().lstrip("/")
     if not rel or ".." in rel.split("/"):
@@ -352,6 +361,29 @@ def governance_resolve(workspace: str, rel_path: str) -> Path | None:
     except ValueError:
         return None
     return target
+
+
+def governance_tree(workspace: str) -> list[str]:
+    """List governance-editable paths under sun/ and planets/ (sorted, unique)."""
+    base = Path(workspace).resolve()
+    found: set[str] = set()
+    for prefix in _GOVERNANCE_PREFIXES:
+        root = base / prefix.rstrip("/")
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                rel = path.relative_to(base).as_posix()
+            except ValueError:
+                continue
+            if not _governance_rel_allowed(rel):
+                continue
+            if governance_resolve(workspace, rel) is None:
+                continue
+            found.add(rel)
+    return sorted(found)
 
 
 def record_metric(event: str, detail: dict[str, Any] | None = None) -> None:

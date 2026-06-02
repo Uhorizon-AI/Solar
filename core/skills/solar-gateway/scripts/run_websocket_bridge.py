@@ -26,16 +26,27 @@ HOST = os.getenv("SOLAR_WS_HOST", "127.0.0.1")
 PORT = int(os.getenv("SOLAR_WS_PORT", "8765"))
 PATH = os.getenv("SOLAR_WS_PATH", "/ws")
 AI_ROUTER_PYTHON = os.getenv("SOLAR_AI_ROUTER_PYTHON", "python3")
-AI_ROUTER_TIMEOUT_SEC = int(
-    os.getenv("SOLAR_ROUTER_TIMEOUT_SEC")
-    or os.getenv("SOLAR_AI_ROUTER_TIMEOUT_SEC")
-    or "310"
+
+
+def _env_int_with_comment(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    value = raw.split("#", 1)[0].strip()
+    if not value:
+        return default
+    return int(value)
+
+
+AI_ROUTER_TIMEOUT_SEC = _env_int_with_comment(
+    "SOLAR_ROUTER_TIMEOUT_SEC",
+    _env_int_with_comment("SOLAR_AI_ROUTER_TIMEOUT_SEC", 310),
 )
 
 _SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
-_INTERFACE_SCRIPTS = _SCRIPT_DIR.parent.parent / "solar-interface" / "scripts"
-if str(_INTERFACE_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_INTERFACE_SCRIPTS))
+_CLIENT_SCRIPTS = _SCRIPT_DIR.parent.parent / "solar-client" / "scripts"
+if str(_CLIENT_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_CLIENT_SCRIPTS))
 
 from solar_paths import resolve_solar_paths  # noqa: E402
 

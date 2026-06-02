@@ -6,7 +6,7 @@
 # NOTE: Worker inherits SOLAR_WORKSPACE from parent caller; skip re-discovery when set.
 # CLI and sync paths always run discovery (resolve_solar_paths.sh). Intentional exception.
 if [[ -z "${SOLAR_WORKSPACE:-}" ]]; then
-  _TASK_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-interface/scripts" && pwd)/resolve_solar_paths.sh"
+  _TASK_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/resolve_solar_paths.sh"
   if [[ -f "$_TASK_RESOLVE_SCRIPT" ]]; then
     # shellcheck source=/dev/null
     source "$_TASK_RESOLVE_SCRIPT"

@@ -43,5 +43,5 @@ if [[ -d "$SOLAR_APP" ]]; then
   echo "OK: Solar.app present — menu bar tray; alerts via terminal-notifier (-sender Solar)"
 else
   echo "OK: dev tray — run: bash $SCRIPT_DIR/run_host_tray.sh"
-  echo "     optional: bash core/skills/solar-host/scripts/build_solar_tray_app.sh"
+  echo "     optional: bash core/skills/solar-app/scripts/build_solar_tray_app.sh"
 fi

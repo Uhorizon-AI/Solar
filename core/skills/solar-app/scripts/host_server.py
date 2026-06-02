@@ -316,9 +316,12 @@ def dashboard_html() -> str:
   </section>
   <section>
     <h2>Governance editor</h2>
-    <input id="govPath" value="sun/MEMORY.md" style="width:100%;padding:8px;margin-bottom:8px"/>
+    <p class="muted">Pick a file under sun/ or planets/ (.md / .json), or type a path manually.</p>
+    <select id="govSelect" style="width:100%;padding:8px;margin-bottom:8px"><option value="">Loading paths…</option></select>
+    <input id="govPath" value="sun/MEMORY.md" placeholder="sun/MEMORY.md" style="width:100%;padding:8px;margin-bottom:8px"/>
     <button type="button" id="btnGovLoad">Load</button>
     <button type="button" id="btnGovSave">Save</button>
+    <span id="govStatus" class="muted"></span>
     <textarea id="govBody" rows="12"></textarea>
   </section>
   <script>
@@ -372,21 +375,99 @@ def dashboard_html() -> str:
     }});
     document.getElementById("btnChat").onclick = async () => {{
       const msg = document.getElementById("chatIn").value;
-      const r = await postJson("/api/chat", {{ message: msg }});
-      document.getElementById("chatOut").textContent = await r.text();
+      const out = document.getElementById("chatOut");
+      out.textContent = "…";
+      try {{
+        const r = await postJson("/api/chat", {{ message: msg }});
+        const raw = await r.text();
+        try {{
+          const data = JSON.parse(raw);
+          const reply = data.reply_text || data.error || raw;
+          out.textContent = reply;
+          if (!r.ok) out.textContent = (data.error || raw) + " (HTTP " + r.status + ")";
+        }} catch (_) {{
+          out.textContent = raw;
+        }}
+      }} catch (e) {{
+        out.textContent = String(e);
+      }}
+    }};
+    function setGovStatus(msg, isErr) {{
+      const el = document.getElementById("govStatus");
+      el.textContent = msg || "";
+      el.className = isErr ? "err" : "muted";
+    }}
+    function syncGovPathFromSelect() {{
+      const sel = document.getElementById("govSelect");
+      if (sel.value) document.getElementById("govPath").value = sel.value;
+    }}
+    async function loadGovTree() {{
+      const sel = document.getElementById("govSelect");
+      try {{
+        const r = await fetch("/api/governance/tree");
+        const data = await r.json();
+        const paths = data.paths || [];
+        sel.innerHTML = "";
+        if (!paths.length) {{
+          sel.innerHTML = "<option value=''>— no files listed —</option>";
+          return;
+        }}
+        paths.forEach((p) => {{
+          const o = document.createElement("option");
+          o.value = p; o.textContent = p;
+          sel.appendChild(o);
+        }});
+        const cur = document.getElementById("govPath").value;
+        if (paths.includes(cur)) sel.value = cur;
+        else if (paths.includes("sun/MEMORY.md")) {{
+          sel.value = "sun/MEMORY.md";
+          document.getElementById("govPath").value = "sun/MEMORY.md";
+        }}
+      }} catch (e) {{
+        sel.innerHTML = "<option value=''>— tree unavailable —</option>";
+      }}
+    }}
+    document.getElementById("govSelect").onchange = () => {{
+      syncGovPathFromSelect();
+      setGovStatus("");
     }};
     document.getElementById("btnGovLoad").onclick = async () => {{
-      const p = document.getElementById("govPath").value;
-      const r = await fetch("/api/governance/file?path=" + encodeURIComponent(p));
-      document.getElementById("govBody").value = await r.text();
+      syncGovPathFromSelect();
+      const p = document.getElementById("govPath").value.trim();
+      setGovStatus("Loading…");
+      try {{
+        const r = await fetch("/api/governance/file?path=" + encodeURIComponent(p));
+        const body = await r.text();
+        if (!r.ok) {{
+          setGovStatus(body || ("HTTP " + r.status), true);
+          return;
+        }}
+        document.getElementById("govBody").value = body;
+        setGovStatus("Loaded " + p);
+      }} catch (e) {{
+        setGovStatus(String(e), true);
+      }}
     }};
     document.getElementById("btnGovSave").onclick = async () => {{
-      const p = document.getElementById("govPath").value;
-      const r = await fetch("/api/governance/file?path=" + encodeURIComponent(p), {{
-        method: "PUT", headers: {{ "Content-Type": "text/plain" }}, body: document.getElementById("govBody").value
-      }});
-      alert(r.ok ? "Saved" : await r.text());
+      syncGovPathFromSelect();
+      const p = document.getElementById("govPath").value.trim();
+      setGovStatus("Saving…");
+      try {{
+        const r = await fetch("/api/governance/file?path=" + encodeURIComponent(p), {{
+          method: "PUT", headers: {{ "Content-Type": "text/plain" }}, body: document.getElementById("govBody").value
+        }});
+        const body = await r.text();
+        if (!r.ok) {{
+          setGovStatus(body || ("HTTP " + r.status), true);
+          return;
+        }}
+        setGovStatus("Saved " + p);
+        loadGovTree();
+      }} catch (e) {{
+        setGovStatus(String(e), true);
+      }}
     }};
+    loadGovTree();
     function selectedInboxTypes() {{
       return Array.from(document.querySelectorAll(".inbox-filter:checked")).map((el) => el.value);
     }}
@@ -518,7 +599,7 @@ class HostHandler(BaseHTTPRequestHandler):
             self._send(dashboard_html().encode("utf-8"))
             return
         if path == "/health":
-            self._send_json({"status": "ok", "service": "solar-host", "port": PORT})
+            self._send_json({"status": "ok", "service": "solar-app", "port": PORT})
             return
         if path == "/api/status":
             self._send_json({"text": run_solar_status(ws), "workspace": str(ws)})
@@ -539,7 +620,7 @@ class HostHandler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "status": "ready" if ready else "not_ready",
-                    "service": "solar-host",
+                    "service": "solar-app",
                     "mode": "in-process",
                     "workspace": str(ws),
                     "checks": checks,
@@ -562,6 +643,9 @@ class HostHandler(BaseHTTPRequestHandler):
         if path == "/api/system/check":
             code, out = _run_script("solar-system/scripts/check_orchestrator.sh", ws)
             self._send_json({"code": code, "output": out})
+            return
+        if path == "/api/governance/tree":
+            self._send_json({"paths": reg.governance_tree(str(ws))})
             return
         if path == "/api/governance/file":
             rel = (qs.get("path") or [""])[0]
@@ -726,7 +810,7 @@ def main() -> int:
     if not active:
         print(
             "ERROR: no active workspace in registry; "
-            "run: solar host workspace add <path>",
+            "run: solar app workspace add <path> (or solar app workspace add <path>)",
             file=sys.stderr,
         )
         return 1

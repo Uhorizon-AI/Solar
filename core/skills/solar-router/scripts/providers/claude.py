@@ -3,7 +3,7 @@ import os
 import shlex
 import subprocess
 
-from .base import BaseProvider, SOLAR_WORKSPACE
+from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
 class ClaudeProvider(BaseProvider):
@@ -26,7 +26,7 @@ class ClaudeProvider(BaseProvider):
         cmd = parts + [prompt]
 
         env = self.prepare_env(os.environ.copy())
-        timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
+        timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
 
         proc = subprocess.Popen(
             cmd,

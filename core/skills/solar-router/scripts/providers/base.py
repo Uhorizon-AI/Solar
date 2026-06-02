@@ -13,9 +13,9 @@ from abc import ABC
 from typing import Dict, List
 
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1]
-_INTERFACE_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-interface" / "scripts"
-if str(_INTERFACE_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_INTERFACE_SCRIPTS))
+_CLIENT_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-client" / "scripts"
+if str(_CLIENT_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_CLIENT_SCRIPTS))
 
 from solar_paths import resolve_solar_paths  # noqa: E402
 
@@ -27,6 +27,22 @@ FALLBACK_PATHS = [
     "/usr/bin",
     "/bin",
 ]
+
+
+def env_int(name: str, default: int) -> int:
+    """Parse int env vars allowing inline comments (e.g. '3600 # note')."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    value = raw.split("#", 1)[0].strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"invalid integer env {name}={raw!r} (expected e.g. {default})"
+        ) from exc
 
 
 class BaseProvider(ABC):
@@ -89,7 +105,7 @@ class BaseProvider(ABC):
         yield self.run(prompt)
 
     def run(self, prompt: str) -> str:
-        timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
+        timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
         cmd = self.get_cmd(prompt)
         env = self.prepare_env(os.environ.copy())
         self.log_prompt(prompt)

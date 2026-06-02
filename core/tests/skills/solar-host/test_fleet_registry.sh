@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-REGISTRY_PY="$CORE_ROOT/skills/solar-host/scripts/host_registry.py"
+REGISTRY_PY="$CORE_ROOT/skills/solar-app/scripts/host_registry.py"
 PASS=0
 FAIL=0
 

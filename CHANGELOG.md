@@ -6,6 +6,36 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Known issues
+- **Solar.app Voice:** only **Push to talk (paste)** validated; copy, Ask Solar, global hotkey — see voice bug register.
+- **Governance editor:** path tree shipped (`GET /api/governance/tree`); autocomplete / polish still pending (Host-3).
+- **`solar-interface`:** skill and optional `:7741` daemon remain for dev/CLI; full sunset not done. Test dir still named `core/tests/skills/solar-host/`.
+
+### Added
+- feat(solar-app): **Host-3 governance** — `GET /api/governance/tree` (`.md`/`.json` under `sun/`, `planets/`); dashboard select + manual path; chat shows `reply_text`.
+- feat(solar-app): `core/skills/solar-app/SKILL.md` — canonical control plane skill; runtime in `solar-app/scripts/`.
+- feat(solar-client): **Fase 7** — canonical `resolve_solar_paths.sh` and `solar_paths.py`; tests in `core/tests/skills/solar-client/`.
+- test(solar-host): `test_host_governance_tree.sh` — tree API, path rejection (`..`).
+
+### Changed
+- change(solar-app): runtime moved from `solar-host/scripts/` to `solar-app/scripts/` (no backward-compat symlink).
+- change(solar-cli): human entry is **`solar app`** only; **`solar host`** subcommand removed.
+- change(solar-client): portable bundle seeds `solar-client`, `solar-workspace`, `solar-app` only (no `solar-host` / `solar-interface` seeds).
+- change(solar-system): LaunchAgent orchestrator uses `solar-app` `ensure_host.sh` / `check_host.sh`.
+- change(solar-interface): one-release shims re-export `solar-client` path resolution (`resolve_solar_paths.sh`, `solar_paths.py`).
+- change(solar-interface): default runtime dir `sun/runtime/app` (was `sun/runtime/interface`); `solar status` host block targets `:9000` only.
+- change(.gitignore): `**/host_platform/macos/dist/` for py2app `Solar.app` artifacts (replaces obsolete `solar-host/.../dist/` path).
+
+### Removed
+- remove(solar-host): skill directory `core/skills/solar-host/` (superseded by `solar-app`).
+
+### Fixed
+- fix(solar-router): `env_int()` tolerates inline `#` comments in `.env` (e.g. `SOLAR_ROUTER_TIMEOUT_SEC`) — scoped chat no longer 502 on parse error.
+- fix(solar-interface): `solar_status.sh` — restore missing `fi`; drop legacy `:7741` host fallback (Solar App Runtime panel).
+- fix(solar-interface): `solar_paths.py` shim delegates `__main__` (prints `SOLAR_WORKSPACE` / `SOLAR_ROOT`).
+- fix(solar-interface): `SKILL.md` — remove incorrect `solar app` “compatibility alias” copy; document `solar app` vs removed `solar host`.
+- test(solar-client): `test_solar_paths_py.sh` asserts interface shim CLI output.
+
 ## [0.17.2] - 2026-06-01
 
 ### Changed

@@ -3,9 +3,9 @@
 set -euo pipefail
 
 _HOST_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_INTERFACE_SCRIPTS="$(cd "$_HOST_LIB_DIR/../../solar-interface/scripts" && pwd)"
-# shellcheck source=resolve_solar_paths.sh
-source "$_INTERFACE_SCRIPTS/resolve_solar_paths.sh"
+_CLIENT_SCRIPTS="$(cd "$_HOST_LIB_DIR/../../solar-client/scripts" && pwd)"
+# shellcheck source=../../solar-client/scripts/resolve_solar_paths.sh
+source "$_CLIENT_SCRIPTS/resolve_solar_paths.sh"
 
 solar_host_workspace_ports() {
   local ws="$1"

@@ -126,7 +126,7 @@ fi
 
 if has_feature "host"; then
   echo "▶ Running feature: host"
-  if ! bash "$(solar_system_skill_script solar-host ensure_host.sh)"; then
+  if ! bash "$(solar_system_skill_script solar-app ensure_host.sh)"; then
     echo "❌ host feature failed." >&2
     failures=$((failures + 1))
   fi
@@ -134,7 +134,7 @@ fi
 
 for token in $(echo "$FEATURES" | tr ',' ' '); do
   case "$token" in
-    async-tasks|transport-gateway|interface|host) ;;
+    async-tasks|transport-gateway|host) ;;
     *) echo "⚠️  Unknown feature token ignored: $token" ;;
   esac
 done

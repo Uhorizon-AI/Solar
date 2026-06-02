@@ -304,7 +304,7 @@ if feature_active "host"; then
   host_out=""
   host_code=0
   set +e
-  host_out="$(run_with_timeout bash "$(solar_system_skill_script solar-host check_host.sh)" 2>&1)"
+  host_out="$(run_with_timeout bash "$(solar_system_skill_script solar-app check_host.sh)" 2>&1)"
   host_code=$?
   set -e
 

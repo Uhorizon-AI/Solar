@@ -6,7 +6,7 @@ SOLAR_VERSION="0.17.2"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)"
 WORKSPACE_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-workspace/scripts" && pwd)"
-HOST_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-host/scripts" && pwd)"
+HOST_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-app/scripts" && pwd)"
 
 # Workspace / client commands (before chat REPL wiring)
 case "${1:-}" in
@@ -84,7 +84,7 @@ case "${1:-}" in
         ;;
     esac
     ;;
-  host)
+  app)
     shift
     case "${1:-}" in
       start)
@@ -113,11 +113,11 @@ case "${1:-}" in
         exec bash "$HOST_SCRIPTS/host_workspace.sh" "$@"
         ;;
       "")
-        echo "Usage: solar host {start|stop|status|open|workspace ...}" >&2
+        echo "Usage: solar app {start|stop|status|open|workspace ...}" >&2
         exit 2
         ;;
       *)
-        echo "Unknown host subcommand: $1" >&2
+        echo "Unknown app subcommand: $1" >&2
         exit 2
         ;;
     esac
@@ -154,11 +154,12 @@ Flags:
 Subcommands:
   client init|sync|doctor|upgrade|update|bundle|self-update  Solar Client (manifest, bundle, IDE sync)
   workspace doctor         Workspace content health (sun/, planets/)
-  host start|stop|status|open  Solar Host control plane UI (default :9000 — preferred human entry)
+  app start|stop|status|open   Solar App control plane UI (default :9000 — preferred human entry)
+  app workspace ...            Workspace registry helpers
   status [--verbose]       Compact workspace health (Client + Workspace + runtime)
   paths                    Resolvable paths for IDE @ references
 
-Note: Interactive chat on :7741 is legacy; prefer Solar Host or your IDE for conversation.
+Note: Interactive chat on :7741 is deprecated; prefer Solar App or your IDE for conversation.
   new [title]              Start a new thread and enter chat
   runs                     List recent runs
   approvals                List pending approvals

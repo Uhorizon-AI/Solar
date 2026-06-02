@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-interface/scripts" && pwd)/resolve_solar_paths.sh"
+_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/resolve_solar_paths.sh"
 # shellcheck source=/dev/null
 source "$_RESOLVE_SCRIPT"
 solar_resolve_paths --quiet

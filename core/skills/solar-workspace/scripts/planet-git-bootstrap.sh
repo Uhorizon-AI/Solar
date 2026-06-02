@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-interface/scripts" && pwd)/resolve_solar_paths.sh"
+_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/resolve_solar_paths.sh"
 # shellcheck source=/dev/null
 source "$_RESOLVE_SCRIPT"
 solar_resolve_paths --quiet

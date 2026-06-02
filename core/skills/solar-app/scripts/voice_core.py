@@ -338,13 +338,13 @@ class VoiceHostClient:
                 return True, ""
         return (
             False,
-            f"Solar Host not reachable at {self.base}. Start with: solar host start",
+            f"Solar App not reachable at {self.base}. Start with: solar app start (or solar app start)",
         )
 
     def _start_host_script(self) -> Optional[Path]:
         candidates = [
             _SCRIPT_DIR / "start_host.sh",
-            Path(active_workspace()) / "solar/core/skills/solar-host/scripts/start_host.sh",
+            Path(active_workspace()) / "solar/core/skills/solar-app/scripts/start_host.sh",
         ]
         for candidate in candidates:
             if candidate.is_file():
@@ -521,7 +521,7 @@ def _mock_stream_fixture_path() -> Optional[Path]:
         _SCRIPT_DIR.parent.parent.parent
         / "tests"
         / "skills"
-        / "solar-host"
+        / "solar-app"
         / "fixtures"
         / "voice_mock_stream.sse"
     )

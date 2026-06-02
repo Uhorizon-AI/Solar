@@ -92,7 +92,7 @@ The LaunchAgent entrypoint is built at `sun/runtime/system/Solar` during install
    - async tasks: `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` (the script first checks whether async-tasks is already supervised by solar-system, then falls back to the local worker only when needed)
    - transport gateway: `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
    - interface: `core/skills/solar-interface/scripts/ensure_interface.sh`
-   - host: `core/skills/solar-host/scripts/ensure_host.sh`
+   - host: `core/skills/solar-app/scripts/ensure_host.sh`
 
 ## Design notes
 

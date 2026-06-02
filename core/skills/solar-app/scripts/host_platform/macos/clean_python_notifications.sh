@@ -24,7 +24,7 @@ Requires Full Disk Access for this terminal:
   System Settings → Privacy & Security → Full Disk Access → enable Cursor or Terminal
 
 After --apply, quit System Settings (Cmd+Q) and reopen Notifications to refresh.
-Use Solar.app or terminal-notifier for new alerts (see solar-host SKILL.md).
+Use Solar.app or terminal-notifier for new alerts (see solar-app SKILL.md).
 EOF
 }
 
@@ -176,7 +176,7 @@ macOS blocks this file unless the app running the shell has Full Disk Access.
 4. **Quit ${app} completely** (Cmd+Q) and reopen — required for TCC.
 5. Retry:
 
-   bash solar/core/skills/solar-host/scripts/host_platform/macos/clean_python_notifications.sh --list
+   bash solar/core/skills/solar-app/scripts/host_platform/macos/clean_python_notifications.sh --list
 
 If you run from Terminal.app instead of Cursor, add Terminal.app there.
 
@@ -236,7 +236,7 @@ if pgrep -f "Python.*host_server.py" >/dev/null 2>&1; then
   echo ""
   echo "WARN: Solar Host (host_server.py) is running as Homebrew Python."
   echo "      macOS re-lists \"Python\" in Notifications while that process is alive."
-  echo "      solar host stop   # then re-run --apply"
+  echo "      solar app stop   # then re-run --apply"
 fi
 
 echo ""

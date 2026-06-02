@@ -4,7 +4,7 @@ import re
 import shlex
 import subprocess
 
-from .base import BaseProvider
+from .base import BaseProvider, env_int
 
 
 class GeminiProvider(BaseProvider):
@@ -41,7 +41,7 @@ class GeminiProvider(BaseProvider):
         cmd = parts + ["-p", prompt]
 
         env = self.prepare_env(os.environ.copy())
-        timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
+        timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
 
         proc = subprocess.Popen(
             cmd,

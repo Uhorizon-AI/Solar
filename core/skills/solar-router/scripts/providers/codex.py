@@ -4,7 +4,7 @@ import shlex
 import subprocess
 import sys
 
-from .base import BaseProvider, SOLAR_WORKSPACE
+from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
 class CodexProvider(BaseProvider):
@@ -32,7 +32,7 @@ class CodexProvider(BaseProvider):
 
         cmd = parts + [prompt]
         env = self.prepare_env(os.environ.copy())
-        timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
+        timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
         debug = os.getenv("SOLAR_ROUTER_CODEX_DEBUG_EVENTS", "").strip() == "1"
 
         proc = subprocess.Popen(

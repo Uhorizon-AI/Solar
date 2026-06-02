@@ -22,9 +22,9 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
-_INTERFACE_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-interface" / "scripts"
-if str(_INTERFACE_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_INTERFACE_SCRIPTS))
+_CLIENT_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-client" / "scripts"
+if str(_CLIENT_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_CLIENT_SCRIPTS))
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 

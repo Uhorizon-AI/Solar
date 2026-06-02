@@ -2,7 +2,7 @@
 # Shared path resolution for solar-system (source only).
 
 _SOLAR_SYSTEM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_RESOLVE_SCRIPT="$_SOLAR_SYSTEM_LIB_DIR/../../solar-interface/scripts/resolve_solar_paths.sh"
+_RESOLVE_SCRIPT="$_SOLAR_SYSTEM_LIB_DIR/../../solar-client/scripts/resolve_solar_paths.sh"
 
 solar_system_resolve_workspace() {
   if [[ -n "${_SOLAR_SYSTEM_RESOLVED:-}" ]]; then

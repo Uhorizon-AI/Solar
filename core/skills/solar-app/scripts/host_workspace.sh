@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# solar host workspace — manage machine-local registry
+# solar app workspace — manage machine-local registry
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REGISTRY_PY="$SCRIPT_DIR/host_registry.py"
@@ -7,10 +7,10 @@ REGISTRY_PY="$SCRIPT_DIR/host_registry.py"
 usage() {
   cat <<'EOF'
 Usage:
-  solar host workspace list
-  solar host workspace add <path> [label]
-  solar host workspace remove <path>
-  solar host workspace use <path>
+  solar app workspace list
+  solar app workspace add <path> [label]
+  solar app workspace remove <path>
+  solar app workspace use <path>
 EOF
 }
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-SCRIPTS="$CORE_ROOT/skills/solar-host/scripts"
+SCRIPTS="$CORE_ROOT/skills/solar-app/scripts"
 PASS=0
 FAIL=0
 
@@ -63,7 +63,7 @@ ctx.switch_workspace(ws_a)
 db_a = ctx.legacy_interface_db_path(ws_a)
 mounted = ctx.get_mounted()
 assert mounted == ws_a, (mounted, ws_a)
-assert db_a == Path(ws_a) / "sun/runtime/interface/db/interface.sqlite"
+assert db_a == Path(ws_a) / "sun/runtime/app/db/interface.sqlite"
 assert db_a.parent.is_dir(), "runtime db dir should exist"
 
 store_a = hi.get_store(ws_a)

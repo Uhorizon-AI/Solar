@@ -39,7 +39,7 @@ fi
 
 INSTALL_ROOT="$ROOT"
 SOLAR="$INSTALL_ROOT/core/skills/solar-interface/scripts/solar"
-RESOLVE="$INSTALL_ROOT/core/skills/solar-interface/scripts/resolve_solar_paths.sh"
+RESOLVE="$INSTALL_ROOT/core/skills/solar-client/scripts/resolve_solar_paths.sh"
 
 PASS=0
 FAIL=0
@@ -88,8 +88,8 @@ echo "=== Preflight ($INSTALL_ROOT) ==="
 run_expect_ok "bash -n solar CLI" bash -n "$SOLAR"
 run_expect_ok "bash -n resolve_solar_paths.sh" bash -n "$RESOLVE"
 
-UNIT_RESOLVE="$INSTALL_ROOT/core/tests/skills/solar-interface/test_resolve_solar_paths.sh"
-UNIT_PATHS_PY="$INSTALL_ROOT/core/tests/skills/solar-interface/test_solar_paths_py.sh"
+UNIT_RESOLVE="$INSTALL_ROOT/core/tests/skills/solar-client/test_resolve_solar_paths.sh"
+UNIT_PATHS_PY="$INSTALL_ROOT/core/tests/skills/solar-client/test_solar_paths_py.sh"
 UNIT_UPGRADE="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_upgrade.sh"
 UNIT_MANIFEST="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_manifest.sh"
 UNIT_BUNDLE="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_bundle.sh"

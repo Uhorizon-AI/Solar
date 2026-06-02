@@ -54,7 +54,7 @@ def _warn_no_notifier() -> None:
     print(
         "WARN: no Solar notification channel — install terminal-notifier or rebuild Solar.app\n"
         "      brew install terminal-notifier\n"
-        "      bash core/skills/solar-host/scripts/build_solar_tray_app.sh && open …/dist/Solar.app",
+        "      bash core/skills/solar-app/scripts/build_solar_tray_app.sh && open …/dist/Solar.app",
         file=sys.stderr,
     )
 

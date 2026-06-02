@@ -29,11 +29,15 @@ None
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-client /tmp
 bash -n core/skills/solar-client/scripts/client_lib.sh
 bash -n core/skills/solar-client/scripts/client_doctor.sh
+bash -n core/skills/solar-client/scripts/resolve_solar_paths.sh
+python3 -m py_compile core/skills/solar-client/scripts/solar_paths.py
+bash core/tests/skills/solar-client/test_resolve_solar_paths.sh
+bash core/tests/skills/solar-client/test_solar_paths_py.sh
 ```
 
 ## CLI (via `solar` entrypoint)
 
-Resolve paths first (`resolve_solar_paths.sh` in `solar-interface`; shared by cwd):
+Resolve paths first (`resolve_solar_paths.sh` + `solar_paths.py` in this skill; `solar-interface` ships a one-release shim):
 
 ```bash
 solar client init
