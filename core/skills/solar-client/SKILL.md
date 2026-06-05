@@ -37,7 +37,9 @@ bash core/tests/skills/solar-client/test_solar_paths_py.sh
 
 ## CLI (via `solar` entrypoint)
 
-Resolve paths first (`resolve_solar_paths.sh` + `solar_paths.py` in this skill; `solar-interface` ships a one-release shim):
+Canonical entry: `core/skills/solar-client/scripts/solar`
+
+Resolve paths first (`resolve_solar_paths.sh` + `solar_paths.py` in this skill):
 
 ```bash
 solar client init
@@ -49,6 +51,15 @@ solar client doctor [--strict]
 solar client self-update
 solar status
 solar paths
+solar app …                # delegates to solar-app
+```
+
+Validation:
+
+```bash
+bash -n core/skills/solar-client/scripts/solar
+bash -n core/skills/solar-client/scripts/solar_status.sh
+bash -n core/skills/solar-client/scripts/solar_paths.sh
 ```
 
 ## Workspace modes (`core_source`)
@@ -71,6 +82,6 @@ Smoke: `bash core/skills/solar-client/scripts/smoke-solar-client.sh ~/Solar/sola
 
 | Skill | Rol |
 |-------|-----|
-| **solar-client** | Manifest, bundle, IDE sync, install |
+| **solar-client** | Manifest, bundle, IDE sync, install, **`solar` CLI entry** |
 | **solar-workspace** | Doctors `sun/` + `planets/` |
-| **solar-interface** | Daemon/REPL/API (not lifecycle) |
+| **solar-app** | Control plane UI/API + voice runtime |

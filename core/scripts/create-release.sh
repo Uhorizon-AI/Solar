@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GIT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CHANGELOG_FILE="$GIT_ROOT/CHANGELOG.md"
-SOLAR_CLI="$GIT_ROOT/core/skills/solar-interface/scripts/solar"
+SOLAR_CLI="$GIT_ROOT/core/skills/solar-client/scripts/solar"
 
 PUSH_AFTER_RELEASE=false
 AUTO_CONFIRM=false

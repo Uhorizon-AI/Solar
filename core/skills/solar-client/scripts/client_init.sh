@@ -70,10 +70,10 @@ stable_hash() {
 port_offsets() {
   local h
   h="$(stable_hash "$WORKSPACE")"
-  echo "$((7741 + h % 500)) $((8787 + h % 500))"
+  echo "$((9000 + h % 500)) $((8787 + h % 500))"
 }
 
-read -r IFACE_PORT HTTP_PORT < <(port_offsets)
+read -r HOST_PORT HTTP_PORT < <(port_offsets)
 
 mkdir -p "$WORKSPACE/sun/preferences" "$WORKSPACE/sun/daily-log" "$WORKSPACE/planets" "$WORKSPACE/.solar"
 
@@ -173,7 +173,7 @@ if [[ ! -f "$WORKSPACE/.env.example" ]]; then
   {
     echo ""
     echo "# Assigned by solar client init (override as needed)"
-    echo "SOLAR_INTERFACE_PORT=$IFACE_PORT"
+    echo "SOLAR_APP_PORT=$HOST_PORT"
     echo "SOLAR_HTTP_PORT=$HTTP_PORT"
   } >> "$WORKSPACE/.env.example"
 fi

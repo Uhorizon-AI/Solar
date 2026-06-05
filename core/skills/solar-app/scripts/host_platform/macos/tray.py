@@ -81,7 +81,7 @@ class VoiceSession:
             notifications.show_notification(
                 "Solar",
                 "Voice unavailable",
-                "Run: solar voice doctor",
+                "Run: solar app voice doctor",
             )
             return False
         if self._recording:
@@ -315,11 +315,23 @@ def main() -> int:
                         )
                     )
                 else:
-                    # v0.17.0: only paste PTT validated in Solar.app (copy / ask / hotkey: known bugs).
+                    # Validated: paste PTT. Experimental: copy (same pipeline), ask (chat fallback).
+                    voice.add(
+                        rumps.MenuItem(
+                            "Push to talk (copy)",
+                            callback=lambda *_: self._voice.toggle("copy"),
+                        )
+                    )
                     voice.add(
                         rumps.MenuItem(
                             "Push to talk (paste)",
                             callback=lambda *_: self._voice.toggle("paste"),
+                        )
+                    )
+                    voice.add(
+                        rumps.MenuItem(
+                            "Ask Solar (experimental)",
+                            callback=lambda *_: self._voice.toggle("ask"),
                         )
                     )
                     voice.add(

@@ -6,11 +6,6 @@ import sys
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_CORE_DIR = _SCRIPT_DIR.parent.parent.parent
-_INTERFACE_SCRIPTS = _CORE_DIR / "skills" / "solar-interface" / "scripts"
-
-if str(_INTERFACE_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_INTERFACE_SCRIPTS))
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 

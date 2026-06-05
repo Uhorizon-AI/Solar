@@ -59,6 +59,26 @@ def load_workspace_env(ws: Path | str) -> None:
         _managed_env_keys.add(key)
     os.environ["SOLAR_WORKSPACE"] = str(ws_path)
     _managed_env_keys.add("SOLAR_WORKSPACE")
+    _apply_legacy_app_env()
+
+
+def _apply_legacy_app_env() -> None:
+    """Map deprecated SOLAR_HOST_* / SOLAR_INTERFACE_* keys to SOLAR_APP_*."""
+    global _managed_env_keys  # noqa: PLW0603
+    if not os.environ.get("SOLAR_APP_HOST"):
+        for key in ("SOLAR_HOST_HOST", "SOLAR_INTERFACE_HOST"):
+            val = os.environ.get(key)
+            if val:
+                os.environ["SOLAR_APP_HOST"] = val
+                _managed_env_keys.add("SOLAR_APP_HOST")
+                break
+    if not os.environ.get("SOLAR_APP_PORT"):
+        for key in ("SOLAR_HOST_PORT", "SOLAR_INTERFACE_PORT"):
+            val = os.environ.get(key)
+            if val:
+                os.environ["SOLAR_APP_PORT"] = val
+                _managed_env_keys.add("SOLAR_APP_PORT")
+                break
 
 
 def app_runtime_db_path(ws: Path | str) -> Path:
@@ -97,15 +117,13 @@ def ensure_workspace_runtime(ws: Path | str) -> None:
 
 def legacy_interface_pid_file(ws: Path | str) -> Path:
     env = parse_workspace_env_file(ws)
-    runtime_rel = env.get("SOLAR_INTERFACE_RUNTIME_DIR", "sun/runtime/app").lstrip("./")
+    runtime_rel = env.get("SOLAR_APP_RUNTIME_DIR", "sun/runtime/app").lstrip("./")
     return Path(ws).resolve() / runtime_rel / "state" / "interface.pid"
 
 
 def legacy_interface_port(ws: Path | str) -> int:
-    env = parse_workspace_env_file(ws)
-    if env.get("SOLAR_INTERFACE_PORT"):
-        return int(env["SOLAR_INTERFACE_PORT"])
-    return reg.port_offsets(str(Path(ws).resolve()))[0]
+    """Hash-derived port for removed :7741-era daemons (cleanup on workspace switch)."""
+    return reg.legacy_daemon_port(str(Path(ws).resolve()))
 
 
 def _listener_pids(port: int) -> set[int]:

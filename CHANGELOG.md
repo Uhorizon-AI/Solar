@@ -6,6 +6,33 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-client): canonical `solar` CLI entry — `core/skills/solar-client/scripts/solar` (dispatcher for client, workspace, app, status, paths, chat REPL).
+- feat(solar-app): `solar app voice *` — voice CLI nested under App (doctor, once, paste, ask, etc.).
+
+### Changed
+- change(solar-app): governance editor autocomplete — filter-as-you-type matches + HTML datalist from `GET /api/governance/tree`.
+- change(solar-app): tray Voice menu re-enables copy + Ask Solar (experimental); paste remains primary validated path.
+- change(solar-system): `interface` feature token deprecated; orchestrator uses `host` only.
+- change(voice): user-facing hints use `solar app voice doctor` (not top-level `solar voice`).
+- change(env): remove legacy `SOLAR_INTERFACE_*`; bind vars are `SOLAR_APP_HOST`, `SOLAR_APP_PORT`, `SOLAR_APP_BASE_URL` (not `SOLAR_HOST_HOST`).
+- test(solar-app): suite directory renamed from `core/tests/skills/solar-host/` → `solar-app/`.
+
+### Removed
+- remove(solar-interface): skill and `:7741` daemon sunset — no bundle seed, no orchestrator ensure.
+- remove(solar-voice): deprecated stub skill; voice implementation stays in `solar-app`.
+- remove(solar-transport-gateway): deprecated alias stub (use `solar-gateway`).
+- remove(solar-migration-playbook): deprecated alias stub (use `solar-migration`).
+- remove(solar-cli): top-level `solar voice *` removed; use `solar app voice *` or Solar.app tray.
+- remove(solar-app): CLI entry and path shims moved to `solar-client` (`solar`, `solar_status.sh`, `solar_paths.sh`).
+
+### Fixed
+- fix(voice): Ask intent falls back to `POST /api/chat` when SSE stream fails (tray notifications show result or error).
+- fix(solar-app): tray Voice menu duplicate `else` (IndentationError on macOS).
+- fix(solar-app): `interface_repl.py` imports `solar_paths` from `solar-client/scripts`.
+- fix(solar-app): honor explicit `SOLAR_APP_PORT=9000` (hash port only when unset).
+- fix(solar-app): `onboard_host_env.sh` migrates legacy env keys instead of overwriting with `:9000` defaults.
+
 ## [0.18.1] - 2026-06-02
 
 ### Fixed

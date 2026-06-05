@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional
 
 
 def host_url() -> str:
-    host = os.environ.get("SOLAR_HOST_HOST", "127.0.0.1")
-    port = os.environ.get("SOLAR_HOST_PORT", "9000")
+    host = os.environ.get("SOLAR_APP_HOST", "127.0.0.1")
+    port = os.environ.get("SOLAR_APP_PORT", "9000")
     return f"http://{host}:{port}"
 
 

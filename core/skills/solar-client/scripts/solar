@@ -1,0 +1,481 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOLAR_VERSION="0.18.1"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLIENT_SCRIPTS="$SCRIPT_DIR"
+WORKSPACE_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-workspace/scripts" && pwd)"
+APP_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-app/scripts" && pwd)"
+
+# Workspace / client commands (before chat REPL wiring)
+case "${1:-}" in
+  client)
+    shift
+    case "${1:-}" in
+      init)
+        shift
+        exec bash "$CLIENT_SCRIPTS/client_init.sh" "$@"
+        ;;
+      sync)
+        shift
+        exec bash "$CLIENT_SCRIPTS/client_sync.sh" "$@"
+        ;;
+      doctor)
+        shift
+        exec bash "$CLIENT_SCRIPTS/client_doctor.sh" "$@"
+        ;;
+      upgrade)
+        shift
+        exec bash "$CLIENT_SCRIPTS/client_upgrade.sh" "$@"
+        ;;
+      update)
+        shift
+        exec bash "$CLIENT_SCRIPTS/client_update.sh" "$@"
+        ;;
+      bundle)
+        shift
+        exec bash "$CLIENT_SCRIPTS/client_bundle.sh" "$@"
+        ;;
+      self-update)
+        shift
+        exec bash "$CLIENT_SCRIPTS/client_self_update.sh" "$@"
+        ;;
+      "")
+        echo "Usage: solar client {init|sync|doctor|upgrade|update|bundle|self-update}" >&2
+        exit 2
+        ;;
+      *)
+        echo "Unknown client subcommand: $1" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  workspace)
+    shift
+    case "${1:-}" in
+      doctor)
+        shift
+        exec bash "$WORKSPACE_SCRIPTS/workspace_doctor.sh" "$@"
+        ;;
+      "")
+        echo "Usage: solar workspace {doctor}" >&2
+        exit 2
+        ;;
+      *)
+        echo "Unknown workspace subcommand: $1" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  app)
+    shift
+    case "${1:-}" in
+      start)
+        shift
+        exec bash "$APP_SCRIPTS/start_host.sh" "$@"
+        ;;
+      stop)
+        shift
+        exec bash "$APP_SCRIPTS/stop_host.sh" "$@"
+        ;;
+      status)
+        shift
+        exec bash "$APP_SCRIPTS/check_host.sh" "$@"
+        ;;
+      open)
+        _host_url="$(bash -c "source \"$APP_SCRIPTS/host_lib.sh\" && solar_host_load_env && printf '%s' \"\$SOLAR_APP_BASE_URL\"")"
+        if command -v open >/dev/null 2>&1; then
+          open "$_host_url"
+        else
+          echo "Open: $_host_url"
+        fi
+        exit 0
+        ;;
+      workspace)
+        shift
+        exec bash "$APP_SCRIPTS/host_workspace.sh" "$@"
+        ;;
+      voice)
+        shift
+        case "${1:-}" in
+          once|paste|command|read|ask|doctor|check)
+            exec python3 "$APP_SCRIPTS/voice_cli.py" "$@"
+            ;;
+          "")
+            echo "Usage: solar app voice {once|paste|command|read|ask|doctor}" >&2
+            exit 2
+            ;;
+          *)
+            echo "Unknown app voice subcommand: $1" >&2
+            exit 2
+            ;;
+        esac
+        ;;
+      "")
+        echo "Usage: solar app {start|stop|status|open|workspace ...|voice ...}" >&2
+        exit 2
+        ;;
+      *)
+        echo "Unknown app subcommand: $1" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  status)
+    shift
+    exec bash "$SCRIPT_DIR/solar_status.sh" "$@"
+    ;;
+  paths)
+    shift
+    exec bash "$SCRIPT_DIR/solar_paths.sh" "$@"
+    ;;
+  voice)
+    echo "NOTE: 'solar voice' removed in v0.19.0 — use: solar app voice ..." >&2
+    echo "Usage: solar app voice {once|paste|command|read|ask|doctor}" >&2
+    exit 2
+    ;;
+esac
+
+# shellcheck source=/dev/null
+source "$APP_SCRIPTS/interface_lib.sh"
+
+usage() {
+  cat <<EOF
+Solar $SOLAR_VERSION
+
+Usage:
+  solar [flags] [text]     Start or continue a chat (REPL by default)
+
+Flags:
+  -p, --print              Non-interactive: send message, print response, exit
+  -c, --continue           Continue the most recent conversation
+  -r, --resume <thread>    Resume a specific thread by ID
+  -m, --model <provider>   Force provider: codex | claude | gemini (default: first in SOLAR_ROUTER_PROVIDER_PRIORITY)
+  -n, --name <title>       Name this session (used when creating a new thread)
+  -v, --version            Show version
+  -h, --help               Show help
+
+Subcommands:
+  client init|sync|doctor|upgrade|update|bundle|self-update  Solar Client (manifest, bundle, IDE sync)
+  workspace doctor         Workspace content health (sun/, planets/)
+  app start|stop|status|open   Solar App control plane UI (default :9000)
+  app workspace ...            Workspace registry helpers
+  app voice ...                Voice ops/debug (primary UX: Solar.app tray)
+  status [--verbose]       Compact workspace health (Client + Workspace + runtime)
+  paths                    Resolvable paths for IDE @ references
+
+Note: Interactive chat uses Solar App API on :9000 (in-process).
+  new [title]              Start a new thread and enter chat
+  runs                     List recent runs
+  approvals                List pending approvals
+  approve <id>             Approve a pending run
+  reject <id>              Reject a pending run
+
+Inside chat: type your message and press Enter. Use '/exit', '/quit', or Ctrl+C to quit.
+
+Examples:
+  solar "Hola"             Start chat with initial message
+  solar                    Enter chat (create or resume last thread)
+  solar -c                 Continue most recent conversation
+  solar -p "Hola"          Print response and exit (for pipes/scripts)
+  solar -m claude "Hola"   Force Claude as provider
+  solar -r thread_abc123   Resume specific thread
+  solar app voice doctor   Check voice dependencies
+EOF
+}
+
+require_daemon() {
+  if bash "$APP_SCRIPTS/check_host.sh" --quiet 2>/dev/null; then
+    # shellcheck source=/dev/null
+    source "$APP_SCRIPTS/host_lib.sh"
+    solar_host_load_env
+    export SOLAR_APP_BASE_URL
+    return 0
+  fi
+  echo "" >&2
+  echo "Solar App is not reachable. Start it and retry:" >&2
+  echo "  solar app start" >&2
+  echo "  solar app status" >&2
+  exit 1
+}
+
+api_get() {
+  local path="$1"
+  python3 - <<'PY' "$SOLAR_APP_BASE_URL$path"
+import sys
+import urllib.error
+import urllib.request
+
+url = sys.argv[1]
+try:
+    with urllib.request.urlopen(url) as resp:
+        sys.stdout.write(resp.read().decode("utf-8"))
+except urllib.error.HTTPError as exc:
+    sys.stderr.write(exc.read().decode("utf-8"))
+    sys.exit(22)
+PY
+}
+
+api_post() {
+  local path="$1"
+  local _default_payload='{}'
+  local payload="${2:-$_default_payload}"
+  python3 - <<'PY' "$SOLAR_APP_BASE_URL$path" "$payload"
+import sys
+import urllib.error
+import urllib.request
+
+url = sys.argv[1]
+payload = sys.argv[2].encode("utf-8")
+req = urllib.request.Request(
+    url,
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req) as resp:
+        sys.stdout.write(resp.read().decode("utf-8"))
+except urllib.error.HTTPError as exc:
+    sys.stderr.write(exc.read().decode("utf-8"))
+    sys.exit(22)
+PY
+}
+
+set_current_thread() {
+  local thread_id="$1"
+  ensure_interface_dirs
+  printf '{"thread_id":"%s","updated_at":"%s"}\n' "$thread_id" "$(date -Iseconds)" >"$SOLAR_APP_CURRENT_THREAD_FILE"
+}
+
+get_current_thread() {
+  if [[ -f "$SOLAR_APP_CURRENT_THREAD_FILE" ]]; then
+    python3 - <<'PY' "$SOLAR_APP_CURRENT_THREAD_FILE"
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+print(data.get("thread_id",""))
+PY
+  fi
+}
+
+create_thread() {
+  local title="${1:-}"
+  local payload
+  payload="$(python3 -c 'import json, sys; print(json.dumps({"title": sys.argv[1]}))' "$title")"
+  api_post "/threads" "$payload"
+}
+
+# send_message <thread_id> <mode> <text> [provider]
+send_message() {
+  local thread_id="$1"
+  local mode="$2"
+  local text="$3"
+  local provider="${4:-}"
+  local payload
+  payload="$(python3 - <<'PY' "$mode" "$text" "$provider"
+import json, sys
+obj = {"mode": sys.argv[1], "text": sys.argv[2]}
+if sys.argv[3]:
+    obj["provider"] = sys.argv[3]
+print(json.dumps(obj))
+PY
+  )"
+  local resp
+  resp="$(api_post "/threads/$thread_id/runs" "$payload")"
+  printf '%s' "$resp" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+run = data["run"]
+provider = run.get("provider_used") or "unknown"
+reply = data.get("reply_text", "")
+print("[" + provider + "]")
+if reply:
+    print(reply)
+else:
+    status = run.get("status", "")
+    error = run.get("error") or ""
+    print("(no reply — status: " + status + ("  " + error if error else "") + ")")
+print()
+'
+}
+
+# print_message: like send_message but no REPL header, used for -p mode
+print_message() {
+  local thread_id="$1"
+  local text="$2"
+  local provider="${3:-}"
+  local payload
+  payload="$(python3 - <<'PY' "$text" "$provider"
+import json, sys
+obj = {"mode": "ask", "text": sys.argv[1]}
+if sys.argv[2]:
+    obj["provider"] = sys.argv[2]
+print(json.dumps(obj))
+PY
+  )"
+  local resp
+  resp="$(api_post "/threads/$thread_id/runs" "$payload")"
+  printf '%s' "$resp" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+reply = data.get("reply_text", "")
+if reply:
+    sys.stdout.write(reply)
+    if not reply.endswith("\n"):
+        sys.stdout.write("\n")
+else:
+    run = data["run"]
+    sys.stderr.write("Error — status: " + str(run.get("status")) + "\n")
+    sys.exit(1)
+'
+}
+
+chat_loop() {
+  local initial_text="${1:-}"
+  local provider="${2:-}"
+  local name="${3:-}"
+  local force_thread="${4:-}"
+
+  require_daemon
+
+  local thread_id
+  if [[ -n "$force_thread" ]]; then
+    thread_id="$force_thread"
+    set_current_thread "$thread_id"
+    echo "Thread: $thread_id  (resumed)"
+  else
+    thread_id="$(get_current_thread)"
+    if [[ -z "$thread_id" ]]; then
+      local title="${name:-${initial_text:-Solar Chat}}"
+      local resp
+      resp="$(create_thread "$title")"
+      thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
+      set_current_thread "$thread_id"
+      echo "Thread: $thread_id  (new)"
+    else
+      echo "Thread: $thread_id  (resumed)"
+    fi
+  fi
+  [[ -n "$provider" ]] && echo "Provider: $provider"
+  echo "Type '/' to list agents/skills/commands, '@path' to reference files. 'exit' or Ctrl+C to quit."
+  echo ""
+
+  python3 "$APP_SCRIPTS/interface_repl.py" \
+    "$SOLAR_APP_BASE_URL" \
+    "$thread_id" \
+    "$provider" \
+    "$initial_text"
+}
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+
+FLAG_PRINT=0
+FLAG_CONTINUE=0
+FLAG_RESUME=""
+FLAG_MODEL=""
+FLAG_NAME=""
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--print)       FLAG_PRINT=1;          shift ;;
+    -c|--continue)    FLAG_CONTINUE=1;       shift ;;
+    -r|--resume)      FLAG_RESUME="${2:-}";  shift 2 ;;
+    -m|--model)       FLAG_MODEL="${2:-}";   shift 2 ;;
+    -n|--name)        FLAG_NAME="${2:-}";    shift 2 ;;
+    -v|--version)     echo "solar $SOLAR_VERSION"; exit 0 ;;
+    -h|--help)        usage; exit 0 ;;
+    --) shift; POSITIONAL+=("$@"); break ;;
+    -*) echo "Unknown flag: $1" >&2; usage >&2; exit 1 ;;
+    *)  POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+# ── Subcommand dispatch ───────────────────────────────────────────────────────
+
+cmd="${POSITIONAL[0]:-}"
+
+case "$cmd" in
+  runs)
+    require_daemon
+    api_get "/runs" | python3 -c '
+import json, sys
+for item in json.load(sys.stdin).get("runs", []):
+    print(str(item.get("run_id")) + "  " + str(item.get("status")) + "  " + str(item.get("provider_used") or "-") + "  " + str(item.get("thread_id") or "-"))
+'
+    ;;
+  approvals)
+    require_daemon
+    api_get "/approvals" | python3 -c '
+import json, sys
+for item in json.load(sys.stdin).get("approvals", []):
+    print(str(item.get("approval_id")) + "  " + str(item.get("status")) + "  " + str(item.get("run_id")) + "  " + str(item.get("reason")))
+'
+    ;;
+  approve)
+    require_daemon
+    [[ -n "${POSITIONAL[1]:-}" ]] || { usage >&2; exit 1; }
+    api_post "/approvals/${POSITIONAL[1]}/approve" '{}' | python3 -m json.tool
+    ;;
+  reject)
+    require_daemon
+    [[ -n "${POSITIONAL[1]:-}" ]] || { usage >&2; exit 1; }
+    api_post "/approvals/${POSITIONAL[1]}/reject" '{}' | python3 -m json.tool
+    ;;
+  new)
+    require_daemon
+    local_title="${POSITIONAL[1]:-${FLAG_NAME:-}}"
+    resp="$(create_thread "$local_title")"
+    thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
+    set_current_thread "$thread_id"
+    chat_loop "" "$FLAG_MODEL" "$local_title" "$thread_id"
+    ;;
+  *)
+    # Remaining positional args are the initial message text
+    text="${POSITIONAL[*]:-}"
+
+    # -p / --print: non-interactive, print and exit
+    if [[ $FLAG_PRINT -eq 1 ]]; then
+      [[ -n "$text" ]] || { echo "solar -p requires a message" >&2; exit 1; }
+      require_daemon
+      thread_id="$(get_current_thread)"
+      if [[ -z "$thread_id" ]]; then
+        resp="$(create_thread "$text")"
+        thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
+        set_current_thread "$thread_id"
+      fi
+      print_message "$thread_id" "$text" "$FLAG_MODEL"
+
+    # -r / --resume: resume specific thread then enter chat
+    elif [[ -n "$FLAG_RESUME" ]]; then
+      chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" "$FLAG_RESUME"
+
+    # -c / --continue: resume most recent thread (ignore current_thread file — pick from server)
+    elif [[ $FLAG_CONTINUE -eq 1 ]]; then
+      require_daemon
+      latest="$(api_get "/threads" | python3 -c '
+import json, sys
+threads = json.load(sys.stdin).get("threads", [])
+if threads:
+    print(threads[0]["thread_id"])
+')"
+      if [[ -z "$latest" ]]; then
+        echo "No existing threads. Starting a new one." >&2
+        chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" ""
+      else
+        chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" "$latest"
+      fi
+
+    # default: always create a new thread. Use -c to resume the last one.
+    else
+      require_daemon
+      local_title="${FLAG_NAME:-${text:-Solar Chat}}"
+      resp="$(create_thread "$local_title")"
+      thread_id="$(printf '%s' "$resp" | python3 -c 'import json, sys; print(json.load(sys.stdin)["thread"]["thread_id"])')"
+      set_current_thread "$thread_id"
+      chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" "$thread_id"
+    fi
+    ;;
+esac

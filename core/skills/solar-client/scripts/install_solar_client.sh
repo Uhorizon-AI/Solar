@@ -16,7 +16,7 @@ Options:
   --help                Show help
 
 After install:
-  export PATH="$INSTALL_DIR/core/skills/solar-interface/scripts:$PATH"
+  export PATH="$INSTALL_DIR/core/skills/solar-client/scripts:$PATH"
   cd ~/your-workspace && solar client init && solar client sync
 EOF
 }
@@ -39,7 +39,7 @@ done
 INSTALL_DIR="$(cd "$(dirname "$INSTALL_DIR")" && pwd)/$(basename "$INSTALL_DIR")"
 WRAPPER_DIR="${SOLAR_BIN_DIR:-$HOME/.local/bin}"
 SOLAR_BIN="$WRAPPER_DIR/solar"
-SOLAR_CLI="$INSTALL_DIR/core/skills/solar-interface/scripts/solar"
+SOLAR_CLI="$INSTALL_DIR/core/skills/solar-client/scripts/solar"
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
   echo "INFO: existing install at $INSTALL_DIR — updating"

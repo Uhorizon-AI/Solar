@@ -28,11 +28,11 @@ OnChunkFn = Callable[[str], None]
 
 
 def host_base_url() -> str:
-    base = os.environ.get("SOLAR_HOST_BASE_URL", "").strip().rstrip("/")
+    base = os.environ.get("SOLAR_APP_BASE_URL", "").strip().rstrip("/")
     if base:
         return base
-    host = os.environ.get("SOLAR_HOST_HOST", "127.0.0.1")
-    port = os.environ.get("SOLAR_HOST_PORT", "9000")
+    host = os.environ.get("SOLAR_APP_HOST", "127.0.0.1")
+    port = os.environ.get("SOLAR_APP_PORT", "9000")
     return f"http://{host}:{port}"
 
 
@@ -84,10 +84,10 @@ def check_voice_deps(*, require_whisper: bool = False) -> Tuple[bool, str]:
             import voice_config as vcfg  # noqa: PLC0415
 
             if not vcfg.whisper_argv(Path("/dev/null")):
-                missing.append("whisper (solar voice doctor)")
+                missing.append("whisper (solar app voice doctor)")
         except ImportError:
             if not shutil.which("whisper"):
-                missing.append("whisper CLI (solar voice doctor)")
+                missing.append("whisper CLI (solar app voice doctor)")
     if missing:
         return False, "; ".join(missing)
     return True, ""
@@ -99,7 +99,7 @@ def voice_deps_hint() -> str:
         "  brew install sox",
         "Optional local transcription:",
         "  pip install openai-whisper  # or your whisper CLI",
-        "Run: solar voice doctor",
+        "Run: solar app voice doctor",
     ]
     return "\n".join(lines)
 
@@ -250,7 +250,7 @@ def transcribe(audio: Path, *, language: str = "es", _retry: bool = False) -> st
             err = (proc.stderr or proc.stdout or "").strip()
             if err:
                 return (
-                    "[voice] Transcripción falló. Ejecuta: solar voice doctor. "
+                    "[voice] Transcripción falló. Ejecuta: solar app voice doctor. "
                     f"Detalle: {err[:220]}"
                 )
             return f"[voice] Transcription failed (exit {proc.returncode})"
@@ -271,7 +271,7 @@ def transcribe(audio: Path, *, language: str = "es", _retry: bool = False) -> st
         txt_files = sorted(audio.parent.glob(f"{audio.stem}*.txt"))
         if txt_files:
             return txt_files[-1].read_text(encoding="utf-8").strip()
-    return f"[voice] No whisper — run: solar voice doctor. Audio: {audio}"
+    return f"[voice] No whisper — run: solar app voice doctor. Audio: {audio}"
 
 
 def capture_utterance(

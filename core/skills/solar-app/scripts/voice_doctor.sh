@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# solar voice doctor — dependency health + auto-fix (like solar client doctor).
+# solar app voice doctor — dependency health + auto-fix (like solar client doctor).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     -h|--help)
       cat <<'EOF'
-Usage: solar voice doctor [--no-fix] [--strict]
+Usage: solar app voice doctor [--no-fix] [--strict]
 
 Checks voice dependencies. Python packages install via uv into
 ~/Library/Application Support/Solar/voice-uv/.venv (never system pip).
@@ -211,7 +211,7 @@ PY
     fi
   fi
   if [[ "$WHISPER_OK" != true ]]; then
-    warn "solo whisper Homebrew — ejecuta: solar voice doctor (con --fix)"
+    warn "solo whisper Homebrew — ejecuta: solar app voice doctor (con --fix)"
   fi
 else
   warn "whisper not configured for Solar.app"
@@ -277,7 +277,7 @@ if have_uv; then
 fi
 echo ""
 echo "Usage:"
-echo "  solar voice paste              # Enter = stop recording"
+echo "  solar app voice paste              # Enter = stop recording"
 echo "  bash …/run_host_tray.sh        # dev tray (voice-uv venv)"
 echo "  Solar.app → Voice → Push to talk (paste) → Detener grabación  # only validated path"
 echo "  copy / Ask Solar / hotkey        # known bugs"

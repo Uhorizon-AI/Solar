@@ -117,11 +117,7 @@ if has_feature "transport-gateway"; then
 fi
 
 if has_feature "interface"; then
-  echo "▶ Running feature: interface"
-  if ! bash "$(solar_system_skill_script solar-interface ensure_interface.sh)"; then
-    echo "❌ interface feature failed." >&2
-    failures=$((failures + 1))
-  fi
+  echo "⚠️  Feature token 'interface' is deprecated — use 'host' (Solar App on :9000)."
 fi
 
 if has_feature "host"; then

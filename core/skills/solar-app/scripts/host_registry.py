@@ -52,7 +52,12 @@ def stable_hash(workspace: str) -> int:
 
 def port_offsets(workspace: str) -> tuple[int, int]:
     h = stable_hash(workspace)
-    return 7741 + h % 500, 8787 + h % 500
+    return 9000 + h % 500, 8787 + h % 500
+
+
+def legacy_daemon_port(workspace: str) -> int:
+    """Port used by removed :7741-era daemons (hash-derived, for cleanup only)."""
+    return 7741 + stable_hash(workspace) % 500
 
 
 def _default_registry(seed: str | None = None) -> dict[str, Any]:
@@ -197,24 +202,41 @@ def remove_workspace(path: str, reg: dict[str, Any] | None = None) -> dict[str, 
     return data
 
 
-def _interface_port_from_env(workspace: str) -> int | None:
+def _parse_workspace_env_file(workspace: str) -> dict[str, str]:
     env_file = Path(workspace) / ".env"
+    out: dict[str, str] = {}
     if not env_file.is_file():
-        return None
+        return out
     for line in env_file.read_text(encoding="utf-8").splitlines():
-        if line.startswith("SOLAR_INTERFACE_PORT="):
-            try:
-                return int(line.split("=", 1)[1].strip())
-            except ValueError:
-                return None
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key:
+            out[key] = val
+    return out
+
+
+def _app_port_from_env(workspace: str) -> int | None:
+    env = _parse_workspace_env_file(workspace)
+    for key in ("SOLAR_APP_PORT", "SOLAR_HOST_PORT", "SOLAR_INTERFACE_PORT"):
+        raw = env.get(key)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except ValueError:
+            return None
     return None
 
 
 def solar_cli_for(workspace: str) -> str:
     ws = Path(workspace)
     candidates = [
-        ws / "core/skills/solar-interface/scripts/solar",
-        Path(os.environ.get("SOLAR_ROOT", "")) / "core/skills/solar-interface/scripts/solar",
+        ws / "core/skills/solar-client/scripts/solar",
+        Path(os.environ.get("SOLAR_ROOT", "")) / "core/skills/solar-client/scripts/solar",
     ]
     for c in candidates:
         if c.is_file():
@@ -394,8 +416,18 @@ def record_metric(event: str, detail: dict[str, Any] | None = None) -> None:
 
 
 def _host_base_url() -> str:
-    host = os.environ.get("SOLAR_HOST_HOST", "127.0.0.1")
-    port = os.environ.get("SOLAR_HOST_PORT", "9000")
+    host = (
+        os.environ.get("SOLAR_APP_HOST")
+        or os.environ.get("SOLAR_HOST_HOST")
+        or os.environ.get("SOLAR_INTERFACE_HOST")
+        or "127.0.0.1"
+    )
+    port = (
+        os.environ.get("SOLAR_APP_PORT")
+        or os.environ.get("SOLAR_HOST_PORT")
+        or os.environ.get("SOLAR_INTERFACE_PORT")
+        or "9000"
+    )
     return f"http://{host}:{port}"
 
 
@@ -485,9 +517,9 @@ def _cli() -> int:
             print("Usage: host_registry.py ports <workspace>", file=sys.stderr)
             return 2
         ws = _normalize_path(sys.argv[2])
-        iface = _interface_port_from_env(ws) or port_offsets(ws)[0]
+        host = _app_port_from_env(ws) or port_offsets(ws)[0]
         gw = port_offsets(ws)[1]
-        print(iface, gw)
+        print(host, gw)
         return 0
     print(f"Unknown command: {cmd}", file=sys.stderr)
     return 2

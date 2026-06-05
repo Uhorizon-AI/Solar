@@ -38,7 +38,7 @@ else
 fi
 
 INSTALL_ROOT="$ROOT"
-SOLAR="$INSTALL_ROOT/core/skills/solar-interface/scripts/solar"
+SOLAR="$INSTALL_ROOT/core/skills/solar-client/scripts/solar"
 RESOLVE="$INSTALL_ROOT/core/skills/solar-client/scripts/resolve_solar_paths.sh"
 
 PASS=0
@@ -228,7 +228,7 @@ mkdir -p "$PRUNE_INSTALL" "$PRUNE_WS/sun" "$PRUNE_WS/.solar"
 cp -R "$INSTALL_ROOT/core" "$PRUNE_INSTALL/core"
 echo '{"layout":"solar-client-v1.1","core_source":"global"}' > "$PRUNE_WS/.solar/manifest.json"
 mkdir -p "$PRUNE_INSTALL/.cursor/skills/smoke-dummy"
-PRUNE_SOLAR="$PRUNE_INSTALL/core/skills/solar-interface/scripts/solar"
+PRUNE_SOLAR="$PRUNE_INSTALL/core/skills/solar-client/scripts/solar"
 pushd "$PRUNE_WS" >/dev/null
 if bash "$PRUNE_SOLAR" client upgrade >/dev/null 2>&1; then
   if [[ ! -d "$PRUNE_INSTALL/.cursor" ]]; then
@@ -269,7 +269,7 @@ cp -R "$INSTALL_ROOT/core/commands" "$BUNDLE_INSTALL/core/" 2>/dev/null || mkdir
 cp -R "$INSTALL_ROOT/core/templates" "$BUNDLE_INSTALL/core/" 2>/dev/null || mkdir -p "$BUNDLE_INSTALL/core/templates"
 echo '{"layout":"solar-client-v1.1","core_source":"global"}' > "$BUNDLE_WS/.solar/manifest.json"
 echo "before-bundle" > "$BUNDLE_INSTALL/core/.marker"
-BUNDLE_SOLAR="$BUNDLE_INSTALL/core/skills/solar-interface/scripts/solar"
+BUNDLE_SOLAR="$BUNDLE_INSTALL/core/skills/solar-client/scripts/solar"
 pushd "$BUNDLE_WS" >/dev/null
 if bash "$BUNDLE_SOLAR" client update --bundle --yes >/dev/null 2>&1; then
   pass "update --bundle on install without .git"

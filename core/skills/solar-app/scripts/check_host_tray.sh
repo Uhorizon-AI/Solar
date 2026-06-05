@@ -14,7 +14,7 @@ SOLAR_APP="$SCRIPT_DIR/host_platform/macos/dist/Solar.app"
 source "$SCRIPT_DIR/voice_uv_lib.sh"
 export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:$PYTHONPATH}"
 if ! command -v uv >/dev/null 2>&1; then
-  echo "FAIL: uv required — brew install uv && solar voice doctor" >&2
+  echo "FAIL: uv required — brew install uv && solar app voice doctor" >&2
   exit 1
 fi
 PY="$(voice_uv_python 2>/dev/null || voice_uv_ensure)"

@@ -2,7 +2,7 @@
 name: solar-gateway
 description: >
   HTTP webhook and WebSocket entry point for external integrations (n8n, Telegram).
-  Delegates to solar-router. Not the interactive daemon (solar-interface) or Solar Host UI.
+  Delegates to solar-router. Not Solar App UI (`solar-app` on :9000).
 ---
 
 # Solar Gateway

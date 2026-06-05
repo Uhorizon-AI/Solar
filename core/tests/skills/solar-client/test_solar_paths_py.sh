@@ -15,12 +15,11 @@ echo '{"layout":"solar-client-v1.1"}' > "$WS_B/.solar/manifest.json"
 export SOLAR_WORKSPACE="$(cd "$WS_A" && pwd -P)"
 
 SOLAR_PATHS_PY="$ROOT/core/skills/solar-client/scripts/solar_paths.py"
-SHIM_PY="$ROOT/core/skills/solar-interface/scripts/solar_paths.py"
 
-shim_out="$(cd "$WS_A" && python3 "$SHIM_PY" 2>/dev/null || true)"
-if ! echo "$shim_out" | grep -q "^SOLAR_WORKSPACE=" || ! echo "$shim_out" | grep -q "^SOLAR_ROOT="; then
-  echo "FAIL: interface shim solar_paths.py __main__ must print SOLAR_WORKSPACE and SOLAR_ROOT" >&2
-  echo "got: $shim_out" >&2
+canon_out="$(cd "$WS_A" && python3 "$SOLAR_PATHS_PY" 2>/dev/null || true)"
+if ! echo "$canon_out" | grep -q "^SOLAR_WORKSPACE=" || ! echo "$canon_out" | grep -q "^SOLAR_ROOT="; then
+  echo "FAIL: solar_paths.py __main__ must print SOLAR_WORKSPACE and SOLAR_ROOT" >&2
+  echo "got: $canon_out" >&2
   exit 1
 fi
 

@@ -14,7 +14,7 @@ source "$SCRIPT_DIR/voice_uv_lib.sh"
 export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:$PYTHONPATH}"
 
 if ! command -v uv >/dev/null 2>&1; then
-  echo "ERROR: uv required — brew install uv && solar voice doctor" >&2
+  echo "ERROR: uv required — brew install uv && solar app voice doctor" >&2
   exit 1
 fi
 

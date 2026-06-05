@@ -40,8 +40,8 @@ trap 'rm -rf "$TMP"' EXIT
 
 INSTALL="$TMP/install"
 WS="$TMP/workspace"
-mkdir -p "$INSTALL/core/skills/solar-interface/scripts" "$WS/sun" "$WS/.solar"
-cp -R "$CORE_ROOT/skills/solar-interface" "$INSTALL/core/skills/"
+mkdir -p "$INSTALL/core/skills/solar-app/scripts" "$WS/sun" "$WS/.solar"
+cp -R "$CORE_ROOT/skills/solar-app" "$INSTALL/core/skills/"
 cp -R "$CORE_ROOT/scripts" "$INSTALL/core/scripts"
 
 solar_client_write_manifest_v11 "$WS" "$INSTALL"
@@ -61,7 +61,7 @@ else
   assert_ok "portable_capabilities empty list" false
 fi
 
-solar_client_write_manifest_portable "$WS" "abc123" "solar-interface,solar-router"
+solar_client_write_manifest_portable "$WS" "abc123" "solar-app,solar-router"
 assert_eq "portable core_source" "$(solar_client_manifest_core_source "$WS/.solar/manifest.json")" "workspace-snapshot"
 assert_eq "portable requires_global false" "$(solar_client_manifest_field "$WS/.solar/manifest.json" requires_global_client)" "false"
 

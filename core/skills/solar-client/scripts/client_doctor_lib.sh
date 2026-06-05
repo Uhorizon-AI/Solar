@@ -14,20 +14,17 @@ _solar_client_process_args() {
   ps -p "$pid" -ww -o args= 2>/dev/null || ps -p "$pid" -o command= 2>/dev/null || true
 }
 
-_solar_client_is_interface_port() {
+_solar_client_is_host_port() {
   local port="$1"
   local pid="$2"
-  local lib_dir="${SOLAR_CLIENT_SCRIPT_DIR:-}"
-  if [[ -f "${lib_dir}/interface_lib.sh" ]]; then
-    # shellcheck source=interface_lib.sh
-    source "${lib_dir}/interface_lib.sh"
-    if is_interface_server_pid "$pid"; then
-      return 0
-    fi
-    if command -v curl >/dev/null 2>&1; then
-      curl -fsS --max-time 2 "http://${SOLAR_INTERFACE_HOST:-127.0.0.1}:${port}/ready" >/dev/null 2>&1
-      return $?
-    fi
+  local args
+  args="$(_solar_client_process_args "$pid")"
+  if [[ "$args" == *"host_server.py"* ]]; then
+    return 0
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 2 "http://${SOLAR_APP_HOST:-127.0.0.1}:${port}/health" >/dev/null 2>&1
+    return $?
   fi
   return 1
 }
@@ -86,14 +83,14 @@ solar_client_check_ports() {
   SOLAR_CLIENT_PORTS_MSG=""
   local issues=()
   local var port pid
-  for var in SOLAR_INTERFACE_PORT SOLAR_HTTP_PORT; do
+  for var in SOLAR_APP_PORT SOLAR_HTTP_PORT; do
     port="${!var:-}"
     [[ -n "$port" ]] || continue
     pid="$(_solar_client_port_listener_pid "$port" || true)"
     [[ -n "$pid" ]] || continue
     case "$var" in
-      SOLAR_INTERFACE_PORT)
-        if ! _solar_client_is_interface_port "$port" "$pid"; then
+      SOLAR_APP_PORT)
+        if ! _solar_client_is_host_port "$port" "$pid"; then
           issues+=("$var=$port foreign pid $pid")
         fi
         ;;

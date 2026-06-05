@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# host_lib.sh — Solar Host paths and interface API base URL.
+# host_lib.sh — Solar Host paths and API base URL.
 set -euo pipefail
 
 _HOST_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _CLIENT_SCRIPTS="$(cd "$_HOST_LIB_DIR/../../solar-client/scripts" && pwd)"
 # shellcheck source=../../solar-client/scripts/resolve_solar_paths.sh
 source "$_CLIENT_SCRIPTS/resolve_solar_paths.sh"
+# shellcheck source=host_env_compat.sh
+source "$_HOST_LIB_DIR/host_env_compat.sh"
 
 solar_host_workspace_ports() {
   local ws="$1"
@@ -29,17 +31,19 @@ solar_host_load_env() {
     source "$SOLAR_WORKSPACE/.env"
     set +a
   fi
-  if [[ -z "${SOLAR_INTERFACE_PORT:-}" || "${SOLAR_INTERFACE_PORT:-}" == "7741" ]]; then
-    read -r _iface _gw < <(solar_host_workspace_ports "$SOLAR_WORKSPACE")
-    export SOLAR_INTERFACE_PORT="${_iface:-7741}"
-    export SOLAR_HTTP_PORT="${SOLAR_HTTP_PORT:-${_gw:-8787}}"
+  solar_app_apply_legacy_env
+  if [[ -z "${SOLAR_APP_PORT:-}" || -z "${SOLAR_HTTP_PORT:-}" ]]; then
+    read -r _host_port _gw < <(solar_host_workspace_ports "$SOLAR_WORKSPACE")
+    if [[ -z "${SOLAR_APP_PORT:-}" ]]; then
+      export SOLAR_APP_PORT="${_host_port:-9000}"
+    fi
+    if [[ -z "${SOLAR_HTTP_PORT:-}" ]]; then
+      export SOLAR_HTTP_PORT="${_gw:-8787}"
+    fi
   fi
-  export SOLAR_HOST_HOST="${SOLAR_HOST_HOST:-127.0.0.1}"
-  export SOLAR_HOST_PORT="${SOLAR_HOST_PORT:-9000}"
-  export SOLAR_INTERFACE_HOST="${SOLAR_INTERFACE_HOST:-127.0.0.1}"
-  export SOLAR_INTERFACE_PORT="${SOLAR_INTERFACE_PORT:-7741}"
-  export SOLAR_HOST_BASE_URL="http://${SOLAR_HOST_HOST}:${SOLAR_HOST_PORT}"
-  export SOLAR_INTERFACE_BASE_URL="http://${SOLAR_INTERFACE_HOST}:${SOLAR_INTERFACE_PORT}"
+  export SOLAR_APP_HOST="${SOLAR_APP_HOST:-127.0.0.1}"
+  export SOLAR_APP_PORT="${SOLAR_APP_PORT:-9000}"
+  export SOLAR_APP_BASE_URL="http://${SOLAR_APP_HOST}:${SOLAR_APP_PORT}"
   export SOLAR_HOST_RUNTIME_DIR="${SOLAR_HOST_RUNTIME_DIR:-sun/runtime/host}"
   export SOLAR_HOST_PID_FILE="$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR/host.pid"
 }
@@ -50,13 +54,13 @@ solar_host_runtime_dir() {
   printf '%s\n' "$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR"
 }
 
-# PIDs listening on SOLAR_HOST_HOST:SOLAR_HOST_PORT (orphan recovery when host.pid is missing).
+# PIDs listening on SOLAR_APP_HOST:SOLAR_APP_PORT (orphan recovery when host.pid is missing).
 solar_host_port_listener_pids() {
   solar_host_load_env
   if ! command -v lsof >/dev/null 2>&1; then
     return 0
   fi
-  lsof -nP -iTCP:"$SOLAR_HOST_PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u || true
+  lsof -nP -iTCP:"$SOLAR_APP_PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u || true
 }
 
 solar_host_pid_looks_like_server() {
@@ -80,7 +84,7 @@ solar_host_stop_pid() {
   kill -9 "$pid" 2>/dev/null || true
 }
 
-# Stop listeners on :9000 that look like host_server.py (no pid file).
+# Stop listeners that look like host_server.py (no pid file).
 solar_host_stop_orphan_listeners() {
   solar_host_load_env
   local stopped=0
@@ -88,7 +92,7 @@ solar_host_stop_orphan_listeners() {
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
     if solar_host_pid_looks_like_server "$pid"; then
-      echo "WARN: stopping orphan Solar Host listener (pid $pid on :$SOLAR_HOST_PORT)" >&2
+      echo "WARN: stopping orphan Solar Host listener (pid $pid on :$SOLAR_APP_PORT)" >&2
       solar_host_stop_pid "$pid"
       stopped=1
     fi

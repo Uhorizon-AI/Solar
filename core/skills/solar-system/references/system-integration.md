@@ -14,10 +14,9 @@ Supported `SOLAR_SYSTEM_FEATURES` tokens (orchestrator tick only):
 
 - `async-tasks` -> `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh`
 - `transport-gateway` -> `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
-- `host` -> `ensure_host.sh` (Host UI `:9000`; workspace API in-process on same port; optional menu bar tray when `SOLAR_HOST_TRAY=1`)
-- `interface` -> `ensure_interface.sh` (optional dev daemon `:7741`; not started by `host` feature)
+- `host` -> `ensure_host.sh` (Solar App UI `:9000`; workspace API in-process on same port; optional menu bar tray when `SOLAR_HOST_TRAY=1`)
 
-Host-1 macOS: `host_platform/macos` subscribes to `/api/events` for `approval.pending` and `run.failed`. The `host` feature does **not** start `:7741`.
+Host-1 macOS: `host_platform/macos` subscribes to `/api/events` for `approval.pending` and `run.failed`.
 
 ## Why check-first recovery
 

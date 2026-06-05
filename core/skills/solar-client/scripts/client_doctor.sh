@@ -173,9 +173,9 @@ _port_check_verbose() {
   [[ -n "$pid" ]] || return 0
 
   case "$var" in
-    SOLAR_INTERFACE_PORT)
-      if _solar_client_is_interface_port "$port" "$pid"; then
-        ok "$var=$port in use by solar-interface (pid $pid)"
+    SOLAR_APP_PORT)
+      if _solar_client_is_host_port "$port" "$pid"; then
+        ok "$var=$port in use by Solar App (pid $pid)"
         return 0
       fi
       ;;
@@ -190,7 +190,7 @@ _port_check_verbose() {
   warn "$var=$port is in use by a non-Solar process (pid $pid); override in .env if another workspace"
 }
 
-_port_check_verbose SOLAR_INTERFACE_PORT
+_port_check_verbose SOLAR_APP_PORT
 _port_check_verbose SOLAR_HTTP_PORT
 
 echo "Summary: $err_count error(s), $warn_count warning(s)"

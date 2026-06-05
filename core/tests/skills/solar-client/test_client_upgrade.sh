@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 UPGRADE="$CORE_ROOT/skills/solar-client/scripts/client_upgrade.sh"
-SOLAR="$CORE_ROOT/skills/solar-interface/scripts/solar"
+SOLAR="$CORE_ROOT/skills/solar-client/scripts/solar"
 PASS=0
 FAIL=0
 
@@ -40,7 +40,7 @@ INSTALL="$TMP/install"
 WS="$TMP/workspace"
 mkdir -p "$INSTALL" "$WS/sun" "$WS/.solar"
 cp -R "$CORE_ROOT" "$INSTALL/core"
-INSTALL_SOLAR="$INSTALL/core/skills/solar-interface/scripts/solar"
+INSTALL_SOLAR="$INSTALL/core/skills/solar-client/scripts/solar"
 echo '{"layout":"solar-client-v1.1","core_source":"global"}' > "$WS/.solar/manifest.json"
 mkdir -p "$INSTALL/.cursor/skills/dummy-skill"
 
@@ -71,7 +71,7 @@ pushd "$WS" >/dev/null
 bash "$INSTALL_SOLAR" client upgrade >/dev/null 2>&1
 popd >/dev/null
 assert_ok "upgrade prunes .cursor" test ! -d "$INSTALL/.cursor"
-assert_ok "upgrade keeps core/" test -f "$INSTALL/core/skills/solar-interface/scripts/solar"
+assert_ok "upgrade keeps core/" test -f "$INSTALL/core/skills/solar-client/scripts/solar"
 
 LEGACY="$TMP/legacy-mono"
 mkdir -p "$LEGACY/sun" "$LEGACY/planets/demo" "$LEGACY/core/skills" "$LEGACY/.github" "$LEGACY/docs"

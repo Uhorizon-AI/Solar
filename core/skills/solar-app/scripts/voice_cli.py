@@ -81,7 +81,7 @@ def cmd_read(mode: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="solar voice",
+        prog="solar app voice",
         description="Dictado y comandos de voz contra Solar Host.",
         epilog=(
             "Producto Wispr: Solar.app (barra de menú). doctor: deps + voice.json. "
@@ -103,7 +103,7 @@ def main() -> int:
         import subprocess
 
         if args.cmd == "check":
-            print("NOTE: solar voice check → use: solar voice doctor", file=sys.stderr)
+            print("NOTE: solar app voice check → use: solar app voice doctor", file=sys.stderr)
         script = _SCRIPT_DIR / "voice_doctor.sh"
         return subprocess.call(["bash", str(script), *rest])
 

@@ -21,5 +21,5 @@ fi
 if [[ "$stopped" -eq 1 ]]; then
   echo "OK: Solar Host stopped"
 else
-  echo "Solar Host not running (no pid file, no listener on :${SOLAR_HOST_PORT})"
+  echo "Solar Host not running (no pid file, no listener on :${SOLAR_APP_PORT})"
 fi

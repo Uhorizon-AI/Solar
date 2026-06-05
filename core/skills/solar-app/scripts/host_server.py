@@ -19,10 +19,6 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-_INTERFACE_SCRIPTS = _SCRIPT_DIR.parent.parent / "solar-interface" / "scripts"
-if str(_INTERFACE_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_INTERFACE_SCRIPTS))
-
 import host_client_actions as client_actions  # noqa: E402
 import host_events  # noqa: E402
 import host_health_monitor as health_monitor  # noqa: E402
@@ -31,8 +27,8 @@ import host_registry as reg  # noqa: E402
 import host_workspace_context as ctx  # noqa: E402
 from interface_http import HttpAdapter, InterfaceHttpDispatcher, is_interface_path  # noqa: E402
 
-HOST = os.environ.get("SOLAR_HOST_HOST", "127.0.0.1")
-PORT = int(os.environ.get("SOLAR_HOST_PORT", "9000"))
+HOST = os.environ.get("SOLAR_APP_HOST", "127.0.0.1")
+PORT = int(os.environ.get("SOLAR_APP_PORT", "9000"))
 _APPROVAL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$")
 _CORE_DIR = _SCRIPT_DIR.parent.parent.parent
 
@@ -262,7 +258,11 @@ def dashboard_html() -> str:
     .badge {{ background: #e8b84a; color: #0f1419; padding: 2px 8px; border-radius: 999px; font-size: 12px; }}
     table {{ width: 100%; border-collapse: collapse; }}
     td, th {{ padding: 8px; border-bottom: 1px solid #2a3542; text-align: left; }}
-    #chatOut {{ min-height: 120px; }}
+    #govPath {{ width:100%;padding:8px;margin-bottom:8px;box-sizing:border-box }}
+    #govSelect {{ width:100%;padding:8px;margin-bottom:8px }}
+    #govMatches {{ margin:0 0 8px;padding:0;list-style:none;max-height:140px;overflow:auto;border:1px solid #2a3542;border-radius:8px }}
+    #govMatches li {{ padding:6px 10px;cursor:pointer }}
+    #govMatches li:hover,#govMatches li.active {{ background:#1a222c }}
   </style>
 </head>
 <body>
@@ -316,9 +316,11 @@ def dashboard_html() -> str:
   </section>
   <section>
     <h2>Governance editor</h2>
-    <p class="muted">Pick a file under sun/ or planets/ (.md / .json), or type a path manually.</p>
-    <select id="govSelect" style="width:100%;padding:8px;margin-bottom:8px"><option value="">Loading paths…</option></select>
-    <input id="govPath" value="sun/MEMORY.md" placeholder="sun/MEMORY.md" style="width:100%;padding:8px;margin-bottom:8px"/>
+    <p class="muted">Type to filter paths under sun/ or planets/ (.md / .json); pick from matches or the full list.</p>
+    <input id="govPath" list="govPathList" value="sun/MEMORY.md" placeholder="sun/MEMORY.md" autocomplete="off"/>
+    <datalist id="govPathList"></datalist>
+    <ul id="govMatches" class="muted" hidden></ul>
+    <select id="govSelect" size="6" style="display:none"><option value="">Loading paths…</option></select>
     <button type="button" id="btnGovLoad">Load</button>
     <button type="button" id="btnGovSave">Save</button>
     <span id="govStatus" class="muted"></span>
@@ -397,36 +399,73 @@ def dashboard_html() -> str:
       el.textContent = msg || "";
       el.className = isErr ? "err" : "muted";
     }}
+    let govPaths = [];
+    function renderGovMatches(filter) {{
+      const ul = document.getElementById("govMatches");
+      const q = (filter || "").trim().toLowerCase();
+      const hits = q
+        ? govPaths.filter((p) => p.toLowerCase().includes(q)).slice(0, 12)
+        : govPaths.slice(0, 12);
+      ul.innerHTML = "";
+      if (!hits.length) {{
+        ul.hidden = true;
+        return;
+      }}
+      hits.forEach((p) => {{
+        const li = document.createElement("li");
+        li.textContent = p;
+        li.onclick = () => {{
+          document.getElementById("govPath").value = p;
+          ul.hidden = true;
+          setGovStatus("");
+        }};
+        ul.appendChild(li);
+      }});
+      ul.hidden = false;
+    }}
     function syncGovPathFromSelect() {{
       const sel = document.getElementById("govSelect");
       if (sel.value) document.getElementById("govPath").value = sel.value;
     }}
     async function loadGovTree() {{
       const sel = document.getElementById("govSelect");
+      const dl = document.getElementById("govPathList");
       try {{
         const r = await fetch("/api/governance/tree");
         const data = await r.json();
-        const paths = data.paths || [];
+        govPaths = data.paths || [];
         sel.innerHTML = "";
-        if (!paths.length) {{
+        dl.innerHTML = "";
+        if (!govPaths.length) {{
           sel.innerHTML = "<option value=''>— no files listed —</option>";
           return;
         }}
-        paths.forEach((p) => {{
+        govPaths.forEach((p) => {{
           const o = document.createElement("option");
           o.value = p; o.textContent = p;
           sel.appendChild(o);
+          const d = document.createElement("option");
+          d.value = p;
+          dl.appendChild(d);
         }});
         const cur = document.getElementById("govPath").value;
-        if (paths.includes(cur)) sel.value = cur;
-        else if (paths.includes("sun/MEMORY.md")) {{
+        if (govPaths.includes(cur)) sel.value = cur;
+        else if (govPaths.includes("sun/MEMORY.md")) {{
           sel.value = "sun/MEMORY.md";
           document.getElementById("govPath").value = "sun/MEMORY.md";
         }}
+        renderGovMatches(document.getElementById("govPath").value);
       }} catch (e) {{
         sel.innerHTML = "<option value=''>— tree unavailable —</option>";
       }}
     }}
+    document.getElementById("govPath").addEventListener("input", (e) => {{
+      renderGovMatches(e.target.value);
+      setGovStatus("");
+    }});
+    document.getElementById("govPath").addEventListener("focus", (e) => {{
+      renderGovMatches(e.target.value);
+    }});
     document.getElementById("govSelect").onchange = () => {{
       syncGovPathFromSelect();
       setGovStatus("");

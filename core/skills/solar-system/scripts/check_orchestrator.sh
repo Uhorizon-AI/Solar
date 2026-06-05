@@ -164,19 +164,7 @@ else
 fi
 
 if feature_active "interface"; then
-  if interface_proc_count="$(count_matching_processes "solar-interface/scripts/interface_server.py")"; then
-    if [[ "$interface_proc_count" -gt 1 ]]; then
-      echo "  interface:   MULTIPLE ($interface_proc_count daemon candidates running - expects 1)"
-      proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
-    elif [[ "$interface_proc_count" -eq 1 ]]; then
-      echo "  interface:   healthy (1 expected daemon)"
-    else
-      echo "  interface:   healthy (0 daemon detected)"
-    fi
-  else
-    echo "  interface:   UNKNOWN (pgrep failed)"
-    proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
-  fi
+  echo "  interface:   DEPRECATED (use host feature — Solar App :9000)"
 fi
 
 verdict="$(worst_severity "$verdict" "$proc_severity")"
@@ -273,25 +261,8 @@ fi
 
 if feature_active "interface"; then
   echo ""
-  echo "── Feature: interface"
-  interface_out=""
-  interface_code=0
-  set +e
-  interface_out="$(run_with_timeout bash "$(solar_system_skill_script solar-interface check_interface.sh)" 2>&1)"
-  interface_code=$?
-  set -e
-
-  case "$interface_code" in
-    0)
-      echo "  status: HEALTHY"
-      echo "  url:    ${SOLAR_INTERFACE_BASE_URL:-http://127.0.0.1:7741}"
-      ;;
-    *)
-      echo "  status: DOWN"
-      echo "  detail: $interface_out"
-      verdict="$(worst_severity "$verdict" "DOWN")"
-      ;;
-  esac
+  echo "── Feature: interface (deprecated)"
+  echo "  status: SKIPPED — solar-interface removed; use host (Solar App :9000)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -311,7 +282,7 @@ if feature_active "host"; then
   case "$host_code" in
     0)
       echo "  status: HEALTHY"
-      echo "  url:    ${SOLAR_HOST_BASE_URL:-http://127.0.0.1:9000}"
+      echo "  url:    ${SOLAR_APP_BASE_URL:-http://127.0.0.1:9000}"
       ;;
     *)
       echo "  status: DOWN"
@@ -420,24 +391,9 @@ if [[ "$verdict" != "HEALTHY" ]]; then
     fi
   fi
 
-  # interface issues
-  if feature_active "interface" && [[ "${interface_code:-0}" != "0" ]]; then
-    if echo "${interface_out:-}" | grep -qi "not_setup"; then
-      echo "  • interface not set up — initialize runtime:"
-      _suggest_script "skills/solar-interface/scripts/setup_interface.sh"
-    elif echo "${interface_out:-}" | grep -qi "not_ready"; then
-      echo "  • interface daemon is alive but not ready — restart it cleanly:"
-      _suggest_script "skills/solar-interface/scripts/restart_interface_daemon.sh"
-    elif echo "${interface_out:-}" | grep -qi "stale_pid"; then
-      echo "  • interface has a stale pid file — restart the local daemon:"
-      _suggest_script "skills/solar-interface/scripts/restart_interface_daemon.sh"
-    elif echo "${interface_out:-}" | grep -qi "start_failed"; then
-      echo "  • interface failed during startup — inspect current status and logs:"
-      _suggest_script "skills/solar-interface/scripts/status_interface.sh"
-    else
-      echo "  • interface unreachable — start the local daemon:"
-      _suggest_script "skills/solar-interface/scripts/start_interface_daemon.sh"
-    fi
+  # interface feature removed — use host (Solar App)
+  if feature_active "interface"; then
+    echo "  • interface feature deprecated — use host and: solar app start"
   fi
 
   # Generic deep troubleshooting

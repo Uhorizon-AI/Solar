@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-SOLAR="$CORE_ROOT/skills/solar-interface/scripts/solar"
+SOLAR="$CORE_ROOT/skills/solar-client/scripts/solar"
 PASS=0
 FAIL=0
 

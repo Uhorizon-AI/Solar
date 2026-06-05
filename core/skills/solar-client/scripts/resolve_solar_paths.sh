@@ -43,7 +43,7 @@ solar_runtime_core_dir() {
   }
   if [[ "${SOLAR_CORE_SOURCE:-global}" == "workspace-snapshot" ]]; then
     local bundle_core="${SOLAR_WORKSPACE:-}/.solar/bundle/core"
-    if [[ -f "$bundle_core/skills/solar-interface/scripts/solar" ]]; then
+    if [[ -f "$bundle_core/skills/solar-client/scripts/solar" ]]; then
       printf '%s' "$bundle_core"
       return 0
     fi
@@ -134,7 +134,7 @@ _resolve_is_subpath() {
 
 _resolve_validate_root() {
   local root="$1"
-  [[ -f "$root/core/skills/solar-interface/scripts/solar" ]]
+  [[ -f "$root/core/skills/solar-client/scripts/solar" ]]
 }
 
 _resolve_global_root() {
