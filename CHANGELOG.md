@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-06-06
+
 ### Added
 - feat(solar-client): canonical `solar` CLI entry — `core/skills/solar-client/scripts/solar` (dispatcher for client, workspace, app, status, paths, chat REPL).
 - feat(solar-app): `solar app voice *` — voice CLI nested under App (doctor, once, paste, ask, etc.).
