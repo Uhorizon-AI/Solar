@@ -43,12 +43,15 @@ host_state="DOWN"
 host_detail=""
 workspace_state="FAIL"
 system_state="INFO"
+system_detail=""
 router_state="INFO"
 router_detail=""
 browser_state="INFO"
 client_state="OK"
 client_detail=""
 mcp_info=""
+orch_script=""
+orch_out=""
 
 # host (Solar App :9000 in-process)
 HOST_SCRIPTS="$(solar_core_dir)/skills/solar-app/scripts"
@@ -82,28 +85,27 @@ if [[ ! -d "$SOLAR_WORKSPACE/planets" ]]; then
   workspace_detail="${workspace_detail:+$workspace_detail; }planets/ missing"
 fi
 
-# system (LaunchAgent) — capture output first: status_launchagent may exit 1
-# after printing launchctl_loaded (e.g. stderr log awk) which breaks pipefail in "cmd | grep".
-if [[ -f "$(solar_core_dir)/skills/solar-system/scripts/status_launchagent_macos.sh" ]]; then
-  system_out="$(bash "$(solar_core_dir)/skills/solar-system/scripts/status_launchagent_macos.sh" 2>/dev/null || true)"
-  if echo "$system_out" | grep -q "launchctl_loaded: true"; then
-    system_state="OK"
-  elif echo "$system_out" | grep -q "launchctl_loaded: false"; then
-    system_state="WARN"
-  else
-    system_state="WARN"
-  fi
-elif [[ -f "$(solar_core_dir)/skills/solar-system/scripts/check_orchestrator.sh" ]]; then
-  orch_out="$(bash "$(solar_core_dir)/skills/solar-system/scripts/check_orchestrator.sh" 2>/dev/null || true)"
+# system — mirror check_orchestrator.sh final verdict (not launchctl-loaded alone).
+# HEALTHY→OK, PARTIAL→WARN, DOWN→FAIL. Detail points to the deep check command.
+orch_script="$(solar_core_dir)/skills/solar-system/scripts/check_orchestrator.sh"
+if [[ -f "$orch_script" ]]; then
+  orch_out="$(bash "$orch_script" 2>/dev/null || true)"
   if echo "$orch_out" | grep -q "Verdict: HEALTHY"; then
     system_state="OK"
+    system_detail=""
   elif echo "$orch_out" | grep -q "Verdict: PARTIAL"; then
     system_state="WARN"
+    system_detail="run: bash $orch_script"
+  elif echo "$orch_out" | grep -q "Verdict: DOWN"; then
+    system_state="FAIL"
+    system_detail="run: bash $orch_script"
   else
-    system_state="WARN"
+    system_state="FAIL"
+    system_detail="run: bash $orch_script"
   fi
 else
   system_state="INFO"
+  system_detail="check_orchestrator.sh missing"
 fi
 
 # router — WARN only for recent orphans (default last 24h); historical noise ignored
@@ -187,6 +189,7 @@ print(json.dumps({
   "workspace": "$workspace_state",
   "workspace_detail": "$workspace_detail",
   "system": "$system_state",
+  "system_detail": "$system_detail",
   "router": "$router_state",
   "router_detail": "$router_detail",
   "browser": "$browser_state",
@@ -201,7 +204,7 @@ echo "Solar status  SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
 block_line "host" "$host_state" "$host_detail"
 block_line "client" "$client_state" "$client_detail"
 block_line "workspace" "$workspace_state" "$workspace_detail"
-block_line "system" "$system_state"
+block_line "system" "$system_state" "$system_detail"
 block_line "router" "$router_state" "$router_detail"
 block_line "browser" "$browser_state"
 
@@ -225,6 +228,11 @@ if [[ "$VERBOSE" == true ]]; then
   else
     bash "$SCRIPT_DIR/status_interface.sh" 2>/dev/null || true
   fi
+  if [[ -n "$orch_out" ]]; then
+    echo "$orch_out"
+  elif [[ -f "$orch_script" ]]; then
+    bash "$orch_script" 2>/dev/null || true
+  fi
   if [[ -f "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" ]]; then
     bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" 2>/dev/null | head -20 || true
     [[ -n "$router_detail" ]] && echo "router stale: $router_detail"
@@ -237,12 +245,12 @@ if [[ "$VERBOSE" == true ]]; then
 fi
 
 fail=0
-for s in "$host_state" "$workspace_state"; do
-  [[ "$s" == "FAIL" ]] && fail=1
+for s in "$host_state" "$workspace_state" "$system_state"; do
+  [[ "$s" == "FAIL" || "$s" == "DOWN" ]] && fail=1
 done
 if [[ "$STRICT" == true ]]; then
   for s in "$host_state" "$workspace_state" "$client_state" "$system_state" "$router_state"; do
-    [[ "$s" == "FAIL" || "$s" == "WARN" ]] && fail=1
+    [[ "$s" == "FAIL" || "$s" == "WARN" || "$s" == "DOWN" ]] && fail=1
   done
 fi
 exit "$fail"

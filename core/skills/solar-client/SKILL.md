@@ -49,10 +49,12 @@ solar client sync [--portable]
 solar client bundle create|verify
 solar client doctor [--strict]
 solar client self-update
-solar status
+solar status               # compact health; system = check_orchestrator verdict
 solar paths
 solar app …                # delegates to solar-app
 ```
+
+`solar status` maps orchestrator `HEALTHY|PARTIAL|DOWN` → `OK|WARN|FAIL`. On WARN/FAIL, the `system` line points to `check_orchestrator.sh` for detail (no inline remediations).
 
 Validation:
 
