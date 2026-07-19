@@ -20,9 +20,86 @@ Usage:
 
 Options:
   --dry-run        Validate configured provider list and client binaries only (no API calls).
-  --verbose       On provider failure, print full error output (for diagnostics). Default: first 220 chars.
+  --verbose        On provider failure, print full router error (+ raw capture). Default: short error + cmd.
   --prompt TEXT    Prompt used for provider test calls.
 EOF
+}
+
+# Parse mixed run_router capture (stderr prompt logs + stdout JSON).
+# Prints: error line, optional cmd line with placeholders.
+_format_provider_failure() {
+  local provider="$1"
+  local capture="$2"
+  local verbose_flag="$3"
+  printf '%s' "$capture" | python3 -c '
+import json, os, re, sys
+
+provider = sys.argv[1]
+workspace = sys.argv[2].rstrip("/")
+verbose = sys.argv[3] == "true"
+text = sys.stdin.read()
+
+decoder = json.JSONDecoder()
+payload = None
+idx = 0
+while True:
+    start = text.find("{", idx)
+    if start < 0:
+        break
+    try:
+        obj, _end = decoder.raw_decode(text, start)
+    except json.JSONDecodeError:
+        idx = start + 1
+        continue
+    if isinstance(obj, dict) and "status" in obj:
+        payload = obj
+    idx = start + 1
+
+err = ""
+if isinstance(payload, dict):
+    err = str(payload.get("error") or "").strip()
+    code = str(payload.get("error_code") or "").strip()
+    if code and err:
+        err = f"[{code}] {err}"
+    elif code and not err:
+        err = f"[{code}]"
+if not err:
+    for line in reversed(text.splitlines()):
+        s = line.strip()
+        if not s or s.startswith("[") or s.startswith("{") or s.startswith("<"):
+            continue
+        if s.startswith("You are Solar") or s.startswith("## "):
+            continue
+        err = s
+        break
+if not err:
+    err = "(no error message parsed)"
+
+cmd = None
+m = re.search(
+    r"\[solar-router\]\[%s\] CMD: (.+?) <prompt>" % re.escape(provider),
+    text,
+)
+if m:
+    cmd = m.group(1).strip()
+    if workspace:
+        cmd = cmd.replace(workspace, "<SOLAR_WORKSPACE>")
+    home = os.path.expanduser("~")
+    if home and home in cmd:
+        cmd = cmd.replace(home, "~")
+    cmd = cmd + " <prompt>"
+
+shown = err if verbose else (err[:300] + ("…" if len(err) > 300 else ""))
+print(f"    error: {shown}")
+if cmd:
+    print(f"    cmd:   {cmd}")
+elif verbose:
+    print("    cmd:   (not logged; set SOLAR_ROUTER_LOG_PROMPTS=true to capture)")
+if verbose:
+    print("    (raw capture):")
+    for line in text.splitlines():
+        print(f"    {line}")
+' "$provider" "$SOLAR_WORKSPACE" "$verbose_flag"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -157,16 +234,33 @@ PY
     "$provider" "$prompt" "$provider")"
 
   if result="$(printf '%s' "$payload" | python3 "$ROUTER_SCRIPT" 2>&1)"; then
-    preview="$(echo "$result" | head -n1 | cut -c1-80)"
+    preview="$(
+      printf '%s' "$result" | python3 -c '
+import json, sys
+text = sys.stdin.read()
+dec = json.JSONDecoder()
+payload = None
+i = 0
+while True:
+    j = text.find("{", i)
+    if j < 0:
+        break
+    try:
+        obj, _ = dec.raw_decode(text, j)
+    except json.JSONDecodeError:
+        i = j + 1
+        continue
+    if isinstance(obj, dict) and obj.get("status") == "success":
+        payload = obj
+    i = j + 1
+reply = (payload or {}).get("reply_text") or ""
+print((reply[:80] + ("…" if len(reply) > 80 else "")).replace("\n", " "))
+'
+    )"
     echo "  - $provider: OK (${preview})"
   else
     echo "  - $provider: FAIL"
-    if [[ "$verbose" == "true" ]]; then
-      echo "    (full output):"
-      echo "$result" | sed 's/^/    /'
-    else
-      echo "    $(echo "$result" | tr '\n' ' ' | cut -c1-220)"
-    fi
+    _format_provider_failure "$provider" "$result" "$verbose"
     failures=$((failures + 1))
   fi
 done
