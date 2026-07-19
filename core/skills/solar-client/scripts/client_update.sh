@@ -22,7 +22,10 @@ Usage:
   solar client update [options]
 
 Updates the global Solar Client install (SOLAR_ROOT). Does not modify SOLAR_WORKSPACE
-(sun/, planets/, .env) except with --repair (manifest only).
+sun/ or planets/. New updaters atomically migrate SOLAR_ROUTER_PROVIDER_PRIORITY /
+SOLAR_AI_PROVIDER_PRIORITY in the workspace .env (gemini→agy) before apply.
+The first router run after a legacy updater performs the same one-time migration.
+--repair only touches .solar/manifest.json.
 
 Options:
   --check              Report installed vs remote/manifest; no changes
@@ -131,6 +134,18 @@ echo "  mode=$([[ "$use_git" == true ]] && echo git-repo || echo bundle-core)"
 echo "  current=$cur_ver (${cur_commit:0:12})"
 [[ -n "$TARGET_TAG" ]] && echo "  target=$TARGET_TAG"
 echo ""
+
+# Prefer migrate-before when this (running) tree already ships the migrator.
+_MIGRATE_ENV_AGY="$SCRIPT_DIR/migrate_workspace_env_agy.py"
+if [[ -f "$SOLAR_WORKSPACE/.env" && -f "$_MIGRATE_ENV_AGY" ]]; then
+  echo "Migrating workspace .env provider priority (gemini→agy) if needed…"
+  if ! _mig_out="$(python3 "$_MIGRATE_ENV_AGY" "$SOLAR_WORKSPACE/.env" 2>&1)"; then
+    echo "ERROR: workspace .env priority migration failed; aborting before framework update" >&2
+    echo "$_mig_out" >&2
+    exit 1
+  fi
+  echo "$_mig_out"
+fi
 
 DID_BACKUP=false
 if [[ "$use_git" == true ]]; then

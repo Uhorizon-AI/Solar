@@ -18,8 +18,11 @@ read_key() {
   return 1
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MIGRATE_PRIORITY_PY="$SCRIPT_DIR/migrate_provider_priority.py"
+
 # Default value for the only required variable
-provider_priority="agent,codex,claude,gemini"
+provider_priority="codex,claude,agy,agent"
 
 # Read existing value (new name first, then migrate from old name)
 if existing="$(read_key "SOLAR_ROUTER_PROVIDER_PRIORITY")"; then
@@ -27,6 +30,13 @@ if existing="$(read_key "SOLAR_ROUTER_PROVIDER_PRIORITY")"; then
 elif existing="$(read_key "SOLAR_AI_PROVIDER_PRIORITY")"; then
   provider_priority="$existing"
   echo "Migrating SOLAR_AI_PROVIDER_PRIORITY → SOLAR_ROUTER_PROVIDER_PRIORITY"
+fi
+
+# Explicit token migration: retired Gemini CLI → Antigravity (`agy`)
+_before_priority="$provider_priority"
+provider_priority="$(python3 "$MIGRATE_PRIORITY_PY" "$provider_priority" | tr -d '\n')"
+if [[ "$provider_priority" != "$_before_priority" ]]; then
+  echo "WARN: migrated SOLAR_ROUTER_PROVIDER_PRIORITY ($_before_priority → $provider_priority); gemini→agy if present"
 fi
 
 # Optional variables: only preserve if they exist (for migration)
@@ -86,11 +96,14 @@ elif existing="$(read_key "SOLAR_AI_CLAUDE_CMD")"; then
   echo "Migrating SOLAR_AI_CLAUDE_CMD → SOLAR_ROUTER_CLAUDE_CMD"
 fi
 
-if existing="$(read_key "SOLAR_ROUTER_GEMINI_CMD")"; then
-  optional_vars+=("SOLAR_ROUTER_GEMINI_CMD=${existing}")
-elif existing="$(read_key "SOLAR_AI_GEMINI_CMD")"; then
-  optional_vars+=("SOLAR_ROUTER_GEMINI_CMD=${existing}")
-  echo "Migrating SOLAR_AI_GEMINI_CMD → SOLAR_ROUTER_GEMINI_CMD"
+if existing="$(read_key "SOLAR_ROUTER_AGY_CMD")"; then
+  optional_vars+=("SOLAR_ROUTER_AGY_CMD=${existing}")
+elif existing="$(read_key "SOLAR_ROUTER_GEMINI_CMD")" || existing="$(read_key "SOLAR_AI_GEMINI_CMD")"; then
+  # Do NOT copy the value: legacy cmds like `gemini -y` would keep calling the
+  # retired binary under SOLAR_ROUTER_AGY_CMD. Require a manual agy override.
+  echo "WARN: SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD is deprecated and was NOT copied."
+  echo "      Remove the old key. Optional override: SOLAR_ROUTER_AGY_CMD=agy -p --dangerously-skip-permissions"
+  echo "      (default agy command is used when SOLAR_ROUTER_AGY_CMD is unset)"
 fi
 
 # Prepare tmp file with cleaned content (remove all old and new variants)
@@ -116,6 +129,7 @@ awk '
   $0 ~ /^SOLAR_AI_CODEX_CMD=/ { next }
   $0 ~ /^SOLAR_ROUTER_CLAUDE_CMD=/ { next }
   $0 ~ /^SOLAR_AI_CLAUDE_CMD=/ { next }
+  $0 ~ /^SOLAR_ROUTER_AGY_CMD=/ { next }
   $0 ~ /^SOLAR_ROUTER_GEMINI_CMD=/ { next }
   $0 ~ /^SOLAR_AI_GEMINI_CMD=/ { next }
   $0 ~ /^# \[solar-router\] required environment$/ { next }

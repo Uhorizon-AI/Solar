@@ -58,6 +58,16 @@ if [[ -f "$SOLAR_WORKSPACE/.env" ]]; then
   set +a
 fi
 
+# Deprecated Gemini CLI env keys → Antigravity (`agy`)
+if [[ -f "$SOLAR_WORKSPACE/.env" ]]; then
+  if grep -Eq '^[[:space:]]*(SOLAR_ROUTER_GEMINI_CMD|SOLAR_AI_GEMINI_CMD)=' "$SOLAR_WORKSPACE/.env"; then
+    warn "remove SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD. Do not rename the value in place (e.g. gemini -y is invalid under AGY). Optional: SOLAR_ROUTER_AGY_CMD=agy -p --dangerously-skip-permissions"
+    [[ "$STRICT" == true ]] && err "strict: remove SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD"
+  fi
+fi
+if echo "${SOLAR_ROUTER_PROVIDER_PRIORITY:-}${SOLAR_AI_PROVIDER_PRIORITY:-}" | grep -qiE '(^|,)[[:space:]]*gemini[[:space:]]*(,|$)'; then
+  warn "SOLAR_ROUTER_PROVIDER_PRIORITY lists unsupported gemini — use agy (run solar client update)"
+fi
 MANIFEST="$SOLAR_WORKSPACE/.solar/manifest.json"
 if [[ -f "$MANIFEST" ]]; then
   layout="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("layout",""))' "$MANIFEST" 2>/dev/null || true)"

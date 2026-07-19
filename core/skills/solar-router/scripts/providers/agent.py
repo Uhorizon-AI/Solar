@@ -11,7 +11,11 @@ class AgentProvider(BaseProvider):
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
-        return f"agent -p -f --approve-mcps -C {SOLAR_WORKSPACE}"
+        # Cursor Agent CLI: -C was removed; use --workspace. --trust avoids
+        # interactive workspace prompts in -p/headless mode.
+        return (
+            f"agent -p -f --approve-mcps --trust --workspace {SOLAR_WORKSPACE}"
+        )
 
     def stream(self, prompt: str):
         """Stream using --output-format stream-json."""

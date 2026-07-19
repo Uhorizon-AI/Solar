@@ -151,7 +151,7 @@ Flags:
   -p, --print              Non-interactive: send message, print response, exit
   -c, --continue           Continue the most recent conversation
   -r, --resume <thread>    Resume a specific thread by ID
-  -m, --model <provider>   Force provider: codex | claude | gemini (default: first in SOLAR_ROUTER_PROVIDER_PRIORITY)
+  -m, --model <provider>   Force provider: codex | claude | agy | agent (default: first in SOLAR_ROUTER_PROVIDER_PRIORITY)
   -n, --name <title>       Name this session (used when creating a new thread)
   -v, --version            Show version
   -h, --help               Show help

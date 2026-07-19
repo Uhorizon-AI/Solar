@@ -54,6 +54,10 @@ solar paths
 solar app …                # delegates to solar-app
 ```
 
+`solar client update` invokes `migrate_workspace_env_agy.py` internally when a
+workspace still lists the retired `gemini` provider; do not run the helper as a
+normal operator workflow.
+
 `solar status` maps orchestrator `HEALTHY|PARTIAL|DOWN` → `OK|WARN|FAIL`. On WARN/FAIL, the `system` line points to `check_orchestrator.sh` for detail (no inline remediations).
 
 Validation:

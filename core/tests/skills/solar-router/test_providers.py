@@ -9,9 +9,10 @@ from unittest.mock import MagicMock, patch
 from providers.base import BaseProvider, SOLAR_WORKSPACE, FALLBACK_PATHS
 from providers.claude import ClaudeProvider
 from providers.codex import CodexProvider
-from providers.gemini import GeminiProvider
+from providers.agy import AgyProvider
 from providers.agent import AgentProvider
 from providers.ollama import OllamaProvider
+from providers import PROVIDERS
 
 
 # ---------------------------------------------------------------------------
@@ -104,12 +105,23 @@ class TestBaseProviderRun(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# GeminiProvider
+# AgyProvider
 # ---------------------------------------------------------------------------
 
-class TestGeminiProvider(unittest.TestCase):
+class TestAgyProvider(unittest.TestCase):
     def setUp(self):
-        self.provider = GeminiProvider()
+        self.provider = AgyProvider()
+
+    def test_default_cmd_uses_agy(self):
+        cmd = self.provider.build_default_cmd()
+        self.assertTrue(cmd.startswith("agy -p "))
+        self.assertIn("--dangerously-skip-permissions", cmd)
+        self.assertIn(f"--add-dir {SOLAR_WORKSPACE}", cmd)
+
+    def test_name_is_agy(self):
+        self.assertEqual(self.provider.name, "agy")
+        self.assertIn("agy", PROVIDERS)
+        self.assertNotIn("gemini", PROVIDERS)
 
     def test_clean_output_strips_ansi(self):
         raw = "\x1b[32mhello\x1b[0m"
@@ -126,6 +138,12 @@ class TestGeminiProvider(unittest.TestCase):
         raw = "Enter the authorization code:"
         with self.assertRaises(RuntimeError):
             self.provider.clean_output(raw)
+
+    def test_clean_output_detects_quota(self):
+        raw = "Error: Individual quota reached. Please upgrade your subscription"
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.clean_output(raw)
+        self.assertIn("quota", str(ctx.exception).lower())
 
     def test_clean_output_passes_clean_text(self):
         result = self.provider.clean_output("normal response")

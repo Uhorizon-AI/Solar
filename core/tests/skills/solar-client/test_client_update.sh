@@ -145,6 +145,39 @@ head_commit="$(git -C "$INSTALL4" rev-parse HEAD)"
 manifest_commit="$(solar_client_manifest_core_commit "$WS2/.solar/manifest.json")"
 assert_ok "bump_manifest sets core_commit to SOLAR_ROOT HEAD" test "$manifest_commit" = "$head_commit"
 
+# --- integration: migration failure aborts BEFORE framework update (§B) ---
+WS_MIG="$TMP/ws-mig-fail"
+INSTALL_MIG="$WS_MIG/solar"
+mkdir -p "$WS_MIG/sun" "$INSTALL_MIG/core/skills/solar-client/scripts"
+printf '%s\n' '# test core' > "$INSTALL_MIG/core/AGENTS.md"
+printf '%s\n' '#!/usr/bin/env bash' 'echo solar-stub' > "$INSTALL_MIG/core/skills/solar-client/scripts/solar"
+chmod +x "$INSTALL_MIG/core/skills/solar-client/scripts/solar"
+printf '%s\n' 'OLD' > "$INSTALL_MIG/core/.version-marker"
+# Second commit we would move to if update applied — stay unreachable on migrate fail
+git -C "$INSTALL_MIG" init -q
+git -C "$INSTALL_MIG" config user.email "test@test"
+git -C "$INSTALL_MIG" config user.name "Test"
+git -C "$INSTALL_MIG" add -A && git -C "$INSTALL_MIG" commit -q -m "old-core"
+printf '%s\n' 'NEW' > "$INSTALL_MIG/core/.version-marker"
+git -C "$INSTALL_MIG" add -A && git -C "$INSTALL_MIG" commit -q -m "new-core"
+git -C "$INSTALL_MIG" checkout -q HEAD~1
+assert_ok "fixture core marker is OLD before update" grep -qx 'OLD' "$INSTALL_MIG/core/.version-marker"
+
+cat >"$WS_MIG/.env" <<'EOF'
+SOLAR_ROUTER_PROVIDER_PRIORITY=gemini,codex
+EOF
+# Directory not writable → atomic .env rewrite fails; update must abort pre-apply
+chmod a-w "$WS_MIG"
+set +e
+mig_out="$(bash "$UPDATE_SCRIPT" --workspace "$WS_MIG" --yes 2>&1)"
+mig_ec=$?
+set -e
+chmod u+w "$WS_MIG" 2>/dev/null || true
+assert_ok "update exits non-zero when .env migration fails" test "$mig_ec" -ne 0
+assert_ok "update says abort before framework update" grep -qi 'aborting before framework update' <<< "$mig_out"
+assert_ok "core marker unchanged (OLD) after failed migration" grep -qx 'OLD' "$INSTALL_MIG/core/.version-marker"
+assert_ok "legacy gemini priority still present after failed migration" grep -Eq 'PRIORITY=gemini' "$WS_MIG/.env"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

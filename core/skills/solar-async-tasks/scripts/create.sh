@@ -45,7 +45,7 @@ Options:
   --body-file FILE     Read task body from FILE instead of using Description arg.
                        Use this for multi-line prompts. The file content replaces
                        the body section; title heading is added automatically.
-  --provider P         Lock this task to a specific provider: codex | claude | gemini.
+  --provider P         Lock this task to a specific provider: codex | claude | agy | agent.
                        The worker passes it to solar-router as strict mode (no fallback).
                        Only valid with --queued.
 

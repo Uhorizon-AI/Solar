@@ -53,7 +53,7 @@ def _load_providers() -> list[str]:
                     return providers
     except (OSError, ValueError):
         pass
-    return ["codex", "claude", "gemini"]
+    return ["codex", "claude", "agy"]
 
 
 BUILTIN_COMMANDS = {
@@ -76,13 +76,13 @@ STYLE = Style.from_dict({
 })
 
 PROV_COLORS = {
-    "claude": "ansicyan", "gemini": "ansiblue",
+    "claude": "ansicyan", "agy": "ansiblue",
     "codex": "ansigreen", "agent": "ansimagenta",
 }
 
 PROV_ANSI = {
     "claude": "\033[36m",
-    "gemini": "\033[34m",
+    "agy": "\033[34m",
     "codex": "\033[32m",
     "agent": "\033[35m",
 }

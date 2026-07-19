@@ -2,6 +2,8 @@
 Unit tests for router.py — no real subprocess calls unless mocked.
 """
 import json
+import pathlib
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -211,6 +213,12 @@ class TestRouteErrorPaths(unittest.TestCase):
         result = router.route(_payload(mode="direct_only"))
         self.assertEqual(result["error_code"], "all_providers_failed")
 
+    @patch.dict("os.environ", {"SOLAR_ROUTER_PROVIDER_PRIORITY": "gemini"}, clear=False)
+    def test_invalid_provider_priority(self):
+        result = router.route(_payload(mode="direct_only"))
+        self.assertEqual(result["error_code"], "invalid_provider_priority")
+        self.assertIn("gemini", result.get("error", ""))
+
 
 # ---------------------------------------------------------------------------
 # route() — success
@@ -271,6 +279,122 @@ class TestRouteStream(unittest.TestCase):
         self.assertEqual(done["status"], "success")
         self.assertIn("decision", done)
         self.assertIn("reply_text", done)
+
+
+# ---------------------------------------------------------------------------
+# _provider_priority (agy migration / no silent fallback)
+# ---------------------------------------------------------------------------
+
+class TestProviderPriority(unittest.TestCase):
+    def setUp(self):
+        # Provider parsing tests do not exercise the one-time workspace bridge.
+        router._ENV_AGY_MIGRATION_ATTEMPTED = True
+
+    def test_legacy_workspace_is_atomically_healed_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            workspace = pathlib.Path(td)
+            env_path = workspace / ".env"
+            env_path.write_text(
+                "SOLAR_ROUTER_PROVIDER_PRIORITY=gemini,codex\n",
+                encoding="utf-8",
+            )
+            router._ENV_AGY_MIGRATION_ATTEMPTED = False
+            with (
+                patch.object(router, "SOLAR_WORKSPACE", workspace),
+                patch.dict(
+                    "os.environ",
+                    {
+                        "SOLAR_ROUTER_PROVIDER_PRIORITY": "gemini,codex",
+                        "SOLAR_AI_PROVIDER_PRIORITY": "",
+                    },
+                    clear=False,
+                ),
+            ):
+                self.assertEqual(router._provider_priority(), ["agy", "codex"])
+            self.assertIn(
+                "SOLAR_ROUTER_PROVIDER_PRIORITY=agy,codex",
+                env_path.read_text(encoding="utf-8"),
+            )
+
+    def test_failed_workspace_heal_can_retry_in_same_process(self):
+        with tempfile.TemporaryDirectory() as td:
+            workspace = pathlib.Path(td)
+            (workspace / ".env").write_text(
+                "SOLAR_ROUTER_PROVIDER_PRIORITY=gemini,codex\n",
+                encoding="utf-8",
+            )
+            router._ENV_AGY_MIGRATION_ATTEMPTED = False
+            failed = router.subprocess.CompletedProcess(
+                args=["migrator"],
+                returncode=1,
+                stdout="",
+                stderr="temporary write failure",
+            )
+            with (
+                patch.object(router, "SOLAR_WORKSPACE", workspace),
+                patch.object(router.subprocess, "run", return_value=failed),
+                patch.dict(
+                    "os.environ",
+                    {"SOLAR_ROUTER_PROVIDER_PRIORITY": "gemini,codex"},
+                    clear=False,
+                ),
+            ):
+                with self.assertRaises(router.UnsupportedProviderPriorityError):
+                    router._provider_priority()
+            self.assertFalse(router._ENV_AGY_MIGRATION_ATTEMPTED)
+
+    def test_valid_priority(self):
+        with patch.dict("os.environ", {"SOLAR_ROUTER_PROVIDER_PRIORITY": "codex,claude"}, clear=False):
+            self.assertEqual(router._provider_priority(), ["codex", "claude"])
+
+    def test_legacy_gemini_raises_clear_error(self):
+        with patch.dict("os.environ", {"SOLAR_ROUTER_PROVIDER_PRIORITY": "gemini"}, clear=False):
+            with self.assertRaises(router.UnsupportedProviderPriorityError) as ctx:
+                router._provider_priority()
+            msg = str(ctx.exception)
+            self.assertIn("gemini", msg)
+            self.assertIn("agy", msg)
+            self.assertIn("unsupported provider", msg)
+
+    def test_gemini_mixed_with_valid_still_raises(self):
+        with patch.dict(
+            "os.environ",
+            {"SOLAR_ROUTER_PROVIDER_PRIORITY": "codex,gemini"},
+            clear=False,
+        ):
+            with self.assertRaises(router.UnsupportedProviderPriorityError) as ctx:
+                router._provider_priority()
+            self.assertIn("gemini", str(ctx.exception))
+
+    def test_empty_after_invalid_only_raises(self):
+        with patch.dict(
+            "os.environ",
+            {"SOLAR_ROUTER_PROVIDER_PRIORITY": "not-a-provider"},
+            clear=False,
+        ):
+            with self.assertRaises(router.UnsupportedProviderPriorityError) as ctx:
+                router._provider_priority()
+            self.assertIn("unsupported provider", str(ctx.exception))
+
+    def test_whitespace_only_raises(self):
+        with patch.dict("os.environ", {"SOLAR_ROUTER_PROVIDER_PRIORITY": " , , "}, clear=False):
+            with self.assertRaises(router.UnsupportedProviderPriorityError) as ctx:
+                router._provider_priority()
+            self.assertIn("no supported providers", str(ctx.exception))
+
+    def test_default_priority(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "SOLAR_ROUTER_PROVIDER_PRIORITY": "",
+                "SOLAR_AI_PROVIDER_PRIORITY": "",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                router._provider_priority(),
+                ["codex", "claude", "agy", "agent"],
+            )
 
 
 if __name__ == "__main__":

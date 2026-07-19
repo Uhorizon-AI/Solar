@@ -386,20 +386,129 @@ def build_prompt(
 # Provider selection
 # ---------------------------------------------------------------------------
 
+DEFAULT_PROVIDER_PRIORITY = "codex,claude,agy,agent"
+
+
+class UnsupportedProviderPriorityError(RuntimeError):
+    """SOLAR_ROUTER_PROVIDER_PRIORITY is empty or contains unsupported tokens."""
+
+
+_ENV_AGY_MIGRATION_ATTEMPTED = False
+
+
+def _maybe_migrate_workspace_env_agy() -> None:
+    """Run the one-time atomic .env bridge for a legacy updater transition.
+
+    Old client updaters cannot execute migration code introduced by the target
+    release. The first router selection in the new release therefore migrates
+    an active legacy priority before provider selection. Failure is explicit and
+    no provider is invoked.
+    """
+    global _ENV_AGY_MIGRATION_ATTEMPTED
+    if _ENV_AGY_MIGRATION_ATTEMPTED:
+        return
+
+    env_path = SOLAR_WORKSPACE / ".env"
+    if not env_path.is_file():
+        _ENV_AGY_MIGRATION_ATTEMPTED = True
+        return
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    legacy_priority = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        if key in ("SOLAR_ROUTER_PROVIDER_PRIORITY", "SOLAR_AI_PROVIDER_PRIORITY"):
+            tokens = {part.strip().casefold() for part in value.split(",")}
+            if "gemini" in tokens:
+                legacy_priority = True
+                break
+    if not legacy_priority:
+        _ENV_AGY_MIGRATION_ATTEMPTED = True
+        return
+    migrator = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "solar-client"
+        / "scripts"
+        / "migrate_workspace_env_agy.py"
+    )
+    if not migrator.is_file():
+        raise UnsupportedProviderPriorityError(
+            "legacy provider priority contains 'gemini', but the agy migration "
+            "helper is missing; replace 'gemini' with 'agy' in workspace .env"
+        )
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(migrator), str(env_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout).strip()
+            raise UnsupportedProviderPriorityError(
+                "could not migrate legacy provider priority gemini→agy"
+                + (f": {detail}" if detail else "")
+            )
+        text = env_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise UnsupportedProviderPriorityError(
+            f"could not migrate legacy provider priority gemini→agy: {exc}"
+        ) from exc
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, val = stripped.partition("=")
+        if key in ("SOLAR_ROUTER_PROVIDER_PRIORITY", "SOLAR_AI_PROVIDER_PRIORITY"):
+            os.environ[key] = val
+    _ENV_AGY_MIGRATION_ATTEMPTED = True
+
+
 def _provider_priority() -> List[str]:
+    """Return configured provider order. Never silently expands to all providers.
+
+    Unknown tokens (including retired ``gemini``) raise with a clear error so
+    misconfiguration cannot fall through to a different primary provider.
+    """
+    _maybe_migrate_workspace_env_agy()
     raw = (
         os.getenv("SOLAR_ROUTER_PROVIDER_PRIORITY")
         or os.getenv("SOLAR_AI_PROVIDER_PRIORITY")
-        or "claude,gemini,agent"
+        or DEFAULT_PROVIDER_PRIORITY
     )
     seen: set = set()
     result: List[str] = []
+    unknown: List[str] = []
     for p in raw.split(","):
         p = p.strip().lower()
-        if p in SUPPORTED_PROVIDERS and p not in seen:
-            seen.add(p)
-            result.append(p)
-    return result if result else list(SUPPORTED_PROVIDERS)
+        if not p:
+            continue
+        if p in PROVIDERS:
+            if p not in seen:
+                seen.add(p)
+                result.append(p)
+        else:
+            unknown.append(p)
+    if unknown:
+        hint = ""
+        if "gemini" in unknown:
+            hint = " Gemini CLI was retired; replace 'gemini' with 'agy' (Antigravity)."
+        raise UnsupportedProviderPriorityError(
+            "unsupported provider(s) in SOLAR_ROUTER_PROVIDER_PRIORITY: "
+            f"{', '.join(unknown)}. "
+            f"supported: {', '.join(sorted(PROVIDERS))}.{hint}"
+        )
+    if not result:
+        raise UnsupportedProviderPriorityError(
+            "SOLAR_ROUTER_PROVIDER_PRIORITY has no supported providers "
+            f"(raw={raw!r}). supported: {', '.join(sorted(PROVIDERS))}."
+        )
+    return result
 
 
 def run_with_fallback(prompt: str) -> tuple:
@@ -535,6 +644,18 @@ def route_stream(raw: str):
             for chunk, provider_used in stream_provider(prompt, None):
                 full_text_parts.append(chunk)
                 yield json.dumps({"type": "chunk", "text": chunk}, ensure_ascii=False)
+    except UnsupportedProviderPriorityError as exc:
+        yield json.dumps(
+            {
+                "type": "done",
+                "status": "failed",
+                "error": str(exc),
+                "provider": provider_used,
+                "request_id": request_id,
+                "error_code": "invalid_provider_priority",
+            }
+        )
+        return
     except Exception as exc:
         yield json.dumps({"type": "done", "status": "failed", "error": str(exc), "provider": provider_used, "request_id": request_id})
         return
@@ -628,6 +749,16 @@ def route(raw: str) -> Dict[str, Any]:
             ai_output, provider_used = run_strict_provider(provider_override, prompt)
         else:
             ai_output, provider_used = run_with_fallback(prompt)
+    except UnsupportedProviderPriorityError as exc:
+        return _failed_after_audit(
+            router_id,
+            t_start,
+            request_id,
+            "invalid_provider_priority",
+            str(exc),
+            provider_used,
+            prompt_chars=len(prompt),
+        )
     except Exception as exc:
         if provider_override:
             return _failed_after_audit(

@@ -78,7 +78,7 @@ solar client sync
 - `uv`
 - Python dependency resolved at runtime by `uv`: `websockets==12.0`
 - At least one AI client CLI in `PATH`:
-  - `codex`, `claude`, or `gemini`
+  - `codex`, `claude`, `agy`, or `agent`
 - Local runtime write access for conversation memory (default: `sun/runtime/router/`)
 
 ## System activation (via solar-system)

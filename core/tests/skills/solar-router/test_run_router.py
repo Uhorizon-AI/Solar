@@ -115,7 +115,7 @@ class TestV3ContractOnSuccessPaths(unittest.TestCase):
         self.assertEqual(result["decision"]["kind"], "async_draft_created")
         self.assertEqual(result["decision"]["task_id"], "task-xyz")
 
-    @patch("router.run_with_fallback", return_value=("answer", "gemini"))
+    @patch("router.run_with_fallback", return_value=("answer", "agy"))
     def test_request_id_preserved(self, _):
         result = route(_req(request_id="my-request-id-99"))
         self.assertEqual(result["request_id"], "my-request-id-99")
@@ -155,7 +155,7 @@ class TestProviderStrictMode(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         mock_strict.assert_called_once()
 
-    @patch("router.run_with_fallback", return_value=("fallback response", "gemini"))
+    @patch("router.run_with_fallback", return_value=("fallback response", "agy"))
     def test_no_provider_override_uses_fallback(self, mock_fallback):
         result = route(_req())
         self.assertEqual(result["status"], "success")

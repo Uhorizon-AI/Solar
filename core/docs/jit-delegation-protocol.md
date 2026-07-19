@@ -37,7 +37,7 @@ echo '{
   "text": "<task description>",
   "channel": "other",
   "mode": "direct_only",
-  "provider": "<claude|gemini|codex>",
+  "provider": "<claude|agy|codex>",
   "metadata": {
     "agent": "<agent-name or null>",
     "skills": ["<skill-1>", "<skill-2>"],

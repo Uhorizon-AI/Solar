@@ -7,8 +7,9 @@ the Solar browser .env block (defaults 127.0.0.1:9222).
 Entrypoint: validate_mcp.sh (same directory).
 
 By default, only validates entries in SOLAR_ROUTER_PROVIDER_PRIORITY that have
-a known MCP config path: codex, claude, gemini, and agent. The solar-router
+a known MCP config path: codex, claude, agy, and agent. The solar-router
 provider "agent" is the Cursor CLI; its MCP is read from ~/.cursor/mcp.json.
+Provider "agy" (Antigravity) uses multipath MCP configs (local project + globals).
 
 Does not write files. Prints a report; the agent/user applies fixes in the IDE.
 
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -28,12 +30,21 @@ except ModuleNotFoundError:
     tomllib = None  # type: ignore[assignment]
 
 MCP_SERVER_KEY = "chrome-devtools"
-ROUTER_MCP_PROVIDERS = frozenset({"codex", "claude", "gemini", "agent"})
-DEFAULT_PRIORITY_FALLBACK = "codex,claude,gemini"
+ROUTER_MCP_PROVIDERS = frozenset({"codex", "claude", "agy", "agent"})
+DEFAULT_PRIORITY_FALLBACK = "codex,claude,agy,agent"
 
 
 def repo_root_from_script() -> Path:
     return Path(__file__).resolve().parents[4]
+
+
+def resolve_workspace_root(repo_root: Path | None) -> Path:
+    if repo_root is not None:
+        return repo_root.expanduser().resolve()
+    env_ws = (os.environ.get("SOLAR_WORKSPACE") or "").strip()
+    if env_ws:
+        return Path(env_ws).expanduser().resolve()
+    return repo_root_from_script()
 
 
 def load_dotenv(env_path: Path) -> dict[str, str]:
@@ -132,6 +143,16 @@ def load_json_chrome(path: Path) -> tuple[dict | None, str | None]:
     return entry, None
 
 
+def file_has_mcp_servers(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and isinstance(data.get("mcpServers"), dict)
+
+
 def load_codex_chrome(path: Path) -> tuple[dict | None, str | None]:
     if not path.is_file():
         return None, "file missing"
@@ -175,7 +196,7 @@ def remediation_json_cursor(env: dict[str, str]) -> str:
     )
 
 
-def remediation_json_claude_gemini(env: dict[str, str]) -> str:
+def remediation_json_claude_agy(env: dict[str, str]) -> str:
     return json.dumps(
         {
             MCP_SERVER_KEY: {
@@ -203,15 +224,55 @@ def remediation_codex_toml(env: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def provider_target(home: Path, provider: str) -> tuple[str, Path, str]:
+def agy_candidate_paths(home: Path, workspace: Path) -> list[tuple[str, Path, bool]]:
+    """Ordered agy MCP candidates: (label, path, is_local).
+
+    Legacy settings.json is only applicable when it contains mcpServers.
+    """
+    return [
+        ("agy/local", workspace / ".agents" / "mcp_config.json", True),
+        ("agy/antigravity-cli", home / ".gemini" / "antigravity-cli" / "mcp_config.json", False),
+        ("agy/config", home / ".gemini" / "config" / "mcp_config.json", False),
+        ("agy/legacy-settings", home / ".gemini" / "settings.json", False),
+    ]
+
+
+def agy_existing_targets(
+    home: Path,
+    workspace: Path,
+) -> list[tuple[str, Path, str, bool]]:
+    """Return existing agy configs: (name, path, kind, effective).
+
+    Local project config is marked effective when present.
+    Legacy settings.json included only if it has mcpServers.
+    """
+    local_exists = (workspace / ".agents" / "mcp_config.json").is_file()
+    out: list[tuple[str, Path, str, bool]] = []
+    for label, path, is_local in agy_candidate_paths(home, workspace):
+        if label == "agy/legacy-settings":
+            if not file_has_mcp_servers(path):
+                continue
+        elif not path.is_file():
+            continue
+        effective = bool(is_local and local_exists)
+        out.append((label, path, "agy", effective))
+    return out
+
+
+def provider_targets(
+    home: Path,
+    workspace: Path,
+    provider: str,
+) -> list[tuple[str, Path, str, bool]]:
+    """Expand a provider to one or more (name, path, kind, effective) targets."""
     if provider == "codex":
-        return ("codex", home / ".codex" / "config.toml", "codex")
+        return [("codex", home / ".codex" / "config.toml", "codex", True)]
     if provider == "claude":
-        return ("claude", home / ".claude.json", "claude")
-    if provider == "gemini":
-        return ("gemini", home / ".gemini" / "settings.json", "gemini")
+        return [("claude", home / ".claude.json", "claude", True)]
+    if provider == "agy":
+        return agy_existing_targets(home, workspace)
     if provider == "agent":
-        return ("agent", home / ".cursor" / "mcp.json", "cursor")
+        return [("agent", home / ".cursor" / "mcp.json", "cursor", True)]
     raise ValueError(provider)
 
 
@@ -222,14 +283,18 @@ def run_one(
     env: dict[str, str],
     *,
     required: bool,
+    effective: bool = False,
 ) -> bool:
     """Return True if drift or missing/invalid when required."""
-    print(f"[{name}] {path}")
+    eff = " effective" if effective else ""
+    print(f"[{name}]{eff} {path}")
     if name == "agent":
         print(
             '  note: solar-router provider "agent" is the Cursor CLI; '
             "chrome-devtools MCP is configured under Cursor (~/.cursor/mcp.json)."
         )
+    if effective:
+        print("  note: local project MCP is the effective source for this workspace.")
     bad = False
 
     def print_codex_suggestion() -> None:
@@ -239,7 +304,7 @@ def run_one(
         print("  ---")
 
     def print_json_suggestion() -> None:
-        sug = remediation_json_cursor(env) if kind == "cursor" else remediation_json_claude_gemini(env)
+        sug = remediation_json_cursor(env) if kind == "cursor" else remediation_json_claude_agy(env)
         print("  ---")
         for line in sug.split("\n"):
             print(f"    {line}")
@@ -309,17 +374,24 @@ def main() -> int:
         "--repo-root",
         type=Path,
         default=None,
-        help="Solar repo root (default: inferred from script location)",
+        help="Solar workspace root for .env + local .agents/mcp_config.json (default: SOLAR_WORKSPACE or inferred)",
     )
     ap.add_argument(
         "--all-clients",
         action="store_true",
-        help="Validate codex, ~/.cursor/mcp.json, claude, gemini regardless of priority; missing = skip",
+        help="Validate codex, cursor, claude, and all existing agy MCP paths; missing = skip",
+    )
+    ap.add_argument(
+        "--home",
+        type=Path,
+        default=None,
+        help="Override Path.home() (tests)",
     )
     args = ap.parse_args()
 
-    root = args.repo_root or repo_root_from_script()
-    env_path = root / ".env"
+    workspace = resolve_workspace_root(args.repo_root)
+    home = (args.home or Path.home()).expanduser().resolve()
+    env_path = workspace / ".env"
     env = load_dotenv(env_path)
 
     raw_priority, priority_ordered = parse_router_priority(env)
@@ -327,18 +399,30 @@ def main() -> int:
 
     print("Solar browser MCP (expected pattern)")
     print(f"  server key: mcpServers.{MCP_SERVER_KEY}")
-    print(f"  expected browserUrl: {browser_url(env)} (from repo .env or defaults)")
+    print(f"  expected browserUrl: {browser_url(env)} (from workspace .env or defaults)")
+    print(f"  workspace: {workspace}")
     print()
 
+    targets: list[tuple[str, Path, str, bool]] = []
+    required_map: dict[str, bool] = {}
+
     if args.all_clients:
-        print("Mode: --all-clients (fixed list: codex, ~/.cursor/mcp.json, claude, gemini; missing = skip)")
+        print(
+            "Mode: --all-clients (codex, ~/.cursor/mcp.json, claude, all existing agy MCP paths; missing = skip)"
+        )
         print(f"  (SOLAR_ROUTER_PROVIDER_PRIORITY {raw_priority!r} — ignored for which paths to check)")
-        targets: list[tuple[str, Path, str]] = [
-            ("codex", Path.home() / ".codex" / "config.toml", "codex"),
-            ("cursor", Path.home() / ".cursor" / "mcp.json", "cursor"),
-            ("claude", Path.home() / ".claude.json", "claude"),
-            ("gemini", Path.home() / ".gemini" / "settings.json", "gemini"),
+        targets = [
+            ("codex", home / ".codex" / "config.toml", "codex", True),
+            ("cursor", home / ".cursor" / "mcp.json", "cursor", True),
+            ("claude", home / ".claude.json", "claude", True),
         ]
+        targets.extend(agy_existing_targets(home, workspace))
+        # Also surface candidate locals that are missing under all-clients as skip via run_one
+        # when none exist — report primary local candidate as optional skip.
+        if not any(t[0].startswith("agy/") for t in targets):
+            targets.append(
+                ("agy/local", workspace / ".agents" / "mcp_config.json", "agy", False)
+            )
         required_map = {t[0]: False for t in targets}
     else:
         print("Solar router (SOLAR_ROUTER_PROVIDER_PRIORITY, else SOLAR_AI_PROVIDER_PRIORITY, else default)")
@@ -349,31 +433,52 @@ def main() -> int:
         print(
             f"  MCP validated for solar-router providers: {', '.join(mcp_from_router) if mcp_from_router else '(none)'}"
         )
-        print('  Mapping: agent → ~/.cursor/mcp.json (Cursor). Use --all-clients to audit all paths.')
+        print(
+            "  Mapping: agent → ~/.cursor/mcp.json; agy → local .agents/mcp_config.json + "
+            "~/.gemini/**/mcp_config.json (+ legacy settings.json if mcpServers). "
+            "Use --all-clients to audit all paths."
+        )
         print()
         if not mcp_from_router:
-            print("No codex, claude, gemini, or agent in SOLAR_ROUTER_PROVIDER_PRIORITY — nothing to validate.")
+            print("No codex, claude, agy, or agent in SOLAR_ROUTER_PROVIDER_PRIORITY — nothing to validate.")
             print()
             return 0
-        targets = [provider_target(Path.home(), p) for p in mcp_from_router]
-        required_map = {t[0]: True for t in targets}
+        for p in mcp_from_router:
+            expanded = provider_targets(home, workspace, p)
+            if p == "agy" and not expanded:
+                # Required provider with no configs present: report local candidate as missing.
+                expanded = [
+                    ("agy/local", workspace / ".agents" / "mcp_config.json", "agy", False)
+                ]
+            for name, path, kind, effective in expanded:
+                targets.append((name, path, kind, effective))
+                required_map[name] = True
 
     print()
     print("Local client configs (read-only)")
     print()
 
     any_bad = False
-    for name, path, kind in targets:
-        if run_one(name, path, kind, env, required=required_map.get(name, True)):
+    for name, path, kind, effective in targets:
+        if run_one(
+            name,
+            path,
+            kind,
+            env,
+            required=required_map.get(name, True),
+            effective=effective,
+        ):
             any_bad = True
 
     print("Notes:")
     if args.all_clients:
         print("  - skip = file or chrome-devtools absent; optional unless you use that IDE.")
+        print("  - agy: every existing MCP path is checked (local marked effective when present).")
     else:
         print("  - For providers in SOLAR_ROUTER_PROVIDER_PRIORITY, missing/wrong MCP is reported as required.")
         print('  - "agent" validates ~/.cursor/mcp.json (Cursor CLI in solar-router).')
-        print("  - --all-clients: fixed four paths, ignore priority; missing = skip.")
+        print("  - agy: validates all existing candidate paths; local project config is effective when present.")
+        print("  - --all-clients: fixed clients + all existing agy paths; ignore priority; missing = skip.")
     print("  - Start Chrome only when needed: run ensure_browser.sh --start right before browser MCP work; MCP must not launch Chrome.")
     print("  - On drift/required, apply the snippet manually; this script does not write ~/.")
     print()

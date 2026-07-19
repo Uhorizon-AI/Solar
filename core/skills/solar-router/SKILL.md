@@ -1,7 +1,7 @@
 ---
 name: solar-router
 description: >
-  Shared router that runs AI providers (Codex, Claude, Gemini, Agent, Ollama) with Solar repo context.
+  Shared router that runs AI providers (Codex, Claude, Agy/Antigravity, Agent, Ollama) with Solar repo context.
   Single source of truth for provider selection, fallback, and async routing policy.
   Use when solar-gateway, async-tasks, or other runtimes need to invoke an AI with
   cwd = SOLAR_WORKSPACE and paths resolved against the active workspace.
@@ -44,7 +44,7 @@ scripts/
     base.py            — BaseProvider: resolve_binary, get_cmd, prepare_env, clean_output, run
     claude.py          — static default_cmd
     codex.py           — build_default_cmd() with SOLAR_WORKSPACE + CODEX_STATE_DIR
-    gemini.py          — prepare_env (GEMINI_* vars) + clean_output (ANSI strip, OAuth guard)
+    agy.py             — Antigravity CLI (`agy -p`)
     agent.py           — build_default_cmd() with SOLAR_WORKSPACE
 
 Automated tests live under `core/tests/skills/solar-router/` (framework-wide layout; see `core/AGENTS.md`).
@@ -67,7 +67,7 @@ bash core/skills/solar-router/scripts/onboard_router_env.sh
 ```
 
 **Key environment variables:**
-- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `codex,claude,gemini,ollama`)
+- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `codex,claude,agy,agent,ollama`)
 - `SOLAR_ROUTER_RUNTIME_DIR` — Where conversation history is stored (default: `sun/runtime/router`)
 - `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` — System prompt file path (default: `core/skills/solar-router/assets/system_prompt.md`)
 - `SOLAR_ROUTER_CONTEXT_TURNS` — Number of conversation turns to include (default: `12`)
@@ -76,7 +76,7 @@ bash core/skills/solar-router/scripts/onboard_router_env.sh
 Optional command overrides:
 - `SOLAR_ROUTER_CODEX_CMD`
 - `SOLAR_ROUTER_CLAUDE_CMD`
-- `SOLAR_ROUTER_GEMINI_CMD`
+- `SOLAR_ROUTER_AGY_CMD`
 - `SOLAR_ROUTER_OLLAMA_CMD`
 
 Ollama setup:
@@ -129,7 +129,7 @@ bash core/skills/solar-router/scripts/reconcile_router_audit.sh
   "text": "string",
   "channel": "telegram|n8n|async-task|other",
   "mode": "auto|direct_only|async_only",
-  "provider": "codex|claude|gemini|agent|ollama|null",
+  "provider": "codex|claude|agy|agent|ollama|null",
   "metadata": {
     "agent": "agent-name|null",
     "skills": ["planet:skill-name", "core-skill-name"],
@@ -181,7 +181,7 @@ EOF
 {
   "status": "success|failed",
   "request_id": "string",
-  "provider_used": "codex|claude|gemini|agent|ollama",
+  "provider_used": "codex|claude|agy|agent|ollama",
   "reply_text": "string",
   "decision": {
     "kind": "direct_reply|async_draft_proposal|async_draft_created|async_activation_needed",

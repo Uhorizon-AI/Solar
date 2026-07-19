@@ -98,7 +98,7 @@ echo "════════════════════════�
 echo ""
 echo "  Providers:"
 bash "$SCRIPT_DIR/diagnose_router.sh" --dry-run 2>/dev/null \
-  | grep -E "^\s+- (codex|claude|gemini)" \
+  | grep -E "^\s+- (codex|claude|agy)" \
   | sed 's/^/  /' \
   || echo "    (diagnose_router.sh not available)"
 

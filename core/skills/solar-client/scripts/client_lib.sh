@@ -213,6 +213,14 @@ solar_client_print_upgrade_report() {
   if [[ "$git_ver" == v0.8.* ]] || [[ "$git_ver" == v0.9.* ]]; then
     echo "  HINT: update framework repo: cd \"$root\" && git fetch && git checkout v0.10.0"
   fi
+  if [[ -f "$ws/.env" ]]; then
+    if grep -Eq '^[[:space:]]*(SOLAR_ROUTER_GEMINI_CMD|SOLAR_AI_GEMINI_CMD)=' "$ws/.env"; then
+      echo "  WARN: remove SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD. Do not rename the value in place (e.g. gemini -y is invalid under AGY). Optional: SOLAR_ROUTER_AGY_CMD=agy -p --dangerously-skip-permissions"
+    fi
+    if grep -Eiq '^[[:space:]]*(SOLAR_ROUTER_PROVIDER_PRIORITY|SOLAR_AI_PROVIDER_PRIORITY)=.*gemini' "$ws/.env"; then
+      echo "  WARN: provider priority lists unsupported gemini — use agy (run solar client update)"
+    fi
+  fi
 }
 
 # Workspace entries that stay at SOLAR_WORKSPACE root (runtime / client metadata).

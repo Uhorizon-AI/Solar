@@ -68,7 +68,7 @@ if [[ -f "$ROOT_ENV_FILE" ]]; then
   set +a
 fi
 
-priority="${SOLAR_ROUTER_PROVIDER_PRIORITY:-${SOLAR_AI_PROVIDER_PRIORITY:-codex,claude,gemini}}"
+priority="${SOLAR_ROUTER_PROVIDER_PRIORITY:-${SOLAR_AI_PROVIDER_PRIORITY:-codex,claude,agy,agent}}"
 
 unique_providers="$(echo "$priority" | awk -F',' '
   {
@@ -123,10 +123,10 @@ codex_default = (
     f"--add-dir {os.path.expanduser('~/.codex')} --"
 )
 defaults = {
-    "agent": f"agent -p -f --approve-mcps --workspace {repo_root}",
+    "agent": f"agent -p -f --approve-mcps --trust --workspace {repo_root}",
     "codex": codex_default,
     "claude": "claude -p --permission-mode bypassPermissions",
-    "gemini": "gemini -y",
+    "agy": "agy -p --dangerously-skip-permissions",
     "ollama": "ollama run solar --hidethinking --nowordwrap",
 }
 if provider not in defaults:

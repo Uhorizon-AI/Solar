@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # List configured AI providers, one per line.
-# Reads SOLAR_ROUTER_PROVIDER_PRIORITY (fallback: codex,claude,gemini).
+# Reads SOLAR_ROUTER_PROVIDER_PRIORITY (fallback: codex,claude,agy,agent).
 #
 # Usage:
 #   bash core/skills/solar-router/scripts/list_providers.sh
@@ -45,7 +45,7 @@ if [[ -f "$ROOT_ENV_FILE" ]]; then
   set +a
 fi
 
-priority="${SOLAR_ROUTER_PROVIDER_PRIORITY:-${SOLAR_AI_PROVIDER_PRIORITY:-codex,claude,gemini}}"
+priority="${SOLAR_ROUTER_PROVIDER_PRIORITY:-${SOLAR_AI_PROVIDER_PRIORITY:-codex,claude,agy,agent}}"
 
 # Deduplicate, trim whitespace, lowercase, optionally exclude one provider
 result="$(echo "$priority" | awk -F',' -v excl="$exclude" '
