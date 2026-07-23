@@ -156,7 +156,9 @@ prune_target_dir_to_index() {
   local removed=0
   shopt -s nullglob dotglob
   for item in "$target_dir"/*; do
-    [ -e "$item" ] || continue
+    # Include dangling symlinks: [ -e ] is false when the target was removed
+    # (e.g. planet deleted) but the IDE link remains under .claude/.cursor/.codex.
+    [ -e "$item" ] || [ -L "$item" ] || continue
     local name
     name="$(basename "$item")"
 
