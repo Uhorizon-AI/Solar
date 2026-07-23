@@ -6,7 +6,16 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-gateway): `stop_transport_gateway.sh` with `--dry-run` / `--force` / `--tunnel-only`, strict ownership, and stale pid-file unlink.
+- feat(solar-gateway): stable env stamp at `sun/runtime/gateway/env.stamp`, failure backoff via `env.fail`, and portable mkdir-lock (no `flock`) shared by ensure/setup.
+- feat(solar-gateway): non-destructive preflight before stopping a healthy runtime; provider tokens validated via solar-router `list_supported_providers.sh` (canonical `PROVIDERS`).
+- feat(solar-router): `list_supported_providers.sh` exports registered provider ids from `PROVIDERS`.
+- test(solar-gateway): functional Telegram rollback harness + `smoke_priority_ensure.sh` (priority change → ensure → process env).
+
 ### Changed
+- change(solar-gateway): setup no longer reuses existing listeners; occupied ports require `--restart` (preflight → stop → start → stamp).
+- change(solar-gateway): `ensure_transport_gateway.sh` is drift-first — any env drift triggers full `setup --restart`; partial without drift remains tunnel-only.
 - change(solar-router): provider id `gemini` retired in favor of `agy` (Antigravity CLI). Supported providers: `codex`, `claude`, `agy`, `agent`, `ollama`.
 - change(solar-router): default headless command for `agy` is `agy -p --dangerously-skip-permissions --add-dir <workspace>`.
 - change(solar-router): unified default provider priority `codex,claude,agy,agent` across router, onboard, diagnose, list_providers, templates, validate_mcp, and docs.
@@ -15,6 +24,10 @@ The format is based on Keep a Changelog.
 - change(solar-browser): `validate_mcp` checks all existing Antigravity MCP paths (local `.agents/mcp_config.json` effective when present, plus `~/.gemini/**` candidates).
 
 ### Fixed
+- fix(solar-gateway): Telegram webhook set/verify failures now roll back (stop) instead of exiting under `set -e` with partial processes and no stamp.
+- fix(solar-gateway): tunnel ownership matches stamp previous tunnel identity so name/config/host changes do not mark the old cloudflared as foreign during restart.
+- fix(solar-gateway): `SOLAR_GATEWAY_LOCK_HELD=1` is ignored unless `lock/pid` exists and equals the parent PID (no manual lock bypass).
+- fix(solar-gateway): `env.fail` hard-stops after `GATEWAY_FAIL_ATTEMPTS_CAP` (default 5) with the same fingerprint — no infinite spaced retry loop.
 - fix(solar-router): `_provider_priority()` no longer falls back to all providers when the configured list is empty or only contains unsupported tokens (e.g. `SOLAR_ROUTER_PROVIDER_PRIORITY=gemini`). It now raises `UnsupportedProviderPriorityError`; `route()` maps that to `error_code=invalid_provider_priority` (not `all_providers_failed`).
 - fix(solar-router): the first provider selection after an update from a legacy client performs the same atomic `gemini`→`agy` workspace migration; migration failure is explicit and no provider runs.
 - fix(solar-router): shared `migrate_provider_priority.py` helper + `onboard_router_env.sh` rewrite priority token `gemini` → `agy` with an explicit WARN, and do **not** copy `SOLAR_ROUTER_GEMINI_CMD` / `SOLAR_AI_GEMINI_CMD` into `SOLAR_ROUTER_AGY_CMD` (values like `gemini -y` would keep calling the retired binary).

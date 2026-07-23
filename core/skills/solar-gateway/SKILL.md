@@ -40,6 +40,16 @@ None
 # One-command setup (recommended)
 bash core/skills/solar-gateway/scripts/setup_transport_gateway.sh
 
+# Restart after .env changes (stop owned runtime + start; runs preflight first)
+bash core/skills/solar-gateway/scripts/setup_transport_gateway.sh --restart
+
+# Dry-run stop (ownership report; no kill)
+bash core/skills/solar-gateway/scripts/stop_transport_gateway.sh --dry-run
+
+# Stop owned processes (--force kills foreign blockers; --tunnel-only skips bridges)
+bash core/skills/solar-gateway/scripts/stop_transport_gateway.sh
+bash core/skills/solar-gateway/scripts/stop_transport_gateway.sh --tunnel-only
+
 # Validate skill quality and structure
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-gateway /tmp
 
@@ -52,12 +62,18 @@ bash core/skills/solar-gateway/scripts/validate_websocket_bridge.sh
 # Preflight AI providers
 bash core/skills/solar-router/scripts/diagnose_router.sh --dry-run
 bash core/skills/solar-router/scripts/diagnose_router.sh
+bash core/skills/solar-router/scripts/list_supported_providers.sh
 
-# Check runtime health (local + public)
+# Check runtime health (local + public) — exit 0/1/2; drift does not change check exits
 bash core/skills/solar-gateway/scripts/check_transport_gateway.sh
 
 # Ensure gateway is healthy, recover if not (used by solar-system orchestrator)
+# Drift-first: env stamp mismatch → preflight → setup --restart
+# Partial without drift → tunnel-only; partial with drift → full restart
 bash core/skills/solar-gateway/scripts/ensure_transport_gateway.sh
+
+# Smoke: priority change → ensure → new process env (restores .env afterward)
+bash core/tests/skills/solar-gateway/smoke_priority_ensure.sh
 
 # Register and verify Telegram webhook
 bash core/skills/solar-gateway/scripts/set_telegram_webhook.sh
@@ -72,6 +88,15 @@ uv run --with websockets==12.0 python3 -c "import websockets; print(websockets._
 # Sync core changes to local clients
 solar client sync
 ```
+
+## Lifecycle (stop / setup / ensure)
+
+- **No listener reuse:** setup fails if WS/HTTP ports are busy unless `--restart`.
+- **Stop** is the only kill path: ownership via bridge cmdline signatures + port/pid file; tunnel via `cloudflared.pid` + cmdline (no global cloudflared scan).
+- **Env stamp** lives at `$SOLAR_WORKSPACE/sun/runtime/gateway/env.stamp` (fingerprint of an allowlisted key set — not `.env` mtime). Missing stamp with live Solar bridges counts as drift.
+- **Drift / restart** runs a **non-destructive preflight** before stopping a healthy runtime. Preflight failure writes `env.fail` and leaves processes running. Provider tokens are validated against solar-router `PROVIDERS` (via `list_supported_providers.sh`), not a duplicated list.
+- **Backoff:** repeated failures with the same fingerprint are throttled via `env.fail` (exponential, capped). After `GATEWAY_FAIL_ATTEMPTS_CAP` (default 5) failures with the same fingerprint, ensure **stops retrying** until the fingerprint changes (fix `.env` or remove `env.fail`). A fingerprint change resets backoff.
+- **mkdir-lock** (portable, no `flock`) at `sun/runtime/gateway/lock/` serializes ensure/setup/stamp writes. Distinct from the solar-system orchestrator lock. Dead or recycled lock PIDs are reclaimed.
 
 ## Runtime requirements
 
@@ -111,11 +136,13 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 
 ## Workflow
 
-1. Run `setup_transport_gateway.sh` as default end-to-end flow.
-2. If needed, run `setup_transport_gateway.sh --prepare-only` to stop before long-running services.
-3. For stable DNS, configure named tunnel with `configure_named_tunnel.sh` and set `SOLAR_TUNNEL_MODE=named`.
-4. All AI execution and routing policy is delegated to **solar-router** (`core/skills/solar-router/scripts/run_router.py`). This skill does not select providers or implement fallback.
-5. Use individual scripts only for troubleshooting or partial reconfiguration.
+1. Run `setup_transport_gateway.sh` as default end-to-end flow (writes `env.stamp` on success).
+2. After editing watched `.env` keys, either wait for the next `ensure_transport_gateway.sh` tick or run `setup_transport_gateway.sh --restart`.
+3. Preview stop candidates with `stop_transport_gateway.sh --dry-run` before a manual restart.
+4. If needed, run `setup_transport_gateway.sh --prepare-only` to stop before long-running services.
+5. For stable DNS, configure named tunnel with `configure_named_tunnel.sh` and set `SOLAR_TUNNEL_MODE=named`.
+6. All AI execution and routing policy is delegated to **solar-router** (`core/skills/solar-router/scripts/run_router.py`). This skill does not select providers or implement fallback.
+7. Use individual scripts only for troubleshooting or partial reconfiguration.
 
 ## Dependency policy
 
