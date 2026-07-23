@@ -33,6 +33,7 @@ bash -n core/skills/solar-client/scripts/resolve_solar_paths.sh
 python3 -m py_compile core/skills/solar-client/scripts/solar_paths.py
 bash core/tests/skills/solar-client/test_resolve_solar_paths.sh
 bash core/tests/skills/solar-client/test_solar_paths_py.sh
+bash core/tests/skills/solar-client/test_sync_clients_prune.sh
 ```
 
 ## CLI (via `solar` entrypoint)

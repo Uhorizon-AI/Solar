@@ -15,6 +15,7 @@ The format is based on Keep a Changelog.
 - change(solar-browser): `validate_mcp` checks all existing Antigravity MCP paths (local `.agents/mcp_config.json` effective when present, plus `~/.gemini/**` candidates).
 
 ### Fixed
+- fix(solar-client): `sync-clients` prune now removes dangling symlinks (e.g. skills/agents/commands left after a planet is deleted). Previously `[ -e ]` skipped broken links, so stale entries like `oh-my-codex:*` survived `solar client sync`.
 - fix(solar-router): `_provider_priority()` no longer falls back to all providers when the configured list is empty or only contains unsupported tokens (e.g. `SOLAR_ROUTER_PROVIDER_PRIORITY=gemini`). It now raises `UnsupportedProviderPriorityError`; `route()` maps that to `error_code=invalid_provider_priority` (not `all_providers_failed`).
 - fix(solar-router): the first provider selection after an update from a legacy client performs the same atomic `gemini`→`agy` workspace migration; migration failure is explicit and no provider runs.
 - fix(solar-router): shared `migrate_provider_priority.py` helper + `onboard_router_env.sh` rewrite priority token `gemini` → `agy` with an explicit WARN, and do **not** copy `SOLAR_ROUTER_GEMINI_CMD` / `SOLAR_AI_GEMINI_CMD` into `SOLAR_ROUTER_AGY_CMD` (values like `gemini -y` would keep calling the retired binary).
