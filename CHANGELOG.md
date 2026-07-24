@@ -24,6 +24,8 @@ The format is based on Keep a Changelog.
 - change(solar-browser): `validate_mcp` checks all existing Antigravity MCP paths (local `.agents/mcp_config.json` effective when present, plus `~/.gemini/**` candidates).
 
 ### Fixed
+- fix(solar-router): restore gateway long-job async path — when `mode=auto` emits `async_draft_created` on telegram/n8n, the router again creates a queued task, sets `notify_when: completed`, and returns a canonical ACK. Worker prompts keep Validation Gate for mutable actions; `add_notify.sh` failures use a no-notify ACK; create failures in `async_only`/`auto` fall back to `direct_reply` instead of a false ACK; `SOLAR_ROUTER_CONTEXT_TURNS` is validated/clamped.
+- fix(solar-router): restore conversation continuity lost in `be1ae84` (thin dispatcher). `route()` / `route_stream()` again inject rolling `<solar_summary>` plus recent JSONL turns (`SOLAR_ROUTER_CONTEXT_TURNS`) into the provider prompt, persist updated summaries, and store clean `reply_text` in history.
 - fix(solar-gateway): Telegram webhook set/verify failures now roll back (stop) instead of exiting under `set -e` with partial processes and no stamp.
 - fix(solar-gateway): tunnel ownership matches stamp previous tunnel identity so name/config/host changes do not mark the old cloudflared as foreign during restart.
 - fix(solar-gateway): `SOLAR_GATEWAY_LOCK_HELD=1` is ignored unless `lock/pid` exists and equals the parent PID (no manual lock bypass).

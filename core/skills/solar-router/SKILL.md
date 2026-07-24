@@ -28,8 +28,8 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 - Run the selected provider with `cwd=SOLAR_WORKSPACE` so all providers see `sun/`, `planets/`, and workspace `AGENTS.md`.
 - Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `SOLAR_WORKSPACE` when relative.
 - Codex default command includes `-C <repo-root>` and `--add-dir ~/.codex`.
-- Persist conversation turns in runtime dir (JSONL) for continuity.
-- Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output.
+- Persist conversation turns in runtime dir (JSONL) and inject continuity into each prompt: rolling `*-summary.txt` from `<solar_summary>` plus recent turns (`SOLAR_ROUTER_CONTEXT_TURNS`).
+- Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output. On telegram/n8n, `async_draft_created` queues work + `notify_when: completed` and returns a short ACK.
 - Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
 - Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability (including failed early-exit paths).
 

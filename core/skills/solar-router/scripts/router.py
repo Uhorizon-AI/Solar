@@ -6,7 +6,8 @@ The thin run_router.py entrypoint handles stdin/stdout/exit.
 
 Architecture: thin dispatcher + decision extraction.
 - Each CLI loads repo context from cwd=SOLAR_WORKSPACE (CLAUDE.md, profile.md, MEMORY.md).
-- The router passes the user message + optional history pointer + routing hints.
+- The router injects conversation continuity: rolling <solar_summary> plus recent turns
+  from sun/runtime/router/conversations/<id>.jsonl (SOLAR_ROUTER_CONTEXT_TURNS).
 - For mode=auto and channels telegram/n8n, the model emits <solar_decision> tags;
   the router parses them into decision.kind for transport consumers.
 """
@@ -17,6 +18,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -41,6 +43,30 @@ VALID_CHANNELS = {"telegram", "n8n", "async-task", "other"}
 
 SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
 
+DEFAULT_CONTEXT_TURNS = 12
+MAX_CONTEXT_TURNS_CAP = 100
+
+
+def parse_context_turns(raw: Optional[str] = None) -> int:
+    """Parse SOLAR_ROUTER_CONTEXT_TURNS safely.
+
+    Invalid, empty, non-numeric, zero, or negative values fall back to the
+    default. Values above MAX_CONTEXT_TURNS_CAP are clamped.
+    """
+    if raw is None:
+        raw = os.getenv("SOLAR_ROUTER_CONTEXT_TURNS") or os.getenv("SOLAR_CONTEXT_TURNS")
+    if raw is None or not str(raw).strip():
+        return DEFAULT_CONTEXT_TURNS
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_CONTEXT_TURNS
+    if value < 1:
+        return DEFAULT_CONTEXT_TURNS
+    return min(value, MAX_CONTEXT_TURNS_CAP)
+
+
+MAX_CONTEXT_TURNS = parse_context_turns()
 
 _raw_runtime_dir = (
     os.getenv("SOLAR_ROUTER_RUNTIME_DIR")
@@ -70,6 +96,10 @@ RE_SOLAR_SUMMARY = re.compile(
     r"<solar_summary>.*?</solar_summary>",
     re.IGNORECASE | re.DOTALL,
 )
+RE_SOLAR_SUMMARY_CAPTURE = re.compile(
+    r"<solar_summary>(.*?)</solar_summary>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +115,24 @@ def conversation_file(conversation_id: str) -> pathlib.Path:
     return RUNTIME_ROOT / "conversations" / f"{sanitize_id(conversation_id)}.jsonl"
 
 
+def summary_file(conversation_id: str) -> pathlib.Path:
+    return RUNTIME_ROOT / "conversations" / f"{sanitize_id(conversation_id)}-summary.txt"
+
+
+def load_summary(conversation_id: str) -> Optional[str]:
+    path = summary_file(conversation_id)
+    if path.exists():
+        text = path.read_text(encoding="utf-8").strip()
+        return text if text else None
+    return None
+
+
+def save_summary(conversation_id: str, summary: str) -> None:
+    path = summary_file(conversation_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(summary.strip(), encoding="utf-8")
+
+
 def read_system_prompt() -> str:
     if not SYSTEM_PROMPT_FILE.exists():
         return (
@@ -92,6 +140,43 @@ def read_system_prompt() -> str:
             " conversation turns and answer with clear, useful output."
         )
     return SYSTEM_PROMPT_FILE.read_text(encoding="utf-8").strip()
+
+
+def load_recent_messages(path: pathlib.Path) -> List[Dict[str, str]]:
+    """Load the last SOLAR_ROUTER_CONTEXT_TURNS user/assistant pairs from JSONL."""
+    if not path.exists():
+        return []
+    items: List[Dict[str, str]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        role = str(record.get("role", "")).strip().lower()
+        text = str(record.get("text", "")).strip()
+        if role == "assistant" and text:
+            text = strip_solar_metadata(text) or text
+        if role in {"user", "assistant"} and text:
+            items.append({"role": role, "text": text})
+    keep = MAX_CONTEXT_TURNS * 2
+    return items[-keep:] if keep > 0 else items
+
+
+def conversation_context(
+    conversation_id: str, conv_path: pathlib.Path
+) -> Tuple[Optional[str], List[Dict[str, str]]]:
+    """Return (rolling summary, recent messages) for prompt injection.
+
+    When a summary exists, only the last two raw turns are attached as a
+    supplement so the immediate prior exchange is never lost.
+    """
+    summary = load_summary(conversation_id)
+    recent_all = load_recent_messages(conv_path)
+    recent = recent_all[-4:] if summary else recent_all
+    return summary, recent
 
 
 def append_message(path: pathlib.Path, role: str, text: str) -> None:
@@ -125,11 +210,35 @@ def strip_solar_metadata(ai_output: str) -> str:
     return text.strip()
 
 
+def extract_summary_from_output(raw_output: str) -> Optional[str]:
+    """Extract the rolling summary from the model's <solar_summary> tag."""
+    text = (raw_output or "").strip()
+    if not text:
+        return None
+    match = RE_SOLAR_SUMMARY_CAPTURE.search(text)
+    if match:
+        return match.group(1).strip() or None
+    return None
+
+
 def extract_tag_decision_kind(ai_output: str) -> Optional[str]:
     m = RE_SOLAR_DECISION.search(ai_output)
     if not m:
         return None
     return m.group(1).lower()
+
+
+GATEWAY_ASYNC_CHANNELS = frozenset({"telegram", "n8n"})
+GATEWAY_ASYNC_ACK = (
+    "Me pongo con ello. Te aviso por aquí cuando termine."
+)
+GATEWAY_ASYNC_ACK_NO_NOTIFY = (
+    "La tarea quedó encolada, pero no pude activar la notificación automática. "
+    "Revisa el estado en async-tasks; no asumas que llegará un aviso."
+)
+ASYNC_CREATE_FAILED_SUFFIX = (
+    "\n\n[Warning: could not create the async task; answer kept as direct reply.]"
+)
 
 
 def async_tasks_enabled() -> bool:
@@ -138,32 +247,156 @@ def async_tasks_enabled() -> bool:
     return "async-tasks" in parts
 
 
-def create_async_draft(user_text: str, ai_output: str, request_id: str) -> Optional[str]:
-    """Create a draft via solar-async-tasks create.sh; return task id or None."""
+def _parse_create_task_id(stdout: str, stderr: str) -> Optional[str]:
+    out = (stdout or "") + "\n" + (stderr or "")
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("ID:"):
+            return line.split("ID:", 1)[1].strip()
+    return None
+
+
+def _gateway_task_body(user_text: str, channel: str) -> str:
+    """Worker prompt for a gateway-originated long-running request.
+
+    Auto-queue acknowledges start of work. Validation Gate / execution-consent
+    still apply: read/analysis and declared artifacts may proceed; mutable
+    external actions require explicit approval inside the async run.
+    """
+    return (
+        f"## Origin\n"
+        f"- channel: {channel}\n"
+        f"- mode: fulfill user request asynchronously\n\n"
+        f"## User request\n\n"
+        f"{user_text.strip()}\n\n"
+        f"## Instructions\n"
+        f"1. Prefer read/analysis and writing declared deliverable paths under the Solar workspace.\n"
+        f"2. The gateway already acknowledged the user for starting this work. Proceed with "
+        f"in-scope read/analysis and declared artifact writes without asking to re-activate "
+        f"or re-queue the task.\n"
+        f"3. Still require explicit approval before external sends, destructive deletes, "
+        f"credential access, irreversible actions, or anything outside the declared task "
+        f"scope (solar-async-tasks execution-consent / Validation Gate).\n"
+        f"4. Add a short `## Result` section summarizing what was done and any pending "
+        f"approvals still required.\n"
+    )
+
+
+def create_async_draft(
+    user_text: str,
+    ai_output: str,
+    request_id: str,
+    *,
+    channel: str = "other",
+    queue: bool = False,
+    notify: bool = False,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Create an async task via solar-async-tasks create.sh.
+
+    Returns `(task_id, warning)`.
+    - `task_id` is None when creation failed.
+    - `warning` is set when `notify=True` but `notify_when: completed` could not
+      be configured (missing script, non-zero exit, or exception). Callers must
+      surface that warning so the user is not promised a completion ping.
+    """
     _ = request_id  # reserved for future correlation
     script = _resolve_under_home("core/skills/solar-async-tasks/scripts/create.sh")
     if not script.is_file():
-        return None
+        return None, None
     title = (user_text.strip() or "async task")[:120]
-    desc = (strip_solar_metadata(ai_output) or ai_output).strip()[:8000]
+    channel_l = (channel or "other").strip().lower()
+
+    body_path: Optional[pathlib.Path] = None
+    proc = None
     try:
+        if queue:
+            body = _gateway_task_body(user_text, channel_l)
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", suffix=".md", delete=False
+            ) as fh:
+                fh.write(body)
+                body_path = pathlib.Path(fh.name)
+            cmd = [
+                "bash",
+                str(script),
+                "--queued",
+                "--scheduled-time",
+                "now",
+                "--priority",
+                "normal",
+                "--body-file",
+                str(body_path),
+                title,
+            ]
+        else:
+            desc = (strip_solar_metadata(ai_output) or ai_output or user_text).strip()[:8000]
+            cmd = ["bash", str(script), title, desc]
+
         proc = subprocess.run(
-            ["bash", str(script), title, desc],
+            cmd,
             capture_output=True,
             text=True,
             cwd=str(SOLAR_WORKSPACE),
             timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0:
-        return None
-    out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith("ID:"):
-            return line.split("ID:", 1)[1].strip()
-    return None
+        return None, None
+    finally:
+        if body_path is not None:
+            try:
+                body_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    if proc is None or proc.returncode != 0:
+        return None, None
+    task_id = _parse_create_task_id(proc.stdout or "", proc.stderr or "")
+    if not task_id:
+        return None, None
+
+    if not notify:
+        return task_id, None
+
+    notify_script = _resolve_under_home(
+        "core/skills/solar-async-tasks/scripts/add_notify.sh"
+    )
+    if not notify_script.is_file():
+        return task_id, "notify_script_missing"
+    try:
+        nproc = subprocess.run(
+            ["bash", str(notify_script), task_id],
+            capture_output=True,
+            text=True,
+            cwd=str(SOLAR_WORKSPACE),
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return task_id, "notify_failed"
+    if nproc.returncode != 0:
+        return task_id, "notify_failed"
+    return task_id, None
+
+
+def gateway_async_reply(
+    task_id: Optional[str],
+    *,
+    notify_warning: Optional[str] = None,
+) -> str:
+    """Always return a canonical gateway ACK (ignore model prose).
+
+    When notify could not be configured, do not promise a completion ping.
+    """
+    if notify_warning:
+        parts = [GATEWAY_ASYNC_ACK_NO_NOTIFY]
+        if task_id:
+            parts.append(f"(Tarea: {task_id})")
+        parts.append(f"[Detalle: {notify_warning}]")
+        return "\n\n".join(parts)
+    parts = [GATEWAY_ASYNC_ACK]
+    if task_id:
+        parts.append(f"(Tarea: {task_id})")
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +456,10 @@ def resolve_decision(
 ) -> Tuple[Dict[str, Any], str]:
     """
     Compute v3 decision dict and user-facing reply_text (tags stripped).
+
+    For gateway channels (telegram/n8n), `async_draft_created` launches a queued
+    task with completion notify and returns a short ACK. Other channels create a
+    draft for the human plan→approve flow.
     """
     mode_l = mode.strip().lower()
     channel_l = channel.strip().lower()
@@ -241,10 +478,27 @@ def resolve_decision(
                 {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
                 fallback_reply,
             )
-        task_id = create_async_draft(user_text, ai_output, request_id)
+        task_id, notify_warning = create_async_draft(
+            user_text,
+            ai_output,
+            request_id,
+            channel=channel_l,
+            queue=channel_l in GATEWAY_ASYNC_CHANNELS,
+            notify=channel_l in GATEWAY_ASYNC_CHANNELS,
+        )
+        if not task_id:
+            return (
+                {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+                fallback_reply + ASYNC_CREATE_FAILED_SUFFIX,
+            )
+        reply = (
+            gateway_async_reply(task_id, notify_warning=notify_warning)
+            if channel_l in GATEWAY_ASYNC_CHANNELS
+            else fallback_reply
+        )
         return (
             {"kind": "async_draft_created", "task_id": task_id, "priority_suggested": None},
-            fallback_reply,
+            reply,
         )
 
     if mode_l == "auto" and channel_l == "async-task":
@@ -256,9 +510,38 @@ def resolve_decision(
     # mode == auto, channels: telegram, n8n, other
     tag_kind = extract_tag_decision_kind(ai_output)
     if tag_kind == "async_draft_created":
+        if not async_tasks_enabled():
+            return (
+                {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+                fallback_reply
+                + "\n\n[Async tasks disabled: enable async-tasks in SOLAR_SYSTEM_FEATURES.]",
+            )
+        is_gateway = channel_l in GATEWAY_ASYNC_CHANNELS
+        task_id, notify_warning = create_async_draft(
+            user_text,
+            ai_output,
+            request_id,
+            channel=channel_l,
+            queue=is_gateway,
+            notify=is_gateway,
+        )
+        if not task_id:
+            return (
+                {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+                fallback_reply + ASYNC_CREATE_FAILED_SUFFIX,
+            )
+        if is_gateway:
+            reply = gateway_async_reply(task_id, notify_warning=notify_warning)
+        else:
+            reply = (
+                f"{fallback_reply}\n\n"
+                f"He creado el draft `{task_id}`. ¿Quieres que lo active y lo pase a queue?"
+                if "active" not in fallback_reply.lower()
+                else fallback_reply
+            )
         return (
-            {"kind": "async_draft_created", "task_id": None, "priority_suggested": None},
-            fallback_reply,
+            {"kind": "async_draft_created", "task_id": task_id, "priority_suggested": "normal"},
+            reply,
         )
     if tag_kind == "direct_reply":
         return (
@@ -324,6 +607,8 @@ def build_prompt(
     mode: str,
     channel: str,
     jit_context: Optional[Dict[str, Any]] = None,
+    recent: Optional[List[Dict[str, str]]] = None,
+    summary: Optional[str] = None,
 ) -> str:
     lines: List[str] = []
     lines.append(system_prompt)
@@ -337,7 +622,7 @@ def build_prompt(
         elif jit_context.get("agent_path"):
             # Agent file exists: reference it — CLI reads from SOLAR_WORKSPACE
             lines.append("")
-            lines.append(f"## Agent Role")
+            lines.append("## Agent Role")
             lines.append(f"Read {jit_context['agent_path']} for your role definition before responding.")
 
     lines.append("")
@@ -350,6 +635,22 @@ def build_prompt(
     if jit_context and jit_context.get("jit_generated"):
         lines.append("- agent: jit (generated for this task)")
     lines.append("")
+    if summary:
+        lines.append("Conversation summary (previous turns):")
+        lines.append(summary)
+        lines.append("")
+        if recent:
+            lines.append("Most recent turns (supplement, newest last):")
+            for item in recent:
+                label = "USER" if item["role"] == "user" else "ASSISTANT"
+                lines.append(f"{label}: {item['text']}")
+            lines.append("")
+    elif recent:
+        lines.append("Recent turns (oldest -> newest):")
+        for item in recent:
+            label = "USER" if item["role"] == "user" else "ASSISTANT"
+            lines.append(f"{label}: {item['text']}")
+        lines.append("")
     lines.append("Current user message:")
     lines.append(user_text)
     lines.append("")
@@ -357,9 +658,13 @@ def build_prompt(
     channel_l = channel.strip().lower()
     if mode_l == "auto" and channel_l in ("telegram", "n8n"):
         lines.append(
-            f"[Solar routing] channel={channel_l}, mode=auto. After your main answer, append "
-            "exactly one line: <solar_decision>direct_reply</solar_decision> if the request is quick, "
-            "or <solar_decision>async_draft_created</solar_decision> if it needs substantial async work. "
+            f"[Solar routing] channel={channel_l}, mode=auto. "
+            "If the request likely needs more than ~60 seconds (plans, audits, multi-file work, "
+            "research, batch processing), do NOT execute it in this turn. Reply with a short ACK "
+            "like 'Me pongo con ello. Te aviso cuando termine.' and append "
+            "<solar_decision>async_draft_created</solar_decision>. "
+            "The router will queue the real work and notify on completion. "
+            "Use <solar_decision>direct_reply</solar_decision> only for quick answers. "
             "Then append <solar_summary>...</solar_summary> as usual."
         )
     elif mode_l == "auto" and channel_l != "async-task":
@@ -629,7 +934,17 @@ def route_stream(raw: str):
     metadata = payload.get("metadata") or {}
     jit_context = resolve_jit_context(metadata) if metadata else None
     system_prompt = read_system_prompt()
-    prompt = build_prompt(system_prompt, text, conversation_id, mode, channel, jit_context)
+    summary, recent = conversation_context(conversation_id, conv_path)
+    prompt = build_prompt(
+        system_prompt,
+        text,
+        conversation_id,
+        mode,
+        channel,
+        jit_context,
+        recent=recent,
+        summary=summary,
+    )
 
     provider_used: Optional[str] = None
     usage: Optional[Dict[str, Any]] = None
@@ -671,7 +986,10 @@ def route_stream(raw: str):
     decision, reply_text = resolve_decision(mode, channel, ai_output, text, request_id)
 
     append_message(conv_path, "user", text)
-    append_message(conv_path, "assistant", ai_output)
+    append_message(conv_path, "assistant", reply_text)
+    new_summary = extract_summary_from_output(ai_output)
+    if new_summary:
+        save_summary(conversation_id, new_summary)
 
     yield json.dumps(
         {
@@ -684,6 +1002,9 @@ def route_stream(raw: str):
             "prompt_chars": len(prompt),
             "reply_text": reply_text,
             "decision": decision,
+            "history_turns": len(recent) // 2,
+            "summary_used": summary is not None,
+            "summary_updated": new_summary is not None,
         },
         ensure_ascii=False,
     )
@@ -741,7 +1062,17 @@ def route(raw: str) -> Dict[str, Any]:
 
     jit_context = resolve_jit_context(metadata) if metadata else None
     system_prompt = read_system_prompt()
-    prompt = build_prompt(system_prompt, text, conversation_id, mode, channel, jit_context)
+    summary, recent = conversation_context(conversation_id, conv_path)
+    prompt = build_prompt(
+        system_prompt,
+        text,
+        conversation_id,
+        mode,
+        channel,
+        jit_context,
+        recent=recent,
+        summary=summary,
+    )
 
     provider_used: Optional[str] = None
     try:
@@ -783,7 +1114,10 @@ def route(raw: str) -> Dict[str, Any]:
     decision, reply_text = resolve_decision(mode, channel, ai_output, text, request_id)
 
     append_message(conv_path, "user", text)
-    append_message(conv_path, "assistant", ai_output)
+    append_message(conv_path, "assistant", reply_text)
+    new_summary = extract_summary_from_output(ai_output)
+    if new_summary:
+        save_summary(conversation_id, new_summary)
 
     audit_log(
         router_id,
@@ -794,6 +1128,9 @@ def route(raw: str) -> Dict[str, Any]:
         prompt_chars=len(prompt),
         decision_kind=decision.get("kind"),
         jit_generated=bool(jit_context and jit_context.get("jit_generated")),
+        history_turns=len(recent) // 2,
+        summary_used=summary is not None,
+        summary_updated=new_summary is not None,
     )
 
     return {
