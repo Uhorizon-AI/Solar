@@ -70,6 +70,12 @@ Invoked when `sun/MEMORY.md` or `sun/preferences/profile.md` are missing. Offer 
 
 `core/` must be operated autonomously. The agent may execute any script under `core/**` when needed by the active workflow. Do not ask non-technical users to run bash commands for normal `core/` operations — ask only for required secrets, blocked permissions, or high-risk actions.
 
+Under supervised autonomy, this is **A2 implicit**: scoped to the active
+workflow, local `core/**` scripts only. It is not authority for external sends,
+credential changes, irreversible deletes, or push/release. See
+`core/docs/authority-model.md`, workspace `AGENTS.md` (Supervised autonomy), and
+`core/skills/solar-router/references/authority-gate.md`.
+
 ## Workspace doctor policy (required)
 
 Doctor runs are on-demand only. Git checks are opt-in: `solar workspace doctor --check-git`. Missing `.git` in `sun/` or `planets/*` is not a blocking issue unless git validation was explicitly requested.

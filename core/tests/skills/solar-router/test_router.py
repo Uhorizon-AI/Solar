@@ -104,7 +104,10 @@ class TestDecisionEngine(unittest.TestCase):
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value=("tid-gateway", None))
     def test_auto_telegram_parses_tags(self, mock_create):
-        raw = "ok<solar_decision>async_draft_created</solar_decision><solar_summary>x</solar_summary>"
+        raw = (
+            "- object: o\n- scope: s\n- effect: e\n"
+            "ok<solar_decision>async_draft_created</solar_decision><solar_summary>x</solar_summary>"
+        )
         result = router.decision_engine("auto", "telegram", raw, "r1", "text")
         self.assertEqual(result["kind"], "async_draft_created")
         self.assertEqual(result["task_id"], "tid-gateway")
@@ -112,6 +115,15 @@ class TestDecisionEngine(unittest.TestCase):
         kwargs = mock_create.call_args.kwargs
         self.assertTrue(kwargs.get("queue"))
         self.assertTrue(kwargs.get("notify"))
+
+    @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
+    @patch("router.create_async_draft", return_value=("tid-noscope", None))
+    def test_auto_telegram_without_scope_does_not_queue(self, mock_create):
+        raw = "ok<solar_decision>async_draft_created</solar_decision><solar_summary>x</solar_summary>"
+        result = router.decision_engine("auto", "telegram", raw, "r1", "text")
+        self.assertEqual(result["kind"], "async_draft_created")
+        self.assertFalse(result.get("queued"))
+        self.assertFalse(mock_create.call_args.kwargs.get("queue"))
 
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):
@@ -460,6 +472,9 @@ class TestRouteSuccessPaths(unittest.TestCase):
     @patch("router.run_with_fallback")
     def test_auto_telegram_async_tag(self, mock_run, mock_create):
         raw = (
+            "- object: long report\n"
+            "- scope: sun/plans/**\n"
+            "- effect: markdown file written\n"
             "¿Quieres que lo active y lo pase a queue?\n"
             "<solar_decision>async_draft_created</solar_decision>\n"
             "<solar_summary>informe encolado</solar_summary>"
@@ -470,6 +485,7 @@ class TestRouteSuccessPaths(unittest.TestCase):
         )
         self.assertEqual(result["decision"]["kind"], "async_draft_created")
         self.assertEqual(result["decision"]["task_id"], "task-async-1")
+        self.assertTrue(result["decision"].get("queued"))
         self.assertNotIn("solar_decision", result["reply_text"])
         self.assertNotIn("solar_summary", result["reply_text"])
         self.assertEqual(
@@ -485,6 +501,9 @@ class TestRouteSuccessPaths(unittest.TestCase):
     @patch("router.create_async_draft", return_value=("task-n8n-1", None))
     def test_resolve_decision_n8n_queues_and_acks(self, mock_create):
         raw = (
+            "- object: plan\n"
+            "- scope: sun/plans/**\n"
+            "- effect: plan file written\n"
             "¿Lo activo?\n"
             "<solar_decision>async_draft_created</solar_decision>\n"
             "<solar_summary>x</solar_summary>"
@@ -494,6 +513,7 @@ class TestRouteSuccessPaths(unittest.TestCase):
         )
         self.assertEqual(decision["kind"], "async_draft_created")
         self.assertEqual(decision["task_id"], "task-n8n-1")
+        self.assertTrue(decision.get("queued"))
         self.assertEqual(reply, router.gateway_async_reply("task-n8n-1"))
         self.assertTrue(mock_create.call_args.kwargs.get("queue"))
         self.assertTrue(mock_create.call_args.kwargs.get("notify"))
@@ -502,6 +522,9 @@ class TestRouteSuccessPaths(unittest.TestCase):
     @patch("router.create_async_draft", return_value=("task-warn-1", "notify_failed"))
     def test_resolve_decision_surfaces_notify_warning(self, _):
         raw = (
+            "- object: audit\n"
+            "- scope: sun/plans/**\n"
+            "- effect: audit written\n"
             "Me pongo con ello.\n"
             "<solar_decision>async_draft_created</solar_decision>\n"
             "<solar_summary>x</solar_summary>"
@@ -513,6 +536,65 @@ class TestRouteSuccessPaths(unittest.TestCase):
         self.assertIn("notify_failed", reply)
         self.assertIn(router.GATEWAY_ASYNC_ACK_NO_NOTIFY, reply)
         self.assertNotIn(router.GATEWAY_ASYNC_ACK, reply)
+
+    @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
+    @patch("router.create_async_draft", return_value=("draft-noscope-1", None))
+    def test_gateway_async_without_scope_does_not_queue(self, mock_create):
+        raw = (
+            "Me pongo con ello.\n"
+            "<solar_decision>async_draft_created</solar_decision>\n"
+            "<solar_summary>x</solar_summary>"
+        )
+        decision, reply = router.resolve_decision(
+            "auto", "telegram", raw, "haz un informe enorme", "req-noscope"
+        )
+        self.assertEqual(decision["kind"], "async_draft_created")
+        self.assertEqual(decision["task_id"], "draft-noscope-1")
+        self.assertFalse(decision.get("queued"))
+        self.assertTrue(decision.get("approval_required"))
+        self.assertFalse(mock_create.call_args.kwargs.get("queue"))
+        self.assertIn("sin encolar", reply)
+        self.assertIn("object/scope/effect", reply)
+
+    @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
+    @patch("router.create_async_draft", return_value=("draft-usertext-1", None))
+    def test_user_declared_scope_does_not_unlock_queue(self, mock_create):
+        raw = (
+            "Voy con ello.\n"
+            "<solar_decision>async_draft_created</solar_decision>\n"
+            "<solar_summary>x</solar_summary>"
+        )
+        decision, _ = router.resolve_decision(
+            "auto",
+            "telegram",
+            raw,
+            "- object: o\n- scope: s\n- effect: e\nhaz el informe",
+            "req-usertext",
+        )
+        self.assertFalse(decision.get("queued"))
+        self.assertTrue(decision.get("approval_required"))
+        self.assertFalse(mock_create.call_args.kwargs.get("queue"))
+
+    def test_extract_async_scope_and_material_audit(self):
+        scope = router.extract_async_scope("- object: o\n- scope: s\n- effect: e\n")
+        self.assertTrue(router.async_scope_complete(scope))
+        fields = router.material_audit_fields(
+            text="haz informe",
+            channel="telegram",
+            mode="auto",
+            decision={
+                "kind": "async_draft_created",
+                "task_id": "t1",
+                "queued": True,
+                "approval_required": False,
+                "async_scope": scope,
+            },
+            scope=scope,
+        )
+        self.assertEqual(fields["authority"], "a2_scoped_ack")
+        self.assertIn("intention", fields)
+        self.assertIn("systems", fields)
+        self.assertIn("validation", fields)
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value=(None, None))

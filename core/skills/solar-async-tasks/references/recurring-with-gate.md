@@ -2,6 +2,19 @@
 
 A recurring task that requires human validation between each execution. The gate prevents the loop from running indefinitely without review — each iteration waits for explicit approval before the next one.
 
+## This gate is not authority
+
+Two different questions, two different mechanisms — do not merge them and do not use one to answer the other:
+
+| Question | Mechanism |
+|---|---|
+| *May this routine act at all, within which limits, until when, how is it stopped?* | A3 mandate — `core/skills/solar-router/references/a3-mandates.md` |
+| *Is the artefact from the previous run good enough to justify producing another?* | The `gate:` state file below |
+
+Same split as A2 (authority) versus a domain gate (artefact fitness): a passing gate never grants authority.
+
+So a **delegated** routine does not keep its own authority state: it calls `delegation_ctl.py check` in the body and fails closed on non-zero exit. Keep the `gate:` file only when a human must review each artefact before the next run. A routine can legitimately need both — the mandate authorizes the class of work, the gate paces it.
+
 ## When to use this pattern
 
 - The task produces a diagnostic or artifact that a human must review before the next cycle

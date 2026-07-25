@@ -29,6 +29,9 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 - Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `SOLAR_WORKSPACE` when relative.
 - Codex default command includes `-C <repo-root>` and `--add-dir ~/.codex`.
 - Persist conversation turns in runtime dir (JSONL) and inject continuity into each prompt: rolling `*-summary.txt` from `<solar_summary>` plus recent turns (`SOLAR_ROUTER_CONTEXT_TURNS`).
+- Also inject cross-channel canonical intention from `sun/runtime/continuity/active.json` when present. See `references/continuity.md`.
+- Own the A3 mandate controller (`scripts/delegation_ctl.py`) for `sun/delegations/`: any caller gates mutating routines through `check` and fails closed. See `references/a3-mandates.md`. Unrelated to JIT agent/skill delegation.
+- Answer "where are we" on demand with `scripts/work_status.sh` (intention, machine queue, today's blockers, mandates). Read-only, no cadence: periodic briefings are recurring async tasks. Behaviour layer in `references/signal-orchestration.md`.
 - Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output. On telegram/n8n, `async_draft_created` queues work + `notify_when: completed` and returns a short ACK.
 - Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
 - Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability (including failed early-exit paths).

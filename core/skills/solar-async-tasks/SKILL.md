@@ -112,17 +112,19 @@ If the user asked for review before final edits, write a proposal or result arti
 
 ## Execution Consent
 
+**Prepare ≠ queue.** Draft/plan is preparation. `approve.sh` (or a scoped Telegram/n8n auto-queue ACK) is A2 only for the declared object/scope/effect.
+
 Queued or active tasks are already approved to execute their declared body and write declared artifacts/output paths.
 
-Still request explicit approval for:
+Still request **A2 formal** approval for:
 
-- external sends,
+- external sends (never A2-implicit; apply domain gates such as ECG),
 - deletions,
 - credential changes,
 - irreversible actions,
 - writes outside the declared task scope.
 
-See `references/execution-consent.md`.
+See `references/execution-consent.md` and `solar-router/references/authority-gate.md`.
 
 ## Task Body Authoring
 

@@ -133,6 +133,101 @@ def save_summary(conversation_id: str, summary: str) -> None:
     path.write_text(summary.strip(), encoding="utf-8")
 
 
+def continuity_root() -> pathlib.Path:
+    return SOLAR_WORKSPACE / "sun" / "runtime" / "continuity"
+
+
+def continuity_active_path() -> pathlib.Path:
+    return continuity_root() / "active.json"
+
+
+def empty_continuity(channel: str = "") -> Dict[str, Any]:
+    return {
+        "intention_id": "",
+        "active_task": "",
+        "decisions": [],
+        "completed_actions": [],
+        "pending": [],
+        "constraints": [],
+        "next_owner": "",
+        "updated_at": "",
+        "channels_seen": [channel] if channel else [],
+    }
+
+
+def load_continuity() -> Optional[Dict[str, Any]]:
+    path = continuity_active_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def format_continuity_block(data: Dict[str, Any]) -> str:
+    lines = [
+        "Cross-channel continuity (canonical intention — prefer this over re-onboarding):",
+        f"- intention_id: {data.get('intention_id') or '(none)'}",
+        f"- active_task: {data.get('active_task') or '(none)'}",
+        f"- next_owner: {data.get('next_owner') or '(unset)'}",
+        f"- updated_at: {data.get('updated_at') or '(unknown)'}",
+    ]
+    for key, label in (
+        ("decisions", "decisions"),
+        ("completed_actions", "completed"),
+        ("pending", "pending"),
+        ("constraints", "constraints"),
+    ):
+        items = data.get(key) or []
+        if isinstance(items, list) and items:
+            lines.append(f"- {label}: " + "; ".join(str(x) for x in items[:8]))
+    channels = data.get("channels_seen") or []
+    if isinstance(channels, list) and channels:
+        lines.append("- channels_seen: " + ", ".join(str(c) for c in channels[-6:]))
+    lines.append(
+        "Before acting: decide if the new message replaces, extends, or only queries this work. "
+        "Last explicit instruction wins over incompatible prior context. "
+        "Check for duplicates before creating tasks/events/messages/artifacts. "
+        "Do not put secrets in continuity."
+    )
+    return "\n".join(lines)
+
+
+def touch_continuity_channel(channel: str) -> None:
+    """Record that a channel touched the active intention; create file if missing."""
+    path = continuity_active_path()
+    data = load_continuity() or empty_continuity(channel)
+    seen = data.get("channels_seen")
+    if not isinstance(seen, list):
+        seen = []
+    if channel and channel not in seen:
+        seen.append(channel)
+    data["channels_seen"] = seen[-12:]
+    data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def maybe_update_continuity_from_summary(summary: str, channel: str) -> None:
+    """Light-touch sync: keep active_task text from rolling summary when empty/stale."""
+    data = load_continuity() or empty_continuity(channel)
+    compact = " ".join(summary.strip().split())
+    if compact and (not data.get("active_task") or len(str(data.get("active_task"))) < 8):
+        data["active_task"] = compact[:280]
+    seen = data.get("channels_seen")
+    if not isinstance(seen, list):
+        seen = []
+    if channel and channel not in seen:
+        seen.append(channel)
+    data["channels_seen"] = seen[-12:]
+    data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    path = continuity_active_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def read_system_prompt() -> str:
     if not SYSTEM_PROMPT_FILE.exists():
         return (
@@ -239,6 +334,93 @@ GATEWAY_ASYNC_ACK_NO_NOTIFY = (
 ASYNC_CREATE_FAILED_SUFFIX = (
     "\n\n[Warning: could not create the async task; answer kept as direct reply.]"
 )
+ASYNC_SCOPE_APPROVAL_SUFFIX = (
+    "\n\nHe creado el draft `{task_id}` sin encolar: faltan object/scope/effect "
+    "estructurados. Decláralos o aprueba el encolado explícitamente."
+)
+
+RE_ASYNC_SCOPE_TAG = re.compile(
+    r"<(object|scope|effect)>\s*(.*?)\s*</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+RE_ASYNC_SCOPE_FIELD = re.compile(
+    r"(?im)^\s*[-*]?\s*(object|scope|effect)\s*:\s*(.+?)\s*$",
+)
+
+
+def extract_async_scope(ai_output: str) -> Dict[str, str]:
+    """Extract object/scope/effect declarations for gateway auto-queue.
+
+    Only the AI output counts: user text stating "scope: …" must not by itself
+    unlock auto-queue (prepare ≠ queue).
+    """
+    blob = strip_solar_metadata(ai_output or "")
+    found: Dict[str, str] = {}
+    for match in RE_ASYNC_SCOPE_TAG.finditer(blob):
+        key = match.group(1).lower()
+        value = " ".join(match.group(2).split()).strip()
+        if value:
+            found[key] = value
+    for match in RE_ASYNC_SCOPE_FIELD.finditer(blob):
+        key = match.group(1).lower()
+        value = " ".join(match.group(2).split()).strip()
+        if value and key not in found:
+            found[key] = value
+    return found
+
+
+def async_scope_complete(scope: Dict[str, str]) -> bool:
+    return all(str(scope.get(key) or "").strip() for key in ("object", "scope", "effect"))
+
+
+def material_audit_fields(
+    *,
+    text: str,
+    channel: str,
+    mode: str,
+    decision: Dict[str, Any],
+    jit_context: Optional[Dict[str, Any]] = None,
+    scope: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """§10 minimum evidence fields for material router actions."""
+    kind = decision.get("kind")
+    task_id = decision.get("task_id")
+    queued = bool(decision.get("queued"))
+    if kind == "async_draft_created" and task_id and queued:
+        authority = "a2_scoped_ack"
+    elif kind == "async_draft_created" and task_id:
+        authority = "a1_prepare_draft"
+    elif kind == "direct_reply":
+        authority = "a0_a1_in_turn"
+    else:
+        authority = "unclassified"
+    agent = "solar-router"
+    if jit_context:
+        agent = (
+            jit_context.get("agent_name")
+            or jit_context.get("agent_path")
+            or agent
+        )
+    systems = [f"channel:{channel}", "solar-router"]
+    if task_id:
+        systems.append("solar-async-tasks")
+    return {
+        "intention": (text or "").strip()[:500],
+        "authority": authority,
+        "agent": agent,
+        "systems": systems,
+        "result": {
+            "decision_kind": kind,
+            "task_id": task_id,
+            "queued": queued,
+            "approval_required": bool(decision.get("approval_required")),
+        },
+        "validation": {
+            "mode": mode,
+            "async_scope": scope or {},
+            "async_scope_complete": async_scope_complete(scope or {}),
+        },
+    }
 
 
 def async_tasks_enabled() -> bool:
@@ -457,102 +639,125 @@ def resolve_decision(
     """
     Compute v3 decision dict and user-facing reply_text (tags stripped).
 
-    For gateway channels (telegram/n8n), `async_draft_created` launches a queued
-    task with completion notify and returns a short ACK. Other channels create a
-    draft for the human plan→approve flow.
+    For gateway channels (telegram/n8n), `async_draft_created` may auto-queue
+    only when object/scope/effect are structurally declared. Otherwise the draft
+    is kept and approval is requested (prepare ≠ queue).
     """
     mode_l = mode.strip().lower()
     channel_l = channel.strip().lower()
     stripped = strip_solar_metadata(ai_output)
     fallback_reply = stripped if stripped else ai_output.strip()
+    scope = extract_async_scope(ai_output)
+    scope_ok = async_scope_complete(scope)
+
+    def _decision(
+        kind: str,
+        *,
+        task_id: Optional[str] = None,
+        priority: Optional[str] = None,
+        queued: bool = False,
+        approval_required: bool = False,
+    ) -> Dict[str, Any]:
+        return {
+            "kind": kind,
+            "task_id": task_id,
+            "priority_suggested": priority,
+            "queued": queued,
+            "approval_required": approval_required,
+            "async_scope": scope,
+        }
 
     if mode_l == "direct_only":
-        return (
-            {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
-            fallback_reply,
-        )
+        return _decision("direct_reply"), fallback_reply
 
     if mode_l == "async_only":
         if not async_tasks_enabled():
-            return (
-                {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
-                fallback_reply,
-            )
+            return _decision("direct_reply"), fallback_reply
+        want_gateway_queue = channel_l in GATEWAY_ASYNC_CHANNELS
+        do_queue = want_gateway_queue and scope_ok
         task_id, notify_warning = create_async_draft(
             user_text,
             ai_output,
             request_id,
             channel=channel_l,
-            queue=channel_l in GATEWAY_ASYNC_CHANNELS,
-            notify=channel_l in GATEWAY_ASYNC_CHANNELS,
+            queue=do_queue,
+            notify=do_queue,
         )
         if not task_id:
             return (
-                {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+                _decision("direct_reply"),
                 fallback_reply + ASYNC_CREATE_FAILED_SUFFIX,
             )
-        reply = (
-            gateway_async_reply(task_id, notify_warning=notify_warning)
-            if channel_l in GATEWAY_ASYNC_CHANNELS
-            else fallback_reply
-        )
+        if do_queue:
+            reply = gateway_async_reply(task_id, notify_warning=notify_warning)
+        elif want_gateway_queue:
+            reply = fallback_reply + ASYNC_SCOPE_APPROVAL_SUFFIX.format(task_id=task_id)
+        else:
+            reply = fallback_reply
         return (
-            {"kind": "async_draft_created", "task_id": task_id, "priority_suggested": None},
+            _decision(
+                "async_draft_created",
+                task_id=task_id,
+                queued=do_queue,
+                approval_required=want_gateway_queue and not do_queue,
+            ),
             reply,
         )
 
     if mode_l == "auto" and channel_l == "async-task":
-        return (
-            {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
-            fallback_reply,
-        )
+        return _decision("direct_reply"), fallback_reply
 
     # mode == auto, channels: telegram, n8n, other
     tag_kind = extract_tag_decision_kind(ai_output)
     if tag_kind == "async_draft_created":
         if not async_tasks_enabled():
             return (
-                {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+                _decision("direct_reply"),
                 fallback_reply
                 + "\n\n[Async tasks disabled: enable async-tasks in SOLAR_SYSTEM_FEATURES.]",
             )
         is_gateway = channel_l in GATEWAY_ASYNC_CHANNELS
+        do_queue = is_gateway and scope_ok
         task_id, notify_warning = create_async_draft(
             user_text,
             ai_output,
             request_id,
             channel=channel_l,
-            queue=is_gateway,
-            notify=is_gateway,
+            queue=do_queue,
+            notify=do_queue,
         )
         if not task_id:
             return (
-                {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+                _decision("direct_reply"),
                 fallback_reply + ASYNC_CREATE_FAILED_SUFFIX,
             )
-        if is_gateway:
+        if do_queue:
             reply = gateway_async_reply(task_id, notify_warning=notify_warning)
+        elif is_gateway:
+            reply = fallback_reply + ASYNC_SCOPE_APPROVAL_SUFFIX.format(task_id=task_id)
         else:
-            reply = (
-                f"{fallback_reply}\n\n"
-                f"He creado el draft `{task_id}`. ¿Quieres que lo active y lo pase a queue?"
-                if "active" not in fallback_reply.lower()
-                else fallback_reply
-            )
+            if "active" not in fallback_reply.lower():
+                reply = (
+                    f"{fallback_reply}\n\n"
+                    f"He creado el draft `{task_id}`. ¿Quieres que lo active y lo pase a queue?"
+                )
+            else:
+                reply = fallback_reply
         return (
-            {"kind": "async_draft_created", "task_id": task_id, "priority_suggested": "normal"},
+            _decision(
+                "async_draft_created",
+                task_id=task_id,
+                priority="normal",
+                queued=do_queue,
+                approval_required=(is_gateway and not do_queue) or (not is_gateway),
+            ),
             reply,
         )
     if tag_kind == "direct_reply":
-        return (
-            {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
-            fallback_reply,
-        )
+        return _decision("direct_reply"), fallback_reply
 
-    return (
-        {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
-        fallback_reply,
-    )
+    return _decision("direct_reply"), fallback_reply
+
 
 
 def decision_engine(
@@ -609,6 +814,7 @@ def build_prompt(
     jit_context: Optional[Dict[str, Any]] = None,
     recent: Optional[List[Dict[str, str]]] = None,
     summary: Optional[str] = None,
+    continuity: Optional[Dict[str, Any]] = None,
 ) -> str:
     lines: List[str] = []
     lines.append(system_prompt)
@@ -635,6 +841,9 @@ def build_prompt(
     if jit_context and jit_context.get("jit_generated"):
         lines.append("- agent: jit (generated for this task)")
     lines.append("")
+    if continuity:
+        lines.append(format_continuity_block(continuity))
+        lines.append("")
     if summary:
         lines.append("Conversation summary (previous turns):")
         lines.append(summary)
@@ -682,7 +891,7 @@ def build_prompt(
                 "[Solar async-task consent] This active task has already been approved to execute its "
                 "task body and write declared artifacts/output paths. Ask for explicit approval only for "
                 "external sends, deletions, credentials, irreversible actions, or changes outside the "
-                "declared task scope."
+                "declared task scope. Prepare ≠ queue: do not expand into undeclared sends."
             )
     return "\n".join(lines)
 
@@ -908,6 +1117,8 @@ def route_stream(raw: str):
         return
 
     request_id = str(payload.get("request_id", "")).strip() or "unknown"
+    router_id = str(uuid.uuid4())
+    t_start = time.monotonic()
     user_id = str(payload.get("user_id", "")).strip()
     session_id = str(payload.get("session_id", "")).strip()
     text = str(payload.get("text", "")).strip()
@@ -933,8 +1144,12 @@ def route_stream(raw: str):
     conv_path = conversation_file(conversation_id)
     metadata = payload.get("metadata") or {}
     jit_context = resolve_jit_context(metadata) if metadata else None
+    audit_log(router_id, "start", request_id=request_id, user_id=user_id, channel=channel, mode=mode, metadata=metadata, stream=True)
     system_prompt = read_system_prompt()
     summary, recent = conversation_context(conversation_id, conv_path)
+    continuity = load_continuity()
+    touch_continuity_channel(channel)
+    continuity = load_continuity() or continuity
     prompt = build_prompt(
         system_prompt,
         text,
@@ -944,6 +1159,7 @@ def route_stream(raw: str):
         jit_context,
         recent=recent,
         summary=summary,
+        continuity=continuity,
     )
 
     provider_used: Optional[str] = None
@@ -990,6 +1206,30 @@ def route_stream(raw: str):
     new_summary = extract_summary_from_output(ai_output)
     if new_summary:
         save_summary(conversation_id, new_summary)
+        maybe_update_continuity_from_summary(new_summary, channel)
+
+    audit_log(
+        router_id,
+        "end",
+        status="success",
+        provider=provider_used,
+        duration_ms=int((time.monotonic() - t_start) * 1000),
+        prompt_chars=len(prompt),
+        decision_kind=decision.get("kind"),
+        stream=True,
+        jit_generated=bool(jit_context and jit_context.get("jit_generated")),
+        history_turns=len(recent) // 2,
+        summary_used=summary is not None,
+        summary_updated=new_summary is not None,
+        **material_audit_fields(
+            text=text,
+            channel=channel,
+            mode=mode,
+            decision=decision,
+            jit_context=jit_context,
+            scope=decision.get("async_scope") if isinstance(decision.get("async_scope"), dict) else None,
+        ),
+    )
 
     yield json.dumps(
         {
@@ -1063,6 +1303,9 @@ def route(raw: str) -> Dict[str, Any]:
     jit_context = resolve_jit_context(metadata) if metadata else None
     system_prompt = read_system_prompt()
     summary, recent = conversation_context(conversation_id, conv_path)
+    continuity = load_continuity()
+    touch_continuity_channel(channel)
+    continuity = load_continuity() or continuity
     prompt = build_prompt(
         system_prompt,
         text,
@@ -1072,6 +1315,7 @@ def route(raw: str) -> Dict[str, Any]:
         jit_context,
         recent=recent,
         summary=summary,
+        continuity=continuity,
     )
 
     provider_used: Optional[str] = None
@@ -1118,6 +1362,7 @@ def route(raw: str) -> Dict[str, Any]:
     new_summary = extract_summary_from_output(ai_output)
     if new_summary:
         save_summary(conversation_id, new_summary)
+        maybe_update_continuity_from_summary(new_summary, channel)
 
     audit_log(
         router_id,
@@ -1131,6 +1376,14 @@ def route(raw: str) -> Dict[str, Any]:
         history_turns=len(recent) // 2,
         summary_used=summary is not None,
         summary_updated=new_summary is not None,
+        **material_audit_fields(
+            text=text,
+            channel=channel,
+            mode=mode,
+            decision=decision,
+            jit_context=jit_context,
+            scope=decision.get("async_scope") if isinstance(decision.get("async_scope"), dict) else None,
+        ),
     )
 
     return {

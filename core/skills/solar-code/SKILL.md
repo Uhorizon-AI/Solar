@@ -58,6 +58,16 @@ Classify the change before acting:
 **Default mode:** `local-review`. Branch, push, and PR are optional layers added
 only when there is evidence they are needed.
 
+### Authority (supervised autonomy)
+
+- Clear local `solar-code` work under an explicit user mandate is **A2 implicit**
+  (scoped working-tree edit + IDE review). Do not ask a second “approve?” for that
+  scoped edit.
+- **Push, PR, tag, and release** are never A2 implicit — require **A2 formal**
+  (and treat irreversible release paths as A4 escalation when appropriate).
+- If triage level grows beyond the original mandate, re-triage and get explicit
+  approval before continuing (new A2).
+
 ## Failure protocol
 
 - If a required check fails: stop, report the failure, do not proceed.
