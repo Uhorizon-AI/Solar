@@ -10,6 +10,77 @@ solar_client_install_root() {
   _resolve_global_root
 }
 
+# Canonical public framework repo (install / bootstrap / docs).
+solar_client_canonical_repo_url() {
+  printf '%s\n' "${SOLAR_REPO_URL:-https://github.com/Uhorizon-AI/Solar.git}"
+}
+
+solar_client_releases_latest_api() {
+  printf '%s\n' "${SOLAR_RELEASES_API_URL:-https://api.github.com/repos/Uhorizon-AI/Solar/releases/latest}"
+}
+
+# Resolve latest stable GitHub Release tag_name via curl + JSON parse.
+# Override for tests/offline: SOLAR_STABLE_RELEASE_TAG=vX.Y.Z
+# Returns tag on stdout; exit 1 on failure (no fallback to main).
+solar_client_resolve_stable_release_tag() {
+  if [[ -n "${SOLAR_STABLE_RELEASE_TAG:-}" ]]; then
+    local forced="${SOLAR_STABLE_RELEASE_TAG}"
+    if [[ ! "$forced" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
+      echo "ERROR: SOLAR_STABLE_RELEASE_TAG invalid: $forced" >&2
+      return 1
+    fi
+    # Reject prerelease-looking overrides unless explicitly allowed
+    if [[ "$forced" =~ (beta|rc|alpha|pre) ]] && [[ "${SOLAR_ALLOW_PRERELEASE:-}" != "1" ]]; then
+      echo "ERROR: refusing prerelease tag as stable: $forced (set SOLAR_ALLOW_PRERELEASE=1 to override)" >&2
+      return 1
+    fi
+    printf '%s\n' "$forced"
+    return 0
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "ERROR: curl is required to resolve the stable Solar release" >&2
+    return 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 is required to resolve the stable Solar release" >&2
+    return 1
+  fi
+
+  local api_url body tag
+  api_url="$(solar_client_releases_latest_api)"
+  if ! body="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$api_url" 2>/dev/null)"; then
+    echo "ERROR: failed to fetch stable release from $api_url" >&2
+    return 1
+  fi
+
+  tag="$(printf '%s' "$body" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception as exc:
+    sys.stderr.write(f"ERROR: invalid releases API JSON: {exc}\n")
+    sys.exit(1)
+if data.get("draft"):
+    sys.stderr.write("ERROR: latest release is a draft\n")
+    sys.exit(1)
+if data.get("prerelease"):
+    sys.stderr.write("ERROR: latest release is a prerelease; no stable channel available\n")
+    sys.exit(1)
+tag = (data.get("tag_name") or "").strip()
+if not tag:
+    sys.stderr.write("ERROR: releases API response missing tag_name\n")
+    sys.exit(1)
+print(tag)
+')" || return 1
+
+  if [[ -z "$tag" ]]; then
+    echo "ERROR: empty stable release tag" >&2
+    return 1
+  fi
+  printf '%s\n' "$tag"
+}
+
 solar_client_git_identity() {
   local client_root="$1"
   local git_root version commit
@@ -426,15 +497,8 @@ solar_client_apply_git_update() {
     fi
     git -C "$root" checkout "$tag"
   else
-    if git -C "$root" show-ref --verify --quiet refs/remotes/origin/main; then
-      git -C "$root" checkout main 2>/dev/null || git -C "$root" checkout -B main
-      git -C "$root" pull --ff-only origin main
-    elif git -C "$root" show-ref --verify --quiet refs/remotes/origin/master; then
-      git -C "$root" checkout master 2>/dev/null || git -C "$root" checkout -B master
-      git -C "$root" pull --ff-only origin master
-    else
-      echo "WARN: no origin/main or origin/master; staying on current branch"
-    fi
+    echo "ERROR: git update requires an explicit ref (stable release or --ref)" >&2
+    return 1
   fi
   return 0
 }

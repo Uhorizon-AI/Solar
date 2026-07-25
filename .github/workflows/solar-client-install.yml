@@ -1,0 +1,88 @@
+name: Solar Client install
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "core/skills/solar-client/**"
+      - "core/tests/skills/solar-client/**"
+      - "core/scripts/create-release.sh"
+      - ".github/workflows/solar-client-install.yml"
+      - "README.md"
+  pull_request:
+    paths:
+      - "core/skills/solar-client/**"
+      - "core/tests/skills/solar-client/**"
+      - "core/scripts/create-release.sh"
+      - ".github/workflows/solar-client-install.yml"
+      - "README.md"
+
+jobs:
+  install-macos:
+    name: Install E2E (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Executable bit on solar CLI
+        run: |
+          mode="$(git ls-files -s core/skills/solar-client/scripts/solar | awk '{print $1}')"
+          echo "mode=$mode"
+          test "$mode" = "100755"
+
+      - name: Anti-defaults (canonical repo + no stale bootstrap tag)
+        run: |
+          if grep -R "louisjimenezp/solar" core/skills/solar-client/scripts/bootstrap_solar_client.sh \
+               core/skills/solar-client/scripts/install_solar_client.sh; then
+            echo "ERROR: personal repo URL still present" >&2
+            exit 1
+          fi
+          if grep -E 'SOLAR_CLIENT_TAG:-v0\.14\.0' core/skills/solar-client/scripts/bootstrap_solar_client.sh; then
+            echo "ERROR: stale default tag v0.14.0 still present" >&2
+            exit 1
+          fi
+          grep -q 'Uhorizon-AI/Solar' core/skills/solar-client/scripts/client_lib.sh
+          grep -q 'Uhorizon-AI/Solar' core/skills/solar-client/scripts/bootstrap_solar_client.sh
+
+      - name: bash -n critical scripts
+        run: |
+          bash -n core/skills/solar-client/scripts/client_lib.sh
+          bash -n core/skills/solar-client/scripts/install_solar_client.sh
+          bash -n core/skills/solar-client/scripts/bootstrap_solar_client.sh
+          bash -n core/skills/solar-client/scripts/client_update.sh
+          bash -n core/skills/solar-client/scripts/solar
+          bash -n core/skills/solar-client/scripts/solar_setup.sh
+          bash -n core/skills/solar-client/scripts/uninstall_solar_client.sh
+          bash -n core/scripts/create-release.sh
+
+      - name: README bootstrap pin present
+        run: |
+          grep -q '<!-- solar-bootstrap-pin -->' README.md
+          grep -q '<!-- /solar-bootstrap-pin -->' README.md
+          pin_ver="$(grep -oE 'raw.githubusercontent.com/Uhorizon-AI/Solar/v[0-9]+\.[0-9]+\.[0-9]+' README.md | head -1 | sed 's|.*/||')"
+          cli_ver="$(grep -E '^SOLAR_VERSION=' core/skills/solar-client/scripts/solar | sed 's/.*"\(.*\)"/\1/')"
+          echo "pin=$pin_ver cli=$cli_ver"
+          # Pin may lag until next create-release; require pin format only on PRs that do not bump release.
+          test -n "$pin_ver"
+
+      - name: Install E2E test
+        run: bash core/tests/skills/solar-client/test_install_solar_client.sh
+
+      - name: Existing client unit tests
+        run: |
+          bash core/tests/skills/solar-client/test_resolve_solar_paths.sh
+          bash core/tests/skills/solar-client/test_client_update.sh
+
+  install-ubuntu-informative:
+    name: Install E2E (Ubuntu, informative)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install E2E (non-blocking)
+        run: bash core/tests/skills/solar-client/test_install_solar_client.sh

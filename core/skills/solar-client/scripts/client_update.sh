@@ -31,8 +31,9 @@ Options:
   --check              Report installed vs remote/manifest; no changes
   --repair             Repair workspace .solar/manifest.json (OneDrive conflicts)
   --workspace <path>   Workspace for manifest checks/repair (default: discover cwd)
-  --tag <ref>          Git checkout <ref> in SOLAR_ROOT (tag or branch)
-  --version <vX.Y.Z>   Alias for --tag
+  --ref <ref>          Git checkout <ref> in SOLAR_ROOT (tag, branch, or commit)
+  --tag <ref>          Alias for --ref
+  --version <vX.Y.Z>   Alias for --ref
   --bundle             Force core/ bundle rsync (skip git even if .git exists)
   --from-dev           Bundle from current SOLAR_ROOT checkout (default with --bundle)
   --from-tag <tag>     Bundle from git tag (with --bundle)
@@ -62,7 +63,7 @@ while [[ $# -gt 0 ]]; do
       USE_BUNDLE=true
       shift
       ;;
-    --tag|--version)
+    --ref|--tag|--version)
       opt="$1"
       shift
       [[ $# -gt 0 ]] || { echo "ERROR: $opt requires a value" >&2; exit 2; }
@@ -149,6 +150,13 @@ fi
 
 DID_BACKUP=false
 if [[ "$use_git" == true ]]; then
+  if [[ -z "$TARGET_TAG" ]]; then
+    TARGET_TAG="$(solar_client_resolve_stable_release_tag)" || {
+      echo "ERROR: could not resolve stable release; pass --ref explicitly" >&2
+      exit 1
+    }
+    echo "  target=$TARGET_TAG (stable release)"
+  fi
   if solar_client_should_rsync_backup_git "$INSTALL_ROOT" "$FORCE_BACKUP"; then
     backup_path="$(solar_client_backup_install_git "$INSTALL_ROOT" "$cur_ver" "$SOLAR_WORKSPACE")"
     echo "OK: backup at $backup_path"

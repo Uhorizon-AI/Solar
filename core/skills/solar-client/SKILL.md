@@ -34,6 +34,7 @@ python3 -m py_compile core/skills/solar-client/scripts/solar_paths.py
 bash core/tests/skills/solar-client/test_resolve_solar_paths.sh
 bash core/tests/skills/solar-client/test_solar_paths_py.sh
 bash core/tests/skills/solar-client/test_sync_clients_prune.sh
+bash core/tests/skills/solar-client/test_install_solar_client.sh
 ```
 
 ## CLI (via `solar` entrypoint)
@@ -44,12 +45,14 @@ Resolve paths first (`resolve_solar_paths.sh` + `solar_paths.py` in this skill):
 
 ```bash
 solar client init
-solar client update [--check|--repair|--tag|--bundle]
+solar client update [--check|--repair|--ref|--tag|--bundle]
 solar client upgrade [--check|--restructure]
 solar client sync [--portable]
 solar client bundle create|verify
 solar client doctor [--strict]
 solar client self-update
+solar setup                # onboarding facade
+solar uninstall            # remove wrapper; optional --remove-install
 solar status               # compact health; system = check_orchestrator verdict
 solar paths
 solar app …                # delegates to solar-app
@@ -78,12 +81,21 @@ bash -n core/skills/solar-client/scripts/solar_paths.sh
 
 ## Install
 
+**Contract:** macOS supported; stable channel = GitHub Release `latest` (API + `curl`); smoke uses absolute wrapper path; installer does not edit shell profiles. Details: `core/docs/installation.md`.
+
 ```bash
-bash core/skills/solar-client/scripts/install_solar_client.sh
-# or: curl -fsSL .../bootstrap_solar_client.sh | bash
+# Bootstrap (URL pin maintained by create-release — see README markers)
+curl -fsSL https://raw.githubusercontent.com/Uhorizon-AI/Solar/v0.18.2/core/skills/solar-client/scripts/bootstrap_solar_client.sh | bash
+
+bash core/skills/solar-client/scripts/install_solar_client.sh [--ref <tag>]
+solar setup
+solar uninstall [--remove-install]
 ```
 
-Smoke: `bash core/skills/solar-client/scripts/smoke-solar-client.sh ~/Solar/solar`
+Smoke / E2E: `bash core/tests/skills/solar-client/test_install_solar_client.sh`
+(invokes the wrapper **without** `bash` so mode `100644` is detected)
+
+Packaging backlog: `core/docs/packaging.md`
 
 ## Frontera
 

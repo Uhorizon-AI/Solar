@@ -137,18 +137,44 @@ Define tools, skills, and templates in the Core, then effortlessly deploy them a
 
 ## 🚀 Quickstart
 
-1. **Clone the repository:**
-   ```bash
-   git clone git@github.com:Uhorizon-AI/Solar.git
-   ```
+### Install Solar (users)
 
-2. **Open your editor:**
-   - Open Visual Studio Code and load the repository folder.
-   - We recommend using relevant AI VS Code extensions (Claude Code, GitHub Copilot/Codex, or Gemini Code).
+Requires macOS, Git, Bash, Python 3, and curl. The installer does **not** edit your shell profile.
 
-3. **Say Hello:**
-   - Engage your AI client in the terminal or chat panel, and say `hello`.
-   - The OS takes over, initializing your session based on the Sun's instructions.
+<!-- solar-bootstrap-pin -->
+```bash
+curl -fsSL https://raw.githubusercontent.com/Uhorizon-AI/Solar/v0.18.2/core/skills/solar-client/scripts/bootstrap_solar_client.sh | bash
+```
+<!-- /solar-bootstrap-pin -->
+
+If the installer reports that `~/.local/bin` is not on your `PATH`, add it and open a new shell:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then create a workspace:
+
+```bash
+mkdir -p ~/Solar
+cd ~/Solar
+solar client init
+solar client sync
+solar client doctor --strict
+```
+
+The bootstrap URL above is pinned to a release tag by `create-release` (do not edit by hand). Runtime installs resolve the latest stable GitHub Release via the API.
+
+### Contribute to the framework (developers)
+
+```bash
+git clone https://github.com/Uhorizon-AI/Solar.git
+cd Solar
+```
+
+SSH alternative: `git clone git@github.com:Uhorizon-AI/Solar.git`
+
+Open the repo in your editor and follow contributing docs. Cloning the framework is **not** the same as installing the product.
 
 <br/>
 

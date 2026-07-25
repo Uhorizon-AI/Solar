@@ -10,6 +10,14 @@ APP_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-app/scripts" && pwd)"
 
 # Workspace / client commands (before chat REPL wiring)
 case "${1:-}" in
+  setup)
+    shift
+    exec bash "$CLIENT_SCRIPTS/solar_setup.sh" "$@"
+    ;;
+  uninstall)
+    shift
+    exec bash "$CLIENT_SCRIPTS/uninstall_solar_client.sh" "$@"
+    ;;
   client)
     shift
     case "${1:-}" in
@@ -157,6 +165,8 @@ Flags:
   -h, --help               Show help
 
 Subcommands:
+  setup                    Onboarding: preflight, init, sync, doctors (does not edit shell profile)
+  uninstall                Remove wrapper (and optional install tree); preserves workspaces
   client init|sync|doctor|upgrade|update|bundle|self-update  Solar Client (manifest, bundle, IDE sync)
   workspace doctor         Workspace content health (sun/, planets/)
   app start|stop|status|open   Solar App control plane UI (default :9000)
