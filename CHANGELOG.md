@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-26
+
 ### Added
 - feat(solar-gateway): `stop_transport_gateway.sh` with `--dry-run` / `--force` / `--tunnel-only`, strict ownership, and stale pid-file unlink.
 - feat(solar-gateway): stable env stamp at `sun/runtime/gateway/env.stamp`, failure backoff via `env.fail`, and portable mkdir-lock (no `flock`) shared by ensure/setup.
