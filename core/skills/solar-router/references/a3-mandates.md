@@ -33,11 +33,16 @@ Exit codes: `0` ok · `1` mandate not found · `2` refused (fail-closed).
 - `check` validates required fields, `valid_from`/`expires_at`, revoked state, `mode`
   and exact `allowed_actions` membership. Callers must treat a non-zero exit as a hard
   stop, never as a warning.
-- While `mode: shadow`, only actions in `shadow_safe_actions` may run (default:
-  `status`, `check`, `dry-run`, `validate`, `shadow`). Anything else —
-  including `resolve` (writes YAML/salt), `score`, `run`, and free-form write
+- While `mode: shadow`, only actions in `shadow_safe_actions` may run via
+  `delegation_ctl check` (default: `status`, `check`, `dry-run`, `validate`,
+  `shadow`). Anything else — including `score`, `run`, and free-form write
   phrases — is refused. Mandates may narrow the allowlist with an explicit
   `shadow_safe_actions:` block (intersection with the default); they cannot widen it.
+- Skill-local bootstrap (e.g. calendar `resolve` for YAML ids + salt) stays
+  **outside** A3: the skill must not call `delegation_ctl check` for that setup.
+  Do not invent mandate fields that authorize actions while revoked/expired —
+  that would break fail-closed. `run` (side effects on external systems) must
+  still fail closed under shadow via `check`.
 - `--automated` enforces `limits.frequency`. Supported forms: `every N hours` /
   `cada N horas`, `every N days` / `cada N días`. If `frequency:` is present and
   unparseable, automated runs **fail closed** (do not silently skip cadence).

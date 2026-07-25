@@ -116,6 +116,37 @@ If the user asked for review before final edits, write a proposal or result arti
 
 Queued or active tasks are already approved to execute their declared body and write declared artifacts/output paths.
 
+### Deterministic local executor
+
+Approved recurring operations that must run in the host context instead of an AI
+provider may declare:
+
+```yaml
+executor: local
+local_command: bash planets/<planet>/skills/<skill>/scripts/approved.sh
+local_timeout: 300
+```
+
+The command is tokenized without a shell (`shlex`), runs with `cwd=SOLAR_WORKSPACE`,
+and the primary script must resolve under an allowlisted tree:
+
+- `planets/<planet>/skills/<skill>/scripts/…`
+- `solar/core/skills/<skill>/scripts/…` (or `core/skills/<skill>/scripts/…`)
+
+Paths such as `planets/*/operations/scripts/…` are refused. Arbitrary binaries,
+paths outside the workspace, or scripts outside those trees are refused
+(`local_command_unauthorized`) and the task moves to `error/`.
+
+Exit codes treated as success:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success (work applied or OK) |
+| `10` | Success with no changes (caller convention; e.g. calendar-sync `NO_CHANGES`) |
+
+Any other exit, missing `local_command`, invalid `local_timeout`, or unauthorized
+path moves the task to `error/` with the real command output (fail-closed).
+
 Still request **A2 formal** approval for:
 
 - external sends (never A2-implicit; apply domain gates such as ECG),
