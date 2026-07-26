@@ -203,7 +203,13 @@ chmod +x \
 git -C "$BOOT_SRC" config user.email "test@test"
 git -C "$BOOT_SRC" config user.name "Test"
 git -C "$BOOT_SRC" add -A
-git -C "$BOOT_SRC" commit -q -m "test: installer with --ref"
+if git -C "$BOOT_SRC" diff --cached --quiet; then
+  # Working tree already matches HEAD (common on a clean publish checkout).
+  # Empty commit still gives a unique SHA that is not a branch/tag tip name.
+  git -C "$BOOT_SRC" commit -q --allow-empty -m "test: installer with --ref (no script delta)"
+else
+  git -C "$BOOT_SRC" commit -q -m "test: installer with --ref"
+fi
 BOOT_SHA="$(git -C "$BOOT_SRC" rev-parse HEAD)"
 unset SOLAR_BOOTSTRAP_FROM_LOCAL || true
 set +e
