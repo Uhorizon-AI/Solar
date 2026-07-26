@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-07-26
+
 ### Added
 - feat(solar-client): after `solar client update` (and on `--check`), report macOS LaunchAgent `SOLAR_ROOT` binding via solar-system helpers; warn when the plist is stale or incomplete.
 - feat(solar-client): `--reinstall-launchagent` on a real update rewrites the LaunchAgent plist and restarts the transport gateway so bridges inherit the new install root (fail-closed if gateway restart fails).
