@@ -180,6 +180,126 @@ assert_ok "update says abort before framework update" grep -qi 'aborting before 
 assert_ok "core marker unchanged (OLD) after failed migration" grep -qx 'OLD' "$INSTALL_MIG/core/.version-marker"
 assert_ok "legacy gemini priority still present after failed migration" grep -Eq 'PRIORITY=gemini' "$WS_MIG/.env"
 
+# --- LaunchAgent assess helpers (Darwin / no-system-lib) ---
+EMPTY_INSTALL="$TMP/empty-install"
+mkdir -p "$EMPTY_INSTALL/core"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  assert_ok "assess missing system_lib → no_system_lib" \
+    test "$(solar_client_assess_launchagent "$EMPTY_INSTALL")" = "no_system_lib"
+  # Real tree in this repo should classify against live plist without crashing.
+  live_status="$(solar_client_assess_launchagent "$CORE_ROOT/..")"
+  case "$live_status" in
+    ok|absent|missing_key|root_missing|orchestrator_missing|router_missing|mismatch|no_system_lib)
+      echo "PASS: assess live install status=$live_status"
+      PASS=$((PASS + 1))
+      ;;
+    *)
+      echo "FAIL: unexpected assess status=$live_status" >&2
+      FAIL=$((FAIL + 1))
+      ;;
+  esac
+  report_out="$(solar_client_report_launchagent_binding "$EMPTY_INSTALL" false 2>&1)"
+  assert_ok "report mentions skipped/missing helpers" \
+    grep -Eqi 'LaunchAgent: skipped|solar-system helpers missing' <<< "$report_out"
+else
+  assert_ok "assess non-Darwin → skipped_os" \
+    test "$(solar_client_assess_launchagent "$EMPTY_INSTALL")" = "skipped_os"
+fi
+
+# usage documents the new flag
+assert_ok "usage lists --reinstall-launchagent" \
+  grep -q -- '--reinstall-launchagent' <<<"$(bash "$UPDATE_SCRIPT" -h 2>&1)"
+assert_ok "usage says --check is incompatible with reinstall" \
+  grep -Eqi 'Incompatible with --check|read-only' <<<"$(bash "$UPDATE_SCRIPT" -h 2>&1)"
+
+# --check --reinstall-launchagent must fail before any mutation
+CHECK_WS="$TMP/check-ro-ws"
+mkdir -p "$CHECK_WS/sun" "$CHECK_WS/.solar"
+printf '%s\n' '{"layout":"solar-client-v1.2","core_version":"v0.20.2","core_source":"global"}' \
+  >"$CHECK_WS/.solar/settings.json"
+MARKER_CHECK="$TMP/must-not-touch"
+rm -f "$MARKER_CHECK"
+export SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=mismatch
+export SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT="$TMP/must-not-run-install.sh"
+cat >"$SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT" <<EOF
+#!/usr/bin/env bash
+echo touched >"$MARKER_CHECK"
+exit 0
+EOF
+chmod +x "$SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT"
+set +e
+combo_out="$(bash "$UPDATE_SCRIPT" --workspace "$CHECK_WS" --check --reinstall-launchagent 2>&1)"
+combo_ec=$?
+set -e
+assert_ok "--check --reinstall-launchagent exits 2" test "$combo_ec" -eq 2
+assert_ok "--check --reinstall-launchagent error mentions read-only" \
+  grep -Eqi 'read-only|do not combine' <<< "$combo_out"
+assert_ok "--check --reinstall-launchagent did not run install script" \
+  test ! -f "$MARKER_CHECK"
+unset SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE
+unset SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT
+
+# Isolated reinstall flow with mocked install + gateway scripts
+MOCK_INSTALL_ROOT="$TMP/mock-install"
+mkdir -p "$MOCK_INSTALL_ROOT/core"
+FAKE_INSTALL="$TMP/fake-install-launchagent.sh"
+FAKE_SETUP="$TMP/fake-setup-gateway.sh"
+INSTALL_MARK="$TMP/install-ran"
+SETUP_MARK="$TMP/setup-ran"
+cat >"$FAKE_INSTALL" <<EOF
+#!/usr/bin/env bash
+echo ok >"$INSTALL_MARK"
+exit 0
+EOF
+cat >"$FAKE_SETUP" <<EOF
+#!/usr/bin/env bash
+echo ok >"$SETUP_MARK"
+exit 0
+EOF
+chmod +x "$FAKE_INSTALL" "$FAKE_SETUP"
+export SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=mismatch
+export SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT="$FAKE_INSTALL"
+export SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT="$FAKE_SETUP"
+set +e
+re_out="$(solar_client_report_launchagent_binding "$MOCK_INSTALL_ROOT" true 2>&1)"
+re_ec=$?
+set -e
+assert_ok "mocked reinstall exits 0" test "$re_ec" -eq 0
+assert_ok "mocked reinstall ran install script" test -f "$INSTALL_MARK"
+assert_ok "mocked reinstall ran gateway setup" test -f "$SETUP_MARK"
+assert_ok "mocked reinstall reports OK" grep -q 'OK: LaunchAgent SOLAR_ROOT matches install' <<< "$re_out"
+unset SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE
+unset SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT
+unset SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
+
+# Gateway restart failure → non-zero (LaunchAgent install may have run)
+FAIL_SETUP="$TMP/fake-setup-fail.sh"
+INSTALL_MARK2="$TMP/install-ran-2"
+cat >"$FAKE_INSTALL" <<EOF
+#!/usr/bin/env bash
+echo ok >"$INSTALL_MARK2"
+exit 0
+EOF
+cat >"$FAIL_SETUP" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$FAKE_INSTALL" "$FAIL_SETUP"
+export SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=root_missing
+export SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT="$FAKE_INSTALL"
+export SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT="$FAIL_SETUP"
+set +e
+fail_out="$(solar_client_report_launchagent_binding "$MOCK_INSTALL_ROOT" true 2>&1)"
+fail_ec=$?
+set -e
+assert_ok "gateway fail after reinstall exits non-zero" test "$fail_ec" -ne 0
+assert_ok "gateway fail still ran install script" test -f "$INSTALL_MARK2"
+assert_ok "gateway fail error is explicit" \
+  grep -Eqi 'gateway restart failed|transport gateway restart failed' <<< "$fail_out"
+unset SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE
+unset SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT
+unset SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

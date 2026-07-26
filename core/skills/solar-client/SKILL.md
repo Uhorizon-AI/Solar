@@ -49,7 +49,9 @@ Resolve paths first (`resolve_solar_paths.sh` + `solar_paths.py` in this skill):
 
 ```bash
 solar client init
-solar client update [--check|--repair|--ref|--tag|--bundle]
+solar client update [options]
+# common: --check | --repair | --ref/--tag | --bundle | --reinstall-launchagent
+# --check is read-only (incompatible with --reinstall-launchagent)
 solar client upgrade [--check|--restructure]
 solar client sync [--portable]
 solar client sync exclude list
@@ -68,6 +70,12 @@ solar app …                # delegates to solar-app
 `solar client update` invokes `migrate_workspace_env_agy.py` internally when a
 workspace still lists the retired `gemini` provider; do not run the helper as a
 normal operator workflow.
+
+On macOS, `solar client update --check` and a normal update **report** LaunchAgent
+`SOLAR_ROOT` binding (read-only). `--reinstall-launchagent` is only valid on a real
+update (not with `--check`): it rewrites the plist and restarts the transport
+gateway; if gateway restart fails after a successful LaunchAgent reinstall, the
+command exits non-zero.
 
 `solar status` maps orchestrator `HEALTHY|PARTIAL|DOWN` → `OK|WARN|FAIL`. On WARN/FAIL, the `system` line points to `check_orchestrator.sh` for detail (no inline remediations).
 

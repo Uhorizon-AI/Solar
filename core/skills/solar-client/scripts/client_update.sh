@@ -15,6 +15,7 @@ FORCE_BACKUP=false
 FORCE_WORKSPACE=""
 TARGET_TAG=""
 CHANNEL=""
+REINSTALL_LAUNCHAGENT=false
 
 usage() {
   cat <<'EOF'
@@ -27,8 +28,12 @@ SOLAR_AI_PROVIDER_PRIORITY in the workspace .env (gemini→agy) before apply.
 The first router run after a legacy updater performs the same one-time migration.
 --repair only touches .solar/settings.json (migrates legacy manifest.json).
 
+On macOS, after a successful update, reports LaunchAgent SOLAR_ROOT binding (read-only
+status). Use --reinstall-launchagent on a real update (not with --check) to rewrite
+the plist and restart the transport gateway.
+
 Options:
-  --check              Report installed vs remote/settings; no changes
+  --check              Report installed vs remote/settings/LaunchAgent; no changes
   --repair             Repair workspace .solar/settings.json (OneDrive conflicts)
   --workspace <path>   Workspace for settings checks/repair (default: discover cwd)
   --ref <ref>          Git checkout <ref> in SOLAR_ROOT (tag, branch, or commit)
@@ -39,6 +44,10 @@ Options:
   --from-tag <tag>     Bundle from git tag (with --bundle)
   --channel <name>     Reserved (stable only; beta not implemented)
   --backup             Rsync snapshot before update (git mode only; default: no rsync, use git tags)
+  --reinstall-launchagent
+                       After update completes, reinstall macOS LaunchAgent when
+                       SOLAR_ROOT binding is stale and restart transport gateway.
+                       Incompatible with --check (read-only).
   --yes, -y            Proceed if SOLAR_ROOT git working tree is dirty
   -h, --help           Show help
 
@@ -77,6 +86,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --backup) FORCE_BACKUP=true; shift ;;
+    --reinstall-launchagent) REINSTALL_LAUNCHAGENT=true; shift ;;
     --yes|-y) AUTO_YES=true; shift ;;
     --workspace|--home)
       shift
@@ -88,6 +98,13 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [[ "$CHECK_ONLY" == true && "$REINSTALL_LAUNCHAGENT" == true ]]; then
+  echo "ERROR: --check is read-only; do not combine with --reinstall-launchagent" >&2
+  echo "  Report only:  solar client update --check" >&2
+  echo "  Repair host:  solar client update --reinstall-launchagent" >&2
+  exit 2
+fi
 
 if [[ -n "$CHANNEL" && "$CHANNEL" != "stable" ]]; then
   echo "WARN: channel=$CHANNEL not implemented (using stable)" >&2
@@ -119,6 +136,8 @@ fi
 
 if [[ "$CHECK_ONLY" == true ]]; then
   solar_client_update_check_report "$INSTALL_ROOT" "$SOLAR_WORKSPACE"
+  # --check is always read-only (combination with --reinstall-launchagent rejected above).
+  solar_client_report_launchagent_binding "$INSTALL_ROOT" false
   exit 0
 fi
 
@@ -198,6 +217,10 @@ echo "OK: update complete — $new_ver (${new_commit:0:12})"
 if ! solar_client_paths_equal "$INSTALL_ROOT" "$SOLAR_WORKSPACE"; then
   echo "HINT: run solar client upgrade in SOLAR_WORKSPACE if install has IDE artifacts"
 fi
+
+echo ""
+solar_client_report_launchagent_binding "$INSTALL_ROOT" "$REINSTALL_LAUNCHAGENT"
+
 echo "Next steps (per workspace):"
 echo "  cd \"$SOLAR_WORKSPACE\""
 echo "  solar client sync"

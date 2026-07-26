@@ -1093,6 +1093,137 @@ solar_client_update_check_report() {
   fi
 }
 
+# LaunchAgent plist path (macOS solar-system supervisor).
+solar_client_launchagent_plist_path() {
+  printf '%s\n' "${HOME}/Library/LaunchAgents/${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}.plist"
+}
+
+# Source solar-system helpers from an install root (post-update tree).
+solar_client_source_system_lib() {
+  local install_root="$1"
+  local lib="${install_root}/core/skills/solar-system/scripts/system_lib.sh"
+  [[ -f "$lib" ]] || return 1
+  # shellcheck source=/dev/null
+  source "$lib"
+}
+
+# Classify LaunchAgent SOLAR_ROOT vs install_root.
+# Prints one token: skipped_os|no_system_lib|absent|<classify tokens from system_lib>
+# Test hook: SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE forces the returned status.
+solar_client_assess_launchagent() {
+  local install_root="$1"
+  local plist status plist_root
+
+  if [[ -n "${SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE:-}" ]]; then
+    printf '%s\n' "$SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE"
+    return 0
+  fi
+
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    echo "skipped_os"
+    return 0
+  fi
+  if ! solar_client_source_system_lib "$install_root"; then
+    echo "no_system_lib"
+    return 0
+  fi
+  plist="$(solar_client_launchagent_plist_path)"
+  if [[ ! -f "$plist" ]]; then
+    echo "absent"
+    return 0
+  fi
+  plist_root="$(solar_system_plist_solar_root "$plist" || true)"
+  status="$(solar_system_classify_plist_root "$plist_root" "$install_root")"
+  printf '%s\n' "$status"
+}
+
+# Report / optionally repair LaunchAgent binding after update.
+# Args: install_root, reinstall(true|false)
+# Returns 0 for read-only report paths; reinstall/install/gateway failures return non-zero.
+# Test hooks (optional):
+#   SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT — override install_launchagent_macos.sh
+#   SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT — override setup_transport_gateway.sh
+solar_client_report_launchagent_binding() {
+  local install_root="$1"
+  local reinstall="${2:-false}"
+  local status plist plist_root install_script setup_script
+
+  status="$(solar_client_assess_launchagent "$install_root")"
+  case "$status" in
+    skipped_os)
+      return 0
+      ;;
+    no_system_lib)
+      echo "LaunchAgent: skipped (solar-system helpers missing under install)"
+      return 0
+      ;;
+    absent)
+      echo "LaunchAgent: not installed (optional on this machine)"
+      return 0
+      ;;
+    ok)
+      echo "LaunchAgent: ok (plist SOLAR_ROOT matches install)"
+      return 0
+      ;;
+  esac
+
+  plist="$(solar_client_launchagent_plist_path)"
+  plist_root=""
+  if [[ -z "${SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE:-}" ]] \
+    && solar_client_source_system_lib "$install_root"; then
+    plist_root="$(solar_system_plist_solar_root "$plist" || true)"
+  fi
+  install_script="${SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT:-${install_root}/core/skills/solar-system/scripts/install_launchagent_macos.sh}"
+  setup_script="${SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT:-${install_root}/core/skills/solar-gateway/scripts/setup_transport_gateway.sh}"
+
+  echo "WARN: LaunchAgent SOLAR_ROOT is stale or incomplete (status=$status)"
+  echo "  plist:  ${plist_root:-<missing>}"
+  echo "  active: $install_root"
+  echo "  (solar client update does not rewrite the LaunchAgent by default)"
+
+  if [[ "$reinstall" == true ]]; then
+    if [[ ! -f "$install_script" ]]; then
+      echo "ERROR: missing $install_script" >&2
+      return 1
+    fi
+    echo "Reinstalling LaunchAgent to embed current SOLAR_ROOT…"
+    # Ensure child scripts resolve the post-update install.
+    export SOLAR_ROOT="$install_root"
+    [[ -n "${SOLAR_WORKSPACE:-}" ]] || export SOLAR_WORKSPACE="$(pwd)"
+    bash "$install_script" || return 1
+    if [[ -f "$setup_script" ]]; then
+      echo "Restarting transport gateway so bridges inherit the new SOLAR_ROOT…"
+      if ! bash "$setup_script" --restart; then
+        echo "ERROR: LaunchAgent reinstalled but transport gateway restart failed" >&2
+        echo "  bash \"$setup_script\" --restart" >&2
+        return 1
+      fi
+    fi
+    # Clear override so post-repair assess can reflect mocks / real state.
+    if [[ -n "${SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE:-}" ]]; then
+      # Test hook: after successful reinstall, treat binding as repaired.
+      unset SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE
+      echo "OK: LaunchAgent SOLAR_ROOT matches install"
+      return 0
+    fi
+    status="$(solar_client_assess_launchagent "$install_root")"
+    if [[ "$status" == "ok" ]]; then
+      echo "OK: LaunchAgent SOLAR_ROOT matches install"
+      return 0
+    fi
+    echo "ERROR: LaunchAgent still status=$status after reinstall — run: bash \"$install_root/core/skills/solar-system/scripts/check_orchestrator.sh\"" >&2
+    return 1
+  fi
+
+  echo "  Fix:"
+  echo "    solar client update --reinstall-launchagent"
+  echo "  Or:"
+  echo "    bash \"$install_script\""
+  if [[ -f "$setup_script" ]]; then
+    echo "    bash \"$setup_script\" --restart"
+  fi
+}
+
 solar_client_restructure_apply() {
   local ws="$1"
   local dry_run="${2:-false}"
