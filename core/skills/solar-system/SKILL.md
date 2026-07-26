@@ -38,6 +38,9 @@ bash -n core/skills/solar-system/scripts/run_orchestrator.sh
 bash -n core/skills/solar-system/scripts/install_launchagent_macos.sh
 bash -n core/skills/solar-system/scripts/check_orchestrator.sh
 
+# LaunchAgent SOLAR_ROOT binding unit tests
+bash core/tests/skills/solar-system/test_plist_root_binding.sh
+
 # Sync core changes to local clients
 solar client sync
 ```
@@ -76,11 +79,13 @@ Legacy token `interface` is ignored (sunset with `solar-interface` skill); use `
    - `bash core/skills/solar-system/scripts/install_launchagent_macos.sh`
    - Feature-specific runtime blocks stay in the owning skill, for example `solar-router`.
 3. Check current status:
-   - `bash core/skills/solar-system/scripts/status_launchagent_macos.sh` — supervisor only (plist + launchctl + logs)
-   - `bash core/skills/solar-system/scripts/check_orchestrator.sh` — full orchestrator + feature health (daily operational check)
+   - `bash core/skills/solar-system/scripts/status_launchagent_macos.sh` — supervisor only (plist + launchctl + logs + SOLAR_ROOT binding)
+   - `bash core/skills/solar-system/scripts/check_orchestrator.sh` — full orchestrator + feature health (daily operational check); fails when LaunchAgent `SOLAR_ROOT` is missing, incomplete, or differs from the active install
    - `bash core/skills/solar-system/scripts/diagnose_launchagent.sh` — deep troubleshooting when there is an incident
 4. Uninstall LaunchAgent (if needed):
    - `bash core/skills/solar-system/scripts/uninstall_launchagent_macos.sh`
+
+After `solar client update` or relocating the global install, re-run `install_launchagent_macos.sh` so the plist embeds the current `SOLAR_ROOT`. `check_orchestrator.sh` reports `plist_root_status` (`ok|missing_key|root_missing|orchestrator_missing|router_missing|mismatch`).
 
 ## Orchestrator behavior
 

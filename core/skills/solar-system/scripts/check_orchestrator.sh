@@ -110,6 +110,25 @@ else
   verdict="$(worst_severity "$verdict" "DOWN")"
 fi
 
+# LaunchAgent embeds SOLAR_ROOT at install time. After relocating the global
+# install (e.g. ~/Solar/solar → ~/.local/share/solar), a stale plist keeps
+# ticking against a missing tree while transport can still look "healthy".
+plist_root_status="skipped"
+plist_root_value=""
+if [[ "$(uname -s)" == "Darwin" && -f "$PLIST" ]]; then
+  plist_root_value="$(solar_system_plist_solar_root "$PLIST" || true)"
+  plist_root_status="$(solar_system_classify_plist_root "$plist_root_value" "$SOLAR_ROOT")"
+  echo "  plist_SOLAR_ROOT: ${plist_root_value:-<missing>}"
+  echo "  active_SOLAR_ROOT: $SOLAR_ROOT"
+  echo "  plist_root_status: $plist_root_status"
+  case "$plist_root_status" in
+    ok) ;;
+    *)
+      verdict="$(worst_severity "$verdict" "$(solar_system_plist_root_severity "$plist_root_status")")"
+      ;;
+  esac
+fi
+
 # ---------------------------------------------------------------------------
 # Check 2: Process Health (Duplicate detection)
 # ---------------------------------------------------------------------------
@@ -331,6 +350,33 @@ if [[ "$verdict" != "HEALTHY" ]]; then
     echo "  • LaunchAgent not installed or not loaded:"
     _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
   fi
+
+  # Stale LaunchAgent SOLAR_ROOT (install moved; plist not reinstalled)
+  case "${plist_root_status:-skipped}" in
+    skipped|ok) ;;
+    missing_key)
+      echo "  • LaunchAgent plist is missing EnvironmentVariables.SOLAR_ROOT — reinstall:"
+      _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
+      ;;
+    root_missing)
+      echo "  • LaunchAgent SOLAR_ROOT path does not exist (${plist_root_value}):"
+      echo "    Active install is: $SOLAR_ROOT"
+      echo "    Reinstall LaunchAgent so the plist embeds the current SOLAR_ROOT:"
+      _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
+      ;;
+    orchestrator_missing|router_missing)
+      echo "  • LaunchAgent SOLAR_ROOT is incomplete (${plist_root_status}) at ${plist_root_value}:"
+      echo "    Active install is: $SOLAR_ROOT"
+      _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
+      ;;
+    mismatch)
+      echo "  • LaunchAgent SOLAR_ROOT differs from the active install:"
+      echo "    plist:  ${plist_root_value}"
+      echo "    active: $SOLAR_ROOT"
+      echo "    Reinstall LaunchAgent after solar client update / install relocate:"
+      _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
+      ;;
+  esac
 
   # transport-gateway issues
   if feature_active "transport-gateway" && [[ "$gw_code" != "0" ]]; then

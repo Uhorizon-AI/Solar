@@ -48,6 +48,11 @@ echo "  features: ${SOLAR_SYSTEM_FEATURES:-}"
 
 if [[ -f "$PLIST" ]]; then
   echo "  plist_present: true"
+  plist_root="$(solar_system_plist_solar_root "$PLIST" || true)"
+  plist_status="$(solar_system_classify_plist_root "$plist_root" "$SOLAR_ROOT")"
+  echo "  plist_SOLAR_ROOT: ${plist_root:-<missing>}"
+  echo "  active_SOLAR_ROOT: $SOLAR_ROOT"
+  echo "  plist_root_status: $plist_status"
 else
   echo "  plist_present: false"
 fi

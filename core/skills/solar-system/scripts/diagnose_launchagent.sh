@@ -42,11 +42,30 @@ echo "=== 4. Log paths writable ==="
 touch "$STDOUT" "$STDERR" 2>/dev/null && echo "OK: $STDOUT $STDERR" || echo "FAIL: cannot create log files"
 
 echo ""
-echo "=== 5. Plist lint ==="
+echo "=== 5. Plist lint + SOLAR_ROOT binding ==="
 tmp_plist=$(mktemp)
 trap 'rm -f "$tmp_plist"' EXIT
 bash "$SOLAR_ROOT/core/skills/solar-system/scripts/render_launchagent_plist.sh" "$tmp_plist" >/dev/null
-plutil -lint "$tmp_plist" && echo "OK: plist valid"
+plutil -lint "$tmp_plist" && echo "OK: rendered plist valid"
+
+INSTALLED_PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+if [[ -f "$INSTALLED_PLIST" ]]; then
+  plist_root="$(solar_system_plist_solar_root "$INSTALLED_PLIST" || true)"
+  plist_status="$(solar_system_classify_plist_root "$plist_root" "$SOLAR_ROOT")"
+  echo "Installed plist: $INSTALLED_PLIST"
+  echo "  plist_SOLAR_ROOT: ${plist_root:-<missing>}"
+  echo "  active_SOLAR_ROOT: $SOLAR_ROOT"
+  echo "  plist_root_status: $plist_status"
+  case "$plist_status" in
+    ok) echo "OK: LaunchAgent SOLAR_ROOT matches active install" ;;
+    *)
+      echo "FAIL: plist_root_status=$plist_status — reinstall LaunchAgent:"
+      echo "  bash \"$SOLAR_ROOT/core/skills/solar-system/scripts/install_launchagent_macos.sh\""
+      ;;
+  esac
+else
+  echo "Installed plist: missing ($INSTALLED_PLIST)"
+fi
 
 echo ""
 echo "=== 6. Current job state ==="

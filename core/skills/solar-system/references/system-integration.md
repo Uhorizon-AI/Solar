@@ -7,6 +7,7 @@
 - Orchestrator script: `core/skills/solar-system/scripts/run_orchestrator.sh --once`.
 - Runtime dir override: `SOLAR_SYSTEM_RUNTIME_DIR` (default `sun/runtime/system`).
 - Feature selector: `SOLAR_SYSTEM_FEATURES` (CSV).
+- LaunchAgent plist embeds `SOLAR_ROOT` and `SOLAR_WORKSPACE` at install time. After relocating the global install, reinstall the LaunchAgent. `check_orchestrator.sh` validates plist `SOLAR_ROOT` against the active install (`plist_root_status`). Completeness checks require `run_orchestrator.sh` and `run_router.py` under that root (framework always ships `solar-router`; independent of which `SOLAR_SYSTEM_FEATURES` are enabled).
 
 ## Feature dispatch
 
