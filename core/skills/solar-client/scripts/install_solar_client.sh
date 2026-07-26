@@ -11,11 +11,12 @@ usage() {
 Usage:
   bash install_solar_client.sh [--install-dir <path>] [--ref <ref>] [--tag <ref>] [--yes]
 
-Installs Solar framework to ~/Solar/solar (or --install-dir) and adds a solar wrapper
-under ~/.local/bin (or SOLAR_BIN_DIR).
+Installs Solar framework to ~/.local/share/solar (or --install-dir) and adds a
+solar wrapper under ~/.local/bin (or SOLAR_BIN_DIR) — same shape as Claude Code / Codex:
+global command on PATH, data dir hidden, workspace = any folder you choose.
 
 Options:
-  --install-dir <path>  Install root (default: ~/Solar/solar)
+  --install-dir <path>  Install root (default: ~/.local/share/solar)
   --ref <ref>           Git tag/branch/commit to checkout (default: latest GitHub Release)
   --tag <ref>           Alias for --ref
   --yes, -y             Non-interactive
@@ -26,7 +27,7 @@ Smoke test uses the absolute wrapper path; missing PATH is an instruction, not a
 
 After install (if needed):
   export PATH="$HOME/.local/bin:$PATH"
-  mkdir -p ~/Solar && cd ~/Solar
+  mkdir -p ~/Solar && cd ~/Solar    # any project folder works
   solar client init && solar client sync && solar client doctor --strict
 EOF
 }
@@ -63,7 +64,7 @@ has_only_managed_cli_mode_repair() {
   git -C "$root" show "HEAD:$cli_rel" 2>/dev/null | cmp -s - "$root/$cli_rel"
 }
 
-INSTALL_DIR="${SOLAR_ROOT:-$HOME/Solar/solar}"
+INSTALL_DIR="$(solar_client_default_install_dir)"
 REF=""
 YES=false
 REPO_URL="$(solar_client_canonical_repo_url)"
@@ -177,8 +178,7 @@ if [[ "$path_ok" != true ]]; then
   echo ""
 fi
 
-echo "Quick start:"
+echo "Quick start (any project folder — like claude / codex):"
 echo "  mkdir -p ~/Solar && cd ~/Solar"
-echo "  \"$SOLAR_BIN\" client init"
-echo "  \"$SOLAR_BIN\" client sync"
-echo "  \"$SOLAR_BIN\" client doctor --strict"
+echo "  \"$SOLAR_BIN\" setup"
+echo "  # or: \"$SOLAR_BIN\" client init && \"$SOLAR_BIN\" client sync && \"$SOLAR_BIN\" client doctor --strict"

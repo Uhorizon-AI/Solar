@@ -152,6 +152,17 @@ _resolve_global_root() {
     echo "$bundled"
     return 0
   fi
+  # Default product install (Claude/Codex-style), then legacy ~/Solar/solar.
+  local candidate
+  for candidate in \
+    "${HOME}/.local/share/solar" \
+    "${HOME}/Solar/solar"
+  do
+    if [[ -d "$candidate" ]] && _resolve_validate_root "$(_resolve_abs "$candidate")"; then
+      echo "$(_resolve_abs "$candidate")"
+      return 0
+    fi
+  done
   echo "ERROR: Solar install not found (set SOLAR_ROOT or install solar CLI)" >&2
   return 1
 }

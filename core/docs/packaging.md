@@ -15,7 +15,7 @@ Stabilise the Git install + GitHub Release contract before packaging. This docum
    `raw.githubusercontent.com/.../bootstrap_solar_client.sh`  
    to a checksummed asset URL on the same Release.
 
-4. **Installer without Git** — extract tarball to `~/Solar/solar`, write wrapper, smoke `"$WRAPPER" --version`.
+4. **Installer without Git** — extract tarball to `~/.local/share/solar`, write wrapper to `~/.local/bin`, smoke `"$WRAPPER" --version`.
 
 5. **Channels** — stable (GitHub Release latest) and optional beta (prerelease) once packaging exists.
 

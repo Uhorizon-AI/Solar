@@ -81,14 +81,11 @@ bash -n core/skills/solar-client/scripts/solar_paths.sh
 
 ## Install
 
-**Contract:** macOS supported; stable channel = GitHub Release `latest` (API + `curl`); smoke uses absolute wrapper path; installer does not edit shell profiles. Details: `core/docs/installation.md`.
+**Contract:** macOS supported; stable = GitHub Release `latest` (API + `curl`); smoke uses absolute wrapper path; no silent profile edits. Default: `~/.local/share/solar` + `~/.local/bin/solar`; workspace = any folder. Details: `core/docs/installation.md`.
 
 ```bash
-# Bootstrap (URL pin maintained by create-release — see README markers)
-curl -fsSL https://raw.githubusercontent.com/Uhorizon-AI/Solar/v0.18.2/core/skills/solar-client/scripts/bootstrap_solar_client.sh | bash
-
-bash core/skills/solar-client/scripts/install_solar_client.sh [--ref <tag>]
-solar setup
+curl -fsSL https://raw.githubusercontent.com/Uhorizon-AI/Solar/v0.19.2/core/skills/solar-client/scripts/bootstrap_solar_client.sh | bash
+mkdir -p ~/Solar && cd ~/Solar && solar setup
 solar uninstall [--remove-install]
 ```
 

@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-client): `bootstrap_solar_client.sh` no longer errors with `BASH_SOURCE[0]: unbound variable` when installed via `curl | bash`.
+
+### Changed
+- change(solar-client): default install root is `~/.local/share/solar` (Claude Code / Codex style). Wrapper stays at `~/.local/bin/solar`. Workspace is any directory (e.g. `~/Solar`). Legacy `~/Solar/solar` is still discovered as a fallback.
+
 ## [0.19.2] - 2026-07-26
 
 ### Fixed

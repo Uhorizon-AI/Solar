@@ -16,14 +16,14 @@ Usage:
 Removes:
   - wrapper at $SOLAR_BIN_DIR/solar (default ~/.local/bin/solar)
   - optional LaunchAgent label ai.uhorizon.solar (macOS) if present
-  - with --remove-install: the global install dir (default ~/Solar/solar)
+  - with --remove-install: the global install dir (default ~/.local/share/solar)
 
 Preserves by default:
-  - ~/Solar workspace (sun/, planets/) when separate from the install dir
+  - workspace dirs (sun/, planets/) anywhere, including ~/Solar
   - user .env / credentials outside the install tree
 
 Options:
-  --remove-install  Also delete SOLAR_ROOT / ~/Solar/solar
+  --remove-install  Also delete SOLAR_ROOT / ~/.local/share/solar
   --yes, -y         Non-interactive
   -h, --help        Show help
 EOF
@@ -33,7 +33,11 @@ REMOVE_INSTALL=false
 YES=false
 WRAPPER_DIR="${SOLAR_BIN_DIR:-$HOME/.local/bin}"
 SOLAR_BIN="$WRAPPER_DIR/solar"
-INSTALL_DIR="${SOLAR_ROOT:-$HOME/Solar/solar}"
+if declare -F solar_client_default_install_dir >/dev/null 2>&1; then
+  INSTALL_DIR="$(solar_client_default_install_dir)"
+else
+  INSTALL_DIR="${SOLAR_ROOT:-$HOME/.local/share/solar}"
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

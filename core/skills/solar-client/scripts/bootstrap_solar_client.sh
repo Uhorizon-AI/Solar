@@ -2,11 +2,17 @@
 # bootstrap_solar_client.sh — curl-friendly installer entrypoint.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# curl|bash feeds the script on stdin — BASH_SOURCE[0] is unset there.
+# Only resolve SCRIPT_DIR when invoked as a real file (local/dev path).
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
 # When bootstrapping from a remote shallow clone, client_lib may not exist yet
 # in the temp tree until after clone. Prefer sourcing from local override path.
 _source_lib() {
-  if [[ -f "$SCRIPT_DIR/client_lib.sh" ]]; then
+  if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/client_lib.sh" ]]; then
     # shellcheck source=client_lib.sh
     source "$SCRIPT_DIR/client_lib.sh"
   fi
@@ -14,7 +20,11 @@ _source_lib() {
 _source_lib
 
 REF="${SOLAR_CLIENT_TAG:-${SOLAR_CLIENT_REF:-}}"
-INSTALL_DIR="${SOLAR_INSTALL_DIR:-$HOME/Solar/solar}"
+if declare -F solar_client_default_install_dir >/dev/null 2>&1; then
+  INSTALL_DIR="$(solar_client_default_install_dir)"
+else
+  INSTALL_DIR="${SOLAR_INSTALL_DIR:-${SOLAR_ROOT:-$HOME/.local/share/solar}}"
+fi
 if declare -F solar_client_canonical_repo_url >/dev/null 2>&1; then
   REPO_URL="$(solar_client_canonical_repo_url)"
 else
@@ -27,6 +37,7 @@ Usage:
   bash bootstrap_solar_client.sh [--install-dir <path>] [--ref <ref>] [--tag <ref>] [--yes]
 
 Downloads the installer from the canonical Solar repo and runs it.
+Default install dir: ~/.local/share/solar (override with --install-dir / SOLAR_INSTALL_DIR).
 --ref accepts a tag, branch, or commit SHA ( --tag is an alias ).
 Default ref = latest GitHub Release (API + curl), not main.
 EOF

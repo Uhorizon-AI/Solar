@@ -4,15 +4,22 @@
 **Experimental:** Linux CLI (CI informative only)  
 **Out of scope:** Windows native
 
-## Layout
+## Layout (Claude Code / Codex style)
 
 | Path | Role |
 |---|---|
-| `~/Solar/solar` (default `SOLAR_ROOT`) | Global framework install (git checkout) |
-| `~/Solar` (or any dir) | Workspace (`sun/`, `planets/`, `.solar/`) |
-| `~/.local/bin/solar` | Wrapper (`SOLAR_BIN_DIR` override) |
+| `~/.local/share/solar` (default `SOLAR_ROOT`) | Global framework install (git checkout; hidden data dir) |
+| Any directory (e.g. `~/Solar`, `~/Projects/acme`) | Workspace (`sun/`, `planets/`, `.solar/`) |
+| `~/.local/bin/solar` | Wrapper on PATH (`SOLAR_BIN_DIR` override) |
 
 Install and workspace stay separate so core updates never overwrite `sun/` / `planets/`.
+
+**Legacy:** older installs may live at `~/Solar/solar`. That path is still discovered as a fallback. Prefer migrating with:
+
+```bash
+bash ~/.local/share/solar/core/skills/solar-client/scripts/install_solar_client.sh --yes
+# or keep SOLAR_ROOT=~/Solar/solar if you prefer not to move
+```
 
 ## Dependencies
 
@@ -31,6 +38,7 @@ Resolved with `curl` (not `gh`). No fallback to `main`. Pass `--ref` for an expl
 - Success requires `"$WRAPPER" --version` (absolute path) to succeed.
 - Missing `PATH` entry for the wrapper directory prints an instruction; it does **not** fail the install.
 - The installer never edits shell profiles silently.
+- `curl | bash` is supported (no `BASH_SOURCE` dependency).
 
 ## Commands
 
@@ -38,6 +46,8 @@ Resolved with `curl` (not `gh`). No fallback to `main`. Pass `--ref` for an expl
 # Install (bootstrap pin in README is release-managed)
 curl -fsSL https://raw.githubusercontent.com/Uhorizon-AI/Solar/vX.Y.Z/core/skills/solar-client/scripts/bootstrap_solar_client.sh | bash
 
+# Use from any folder
+mkdir -p ~/Solar && cd ~/Solar
 solar setup                 # preflight + init + sync + doctors
 solar client update --ref <tag>   # or default = stable release
 solar uninstall             # remove wrapper; optional --remove-install

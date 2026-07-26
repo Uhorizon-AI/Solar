@@ -19,7 +19,7 @@ FROM_DEV=true
 FROM_TAG=""
 OUTPUT=""
 FORCE=false
-# Framework repo root (parent of core/), e.g. ~/Solar/solar
+# Framework repo root (parent of core/), e.g. ~/.local/share/solar
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 
 while [[ $# -gt 0 ]]; do

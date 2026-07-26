@@ -139,7 +139,7 @@ Define tools, skills, and templates in the Core, then effortlessly deploy them a
 
 ### Install Solar (users)
 
-Requires macOS, Git, Bash, Python 3, and curl. The installer does **not** edit your shell profile.
+Requires macOS, Git, Bash, Python 3, and curl. Same shape as Claude Code / Codex: one global `solar` on your `PATH`, framework data under `~/.local/share/solar`, workspace = any folder you choose. The installer does **not** edit your shell profile.
 
 <!-- solar-bootstrap-pin -->
 ```bash
@@ -153,15 +153,15 @@ If the installer reports that `~/.local/bin` is not on your `PATH`, add it and o
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Then create a workspace:
+Then open any project folder and set it up as a Solar workspace:
 
 ```bash
 mkdir -p ~/Solar
 cd ~/Solar
-solar client init
-solar client sync
-solar client doctor --strict
+solar setup
 ```
+
+(`solar setup` runs init + sync + doctors. You can use `~/Projects/acme` or any other directory instead of `~/Solar`.)
 
 The bootstrap URL above is pinned to a release tag by `create-release` (do not edit by hand). Runtime installs resolve the latest stable GitHub Release via the API.
 

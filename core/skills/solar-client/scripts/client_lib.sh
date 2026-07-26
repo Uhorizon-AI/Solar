@@ -15,6 +15,20 @@ solar_client_canonical_repo_url() {
   printf '%s\n' "${SOLAR_REPO_URL:-https://github.com/Uhorizon-AI/Solar.git}"
 }
 
+# Default global install root (Claude/Codex-style: hidden data dir, not ~/Solar/solar).
+# Override with SOLAR_ROOT, SOLAR_INSTALL_DIR, or install --install-dir.
+solar_client_default_install_dir() {
+  if [[ -n "${SOLAR_ROOT:-}" ]]; then
+    printf '%s\n' "$SOLAR_ROOT"
+    return 0
+  fi
+  if [[ -n "${SOLAR_INSTALL_DIR:-}" ]]; then
+    printf '%s\n' "$SOLAR_INSTALL_DIR"
+    return 0
+  fi
+  printf '%s\n' "${HOME}/.local/share/solar"
+}
+
 solar_client_releases_latest_api() {
   printf '%s\n' "${SOLAR_RELEASES_API_URL:-https://api.github.com/repos/Uhorizon-AI/Solar/releases/latest}"
 }

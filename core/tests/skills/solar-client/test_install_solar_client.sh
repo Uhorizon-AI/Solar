@@ -63,6 +63,10 @@ got="$(solar_client_resolve_stable_release_tag)"
 assert_ok "SOLAR_STABLE_RELEASE_TAG override" test "$got" = "v1.2.3"
 unset SOLAR_STABLE_RELEASE_TAG
 
+unset SOLAR_ROOT SOLAR_INSTALL_DIR || true
+assert_ok "default install dir is ~/.local/share/solar" \
+  test "$(solar_client_default_install_dir)" = "$HOME/.local/share/solar"
+
 PRERELEASE="$TMP/pre.json"
 cat > "$PRERELEASE" <<'JSON'
 {"tag_name":"v9.9.9-beta.1","draft":false,"prerelease":true}
