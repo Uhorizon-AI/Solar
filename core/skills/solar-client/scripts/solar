@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOLAR_VERSION="0.19.3"
+SOLAR_VERSION="0.20.0"
 
 # Version must work without a workspace or Solar App runtime (installer smoke, CI).
 case "${1:-}" in

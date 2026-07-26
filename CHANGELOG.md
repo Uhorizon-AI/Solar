@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-07-26
+
 ### Added
 - feat(solar-client): `solar client sync exclude list|add|remove` manages `sync_exclude_planets` in workspace settings (skip planet skills/agents/commands on sync; invalid settings fail closed before IDE mutation).
 
