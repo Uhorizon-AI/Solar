@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.19.3] - 2026-07-26
+
 ### Fixed
 - fix(solar-client): `bootstrap_solar_client.sh` no longer errors with `BASH_SOURCE[0]: unbound variable` when installed via `curl | bash`.
 
