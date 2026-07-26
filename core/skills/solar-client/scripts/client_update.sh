@@ -25,12 +25,12 @@ Updates the global Solar Client install (SOLAR_ROOT). Does not modify SOLAR_WORK
 sun/ or planets/. New updaters atomically migrate SOLAR_ROUTER_PROVIDER_PRIORITY /
 SOLAR_AI_PROVIDER_PRIORITY in the workspace .env (gemini→agy) before apply.
 The first router run after a legacy updater performs the same one-time migration.
---repair only touches .solar/manifest.json.
+--repair only touches .solar/settings.json (migrates legacy manifest.json).
 
 Options:
-  --check              Report installed vs remote/manifest; no changes
-  --repair             Repair workspace .solar/manifest.json (OneDrive conflicts)
-  --workspace <path>   Workspace for manifest checks/repair (default: discover cwd)
+  --check              Report installed vs remote/settings; no changes
+  --repair             Repair workspace .solar/settings.json (OneDrive conflicts)
+  --workspace <path>   Workspace for settings checks/repair (default: discover cwd)
   --ref <ref>          Git checkout <ref> in SOLAR_ROOT (tag, branch, or commit)
   --tag <ref>          Alias for --ref
   --version <vX.Y.Z>   Alias for --ref
@@ -102,17 +102,17 @@ INSTALL_ROOT="$SOLAR_ROOT"
 BUNDLE_SCRIPT="$(solar_core_dir)/skills/solar-client/scripts/package_solar_bundle.sh"
 
 if [[ "$REPAIR_ONLY" == true ]]; then
-  manifest="$SOLAR_WORKSPACE/.solar/manifest.json"
-  if [[ ! -f "$manifest" ]] && [[ ! -d "$SOLAR_WORKSPACE/.solar" ]]; then
-    echo "ERROR: no .solar/manifest.json in SOLAR_WORKSPACE=$SOLAR_WORKSPACE" >&2
+  if ! solar_client_settings_exists "$SOLAR_WORKSPACE" && [[ ! -d "$SOLAR_WORKSPACE/.solar" ]]; then
+    echo "ERROR: no .solar/settings.json (or legacy manifest) in SOLAR_WORKSPACE=$SOLAR_WORKSPACE" >&2
     exit 1
   fi
-  if [[ -f "$manifest" ]] && ! solar_client_manifest_needs_repair "$manifest"; then
-    echo "OK: manifest looks valid (layout solar-client-v1.1, core_version present)"
+  settings_path="$(solar_client_settings_path "$SOLAR_WORKSPACE")"
+  if [[ -f "$settings_path" ]] && ! solar_client_manifest_needs_repair "$settings_path"; then
+    echo "OK: settings look valid (layout solar-client-v1.1|v1.2, core_version present)"
     exit 0
   fi
   solar_client_repair_manifest "$SOLAR_WORKSPACE" "$INSTALL_ROOT"
-  echo "OK: repaired .solar/manifest.json from global client ($INSTALL_ROOT)"
+  echo "OK: repaired .solar/settings.json from global client ($INSTALL_ROOT)"
   echo "Next: solar client sync && solar client doctor"
   exit 0
 fi

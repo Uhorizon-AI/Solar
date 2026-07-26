@@ -93,6 +93,7 @@ UNIT_PATHS_PY="$INSTALL_ROOT/core/tests/skills/solar-client/test_solar_paths_py.
 UNIT_UPGRADE="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_upgrade.sh"
 UNIT_MANIFEST="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_manifest.sh"
 UNIT_BUNDLE="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_bundle.sh"
+UNIT_SYNC_EXCLUDE="$INSTALL_ROOT/core/tests/skills/solar-client/test_sync_exclude.sh"
 if [[ -f "$UNIT_RESOLVE" ]]; then
   bash "$UNIT_RESOLVE" >/dev/null 2>&1 && pass "unit: test_resolve_solar_paths.sh" || fail "unit: test_resolve_solar_paths.sh"
 else
@@ -118,6 +119,11 @@ if [[ -f "$UNIT_BUNDLE" ]]; then
 else
   fail "missing test_client_bundle.sh"
 fi
+if [[ -f "$UNIT_SYNC_EXCLUDE" ]]; then
+  bash "$UNIT_SYNC_EXCLUDE" >/dev/null 2>&1 && pass "unit: test_sync_exclude.sh" || fail "unit: test_sync_exclude.sh"
+else
+  fail "missing test_sync_exclude.sh"
+fi
 
 echo "=== Workspace conflict (exported vs cwd) ==="
 WS_A="$TMP/workspace-a"
@@ -139,8 +145,8 @@ INIT_WS="$TMP/init-test"
 mkdir -p "$INIT_WS"
 pushd "$INIT_WS" >/dev/null
 if bash "$SOLAR" client init >/dev/null 2>&1; then
-  if [[ -f .solar/manifest.json && -d sun && ! -d .solar/core ]]; then
-    pass "init: manifest+sun, no .solar/core"
+  if [[ -f .solar/settings.json && -d sun && ! -d .solar/core ]]; then
+    pass "init: settings+sun, no .solar/core"
   else
     fail "init: bad layout"
   fi
@@ -162,9 +168,14 @@ else
   fail "re-init overwrote .env"
 fi
 
-run_expect_ok "solar status after init" bash "$SOLAR" status
+status_out="$(bash "$SOLAR" status 2>&1 || true)"
+if echo "$status_out" | grep -q "core_source=global"; then
+  pass "solar status reads settings after init"
+else
+  fail "solar status reads settings after init"
+fi
 doc_out="$(bash "$SOLAR" client doctor 2>&1 || true)"
-if echo "$doc_out" | grep -q "manifest core_source=global"; then
+if echo "$doc_out" | grep -q "settings core_source=global"; then
   pass "doctor reports core_source=global"
   pass "solar client doctor after init"
 else
@@ -188,9 +199,9 @@ touch "$UPG_WS/.solar/.env"
 echo '{"layout":"solar-client-v1"}' > "$UPG_WS/.solar/manifest.json"
 pushd "$UPG_WS" >/dev/null
 if bash "$SOLAR" client upgrade >/dev/null 2>&1; then
-  layout="$(python3 -c 'import json; print(json.load(open(".solar/manifest.json")).get("layout",""))')"
-  if [[ ! -d .solar/core && "$layout" == "solar-client-v1.1" ]]; then
-    pass "upgrade: removes .solar/core, v1.1 manifest"
+  layout="$(python3 -c 'import json; print(json.load(open(".solar/settings.json")).get("layout",""))')"
+  if [[ ! -d .solar/core && ! -f .solar/manifest.json && "$layout" == "solar-client-v1.2" ]]; then
+    pass "upgrade: removes .solar/core, writes v1.2 settings"
   else
     fail "upgrade: layout or .solar/core"
   fi
@@ -204,7 +215,12 @@ if [[ -n "$root_line" && "$root_line" == *"$INSTALL_ROOT"* ]]; then
 else
   fail "paths: SOLAR_ROOT ($root_line)"
 fi
-run_expect_ok "status after upgrade" bash "$SOLAR" status
+status_out="$(bash "$SOLAR" status 2>&1 || true)"
+if echo "$status_out" | grep -q "core_source=global"; then
+  pass "solar status reads settings after upgrade"
+else
+  fail "solar status reads settings after upgrade"
+fi
 popd >/dev/null
 
 echo "=== doctor blocks obsolete .solar/core ==="

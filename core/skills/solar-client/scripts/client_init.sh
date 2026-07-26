@@ -16,7 +16,7 @@ Usage:
   solar client init [--force] [--force-governance]
 
 Creates in the current directory (SOLAR_WORKSPACE):
-  .solar/manifest.json, sun/, planets/, .env.example, AGENTS.md, IDE symlinks, .cursorignore
+  .solar/settings.json, sun/, planets/, .env.example, AGENTS.md, IDE symlinks, .cursorignore
 
 Framework skills/agents come from the global Solar Client install (solar client sync).
 Does NOT copy core/ into .solar/core/ (obsolete in v1.1).
@@ -47,7 +47,7 @@ if [[ -d "$WORKSPACE/.solar/core" ]]; then
   exit 1
 fi
 
-if [[ -d "$WORKSPACE/core" && -f "$WORKSPACE/core/AGENTS.md" && ! -f "$WORKSPACE/.solar/manifest.json" ]]; then
+if [[ -d "$WORKSPACE/core" && -f "$WORKSPACE/core/AGENTS.md" ]] && ! solar_client_settings_exists "$WORKSPACE"; then
   if [[ "$FORCE_LEGACY" != true ]]; then
     echo "ERROR: legacy layout (core/ at root). Use a new directory or --force (not recommended on dev monorepo)." >&2
     exit 1
@@ -77,8 +77,8 @@ read -r HOST_PORT HTTP_PORT < <(port_offsets)
 
 mkdir -p "$WORKSPACE/sun/preferences" "$WORKSPACE/sun/daily-log" "$WORKSPACE/planets" "$WORKSPACE/.solar"
 
-if [[ ! -f "$WORKSPACE/.solar/manifest.json" ]]; then
-  solar_client_write_manifest_v11 "$WORKSPACE" "$INSTALL_ROOT"
+if ! solar_client_settings_exists "$WORKSPACE"; then
+  solar_client_write_settings_v12 "$WORKSPACE" "$INSTALL_ROOT"
 fi
 
 if [[ ! -f "$WORKSPACE/sun/preferences/profile.md" ]]; then

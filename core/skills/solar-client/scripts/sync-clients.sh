@@ -27,6 +27,8 @@ NC='\033[0m'
 RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/resolve_solar_paths.sh"
 # shellcheck source=/dev/null
 source "$RESOLVE_SCRIPT"
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/client_lib.sh"
 solar_resolve_paths --quiet
 
 ROOT_DIR="$SOLAR_WORKSPACE"
@@ -291,10 +293,25 @@ discover_resources() {
 
   # Discover planet resources
   if [ -d "$PLANETS_DIR" ]; then
+    local _sync_exclude_raw
+    if ! _sync_exclude_raw="$(solar_client_read_sync_exclude_planets "$ROOT_DIR")"; then
+      echo "ERROR: cannot read sync exclusions; run solar client update --repair" >&2
+      return 1
+    fi
+    _SYNC_EXCLUDE=""
+    while IFS= read -r _ex; do
+      [[ -n "$_ex" ]] || continue
+      _SYNC_EXCLUDE="${_SYNC_EXCLUDE}"$'\n'"${_ex}"
+    done <<<"$_sync_exclude_raw"
     for planet_dir in "$PLANETS_DIR"/*; do
       [ -d "$planet_dir" ] || continue
       local planet_name
       planet_name="$(basename "$planet_dir")"
+
+      if printf '%s\n' "$_SYNC_EXCLUDE" | grep -Fxq -- "$planet_name"; then
+        log_ok "Skipping excluded planet: $planet_name"
+        continue
+      fi
 
       # Planet skills (any */skills/*/SKILL.md under planet, always prefixed)
       discover_planet_skills "$planet_dir" "$planet_name"

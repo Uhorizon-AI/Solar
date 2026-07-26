@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# client_upgrade.sh — upgrade workspace to solar-client-v1.1 + install hygiene (Fase 1.2).
+# client_upgrade.sh — upgrade workspace to solar-client-v1.2 + install hygiene.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,9 +19,9 @@ Usage:
   solar client upgrade [--check] [--repair-governance] [--workspace <path>]
                      [--restructure] [--skip-prune-install]
 
-Upgrades to the Solar Client model (solar-client-v1.1):
+Upgrades to the Solar Client model (solar-client-v1.2):
   - Reports SOLAR_WORKSPACE, SOLAR_ROOT, layout, install git tag
-  - Workspace: removes obsolete .solar/core/ and orphan .solar/.env; writes manifest
+  - Workspace: removes obsolete .solar/core/ and orphan .solar/.env; writes .solar/settings.json
   - Install hygiene: removes IDE/agent artifacts under SOLAR_ROOT when distinct from workspace
   - Optional --restructure: mv full framework repo -> solar/ (then run client init + sync yourself)
 
@@ -96,7 +96,7 @@ fi
 
 [[ -d "$SOLAR_WORKSPACE/.solar/core" ]] && actions+=("remove .solar/core/")
 [[ -f "$SOLAR_WORKSPACE/.solar/.env" ]] && actions+=("remove orphan .solar/.env")
-actions+=("write .solar/manifest.json (solar-client-v1.1)")
+actions+=("write .solar/settings.json (solar-client-v1.2)")
 [[ "$REPAIR_GOVERNANCE" == true ]] && actions+=("repair governance (AGENTS.md + IDE symlinks)")
 
 if [[ "$SKIP_PRUNE_INSTALL" != true ]] && ! solar_client_paths_equal "$SOLAR_ROOT" "$SOLAR_WORKSPACE"; then
@@ -124,8 +124,8 @@ if [[ -f "$SOLAR_WORKSPACE/.solar/.env" ]]; then
   echo "OK: removed orphan .solar/.env"
 fi
 
-solar_client_write_manifest_v11 "$SOLAR_WORKSPACE" "$INSTALL_ROOT" preserve_synced=1
-echo "OK: updated .solar/manifest.json (layout solar-client-v1.1)"
+solar_client_write_settings_v12 "$SOLAR_WORKSPACE" "$INSTALL_ROOT" preserve_synced=1
+echo "OK: updated .solar/settings.json (layout solar-client-v1.2)"
 
 if [[ "$REPAIR_GOVERNANCE" == true ]]; then
   tpl="$(solar_core_dir)/templates/workspace-AGENTS.md"

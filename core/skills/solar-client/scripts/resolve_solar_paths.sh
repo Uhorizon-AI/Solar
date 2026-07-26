@@ -18,7 +18,7 @@ Usage (source this file):
   solar_resolve_paths [--workspace <path>] [--quiet] [--export] [--relaxed]
 
 Exports on success:
-  SOLAR_WORKSPACE      Active agent (sun/, planets/, .env, .solar/manifest.json)
+  SOLAR_WORKSPACE      Active agent (sun/, planets/, .env, .solar/settings.json)
   SOLAR_ROOT             Runtime install root (global framework or .solar/bundle in portable mode)
   SOLAR_GLOBAL_ROOT      Global framework install when discoverable (optional)
 
@@ -90,8 +90,15 @@ solar_global_core_dir() {
 
 _resolve_manifest_core_source() {
   local ws="$1"
-  local manifest="$ws/.solar/manifest.json"
-  [[ -f "$manifest" ]] || { echo "global"; return 0; }
+  local manifest=""
+  if [[ -f "$ws/.solar/settings.json" ]]; then
+    manifest="$ws/.solar/settings.json"
+  elif [[ -f "$ws/.solar/manifest.json" ]]; then
+    manifest="$ws/.solar/manifest.json"
+  else
+    echo "global"
+    return 0
+  fi
   python3 - <<'PY' "$manifest" 2>/dev/null || echo "global"
 import json, sys
 try:
@@ -171,7 +178,7 @@ _resolve_discover_manifest_workspace() {
   local dir
   dir="$(pwd -P)"
   while [[ "$dir" != "/" ]]; do
-    if [[ -f "$dir/.solar/manifest.json" && -d "$dir/sun" ]]; then
+    if [[ -d "$dir/sun" ]] && { [[ -f "$dir/.solar/settings.json" ]] || [[ -f "$dir/.solar/manifest.json" ]]; }; then
       _resolve_abs "$dir"
       return 0
     fi
@@ -225,7 +232,7 @@ _resolve_discover() {
 
 _resolve_workspace_layout() {
   local ws="$1"
-  if [[ -f "$ws/.solar/manifest.json" ]]; then
+  if [[ -f "$ws/.solar/settings.json" || -f "$ws/.solar/manifest.json" ]]; then
     echo "client"
     return 0
   fi

@@ -68,15 +68,15 @@ fi
 if echo "${SOLAR_ROUTER_PROVIDER_PRIORITY:-}${SOLAR_AI_PROVIDER_PRIORITY:-}" | grep -qiE '(^|,)[[:space:]]*gemini[[:space:]]*(,|$)'; then
   warn "SOLAR_ROUTER_PROVIDER_PRIORITY lists unsupported gemini — use agy (run solar client update)"
 fi
-MANIFEST="$SOLAR_WORKSPACE/.solar/manifest.json"
+MANIFEST="$(solar_client_settings_path "$SOLAR_WORKSPACE")"
 if [[ -f "$MANIFEST" ]]; then
   layout="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("layout",""))' "$MANIFEST" 2>/dev/null || true)"
-  if [[ "$layout" == "solar-client-v1.1" ]]; then
-    ok "manifest layout=$layout"
+  if [[ "$layout" == "solar-client-v1.2" || "$layout" == "solar-client-v1.1" ]]; then
+    ok "settings layout=$layout"
   elif [[ -n "$layout" ]]; then
-    warn "manifest layout=$layout (expected solar-client-v1.1; run solar client upgrade)"
+    warn "settings layout=$layout (expected solar-client-v1.2; run solar client sync or upgrade)"
   else
-    warn "manifest missing layout field (run solar client upgrade)"
+    warn "settings missing layout field (run solar client upgrade)"
   fi
   core_source="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("core_source",""))' "$MANIFEST" 2>/dev/null || true)"
   requires_global="$(solar_client_manifest_field "$MANIFEST" requires_global_client)"
@@ -84,15 +84,15 @@ if [[ -f "$MANIFEST" ]]; then
   [[ -d "$SOLAR_WORKSPACE/.solar/bundle" ]] && bundle_present=true
 
   if [[ "$core_source" == "global" ]]; then
-    ok "manifest core_source=global (requires SOLAR_ROOT)"
+    ok "settings core_source=global (requires SOLAR_ROOT)"
     if [[ "$requires_global" == "false" ]]; then
-      warn "manifest requires_global_client=false but core_source=global (drift)"
+      warn "settings requires_global_client=false but core_source=global (drift)"
     fi
     if [[ "$bundle_present" == true ]]; then
-      warn ".solar/bundle/ exists but manifest still global — run: solar client bundle create or remove bundle"
+      warn ".solar/bundle/ exists but settings still global — run: solar client bundle create or remove bundle"
     fi
   elif [[ "$core_source" == "workspace-snapshot" ]]; then
-    ok "manifest core_source=workspace-snapshot (portable)"
+    ok "settings core_source=workspace-snapshot (portable)"
     if solar_client_bundle_validate "$SOLAR_WORKSPACE" true 2>/dev/null; then
       ok "workspace bundle valid"
     else
@@ -118,33 +118,33 @@ PY
       [[ "$STRICT" == true ]] && err "strict: bundle too large"
     fi
   elif [[ -n "$core_source" ]]; then
-    warn "manifest core_source=$core_source (expected global or workspace-snapshot)"
+    warn "settings core_source=$core_source (expected global or workspace-snapshot)"
   fi
   read -r global_ver global_commit < <(solar_client_git_identity "$SOLAR_ROOT" 2>/dev/null || echo "unknown unknown")
   manifest_ver="$(solar_client_manifest_core_version "$MANIFEST")"
   manifest_commit="$(solar_client_manifest_core_commit "$MANIFEST")"
   if [[ "$core_source" != "workspace-snapshot" ]]; then
   if [[ -n "$manifest_ver" && -n "$global_ver" && "$manifest_ver" != "$global_ver" && "$global_ver" != dev* && "$global_ver" != unknown ]]; then
-    warn "manifest core_version=$manifest_ver but global client is $global_ver — run: solar client sync"
+    warn "settings core_version=$manifest_ver but global client is $global_ver — run: solar client sync"
     if [[ "$STRICT" == true ]]; then
-      err "strict: workspace manifest out of sync with SOLAR_ROOT after global update"
+      err "strict: workspace settings out of sync with SOLAR_ROOT after global update"
     fi
   elif [[ -n "$manifest_ver" ]]; then
-    ok "manifest core_version=$manifest_ver matches global client"
+    ok "settings core_version=$manifest_ver matches global client"
   fi
   if [[ -n "$global_commit" && "$global_commit" != unknown && -n "$manifest_commit" && "$manifest_commit" != "$global_commit" ]]; then
-    warn "manifest core_commit=${manifest_commit:0:12} but SOLAR_ROOT HEAD is ${global_commit:0:12} — run: solar client sync"
-    [[ "$STRICT" == true ]] && err "strict: manifest core_commit out of sync with SOLAR_ROOT"
+    warn "settings core_commit=${manifest_commit:0:12} but SOLAR_ROOT HEAD is ${global_commit:0:12} — run: solar client sync"
+    [[ "$STRICT" == true ]] && err "strict: settings core_commit out of sync with SOLAR_ROOT"
   elif [[ -n "$manifest_commit" && -n "$global_commit" && "$global_commit" != unknown ]]; then
-    ok "manifest core_commit matches SOLAR_ROOT HEAD"
+    ok "settings core_commit matches SOLAR_ROOT HEAD"
   fi
   fi
   if solar_client_manifest_needs_repair "$MANIFEST"; then
-    warn "manifest needs repair (invalid JSON, merge markers, or missing fields) — run: solar client update --repair"
-    [[ "$STRICT" == true ]] && err "strict: manifest repair required"
+    warn "settings needs repair (invalid JSON, merge markers, or missing fields) — run: solar client update --repair"
+    [[ "$STRICT" == true ]] && err "strict: settings repair required"
   fi
 else
-  warn ".solar/manifest.json missing (run solar client init or upgrade)"
+  warn ".solar/settings.json missing (run solar client init or upgrade)"
 fi
 
 if [[ "$(solar_core_dir)" == "$SOLAR_WORKSPACE/.solar/core" ]]; then

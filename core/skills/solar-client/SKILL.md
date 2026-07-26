@@ -2,7 +2,8 @@
 name: solar-client
 description: >
   Solar Client workspace lifecycle: init, sync, update, upgrade, bundle, and client-only
-  doctor. Use when operating manifest, IDE sync, portable bundle, or global install hygiene.
+  doctor. Use when operating workspace settings, IDE sync, portable bundle, or global
+  install hygiene.
 ---
 
 # Solar Client
@@ -11,11 +12,11 @@ description: >
 
 Manage the relationship between **SOLAR_WORKSPACE** and **SOLAR_ROOT**:
 
-- workspace manifest (`.solar/manifest.json`),
+- workspace settings (`.solar/settings.json`),
 - IDE/agent sync (`sync-clients`),
 - portable bundle (`workspace-snapshot`),
 - global install update and self-update,
-- **client-only** doctor (manifest, bundle, symlinks, ports).
+- **client-only** doctor (settings, bundle, symlinks, ports).
 
 Workspace content health (`sun/`, `planets/`) is **`solar-workspace`** — use `solar workspace doctor`.
 
@@ -34,7 +35,9 @@ python3 -m py_compile core/skills/solar-client/scripts/solar_paths.py
 bash core/tests/skills/solar-client/test_resolve_solar_paths.sh
 bash core/tests/skills/solar-client/test_solar_paths_py.sh
 bash core/tests/skills/solar-client/test_sync_clients_prune.sh
+bash core/tests/skills/solar-client/test_sync_exclude.sh
 bash core/tests/skills/solar-client/test_install_solar_client.sh
+bash core/skills/solar-client/scripts/smoke-solar-client.sh "$PWD"
 ```
 
 ## CLI (via `solar` entrypoint)
@@ -48,6 +51,9 @@ solar client init
 solar client update [--check|--repair|--ref|--tag|--bundle]
 solar client upgrade [--check|--restructure]
 solar client sync [--portable]
+solar client sync exclude list
+solar client sync exclude add <planet>
+solar client sync exclude remove <planet>
 solar client bundle create|verify
 solar client doctor [--strict]
 solar client self-update

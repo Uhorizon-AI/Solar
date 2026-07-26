@@ -159,7 +159,7 @@ if ! solar_client_check_ports; then
   fi
 fi
 
-MANIFEST="$SOLAR_WORKSPACE/.solar/manifest.json"
+MANIFEST="$(solar_client_settings_path "$SOLAR_WORKSPACE")"
 if [[ -f "$MANIFEST" ]]; then
   _core_src="$(solar_client_manifest_core_source "$MANIFEST")"
   if [[ "$_core_src" == "workspace-snapshot" ]]; then

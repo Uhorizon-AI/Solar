@@ -109,16 +109,132 @@ solar_client_git_identity() {
   printf '%s %s\n' "$version" "$commit"
 }
 
-solar_client_write_manifest_v11() {
+# Prefer settings.json; fall back to legacy manifest.json for reads.
+# If neither exists, returns the canonical write path (.solar/settings.json).
+solar_client_settings_path() {
+  local workspace="$1"
+  if [[ -f "$workspace/.solar/settings.json" ]]; then
+    printf '%s\n' "$workspace/.solar/settings.json"
+  elif [[ -f "$workspace/.solar/manifest.json" ]]; then
+    printf '%s\n' "$workspace/.solar/manifest.json"
+  else
+    printf '%s\n' "$workspace/.solar/settings.json"
+  fi
+}
+
+solar_client_settings_exists() {
+  local workspace="$1"
+  [[ -f "$workspace/.solar/settings.json" || -f "$workspace/.solar/manifest.json" ]]
+}
+
+# Canonical write target (always settings.json under layout v1.2).
+solar_client_settings_write_path() {
+  printf '%s\n' "$1/.solar/settings.json"
+}
+
+# Print sync_exclude_planets one per line (empty if absent/[]).
+solar_client_read_sync_exclude_planets() {
+  local workspace="$1"
+  local path
+  path="$(solar_client_settings_path "$workspace")"
+  [[ -f "$path" ]] || return 0
+  python3 - <<'PY' "$path"
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception as exc:
+    sys.stderr.write(f"ERROR: invalid Solar workspace settings: {path}: {exc}\n")
+    sys.exit(1)
+if not isinstance(data, dict):
+    sys.stderr.write(f"ERROR: Solar workspace settings must be a JSON object: {path}\n")
+    sys.exit(1)
+planets = data.get("sync_exclude_planets", [])
+if not isinstance(planets, list):
+    sys.stderr.write(f"ERROR: sync_exclude_planets must be an array of planet names: {path}\n")
+    sys.exit(1)
+for p in planets:
+    if not isinstance(p, str) or not p.strip() or "/" in p or "\\" in p or p in (".", ".."):
+        sys.stderr.write(f"ERROR: invalid planet name in sync_exclude_planets: {p!r}\n")
+        sys.exit(1)
+    print(p.strip())
+PY
+}
+
+# Replace sync_exclude_planets with the given list (args after workspace).
+# Empty list → write "sync_exclude_planets": [] (key kept).
+solar_client_write_sync_exclude_planets() {
+  local workspace="$1"
+  shift
+  local write_path read_path
+  write_path="$(solar_client_settings_write_path "$workspace")"
+  read_path="$(solar_client_settings_path "$workspace")"
+  mkdir -p "$workspace/.solar"
+  python3 - <<'PY' "$write_path" "$read_path" "$@"
+import json, os, sys, tempfile
+
+write_path, read_path = sys.argv[1], sys.argv[2]
+planets = []
+seen = set()
+for planet in sys.argv[3:]:
+    planet = planet.strip()
+    if not planet or "/" in planet or "\\" in planet or planet in (".", ".."):
+        sys.stderr.write(f"ERROR: invalid planet name: {planet!r}\n")
+        sys.exit(2)
+    if planet not in seen:
+        seen.add(planet)
+        planets.append(planet)
+
+data = {}
+if os.path.isfile(read_path):
+    try:
+        with open(read_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:
+        sys.stderr.write(f"ERROR: invalid Solar workspace settings: {read_path}: {exc}\n")
+        sys.exit(1)
+    if not isinstance(data, dict):
+        sys.stderr.write(f"ERROR: Solar workspace settings must be a JSON object: {read_path}\n")
+        sys.exit(1)
+
+data["sync_exclude_planets"] = planets
+data["scope"] = "workspace"
+data["layout"] = "solar-client-v1.2"
+
+os.makedirs(os.path.dirname(write_path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, write_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+
+legacy = os.path.join(os.path.dirname(write_path), "manifest.json")
+if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write_path):
+    os.unlink(legacy)
+PY
+}
+
+# Writes .solar/settings.json (layout solar-client-v1.2). Prefer this name over the legacy alias.
+solar_client_write_settings_v12() {
   local workspace="$1"
   local client_root="$2"
   local preserve_synced="${3:-}"
-  local version commit synced_at
+  local version commit synced_at write_path read_path
   read -r version commit < <(solar_client_git_identity "$client_root")
   synced_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  if [[ -n "$preserve_synced" && -f "$workspace/.solar/manifest.json" ]]; then
+  write_path="$(solar_client_settings_write_path "$workspace")"
+  read_path="$(solar_client_settings_path "$workspace")"
+  if [[ -n "$preserve_synced" && -f "$read_path" ]]; then
     local existing
-    existing="$(python3 - <<'PY' "$workspace/.solar/manifest.json"
+    existing="$(python3 - <<'PY' "$read_path"
 import json, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as fh:
@@ -133,11 +249,13 @@ PY
     fi
   fi
   mkdir -p "$workspace/.solar"
-  python3 - <<PY "$workspace/.solar/manifest.json" "$version" "$commit" "$synced_at"
-import json, sys
-path, version, commit, synced_at = sys.argv[1:5]
-data = {
-    "layout": "solar-client-v1.1",
+  python3 - <<PY "$write_path" "$read_path" "$version" "$commit" "$synced_at"
+import json, os, sys, tempfile
+
+write_path, read_path, version, commit, synced_at = sys.argv[1:6]
+managed = {
+    "scope": "workspace",
+    "layout": "solar-client-v1.2",
     "client_version": version,
     "core_version": version,
     "core_commit": commit,
@@ -148,10 +266,45 @@ data = {
     "requires_global_client": True,
     "portable_capabilities": [],
 }
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
+
+existing = {}
+if os.path.isfile(read_path):
+    try:
+        with open(read_path, encoding="utf-8") as fh:
+            existing = json.load(fh)
+    except Exception:
+        existing = {}
+
+data = dict(existing)
+data.update(managed)
+
+os.makedirs(os.path.dirname(write_path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    # Test hook: fail after temp write, before commit — legacy must remain.
+    if os.environ.get("SOLAR_CLIENT_TEST_FAIL_BEFORE_REPLACE") == "1":
+        raise RuntimeError("injected fail before replace")
+    os.replace(tmp, write_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+
+# Delete legacy only after settings.json is committed.
+legacy = os.path.join(os.path.dirname(write_path), "manifest.json")
+if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write_path):
+    os.unlink(legacy)
 PY
+}
+
+# Deprecated alias (writes v1.2 settings.json). Prefer solar_client_write_settings_v12.
+solar_client_write_manifest_v11() {
+  solar_client_write_settings_v12 "$@"
 }
 
 solar_client_manifest_core_version() {
@@ -180,48 +333,86 @@ except Exception:
 PY
 }
 
-# After sync: align manifest core_version/client_version/core_commit with SOLAR_ROOT.
+# After sync: align settings core_version/client_version/core_commit with SOLAR_ROOT.
 solar_client_bump_manifest_from_install() {
   local workspace="$1"
   local client_root="$2"
-  local manifest="$workspace/.solar/manifest.json"
-  [[ -f "$manifest" ]] || return 0
+  local read_path write_path
+  read_path="$(solar_client_settings_path "$workspace")"
+  write_path="$(solar_client_settings_write_path "$workspace")"
+  [[ -f "$read_path" ]] || return 0
   local version commit
   read -r version commit < <(solar_client_git_identity "$client_root")
-  python3 - <<PY "$manifest" "$version" "$commit"
-import json, sys
-path, version, commit = sys.argv[1:4]
-with open(path, encoding="utf-8") as fh:
+  python3 - <<PY "$write_path" "$read_path" "$version" "$commit"
+import json, os, sys, tempfile
+write_path, read_path, version, commit = sys.argv[1:5]
+with open(read_path, encoding="utf-8") as fh:
     data = json.load(fh)
+if not isinstance(data, dict):
+    raise ValueError(f"Solar workspace settings must be a JSON object: {read_path}")
 data["core_version"] = version
 data["client_version"] = version
 data["core_commit"] = commit
+data["scope"] = "workspace"
+data["layout"] = "solar-client-v1.2"
 if data.get("core_source") != "workspace-snapshot":
     data["core_source"] = "global"
     data["requires_global_client"] = True
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
+os.makedirs(os.path.dirname(write_path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, write_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+legacy = os.path.join(os.path.dirname(write_path), "manifest.json")
+if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write_path):
+    os.unlink(legacy)
 PY
 }
 
 solar_client_touch_manifest_synced() {
   local workspace="$1"
-  local manifest="$workspace/.solar/manifest.json"
-  [[ -f "$manifest" ]] || return 0
-  python3 - <<'PY' "$manifest"
-import json, sys
+  local read_path write_path
+  read_path="$(solar_client_settings_path "$workspace")"
+  write_path="$(solar_client_settings_write_path "$workspace")"
+  [[ -f "$read_path" ]] || return 0
+  python3 - <<'PY' "$write_path" "$read_path"
+import json, os, sys, tempfile
 from datetime import datetime, timezone
-path = sys.argv[1]
-with open(path, encoding="utf-8") as fh:
+write_path, read_path = sys.argv[1:3]
+with open(read_path, encoding="utf-8") as fh:
     data = json.load(fh)
+if not isinstance(data, dict):
+    raise ValueError(f"Solar workspace settings must be a JSON object: {read_path}")
 data["synced_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 core = data.get("core_version") or data.get("version")
 if core:
     data["core_version"] = core
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
+data["scope"] = "workspace"
+data["layout"] = "solar-client-v1.2"
+os.makedirs(os.path.dirname(write_path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, write_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+legacy = os.path.join(os.path.dirname(write_path), "manifest.json")
+if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write_path):
+    os.unlink(legacy)
 PY
 }
 
@@ -234,7 +425,7 @@ solar_client_paths_equal() {
 
 solar_client_workspace_layout() {
   local ws="$1"
-  if [[ -f "$ws/.solar/manifest.json" ]]; then
+  if solar_client_settings_exists "$ws"; then
     echo "client"
     return 0
   fi
@@ -286,15 +477,15 @@ solar_client_print_upgrade_report() {
   layout="$(solar_client_workspace_layout "$ws" 2>/dev/null || echo "unknown")"
   read -r git_ver git_commit < <(solar_client_git_identity "$root")
   manifest_layout=""
-  if [[ -f "$ws/.solar/manifest.json" ]]; then
-    manifest_layout="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("layout",""))' "$ws/.solar/manifest.json" 2>/dev/null || true)"
+  if solar_client_settings_exists "$ws"; then
+    manifest_layout="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("layout",""))' "$(solar_client_settings_path "$ws")" 2>/dev/null || true)"
   fi
   echo "Solar Client upgrade"
   echo "  SOLAR_WORKSPACE=$ws"
   echo "  SOLAR_ROOT=$root"
   echo "  workspace_layout=$layout"
   echo "  install_git=$git_ver (${git_commit:0:12})"
-  echo "  manifest.layout=${manifest_layout:-<none>}"
+  echo "  settings.layout=${manifest_layout:-<none>}"
   if [[ "$git_ver" == v0.8.* ]] || [[ "$git_ver" == v0.9.* ]]; then
     echo "  HINT: update framework repo: cd \"$root\" && git fetch && git checkout v0.10.0"
   fi
@@ -557,7 +748,7 @@ except Exception:
     sys.exit(0)  # needs repair
 layout = data.get("layout", "")
 core = data.get("core_version") or data.get("version") or ""
-if layout != "solar-client-v1.1" or not core:
+if layout not in ("solar-client-v1.1", "solar-client-v1.2") or not core:
     sys.exit(0)
 sys.exit(1)
 PY
@@ -566,7 +757,7 @@ PY
 solar_client_repair_manifest() {
   local workspace="$1"
   local install_root="$2"
-  solar_client_write_manifest_v11 "$workspace" "$install_root" preserve_synced=1
+  solar_client_write_settings_v12 "$workspace" "$install_root" preserve_synced=1
 }
 
 solar_client_manifest_field() {
@@ -630,7 +821,8 @@ PY
 solar_client_check_snapshot_outdated() {
   local workspace="$1"
   local install_root="${2:-}"
-  local manifest="$workspace/.solar/manifest.json"
+  local manifest
+  manifest="$(solar_client_settings_path "$workspace")"
   [[ -f "$manifest" ]] || return 1
   [[ "$(solar_client_manifest_core_source "$manifest")" == "workspace-snapshot" ]] || return 1
   local bundle_ver global_ver
@@ -650,34 +842,39 @@ solar_client_write_manifest_portable() {
   local workspace="$1"
   local bundle_checksum="$2"
   local capabilities="${3:-}"
-  local manifest="$workspace/.solar/manifest.json"
+  local write_path read_path
+  write_path="$(solar_client_settings_write_path "$workspace")"
+  read_path="$(solar_client_settings_path "$workspace")"
   local snapshot_at synced_at existing_ver existing_commit global_root
   snapshot_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   synced_at="$snapshot_at"
   existing_ver=""
   existing_commit=""
-  if [[ -f "$manifest" ]]; then
-    synced_at="$(solar_client_manifest_field "$manifest" synced_at)"
+  mkdir -p "$workspace/.solar"
+  if [[ -f "$read_path" ]]; then
+    synced_at="$(solar_client_manifest_field "$read_path" synced_at)"
     [[ -n "$synced_at" ]] || synced_at="$snapshot_at"
   fi
   if global_root="$(solar_global_install_root 2>/dev/null || true)" && [[ -n "$global_root" ]]; then
     read -r existing_ver existing_commit < <(solar_client_git_identity "$global_root")
-  elif [[ -f "$manifest" ]]; then
-    existing_ver="$(solar_client_manifest_core_version "$manifest")"
-    existing_commit="$(solar_client_manifest_core_commit "$manifest")"
+  elif [[ -f "$read_path" ]]; then
+    existing_ver="$(solar_client_manifest_core_version "$read_path")"
+    existing_commit="$(solar_client_manifest_core_commit "$read_path")"
   fi
-  python3 - <<PY "$manifest" "$bundle_checksum" "$snapshot_at" "$synced_at" "$existing_ver" "$existing_commit" "$capabilities"
-import json, sys
-path, checksum, snapshot_at, synced_at, ver, commit, caps = sys.argv[1:8]
+  python3 - <<PY "$write_path" "$read_path" "$bundle_checksum" "$snapshot_at" "$synced_at" "$existing_ver" "$existing_commit" "$capabilities"
+import json, os, sys, tempfile
+write_path, read_path, checksum, snapshot_at, synced_at, ver, commit, caps = sys.argv[1:9]
 caps_list = [c.strip() for c in caps.split(",") if c.strip()] if caps else []
 data = {}
-try:
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
-except Exception:
-    pass
+if os.path.isfile(read_path):
+    try:
+        with open(read_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        pass
 data.update({
-    "layout": "solar-client-v1.1",
+    "scope": "workspace",
+    "layout": "solar-client-v1.2",
     "core_source": "workspace-snapshot",
     "requires_global_client": False,
     "portable_capabilities": caps_list,
@@ -693,25 +890,58 @@ if ver:
     data["client_version"] = ver
 if commit:
     data["core_commit"] = commit
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
+os.makedirs(os.path.dirname(write_path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, write_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+legacy = os.path.join(os.path.dirname(write_path), "manifest.json")
+if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write_path):
+    os.unlink(legacy)
 PY
 }
 
 solar_client_mark_snapshot_outdated() {
-  local manifest="$1"
+  local workspace="$1"
   local outdated="${2:-true}"
-  [[ -f "$manifest" ]] || return 0
-  python3 - <<PY "$manifest" "$outdated"
-import json, sys
-path, outdated = sys.argv[1], sys.argv[2] == "true"
-with open(path, encoding="utf-8") as fh:
+  local read_path write_path
+  read_path="$(solar_client_settings_path "$workspace")"
+  write_path="$(solar_client_settings_write_path "$workspace")"
+  [[ -f "$read_path" ]] || return 0
+  python3 - <<PY "$write_path" "$read_path" "$outdated"
+import json, os, sys, tempfile
+write_path, read_path, outdated = sys.argv[1], sys.argv[2], sys.argv[3] == "true"
+with open(read_path, encoding="utf-8") as fh:
     data = json.load(fh)
+if not isinstance(data, dict):
+    raise ValueError(f"Solar workspace settings must be a JSON object: {read_path}")
 data["snapshot_outdated"] = outdated
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
+data["scope"] = "workspace"
+data["layout"] = "solar-client-v1.2"
+os.makedirs(os.path.dirname(write_path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, write_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+legacy = os.path.join(os.path.dirname(write_path), "manifest.json")
+if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write_path):
+    os.unlink(legacy)
 PY
 }
 
@@ -720,7 +950,7 @@ solar_client_bundle_validate() {
   local strict="${2:-false}"
   local bundle_dir manifest index checksums
   bundle_dir="$(solar_client_bundle_dir "$workspace")"
-  manifest="$workspace/.solar/manifest.json"
+  manifest="$(solar_client_settings_path "$workspace")"
   index="$bundle_dir/index.json"
   checksums="$bundle_dir/checksums.sha256"
 
@@ -840,25 +1070,26 @@ solar_client_update_check_report() {
     fi
   fi
 
-  if [[ -n "$workspace" && -f "$workspace/.solar/manifest.json" ]]; then
-    local mv core_src
-    mv="$(solar_client_manifest_core_version "$workspace/.solar/manifest.json")"
-    core_src="$(solar_client_manifest_core_source "$workspace/.solar/manifest.json")"
-    echo "Workspace manifest core_version=${mv:-<none>} core_source=${core_src:-global}"
+  if [[ -n "$workspace" ]] && solar_client_settings_exists "$workspace"; then
+    local mv core_src settings_path
+    settings_path="$(solar_client_settings_path "$workspace")"
+    mv="$(solar_client_manifest_core_version "$settings_path")"
+    core_src="$(solar_client_manifest_core_source "$settings_path")"
+    echo "Workspace settings core_version=${mv:-<none>} core_source=${core_src:-global}"
     if [[ "$core_src" == "workspace-snapshot" ]]; then
       if solar_client_check_snapshot_outdated "$workspace" "$install_root"; then
         echo "WARN: workspace bundle snapshot_outdated (global=$gv bundle=$mv) — run: solar client bundle create"
-        solar_client_mark_snapshot_outdated "$workspace/.solar/manifest.json" true
+        solar_client_mark_snapshot_outdated "$workspace" true
       fi
     fi
     if [[ -n "$mv" && "$gv" != "$mv" && "$gv" != dev* && "$core_src" == "global" ]]; then
       echo "WARN: global client updated — run: solar client sync"
     fi
-    if solar_client_manifest_needs_repair "$workspace/.solar/manifest.json"; then
-      echo "WARN: manifest may need repair — run: solar client update --repair"
+    if solar_client_manifest_needs_repair "$settings_path"; then
+      echo "WARN: settings may need repair — run: solar client update --repair"
     fi
   elif [[ -n "$workspace" ]]; then
-    echo "Workspace manifest=<none>"
+    echo "Workspace settings=<none>"
   fi
 }
 

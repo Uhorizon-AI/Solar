@@ -35,7 +35,7 @@ export SOLAR_WORKSPACE="$WS"
 
 pushd "$WS" >/dev/null
 assert_ok "bundle create" bash "$SOLAR" client bundle create
-assert_ok "manifest portable" grep -q workspace-snapshot .solar/manifest.json
+assert_ok "manifest portable" grep -q workspace-snapshot .solar/settings.json
 assert_ok "bundle index exists" test -f .solar/bundle/index.json
 assert_ok "bundle verify" bash "$SOLAR" client bundle verify
 

@@ -33,8 +33,8 @@ mkdir -p "$WS/.solar" "$WS/sun" "$INSTALL/core"
 printf '%s\n' '<<<<<<< HEAD' '{"layout":"broken"}' > "$WS/.solar/manifest.json"
 assert_ok "needs_repair detects conflict markers" solar_client_manifest_needs_repair "$WS/.solar/manifest.json"
 solar_client_repair_manifest "$WS" "$INSTALL"
-assert_ok "repair: valid layout" grep -q 'solar-client-v1.1' "$WS/.solar/manifest.json"
-if ! grep -q '<<<<<<<' "$WS/.solar/manifest.json" 2>/dev/null; then
+assert_ok "repair: valid layout" grep -q 'solar-client-v1.2' "$WS/.solar/settings.json"
+if ! grep -q '<<<<<<<' "$WS/.solar/settings.json" 2>/dev/null; then
   echo "PASS: repair: no conflict markers"
   PASS=$((PASS + 1))
 else
@@ -142,8 +142,10 @@ echo "y" > "$INSTALL4/core/.probe"
 git -C "$INSTALL4" add -A && git -C "$INSTALL4" commit -q -m "init"
 solar_client_bump_manifest_from_install "$WS2" "$INSTALL4"
 head_commit="$(git -C "$INSTALL4" rev-parse HEAD)"
-manifest_commit="$(solar_client_manifest_core_commit "$WS2/.solar/manifest.json")"
+manifest_commit="$(solar_client_manifest_core_commit "$(solar_client_settings_path "$WS2")")"
 assert_ok "bump_manifest sets core_commit to SOLAR_ROOT HEAD" test "$manifest_commit" = "$head_commit"
+assert_ok "bump migrates to settings.json" test -f "$WS2/.solar/settings.json"
+assert_ok "bump removes legacy manifest" test ! -f "$WS2/.solar/manifest.json"
 
 # --- integration: migration failure aborts BEFORE framework update (§B) ---
 WS_MIG="$TMP/ws-mig-fail"

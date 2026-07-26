@@ -6,6 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-client): `solar client sync exclude list|add|remove` manages `sync_exclude_planets` in workspace settings (skip planet skills/agents/commands on sync; invalid settings fail closed before IDE mutation).
+
+### Changed
+- change(solar-client): workspace binding file is `.solar/settings.json` (layout `solar-client-v1.2`); dual-read with legacy `.solar/manifest.json`; atomic write then remove legacy; preserve `sync_exclude_planets` and unknown keys on rewrite.
+- change(solar-client): rename writer to `solar_client_write_settings_v12` (deprecated alias `solar_client_write_manifest_v11` retained); mid-fail before replace keeps legacy `manifest.json`.
+
 ## [0.19.3] - 2026-07-26
 
 ### Fixed
