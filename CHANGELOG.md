@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-07-26
+### Fixed
+- fix(solar-system): detect stale LaunchAgent SOLAR_ROOT
+
+
 ## [0.20.1] - 2026-07-26
 
 ## [0.20.0] - 2026-07-26
