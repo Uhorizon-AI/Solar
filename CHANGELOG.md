@@ -6,10 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
-## [0.19.1] - 2026-07-26
 ### Fixed
-- fix(test): allow empty commit in bootstrap SHA install E2E
-
+- fix(test): allow empty commit in bootstrap SHA install E2E (publish gate no longer fails on a clean tree).
 
 ## [0.19.1] - 2026-07-26
 
