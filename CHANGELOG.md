@@ -9,12 +9,18 @@ The format is based on Keep a Changelog.
 ## [0.20.0] - 2026-07-26
 
 ### Added
+- feat(solar): Codex-style update banner on `solar` / `-h` (and `solar status`) when a newer GitHub release exists; cached 24h; `solar update` to upgrade; disable with `SOLAR_NO_UPDATE_CHECK=1`.
 - feat(solar-client): `solar client sync exclude list|add|remove` manages `sync_exclude_planets` in workspace settings (skip planet skills/agents/commands on sync; invalid settings fail closed before IDE mutation).
 
 ### Changed
 - change(solar-client): workspace binding file is `.solar/settings.json` (layout `solar-client-v1.2`); dual-read with legacy `.solar/manifest.json`; atomic write then remove legacy; preserve `sync_exclude_planets` and unknown keys on rewrite.
 - change(solar-client): rename writer to `solar_client_write_settings_v12` (deprecated alias `solar_client_write_manifest_v11` retained); mid-fail before replace keeps legacy `manifest.json`.
 
+### Fixed
+- fix(solar): bare `solar` / `-h` show help (no Solar App, no chat attempt).
+- fix(solar-client): `api_get`/`api_post` catch `URLError` (no raw urllib traceback when Solar App is down).
+- fix(solar): top-level `solar update` aliases `solar client update` (no longer treated as chat text).
+- fix(solar-client): update-notice cache read is single-line (`latest checked ttl`) so TTL freshness works.
 ## [0.19.3] - 2026-07-26
 
 ### Fixed

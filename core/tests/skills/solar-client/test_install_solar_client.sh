@@ -200,6 +200,8 @@ cp "$CORE_ROOT/skills/solar-client/scripts/client_lib.sh" \
   "$BOOT_SRC/core/skills/solar-client/scripts/client_lib.sh"
 cp "$CORE_ROOT/skills/solar-client/scripts/solar" \
   "$BOOT_SRC/core/skills/solar-client/scripts/solar"
+cp "$CORE_ROOT/skills/solar-client/scripts/update_notice.sh" \
+  "$BOOT_SRC/core/skills/solar-client/scripts/update_notice.sh"
 chmod +x \
   "$BOOT_SRC/core/skills/solar-client/scripts/install_solar_client.sh" \
   "$BOOT_SRC/core/skills/solar-client/scripts/bootstrap_solar_client.sh" \

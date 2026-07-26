@@ -37,6 +37,7 @@ bash core/tests/skills/solar-client/test_solar_paths_py.sh
 bash core/tests/skills/solar-client/test_sync_clients_prune.sh
 bash core/tests/skills/solar-client/test_sync_exclude.sh
 bash core/tests/skills/solar-client/test_install_solar_client.sh
+bash core/tests/skills/solar-client/test_update_notice.sh
 bash core/skills/solar-client/scripts/smoke-solar-client.sh "$PWD"
 ```
 

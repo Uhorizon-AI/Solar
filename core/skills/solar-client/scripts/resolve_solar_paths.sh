@@ -262,7 +262,7 @@ _resolve_set_paths() {
   fi
 
   layout="$(_resolve_workspace_layout "$ws")" || {
-    echo "ERROR: invalid Solar workspace at $ws (need manifest+sun/, legacy core/, or solar/core/)" >&2
+    echo "ERROR: invalid Solar workspace at $ws (need .solar/settings.json or manifest.json + sun/, legacy core/, or solar/core/)" >&2
     return 1
   }
 

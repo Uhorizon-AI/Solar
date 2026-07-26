@@ -3,15 +3,76 @@ set -euo pipefail
 
 SOLAR_VERSION="0.20.0"
 
-# Version must work without a workspace or Solar App runtime (installer smoke, CI).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=update_notice.sh
+source "$SCRIPT_DIR/update_notice.sh"
+
+usage() {
+  cat <<EOF
+Solar $SOLAR_VERSION
+
+Usage:
+  solar <subcommand>       Client / workspace / app commands
+  solar [flags] <text>     Start chat with a message (requires Solar App)
+  solar new [title]        Start a new chat thread
+  solar -c                 Continue the most recent conversation
+
+Flags:
+  -p, --print              Non-interactive: send message, print response, exit
+  -c, --continue           Continue the most recent conversation
+  -r, --resume <thread>    Resume a specific thread by ID
+  -m, --model <provider>   Force provider: codex | claude | agy | agent (default: first in SOLAR_ROUTER_PROVIDER_PRIORITY)
+  -n, --name <title>       Name this session (used when creating a new thread)
+  -v, --version            Show version
+  -h, --help               Show help
+
+Subcommands:
+  setup                    Onboarding: preflight, init, sync, doctors (does not edit shell profile)
+  uninstall                Remove wrapper (and optional install tree); preserves workspaces
+  client init|sync|doctor|upgrade|update|bundle|self-update  Solar Client (settings, bundle, IDE sync)
+  update                   Alias for: solar client update
+  workspace doctor         Workspace content health (sun/, planets/)
+  app start|stop|status|open   Solar App control plane UI (default :9000)
+  app workspace ...            Workspace registry helpers
+  app voice ...                Voice ops/debug (primary UX: Solar.app tray)
+  status [--verbose]       Compact workspace health (Client + Workspace + runtime)
+  paths                    Resolvable paths for IDE @ references
+
+Note: Interactive chat uses Solar App API on :9000 (in-process).
+  new [title]              Start a new thread and enter chat
+  runs                     List recent runs
+  approvals                List pending approvals
+  approve <id>             Approve a pending run
+  reject <id>              Reject a pending run
+
+Inside chat: type your message and press Enter. Use '/exit', '/quit', or Ctrl+C to quit.
+
+Examples:
+  solar                    Show this help (does not start Solar App)
+  solar "Hola"             Start chat with initial message
+  solar new                Start a new chat thread
+  solar -c                 Continue most recent conversation
+  solar -p "Hola"          Print response and exit (for pipes/scripts)
+  solar -m claude "Hola"   Force Claude as provider
+  solar -r thread_abc123   Resume specific thread
+  solar app start          Start Solar App (needed for chat)
+  solar app voice doctor   Check voice dependencies
+EOF
+}
+
+# Version / help must work without a workspace or Solar App runtime.
 case "${1:-}" in
   -v|--version)
     echo "solar $SOLAR_VERSION"
     exit 0
     ;;
+  ""|-h|--help)
+    solar_update_notice_print "$SOLAR_VERSION" || true
+    usage
+    exit 0
+    ;;
 esac
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT_SCRIPTS="$SCRIPT_DIR"
 WORKSPACE_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-workspace/scripts" && pwd)"
 APP_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-app/scripts" && pwd)"
@@ -146,6 +207,11 @@ case "${1:-}" in
     shift
     exec bash "$SCRIPT_DIR/solar_paths.sh" "$@"
     ;;
+  update)
+    # Alias: users often type `solar update` for client update (not chat).
+    shift
+    exec bash "$CLIENT_SCRIPTS/client_update.sh" "$@"
+    ;;
   voice)
     echo "NOTE: 'solar voice' removed in v0.19.0 — use: solar app voice ..." >&2
     echo "Usage: solar app voice {once|paste|command|read|ask|doctor}" >&2
@@ -156,52 +222,6 @@ esac
 # shellcheck source=/dev/null
 source "$APP_SCRIPTS/interface_lib.sh"
 
-usage() {
-  cat <<EOF
-Solar $SOLAR_VERSION
-
-Usage:
-  solar [flags] [text]     Start or continue a chat (REPL by default)
-
-Flags:
-  -p, --print              Non-interactive: send message, print response, exit
-  -c, --continue           Continue the most recent conversation
-  -r, --resume <thread>    Resume a specific thread by ID
-  -m, --model <provider>   Force provider: codex | claude | agy | agent (default: first in SOLAR_ROUTER_PROVIDER_PRIORITY)
-  -n, --name <title>       Name this session (used when creating a new thread)
-  -v, --version            Show version
-  -h, --help               Show help
-
-Subcommands:
-  setup                    Onboarding: preflight, init, sync, doctors (does not edit shell profile)
-  uninstall                Remove wrapper (and optional install tree); preserves workspaces
-  client init|sync|doctor|upgrade|update|bundle|self-update  Solar Client (manifest, bundle, IDE sync)
-  workspace doctor         Workspace content health (sun/, planets/)
-  app start|stop|status|open   Solar App control plane UI (default :9000)
-  app workspace ...            Workspace registry helpers
-  app voice ...                Voice ops/debug (primary UX: Solar.app tray)
-  status [--verbose]       Compact workspace health (Client + Workspace + runtime)
-  paths                    Resolvable paths for IDE @ references
-
-Note: Interactive chat uses Solar App API on :9000 (in-process).
-  new [title]              Start a new thread and enter chat
-  runs                     List recent runs
-  approvals                List pending approvals
-  approve <id>             Approve a pending run
-  reject <id>              Reject a pending run
-
-Inside chat: type your message and press Enter. Use '/exit', '/quit', or Ctrl+C to quit.
-
-Examples:
-  solar "Hola"             Start chat with initial message
-  solar                    Enter chat (create or resume last thread)
-  solar -c                 Continue most recent conversation
-  solar -p "Hola"          Print response and exit (for pipes/scripts)
-  solar -m claude "Hola"   Force Claude as provider
-  solar -r thread_abc123   Resume specific thread
-  solar app voice doctor   Check voice dependencies
-EOF
-}
 
 require_daemon() {
   if bash "$APP_SCRIPTS/check_host.sh" --quiet 2>/dev/null; then
@@ -232,6 +252,14 @@ try:
 except urllib.error.HTTPError as exc:
     sys.stderr.write(exc.read().decode("utf-8"))
     sys.exit(22)
+except urllib.error.URLError as exc:
+    sys.stderr.write(
+        "\nSolar App is not reachable. Start it and retry:\n"
+        "  solar app start\n"
+        "  solar app status\n"
+        f"(detail: {exc.reason})\n"
+    )
+    sys.exit(1)
 PY
 }
 
@@ -258,6 +286,14 @@ try:
 except urllib.error.HTTPError as exc:
     sys.stderr.write(exc.read().decode("utf-8"))
     sys.exit(22)
+except urllib.error.URLError as exc:
+    sys.stderr.write(
+        "\nSolar App is not reachable. Start it and retry:\n"
+        "  solar app start\n"
+        "  solar app status\n"
+        f"(detail: {exc.reason})\n"
+    )
+    sys.exit(1)
 PY
 }
 
@@ -486,8 +522,13 @@ if threads:
         chat_loop "$text" "$FLAG_MODEL" "$FLAG_NAME" "$latest"
       fi
 
-    # default: always create a new thread. Use -c to resume the last one.
+    # default: message text (or explicit chat flags) starts a new thread.
+    # Bare `solar` with no args is handled earlier (help). Defensive fallback:
     else
+      if [[ -z "$text" && -z "$FLAG_NAME" && -z "$FLAG_MODEL" ]]; then
+        usage
+        exit 0
+      fi
       require_daemon
       local_title="${FLAG_NAME:-${text:-Solar Chat}}"
       resp="$(create_thread "$local_title")"

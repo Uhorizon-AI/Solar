@@ -27,6 +27,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# shellcheck source=update_notice.sh
+source "$SCRIPT_DIR/update_notice.sh"
+if [[ "$JSON" != true ]]; then
+  _status_ver=""
+  if [[ -n "${SOLAR_ROOT:-}" ]]; then
+    read -r _status_ver _ < <(solar_client_git_identity "$SOLAR_ROOT" 2>/dev/null) || _status_ver=""
+  fi
+  solar_update_notice_print "${_status_ver:-}" || true
+fi
+
 block_line() {
   local name="$1"
   local state="$2"
