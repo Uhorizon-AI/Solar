@@ -105,6 +105,14 @@ set -e
 assert_ok "wrapper --version exit 0" test "$ver_ec" -eq 0
 assert_ok "wrapper --version prints solar" grep -q 'solar' <<<"$ver_out"
 
+# Installer smoke must not depend on ambient workspace env (CI runners have none).
+set +e
+ver_clean_out="$(env -u SOLAR_WORKSPACE -u SOLAR_ROOT "$BIN_DIR/solar" --version 2>&1)"
+ver_clean_ec=$?
+set -e
+assert_ok "wrapper --version without workspace env" test "$ver_clean_ec" -eq 0
+assert_ok "wrapper --version without workspace prints version" grep -q 'solar' <<<"$ver_clean_out"
+
 # Idempotent second install
 set +e
 out2="$(bash "$INSTALL_SCRIPT" --install-dir "$INSTALL_DIR" --ref "$REF" --yes 2>&1)"

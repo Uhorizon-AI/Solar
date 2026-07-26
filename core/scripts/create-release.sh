@@ -422,6 +422,8 @@ function bump_solar_cli_version() {
   tmp=$(mktemp)
   sed "s/^SOLAR_VERSION=\".*\"/SOLAR_VERSION=\"$ver\"/" "$SOLAR_CLI" > "$tmp"
   mv "$tmp" "$SOLAR_CLI"
+  # sed/mv replaces the file and drops the executable bit — restore it for git + installs.
+  chmod +x "$SOLAR_CLI"
   success "SOLAR_VERSION=$ver"
 }
 
@@ -467,7 +469,12 @@ function create_tag_and_commit() {
   info "Creating git tag $NEW_VERSION..."
 
   git -C "$GIT_ROOT" add "$CHANGELOG_FILE" "$README_FILE"
-  [[ -f "$SOLAR_CLI" ]] && git -C "$GIT_ROOT" add "$SOLAR_CLI"
+  if [[ -f "$SOLAR_CLI" ]]; then
+    git -C "$GIT_ROOT" add "$SOLAR_CLI"
+    # Ensure the CLI stays executable in the index (100755), even after version bumps.
+    git -C "$GIT_ROOT" update-index --chmod=+x -- "core/skills/solar-client/scripts/solar" 2>/dev/null \
+      || git -C "$GIT_ROOT" update-index --chmod=+x "$SOLAR_CLI"
+  fi
   git -C "$GIT_ROOT" commit -m "chore(release): $NEW_VERSION"
   git -C "$GIT_ROOT" tag "$NEW_VERSION"
 

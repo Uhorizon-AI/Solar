@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-client): `solar --version` works without a workspace / Solar App runtime (installer smoke + CI); `create-release` restores executable bit on `scripts/solar` after version bump so git keeps `100755`.
+
 ## [0.19.0] - 2026-07-26
 
 ### Added

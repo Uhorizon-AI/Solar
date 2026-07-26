@@ -3,6 +3,14 @@ set -euo pipefail
 
 SOLAR_VERSION="0.19.0"
 
+# Version must work without a workspace or Solar App runtime (installer smoke, CI).
+case "${1:-}" in
+  -v|--version)
+    echo "solar $SOLAR_VERSION"
+    exit 0
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT_SCRIPTS="$SCRIPT_DIR"
 WORKSPACE_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-workspace/scripts" && pwd)"
