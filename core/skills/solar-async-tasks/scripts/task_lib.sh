@@ -392,6 +392,33 @@ set_meta() {
     fi
 }
 
+# Parse recurring_last_run (UTC ISO-8601) to epoch seconds.
+# BSD date treats a trailing "Z" as a literal, not UTC — force TZ=UTC so
+# recurring_min_interval is not skewed by the local offset (e.g. CEST +2h
+# made a 7200s interval always appear elapsed).
+recurring_last_run_epoch() {
+    local last_run="$1"
+    local last_norm ts=""
+
+    [[ -z "$last_run" ]] && { echo 0; return; }
+
+    if [[ "$last_run" == *[Zz] ]]; then
+        ts="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_run" +%s 2>/dev/null || true)"
+    else
+        # Offset form: 2026-07-27T12:00:00+02:00 → +0200 for BSD date
+        last_norm="$(echo "$last_run" | sed -E 's/([+-][0-9]{2}):([0-9]{2})$/\1\2/')"
+        ts="$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$last_norm" +%s 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$ts" ]] && command -v gdate >/dev/null 2>&1; then
+        ts="$(gdate -d "$last_run" +%s 2>/dev/null || true)"
+    elif [[ -z "$ts" ]] && date -d "1970-01-01" +%s >/dev/null 2>&1; then
+        ts="$(date -d "$last_run" +%s 2>/dev/null || true)"
+    fi
+
+    echo "${ts:-0}"
+}
+
 # Check if recurring task is ready to run (race protection)
 is_recurring_ready() {
     local file="$1"
@@ -404,9 +431,10 @@ is_recurring_ready() {
     local min_interval=$(extract_meta "$file" "recurring_min_interval")
     min_interval=${min_interval:-86400}  # Default 24h
 
-    local last_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_run" +%s 2>/dev/null || echo 0)
-    local now_epoch=$(date +%s)
-    local elapsed=$((now_epoch - last_epoch))
+    local last_epoch now_epoch elapsed
+    last_epoch="$(recurring_last_run_epoch "$last_run")"
+    now_epoch=$(date +%s)
+    elapsed=$((now_epoch - last_epoch))
 
     [[ $elapsed -ge $min_interval ]]
 }
