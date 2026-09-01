@@ -2,99 +2,61 @@
 
 ## First-Run / Session start Protocol (Required)
 
-**First thing in every session, before responding to the first user message:** read in this order:
+**First thing in every session, detect the session level from the first user message, then load only what that level requires. Do not mention this step in your reply.**
 
-1. **This file** (root `AGENTS.md`) in full.
-2. **`sun/preferences/profile.md`** — so you know who you are talking to.
-3. **`sun/MEMORY.md`** — so you have context and learnings to remember.
+Session levels (see `core/docs/token-budget-protocol.md` for full spec):
 
-If `sun/preferences/profile.md` or `sun/MEMORY.md` are missing, delegate to `core/AGENTS.md` setup protocol instead of answering. Do not mention this step in your reply.
+**Level 1 — Light** (question, quick task, no planet or framework reference):
+- Read: `sun/preferences/profile.md` only.
 
-## Core Directive: Solar Architecture
+**Level 2 — Planet** (task involves a specific planet, company, project, or planet-scoped skill):
+- Read: `sun/preferences/profile.md` + `sun/MEMORY.md` + `planets/<active-planet>/AGENTS.md`.
+- Do NOT load other planets' AGENTS.md or `core/AGENTS.md`.
 
-This system operates on a **Hub-and-Spoke** model called "Solar".
+**Level 3 — Framework** (task modifies `core/`, governance files, scripts, or Solar architecture):
+- Read: `sun/preferences/profile.md` + `sun/MEMORY.md` + `core/AGENTS.md`.
+- Load active planet AGENTS.md only if applicable.
 
-## Instruction Resolution (Required)
+Detection order: check L3 signals first (mentions core/, AGENTS.md, scripts, Solar itself), then L2 (mentions planet name, company, project, planet skill), default to L1.
 
-Solar operates with a three-layer governance structure:
+If `sun/preferences/profile.md` or `sun/MEMORY.md` are missing when required, delegate to `core/AGENTS.md` setup protocol instead of answering.
 
-1. **Root `AGENTS.md`** (this file) - Global orchestration and delegation protocols
-2. **`core/AGENTS.md`** - AI Operating System framework rules
-3. **`planets/<planet-name>/AGENTS.md`** - Domain-specific governance
+## Architecture (Required)
 
-**How it works:**
-- Working in `core/` → Apply `core/AGENTS.md` rules
-- Working in a planet → Apply that planet's `AGENTS.md` rules
-- Working in `sun/` → Apply root rules (sun/ is runtime storage, not a governance layer)
+Three-layer governance: root (global orchestration) → `core/AGENTS.md` (framework rules) → `planets/<name>/AGENTS.md` (domain rules). More specific layers override general ones. `core/` → apply core rules. Planet folder → apply that planet's rules. `sun/` → apply root rules.
 
-**Key principle:** More specific governance layers override general ones.
+Sun (`/sun/`) is the personal interface and router. Planets (`/planets/<name>/`) are autonomous domain specialists. Each AGENTS.md owns its scope; delegate what you don't own to the next layer.
 
-## Governance Delegation (Required)
+## Context Sustainability (Required)
 
-**This layer (root/AGENTS.md):**
-- **Authority:** Global orchestration (Sun/Planet architecture, delegation protocols)
-- **Delegates to:** `core/AGENTS.md` for framework operational rules
+Solar optimizes for finding context, not loading context. For detailed framework rules on context size, memory, docs, skills, agents, commands, and measurement, delegate to `core/AGENTS.md`.
 
-**Key principle:** Each AGENTS.md owns its scope. Delegate what you don't own to your immediate parent or specialist layer.
+## Preference Update Delegation (Required)
 
-### 1. The Sun (Personal Agent)
-- **Location:** `/sun/`
-- **Role:** Interface & Router - routes tasks, maintains user context
-- **Authority:** User preferences only
+If the user explicitly updates personal operating context, delegate execution to the Profile Sync Protocol in `core/AGENTS.md`. See `core/docs/profile-sync-protocol.md`. Root keeps conversation ownership.
 
-### 2. The Planets (Domain Agents)
-- **Location:** `/planets/<planet-name>/`
-- **Role:** Specialists - execute tasks, enforce domain rules
-- **Authority:** Domain-specific governance
+## Planet Management (Required)
 
-## Planet Design Principles (Required)
-
-- Planet = autonomous operational context (not department/channel)
-- Governable with single `AGENTS.md`
-- Create when ≥3 criteria differ: objective, stakeholders, data, execution rules
-- Prefer fewer planets with strong governance
-
-## Protocol: "Interplanetary Transport"
-
-When Sun delegates to Planet: resolve `AGENTS.md`, transfer objective/constraints, Planet executes autonomously, returns summary without leaking complexity.
-
-## Creating New Planets
-
-To add a new company/project, use the automated creation script:
-
-```bash
-bash core/scripts/create-planet.sh <planet-name>
-```
-
-This ensures proper structure (AGENTS.md template + CLAUDE.md/GEMINI.md symlinks). See `core/AGENTS.md` "Planet management rule" for details.
-
-## Planet Resource Sync (Required)
-
-Planets can include custom resources (agents, commands, skills).
-
-For framework operational rules on planet resource management, see the **Planet management rule** section in `core/AGENTS.md`.
+- **Create:** `bash core/scripts/create-planet.sh <planet-name>` (auto-creates AGENTS.md template + symlinks).
+- Planet = autonomous operational context. Create when ≥3 criteria differ: objective, stakeholders, data, execution rules. Prefer fewer planets with strong governance.
+- **Transport:** When Sun delegates to Planet, resolve AGENTS.md, transfer objective/constraints, Planet executes autonomously, returns summary without leaking complexity.
+- **Resources:** skills, agents, commands sync via `bash core/scripts/sync-clients.sh`. See `core/AGENTS.md` planet management rule for details.
 
 ## Ambiguity Handling (Required)
 
-If a user request is ambiguous about destination scope (for example: "create a template", "save this", "update this"), the Sun must ask a short clarifying question before writing files.
-
-Allowed destination options:
-- `core/` for reusable framework artifacts
-- `sun/` for personal runtime context
-- `planets/<planet-name>/` for domain-specific artifacts
-
-Do not write to an assumed folder when scope is unclear.
+If destination scope is ambiguous ("save this", "create a template"), ask before writing. Options: `core/` (reusable framework), `sun/` (personal runtime), `planets/<name>/` (domain-specific).
 
 ## Version Control Boundaries (Required)
 
-- The `Solar` framework repository governs `core/` and shared framework files only.
-- `sun/` and `planets/**` are user-owned runtime workspaces and must be treated as out of framework governance.
-- Never stage runtime workspace content from the parent framework repository (for example: `git add sun/` or `git add planets/`).
-- If a user wants version control for `sun/` or any `planets/<planet-name>/`, recommend and use an independent repository inside that workspace.
+Framework repo governs `core/` and root files only. Never stage `sun/` or `planets/**` in the framework repo. For version control in those workspaces, use independent repos inside each.
 
 ## Runtime Workspace Access (Required)
 
 Access `sun/` and `planets/*/` directly. See `core/AGENTS.md` for workspace rules.
+
+## Chrome DevTools MCP — browser on demand (Required)
+
+Before any Chrome DevTools MCP call: run `ensure_browser.sh --start`. After workflow completes: run `ensure_browser.sh --stop`. Never keep Chrome running between tasks. See `core/docs/browser-protocol.md` for full flow.
 
 ## Workspace Doctor Policy (Required)
 
@@ -102,82 +64,16 @@ Git setup in `sun/` and `planets/*` is optional. See `core/AGENTS.md` for doctor
 
 ## JIT Delegation Protocol (Required)
 
-When receiving a task, the AI must self-evaluate before responding:
-
-### 1. Self-Assessment
-Check if available agents, skills, and commands are sufficient for the task:
-- **Sufficient** → execute directly.
-- **Insufficient or uncertain** → delegate to `solar-router` as a subprocess.
-
-### 2. Validation Gate
-Before delegating to `solar-router`:
-- Task is **read / analysis only** → delegate automatically.
-- Task **modifies data or sends messages** → show the user which agent + skills will be used and wait for explicit approval before proceeding.
-
-### 3. Subprocess Invocation
-Call `solar-router` using the v3 contract via stdin. Always use `mode: direct_only` and `channel: other` in subprocesses to prevent recursion:
-
-```bash
-echo '{
-  "request_id": "<uuid>",
-  "session_id": "<session_id>",
-  "user_id": "<user_id>",
-  "text": "<task description>",
-  "channel": "other",
-  "mode": "direct_only",
-  "provider": "<claude|gemini|codex>",
-  "metadata": {
-    "agent": "<agent-name or null>",
-    "skills": ["<skill-1>", "<skill-2>"],
-    "planet": "<planet-name>"
-  }
-}' | python3 core/skills/solar-router/scripts/run_router.py
-```
-
-For full field rules, JIT protocol, metadata format, and invariants see `core/skills/solar-router/references/routing-policy.md`.
-
-### 4. When No Agent or Skill Exists
-Set `metadata.agent` to `null` — the router generates a role JIT. Frequently used JIT resources are persisted to the correct planet and synced via `sync-clients.sh`.
+Self-assess before responding: sufficient → execute directly; deferred/multiprovider/external/browser/MCP/long-running/blocking → use `solar-async-tasks`; insufficient but short/local/non-blocking → delegate to `solar-router`. Read/analysis tasks delegate automatically; data-modifying tasks require explicit user approval first. See `core/docs/jit-delegation-protocol.md` for subprocess invocation contract, provider invocation boundaries, and field rules.
 
 ## Workflow Orchestration (Required)
 
-### Plan Node Default
-- Enter planning mode for any non-trivial task (3+ steps or architectural decisions).
-- If something fails, STOP and replan immediately; do not proceed.
-- Use planning for verification steps, not just construction.
-- Write detailed specifications in advance to reduce ambiguity.
+**Plan:** Enter planning mode for any non-trivial task (3+ steps or architectural decisions). If something fails, STOP and replan. Never mark done without real validation — run tests, check logs, ask "Would a senior engineer approve this?"
 
-### Delegation (multi-provider)
-- Coexist with Self-Assessment rule: sufficient → execute directly. Delegate only when it adds context or parallelism.
-- Use JIT/solar-router to create processes and invoke agents; any AI can do this. Traceability built-in.
-- Delegate research, exploration, and parallel analysis when useful; execute directly when sufficient.
-- One task per delegation.
+**Delegation:** sufficient → execute directly. Delegate only when it adds context or parallelism. One task per delegation.
 
-### Self-Improvement Loop
-- After any user correction: capture the pattern in `sun/lessons.md` (inbox). Consolidate into `sun/MEMORY.md` at least weekly or when closing long initiatives.
-- Review lessons at the start of work sessions — recommended, not required in first-run.
+**Self-improvement:** After any user correction, capture in `sun/lessons.md`. Consolidate into `sun/MEMORY.md` weekly or when closing long initiatives.
 
-### Daily-log Execution Trace (when applicable)
-- When you complete work that produces a traceable deliverable (e.g., sales-actions, content draft, digest, pipeline update), insert a row at the top of the Log table in `sun/daily-log/YYYY-MM-DD.md` (local date): `| HH:MM | tag | Description → [artifact-path](artifact-path) |`. Order: newest first.
-- If no time: `| - | tag | Description |`. Tags: sales marketing job ops.
-- Any artifact (file path) in Top Priorities, Blockers, or Log must be a markdown link: `[path](path)` for easy opening.
-- Create file if missing (structure: header + ## Log with table). Apply only on explicit completion, not on partial progress. Use local timezone for HH:MM.
+**Daily-log:** On completing a traceable deliverable, insert a row at the top of `sun/daily-log/YYYY-MM-DD.md`: `| HH:MM | tag | Description → [artifact-path](artifact-path) |`. Tags: sales marketing job ops. Create file if missing. Use local timezone.
 
-### Verification Before Done
-- Never mark a task complete without running real validation and reviewing output. Tied to No Laziness.
-- Ask: "Would a senior engineer approve this?"
-- Run tests, check logs, demonstrate correctness.
-
-### Demand Elegance (Balanced)
-- For non-trivial changes: pause and ask "Is there a more elegant way?"
-- If a solution feels hacky: "Knowing what I know now, I would implement the elegant solution."
-- Skip for simple, obvious solutions; avoid over-engineering.
-
-### Autonomous Bug Fixing
-- On technical error report: fix proactively without asking for help.
-- Guardrail: respect Validation Gate. Does not replace explicit approval for data, sends, or high-risk actions.
-
-### Core Principles
-- Simplicity first: make each change as simple as possible; minimal code impact.
-- No laziness: find root causes; no temporary fixes; senior standards.
-- Minimal impact: changes should only touch what is necessary; avoid introducing errors.
+**Execution principles:** Simplicity first. No laziness — find root causes, no temporary fixes. Minimal impact — only touch what is necessary. On bug reports: fix proactively, respecting the Validation Gate for data/send actions. For non-trivial changes, ask "Is there a more elegant way?"

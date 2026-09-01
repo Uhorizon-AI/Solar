@@ -14,6 +14,14 @@
   <key>WorkingDirectory</key>
   <string>__WORKING_DIRECTORY__</string>
 
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SOLAR_WORKSPACE</key>
+    <string>__SOLAR_WORKSPACE__</string>
+    <key>SOLAR_ROOT</key>
+    <string>__SOLAR_ROOT__</string>
+  </dict>
+
   <key>ProgramArguments</key>
   <array>
     <string>__ENTRYPOINT_PATH__</string>

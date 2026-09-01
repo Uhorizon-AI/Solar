@@ -20,7 +20,7 @@ Provide one system-level control point for Solar runtime operations:
 - Orchestrate enabled features from `.env`:
   - `async-tasks`
   - `transport-gateway`
-  - `interface`
+  - `host` — Solar App on `:9000` (canonical human entry; in-process API + tray)
 - Keep orchestration deterministic and non-overlapping.
 
 ## Required MCP
@@ -38,8 +38,11 @@ bash -n core/skills/solar-system/scripts/run_orchestrator.sh
 bash -n core/skills/solar-system/scripts/install_launchagent_macos.sh
 bash -n core/skills/solar-system/scripts/check_orchestrator.sh
 
+# LaunchAgent SOLAR_ROOT binding unit tests
+bash core/tests/skills/solar-system/test_plist_root_binding.sh
+
 # Sync core changes to local clients
-bash core/scripts/sync-clients.sh
+solar client sync
 ```
 
 ## Runtime configuration
@@ -57,10 +60,14 @@ Block format:
 SOLAR_SYSTEM_FEATURES=async-tasks
 ```
 
+The LaunchAgent entrypoint is built at `sun/runtime/system/Solar` during install (default path in code; not versioned in `core/`). Override only if needed: `SOLAR_SYSTEM_RUNTIME_DIR` (absolute or relative to repo root).
+
 `SOLAR_SYSTEM_FEATURES` is a CSV selector. Supported values:
 - `async-tasks`
 - `transport-gateway`
-- `interface`
+- `host` — preferred on workstations (panel + API on `:9000` in-process)
+
+Legacy token `interface` is ignored (sunset with `solar-interface` skill); use `host` only.
 
 **Note:** `SOLAR_SYSTEM_FEATURES` is also read by `solar-router` to determine if `async-tasks` is available for async draft creation. Keep this value consistent with your active runtime configuration.
 
@@ -70,12 +77,15 @@ SOLAR_SYSTEM_FEATURES=async-tasks
    - `bash core/skills/solar-system/scripts/onboard_system_env.sh`
 2. Install or update LaunchAgent:
    - `bash core/skills/solar-system/scripts/install_launchagent_macos.sh`
+   - Feature-specific runtime blocks stay in the owning skill, for example `solar-router`.
 3. Check current status:
-   - `bash core/skills/solar-system/scripts/status_launchagent_macos.sh` — supervisor only (plist + launchctl + logs)
-   - `bash core/skills/solar-system/scripts/check_orchestrator.sh` — full orchestrator + feature health (daily operational check)
+   - `bash core/skills/solar-system/scripts/status_launchagent_macos.sh` — supervisor only (plist + launchctl + logs + SOLAR_ROOT binding)
+   - `bash core/skills/solar-system/scripts/check_orchestrator.sh` — full orchestrator + feature health (daily operational check); fails when LaunchAgent `SOLAR_ROOT` is missing, incomplete, or differs from the active install
    - `bash core/skills/solar-system/scripts/diagnose_launchagent.sh` — deep troubleshooting when there is an incident
 4. Uninstall LaunchAgent (if needed):
    - `bash core/skills/solar-system/scripts/uninstall_launchagent_macos.sh`
+
+After `solar client update` or relocating the global install, re-run `install_launchagent_macos.sh` so the plist embeds the current `SOLAR_ROOT`. `check_orchestrator.sh` reports `plist_root_status` (`ok|missing_key|root_missing|orchestrator_missing|router_missing|mismatch`).
 
 ## Orchestrator behavior
 
@@ -84,9 +94,9 @@ SOLAR_SYSTEM_FEATURES=async-tasks
 2. reads `SOLAR_SYSTEM_FEATURES`,
 3. acquires a lock to avoid overlapping ticks,
 4. runs enabled features in order:
-   - async tasks: `run_worker.sh --once`
-   - transport gateway: `core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh`
-   - interface: `core/skills/solar-interface/scripts/ensure_interface.sh`
+   - async tasks: `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` (the script first checks whether async-tasks is already supervised by solar-system, then falls back to the local worker only when needed)
+   - transport gateway: `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
+   - host: `core/skills/solar-app/scripts/ensure_host.sh`
 
 ## Design notes
 

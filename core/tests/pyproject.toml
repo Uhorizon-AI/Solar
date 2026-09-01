@@ -3,7 +3,9 @@ name = "solar-core-tests"
 version = "0.0.0"
 description = "Centralized automated tests for core/skills (not published to PyPI)"
 requires-python = ">=3.10,<4.0"
-dependencies = []
+dependencies = [
+    "pytest>=8",
+]
 
 [dependency-groups]
 dev = ["pytest>=8"]

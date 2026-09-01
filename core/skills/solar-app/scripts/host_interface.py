@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Resolve workspace-scoped InterfaceStore for Solar Host (in-process API)."""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from interface_store import InterfaceStore  # noqa: E402
+
+import host_events  # noqa: E402
+import host_registry as reg  # noqa: E402
+import host_workspace_context as ctx  # noqa: E402
+
+_cache: dict[str, InterfaceStore] = {}
+
+
+def _workspace_path(workspace: str | None = None) -> str:
+    ws = workspace or ctx.get_mounted() or reg.get_active_path()
+    if not ws:
+        raise ValueError("no workspace mounted or active")
+    return str(Path(ws).resolve())
+
+
+def _bind_event_hook(store: InterfaceStore, workspace: str) -> None:
+    def _hook(event_type: str, payload: dict) -> None:
+        host_events.emit(event_type, payload, workspace=workspace)
+
+    store.set_event_hook(_hook)
+
+
+def get_store(workspace: str | None = None) -> InterfaceStore:
+    norm = _workspace_path(workspace)
+    if norm not in _cache:
+        store = InterfaceStore(norm)
+        store.ensure_runtime()
+        _bind_event_hook(store, norm)
+        _cache[norm] = store
+    return _cache[norm]
+
+
+def invalidate_store(workspace: str | None = None) -> None:
+    if workspace:
+        _cache.pop(str(Path(workspace).resolve()), None)
+    else:
+        _cache.clear()

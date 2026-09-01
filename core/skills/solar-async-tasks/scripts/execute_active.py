@@ -16,14 +16,85 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+# Interpreters allowed as argv[0] when local_command runs a script under workspace.
+_LOCAL_INTERPRETERS = frozenset({"bash", "sh", "python3", "python", "ruby"})
+
+# Exact relative patterns under SOLAR_WORKSPACE (posix), after resolve().
+_LOCAL_SCRIPT_PATTERNS = (
+    re.compile(r"^planets/[^/]+/skills/[^/]+/scripts/.+"),
+    re.compile(r"^solar/core/skills/[^/]+/scripts/.+"),
+    re.compile(r"^core/skills/[^/]+/scripts/.+"),
+)
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_local_timeout(raw: str) -> Tuple[Optional[int], Optional[str]]:
+    """Return (seconds, error_code). error_code set ⇒ fail-closed."""
+    value = (raw or "300").strip() or "300"
+    try:
+        timeout_sec = int(value)
+    except ValueError:
+        return None, "local_timeout_invalid"
+    if timeout_sec <= 0:
+        return None, "local_timeout_invalid"
+    return timeout_sec, None
+
+
+def authorize_local_argv(
+    local_command: str, workspace: pathlib.Path
+) -> Tuple[Optional[List[str]], Optional[str]]:
+    """Tokenize and allowlist local_command under skill script trees only.
+
+    Allowed relative paths (after resolve, posix):
+      planets/<planet>/skills/<skill>/scripts/**
+      solar/core/skills/<skill>/scripts/**
+      core/skills/<skill>/scripts/**
+
+    Returns (argv, error_code). error_code set ⇒ refuse execution.
+    """
+    try:
+        argv = shlex.split(local_command)
+    except ValueError:
+        return None, "local_command_invalid"
+    if not argv:
+        return None, "local_command_missing"
+
+    script_idx = 0
+    first_name = pathlib.Path(argv[0]).name
+    if first_name in _LOCAL_INTERPRETERS:
+        if len(argv) < 2:
+            return None, "local_command_unauthorized"
+        script_idx = 1
+
+    script_token = argv[script_idx]
+    script_path = pathlib.Path(script_token)
+    if not script_path.is_absolute():
+        script_path = (workspace / script_path).resolve()
+    else:
+        script_path = script_path.resolve()
+
+    try:
+        rel = script_path.relative_to(workspace.resolve()).as_posix()
+    except ValueError:
+        return None, "local_command_unauthorized"
+
+    if not any(pat.match(rel) for pat in _LOCAL_SCRIPT_PATTERNS):
+        return None, "local_command_unauthorized"
+    if not script_path.is_file():
+        return None, "local_command_missing"
+
+    argv = list(argv)
+    argv[script_idx] = str(script_path)
+    return argv, None
 
 
 def read_frontmatter_key(task_file: pathlib.Path, key: str) -> str:
@@ -76,6 +147,16 @@ def build_prompt(task_id: str, title: str, body: str) -> str:
     )
 
 
+def _env_int_with_comment(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    value = raw.split("#", 1)[0].strip()
+    if not value:
+        return default
+    return int(value)
+
+
 def call_router(
     router_script: pathlib.Path,
     task_id: str,
@@ -87,10 +168,9 @@ def call_router(
     Returns parsed router v3 response dict.
     """
     router_python = os.getenv("SOLAR_AI_ROUTER_PYTHON", "python3")
-    timeout_sec = int(
-        os.getenv("SOLAR_ROUTER_TIMEOUT_SEC")
-        or os.getenv("SOLAR_AI_ROUTER_TIMEOUT_SEC")
-        or "310"
+    timeout_sec = _env_int_with_comment(
+        "SOLAR_ROUTER_TIMEOUT_SEC",
+        _env_int_with_comment("SOLAR_AI_ROUTER_TIMEOUT_SEC", 310),
     )
 
     payload: Dict[str, Any] = {
@@ -217,10 +297,6 @@ def main() -> int:
         print(f"Error: task file not found: {task_file}", file=sys.stderr)
         return 1
 
-    if not router_script.exists():
-        print(f"Error: router script not found: {router_script}", file=sys.stderr)
-        return 1
-
     # Derive log path
     task_root = task_file.parent.parent
     log_dir = task_root / "logs"
@@ -228,6 +304,80 @@ def main() -> int:
 
     # Read per-task provider override from frontmatter
     task_provider = read_frontmatter_key(task_file, "provider").strip().lower() or None
+    executor = read_frontmatter_key(task_file, "executor").strip().lower()
+
+    if executor == "local":
+        local_command = read_frontmatter_key(task_file, "local_command").strip()
+        if not local_command:
+            mark_task_error(
+                task_file, task_id, title, "local",
+                "local_command_missing", "executor=local requires local_command", log_file
+            )
+            return 1
+        workspace = pathlib.Path(
+            os.getenv("SOLAR_WORKSPACE") or task_root.parent.parent.parent
+        ).resolve()
+        timeout_sec, timeout_err = parse_local_timeout(
+            read_frontmatter_key(task_file, "local_timeout")
+        )
+        if timeout_err:
+            mark_task_error(
+                task_file, task_id, title, "local",
+                timeout_err, f"invalid local_timeout: {read_frontmatter_key(task_file, 'local_timeout')!r}",
+                log_file,
+            )
+            return 1
+        argv, auth_err = authorize_local_argv(local_command, workspace)
+        if auth_err or not argv:
+            mark_task_error(
+                task_file, task_id, title, "local",
+                auth_err or "local_command_unauthorized",
+                f"local_command not authorized under workspace scripts/: {local_command}",
+                log_file,
+            )
+            return 1
+        print(f"  Running approved local executor: {local_command}", flush=True)
+        try:
+            proc = subprocess.run(
+                argv,
+                cwd=workspace,
+                text=True,
+                capture_output=True,
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            mark_task_error(
+                task_file, task_id, title, "local",
+                "local_timeout", f"local command timed out after {timeout_sec}s", log_file
+            )
+            return 1
+        except Exception as exc:
+            mark_task_error(
+                task_file, task_id, title, "local",
+                "local_exception", str(exc), log_file
+            )
+            return 1
+
+        output = "\n".join(
+            part.strip() for part in (proc.stdout, proc.stderr) if part.strip()
+        )
+        # 0 = success with work; 10 = success with no changes (caller convention).
+        if proc.returncode not in (0, 10):
+            mark_task_error(
+                task_file, task_id, title, "local",
+                f"local_exit_{proc.returncode}",
+                output or f"local command exited {proc.returncode}",
+                log_file,
+            )
+            return 1
+        result_text = output or "Local command completed with no changes."
+        write_log(log_file, task_id, title, "success", "local", result_text, None, None)
+        print(result_text, flush=True)
+        return 0
+
+    if not router_script.exists():
+        print(f"Error: router script not found: {router_script}", file=sys.stderr)
+        return 1
 
     # Build prompt
     body = strip_frontmatter(task_file)

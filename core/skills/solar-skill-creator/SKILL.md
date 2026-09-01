@@ -43,8 +43,12 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /t
 python3 core/skills/solar-skill-creator/scripts/init_skill.py <skill-name> --path <target-dir>
 
 # Sync resource changes to local clients (when core/ resources changed)
-bash core/scripts/sync-clients.sh
+solar client sync
 ```
+
+## Governance validation
+
+After changing `AGENTS.md` at root, core, or planet level, use the checklist in `references/governance-validation.md` (formerly command `solar-validate-governance`).
 
 ## Skill Structure
 
@@ -60,6 +64,19 @@ skill-name/
 ```
 
 Do not add auxiliary docs like README/INSTALL/CHANGELOG inside skill folders.
+
+## Context Sustainability Gate
+
+When creating or modifying any Solar skill, preserve capability while minimizing always-loaded context:
+
+- Keep `SKILL.md` as a concise operational index: purpose, trigger, required MCP, critical workflow, validation, and links to references.
+- Move long examples, edge cases, background, provider variants, and troubleshooting detail to `references/` inside the same skill.
+- Keep deterministic behavior in `scripts/`; document only the commands the agent must choose from.
+- Keep reusable templates or static resources in `assets/`.
+- Avoid duplicating governance from root, `core/AGENTS.md`, or planet `AGENTS.md`; link to the canonical source instead.
+- Before finishing, review whether the changed `SKILL.md` grew because of detail that belongs in `references/`.
+
+This is not a mechanical line-count reduction. The goal is lower context load with equal or better operational capability.
 
 ## Workflow
 
@@ -80,6 +97,8 @@ Do not add auxiliary docs like README/INSTALL/CHANGELOG inside skill folders.
 - Description states what it does and when to use it.
 - Body stays procedural and concise.
 - Core skills remain vendor-neutral and Solar-owned.
+- `SKILL.md` acts as an index; long detail is moved to `references/` inside the skill.
+- Critical commands remain visible enough that an agent can choose the right workflow without loading every reference.
 - Skill body includes these required sections:
   - `Required MCP`
 - `Fallback if MCP missing` is required only when `Required MCP` is not `None`.

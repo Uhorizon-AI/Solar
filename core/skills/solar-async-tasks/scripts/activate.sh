@@ -101,15 +101,13 @@ if [[ "$cleanup_required" == "true" ]]; then
 fi
 
 if [[ "$(extract_meta "$TASK_FILE" "recurring")" == "true" ]]; then
-    sed -i.bak "/^recurring_last_run:.*/c\\
-recurring_last_run: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-" "$TASK_FILE"
-    rm -f "${TASK_FILE}.bak"
+    set_meta "$TASK_FILE" "recurring_last_run" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 NEW_FILE="$DIR_ACTIVE/$(basename "$TASK_FILE")"
 mv "$TASK_FILE" "$NEW_FILE"
 sed -i.bak 's/^status:.*/status: active/' "$NEW_FILE"
+sed -i.bak '/^blocked_by_task_ids:/d' "$NEW_FILE"
 rm -f "${NEW_FILE}.bak"
 
 echo "✅ Activated task: [$TASK_ID] $TITLE"

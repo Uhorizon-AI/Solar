@@ -3,7 +3,7 @@ import os
 import shlex
 import subprocess
 
-from .base import BaseProvider, REPO_ROOT
+from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
 class AgentProvider(BaseProvider):
@@ -11,7 +11,11 @@ class AgentProvider(BaseProvider):
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
-        return f"agent -p -f --approve-mcps -C {REPO_ROOT}"
+        # Cursor Agent CLI: -C was removed; use --workspace. --trust avoids
+        # interactive workspace prompts in -p/headless mode.
+        return (
+            f"agent -p -f --approve-mcps --trust --workspace {SOLAR_WORKSPACE}"
+        )
 
     def stream(self, prompt: str):
         """Stream using --output-format stream-json."""
@@ -27,7 +31,7 @@ class AgentProvider(BaseProvider):
         cmd = parts + [prompt]
 
         env = self.prepare_env(os.environ.copy())
-        timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
+        timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
 
         proc = subprocess.Popen(
             cmd,

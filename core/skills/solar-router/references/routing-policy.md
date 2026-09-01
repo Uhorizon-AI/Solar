@@ -7,7 +7,7 @@
 - Async routing policy (`direct_reply` vs `async_draft_created`) lives only in the router.
 - Consumers (transport-gateway, async-tasks) delegate 100% to the router and consume the structured v3 response.
 
-All providers (Codex, Claude, Gemini, Agent) run with the same repo context: working directory = Solar repo root, so they see `sun/`, `planets/`, `core/`, and `AGENTS.md`.
+All providers (Codex, Claude, Agy/Antigravity, Agent) run with the same repo context: working directory = Solar repo root, so they see `sun/`, `planets/`, `core/`, and `AGENTS.md`.
 
 ## Internal architecture
 
@@ -19,17 +19,17 @@ All providers (Codex, Claude, Gemini, Agent) run with the same repo context: wor
 | Router core | `scripts/router.py` | Parse, validate, JIT, prompt, decision engine, provider selection. Provider-agnostic. |
 | Provider adapters | `scripts/providers/*.py` | Build command, prepare env, run subprocess, normalize output. No routing logic. |
 
-**Adapter location:** `scripts/providers/{claude,codex,gemini,agent}.py`. Each adapter inherits from `scripts/providers/base.py` (`BaseProvider`). Command override env vars (`SOLAR_ROUTER_{PROVIDER}_CMD`) are resolved in `BaseProvider.get_cmd()`.
+**Adapter location:** `scripts/providers/{claude,codex,agy,agent}.py`. Each adapter inherits from `scripts/providers/base.py` (`BaseProvider`). Command override env vars (`SOLAR_ROUTER_{PROVIDER}_CMD`) are resolved in `BaseProvider.get_cmd()`.
 
 ## Environment keys
 
-- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `agent,codex,claude,gemini`)
+- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `codex,claude,agy,agent,ollama`)
 - `SOLAR_SYSTEM_FEATURES` — CSV of enabled features (e.g., `async-tasks,transport-gateway`). Router reads this to check if `async-tasks` is enabled.
 
 ## Recommended defaults
 
 ```env
-SOLAR_ROUTER_PROVIDER_PRIORITY=agent,codex,claude,gemini
+SOLAR_ROUTER_PROVIDER_PRIORITY=codex,claude,agy,agent
 SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 ```
 
@@ -37,9 +37,10 @@ SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 
 - The first provider in `SOLAR_ROUTER_PROVIDER_PRIORITY` is primary.
 - Remaining providers are fallback order if the previous provider fails.
-- Supported providers are enforced by the router implementation.
+- Supported providers are enforced by the router implementation: `codex`, `claude`, `agy`, `agent`, `ollama`.
 - **Strict mode**: if `provider` field is set in the request, only that provider is used — no fallback. On failure → `error_code: provider_locked_failed`.
 - **Priority mode**: if `provider` is not set, router tries providers in order until one succeeds.
+- **Legacy update bridge**: on the first provider selection after an older client installs this release, the router atomically rewrites an active `gemini` priority token to `agy`. Failure returns `invalid_provider_priority`; it never invokes a fallback provider.
 
 ## Repo context (all providers)
 
@@ -52,10 +53,15 @@ SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 - `SOLAR_ROUTER_AGENT_CMD`
 - `SOLAR_ROUTER_CODEX_CMD`
 - `SOLAR_ROUTER_CLAUDE_CMD`
-- `SOLAR_ROUTER_GEMINI_CMD`
+- `SOLAR_ROUTER_AGY_CMD`
+- `SOLAR_ROUTER_OLLAMA_CMD`
 
-Default Agent command: `agent -p -f --approve-mcps --workspace <repo-root>`
+Default Agent command: `agent -p -f --approve-mcps --trust --workspace <repo-root>`
 Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full-auto -C <repo-root> --add-dir ~/.codex --`
+Default Agy (Antigravity) command: `agy -p --dangerously-skip-permissions --add-dir <repo-root>`
+Default Ollama command targets the local `solar` model: `ollama run solar --hidethinking --nowordwrap`
+
+Deprecated: `SOLAR_ROUTER_GEMINI_CMD` / `SOLAR_AI_GEMINI_CMD` are **not** read. Rename to `SOLAR_ROUTER_AGY_CMD`. `solar client doctor` and `solar client upgrade` warn if the old keys remain.
 
 ## Timeout keys
 
@@ -77,12 +83,23 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
 | `auto`        | `async-task` | `direct_reply`         | Already in queue, never re-propose async       |
 | `auto`        | other        | AI decides semantically | Model emits `<solar_decision>` (see `system_prompt.md`) → router sets `decision.kind` |
 
+For `channel=async-task`, execution consent is defined by
+`core/skills/solar-async-tasks/references/execution-consent.md`: queued/active
+tasks may execute their approved body and write declared artifacts, while external
+sends, destructive deletes, credentials, irreversible actions, and out-of-scope
+changes still require explicit approval.
+
 ## Async draft creation rule
 
 - Router calls `core/skills/solar-async-tasks/scripts/create.sh` directly via subprocess.
 - No direct file writes from router.
-- Draft creation only if `async-tasks` is in `SOLAR_SYSTEM_FEATURES`.
-- Activation (`plan.sh` + `approve.sh`) requires explicit second confirmation from user — never auto-queued.
+- Creation only if `async-tasks` is in `SOLAR_SYSTEM_FEATURES`.
+- When `mode=auto` and the model emits `<solar_decision>async_draft_created</solar_decision>`:
+  - **telegram / n8n (gateway):** create with `--queued --scheduled-time now`, run `add_notify.sh`, and return the canonical ACK (`Me pongo con ello…`). No second activation confirmation. If `add_notify.sh` fails, keep the `task_id` and return `GATEWAY_ASYNC_ACK_NO_NOTIFY` (queued, check async-tasks manually — no completion ping promised). If task creation fails (`task_id` is None), return `direct_reply` with an explicit warning instead of a false ACK.
+  - Queued worker prompts keep Validation Gate / execution-consent: read/analysis + declared artifacts may proceed; external sends, destructive deletes, credentials, and irreversible actions still require explicit approval.
+  - **other channels:** create a draft; human `plan.sh` + `approve.sh` still required before queue unless the caller uses `async_only` with queue semantics.
+- Completion notify uses `notify_when: completed` → `notify_if_configured.sh` (Telegram when configured).
+- `SOLAR_ROUTER_CONTEXT_TURNS` is parsed safely (invalid/≤0 → default 12; hard cap 100).
 
 ## Caller mapping (approved)
 
@@ -104,7 +121,7 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
   "text": "string",
   "channel": "telegram|n8n|async-task|other",
   "mode": "auto|direct_only|async_only",
-  "provider": "codex|claude|gemini|agent|null",
+  "provider": "codex|claude|agy|agent|ollama|null",
   "metadata": {
     "agent": "agent-name|null",
     "skills": ["planet:skill-name", "core-skill-name"],
@@ -117,7 +134,7 @@ Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full
 - `agent`: existing agent from `planets/<planet>/agents/` or `core/agents/`. Set to `null` to generate JIT role inline.
 - `skills`: `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; unprefixed `skill` resolves to `planets/<metadata.planet>/skills/<skill>/SKILL.md` first (if `metadata.planet` is set), then falls back to `core/skills/<skill>/SKILL.md`. Only the frontmatter `description` is injected — never the full file.
 - `planet`: planet that owns this task's domain. Used for agent and skill lookup.
-- `provider` (top-level): `claude` for reasoning/writing, `codex` for code, `gemini` for research. Omit to use priority order.
+- `provider` (top-level): `claude` for reasoning/writing, `codex` for code, `agy` for Antigravity research, `ollama` for local execution. `ollama` always targets the local model named `solar`. Omit to use priority order.
 
 ## Secure Invocation Protocol (Required)
 
@@ -155,7 +172,7 @@ EOF
 {
   "status": "success|failed",
   "request_id": "string",
-  "provider_used": "codex|claude|gemini|agent",
+  "provider_used": "codex|claude|agy|agent|ollama",
   "reply_text": "string",
   "decision": {
     "kind": "direct_reply|async_draft_proposal|async_draft_created|async_activation_needed",
@@ -231,7 +248,7 @@ Two records are written per execution:
 2. No async routing policy outside `solar-router`.
 3. `decision.kind` is the official flow control field for all consumers.
 4. `provider` in request → strict mode, no fallback.
-5. Async activation always requires second explicit user confirmation.
+5. Gateway async (telegram/n8n) auto-queues with completion notify; non-gateway drafts still require explicit activation.
 6. AI client subprocesses always use `mode: direct_only` — no exceptions.
 7. `router_id` is always a UUID auto-generated by the router; never reused across executions.
 8. Skills are resolved on-demand from frontmatter only — full SKILL.md content is never injected into prompts.

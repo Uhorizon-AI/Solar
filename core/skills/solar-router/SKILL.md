@@ -1,10 +1,10 @@
 ---
 name: solar-router
 description: >
-  Shared router that runs AI providers (Codex, Claude, Gemini, Agent) with Solar repo context.
+  Shared router that runs AI providers (Codex, Claude, Agy/Antigravity, Agent, Ollama) with Solar repo context.
   Single source of truth for provider selection, fallback, and async routing policy.
-  Use when transport-gateway, async-tasks, or other runtimes need to invoke an AI with
-  cwd = repo root and paths resolved against REPO_ROOT.
+  Use when solar-gateway, async-tasks, or other runtimes need to invoke an AI with
+  cwd = SOLAR_WORKSPACE and paths resolved against the active workspace.
 ---
 
 # Solar Router
@@ -14,18 +14,27 @@ description: >
 Single source of truth for all AI execution in Solar:
 - **Provider selection and fallback** live only here.
 - **Async routing policy** (`direct_reply` vs `async_draft_created`) lives only here.
-- Used by solar-transport-gateway (WebSocket/bridge) and solar-async-tasks (task execution).
+- Used by solar-gateway (WebSocket/bridge) and solar-async-tasks (task execution).
+
+## Operational boundary
+
+Use this skill as infrastructure for Solar runtimes and controlled diagnostics. Do not use `solar-router` or provider CLIs as the normal path for work that is deferred, multiprovider, browser/MCP-dependent, network/auth/keychain-dependent, long-running, or likely to block the conversation.
+
+For that work, create or propose a task through `solar-async-tasks`. When `solar-system` supervises `async-tasks`, approve/queue the task and let the system runtime execute it.
 
 ## Scope
 
 - Accept JSON payload (router contract v3) on stdin; output structured JSON on stdout.
-- Run the selected provider with `cwd=REPO_ROOT` so all providers see `sun/`, `planets/`, `core/`, `AGENTS.md`.
-- Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `REPO_ROOT` when relative.
+- Run the selected provider with `cwd=SOLAR_WORKSPACE` so all providers see `sun/`, `planets/`, and workspace `AGENTS.md`.
+- Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `SOLAR_WORKSPACE` when relative.
 - Codex default command includes `-C <repo-root>` and `--add-dir ~/.codex`.
-- Persist conversation turns in runtime dir (JSONL) for continuity.
-- Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output.
+- Persist conversation turns in runtime dir (JSONL) and inject continuity into each prompt: rolling `*-summary.txt` from `<solar_summary>` plus recent turns (`SOLAR_ROUTER_CONTEXT_TURNS`).
+- Also inject cross-channel canonical intention from `sun/runtime/continuity/active.json` when present. See `references/continuity.md`.
+- Own the A3 mandate controller (`scripts/delegation_ctl.py`) for `sun/delegations/`: any caller gates mutating routines through `check` and fails closed. See `references/a3-mandates.md`. Unrelated to JIT agent/skill delegation.
+- Answer "where are we" on demand with `scripts/work_status.sh` (intention, machine queue, today's blockers, mandates). Read-only, no cadence: periodic briefings are recurring async tasks. Behaviour layer in `references/signal-orchestration.md`.
+- Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output. On telegram/n8n, `async_draft_created` queues work + `notify_when: completed` and returns a short ACK.
 - Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
-- Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability. **Known bug:** some early-exit paths (e.g. `async_only`) write `start` but not `end`. Tracked separately — Test 14 in `check_router.sh` documents and guards this behavior.
+- Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability (including failed early-exit paths).
 
 ## Internal architecture
 
@@ -37,9 +46,9 @@ scripts/
     __init__.py        — PROVIDERS dict, exports all adapters
     base.py            — BaseProvider: resolve_binary, get_cmd, prepare_env, clean_output, run
     claude.py          — static default_cmd
-    codex.py           — build_default_cmd() with REPO_ROOT + CODEX_STATE_DIR
-    gemini.py          — prepare_env (GEMINI_* vars) + clean_output (ANSI strip, OAuth guard)
-    agent.py           — build_default_cmd() with REPO_ROOT
+    codex.py           — build_default_cmd() with SOLAR_WORKSPACE + CODEX_STATE_DIR
+    agy.py             — Antigravity CLI (`agy -p`)
+    agent.py           — build_default_cmd() with SOLAR_WORKSPACE
 
 Automated tests live under `core/tests/skills/solar-router/` (framework-wide layout; see `core/AGENTS.md`).
 ```
@@ -61,7 +70,7 @@ bash core/skills/solar-router/scripts/onboard_router_env.sh
 ```
 
 **Key environment variables:**
-- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `codex,claude,gemini`)
+- `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `codex,claude,agy,agent,ollama`)
 - `SOLAR_ROUTER_RUNTIME_DIR` — Where conversation history is stored (default: `sun/runtime/router`)
 - `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` — System prompt file path (default: `core/skills/solar-router/assets/system_prompt.md`)
 - `SOLAR_ROUTER_CONTEXT_TURNS` — Number of conversation turns to include (default: `12`)
@@ -70,13 +79,23 @@ bash core/skills/solar-router/scripts/onboard_router_env.sh
 Optional command overrides:
 - `SOLAR_ROUTER_CODEX_CMD`
 - `SOLAR_ROUTER_CLAUDE_CMD`
-- `SOLAR_ROUTER_GEMINI_CMD`
+- `SOLAR_ROUTER_AGY_CMD`
+- `SOLAR_ROUTER_OLLAMA_CMD`
+
+Ollama setup:
+- `provider=ollama` always targets the local model named `solar`
+- Build or refresh it with `bash core/skills/solar-router/scripts/setup_ollama.sh`
 
 ## Validation commands
 
 ```bash
 # Validate skill structure
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-router /tmp
+
+# List configured providers (reads SOLAR_ROUTER_PROVIDER_PRIORITY)
+bash core/skills/solar-router/scripts/list_providers.sh
+bash core/skills/solar-router/scripts/list_providers.sh --exclude claude
+bash core/skills/solar-router/scripts/list_providers.sh --exclude claude --format csv
 
 # Diagnose router / preflight providers (native helper in this skill)
 bash core/skills/solar-router/scripts/diagnose_router.sh --dry-run
@@ -95,6 +114,10 @@ bash core/skills/solar-router/scripts/check_router.sh
 # Live status: provider health, in-flight processes, last executions
 bash core/skills/solar-router/scripts/status_router.sh
 bash core/skills/solar-router/scripts/status_router.sh --last 20
+
+# Close historical orphan audit records (append reconciled end events)
+bash core/skills/solar-router/scripts/reconcile_router_audit.sh --dry-run
+bash core/skills/solar-router/scripts/reconcile_router_audit.sh
 ```
 
 ## Router contract v3
@@ -109,7 +132,7 @@ bash core/skills/solar-router/scripts/status_router.sh --last 20
   "text": "string",
   "channel": "telegram|n8n|async-task|other",
   "mode": "auto|direct_only|async_only",
-  "provider": "codex|claude|gemini|agent|null",
+  "provider": "codex|claude|agy|agent|ollama|null",
   "metadata": {
     "agent": "agent-name|null",
     "skills": ["planet:skill-name", "core-skill-name"],
@@ -161,7 +184,7 @@ EOF
 {
   "status": "success|failed",
   "request_id": "string",
-  "provider_used": "codex|claude|gemini|agent",
+  "provider_used": "codex|claude|agy|agent|ollama",
   "reply_text": "string",
   "decision": {
     "kind": "direct_reply|async_draft_proposal|async_draft_created|async_activation_needed",
@@ -183,13 +206,13 @@ EOF
 
 ## Consumers
 
-- **solar-transport-gateway:** `run_websocket_bridge.py` and HTTP webhook bridge call the router with full v3 contract.
+- **solar-gateway:** `run_websocket_bridge.py` and HTTP webhook bridge call the router with full v3 contract.
 - **solar-async-tasks:** `execute_active.py` (via `execute_active.sh`) calls the router with `channel=async-task`, `mode=direct_only`.
 
 ## Runtime files
 
 - `sun/runtime/router/conversations/<user_id>.jsonl` — conversation history per user (for context continuity).
-- `sun/runtime/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`. **Known bug:** `end` record is not written on early-exit paths — tracked in Test 14 of `check_router.sh`.
+- `sun/runtime/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`.
 
 ## References
 

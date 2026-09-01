@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check_orchestrator.sh — Solar orchestrator + feature health check.
 # Reports supervisor state and per-feature health. Emits a single verdict.
-# Run from repo root: bash core/skills/solar-system/scripts/check_orchestrator.sh
+# Run from SOLAR_WORKSPACE (cwd): bash <SOLAR_ROOT>/skills/solar-system/scripts/check_orchestrator.sh
 #
 # Exit codes (aligned with check_transport_gateway.sh):
 #   0 = HEALTHY
@@ -9,15 +9,12 @@
 #   1 = DOWN     (supervisor down or critical feature down)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-cd "$REPO_ROOT"
-
-if [[ -f ".env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source ".env"
-  set +a
-fi
+# shellcheck source=system_lib.sh
+source "$SCRIPT_DIR/system_lib.sh"
+solar_system_bind_workspace
+SOLAR_WORKSPACE="$SOLAR_WORKSPACE"
+cd "$SOLAR_WORKSPACE"
+solar_system_load_env
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -113,6 +110,25 @@ else
   verdict="$(worst_severity "$verdict" "DOWN")"
 fi
 
+# LaunchAgent embeds SOLAR_ROOT at install time. After relocating the global
+# install (e.g. ~/Solar/solar → ~/.local/share/solar), a stale plist keeps
+# ticking against a missing tree while transport can still look "healthy".
+plist_root_status="skipped"
+plist_root_value=""
+if [[ "$(uname -s)" == "Darwin" && -f "$PLIST" ]]; then
+  plist_root_value="$(solar_system_plist_solar_root "$PLIST" || true)"
+  plist_root_status="$(solar_system_classify_plist_root "$plist_root_value" "$SOLAR_ROOT")"
+  echo "  plist_SOLAR_ROOT: ${plist_root_value:-<missing>}"
+  echo "  active_SOLAR_ROOT: $SOLAR_ROOT"
+  echo "  plist_root_status: $plist_root_status"
+  case "$plist_root_status" in
+    ok) ;;
+    *)
+      verdict="$(worst_severity "$verdict" "$(solar_system_plist_root_severity "$plist_root_status")")"
+      ;;
+  esac
+fi
+
 # ---------------------------------------------------------------------------
 # Check 2: Process Health (Duplicate detection)
 # ---------------------------------------------------------------------------
@@ -125,7 +141,7 @@ count_matching_processes() {
   local pattern="$1"
   local output
   set +e
-  output="$(pgrep -f "$pattern" 2>&1)"
+  output="$(pgrep -f -- "$pattern" 2>&1)"
   local code=$?
   set -e
 
@@ -139,6 +155,14 @@ count_matching_processes() {
       return 0
       ;;
     *)
+      set +e
+      output="$(ps -axo command= 2>/dev/null | awk -v pat="$pattern" '$0 ~ pat { count++ } END { print count + 0 }')"
+      code=$?
+      set -e
+      if [[ "$code" -eq 0 && "$output" =~ ^[0-9]+$ ]]; then
+        echo "$output"
+        return 0
+      fi
       return 1
       ;;
   esac
@@ -158,34 +182,8 @@ else
   proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
 fi
 
-if mcp_count="$(count_matching_processes "chrome-devtools-mcp")"; then
-  if [[ "$mcp_count" -gt 3 ]]; then
-    echo "  chrome-mcp:  MULTIPLE ($mcp_count running - possible leak)"
-    proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
-  elif [[ "$mcp_count" -gt 0 ]]; then
-    echo "  chrome-mcp:  healthy ($mcp_count active)"
-  else
-    echo "  chrome-mcp:  healthy (0 active)"
-  fi
-else
-  echo "  chrome-mcp:  UNKNOWN (pgrep failed)"
-  proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
-fi
-
 if feature_active "interface"; then
-  if interface_proc_count="$(count_matching_processes "core/skills/solar-interface/scripts/interface_server.py")"; then
-    if [[ "$interface_proc_count" -gt 1 ]]; then
-      echo "  interface:   MULTIPLE ($interface_proc_count daemon candidates running - expects 1)"
-      proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
-    elif [[ "$interface_proc_count" -eq 1 ]]; then
-      echo "  interface:   healthy (1 expected daemon)"
-    else
-      echo "  interface:   healthy (0 daemon detected)"
-    fi
-  else
-    echo "  interface:   UNKNOWN (pgrep failed)"
-    proc_severity="$(worst_severity "$proc_severity" "PARTIAL")"
-  fi
+  echo "  interface:   DEPRECATED (use host feature — Solar App :9000)"
 fi
 
 verdict="$(worst_severity "$verdict" "$proc_severity")"
@@ -200,7 +198,7 @@ if feature_active "transport-gateway"; then
   gw_out=""
   gw_code=0
   set +e
-  gw_out="$(run_with_timeout bash core/skills/solar-transport-gateway/scripts/check_transport_gateway.sh 2>&1)"
+  gw_out="$(run_with_timeout bash "$(solar_system_skill_script solar-gateway check_transport_gateway.sh)" 2>&1)"
   gw_code=$?
   set -e
 
@@ -231,7 +229,7 @@ if feature_active "async-tasks"; then
   async_severity="HEALTHY"
 
   # 3a. task_lib.sh present and executable
-  TASK_LIB="core/skills/solar-async-tasks/scripts/task_lib.sh"
+  TASK_LIB="$(solar_system_skill_script solar-async-tasks task_lib.sh)"
   if [[ -x "$TASK_LIB" ]]; then
     echo "  task_lib:    present"
   else
@@ -282,22 +280,32 @@ fi
 
 if feature_active "interface"; then
   echo ""
-  echo "── Feature: interface"
-  interface_out=""
-  interface_code=0
+  echo "── Feature: interface (deprecated)"
+  echo "  status: SKIPPED — solar-interface removed; use host (Solar App :9000)"
+fi
+
+# ---------------------------------------------------------------------------
+# Check 6: host feature
+# ---------------------------------------------------------------------------
+
+if feature_active "host"; then
+  echo ""
+  echo "── Feature: host"
+  host_out=""
+  host_code=0
   set +e
-  interface_out="$(run_with_timeout bash core/skills/solar-interface/scripts/check_interface.sh 2>&1)"
-  interface_code=$?
+  host_out="$(run_with_timeout bash "$(solar_system_skill_script solar-app check_host.sh)" 2>&1)"
+  host_code=$?
   set -e
 
-  case "$interface_code" in
+  case "$host_code" in
     0)
       echo "  status: HEALTHY"
-      echo "  url:    ${SOLAR_INTERFACE_BASE_URL:-http://127.0.0.1:7741}"
+      echo "  url:    ${SOLAR_APP_BASE_URL:-http://127.0.0.1:9000}"
       ;;
     *)
       echo "  status: DOWN"
-      echo "  detail: $interface_out"
+      echo "  detail: $host_out"
       verdict="$(worst_severity "$verdict" "DOWN")"
       ;;
   esac
@@ -309,7 +317,7 @@ fi
 
 for f in "${FEATURES[@]}"; do
   case "$f" in
-    async-tasks|transport-gateway|interface) ;;
+    async-tasks|transport-gateway|interface|host) ;;
     *) echo ""
        echo "  ⚠️  Unknown feature token ignored: $f" ;;
   esac
@@ -322,22 +330,53 @@ done
 echo ""
 echo "── Verdict: $verdict"
 
+_suggest_script() {
+  echo "    bash \"$(solar_system_suggest_script "$1")\""
+}
+
 if [[ "$verdict" != "HEALTHY" ]]; then
   echo ""
   echo "── Suggested actions:"
+  echo "  (SOLAR_ROOT=$SOLAR_ROOT)"
 
   # Process Health issues
   if [[ "$proc_severity" != "HEALTHY" ]]; then
     echo "  • Duplicate processes detected — cleanly kill instances to fix leaks:"
     [[ "$cf_count" -gt 1 ]] && echo "    pkill -f \"cloudflared tunnel\""
-    [[ "$mcp_count" -gt 3 ]] && echo "    pkill -f \"chrome-devtools-mcp\"; pkill -f \"\.cache/chrome-devtools-mcp\""
   fi
 
   # Supervisor issues
   if [[ ! -f "$PLIST" ]] || ! launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
     echo "  • LaunchAgent not installed or not loaded:"
-    echo "    bash core/skills/solar-system/scripts/install_launchagent_macos.sh"
+    _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
   fi
+
+  # Stale LaunchAgent SOLAR_ROOT (install moved; plist not reinstalled)
+  case "${plist_root_status:-skipped}" in
+    skipped|ok) ;;
+    missing_key)
+      echo "  • LaunchAgent plist is missing EnvironmentVariables.SOLAR_ROOT — reinstall:"
+      _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
+      ;;
+    root_missing)
+      echo "  • LaunchAgent SOLAR_ROOT path does not exist (${plist_root_value}):"
+      echo "    Active install is: $SOLAR_ROOT"
+      echo "    Reinstall LaunchAgent so the plist embeds the current SOLAR_ROOT:"
+      _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
+      ;;
+    orchestrator_missing|router_missing)
+      echo "  • LaunchAgent SOLAR_ROOT is incomplete (${plist_root_status}) at ${plist_root_value}:"
+      echo "    Active install is: $SOLAR_ROOT"
+      _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
+      ;;
+    mismatch)
+      echo "  • LaunchAgent SOLAR_ROOT differs from the active install:"
+      echo "    plist:  ${plist_root_value}"
+      echo "    active: $SOLAR_ROOT"
+      echo "    Reinstall LaunchAgent after solar client update / install relocate:"
+      _suggest_script "skills/solar-system/scripts/install_launchagent_macos.sh"
+      ;;
+  esac
 
   # transport-gateway issues
   if feature_active "transport-gateway" && [[ "$gw_code" != "0" ]]; then
@@ -353,23 +392,23 @@ if [[ "$verdict" != "HEALTHY" ]]; then
         echo "  • Named tunnel rejected by Cloudflare (invalid token or deleted tunnel):"
         echo "    1. Check status at: https://one.dash.cloudflare.com → Networks → Tunnels"
         echo "    2. If the tunnel is inactive or deleted, reconfigure it:"
-        echo "       bash core/skills/solar-transport-gateway/scripts/configure_named_tunnel.sh"
+        echo "       bash \"$(solar_system_suggest_script "skills/solar-gateway/scripts/configure_named_tunnel.sh")\""
       elif echo "$tunnel_error" | grep -qi "token\|credential\|auth"; then
         echo "  • Tunnel authentication error — regenerate the token in Cloudflare dashboard:"
         echo "    1. https://one.dash.cloudflare.com → Networks → Tunnels → solar-ai.uhorizon.ai"
         echo "    2. Copy the new token and update CLOUDFLARED_TUNNEL_TOKEN in .env"
-        echo "    3. bash core/skills/solar-transport-gateway/scripts/configure_named_tunnel.sh"
+        echo "    3. bash \"$(solar_system_suggest_script "skills/solar-gateway/scripts/configure_named_tunnel.sh")\""
       elif echo "$tunnel_error" | grep -qi "control stream\|QUIC stream\|Application error 0x0"; then
         echo "  • Tunnel down due to QUIC/control stream protocol error (may be transient):"
-        echo "    bash core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh"
+        _suggest_script "skills/solar-gateway/scripts/ensure_transport_gateway.sh"
         echo "  • If it persists, reconfigure the named tunnel:"
-        echo "    bash core/skills/solar-transport-gateway/scripts/configure_named_tunnel.sh"
+        _suggest_script "skills/solar-gateway/scripts/configure_named_tunnel.sh"
       elif echo "$tunnel_error" | grep -qi "connection refused\|dial\|network"; then
         echo "  • Tunnel has no network connectivity — check your internet connection and retry:"
-        echo "    bash core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh"
+        _suggest_script "skills/solar-gateway/scripts/ensure_transport_gateway.sh"
       else
         echo "  • Tunnel degraded — restart the tunnel:"
-        echo "    bash core/skills/solar-transport-gateway/scripts/ensure_transport_gateway.sh"
+        _suggest_script "skills/solar-gateway/scripts/ensure_transport_gateway.sh"
         if [[ -n "$tunnel_error" ]]; then
           echo "  • Last error in cloudflared.log:"
           echo "$tunnel_error" | sed 's/^/    /'
@@ -377,7 +416,7 @@ if [[ "$verdict" != "HEALTHY" ]]; then
       fi
     else
       echo "  • Transport gateway down — run full setup/recovery:"
-      echo "    bash core/skills/solar-transport-gateway/scripts/setup_transport_gateway.sh"
+      _suggest_script "skills/solar-gateway/scripts/setup_transport_gateway.sh"
     fi
   fi
 
@@ -385,11 +424,11 @@ if [[ "$verdict" != "HEALTHY" ]]; then
   if feature_active "async-tasks"; then
     if [[ ! -x "$TASK_LIB" ]]; then
       echo "  • async-tasks not set up — initialize runtime directories:"
-      echo "    bash core/skills/solar-async-tasks/scripts/setup_async_tasks.sh"
+      _suggest_script "skills/solar-async-tasks/scripts/setup_async_tasks.sh"
     fi
     if [[ ! -d "$DIR_QUEUED" ]]; then
       echo "  • Queue directory missing — initialize runtime directories:"
-      echo "    bash core/skills/solar-async-tasks/scripts/setup_async_tasks.sh"
+      _suggest_script "skills/solar-async-tasks/scripts/setup_async_tasks.sh"
     fi
     if [[ "${orphan_found:-false}" == "true" ]]; then
       echo "  • Orphan lock(s) detected — remove stale locks manually:"
@@ -398,29 +437,14 @@ if [[ "$verdict" != "HEALTHY" ]]; then
     fi
   fi
 
-  # interface issues
-  if feature_active "interface" && [[ "${interface_code:-0}" != "0" ]]; then
-    if echo "${interface_out:-}" | grep -qi "not_setup"; then
-      echo "  • interface not set up — initialize runtime:"
-      echo "    bash core/skills/solar-interface/scripts/setup_interface.sh"
-    elif echo "${interface_out:-}" | grep -qi "not_ready"; then
-      echo "  • interface daemon is alive but not ready — restart it cleanly:"
-      echo "    bash core/skills/solar-interface/scripts/restart_interface_daemon.sh"
-    elif echo "${interface_out:-}" | grep -qi "stale_pid"; then
-      echo "  • interface has a stale pid file — restart the local daemon:"
-      echo "    bash core/skills/solar-interface/scripts/restart_interface_daemon.sh"
-    elif echo "${interface_out:-}" | grep -qi "start_failed"; then
-      echo "  • interface failed during startup — inspect current status and logs:"
-      echo "    bash core/skills/solar-interface/scripts/status_interface.sh"
-    else
-      echo "  • interface unreachable — start the local daemon:"
-      echo "    bash core/skills/solar-interface/scripts/start_interface_daemon.sh"
-    fi
+  # interface feature removed — use host (Solar App)
+  if feature_active "interface"; then
+    echo "  • interface feature deprecated — use host and: solar app start"
   fi
 
   # Generic deep troubleshooting
   echo "  • For deep LaunchAgent diagnostics:"
-  echo "    bash core/skills/solar-system/scripts/diagnose_launchagent.sh"
+  _suggest_script "skills/solar-system/scripts/diagnose_launchagent.sh"
 fi
 
 case "$verdict" in

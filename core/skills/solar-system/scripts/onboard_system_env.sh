@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_ENV_FILE=".env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=system_lib.sh
+source "$SCRIPT_DIR/system_lib.sh"
+solar_system_resolve_workspace
+cd "$SOLAR_WORKSPACE"
+
+ROOT_ENV_FILE="$SOLAR_WORKSPACE/.env"
 BLOCK_HEADER="# [solar-system] required environment"
 
 if [[ ! -f "$ROOT_ENV_FILE" ]]; then
@@ -23,10 +29,16 @@ if existing="$(read_key "SOLAR_SYSTEM_FEATURES")"; then
   features="$existing"
 fi
 
+runtime_dir=""
+if existing="$(read_key "SOLAR_SYSTEM_RUNTIME_DIR")"; then
+  runtime_dir="$existing"
+fi
+
 tmp="$(mktemp)"
 awk '
   $0 ~ /^# \[solar-system\] required environment$/ { next }
   $0 ~ /^SOLAR_SYSTEM_FEATURES=/ { next }
+  $0 ~ /^SOLAR_SYSTEM_RUNTIME_DIR=/ { next }
   { print }
 ' "$ROOT_ENV_FILE" >"$tmp"
 mv "$tmp" "$ROOT_ENV_FILE"
@@ -70,6 +82,9 @@ if [[ -n "$insert_line" ]]; then
   fi
   echo "$BLOCK_HEADER" >>"$tmp"
   echo "SOLAR_SYSTEM_FEATURES=${features}" >>"$tmp"
+  if [[ -n "$runtime_dir" ]]; then
+    echo "SOLAR_SYSTEM_RUNTIME_DIR=${runtime_dir}" >>"$tmp"
+  fi
   sed -n "${insert_line},\$p" "$ROOT_ENV_FILE" >>"$tmp"
 else
   cat "$ROOT_ENV_FILE" >"$tmp"
@@ -78,6 +93,9 @@ else
   fi
   echo "$BLOCK_HEADER" >>"$tmp"
   echo "SOLAR_SYSTEM_FEATURES=${features}" >>"$tmp"
+  if [[ -n "$runtime_dir" ]]; then
+    echo "SOLAR_SYSTEM_RUNTIME_DIR=${runtime_dir}" >>"$tmp"
+  fi
 fi
 mv "$tmp" "$ROOT_ENV_FILE"
 

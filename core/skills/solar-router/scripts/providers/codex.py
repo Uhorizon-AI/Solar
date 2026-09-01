@@ -4,7 +4,7 @@ import shlex
 import subprocess
 import sys
 
-from .base import BaseProvider, REPO_ROOT
+from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
 class CodexProvider(BaseProvider):
@@ -12,7 +12,7 @@ class CodexProvider(BaseProvider):
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
-        return f"codex exec --skip-git-repo-check --full-auto -C {REPO_ROOT} --"
+        return f"codex exec --skip-git-repo-check --full-auto -C {SOLAR_WORKSPACE} --"
 
     def stream(self, prompt: str):
         self.log_prompt(prompt, " --json")
@@ -32,7 +32,7 @@ class CodexProvider(BaseProvider):
 
         cmd = parts + [prompt]
         env = self.prepare_env(os.environ.copy())
-        timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
+        timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
         debug = os.getenv("SOLAR_ROUTER_CODEX_DEBUG_EVENTS", "").strip() == "1"
 
         proc = subprocess.Popen(

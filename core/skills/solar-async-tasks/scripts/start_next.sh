@@ -29,6 +29,12 @@ for NEXT_TASK in $QUEUED_TASKS; do
     TASK_ID=$(extract_meta "$NEXT_TASK" "id")
     TITLE=$(extract_meta "$NEXT_TASK" "title")
 
+    if has_unresolved_dependencies "$NEXT_TASK"; then
+        blocked_by=$(list_unresolved_dependencies "$NEXT_TASK" | paste -sd ',' -)
+        echo "⏸️  Skipping blocked task (waiting on subtasks): $TASK_ID -> ${blocked_by:-unknown}"
+        continue
+    fi
+
     # Check recurring ready (race protection)
     if ! is_recurring_ready "$NEXT_TASK"; then
         echo "⏸️  Skipping recurring task (min_interval not elapsed): $TASK_ID"
@@ -68,10 +74,7 @@ for NEXT_TASK in $QUEUED_TASKS; do
 
     # Task can start! Update recurring_last_run if needed
     if [[ "$(extract_meta "$NEXT_TASK" "recurring")" == "true" ]]; then
-        sed -i.bak "/^recurring_last_run:.*/c\\
-recurring_last_run: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-" "$NEXT_TASK"
-        rm -f "${NEXT_TASK}.bak"
+        set_meta "$NEXT_TASK" "recurring_last_run" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     fi
 
     # Move to active
@@ -80,6 +83,7 @@ recurring_last_run: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
     # Update status
     sed -i.bak 's/^status:.*/status: active/' "$NEW_FILE"
+    sed -i.bak '/^blocked_by_task_ids:/d' "$NEW_FILE"
     rm -f "${NEW_FILE}.bak"
 
     echo "✅ Started task: [$TASK_ID] $TITLE"

@@ -12,9 +12,37 @@ import sys
 from abc import ABC
 from typing import Dict, List
 
-# providers/base.py → [0] providers/ [1] scripts/ [2] solar-router/ [3] skills/ [4] core/ [5] repo root
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[5]
-FALLBACK_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+_SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1]
+_CLIENT_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-client" / "scripts"
+if str(_CLIENT_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_CLIENT_SCRIPTS))
+
+from solar_paths import resolve_solar_paths  # noqa: E402
+
+SOLAR_WORKSPACE, _SOLAR_ROOT = resolve_solar_paths()
+FALLBACK_PATHS = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    str(pathlib.Path.home() / ".local/bin"),
+    "/usr/bin",
+    "/bin",
+]
+
+
+def env_int(name: str, default: int) -> int:
+    """Parse int env vars allowing inline comments (e.g. '3600 # note')."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    value = raw.split("#", 1)[0].strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"invalid integer env {name}={raw!r} (expected e.g. {default})"
+        ) from exc
 
 
 class BaseProvider(ABC):
@@ -55,8 +83,8 @@ class BaseProvider(ABC):
         return output
 
     def get_cwd(self) -> pathlib.Path:
-        """Run from REPO_ROOT so CLIs auto-discover CLAUDE.md, GEMINI.md, profile.md, MEMORY.md."""
-        return REPO_ROOT
+        """Run from SOLAR_WORKSPACE so CLIs auto-discover CLAUDE.md, GEMINI.md, profile.md, MEMORY.md."""
+        return SOLAR_WORKSPACE
 
     def log_prompt(self, prompt: str, extra_flags: str = "") -> None:
         """Write prompt to sun/runtime/router/prompts.log when SOLAR_ROUTER_LOG_PROMPTS=true."""
@@ -67,7 +95,7 @@ class BaseProvider(ABC):
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
         entry = f"\n[solar-router][{self.name}] CMD: {raw}{extra_flags} <prompt>\n[PROMPT]\n{prompt}\n[/PROMPT]\n"
         print(entry, file=sys.stderr, flush=True)
-        log_path = REPO_ROOT / "sun/runtime/router/prompts.log"
+        log_path = SOLAR_WORKSPACE / "sun/runtime/router/prompts.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(entry)
@@ -77,7 +105,7 @@ class BaseProvider(ABC):
         yield self.run(prompt)
 
     def run(self, prompt: str) -> str:
-        timeout_sec = int(os.getenv("SOLAR_ROUTER_TIMEOUT_SEC") or "300")
+        timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
         cmd = self.get_cmd(prompt)
         env = self.prepare_env(os.environ.copy())
         self.log_prompt(prompt)

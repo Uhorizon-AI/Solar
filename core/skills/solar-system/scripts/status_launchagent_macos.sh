@@ -7,15 +7,12 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-cd "$REPO_ROOT"
-
-if [[ -f ".env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source ".env"
-  set +a
-fi
+# shellcheck source=system_lib.sh
+source "$SCRIPT_DIR/system_lib.sh"
+solar_system_bind_workspace
+SOLAR_WORKSPACE="$SOLAR_WORKSPACE"
+cd "$SOLAR_WORKSPACE"
+solar_system_load_env
 
 LABEL="${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}"
 DOMAIN="gui/${UID}"
@@ -51,6 +48,11 @@ echo "  features: ${SOLAR_SYSTEM_FEATURES:-}"
 
 if [[ -f "$PLIST" ]]; then
   echo "  plist_present: true"
+  plist_root="$(solar_system_plist_solar_root "$PLIST" || true)"
+  plist_status="$(solar_system_classify_plist_root "$plist_root" "$SOLAR_ROOT")"
+  echo "  plist_SOLAR_ROOT: ${plist_root:-<missing>}"
+  echo "  active_SOLAR_ROOT: $SOLAR_ROOT"
+  echo "  plist_root_status: $plist_status"
 else
   echo "  plist_present: false"
 fi

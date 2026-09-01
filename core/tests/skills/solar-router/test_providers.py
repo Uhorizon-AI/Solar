@@ -6,11 +6,13 @@ import io
 import unittest
 from unittest.mock import MagicMock, patch
 
-from providers.base import BaseProvider, REPO_ROOT, FALLBACK_PATHS
+from providers.base import BaseProvider, SOLAR_WORKSPACE, FALLBACK_PATHS
 from providers.claude import ClaudeProvider
 from providers.codex import CodexProvider
-from providers.gemini import GeminiProvider
+from providers.agy import AgyProvider
 from providers.agent import AgentProvider
+from providers.ollama import OllamaProvider
+from providers import PROVIDERS
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +64,9 @@ class TestBaseProviderGetCmd(unittest.TestCase):
         cmd = self.provider.get_cmd("hello")
         self.assertEqual(cmd[0], "/usr/bin/claude")
 
+    def test_fallback_paths_include_user_local_bin_for_launchagent(self):
+        self.assertIn("/.local/bin", ":".join(FALLBACK_PATHS))
+
 
 class TestBaseProviderRun(unittest.TestCase):
     def setUp(self):
@@ -96,16 +101,27 @@ class TestBaseProviderRun(unittest.TestCase):
         mock_run.return_value = _mock_proc()
         self.provider.run("prompt")
         _, kwargs = mock_run.call_args
-        self.assertEqual(kwargs["cwd"], REPO_ROOT)
+        self.assertEqual(kwargs["cwd"], SOLAR_WORKSPACE)
 
 
 # ---------------------------------------------------------------------------
-# GeminiProvider
+# AgyProvider
 # ---------------------------------------------------------------------------
 
-class TestGeminiProvider(unittest.TestCase):
+class TestAgyProvider(unittest.TestCase):
     def setUp(self):
-        self.provider = GeminiProvider()
+        self.provider = AgyProvider()
+
+    def test_default_cmd_uses_agy(self):
+        cmd = self.provider.build_default_cmd()
+        self.assertTrue(cmd.startswith("agy -p "))
+        self.assertIn("--dangerously-skip-permissions", cmd)
+        self.assertIn(f"--add-dir {SOLAR_WORKSPACE}", cmd)
+
+    def test_name_is_agy(self):
+        self.assertEqual(self.provider.name, "agy")
+        self.assertIn("agy", PROVIDERS)
+        self.assertNotIn("gemini", PROVIDERS)
 
     def test_clean_output_strips_ansi(self):
         raw = "\x1b[32mhello\x1b[0m"
@@ -123,9 +139,52 @@ class TestGeminiProvider(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.provider.clean_output(raw)
 
+    def test_clean_output_detects_quota(self):
+        raw = "Error: Individual quota reached. Please upgrade your subscription"
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.clean_output(raw)
+        self.assertIn("quota", str(ctx.exception).lower())
+
     def test_clean_output_passes_clean_text(self):
         result = self.provider.clean_output("normal response")
         self.assertEqual(result, "normal response")
+
+
+# ---------------------------------------------------------------------------
+# OllamaProvider
+# ---------------------------------------------------------------------------
+
+class TestOllamaProvider(unittest.TestCase):
+    def setUp(self):
+        self.provider = OllamaProvider()
+
+    def test_default_cmd_uses_solar_model(self):
+        self.assertEqual(
+            self.provider.build_default_cmd(),
+            "ollama run solar --hidethinking --nowordwrap",
+        )
+
+    def test_clean_output_strips_ansi_and_spinner_noise(self):
+        raw = "\x1b[?2026h\x1b[?25l\x1b[1G⠙ \x1b[K\x1b[?25h\x1b[?2026l\nOK\n"
+        self.assertEqual(self.provider.clean_output(raw), "OK")
+
+    def test_clean_output_detects_daemon_unavailable(self):
+        raw = 'Error: Head "http://127.0.0.1:11434/": dial tcp 127.0.0.1:11434: connect: operation not permitted'
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.clean_output(raw)
+        self.assertIn("ollama daemon unavailable", str(ctx.exception))
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/ollama")
+    @patch("providers.ollama.subprocess.run")
+    def test_run_normalizes_daemon_error_from_stderr(self, mock_run, _mock_which):
+        mock_run.return_value = _mock_proc(
+            returncode=1,
+            stdout="",
+            stderr='Error: Head "http://127.0.0.1:11434/": dial tcp 127.0.0.1:11434: connect: operation not permitted',
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.run("prompt")
+        self.assertIn("ollama daemon unavailable", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +194,7 @@ class TestGeminiProvider(unittest.TestCase):
 class TestCodexProvider(unittest.TestCase):
     def test_default_cmd_contains_repo_root(self):
         p = CodexProvider()
-        self.assertIn(str(REPO_ROOT), p.build_default_cmd())
+        self.assertIn(str(SOLAR_WORKSPACE), p.build_default_cmd())
 
     def test_default_cmd_contains_skip_git(self):
         p = CodexProvider()
@@ -284,7 +343,7 @@ class TestCodexProvider(unittest.TestCase):
 class TestAgentProvider(unittest.TestCase):
     def test_default_cmd_contains_repo_root(self):
         p = AgentProvider()
-        self.assertIn(str(REPO_ROOT), p.build_default_cmd())
+        self.assertIn(str(SOLAR_WORKSPACE), p.build_default_cmd())
 
     def test_default_cmd_contains_approve_mcps(self):
         p = AgentProvider()

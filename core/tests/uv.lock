@@ -81,6 +81,9 @@ wheels = [
 name = "solar-core-tests"
 version = "0.0.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "pytest" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -88,6 +91,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "pytest", specifier = ">=8" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]

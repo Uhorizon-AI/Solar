@@ -54,6 +54,7 @@ done | sort -t$'\t' -k1,1nr -k2,2n -k3,3n | while IFS=$'\t' read -r _ _ _ prio f
     RECURRING=$(extract_meta "$f" "recurring")
     CLEANUP=$(extract_meta "$f" "cleanup_required")
     RESOURCES=$(extract_meta "$f" "resources")
+    BLOCKED_BY=$(extract_meta "$f" "blocked_by_task_ids")
 
     # Build schedule string
     SCHED=""
@@ -67,6 +68,7 @@ done | sort -t$'\t' -k1,1nr -k2,2n -k3,3n | while IFS=$'\t' read -r _ _ _ prio f
     TAGS=""
     [[ "$RECURRING" == "true" ]] && TAGS="${TAGS}🔁 "
     [[ "$CLEANUP" == "true" ]] && TAGS="${TAGS}🧹($RESOURCES) "
+    [[ -n "$BLOCKED_BY" ]] && TAGS="${TAGS}⛓️($BLOCKED_BY) "
 
     echo "[$ID] ($prio) $TITLE$SCHED $TAGS"
 done

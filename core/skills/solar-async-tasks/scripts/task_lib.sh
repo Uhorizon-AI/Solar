@@ -3,9 +3,21 @@
 # Shared library for solar-async-tasks
 # Sourced by other scripts
 
-# Default Root: prefer (pwd)/sun/... when run from repo (e.g. LaunchAgent); else $HOME path
+# NOTE: Worker inherits SOLAR_WORKSPACE from parent caller; skip re-discovery when set.
+# CLI and sync paths always run discovery (resolve_solar_paths.sh). Intentional exception.
+if [[ -z "${SOLAR_WORKSPACE:-}" ]]; then
+  _TASK_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/resolve_solar_paths.sh"
+  if [[ -f "$_TASK_RESOLVE_SCRIPT" ]]; then
+    # shellcheck source=/dev/null
+    source "$_TASK_RESOLVE_SCRIPT"
+    solar_resolve_paths --quiet 2>/dev/null || true
+  fi
+fi
+
 if [[ -z "${SOLAR_TASK_ROOT:-}" ]]; then
-  if [[ -d "$(pwd)/sun/runtime/async-tasks" ]]; then
+  if [[ -n "${SOLAR_WORKSPACE:-}" ]]; then
+    export SOLAR_TASK_ROOT="$SOLAR_WORKSPACE/sun/runtime/async-tasks"
+  elif [[ -d "$(pwd)/sun/runtime/async-tasks" ]]; then
     export SOLAR_TASK_ROOT="$(pwd)/sun/runtime/async-tasks"
   else
     export SOLAR_TASK_ROOT="${HOME:-}/Sites/solar.ai/sun/runtime/async-tasks"
@@ -182,6 +194,10 @@ scheduled_minutes() {
         echo "9999"
         return
     fi
+    if [[ "$stime" == "now" ]]; then
+        echo "0"
+        return
+    fi
     echo "$stime" | awk -F: '{ print $1*60+$2 }'
 }
 
@@ -197,6 +213,8 @@ is_scheduled_now() {
     sdays=$(extract_meta "$file" "scheduled_weekdays")
     # No schedule -> always eligible
     [[ -z "$stime" && -z "$sdays" ]] && return 0
+    # Explicit immediate run
+    [[ "$stime" == "now" ]] && return 0
     # Weekday check: if scheduled_weekdays set, current weekday must be in list
     if [[ -n "$sdays" ]]; then
         local current_dow
@@ -257,7 +275,148 @@ get_timeout_cmd() {
 # Parse CSV resources (compatible with extract_meta)
 parse_resources() {
     local resources_str="$1"
-    echo "$resources_str" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+    echo "$resources_str" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | awk 'NF'
+}
+
+parse_csv_meta() {
+    local raw="$1"
+    echo "$raw" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | awk 'NF'
+}
+
+# Extract blocked_by_task_ids from frontmatter.
+# Canonical format is CSV inline:
+#   blocked_by_task_ids: "id1,id2"
+# Also supports YAML list format for resilience:
+#   blocked_by_task_ids:
+#     - "id1"
+#     - "id2"
+extract_blocked_by_task_ids() {
+    local file="$1"
+    awk '
+        BEGIN { in_fm = 0; in_blocked = 0 }
+        /^---[[:space:]]*$/ {
+            if (in_fm == 0) {
+                in_fm = 1
+                next
+            }
+            exit
+        }
+        in_fm == 0 { next }
+        /^blocked_by_task_ids:[[:space:]]*/ {
+            value = $0
+            sub(/^blocked_by_task_ids:[[:space:]]*/, "", value)
+            gsub(/["'\''[:space:]]/, "", value)
+            if (value != "") {
+                print value
+                exit
+            }
+            in_blocked = 1
+            next
+        }
+        in_blocked == 1 && /^[[:space:]]*-[[:space:]]*/ {
+            value = $0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+            gsub(/["'\''[:space:]]/, "", value)
+            if (value != "") {
+                print value
+            }
+            next
+        }
+        in_blocked == 1 {
+            exit
+        }
+    ' "$file" | paste -sd ',' -
+}
+
+is_task_terminal() {
+    local task_id="$1"
+    local task_file
+    task_file="$(find_task "$task_id")"
+    [[ -z "$task_file" ]] && return 0
+
+    case "$(get_status "$task_file")" in
+        completed|archived|error) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+list_unresolved_dependencies() {
+    local file="$1"
+    local blocked_by dep
+    blocked_by="$(extract_blocked_by_task_ids "$file")"
+    [[ -z "$blocked_by" ]] && return 0
+
+    for dep in $(parse_csv_meta "$blocked_by"); do
+        if ! is_task_terminal "$dep"; then
+            echo "$dep"
+        fi
+    done
+}
+
+has_unresolved_dependencies() {
+    local file="$1"
+    local dep
+    while IFS= read -r dep; do
+        [[ -n "$dep" ]] && return 0
+    done < <(list_unresolved_dependencies "$file")
+    return 1
+}
+
+list_open_task_ids() {
+    local f id
+    for f in "$DIR_DRAFTS"/*.md "$DIR_PLANNED"/*.md "$DIR_QUEUED"/*.md "$DIR_ACTIVE"/*.md "$DIR_ERROR"/*.md; do
+        [[ -e "$f" ]] || continue
+        id="$(extract_meta "$f" "id")"
+        [[ -n "$id" ]] && echo "$id"
+    done
+}
+
+# Set or update a frontmatter key=value in a task file.
+# If the key exists, replaces it. If not, inserts it before the closing ---.
+# Usage: set_meta <file> <key> <value>
+set_meta() {
+    local file="$1"
+    local key="$2"
+    local value="$3"
+    if grep -q "^${key}:" "$file" 2>/dev/null; then
+        sed -i.bak "s|^${key}:.*|${key}: ${value}|" "$file"
+        rm -f "${file}.bak"
+    else
+        awk -v k="$key" -v v="$value" '
+            /^---$/ && ++count == 2 && !done {
+                print k ": " v
+                done = 1
+            }
+            { print }
+        ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    fi
+}
+
+# Parse recurring_last_run (UTC ISO-8601) to epoch seconds.
+# BSD date treats a trailing "Z" as a literal, not UTC — force TZ=UTC so
+# recurring_min_interval is not skewed by the local offset (e.g. CEST +2h
+# made a 7200s interval always appear elapsed).
+recurring_last_run_epoch() {
+    local last_run="$1"
+    local last_norm ts=""
+
+    [[ -z "$last_run" ]] && { echo 0; return; }
+
+    if [[ "$last_run" == *[Zz] ]]; then
+        ts="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_run" +%s 2>/dev/null || true)"
+    else
+        # Offset form: 2026-07-27T12:00:00+02:00 → +0200 for BSD date
+        last_norm="$(echo "$last_run" | sed -E 's/([+-][0-9]{2}):([0-9]{2})$/\1\2/')"
+        ts="$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$last_norm" +%s 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$ts" ]] && command -v gdate >/dev/null 2>&1; then
+        ts="$(gdate -d "$last_run" +%s 2>/dev/null || true)"
+    elif [[ -z "$ts" ]] && date -d "1970-01-01" +%s >/dev/null 2>&1; then
+        ts="$(date -d "$last_run" +%s 2>/dev/null || true)"
+    fi
+
+    echo "${ts:-0}"
 }
 
 # Check if recurring task is ready to run (race protection)
@@ -272,9 +431,10 @@ is_recurring_ready() {
     local min_interval=$(extract_meta "$file" "recurring_min_interval")
     min_interval=${min_interval:-86400}  # Default 24h
 
-    local last_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_run" +%s 2>/dev/null || echo 0)
-    local now_epoch=$(date +%s)
-    local elapsed=$((now_epoch - last_epoch))
+    local last_epoch now_epoch elapsed
+    last_epoch="$(recurring_last_run_epoch "$last_run")"
+    now_epoch=$(date +%s)
+    elapsed=$((now_epoch - last_epoch))
 
     [[ $elapsed -ge $min_interval ]]
 }

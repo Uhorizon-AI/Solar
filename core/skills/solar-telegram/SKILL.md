@@ -36,7 +36,7 @@ bash core/skills/solar-telegram/scripts/setup_telegram.sh --ping --test-message 
 bash core/skills/solar-telegram/scripts/setup_telegram.sh --non-interactive
 
 # Sync core changes to local clients
-bash core/scripts/sync-clients.sh
+solar client sync
 ```
 
 ## Required environment variables
@@ -68,7 +68,7 @@ Optional:
 2. Execute `setup_telegram.sh` as the default procedure from the agent (do not ask the user to run shell commands).
 3. If values are missing, ask user for `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, then run setup with `--token` and `--chat-id`.
 4. For bridge mode, use `references/telegram-transport-patterns.md` as the routing contract.
-5. If skill files changed, run `bash core/scripts/sync-clients.sh`.
+5. If skill files changed, run `solar client sync`.
 
 ## Output format
 

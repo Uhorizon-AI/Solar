@@ -10,6 +10,9 @@ __pycache__/
 .venv/
 .poetry-cache/
 
+# solar-app macOS tray (py2app build artifacts — local only)
+**/host_platform/macos/dist/
+
 # Local secrets and env
 .env
 .env.*
@@ -20,6 +23,9 @@ __pycache__/
 sun/
 planets/
 
+# Client update snapshots (legacy path when install root = SOLAR_ROOT)
+backups/
+
 # Local AI client runtime/config
 .claude/
 .codex/
@@ -28,7 +34,3 @@ planets/
 .vscode/
 .cursor/
 .agents/ # Antigravity
-
-# Temporary files
-brain.ai
-brain.code-workspace

@@ -10,173 +10,99 @@ Interactive command to create framework releases with automatic version calculat
 ## Usage
 
 ```bash
-bash core/scripts/create-release.sh [--push]
+# Prepare locally (no remote side effects)
+bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]
+
+# Publish (A2 formal — push + GitHub Release)
+bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z] --publish
+
+# Idempotent recovery if tag is remote but GitHub Release is missing
+bash core/scripts/create-release.sh --publish --retry [--version vX.Y.Z]
 ```
 
 **Options:**
-- `--push`: Automatically push tag and commit to remote after creation (optional)
+- `--yes`: Skip confirmation prompt (required in non-interactive shells)
+- `--version vX.Y.Z`: Force version instead of auto bump
+- `--publish`: Local E2E → `git push origin main --tags` → verify remote tag → `gh release create` → API/raw verify
+- `--publish --retry`: Do **not** recreate commit/tag; only complete/verify the GitHub Release
+- `--push`: Deprecated alias for `--publish` (push without Release is not allowed)
 
 **When to use:**
 - After completing 2-3 significant framework features
 - Before starting new major development (to establish baseline)
 - When framework changes are ready for distribution
 
+Publishing (`--publish`) requires formal A2 approval (external push + GitHub Release).
+
 ---
 
-## Release Flow
+## Modes
 
-### 1. Pre-flight Checks
+| Mode | Effect | Remoto |
+|---|---|---|
+| Prepare (default) | CHANGELOG + `SOLAR_VERSION` + README Quickstart pin + commit + local tag | no |
+| `--publish` | Prep if needed → **E2E local** → push → `gh release create` → verify | yes |
+| `--publish --retry` | Confirm remote tag; create Release if missing | yes |
 
-The script validates:
-- [ ] Working tree is clean (no uncommitted changes)
-- [ ] Currently on `main` branch
-- [ ] At least one commit since last release
-- [ ] Previous release tag exists (or creates v0.1.0 for first release)
+### Prepare order (before commit/tag)
 
-### 2. Commit Analysis
+1. Calculate `NEW_VERSION`
+2. Update `CHANGELOG.md` and `SOLAR_VERSION` in `scripts/solar`
+3. Rewrite README block between `<!-- solar-bootstrap-pin -->` markers to
+   `https://raw.githubusercontent.com/Uhorizon-AI/Solar/vX.Y.Z/core/skills/solar-client/scripts/bootstrap_solar_client.sh`
+4. Show preview (changelog + pin URL) and confirm
+5. Commit `chore(release): vX.Y.Z` and create local tag
 
-Analyzes commits since last tag using Conventional Commits:
+### Publish order
 
-```
-📊 Analyzing commits since v0.1.0...
-   - 3 feat commits  → MINOR bump
-   - 2 fix commits   → PATCH bump
-   - 0 BREAKING      → no MAJOR
-```
+1. Complete prepare if HEAD is not already the release tag
+2. Run `core/tests/skills/solar-client/test_install_solar_client.sh` — abort on failure (**no push**)
+3. `git push origin main --tags`
+4. Verify tag on remote (`git ls-remote`)
+5. `gh release create` (only after remote tag exists)
+6. Verify Release via API + bootstrap raw URL HTTP 200
 
-**Bump precedence:**
-- `MAJOR` (vX.0.0): Breaking changes (`type!` or `BREAKING CHANGE:` footer)
-- `MINOR` (v0.X.0): New features (`feat:`) without breaking changes
-- `PATCH` (v0.0.X): Bug fixes (`fix:`) or compatible changes
+If `gh release create` fails after a successful push, re-run:
 
-### 3. Human Confirmation Gate
-
-```
-📌 Proposed version: v0.2.0
-
-CHANGELOG preview:
-## [0.2.0] - 2026-02-13
-
-### Added
-- feat(memory): add AI-agnostic MEMORY.md protocol
-- feat(release): add release infrastructure
-
-### Fixed
-- fix(doctor): validate MEMORY.md (uppercase)
-
-Do you want to create this release? [y/N]:
-```
-
-**Single decision point:** Accept (`y`) or reject (`N`).
-
-### 4. Automated Execution (if confirmed)
-
-If you confirm, script executes all steps automatically:
-
-```
-✅ Creating release v0.2.0...
-  1. Updating CHANGELOG.md...           ✅
-  2. Creating git tag v0.2.0...         ✅
-  3. Committing changes...              ✅
-  4. Done! (push manually or use --push)
-
-🎉 Release v0.2.0 created successfully!
-
-Next steps:
-- git push origin main --tags  (if not using --push flag)
-- GitHub will auto-create release from tag (if configured)
+```bash
+bash core/scripts/create-release.sh --publish --retry --version vX.Y.Z
 ```
 
 ---
 
-## What Gets Modified
+## Pre-flight Checks
 
-**Files updated:**
-- `CHANGELOG.md` - New version entry prepended
-- `.git/refs/tags/` - New git tag created
-
-**Git operations:**
-- Commit: `chore(release): vX.Y.Z`
-- Tag: `vX.Y.Z`
-- Push: Only if `--push` flag used
-
-**NOT modified:**
-- No VERSION file (Solar uses git tags as source of truth)
-- No package.json or similar (Solar is not a package)
+- Working tree clean
+- On `main`
+- At least one commit since last release (or curated `[Unreleased]`)
+- `--publish` also requires `gh` authenticated
 
 ---
 
-## Versioning Scope
+## What Gets Modified (prepare)
 
-**Framework only** (bumps version):
-- `core/` (skills, scripts, templates, governance)
-- Root files (`AGENTS.md`, `CHANGELOG.md`, `README.md`, `CONTRIBUTING.md`)
+- `CHANGELOG.md`
+- `core/skills/solar-client/scripts/solar` (`SOLAR_VERSION`)
+- `README.md` (bootstrap pin only)
+- Git tag `vX.Y.Z`
 
-**Runtime excluded** (no version bump):
-- `sun/` (user-specific runtime)
-- `planets/*/` (project-specific workspaces)
-
----
-
-## Success Criteria
-
-- [ ] Release created in **< 3 minutes**
-- [ ] Zero ambiguity about version bump rationale
-- [ ] CHANGELOG.md accurate and well-formatted
-- [ ] Git tag points to correct commit
-- [ ] No manual editing required (unless rejecting proposal)
+**NOT modified:** `sun/`, `planets/` (workspace), no VERSION file
 
 ---
 
-## Common Issues and Fixes
+## Identity contract
 
-### Issue: "Working tree not clean"
-- **Fix:** Commit or stash uncommitted changes before releasing
-
-### Issue: "Not on main branch"
-- **Fix:** `git checkout main` before running release
-
-### Issue: Proposed version doesn't match expectations
-- **Fix:** Check commit messages use conventional commits format:
-  - `feat:` for new features (MINOR)
-  - `fix:` for bug fixes (PATCH)
-  - `feat!:` or `BREAKING CHANGE:` for breaking changes (MAJOR)
-- **Option:** Reject proposal, fix commit messages, re-run
-
-### Issue: CHANGELOG formatting looks wrong
-- **Fix:** Review generated preview in confirmation step
-- **Option:** Reject, manually edit CHANGELOG after release
-
-### Issue: Want to create pre-release (beta, rc)
-- **Fix:** Not supported in MVP - use manual git tag:
-  ```bash
-  git tag v0.2.0-beta.1
-  git push origin v0.2.0-beta.1
-  ```
+| Artefact | Value |
+|---|---|
+| Tag / GitHub Release | `vMAJOR.MINOR.PATCH` |
+| `SOLAR_VERSION` | `MAJOR.MINOR.PATCH` |
+| README pin | same `vMAJOR.MINOR.PATCH` (written by this script) |
+| Install/update runtime | `releases/latest` via API + curl (no hard-coded default tag) |
 
 ---
 
 ## Exit Codes
 
-- `0`: Release created successfully
-- `1`: User rejected proposal
-- `2`: Pre-flight validation failed (working tree, branch, etc.)
-
----
-
-## Next Steps After Release
-
-1. **If not using --push:** Push manually:
-   ```bash
-   git push origin main --tags
-   ```
-
-2. **GitHub Release (optional):**
-   - GitHub will detect the tag
-   - Manually create release notes from CHANGELOG.md
-   - (Future: automation via GitHub Actions)
-
-3. **Announce release:**
-   - Update project README if needed
-   - Notify users/collaborators
-   - Document migration notes for MAJOR releases
+- `0`: Success
+- `1`: User rejected or publish/E2E failure
+- `2`: Pre-flight / usage error
