@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-09-06
+
 ### Added
 - feat(solar-gateway): persist n8n response snapshots by `request_id`; serialize duplicate requests across threads and processes so concurrent retries execute the router once and replay the same response.
 - feat(solar-async-tasks): accept flat or nested origin metadata through `create.sh --metadata`; notify the allowlisted origin chat with a brief completion message and result location, or optional ordered message batches.
