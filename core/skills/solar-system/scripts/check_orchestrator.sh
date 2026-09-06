@@ -25,7 +25,7 @@ solar_system_load_env
 # Mirrors get_timeout_cmd() from solar-async-tasks/scripts/task_lib.sh.
 FEATURE_TIMEOUT=15
 
-run_with_timeout() {
+run_feature_with_timeout() {
   if command -v gtimeout &>/dev/null; then
     gtimeout "$FEATURE_TIMEOUT" "$@"
     return $?
@@ -198,7 +198,7 @@ if feature_active "transport-gateway"; then
   gw_out=""
   gw_code=0
   set +e
-  gw_out="$(run_with_timeout bash "$(solar_system_skill_script solar-gateway check_transport_gateway.sh)" 2>&1)"
+  gw_out="$(run_feature_with_timeout bash "$(solar_system_skill_script solar-gateway check_transport_gateway.sh)" 2>&1)"
   gw_code=$?
   set -e
 
@@ -294,7 +294,7 @@ if feature_active "host"; then
   host_out=""
   host_code=0
   set +e
-  host_out="$(run_with_timeout bash "$(solar_system_skill_script solar-app check_host.sh)" 2>&1)"
+  host_out="$(run_feature_with_timeout bash "$(solar_system_skill_script solar-app check_host.sh)" 2>&1)"
   host_code=$?
   set -e
 
