@@ -74,6 +74,11 @@ elif existing="$(read_key "SOLAR_AI_ROUTER_TIMEOUT_SEC")"; then
   echo "Migrating SOLAR_AI_ROUTER_TIMEOUT_SEC → SOLAR_ROUTER_TIMEOUT_SEC"
 fi
 
+# Prompt logging (optional, default in code: false)
+if existing="$(read_key "SOLAR_ROUTER_LOG_PROMPTS")"; then
+  optional_vars+=("SOLAR_ROUTER_LOG_PROMPTS=${existing}")
+fi
+
 # Custom command overrides (optional)
 if existing="$(read_key "SOLAR_ROUTER_AGENT_CMD")"; then
   optional_vars+=("SOLAR_ROUTER_AGENT_CMD=${existing}")
@@ -123,6 +128,7 @@ awk '
   $0 ~ /^SOLAR_CONTEXT_TURNS=/ { next }
   $0 ~ /^SOLAR_ROUTER_TIMEOUT_SEC=/ { next }
   $0 ~ /^SOLAR_AI_ROUTER_TIMEOUT_SEC=/ { next }
+  $0 ~ /^SOLAR_ROUTER_LOG_PROMPTS=/ { next }
   $0 ~ /^SOLAR_ROUTER_AGENT_CMD=/ { next }
   $0 ~ /^SOLAR_AI_AGENT_CMD=/ { next }
   $0 ~ /^SOLAR_ROUTER_CODEX_CMD=/ { next }
@@ -136,13 +142,14 @@ awk '
   { print }
 ' "$ROOT_ENV_FILE" > "$tmp"
 
-# Find insertion point (after solar-telegram or solar-transport-gateway if present, otherwise at end)
-insert_line=""
-if grep -Eq "^# \[solar-transport-gateway\] required environment$" "$tmp"; then
-  insert_line="$(grep -En "^# \[solar-transport-gateway\] required environment$" "$tmp" | tail -n1 | cut -d: -f1)"
-  insert_line=$((insert_line - 1))
-elif grep -Eq "^# \[solar-telegram\] required environment$" "$tmp"; then
-  insert_line="$(grep -En "^# \[solar-telegram\] required environment$" "$tmp" | tail -n1 | cut -d: -f1)"
+# Router precedes Telegram, gateway, and system in canonical dependency order.
+insert_line="$(awk '
+  $0 ~ /^# \[solar-(telegram|gateway|transport-gateway|system)\] required environment$/ {
+    print NR
+    exit
+  }
+' "$tmp")"
+if [[ -n "$insert_line" ]]; then
   insert_line=$((insert_line - 1))
 fi
 

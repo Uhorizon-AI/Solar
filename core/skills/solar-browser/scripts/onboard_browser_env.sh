@@ -70,21 +70,12 @@ awk '
 ' "$ROOT_ENV_FILE" >"$tmp"
 mv "$tmp" "$ROOT_ENV_FILE"
 
-# Insert [solar-browser] immediately after the [solar-system] block (before the
-# next # […] required environment header). If [solar-system] is missing, append
-# at end of file.
-SYSTEM_HEADER='# [solar-system] required environment'
+# Browser is the first managed block in canonical dependency order.
 insert_line="$(
-  awk -v sys_hdr="$SYSTEM_HEADER" '
-    { lineno = NR }
-    $0 == sys_hdr { in_sys = 1; next }
-    in_sys && $0 ~ /^# \[[^]]+\] required environment$/ {
+  awk '
+    $0 ~ /^# \[solar-(router|telegram|gateway|transport-gateway|system)\] required environment$/ {
       print NR
-      found = 1
       exit
-    }
-    END {
-      if (in_sys && !found) print lineno + 1
     }
   ' "$ROOT_ENV_FILE"
 )"
@@ -116,7 +107,6 @@ else
   echo "SOLAR_BROWSER_LOG_PATH=${browser_log_path}" >>"$tmp"
   echo "SOLAR_BROWSER_MCP_LEAK_THRESHOLD=${mcp_leak_threshold}" >>"$tmp"
   printf '\n' >>"$tmp"
-  echo "Note: no # [solar-system] block found; appended solar-browser at EOF. Run onboard_system_env.sh first for canonical order." >&2
 fi
 mv "$tmp" "$ROOT_ENV_FILE"
 

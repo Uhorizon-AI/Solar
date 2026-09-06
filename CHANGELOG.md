@@ -6,6 +6,23 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-gateway): persist n8n response snapshots by `request_id`; serialize duplicate requests across threads and processes so concurrent retries execute the router once and replay the same response.
+- feat(solar-async-tasks): accept flat or nested origin metadata through `create.sh --metadata`; notify the allowlisted origin chat with a brief completion message and result location, or optional ordered message batches.
+
+### Changed
+- change(solar-gateway): separate inbound HTTP channels from Telegram webhook registration. Only `SOLAR_GATEWAY_CLAIM_TELEGRAM=true` permits registration; absent/false never claims, and foreign webhooks are preserved. Retire the legacy webhook flags and OWNER fallback.
+- change(solar-gateway): require Bearer authentication for n8n and fail closed without a configured secret. Use one synchronous POST with a default 90-second router budget; retire HTTP 202/poll execution and include the claim flag and secret hash in restart drift detection.
+- change(solar-router): propagate origin metadata to queued parent tasks, reuse the parent/subtask lifecycle, and support `SOLAR_N8N_AUTO_QUEUE=false` without creating a draft. Children created without metadata do not inherit completion notifications.
+
+### Fixed
+- fix(solar-gateway): normalize managed environment blocks into dependency order, rename the gateway header to `[solar-gateway]`, remove its legacy header, and keep the n8n secret inside the gateway block.
+- fix(solar-gateway): bound and validate `getWebhookInfo` lookups. Failed, malformed, or unsuccessful responses never authorize registration; manual registration fails, while setup/ensure skips claiming and continues.
+- fix(solar-gateway): terminate the n8n router's dedicated process group on timeout without killing the WebSocket bridge.
+- fix(solar-router): check the task's queued/active state before returning the canonical asynchronous acknowledgement.
+- fix(solar-async-tasks): record delivery failures on the task and preserve confirmed-delivery deduplication; notify configured tasks after execution errors, timeouts, and cleanup failures without sending sensitive error details. Resolve the sender from the installation when the workspace is separate.
+- fix(solar-telegram): preserve the caller's destination chat when loading environment configuration.
+
 ## [0.21.0] - 2026-07-26
 
 ### Added

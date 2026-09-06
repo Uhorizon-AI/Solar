@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 import traceback
@@ -63,10 +64,50 @@ def validate_request(payload: Dict[str, Any]) -> bool:
     )
 
 
+def n8n_sync_timeout_sec() -> int:
+    return _env_int_with_comment("SOLAR_N8N_SYNC_TIMEOUT_SEC", 90)
+
+
+N8N_SYNC_TIMEOUT_REPLY = "No pude responder a tiempo. Inténtalo de nuevo."
+
+
+def _failed_router_result(
+    payload: Dict[str, Any],
+    error_msg: str,
+    *,
+    error_code: str = "router_crashed",
+    reply_text: str = "",
+) -> Dict[str, Any]:
+    text = reply_text or error_msg
+    return {
+        "status": "failed",
+        "request_id": payload.get("request_id", "n/a"),
+        "provider_used": None,
+        "reply_text": text,
+        "decision": {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
+        "error_code": error_code,
+        "error": error_msg,
+    }
+
+
+def _parse_router_stdout(stdout: str, stderr: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    text = (stdout or "").strip()
+    if text:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+    error_msg = (stderr or "").strip() or text or "router failed with no output"
+    return _failed_router_result(payload, error_msg)
+
+
 def call_router(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Forward the full request payload to solar-router v3.
     Returns the parsed router v3 JSON response dict.
+
+    channel=n8n uses a dedicated process group and a 90s budget. On timeout
+    that pgid is killed (not the WebSocket server's).
     """
     router_payload = {
         "request_id": payload.get("request_id", "n/a"),
@@ -77,39 +118,52 @@ def call_router(payload: Dict[str, Any]) -> Dict[str, Any]:
         "mode": payload.get("mode", "auto"),
         "metadata": payload.get("metadata", {}),
     }
-    # Pass provider only if explicitly set (strict mode)
     if payload.get("provider"):
         router_payload["provider"] = payload["provider"]
 
+    cmd = [AI_ROUTER_PYTHON, str(_ROUTER_SCRIPT)]
+    stdin_payload = json.dumps(router_payload)
+    channel = str(router_payload.get("channel") or "").strip().lower()
+
+    if channel == "n8n":
+        timeout = n8n_sync_timeout_sec()
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(_SOLAR_WORKSPACE),
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = proc.communicate(input=stdin_payload, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            return _failed_router_result(
+                payload,
+                f"n8n sync budget exceeded ({timeout}s)",
+                error_code="n8n_sync_timeout",
+                reply_text=N8N_SYNC_TIMEOUT_REPLY,
+            )
+        return _parse_router_stdout(stdout or "", stderr or "", payload)
+
     proc = subprocess.run(
-        [AI_ROUTER_PYTHON, str(_ROUTER_SCRIPT)],
-        input=json.dumps(router_payload),
+        cmd,
+        input=stdin_payload,
         text=True,
         capture_output=True,
         timeout=AI_ROUTER_TIMEOUT_SEC,
         cwd=str(_SOLAR_WORKSPACE),
     )
-    stdout = proc.stdout.strip()
-
-    # Always try to parse stdout as router v3 JSON first — even on non-zero exit.
-    # Router emits structured JSON errors (with real error_code) and then exits 1.
-    if stdout:
-        try:
-            return json.loads(stdout)
-        except json.JSONDecodeError:
-            pass
-
-    # Fallback: no parseable JSON at all (crash, binary not found, etc.)
-    error_msg = proc.stderr.strip() or stdout or "router failed with no output"
-    return {
-        "status": "failed",
-        "request_id": payload.get("request_id", "n/a"),
-        "provider_used": None,
-        "reply_text": error_msg,
-        "decision": {"kind": "direct_reply", "task_id": None, "priority_suggested": None},
-        "error_code": "router_crashed",
-        "error": error_msg,
-    }
+    return _parse_router_stdout(proc.stdout or "", proc.stderr or "", payload)
 
 
 async def handle_connection(websocket) -> None:

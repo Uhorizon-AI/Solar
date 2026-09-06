@@ -71,7 +71,11 @@ run_one_task() {
         echo "   Log: $LOG_DIR/$(basename "$task_file" .md).log"
         return 0
     else
-        # execute_active.py already moved the file to error/ and wrote the log
+        # execute_active.py already moved the file to error/ and wrote the log.
+        local error_file="$DIR_ERROR/$(basename "$task_file")"
+        if [[ -f "$error_file" ]]; then
+            bash "$SCRIPT_DIR/notify_if_configured.sh" "$error_file" || true
+        fi
         return 1
     fi
 }

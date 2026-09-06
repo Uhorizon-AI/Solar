@@ -86,6 +86,8 @@ if [[ -n "$public_health_url" ]]; then
 fi
 
 echo "Transport gateway status:"
+echo "  http channels:     $(gateway_http_channels_label)"
+echo "  telegram claim:    $(gateway_telegram_claim_label)"
 echo "  ws process:        $ws_ok"
 echo "  http process:      $http_ok"
 echo "  tunnel process:    $tunnel_ok"

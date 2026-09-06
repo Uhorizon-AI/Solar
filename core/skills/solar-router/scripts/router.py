@@ -338,6 +338,10 @@ ASYNC_SCOPE_APPROVAL_SUFFIX = (
     "\n\nHe creado el draft `{task_id}` sin encolar: faltan object/scope/effect "
     "estructurados. Decláralos o aprueba el encolado explícitamente."
 )
+N8N_AUTO_QUEUE_DISABLED_REPLY = "No puedo tomar tareas largas ahora."
+TASK_NOT_QUEUED_REPLY = (
+    "No pude encolar la tarea. Revisa async-tasks; no asumas que llegará un aviso."
+)
 
 RE_ASYNC_SCOPE_TAG = re.compile(
     r"<(object|scope|effect)>\s*(.*?)\s*</\1>",
@@ -429,6 +433,70 @@ def async_tasks_enabled() -> bool:
     return "async-tasks" in parts
 
 
+def n8n_auto_queue_enabled() -> bool:
+    raw = (os.getenv("SOLAR_N8N_AUTO_QUEUE") or "").strip().lower()
+    if raw in ("false", "0", "no"):
+        return False
+    return True
+
+
+def origin_from_metadata(
+    metadata: Optional[Dict[str, Any]],
+    request_id: str,
+) -> Dict[str, str]:
+    meta = metadata or {}
+    chat_id = str(meta.get("origin_chat_id") or meta.get("chat_id") or "").strip()
+    channel = str(meta.get("origin_channel") or "telegram").strip() or "telegram"
+    origin_request_id = str(meta.get("origin_request_id") or request_id or "").strip()
+    return {
+        "channel": channel,
+        "chat_id": chat_id,
+        "request_id": origin_request_id,
+    }
+
+
+def _task_file_for_id(task_id: str) -> Optional[pathlib.Path]:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return None
+    root = pathlib.Path(SOLAR_WORKSPACE) / "sun" / "runtime" / "async-tasks"
+    for sub in ("queued", "active", "drafts", "planned", "completed", "error", "archive"):
+        folder = root / sub
+        if not folder.is_dir():
+            continue
+        for path in folder.glob("*.md"):
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                if not line.startswith("id:"):
+                    continue
+                value = line.split(":", 1)[1].strip().strip('"').strip("'")
+                if value == tid:
+                    return path
+    return None
+
+
+def task_runtime_status(task_id: str) -> Optional[str]:
+    path = _task_file_for_id(task_id)
+    if path is None:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("status:"):
+            return line.split(":", 1)[1].strip().strip('"').strip("'").lower()
+    return None
+
+
+def task_runtime_is_queued(task_id: str) -> bool:
+    status = task_runtime_status(task_id)
+    return status in ("queued", "active")
+
+
 def _parse_create_task_id(stdout: str, stderr: str) -> Optional[str]:
     out = (stdout or "") + "\n" + (stderr or "")
     for line in out.splitlines():
@@ -439,28 +507,35 @@ def _parse_create_task_id(stdout: str, stderr: str) -> Optional[str]:
 
 
 def _gateway_task_body(user_text: str, channel: str) -> str:
-    """Worker prompt for a gateway-originated long-running request.
+    """Worker prompt for a gateway-originated parent task.
 
-    Auto-queue acknowledges start of work. Validation Gate / execution-consent
-    still apply: read/analysis and declared artifacts may proceed; mutable
-    external actions require explicit approval inside the async run.
+    This file already has origin metadata and notify_when. Children created with
+    create.sh --queued must omit --metadata so only the parent notifies.
+    Follow solar-async-tasks task-with-subtasks.md.
     """
     return (
         f"## Origin\n"
         f"- channel: {channel}\n"
-        f"- mode: fulfill user request asynchronously\n\n"
+        f"- mode: fulfill user request asynchronously\n"
+        f"- this task is the **parent**. Completion notify is already on this file.\n\n"
         f"## User request\n\n"
         f"{user_text.strip()}\n\n"
         f"## Instructions\n"
-        f"1. Prefer read/analysis and writing declared deliverable paths under the Solar workspace.\n"
-        f"2. The gateway already acknowledged the user for starting this work. Proceed with "
+        f"Follow `core/skills/solar-async-tasks/references/task-with-subtasks.md`.\n"
+        f"1. If this is execution 1 and the work needs children: create them with "
+        f"`create.sh --queued` (plus `--provider` / `--body-file` as needed). "
+        f"Do **not** pass `--metadata`. Children must not notify. Stop after creating "
+        f"children; `await_subtasks` re-queues this parent.\n"
+        f"2. If this is execution 2 (children done, or no children were needed): "
+        f"synthesize, write declared artifacts, and add `## Result`. Only this parent "
+        f"notifies the origin chat.\n"
+        f"3. Prefer read/analysis and writing declared deliverable paths under the Solar workspace.\n"
+        f"4. The gateway already acknowledged the user for starting this work. Proceed with "
         f"in-scope read/analysis and declared artifact writes without asking to re-activate "
         f"or re-queue the task.\n"
-        f"3. Still require explicit approval before external sends, destructive deletes, "
+        f"5. Still require explicit approval before external sends, destructive deletes, "
         f"credential access, irreversible actions, or anything outside the declared task "
         f"scope (solar-async-tasks execution-consent / Validation Gate).\n"
-        f"4. Add a short `## Result` section summarizing what was done and any pending "
-        f"approvals still required.\n"
     )
 
 
@@ -472,6 +547,9 @@ def create_async_draft(
     channel: str = "other",
     queue: bool = False,
     notify: bool = False,
+    origin_channel: Optional[str] = None,
+    origin_chat_id: Optional[str] = None,
+    origin_request_id: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Create an async task via solar-async-tasks create.sh.
 
@@ -481,7 +559,6 @@ def create_async_draft(
       be configured (missing script, non-zero exit, or exception). Callers must
       surface that warning so the user is not promised a completion ping.
     """
-    _ = request_id  # reserved for future correlation
     script = _resolve_under_home("core/skills/solar-async-tasks/scripts/create.sh")
     if not script.is_file():
         return None, None
@@ -508,8 +585,20 @@ def create_async_draft(
                 "normal",
                 "--body-file",
                 str(body_path),
-                title,
             ]
+            origin_ch = (origin_channel or "").strip()
+            origin_chat = (origin_chat_id or "").strip()
+            origin_rid = (origin_request_id or request_id or "").strip()
+            meta: Dict[str, str] = {}
+            if origin_ch:
+                meta["origin_channel"] = origin_ch
+            if origin_chat:
+                meta["origin_chat_id"] = origin_chat
+            if origin_rid:
+                meta["origin_request_id"] = origin_rid
+            if meta:
+                cmd.extend(["--metadata", json.dumps(meta, separators=(",", ":"))])
+            cmd.append(title)
         else:
             desc = (strip_solar_metadata(ai_output) or ai_output or user_text).strip()[:8000]
             cmd = ["bash", str(script), title, desc]
@@ -635,6 +724,7 @@ def resolve_decision(
     ai_output: str,
     user_text: str,
     request_id: str,
+    origin: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, Any], str]:
     """
     Compute v3 decision dict and user-facing reply_text (tags stripped).
@@ -649,6 +739,15 @@ def resolve_decision(
     fallback_reply = stripped if stripped else ai_output.strip()
     scope = extract_async_scope(ai_output)
     scope_ok = async_scope_complete(scope)
+    origin = origin or {}
+    origin_kwargs = {
+        "origin_channel": origin.get("channel") or "",
+        "origin_chat_id": origin.get("chat_id") or "",
+        "origin_request_id": origin.get("request_id") or request_id,
+    }
+
+    def _n8n_long_disabled() -> bool:
+        return channel_l == "n8n" and not n8n_auto_queue_enabled()
 
     def _decision(
         kind: str,
@@ -673,6 +772,8 @@ def resolve_decision(
     if mode_l == "async_only":
         if not async_tasks_enabled():
             return _decision("direct_reply"), fallback_reply
+        if _n8n_long_disabled():
+            return _decision("direct_reply"), N8N_AUTO_QUEUE_DISABLED_REPLY
         want_gateway_queue = channel_l in GATEWAY_ASYNC_CHANNELS
         do_queue = want_gateway_queue and scope_ok
         task_id, notify_warning = create_async_draft(
@@ -682,6 +783,7 @@ def resolve_decision(
             channel=channel_l,
             queue=do_queue,
             notify=do_queue,
+            **origin_kwargs,
         )
         if not task_id:
             return (
@@ -689,6 +791,16 @@ def resolve_decision(
                 fallback_reply + ASYNC_CREATE_FAILED_SUFFIX,
             )
         if do_queue:
+            if not task_runtime_is_queued(task_id):
+                return (
+                    _decision(
+                        "async_draft_created",
+                        task_id=task_id,
+                        queued=False,
+                        approval_required=True,
+                    ),
+                    TASK_NOT_QUEUED_REPLY,
+                )
             reply = gateway_async_reply(task_id, notify_warning=notify_warning)
         elif want_gateway_queue:
             reply = fallback_reply + ASYNC_SCOPE_APPROVAL_SUFFIX.format(task_id=task_id)
@@ -716,6 +828,8 @@ def resolve_decision(
                 fallback_reply
                 + "\n\n[Async tasks disabled: enable async-tasks in SOLAR_SYSTEM_FEATURES.]",
             )
+        if _n8n_long_disabled():
+            return _decision("direct_reply"), N8N_AUTO_QUEUE_DISABLED_REPLY
         is_gateway = channel_l in GATEWAY_ASYNC_CHANNELS
         do_queue = is_gateway and scope_ok
         task_id, notify_warning = create_async_draft(
@@ -725,6 +839,7 @@ def resolve_decision(
             channel=channel_l,
             queue=do_queue,
             notify=do_queue,
+            **origin_kwargs,
         )
         if not task_id:
             return (
@@ -732,6 +847,16 @@ def resolve_decision(
                 fallback_reply + ASYNC_CREATE_FAILED_SUFFIX,
             )
         if do_queue:
+            if not task_runtime_is_queued(task_id):
+                return (
+                    _decision(
+                        "async_draft_created",
+                        task_id=task_id,
+                        queued=False,
+                        approval_required=True,
+                    ),
+                    TASK_NOT_QUEUED_REPLY,
+                )
             reply = gateway_async_reply(task_id, notify_warning=notify_warning)
         elif is_gateway:
             reply = fallback_reply + ASYNC_SCOPE_APPROVAL_SUFFIX.format(task_id=task_id)
@@ -1199,7 +1324,14 @@ def route_stream(raw: str):
         if isinstance(provider_usage, dict):
             usage = provider_usage
 
-    decision, reply_text = resolve_decision(mode, channel, ai_output, text, request_id)
+    decision, reply_text = resolve_decision(
+        mode,
+        channel,
+        ai_output,
+        text,
+        request_id,
+        origin=origin_from_metadata(metadata, request_id),
+    )
 
     append_message(conv_path, "user", text)
     append_message(conv_path, "assistant", reply_text)
@@ -1355,7 +1487,14 @@ def route(raw: str) -> Dict[str, Any]:
             prompt_chars=len(prompt),
         )
 
-    decision, reply_text = resolve_decision(mode, channel, ai_output, text, request_id)
+    decision, reply_text = resolve_decision(
+        mode,
+        channel,
+        ai_output,
+        text,
+        request_id,
+        origin=origin_from_metadata(metadata, request_id),
+    )
 
     append_message(conv_path, "user", text)
     append_message(conv_path, "assistant", reply_text)

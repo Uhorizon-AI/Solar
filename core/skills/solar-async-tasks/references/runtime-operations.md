@@ -132,7 +132,20 @@ bash core/skills/solar-async-tasks/scripts/add_notify.sh <task_id>
 
 This sets `notify_when: completed`.
 
-`complete.sh` calls `notify_if_configured.sh`; it uses `.env` values such as `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` when configured.
+`complete.sh` calls `notify_if_configured.sh`. Send happens only when `notify_when: completed` is set and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from `create.sh --metadata`; children created with bare `--queued` do not.
+
+Delivery failures are recorded on the task as `notify_status: failed`,
+`notify_error`, and `notify_attempted_at`; the notifier returns nonzero. A successful
+retry records `notify_status: delivered` and `notify_delivered: true`, so a later
+invocation skips delivery. Retry explicitly with
+`bash core/skills/solar-async-tasks/scripts/notify_if_configured.sh <task-file>`
+after resolving the failure. Automatic retry scheduling is not enabled.
+
+The executor also invokes the notifier after execution failure or timeout; cleanup
+failure uses the same path. Only tasks already carrying `notify_when: completed`
+are eligible, and the origin allowlist still applies. Failure messages are brief
+and omit execution details. The sender is resolved from the installation root;
+task data and environment remain in the workspace.
 
 ## Runtime Structure
 

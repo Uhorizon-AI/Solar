@@ -325,6 +325,130 @@ gateway_install_lock_trap() {
 }
 
 # ---------------------------------------------------------------------------
+# Telegram webhook (boolean; OWNER is migration-only)
+# ---------------------------------------------------------------------------
+
+_gateway_trim_lower() {
+  printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]'
+}
+
+# Effective claim: true | false | "" (absent). Only true may call setWebhook.
+# Reads SOLAR_GATEWAY_CLAIM_TELEGRAM only. No OWNER / SOLAR_TELEGRAM_WEBHOOK fallback.
+gateway_telegram_claim() {
+  printf '%s' "$(_gateway_trim_lower "${SOLAR_GATEWAY_CLAIM_TELEGRAM:-}")"
+}
+
+gateway_telegram_claim_label() {
+  local flag
+  flag="$(gateway_telegram_claim)"
+  if [[ -z "$flag" ]]; then
+    printf '%s' "absent"
+  else
+    printf '%s' "$flag"
+  fi
+}
+
+# 0 if claim is usable by setup: true, false, or absent. Any other value → 1.
+gateway_telegram_claim_valid() {
+  local flag
+  flag="$(gateway_telegram_claim)"
+  [[ -z "$flag" || "$flag" == "true" || "$flag" == "false" ]]
+}
+
+# HTTP routes mounted under SOLAR_HTTP_WEBHOOK_BASE. telegram only if a bot token exists.
+gateway_http_channels_label() {
+  if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+    printf '%s' "n8n, telegram"
+  else
+    printf '%s' "n8n"
+  fi
+}
+
+gateway_telegram_expected_url() {
+  local base="" base_path
+  if [[ -n "${SOLAR_CLOUDFLARED_HOSTNAME:-}" && "${SOLAR_CLOUDFLARED_HOSTNAME:-}" != "REPLACE_ME" ]]; then
+    base="https://${SOLAR_CLOUDFLARED_HOSTNAME}"
+  fi
+  if [[ -z "$base" ]]; then
+    return 1
+  fi
+  base_path="${SOLAR_HTTP_WEBHOOK_BASE:-/webhook}"
+  printf '%s' "${base}${base_path%/}/telegram"
+}
+
+gateway_telegram_live_url() {
+  local info_json
+  if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+    return 1
+  fi
+  info_json="$(curl -fsS --connect-timeout 5 --max-time 10 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo")" || return 1
+  printf '%s' "$info_json" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+result = data.get("result")
+if data.get("ok") is not True or not isinstance(result, dict) or not isinstance(result.get("url"), str):
+    sys.exit(1)
+print(result["url"])
+'
+}
+
+# setup/ensure: never roll back the gateway because a foreign webhook exists.
+# Returns 1 only when claim=true and setWebhook/verify of Solar's URL fails.
+gateway_telegram_lifecycle_setup() {
+  local flag live expected
+  flag="$(gateway_telegram_claim)"
+  if ! gateway_telegram_claim_valid; then
+    echo "preflight: invalid SOLAR_GATEWAY_CLAIM_TELEGRAM=${SOLAR_GATEWAY_CLAIM_TELEGRAM:-} (expected true|false or absent)" >&2
+    return 1
+  fi
+  expected="$(gateway_telegram_expected_url || true)"
+  live=""
+  if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+    if ! live="$(gateway_telegram_live_url)"; then
+      echo "Telegram webhook ownership could not be verified; skipping setWebhook." >&2
+      return 0
+    fi
+  fi
+
+  if [[ "$flag" != "true" ]]; then
+    if [[ "$flag" == "false" ]]; then
+      echo "SOLAR_GATEWAY_CLAIM_TELEGRAM=false — skipping setWebhook."
+    else
+      echo "SOLAR_GATEWAY_CLAIM_TELEGRAM unset — not claiming."
+    fi
+    return 0
+  fi
+
+  if [[ -n "$live" && -n "$expected" && "$live" != "$expected" ]]; then
+    echo "Telegram webhook already points elsewhere — not claiming it."
+    echo "Do not set SOLAR_GATEWAY_CLAIM_TELEGRAM=true while a foreign URL is live."
+    return 0
+  fi
+
+  if [[ "${SOLAR_GATEWAY_FORCE_TELEGRAM_FAIL:-}" == "1" ]]; then
+    echo "SOLAR_GATEWAY_FORCE_TELEGRAM_FAIL=1 — simulating setWebhook failure." >&2
+    return 1
+  fi
+  bash "$(transport_gateway_script set_telegram_webhook.sh)" || return 1
+  bash "$(transport_gateway_script verify_telegram_webhook.sh)" || return 1
+  return 0
+}
+
+gateway_n8n_webhook_secret_sha256() {
+  local secret="${SOLAR_N8N_WEBHOOK_SECRET:-}"
+  if [[ -z "$secret" ]]; then
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$secret" | shasum -a 256 | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$secret" | sha256sum | awk '{print $1}'
+  else
+    printf '%s' "$secret" | cksum | awk '{print $1}'
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Fingerprint / stamp / fail
 # ---------------------------------------------------------------------------
 
@@ -349,12 +473,13 @@ SOLAR_TUNNEL_MODE
 SOLAR_CLOUDFLARED_TUNNEL_NAME
 SOLAR_CLOUDFLARED_HOSTNAME
 SOLAR_CLOUDFLARED_CONFIG
+SOLAR_GATEWAY_CLAIM_TELEGRAM
 EOF
 }
 
 gateway_collect_fingerprint_material() {
   transport_gateway_bind_workspace
-  local key val lines=""
+  local key val lines="" secret_fp=""
   while IFS= read -r key; do
     [[ -z "$key" ]] && continue
     eval "val=\${$key:-}"
@@ -367,6 +492,10 @@ gateway_collect_fingerprint_material() {
     eval "val=\${$key:-}"
     lines+="${key}=${val}"$'\n'
   done < <( (compgen -e 2>/dev/null || true) | grep -E '^SOLAR_ROUTER_[A-Z0-9]+_CMD$' | sort || true)
+
+  # Derived: hash of n8n webhook secret (never plaintext). Empty when unset.
+  secret_fp="$(gateway_n8n_webhook_secret_sha256 || true)"
+  lines+="SOLAR_N8N_WEBHOOK_SECRET_SHA256=${secret_fp}"$'\n'
 
   printf '%s' "$lines" | sort
 }
@@ -663,6 +792,12 @@ gateway_preflight() {
   if ! gateway_compute_fingerprint >/dev/null; then
     echo "preflight: failed to compute fingerprint" >&2
     return 1
+  fi
+
+  # Telegram claim: true|false or absent. No OWNER / SOLAR_TELEGRAM_WEBHOOK fallback.
+  if ! gateway_telegram_claim_valid; then
+    echo "preflight: invalid SOLAR_GATEWAY_CLAIM_TELEGRAM=${SOLAR_GATEWAY_CLAIM_TELEGRAM:-} (expected true|false or absent)" >&2
+    err=1
   fi
 
   # Provider tokens ⊆ supported set

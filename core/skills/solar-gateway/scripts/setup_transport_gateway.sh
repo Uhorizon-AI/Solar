@@ -246,17 +246,8 @@ fi
 
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
   set +e
-  # Test-only hook: force webhook failure after services started (rollback harness).
-  if [[ "${SOLAR_GATEWAY_FORCE_TELEGRAM_FAIL:-}" == "1" ]]; then
-    tg_set_code=1
-  else
-    bash "$(transport_gateway_script set_telegram_webhook.sh)" >/dev/null
-    tg_set_code=$?
-    if [[ "$tg_set_code" -eq 0 ]]; then
-      bash "$(transport_gateway_script verify_telegram_webhook.sh)" >/dev/null
-      tg_set_code=$?
-    fi
-  fi
+  gateway_telegram_lifecycle_setup
+  tg_set_code=$?
   set -e
   if [[ "$tg_set_code" -ne 0 ]]; then
     echo "❌ Telegram webhook set/verify failed — rolling back." >&2
@@ -269,6 +260,8 @@ gateway_write_stamp
 
 echo "Transport gateway setup completed."
 echo "Public URL: $public_url"
+echo "http_channels=$(gateway_http_channels_label)"
+echo "telegram_claim=$(gateway_telegram_claim_label)"
 echo "Processes:"
 echo "  ws pid: $(cat "$RUN_DIR/ws.pid")"
 echo "  http pid: $(cat "$RUN_DIR/http.pid")"

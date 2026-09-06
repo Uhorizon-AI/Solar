@@ -63,18 +63,39 @@ awk '
   { print }
 ' "$ROOT_ENV_FILE" >"$tmp"
 
-mv "$tmp" "$ROOT_ENV_FILE"
+insert_line="$(awk '
+  $0 ~ /^# \[solar-(gateway|transport-gateway|system)\] required environment$/ {
+    print NR
+    exit
+  }
+' "$tmp")"
 
+block_file="$(mktemp)"
 {
-  if [[ -s "$ROOT_ENV_FILE" ]]; then
-    printf '\n'
-  fi
   echo "$BLOCK_HEADER"
   echo "TELEGRAM_BOT_TOKEN=${token}"
   echo "TELEGRAM_CHAT_ID=${chat_id}"
   echo "TELEGRAM_PARSE_MODE=${parse_mode}"
   echo "TELEGRAM_DISABLE_PREVIEW=${disable_preview}"
-} >>"$ROOT_ENV_FILE"
+} >"$block_file"
+
+if [[ -n "$insert_line" ]]; then
+  : >"$ROOT_ENV_FILE"
+  if (( insert_line > 1 )); then
+    sed -n "1,$((insert_line - 1))p" "$tmp" >>"$ROOT_ENV_FILE"
+    printf '\n' >>"$ROOT_ENV_FILE"
+  fi
+  cat "$block_file" >>"$ROOT_ENV_FILE"
+  printf '\n' >>"$ROOT_ENV_FILE"
+  sed -n "${insert_line},\$p" "$tmp" >>"$ROOT_ENV_FILE"
+else
+  mv "$tmp" "$ROOT_ENV_FILE"
+  if [[ -s "$ROOT_ENV_FILE" ]]; then
+    printf '\n' >>"$ROOT_ENV_FILE"
+  fi
+  cat "$block_file" >>"$ROOT_ENV_FILE"
+fi
+rm -f "$block_file"
 
 echo ""
 echo "OK: wrote compact Telegram block in .env."

@@ -103,7 +103,8 @@ class TestDecisionEngine(unittest.TestCase):
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value=("tid-gateway", None))
-    def test_auto_telegram_parses_tags(self, mock_create):
+    @patch("router.task_runtime_is_queued", return_value=True)
+    def test_auto_telegram_parses_tags(self, _queued, mock_create):
         raw = (
             "- object: o\n- scope: s\n- effect: e\n"
             "ok<solar_decision>async_draft_created</solar_decision><solar_summary>x</solar_summary>"
@@ -292,6 +293,9 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
         self.assertIn("read/analysis", body.lower())
         self.assertIn("declared artifact", body.lower())
         self.assertIn("without asking to re-activate", body.lower())
+        self.assertIn("task-with-subtasks.md", body)
+        self.assertIn("create.sh --queued", body)
+        self.assertIn("Do **not** pass `--metadata`", body)
 
     def test_requires_approval_for_mutable_actions(self):
         body = router._gateway_task_body("envía el WhatsApp a Jorge", "n8n")
@@ -469,8 +473,9 @@ class TestRouteSuccessPaths(unittest.TestCase):
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value=("task-async-1", None))
+    @patch("router.task_runtime_is_queued", return_value=True)
     @patch("router.run_with_fallback")
-    def test_auto_telegram_async_tag(self, mock_run, mock_create):
+    def test_auto_telegram_async_tag(self, mock_run, _queued, mock_create):
         raw = (
             "- object: long report\n"
             "- scope: sun/plans/**\n"
@@ -499,7 +504,8 @@ class TestRouteSuccessPaths(unittest.TestCase):
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value=("task-n8n-1", None))
-    def test_resolve_decision_n8n_queues_and_acks(self, mock_create):
+    @patch("router.task_runtime_is_queued", return_value=True)
+    def test_resolve_decision_n8n_queues_and_acks(self, _queued, mock_create):
         raw = (
             "- object: plan\n"
             "- scope: sun/plans/**\n"
@@ -520,7 +526,8 @@ class TestRouteSuccessPaths(unittest.TestCase):
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value=("task-warn-1", "notify_failed"))
-    def test_resolve_decision_surfaces_notify_warning(self, _):
+    @patch("router.task_runtime_is_queued", return_value=True)
+    def test_resolve_decision_surfaces_notify_warning(self, _queued, _):
         raw = (
             "- object: audit\n"
             "- scope: sun/plans/**\n"
@@ -782,6 +789,84 @@ class TestProviderPriority(unittest.TestCase):
                 router._provider_priority(),
                 ["codex", "claude", "agy", "agent"],
             )
+
+
+class TestN8nOriginAndQueueGuards(unittest.TestCase):
+    @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks", "SOLAR_N8N_AUTO_QUEUE": "false"})
+    @patch("router.create_async_draft")
+    def test_n8n_auto_queue_false_skips_draft(self, mock_create):
+        raw = (
+            "- object: plan\n- scope: sun/plans/**\n- effect: file\n"
+            "<solar_decision>async_draft_created</solar_decision>"
+        )
+        decision, reply = router.resolve_decision(
+            "auto", "n8n", raw, "haz un plan largo", "req-off"
+        )
+        mock_create.assert_not_called()
+        self.assertEqual(decision["kind"], "direct_reply")
+        self.assertEqual(reply, router.N8N_AUTO_QUEUE_DISABLED_REPLY)
+        self.assertNotIn("sin encolar", reply)
+
+    @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
+    @patch("router.create_async_draft", return_value=("tid-half", None))
+    @patch("router.task_runtime_is_queued", return_value=False)
+    def test_failed_enqueue_does_not_ack(self, _queued, mock_create):
+        raw = (
+            "- object: plan\n- scope: sun/plans/**\n- effect: file\n"
+            "<solar_decision>async_draft_created</solar_decision>"
+        )
+        decision, reply = router.resolve_decision(
+            "auto",
+            "n8n",
+            raw,
+            "haz un plan largo",
+            "req-half",
+            origin={"channel": "telegram", "chat_id": "99", "request_id": "tg:1"},
+        )
+        self.assertFalse(decision.get("queued"))
+        self.assertNotEqual(reply, router.gateway_async_reply("tid-half"))
+        self.assertNotIn(router.GATEWAY_ASYNC_ACK, reply)
+        self.assertEqual(reply, router.TASK_NOT_QUEUED_REPLY)
+        kwargs = mock_create.call_args.kwargs
+        self.assertEqual(kwargs.get("origin_chat_id"), "99")
+        self.assertEqual(kwargs.get("origin_request_id"), "tg:1")
+
+    @patch("router.subprocess.run")
+    @patch("router._resolve_under_home")
+    def test_create_async_draft_passes_origin_flags(self, mock_resolve, mock_run):
+        create_script = MagicMock()
+        create_script.is_file.return_value = True
+        notify_script = MagicMock()
+        notify_script.is_file.return_value = True
+        mock_resolve.side_effect = lambda rel: (
+            create_script if "create.sh" in rel else notify_script
+        )
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout="ID: origin-1\n", stderr=""),
+            Mock(returncode=0, stdout="", stderr=""),
+        ]
+        task_id, warning = router.create_async_draft(
+            "haz informe",
+            "- object: o\n- scope: s\n- effect: e",
+            "tg:1",
+            channel="n8n",
+            queue=True,
+            notify=True,
+            origin_channel="telegram",
+            origin_chat_id="99",
+            origin_request_id="tg:1",
+        )
+        self.assertEqual(task_id, "origin-1")
+        self.assertIsNone(warning)
+        cmd = mock_run.call_args_list[0][0][0]
+        self.assertIn("--metadata", cmd)
+        meta_idx = cmd.index("--metadata")
+        meta = json.loads(cmd[meta_idx + 1])
+        self.assertEqual(meta.get("origin_channel"), "telegram")
+        self.assertEqual(meta.get("origin_chat_id"), "99")
+        self.assertEqual(meta.get("origin_request_id"), "tg:1")
+        title_idx = cmd.index("haz informe")
+        self.assertLess(meta_idx, title_idx)
 
 
 if __name__ == "__main__":

@@ -23,9 +23,11 @@ if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
   exit 0
 fi
 
-# Preserve caller overrides across `.env` sourcing (e.g. calendar-sync forces HTML).
+# Preserve caller overrides across `.env` sourcing (e.g. calendar-sync forces HTML;
+# async-tasks notify forces origin chat_id).
 _PRESERVE_PARSE_MODE="${TELEGRAM_PARSE_MODE-__UNSET__}"
 _PRESERVE_DISABLE_PREVIEW="${TELEGRAM_DISABLE_PREVIEW-__UNSET__}"
+_PRESERVE_CHAT_ID="${TELEGRAM_CHAT_ID-__UNSET__}"
 
 if [[ -f "$ROOT_ENV_FILE" ]]; then
   set -a
@@ -40,7 +42,10 @@ fi
 if [[ "$_PRESERVE_DISABLE_PREVIEW" != "__UNSET__" ]]; then
   TELEGRAM_DISABLE_PREVIEW="$_PRESERVE_DISABLE_PREVIEW"
 fi
-unset _PRESERVE_PARSE_MODE _PRESERVE_DISABLE_PREVIEW
+if [[ "$_PRESERVE_CHAT_ID" != "__UNSET__" ]]; then
+  TELEGRAM_CHAT_ID="$_PRESERVE_CHAT_ID"
+fi
+unset _PRESERVE_PARSE_MODE _PRESERVE_DISABLE_PREVIEW _PRESERVE_CHAT_ID
 
 for key in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
   if [[ -z "${!key:-}" ]]; then

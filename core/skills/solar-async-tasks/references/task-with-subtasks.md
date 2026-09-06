@@ -78,6 +78,7 @@ done
 - Do not write the final artifact in execution 1 — results are not available yet
 - Do not call `run_router.py` directly — it bypasses the worker and providers fail without auth
 - Do not touch any gate or state file in execution 1
+- Do not pass `--metadata` when creating children. Only the parent (created by the gateway with origin metadata) notifies. Bare `--queued` must not write `notify_when`.
 
 ## Execution 2 — synthesize
 

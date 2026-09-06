@@ -414,6 +414,15 @@ echo "INF https://tg-rollback-test.trycloudflare.com"
 while true; do sleep 1; done
 EOF
 chmod +x "$FAKE_BIN/cloudflared"
+cat >"$FAKE_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == *api.telegram.org* ]]; then
+  echo '{"ok":true,"result":{"url":""}}'
+else
+  exec /usr/bin/curl "$@"
+fi
+EOF
+chmod +x "$FAKE_BIN/curl"
 
 # Ensure free ports and clean run dir for this harness
 for p in 18765 18787; do
@@ -423,10 +432,29 @@ done
 rm -rf "$TMP/run"
 mkdir -p "$TMP/run"
 write_env "codex,claude"
-# Token present so setup enters the telegram block
+# Token present so setup enters the telegram block; true is required for FORCE fail
 echo "TELEGRAM_BOT_TOKEN=test-token-not-real" >>"$WS/.env"
+echo "SOLAR_GATEWAY_CLAIM_TELEGRAM=true" >>"$WS/.env"
 rebind
 
+# setup prepends its system PATH, so use exported functions for isolation.
+export FAKE_BIN
+curl() {
+  if [[ "$*" == *api.telegram.org* ]]; then
+    echo '{"ok":true,"result":{"url":""}}'
+  else
+    command curl "$@"
+  fi
+}
+nohup() {
+  if [[ "${1:-}" == cloudflared ]]; then
+    shift
+    command nohup "$FAKE_BIN/cloudflared" "$@"
+  else
+    command nohup "$@"
+  fi
+}
+export -f curl nohup
 set +e
 TG_OUT="$(
   PATH="$FAKE_BIN:$PATH" \
@@ -437,6 +465,7 @@ TG_OUT="$(
 )"
 TG_CODE=$?
 set -e
+unset -f curl nohup
 
 if [[ "$TG_CODE" -ne 0 ]]; then
   pass "telegram force-fail exits non-zero"
@@ -485,6 +514,172 @@ else
     fail "telegram rollback writes no success stamp"
   fi
 fi
+
+# --- Telegram claim / n8n secret fingerprint ---
+unset SOLAR_TELEGRAM_WEBHOOK_OWNER || true
+unset SOLAR_TELEGRAM_WEBHOOK || true
+unset SOLAR_GATEWAY_CLAIM_TELEGRAM || true
+unset SOLAR_N8N_WEBHOOK_SECRET || true
+unset TELEGRAM_BOT_TOKEN || true
+write_env "codex,claude"
+rebind
+assert_eq "default claim flag is absent" "$(gateway_telegram_claim)" ""
+assert_eq "default claim label is absent" "$(gateway_telegram_claim_label)" "absent"
+assert_eq "http channels without token" "$(gateway_http_channels_label)" "n8n"
+
+echo "SOLAR_TELEGRAM_WEBHOOK_OWNER=external" >>"$WS/.env"
+rebind
+assert_eq "OWNER is ignored" "$(gateway_telegram_claim)" ""
+
+grep -v '^SOLAR_TELEGRAM_WEBHOOK_OWNER=' "$WS/.env" >"$WS/.env.bak" || true
+mv "$WS/.env.bak" "$WS/.env"
+echo "SOLAR_TELEGRAM_WEBHOOK=true" >>"$WS/.env"
+rebind
+assert_eq "legacy SOLAR_TELEGRAM_WEBHOOK is ignored" "$(gateway_telegram_claim)" ""
+
+grep -v '^SOLAR_TELEGRAM_WEBHOOK=' "$WS/.env" >"$WS/.env.bak" || true
+mv "$WS/.env.bak" "$WS/.env"
+write_env "codex,claude"
+rebind
+FP_WH_BASE="$(gateway_compute_fingerprint)"
+echo "SOLAR_GATEWAY_CLAIM_TELEGRAM=false" >>"$WS/.env"
+rebind
+FP_WH_FALSE="$(gateway_compute_fingerprint)"
+if [[ "$FP_WH_BASE" != "$FP_WH_FALSE" ]]; then
+  pass "fingerprint changes when SOLAR_GATEWAY_CLAIM_TELEGRAM=false"
+else
+  fail "fingerprint changes when SOLAR_GATEWAY_CLAIM_TELEGRAM=false"
+fi
+
+grep -v '^SOLAR_GATEWAY_CLAIM_TELEGRAM=' "$WS/.env" >"$WS/.env.bak" || true
+mv "$WS/.env.bak" "$WS/.env"
+echo "SOLAR_GATEWAY_CLAIM_TELEGRAM=bogus" >>"$WS/.env"
+rebind
+if ! gateway_preflight >/dev/null 2>&1; then
+  pass "preflight fails on invalid SOLAR_GATEWAY_CLAIM_TELEGRAM"
+else
+  fail "preflight fails on invalid SOLAR_GATEWAY_CLAIM_TELEGRAM"
+fi
+
+grep -v '^SOLAR_GATEWAY_CLAIM_TELEGRAM=' "$WS/.env" >"$WS/.env.bak" || true
+mv "$WS/.env.bak" "$WS/.env"
+write_env "codex,claude"
+rebind
+
+FP_SEC_A_ENV="secret-value-aaaa-bbbb-cccc-dddd-eeee-ffff"
+FP_SEC_B_ENV="secret-value-1111-2222-3333-4444-5555-6666"
+grep -v '^SOLAR_N8N_WEBHOOK_SECRET=' "$WS/.env" >"$WS/.env.bak" || true
+mv "$WS/.env.bak" "$WS/.env"
+echo "SOLAR_N8N_WEBHOOK_SECRET=${FP_SEC_A_ENV}" >>"$WS/.env"
+rebind
+FP_SEC_A="$(gateway_compute_fingerprint)"
+SEC_HASH_A="$(gateway_n8n_webhook_secret_sha256)"
+grep -v '^SOLAR_N8N_WEBHOOK_SECRET=' "$WS/.env" >"$WS/.env.bak" || true
+mv "$WS/.env.bak" "$WS/.env"
+echo "SOLAR_N8N_WEBHOOK_SECRET=${FP_SEC_B_ENV}" >>"$WS/.env"
+rebind
+FP_SEC_B="$(gateway_compute_fingerprint)"
+SEC_HASH_B="$(gateway_n8n_webhook_secret_sha256)"
+if [[ -n "$SEC_HASH_A" && -n "$SEC_HASH_B" && "$SEC_HASH_A" != "$SEC_HASH_B" && "$FP_SEC_A" != "$FP_SEC_B" ]]; then
+  pass "fingerprint changes when n8n secret rotates"
+else
+  fail "fingerprint changes when n8n secret rotates"
+fi
+MATERIAL="$(gateway_collect_fingerprint_material)"
+if printf '%s' "$MATERIAL" | grep -Fq "$FP_SEC_B_ENV"; then
+  fail "fingerprint material excludes plaintext n8n secret"
+else
+  pass "fingerprint material excludes plaintext n8n secret"
+fi
+assert_contains "fingerprint material includes secret sha key" "$MATERIAL" "SOLAR_N8N_WEBHOOK_SECRET_SHA256="
+
+SET_TG="$CORE_ROOT/skills/solar-gateway/scripts/set_telegram_webhook.sh"
+grep -v '^SOLAR_GATEWAY_CLAIM_TELEGRAM=' "$WS/.env" >"$WS/.env.bak" || true
+mv "$WS/.env.bak" "$WS/.env"
+echo "SOLAR_GATEWAY_CLAIM_TELEGRAM=false" >>"$WS/.env"
+rebind
+SET_OUT="$(bash "$SET_TG" 2>&1)" && SET_CODE=0 || SET_CODE=$?
+if [[ "$SET_CODE" -eq 0 ]] && printf '%s' "$SET_OUT" | grep -qi "omitting setWebhook"; then
+  pass "set_telegram_webhook omits setWebhook when false"
+else
+  fail "set_telegram_webhook omits setWebhook when false"
+  echo "$SET_OUT" | sed 's/^/  /' >&2
+fi
+
+VERIFY_TG="$CORE_ROOT/skills/solar-gateway/scripts/verify_telegram_webhook.sh"
+STUB_BIN="$TMP/bin"
+mkdir -p "$STUB_BIN"
+cat >"$STUB_BIN/curl" <<'STUB'
+#!/usr/bin/env bash
+echo '{"ok":true,"result":{"url":"https://wrong.example/webhook/telegram","has_custom_certificate":false,"pending_update_count":0}}'
+STUB
+chmod +x "$STUB_BIN/curl"
+grep -v '^SOLAR_GATEWAY_CLAIM_TELEGRAM=' "$WS/.env" >"$WS/.env.bak" || true
+mv "$WS/.env.bak" "$WS/.env"
+echo "SOLAR_GATEWAY_CLAIM_TELEGRAM=true" >>"$WS/.env"
+echo "TELEGRAM_BOT_TOKEN=test-token" >>"$WS/.env"
+echo "SOLAR_CLOUDFLARED_HOSTNAME=solar-ai.uhorizon.ai" >>"$WS/.env"
+echo "SOLAR_HTTP_WEBHOOK_BASE=/webhook" >>"$WS/.env"
+rebind
+SET_OUT="$(PATH="$STUB_BIN:$PATH" bash "$SET_TG" 2>&1)" && SET_CODE=0 || SET_CODE=$?
+if [[ "$SET_CODE" -ne 0 ]] && printf '%s' "$SET_OUT" | grep -qi "refusing setWebhook"; then
+  pass "set_telegram_webhook true + foreign URL exits 1"
+else
+  fail "set_telegram_webhook true + foreign URL exits 1"
+  echo "$SET_OUT" | sed 's/^/  /' >&2
+fi
+
+SETUP_LIB_OUT="$(
+  PATH="$STUB_BIN:$PATH" \
+  SOLAR_GATEWAY_CLAIM_TELEGRAM=true \
+  TELEGRAM_BOT_TOKEN=test-token \
+  SOLAR_CLOUDFLARED_HOSTNAME=solar-ai.uhorizon.ai \
+  SOLAR_HTTP_WEBHOOK_BASE=/webhook \
+  bash -c 'source "'"$LIB"'" && gateway_telegram_lifecycle_setup'
+)" && SETUP_LIB_CODE=0 || SETUP_LIB_CODE=$?
+if [[ "$SETUP_LIB_CODE" -eq 0 ]] && printf '%s' "$SETUP_LIB_OUT" | grep -qi "not claiming"; then
+  pass "setup lifecycle skips foreign URL without rollback"
+else
+  fail "setup lifecycle skips foreign URL without rollback"
+  echo "$SETUP_LIB_OUT" | sed 's/^/  /' >&2
+fi
+
+VERIFY_OUT="$(PATH="$STUB_BIN:$PATH" bash "$VERIFY_TG" 2>&1)" && VERIFY_CODE=0 || VERIFY_CODE=$?
+if [[ "$VERIFY_CODE" -ne 0 ]] && printf '%s' "$VERIFY_OUT" | grep -qi "mismatch"; then
+  pass "verify_telegram_webhook fails on URL mismatch"
+else
+  fail "verify_telegram_webhook fails on URL mismatch"
+  echo "$VERIFY_OUT" | sed 's/^/  /' >&2
+fi
+
+# A failed or malformed ownership lookup must never authorize setWebhook.
+for lookup_mode in network invalid api_error; do
+  cat >"$STUB_BIN/curl" <<'STUB'
+#!/usr/bin/env bash
+if [[ "$*" == *getWebhookInfo* ]]; then
+  case "$LOOKUP_MODE" in
+    network) exit 7 ;;
+    invalid) echo 'not-json' ;;
+    api_error) echo '{"ok":false,"description":"failure"}' ;;
+  esac
+else
+  echo called >>"$SET_CALLED"
+  echo '{"ok":true}'
+fi
+STUB
+  export LOOKUP_MODE="$lookup_mode" SET_CALLED="$TMP/set-called"
+  rm -f "$SET_CALLED"
+  assert_fail "setWebhook refuses $lookup_mode lookup" env PATH="$STUB_BIN:$PATH" bash "$SET_TG"
+  assert_ok "lifecycle survives $lookup_mode lookup" env PATH="$STUB_BIN:$PATH" \
+    SOLAR_GATEWAY_CLAIM_TELEGRAM=true TELEGRAM_BOT_TOKEN=test-token \
+    SOLAR_CLOUDFLARED_HOSTNAME=solar.example \
+    bash -c 'source "$1"; gateway_telegram_lifecycle_setup' bash "$LIB"
+  if [[ ! -f "$SET_CALLED" ]]; then pass "no setWebhook after $lookup_mode lookup"; else fail "unsafe claim"; fi
+done
+
+write_env "codex,claude"
+rebind
+rm -f "$(gateway_fail_path)"
 
 # --- priority smoke restoration must be strict ---
 SMOKE="$SCRIPT_DIR/smoke_priority_ensure.sh"
