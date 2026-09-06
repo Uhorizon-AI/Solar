@@ -75,7 +75,13 @@ bash core/skills/solar-gateway/scripts/ensure_transport_gateway.sh
 # Smoke: priority change → ensure → new process env (restores .env afterward)
 bash core/tests/skills/solar-gateway/smoke_priority_ensure.sh
 
-# Register and verify Telegram webhook
+# Unit lifecycle tests (OWNER, fingerprint, preflight, rollback)
+bash core/tests/skills/solar-gateway/test_gateway_lifecycle.sh
+
+# n8n auth / async poll tests
+uv run --project core/tests python -m pytest core/tests/skills/solar-gateway/test_http_n8n_auth.py -q
+
+# Register and verify Telegram webhook (OWNER=solar only; fails if OWNER=external)
 bash core/skills/solar-gateway/scripts/set_telegram_webhook.sh
 bash core/skills/solar-gateway/scripts/verify_telegram_webhook.sh
 
@@ -94,7 +100,14 @@ solar client sync
 - **No listener reuse:** setup fails if WS/HTTP ports are busy unless `--restart`.
 - **Stop** is the only kill path: ownership via bridge cmdline signatures + port/pid file; tunnel via `cloudflared.pid` + cmdline (no global cloudflared scan).
 - **Env stamp** lives at `$SOLAR_WORKSPACE/sun/runtime/gateway/env.stamp` (fingerprint of an allowlisted key set — not `.env` mtime). Missing stamp with live Solar bridges counts as drift.
-- **Drift / restart** runs a **non-destructive preflight** before stopping a healthy runtime. Preflight failure writes `env.fail` and leaves processes running. Provider tokens are validated against solar-router `PROVIDERS` (via `list_supported_providers.sh`), not a duplicated list.
+- Fingerprint includes `SOLAR_GATEWAY_CLAIM_TELEGRAM` and a derived `SOLAR_N8N_WEBHOOK_SECRET_SHA256` (never the secret in plaintext). Rotating the secret or changing the claim flag triggers drift → `ensure` restart.
+- **HTTP channels** (`SOLAR_HTTP_WEBHOOK_BASE/<channel>`): `n8n` always; `telegram` when `TELEGRAM_BOT_TOKEN` is set. Distinct from Bot API claim.
+- **Telegram claim** (`SOLAR_GATEWAY_CLAIM_TELEGRAM=true|false`, absent = do not claim):
+  - `false` or absent: setup/ensure skip `setWebhook` (exit 0). Outbound `sendMessage` is still allowed.
+  - `true`: register Solar's URL only when `getWebhookInfo` is empty or already Solar. A foreign URL is never claimed; setup continues (no rollback).
+  - No `SOLAR_TELEGRAM_WEBHOOK` / `OWNER` fallback.
+- **n8n auth** (`SOLAR_N8N_WEBHOOK_SECRET`): required. `POST /webhook/n8n` uses `Authorization: Bearer`. Unset secret → fail-closed `401`. Missing header → `401`; wrong token → `403` (constant-time compare). Generate with `openssl rand -base64 32`. HTTP 202 / `GET /webhook/n8n/result` are not part of the production contract.
+- **Drift / restart** runs a **non-destructive preflight** before stopping a healthy runtime. Preflight failure writes `env.fail` and leaves processes running. Provider tokens are validated against solar-router `PROVIDERS` (via `list_supported_providers.sh`), not a duplicated list. Invalid `SOLAR_GATEWAY_CLAIM_TELEGRAM` (not `true|false` or absent) fails preflight.
 - **Backoff:** repeated failures with the same fingerprint are throttled via `env.fail` (exponential, capped). After `GATEWAY_FAIL_ATTEMPTS_CAP` (default 5) failures with the same fingerprint, ensure **stops retrying** until the fingerprint changes (fix `.env` or remove `env.fail`). A fingerprint change resets backoff.
 - **mkdir-lock** (portable, no `flock`) at `sun/runtime/gateway/lock/` serializes ensure/setup/stamp writes. Distinct from the solar-system orchestrator lock. Dead or recycled lock PIDs are reclaimed.
 
@@ -113,6 +126,16 @@ For host-level orchestration through one LaunchAgent, enable this feature in:
 ```dotenv
 # [solar-system] required environment
 SOLAR_SYSTEM_FEATURES=transport-gateway
+```
+
+Telegram / n8n gateway (examples):
+
+```dotenv
+# n8n owns the Telegram webhook (this host). Absent or false: do not claim.
+# SOLAR_GATEWAY_CLAIM_TELEGRAM=false
+SOLAR_N8N_WEBHOOK_SECRET=<openssl rand -base64 32>
+# Solar registers /webhook/telegram only when getWebhookInfo is empty or already Solar:
+# SOLAR_GATEWAY_CLAIM_TELEGRAM=true
 ```
 
 Or combined with async tasks:
@@ -136,13 +159,14 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 
 ## Workflow
 
-1. Run `setup_transport_gateway.sh` as default end-to-end flow (writes `env.stamp` on success).
-2. After editing watched `.env` keys, either wait for the next `ensure_transport_gateway.sh` tick or run `setup_transport_gateway.sh --restart`.
+1. Run `setup_transport_gateway.sh` as default end-to-end flow (writes `env.stamp` on success; prints `http_channels=` and `telegram_claim=`).
+2. After editing watched `.env` keys (including `SOLAR_GATEWAY_CLAIM_TELEGRAM` or n8n secret), either wait for the next `ensure_transport_gateway.sh` tick or run `setup_transport_gateway.sh --restart`.
 3. Preview stop candidates with `stop_transport_gateway.sh --dry-run` before a manual restart.
 4. If needed, run `setup_transport_gateway.sh --prepare-only` to stop before long-running services.
 5. For stable DNS, configure named tunnel with `configure_named_tunnel.sh` and set `SOLAR_TUNNEL_MODE=named`.
-6. All AI execution and routing policy is delegated to **solar-router** (`core/skills/solar-router/scripts/run_router.py`). This skill does not select providers or implement fallback.
-7. Use individual scripts only for troubleshooting or partial reconfiguration.
+6. With `SOLAR_GATEWAY_CLAIM_TELEGRAM` absent/`false` (or a foreign URL already present), setup does **not** register the Telegram webhook.
+7. All AI execution and routing policy is delegated to **solar-router** (`core/skills/solar-router/scripts/run_router.py`). This skill does not select providers or implement fallback.
+8. Use individual scripts only for troubleshooting or partial reconfiguration.
 
 ## Dependency policy
 
@@ -180,9 +204,10 @@ Outbound `response` (WS bridge — router v3 JSON + envelope):
 - `error`: human-readable error detail
 
 HTTP bridge channel mapping:
-- Telegram inbound → `channel=telegram`, `mode=auto`
-- n8n inbound → `channel=n8n`, `mode=auto`
-- n8n response: router v3 JSON exposed directly (no legacy double-wrapper)
+- Telegram inbound → `channel=telegram`, `mode=auto` (only when Solar registered the webhook)
+- n8n inbound → `channel=n8n`, `mode=auto`; require `Authorization: Bearer` (`SOLAR_N8N_WEBHOOK_SECRET`). Unset secret → fail-closed `401`
+- n8n production contract: one synchronous `POST /webhook/n8n`. HTTP 202, `SOLAR_N8N_DEFAULT_ASYNC`, and `GET /webhook/n8n/result` return `status: failed` (no poll)
+- n8n response: router v3 JSON exposed directly (no legacy double-wrapper). Replay uses `$SOLAR_GATEWAY_RUN_DIR/n8n-jobs/`
 
 ## References
 

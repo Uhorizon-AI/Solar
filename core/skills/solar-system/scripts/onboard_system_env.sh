@@ -64,16 +64,7 @@ awk '
 ' "$ROOT_ENV_FILE" >"$tmp"
 mv "$tmp" "$ROOT_ENV_FILE"
 
-insert_line="$(
-  awk -v block="$BLOCK_HEADER" '
-    $0 ~ /^# \[[^]]+\] required environment$/ {
-      if ($0 > block) {
-        print NR
-        exit
-      }
-    }
-  ' "$ROOT_ENV_FILE"
-)"
+insert_line=""
 
 tmp="$(mktemp)"
 if [[ -n "$insert_line" ]]; then

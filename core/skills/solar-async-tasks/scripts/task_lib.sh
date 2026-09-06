@@ -153,6 +153,79 @@ extract_meta() {
     ( grep "^$key:" "$file" 2>/dev/null || true ) | sed "s/^$key: //" | tr -d '"' | head -n1
 }
 
+# Insert or replace a YAML frontmatter key (before the closing ---).
+upsert_frontmatter_key() {
+    local file="$1"
+    local key="$2"
+    local value="$3"
+    local tmp
+    [[ -f "$file" ]] || return 1
+    if grep -q "^${key}:" "$file" 2>/dev/null; then
+        tmp="${file}.meta.tmp"
+        awk -v k="$key" -v v="$value" '
+            BEGIN { done=0 }
+            $0 ~ "^" k ":" && !done { print k ": " v; done=1; next }
+            { print }
+        ' "$file" >"$tmp" && mv "$tmp" "$file"
+        return 0
+    fi
+    awk -v k="$key" -v v="$value" '
+        /^---$/ && ++count == 2 && !done {
+            print k ": " v
+            done = 1
+        }
+        { print }
+    ' "$file" >"${file}.meta.tmp" && mv "${file}.meta.tmp" "$file"
+}
+
+telegram_chat_allowed() {
+    local chat_id="$1"
+    local allowed default part
+    [[ -n "$chat_id" ]] || return 1
+    allowed="${TELEGRAM_ALLOWED_CHAT_IDS:-}"
+    if [[ -n "$allowed" ]]; then
+        IFS=',' read -r -a parts <<<"$allowed"
+        for part in "${parts[@]}"; do
+            part="${part#"${part%%[![:space:]]*}"}"
+            part="${part%"${part##*[![:space:]]}"}"
+            [[ "$part" == "$chat_id" ]] && return 0
+        done
+        return 1
+    fi
+    default="${TELEGRAM_CHAT_ID:-}"
+    [[ -n "$default" && "$default" == "$chat_id" ]]
+}
+
+# Brief location/URL for completion notify (frontmatter or first path/URL in ## Result).
+task_result_location() {
+    local file="$1"
+    local loc line in_result=0
+    loc="$(extract_meta "$file" "result_url")"
+    [[ -n "$loc" ]] && { printf '%s\n' "$loc"; return 0; }
+    loc="$(extract_meta "$file" "result_path")"
+    [[ -n "$loc" ]] && { printf '%s\n' "$loc"; return 0; }
+    while IFS= read -r line; do
+        if [[ "$line" == "## Result"* ]]; then
+            in_result=1
+            continue
+        fi
+        if [[ "$in_result" -eq 1 && "$line" == "## "* ]]; then
+            break
+        fi
+        if [[ "$in_result" -eq 1 ]]; then
+            if printf '%s' "$line" | grep -Eo 'https?://[^[:space:])]+' >/dev/null 2>&1; then
+                printf '%s\n' "$(printf '%s' "$line" | grep -Eo 'https?://[^[:space:])]+' | head -n1)"
+                return 0
+            fi
+            if printf '%s' "$line" | grep -Eo '`[^`]+`' >/dev/null 2>&1; then
+                printf '%s\n' "$(printf '%s' "$line" | grep -Eo '`[^`]+`' | head -n1 | tr -d '`')"
+                return 0
+            fi
+        fi
+    done <"$file"
+    printf '%s\n' "$file"
+}
+
 # Extract created timestamp as epoch for sorting
 # Tries ISO8601 parsing, falls back to file mtime
 created_epoch() {
@@ -259,6 +332,86 @@ weekdays_display() {
         esac
     done
     echo "${out%,}"
+}
+
+# Run a command with a portable timeout.
+# Usage: run_with_timeout <seconds> <command> [args...]
+# Exit codes:
+#   0       — command succeeded
+#   1-123, 125-255 — command's real exit status (preserved; not remapped)
+#   124     — timeout (GNU timeout/gtimeout parity)
+#   2       — invalid <seconds> or missing command
+# Ambiguity: if the command itself exits 124, callers cannot distinguish that
+# from a wrapper timeout. complete.sh treats any non-zero (including 124) as
+# cleanup_failed — same operational path.
+run_with_timeout() {
+    local secs="${1:-}"
+    shift || true
+
+    if [[ -z "$secs" || ! "$secs" =~ ^[1-9][0-9]*$ ]]; then
+        echo "run_with_timeout: invalid duration '$secs' (need positive integer)" >&2
+        return 2
+    fi
+    if [[ $# -lt 1 ]]; then
+        echo "run_with_timeout: missing command" >&2
+        return 2
+    fi
+
+    if command -v gtimeout &>/dev/null; then
+        gtimeout "$secs" "$@"
+        return $?
+    fi
+    if command -v timeout &>/dev/null; then
+        timeout "$secs" "$@"
+        return $?
+    fi
+
+    # Pure-bash fallback (Bash 3.2 / macOS without GNU coreutils).
+    # Under set -m / command substitution, killing only the watchdog subshell does
+    # not interrupt its sleep child — wait would block for the full timeout.
+    # Kill the watchdog process group (PGID == killer_pid) so sleep dies immediately.
+    local prev_opts=$-
+    local marker child_pid killer_pid exit_code=0
+    marker="$(mktemp "${TMPDIR:-/tmp}/solar-rwt.XXXXXX")" || return 2
+    rm -f "$marker"
+
+    set -m
+    "$@" &
+    child_pid=$!
+    (
+        sleep "$secs"
+        if kill -0 "$child_pid" 2>/dev/null; then
+            printf '1' > "$marker"
+            kill -- -"$child_pid" 2>/dev/null || kill "$child_pid" 2>/dev/null || true
+        fi
+    ) &
+    killer_pid=$!
+
+    set +e
+    wait "$child_pid" 2>/dev/null
+    exit_code=$?
+    kill -TERM -"$killer_pid" 2>/dev/null || kill -TERM "$killer_pid" 2>/dev/null || true
+    kill -KILL -"$killer_pid" 2>/dev/null || kill -KILL "$killer_pid" 2>/dev/null || true
+    wait "$killer_pid" 2>/dev/null || true
+
+    # Restore shell options touched here (monitor + errexit)
+    if [[ "$prev_opts" == *m* ]]; then
+        set -m
+    else
+        set +m
+    fi
+    if [[ "$prev_opts" == *e* ]]; then
+        set -e
+    else
+        set +e
+    fi
+
+    if [[ -f "$marker" ]]; then
+        rm -f "$marker"
+        return 124
+    fi
+    rm -f "$marker"
+    return "$exit_code"
 }
 
 # Get timeout command (macOS compatibility)

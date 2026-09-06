@@ -86,6 +86,7 @@ if [[ "$cleanup_required" == "true" ]]; then
 
         mv "$TASK_FILE" "$ERROR_FILE"
         rm -f "${TASK_FILE}.bak"
+        bash "$SCRIPT_DIR/notify_if_configured.sh" "$ERROR_FILE" || true
         echo "❌ Task moved to error/ due to cleanup failure: $TASK_ID"
         exit 1
     fi

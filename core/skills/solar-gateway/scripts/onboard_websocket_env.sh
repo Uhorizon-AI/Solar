@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_ENV_FILE=".env"
-BLOCK_HEADER="# [solar-transport-gateway] required environment"
+BLOCK_HEADER="# [solar-gateway] required environment"
 
 if [[ ! -f "$ROOT_ENV_FILE" ]]; then
   touch "$ROOT_ENV_FILE"
@@ -35,6 +35,15 @@ tunnel_mode="quick"
 tunnel_name="solar-gateway"
 tunnel_hostname="REPLACE_ME"
 tunnel_config="${HOME}/.cloudflared/solar-gateway.yml"
+telegram_claim=""
+n8n_webhook_secret=""
+
+if existing="$(read_key "SOLAR_GATEWAY_CLAIM_TELEGRAM")"; then
+  telegram_claim="$existing"
+fi
+if existing="$(read_key "SOLAR_N8N_WEBHOOK_SECRET")"; then
+  n8n_webhook_secret="$existing"
+fi
 
 if existing="$(read_key "SOLAR_WS_HOST")"; then ws_host="$existing"; fi
 if existing="$(read_key "SOLAR_WS_PORT")"; then ws_port="$existing"; fi
@@ -66,8 +75,13 @@ awk '
   $0 ~ /^SOLAR_CLOUDFLARED_TUNNEL_NAME=/ { next }
   $0 ~ /^SOLAR_CLOUDFLARED_HOSTNAME=/ { next }
   $0 ~ /^SOLAR_CLOUDFLARED_CONFIG=/ { next }
+  $0 ~ /^SOLAR_TELEGRAM_WEBHOOK_OWNER=/ { next }
+  $0 ~ /^SOLAR_TELEGRAM_WEBHOOK=/ { next }
+  $0 ~ /^SOLAR_GATEWAY_CLAIM_TELEGRAM=/ { next }
+  $0 ~ /^SOLAR_N8N_WEBHOOK_SECRET=/ { next }
   # Legacy cleanup: remove deprecated transport flag if present.
   $0 ~ /^SOLAR_ENABLE_DIRECT_TELEGRAM_REPLY=/ { next }
+  $0 ~ /^# \[solar-gateway\] required environment$/ { next }
   $0 ~ /^# \[solar-transport-gateway\] required environment$/ { next }
   { print }
 ' "$WORK_ENV_FILE" >"$tmp"
@@ -95,12 +109,10 @@ awk '
 mv "$tmp" "$WORK_ENV_FILE"
 
 insert_line="$(
-  awk -v block="$BLOCK_HEADER" '
-    $0 ~ /^# \[[^]]+\] required environment$/ {
-      if ($0 > block) {
-        print NR
-        exit
-      }
+  awk '
+    $0 ~ /^# \[solar-system\] required environment$/ {
+      print NR
+      exit
     }
   ' "$WORK_ENV_FILE"
 )"
@@ -121,6 +133,9 @@ if [[ -n "$insert_line" ]]; then
   echo "SOLAR_CLOUDFLARED_TUNNEL_NAME=${tunnel_name}" >>"$tmp"
   echo "SOLAR_CLOUDFLARED_HOSTNAME=${tunnel_hostname}" >>"$tmp"
   echo "SOLAR_CLOUDFLARED_CONFIG=${tunnel_config}" >>"$tmp"
+  [[ -n "$telegram_claim" ]] && echo "SOLAR_GATEWAY_CLAIM_TELEGRAM=${telegram_claim}" >>"$tmp"
+  [[ -n "$n8n_webhook_secret" ]] && echo "SOLAR_N8N_WEBHOOK_SECRET=${n8n_webhook_secret}" >>"$tmp"
+  printf '\n' >>"$tmp"
   sed -n "${insert_line},\$p" "$WORK_ENV_FILE" >>"$tmp"
 else
   cat "$WORK_ENV_FILE" >"$tmp"
@@ -138,6 +153,8 @@ else
   echo "SOLAR_CLOUDFLARED_TUNNEL_NAME=${tunnel_name}" >>"$tmp"
   echo "SOLAR_CLOUDFLARED_HOSTNAME=${tunnel_hostname}" >>"$tmp"
   echo "SOLAR_CLOUDFLARED_CONFIG=${tunnel_config}" >>"$tmp"
+  [[ -n "$telegram_claim" ]] && echo "SOLAR_GATEWAY_CLAIM_TELEGRAM=${telegram_claim}" >>"$tmp"
+  [[ -n "$n8n_webhook_secret" ]] && echo "SOLAR_N8N_WEBHOOK_SECRET=${n8n_webhook_secret}" >>"$tmp"
 fi
 mv "$tmp" "$WORK_ENV_FILE"
 
@@ -162,9 +179,9 @@ awk '
 mv "$tmp" "$WORK_ENV_FILE"
 
 if cmp -s "$WORK_ENV_FILE" "$ROOT_ENV_FILE"; then
-  echo "OK: solar-transport-gateway block already up to date in .env."
+  echo "OK: solar-gateway block already up to date in .env."
 else
   mv "$WORK_ENV_FILE" "$ROOT_ENV_FILE"
   WORK_ENV_FILE=""
-  echo "OK: wrote compact solar-transport-gateway block in .env."
+  echo "OK: wrote compact solar-gateway block in .env."
 fi
