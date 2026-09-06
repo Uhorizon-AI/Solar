@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-system): keep feature health-check timeouts isolated from async-task helpers so enabling `async-tasks,host` does not make `solar status` report `run_with_timeout: invalid duration 'bash'`.
+
 ## [0.22.0] - 2026-09-06
 
 ### Added
