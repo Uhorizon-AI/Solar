@@ -88,6 +88,19 @@ solar_global_core_dir() {
   printf '%s/core' "$root"
 }
 
+solar_classify_root() {
+  local runtime_root="$1"
+  local installed_root="$2"
+  local runtime_abs installed_abs
+  runtime_abs="$(_resolve_abs "$runtime_root" 2>/dev/null || printf '%s' "$runtime_root")"
+  installed_abs="$(_resolve_abs "$installed_root" 2>/dev/null || printf '%s' "$installed_root")"
+  if [[ -n "$installed_abs" && "$runtime_abs" == "$installed_abs" ]]; then
+    echo installed
+  else
+    echo development_checkout
+  fi
+}
+
 _resolve_manifest_core_source() {
   local ws="$1"
   local manifest=""

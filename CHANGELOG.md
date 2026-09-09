@@ -7,25 +7,19 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
-- feat(solar-app): add the canonical `/app` experience with conversations, linked work activity, system status/logs, planet artifact previews, and local dictation that fills the composer for review.
-- feat(solar-app): link local preparation requests to the canonical `solar-async-tasks` lifecycle and project run state, bounded logs, and `output.md` results into SQLite.
+- feat(solar-async-tasks): route stop requests through canonical task cancellation and report `cancelled` only after the managed process acknowledges termination.
 
 ### Changed
-- change(solar-app): make `/app` the only product interface, keep `/dashboard` for fleet administration, and retire `/work` and the scoped dashboard chat.
-- change(solar-app): make the `Escuchar` action detect message language locally and select an installed matching macOS voice, with locale and system-voice fallbacks.
-- change(solar-app): make the macOS menu Voice a single push-to-talk action with a HUD reply, and open `/app` and `/dashboard` in an app window instead of a generic browser.
-- change(solar-app): send `/app` conversation turns to solar-router as `channel=app` (`mode=auto`), the same contract as n8n, instead of a private Ollama conductor.
+- Show the effective `SOLAR_ROOT` and classify it as an installed root or development checkout in text and JSON status output.
+- Retain the existing App status, logs and activity shell as a read-only console on port 9000. Read canonical Markdown tasks and router audit records, including injected history, summary use and duration.
+- Require recent console and storage access checks for host availability. Report gateway failures and stale records with their causes and dates, separately from task execution failures.
+
+### Removed
+- App conversation APIs, SQLite conversation store and reconciliation worker; CLI chat and voice commands; macOS tray, HUD, dictation, TTS and Whisper integration.
+- Dashboard mutation and fleet surfaces. `/` and `/dashboard` now lead to the existing console at `/app`.
 
 ### Fixed
-- fix(solar-app): preserve live recordings during cleanup; only signal current-user SoX captures in Solar-owned paths when their parent is init/launchd. Leave processes with unverifiable identity untouched.
-- fix(solar-app): attach router tasks that already completed, failed, or were cancelled before the App received their ID; preserve existing links after task-file cleanup and reconcile results and completion notices once.
-- fix(solar-app): route stop requests through canonical async-task cancellation and report `cancelled` only after the managed process acknowledges termination.
-- fix(solar-app): return HTTP 410 from legacy `/api/chat` instead of creating a disposable thread outside the active conversation.
-- fix(solar-app): stop leftover SoX `rec` captures on Host/tray exit and before a new recording so an orphaned dictation cannot keep the microphone open.
-
-### Known limitations
-- The experimental `Escuchar` action currently reads only the first 400 characters through `speak_brief`; full-message playback and a stop control remain pending.
-- Local macOS speech still sounds robotic in user testing; automatic language selection does not constitute acceptance of voice naturalness.
+- fix(codex): invoke current Codex CLIs with `--sandbox workspace-write` instead of the removed `--full-auto` flag.
 
 ## [0.22.1] - 2026-09-06
 

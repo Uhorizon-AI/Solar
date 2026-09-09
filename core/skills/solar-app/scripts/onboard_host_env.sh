@@ -27,18 +27,6 @@ _resolve_app_host() {
   printf '%s' "127.0.0.1"
 }
 
-_resolve_app_port() {
-  local file="$1" v
-  for key in SOLAR_APP_PORT SOLAR_HOST_PORT SOLAR_INTERFACE_PORT; do
-    v="$(_read_env_key "$file" "$key")"
-    if [[ -n "$v" ]]; then
-      printf '%s' "$v"
-      return 0
-    fi
-  done
-  printf '%s' "9000"
-}
-
 _resolve_host_runtime_dir() {
   local file="$1" v
   v="$(_read_env_key "$file" "SOLAR_HOST_RUNTIME_DIR")"
@@ -50,7 +38,7 @@ _resolve_host_runtime_dir() {
 }
 
 APP_HOST="$(_resolve_app_host "$ENV_FILE")"
-APP_PORT="$(_resolve_app_port "$ENV_FILE")"
+APP_PORT=9000
 HOST_RUNTIME_DIR="$(_resolve_host_runtime_dir "$ENV_FILE")"
 
 tmp="$(mktemp)"
@@ -78,8 +66,3 @@ fi
 } >"$ENV_FILE"
 rm -f "$tmp"
 echo "OK: solar-app block written to .env"
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  echo ""
-  echo "Voice (dictation) — run once:"
-  echo "  solar app voice doctor"
-fi

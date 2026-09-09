@@ -115,4 +115,4 @@ Packaging backlog: `core/docs/packaging.md`
 |-------|-----|
 | **solar-client** | Manifest, bundle, IDE sync, install, **`solar` CLI entry** |
 | **solar-workspace** | Doctors `sun/` + `planets/` |
-| **solar-app** | Control plane UI/API + voice runtime |
+| **solar-app** | Read-only status, activity and execution logs on :9000 |

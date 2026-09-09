@@ -6,9 +6,6 @@ import json
 import os
 import subprocess
 import sys
-import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,14 +19,6 @@ from host_platform.paths import host_global_dir  # noqa: E402
 REGISTRY_DIR = host_global_dir()
 REGISTRY_FILE = REGISTRY_DIR / "workspaces.json"
 METRICS_FILE = REGISTRY_DIR / "host-metrics.jsonl"
-
-_FLEET_CACHE: dict[str, Any] = {"ts": 0.0, "payload": None}
-_FLEET_CACHE_TTL = 30.0
-
-
-def invalidate_fleet_cache() -> None:
-    global _FLEET_CACHE  # noqa: PLW0603
-    _FLEET_CACHE = {"ts": 0.0, "payload": None}
 
 _GOVERNANCE_PREFIXES = ("sun/", "planets/")
 _GOVERNANCE_ALLOWED_SUFFIXES = (".md", ".json")
@@ -50,9 +39,8 @@ def stable_hash(workspace: str) -> int:
     return int(proc.stdout.split()[0])
 
 
-def port_offsets(workspace: str) -> tuple[int, int]:
-    h = stable_hash(workspace)
-    return 9000 + h % 500, 8787 + h % 500
+def gateway_port(workspace: str) -> int:
+    return 8787 + stable_hash(workspace) % 500
 
 
 def legacy_daemon_port(workspace: str) -> int:
@@ -202,36 +190,6 @@ def remove_workspace(path: str, reg: dict[str, Any] | None = None) -> dict[str, 
     return data
 
 
-def _parse_workspace_env_file(workspace: str) -> dict[str, str]:
-    env_file = Path(workspace) / ".env"
-    out: dict[str, str] = {}
-    if not env_file.is_file():
-        return out
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        key = key.strip()
-        val = val.strip().strip('"').strip("'")
-        if key:
-            out[key] = val
-    return out
-
-
-def _app_port_from_env(workspace: str) -> int | None:
-    env = _parse_workspace_env_file(workspace)
-    for key in ("SOLAR_APP_PORT", "SOLAR_HOST_PORT", "SOLAR_INTERFACE_PORT"):
-        raw = env.get(key)
-        if raw is None:
-            continue
-        try:
-            return int(raw)
-        except ValueError:
-            return None
-    return None
-
-
 def solar_cli_for(workspace: str) -> str:
     ws = Path(workspace)
     candidates = [
@@ -250,117 +208,6 @@ def solar_cli_argv(workspace: str, *args: str) -> list[str]:
     if Path(solar_bin).is_file():
         return ["bash", solar_bin, *args]
     return [solar_bin, *args]
-
-
-def _fetch_json(url: str, method: str = "GET", timeout: float = 5.0) -> tuple[int, Any]:
-    req = urllib.request.Request(url, method=method, headers={"Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            return resp.status, json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        return exc.code, {"error": exc.reason}
-    except Exception as exc:  # noqa: BLE001
-        return 0, {"error": str(exc)}
-
-
-def workspace_health(workspace: str, timeout: float = 8.0) -> dict[str, Any]:
-    ws = _normalize_path(workspace)
-    if not Path(ws).is_dir():
-        return {"path": ws, "severity": "DOWN", "detail": "path missing"}
-
-    active = get_active_path()
-    if ws == active:
-        iface_base = "in-process"
-        try:
-            import host_interface as hi  # noqa: PLC0415
-
-            store = hi.get_store(ws)
-            ready, _ = store.readiness()
-            iface_ok = ready
-        except Exception:  # noqa: BLE001
-            iface_ok = False
-    else:
-        iface_base = "offline"
-        try:
-            import host_workspace_context as ctx  # noqa: PLC0415
-
-            iface_ok = ctx.legacy_interface_db_path(ws).is_file()
-        except Exception:  # noqa: BLE001
-            iface_ok = False
-
-    status_snip = ""
-    severity = "OK"
-    try:
-        proc = subprocess.run(
-            solar_cli_argv(ws, "status"),
-            cwd=ws,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        status_snip = (proc.stdout or proc.stderr or "")[:800]
-        if proc.returncode != 0:
-            severity = "WARN"
-    except Exception as exc:  # noqa: BLE001
-        status_snip = f"status error: {exc}"
-        severity = "WARN"
-    if not iface_ok and severity == "OK":
-        severity = "WARN"
-    return {
-        "path": ws,
-        "label": Path(ws).name,
-        "interface_base": iface_base,
-        "interface_ok": iface_ok,
-        "workspace_api_ok": iface_ok,
-        "severity": severity,
-        "status_snip": status_snip,
-    }
-
-
-def fleet_health(use_cache: bool = True) -> dict[str, Any]:
-    global _FLEET_CACHE  # noqa: PLW0603
-    now = time.time()
-    if use_cache and _FLEET_CACHE.get("payload") and now - float(_FLEET_CACHE["ts"]) < _FLEET_CACHE_TTL:
-        return _FLEET_CACHE["payload"]
-    reg = load_registry()
-    active = get_active_path(reg)
-    items = []
-    for ws in list_workspaces(reg):
-        if not ws.get("exists"):
-            items.append({**ws, "severity": "DOWN", "detail": "path missing"})
-            continue
-        h = workspace_health(ws["path"])
-        items.append({**ws, **h})
-    payload = {"active_path": active, "workspaces": items, "cached_at": _now_iso()}
-    _FLEET_CACHE = {"ts": now, "payload": payload}
-    return payload
-
-
-def list_async_jobs(workspace: str) -> list[dict[str, Any]]:
-    root = Path(workspace) / "sun/runtime/async-tasks"
-    jobs: list[dict[str, Any]] = []
-    for sub, state in (("queued", "queued"), ("running", "running"), ("failed", "failed")):
-        d = root / sub
-        if not d.is_dir():
-            continue
-        for f in sorted(d.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:30]:
-            try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                data = {"file": f.name}
-            jobs.append(
-                {
-                    "id": f.stem,
-                    "state": state,
-                    "file": str(f.relative_to(root)),
-                    "summary": data.get("summary") or data.get("title") or f.stem,
-                    "mtime": f.stat().st_mtime,
-                }
-            )
-    jobs.sort(key=lambda j: j.get("mtime", 0), reverse=True)
-    return jobs[:50]
 
 
 def _governance_rel_allowed(rel: str) -> bool:
@@ -415,56 +262,8 @@ def record_metric(event: str, detail: dict[str, Any] | None = None) -> None:
         fh.write(json.dumps(row) + "\n")
 
 
-def _host_base_url() -> str:
-    host = (
-        os.environ.get("SOLAR_APP_HOST")
-        or os.environ.get("SOLAR_HOST_HOST")
-        or os.environ.get("SOLAR_INTERFACE_HOST")
-        or "127.0.0.1"
-    )
-    port = (
-        os.environ.get("SOLAR_APP_PORT")
-        or os.environ.get("SOLAR_HOST_PORT")
-        or os.environ.get("SOLAR_INTERFACE_PORT")
-        or "9000"
-    )
-    return f"http://{host}:{port}"
-
-
-def switch_via_host_api(path: str, timeout: float = 10.0) -> bool:
-    """Switch active workspace on the running Host daemon (no-op if Host is down)."""
-    norm = _normalize_path(path)
-    if "/tmp/" in norm or "/T/tmp." in norm or "/var/folders/" in norm:
-        return False
-    base = _host_base_url()
-    code, _ = _fetch_json(f"{base}/health", timeout=min(timeout, 3.0))
-    if code != 200:
-        return False
-    body = json.dumps({"path": norm}).encode("utf-8")
-    req = urllib.request.Request(
-        f"{base}/api/workspaces/active",
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status == 200
-    except (urllib.error.URLError, OSError, TimeoutError):
-        return False
-
-
 def switch_active_workspace(path: str) -> str:
-    """Prefer live Host API when reachable; otherwise switch in this process."""
-    offline = os.environ.get("SOLAR_HOST_OFFLINE", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-    if not offline and switch_via_host_api(path):
-        active = get_active_path()
-        if active:
-            return active
+    """Switch the local registry and mounted workspace context."""
     import host_workspace_context as ctx  # noqa: PLC0415
 
     return ctx.switch_workspace(path)
@@ -474,7 +273,7 @@ def _cli() -> int:
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: host_registry.py {list|add|remove|use|active|json-fleet}", file=sys.stderr)
+        print("Usage: host_registry.py {list|add|remove|use|active|json-fleet|gateway-port}", file=sys.stderr)
         return 2
     cmd = sys.argv[1]
     if cmd == "list":
@@ -510,16 +309,13 @@ def _cli() -> int:
         print(get_active_path())
         return 0
     if cmd == "json-fleet":
-        print(json.dumps(fleet_health(use_cache=False), indent=2))
-        return 0
-    if cmd == "ports":
+        print("Fleet view is retired; open the console on :9000", file=sys.stderr)
+        return 2
+    if cmd == "gateway-port":
         if len(sys.argv) < 3:
-            print("Usage: host_registry.py ports <workspace>", file=sys.stderr)
+            print("Usage: host_registry.py gateway-port <workspace>", file=sys.stderr)
             return 2
-        ws = _normalize_path(sys.argv[2])
-        host = _app_port_from_env(ws) or port_offsets(ws)[0]
-        gw = port_offsets(ws)[1]
-        print(host, gw)
+        print(gateway_port(_normalize_path(sys.argv[2])))
         return 0
     print(f"Unknown command: {cmd}", file=sys.stderr)
     return 2

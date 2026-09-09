@@ -20,7 +20,7 @@ Provide one system-level control point for Solar runtime operations:
 - Orchestrate enabled features from `.env`:
   - `async-tasks`
   - `transport-gateway`
-  - `host` — Solar App on `:9000` (canonical human entry; in-process API + tray)
+  - `host` — Solar console on `:9000` (status, activity and execution logs)
 - Keep orchestration deterministic and non-overlapping.
 
 ## Required MCP

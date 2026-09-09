@@ -10,11 +10,5 @@ solar_app_apply_legacy_env() {
       export SOLAR_APP_HOST="${SOLAR_INTERFACE_HOST}"
     fi
   fi
-  if [[ -z "${SOLAR_APP_PORT:-}" ]]; then
-    if [[ -n "${SOLAR_HOST_PORT:-}" ]]; then
-      export SOLAR_APP_PORT="${SOLAR_HOST_PORT}"
-    elif [[ -n "${SOLAR_INTERFACE_PORT:-}" ]]; then
-      export SOLAR_APP_PORT="${SOLAR_INTERFACE_PORT}"
-    fi
-  fi
+  export SOLAR_APP_PORT=9000
 }

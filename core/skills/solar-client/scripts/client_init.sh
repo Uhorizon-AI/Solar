@@ -67,13 +67,14 @@ stable_hash() {
   printf '%s' "$1" | cksum | awk '{print $1}'
 }
 
-port_offsets() {
+gateway_port() {
   local h
   h="$(stable_hash "$WORKSPACE")"
-  echo "$((9000 + h % 500)) $((8787 + h % 500))"
+  echo "$((8787 + h % 500))"
 }
 
-read -r HOST_PORT HTTP_PORT < <(port_offsets)
+HOST_PORT=9000
+HTTP_PORT="$(gateway_port)"
 
 mkdir -p "$WORKSPACE/sun/preferences" "$WORKSPACE/sun/daily-log" "$WORKSPACE/planets" "$WORKSPACE/.solar"
 

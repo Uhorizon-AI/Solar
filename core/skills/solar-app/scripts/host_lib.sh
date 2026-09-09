@@ -9,9 +9,9 @@ source "$_CLIENT_SCRIPTS/resolve_solar_paths.sh"
 # shellcheck source=host_env_compat.sh
 source "$_HOST_LIB_DIR/host_env_compat.sh"
 
-solar_host_workspace_ports() {
+solar_host_workspace_gateway_port() {
   local ws="$1"
-  python3 "$_HOST_LIB_DIR/host_registry.py" ports "$ws"
+  python3 "$_HOST_LIB_DIR/host_registry.py" gateway-port "$ws"
 }
 
 solar_host_apply_active_registry() {
@@ -32,17 +32,12 @@ solar_host_load_env() {
     set +a
   fi
   solar_app_apply_legacy_env
-  if [[ -z "${SOLAR_APP_PORT:-}" || -z "${SOLAR_HTTP_PORT:-}" ]]; then
-    read -r _host_port _gw < <(solar_host_workspace_ports "$SOLAR_WORKSPACE")
-    if [[ -z "${SOLAR_APP_PORT:-}" ]]; then
-      export SOLAR_APP_PORT="${_host_port:-9000}"
-    fi
-    if [[ -z "${SOLAR_HTTP_PORT:-}" ]]; then
-      export SOLAR_HTTP_PORT="${_gw:-8787}"
-    fi
+  if [[ -z "${SOLAR_HTTP_PORT:-}" ]]; then
+    _gw="$(solar_host_workspace_gateway_port "$SOLAR_WORKSPACE")"
+    export SOLAR_HTTP_PORT="${_gw:-8787}"
   fi
   export SOLAR_APP_HOST="${SOLAR_APP_HOST:-127.0.0.1}"
-  export SOLAR_APP_PORT="${SOLAR_APP_PORT:-9000}"
+  export SOLAR_APP_PORT=9000
   export SOLAR_APP_BASE_URL="http://${SOLAR_APP_HOST}:${SOLAR_APP_PORT}"
   export SOLAR_HOST_RUNTIME_DIR="${SOLAR_HOST_RUNTIME_DIR:-sun/runtime/host}"
   export SOLAR_HOST_PID_FILE="$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR/host.pid"

@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/host_lib.sh"
 solar_host_load_env
 
-if bash "$SCRIPT_DIR/check_host.sh" --quiet; then
+if bash "$SCRIPT_DIR/check_host.sh" --liveness; then
   exit 0
 fi
 

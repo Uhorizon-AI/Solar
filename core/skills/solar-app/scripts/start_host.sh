@@ -9,7 +9,7 @@ PID_FILE="$SOLAR_HOST_PID_FILE"
 LOG_FILE="$RUNTIME/host.log"
 
 host_health_ok() {
-  curl -fsS --max-time 3 "$SOLAR_APP_BASE_URL/health" >/dev/null 2>&1
+  bash "$SCRIPT_DIR/check_host.sh" --liveness >/dev/null 2>&1
 }
 
 if [[ -f "$PID_FILE" ]]; then
@@ -47,8 +47,14 @@ if [[ ! -f "$SOLAR_CLI" ]] && [[ -f "$(solar_core_dir)/skills/solar-client/scrip
 fi
 
 : >>"$LOG_FILE"
-nohup python3 "$SCRIPT_DIR/host_server.py" >>"$LOG_FILE" 2>&1 &
-new_pid=$!
+new_pid="$(python3 - "$SCRIPT_DIR/host_server.py" "$LOG_FILE" <<'PYTHON'
+import subprocess,sys
+with open(sys.argv[2], 'ab', buffering=0) as log:
+    process = subprocess.Popen([sys.executable, '-u', sys.argv[1]], stdin=subprocess.DEVNULL,
+        stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+print(process.pid)
+PYTHON
+)"
 echo "$new_pid" >"$PID_FILE"
 
 ready=false
@@ -77,7 +83,3 @@ if [[ "$ready" != true ]]; then
 fi
 
 echo "OK: Solar Host started at $SOLAR_APP_BASE_URL (pid $new_pid, log $LOG_FILE)"
-
-if [[ "${SOLAR_HOST_TRAY:-}" == "1" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
-  python3 "$SCRIPT_DIR/host_platform/macos/launch.py" start-tray 2>/dev/null || true
-fi
