@@ -4,10 +4,10 @@
 
 | Layer | Path | Role |
 |---|---|---|
-| Ephemeral turns | `sun/runtime/router/conversations/*.jsonl` | Raw chat per conversation_id |
+| Ephemeral turns | `<runtime root>/router/conversations/*.jsonl` | Raw chat per conversation_id |
 | Rolling channel summary | `…/*-summary.txt` | Compact per-conversation continuity |
-| Canonical intention | `sun/runtime/continuity/active.json` | Cross-channel shared intention |
-| Machine tasks | `sun/runtime/async-tasks/` | Executable deferred work |
+| Canonical intention | `<runtime root>/continuity/active.json` | Cross-channel shared intention |
+| Machine tasks | `<runtime root>/async-tasks/` | Executable deferred work |
 | Human attention | `sun/daily-log/`, planet `operations/` | Blockers / commitments |
 | Stable memory | `sun/MEMORY.md` | Operational learnings only (not a task board) |
 | Plans | `sun/plans/` | Design / RFCs (not runtime state) |

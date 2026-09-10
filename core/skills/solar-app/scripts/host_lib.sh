@@ -39,14 +39,31 @@ solar_host_load_env() {
   export SOLAR_APP_HOST="${SOLAR_APP_HOST:-127.0.0.1}"
   export SOLAR_APP_PORT=9000
   export SOLAR_APP_BASE_URL="http://${SOLAR_APP_HOST}:${SOLAR_APP_PORT}"
-  export SOLAR_HOST_RUNTIME_DIR="${SOLAR_HOST_RUNTIME_DIR:-sun/runtime/host}"
-  export SOLAR_HOST_PID_FILE="$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR/host.pid"
+  # Host state is machine state: it lives under the framework runtime root,
+  # never inside the workspace. A relative override stays relative to the
+  # workspace for backward compatibility with explicit deployments.
+  if [[ -z "${SOLAR_HOST_RUNTIME_DIR:-}" ]]; then
+    # shellcheck source=/dev/null
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+    export SOLAR_HOST_RUNTIME_DIR="$(solar_runtime_dir host)"
+  fi
+  export SOLAR_HOST_PID_FILE="$(solar_host_runtime_path)/host.pid"
+}
+
+# Absolute host runtime dir (does not create it).
+solar_host_runtime_path() {
+  case "$SOLAR_HOST_RUNTIME_DIR" in
+    /*) printf '%s\n' "$SOLAR_HOST_RUNTIME_DIR" ;;
+    *)  printf '%s\n' "$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR" ;;
+  esac
 }
 
 solar_host_runtime_dir() {
   solar_host_load_env
-  mkdir -p "$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR"
-  printf '%s\n' "$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR"
+  local dir
+  dir="$(solar_host_runtime_path)"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
 }
 
 # PIDs listening on SOLAR_APP_HOST:SOLAR_APP_PORT (orphan recovery when host.pid is missing).

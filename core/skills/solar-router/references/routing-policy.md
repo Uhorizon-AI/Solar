@@ -69,7 +69,7 @@ Deprecated: `SOLAR_ROUTER_GEMINI_CMD` / `SOLAR_AI_GEMINI_CMD` are **not** read. 
 
 ## Conversation continuity keys
 
-- `SOLAR_ROUTER_RUNTIME_DIR` (default: `sun/runtime/router`), resolved against repo root if relative
+- `SOLAR_ROUTER_RUNTIME_DIR` (default: `<runtime root>/router`), resolved against repo root if relative
 - `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` (default: `core/skills/solar-router/assets/system_prompt.md`), resolved against repo root if relative
 - `SOLAR_ROUTER_CONTEXT_TURNS` (default: `12`)
 
@@ -144,9 +144,9 @@ To prevent JSON parsing errors (invalid control characters, unescaped newlines),
 
 ### Method A: Temporary JSON File (Recommended for Agents)
 
-1. Use `write_file` to create a temporary JSON file (e.g., `sun/runtime/router/request_<id>.json`).
+1. Use `write_file` to create a temporary JSON file (e.g., `<runtime root>/router/request_<id>.json`).
 2. Ensure the `text` field contains explicit `\n` for newlines.
-3. Execute the router piping the file: `python3 core/skills/solar-router/scripts/run_router.py < sun/runtime/router/request_<id>.json`.
+3. Execute the router piping the file: `python3 core/skills/solar-router/scripts/run_router.py < <runtime root>/router/request_<id>.json`.
 
 ### Method B: Heredoc with Single Quotes (Shell)
 
@@ -230,7 +230,7 @@ The router auto-generates a `router_id` (UUID v4) for every execution. This is t
 
 ## Audit log
 
-File: `sun/runtime/router/audit.jsonl`
+File: `<runtime root>/router/audit.jsonl`
 
 Two records are written per execution:
 

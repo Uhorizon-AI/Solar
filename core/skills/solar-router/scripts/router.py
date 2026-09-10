@@ -7,7 +7,7 @@ The thin run_router.py entrypoint handles stdin/stdout/exit.
 Architecture: thin dispatcher + decision extraction.
 - Each CLI loads repo context from cwd=SOLAR_WORKSPACE (CLAUDE.md, profile.md, MEMORY.md).
 - The router injects conversation continuity: rolling <solar_summary> plus recent turns
-  from sun/runtime/router/conversations/<id>.jsonl (SOLAR_ROUTER_CONTEXT_TURNS).
+  from <runtime root>/router/conversations/<id>.jsonl (SOLAR_ROUTER_CONTEXT_TURNS).
 - For mode=auto and channels telegram/n8n, the model emits <solar_decision> tags;
   the router parses them into decision.kind for transport consumers.
 """
@@ -31,6 +31,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from providers import PROVIDERS  # noqa: E402
+import solar_runtime  # noqa: E402
 from solar_paths import resolve_solar_paths, resolve_under_home as _resolve_under_home  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -71,10 +72,16 @@ MAX_CONTEXT_TURNS = parse_context_turns()
 _raw_runtime_dir = (
     os.getenv("SOLAR_ROUTER_RUNTIME_DIR")
     or os.getenv("SOLAR_RUNTIME_DIR")
-    or "sun/runtime/router"
+    or ""
 )
-_runtime_path = pathlib.Path(_raw_runtime_dir)
-RUNTIME_ROOT = _runtime_path if _runtime_path.is_absolute() else SOLAR_WORKSPACE / _runtime_path
+if _raw_runtime_dir:
+    _runtime_path = pathlib.Path(_raw_runtime_dir)
+    RUNTIME_ROOT = (
+        _runtime_path if _runtime_path.is_absolute() else SOLAR_WORKSPACE / _runtime_path
+    )
+else:
+    # Machine state lives outside the workspace. No fallback to sun/runtime.
+    RUNTIME_ROOT = solar_runtime.runtime_dir("router")
 
 _raw_system_prompt_file = (
     os.getenv("SOLAR_ROUTER_SYSTEM_PROMPT_FILE")

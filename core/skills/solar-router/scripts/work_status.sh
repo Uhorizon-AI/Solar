@@ -8,15 +8,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../solar-client/scripts/resolve_solar_paths.sh
 source "$SCRIPT_DIR/../../solar-client/scripts/resolve_solar_paths.sh"
 solar_resolve_paths --quiet
+# shellcheck source=../../solar-client/scripts/solar_runtime_paths.sh
+source "$SCRIPT_DIR/../../solar-client/scripts/solar_runtime_paths.sh"
 cd "$SOLAR_WORKSPACE"
 
+SOLAR_CONTINUITY_JSON="$(solar_runtime_dir continuity)/active.json"
+SOLAR_ASYNC_ROOT="$(solar_runtime_dir async-tasks)"
+export SOLAR_CONTINUITY_JSON SOLAR_ASYNC_ROOT
+
 echo "## Continuity"
-if [[ -f sun/runtime/continuity/active.json ]]; then
+if [[ -f "$SOLAR_CONTINUITY_JSON" ]]; then
   python3 - <<'PY'
 import json
 from pathlib import Path
 
-data = json.loads(Path("sun/runtime/continuity/active.json").read_text(encoding="utf-8"))
+import os
+
+data = json.loads(Path(os.environ["SOLAR_CONTINUITY_JSON"]).read_text(encoding="utf-8"))
 fields = [
     ("intention_id", "(none)"),
     ("active_task", "(none)"),
@@ -36,7 +44,7 @@ fi
 echo
 echo "## Async tasks (machine)"
 for state in drafts planned queued active error; do
-  dir="sun/runtime/async-tasks/$state"
+  dir="$SOLAR_ASYNC_ROOT/$state"
   if [[ -d "$dir" ]]; then
     count=$(find "$dir" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')
     echo "- $state: $count"

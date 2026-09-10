@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI for sun/runtime/continuity/active.json."""
+"""CLI for <runtime root>/continuity/active.json."""
 
 from __future__ import annotations
 
@@ -17,10 +17,11 @@ if str(_CLIENT) not in sys.path:
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
+import solar_runtime  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
 SOLAR_WORKSPACE, _ = resolve_solar_paths()
-ACTIVE = SOLAR_WORKSPACE / "sun" / "runtime" / "continuity" / "active.json"
+ACTIVE = solar_runtime.runtime_dir("continuity") / "active.json"
 
 
 def utc_now() -> str:

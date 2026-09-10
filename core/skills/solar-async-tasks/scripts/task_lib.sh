@@ -14,14 +14,14 @@ if [[ -z "${SOLAR_WORKSPACE:-}" ]]; then
   fi
 fi
 
+# Machine state lives outside the workspace. SOLAR_TASK_ROOT is the explicit
+# override; otherwise the queue derives from the framework runtime root. There
+# is no fallback to sun/runtime/async-tasks.
 if [[ -z "${SOLAR_TASK_ROOT:-}" ]]; then
-  if [[ -n "${SOLAR_WORKSPACE:-}" ]]; then
-    export SOLAR_TASK_ROOT="$SOLAR_WORKSPACE/sun/runtime/async-tasks"
-  elif [[ -d "$(pwd)/sun/runtime/async-tasks" ]]; then
-    export SOLAR_TASK_ROOT="$(pwd)/sun/runtime/async-tasks"
-  else
-    export SOLAR_TASK_ROOT="${HOME:-}/Sites/solar.ai/sun/runtime/async-tasks"
-  fi
+  _TASK_RUNTIME_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+  # shellcheck source=/dev/null
+  source "$_TASK_RUNTIME_LIB"
+  export SOLAR_TASK_ROOT="$(solar_runtime_dir async-tasks)"
 else
   export SOLAR_TASK_ROOT
 fi

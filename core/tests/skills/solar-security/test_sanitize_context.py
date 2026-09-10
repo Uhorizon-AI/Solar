@@ -44,8 +44,13 @@ def test_sanitize_reuses_existing_mapping():
     assert counts["EMAIL"] == 2
 
 
-def test_default_mapping_path_is_canonical():
-    assert str(mod.DEFAULT_MAPPING_PATH) == "sun/runtime/security-map.json"
+def test_default_mapping_path_lives_in_the_runtime_root():
+    """The security map is machine state: outside sun/, under the runtime root."""
+    path = mod.DEFAULT_MAPPING_PATH
+    assert path.is_absolute()
+    assert path.name == "security-map.json"
+    assert path.parent.name == "runtime"
+    assert "/sun/" not in str(path)
 
 
 def test_wrap_placeholders_for_markdown():

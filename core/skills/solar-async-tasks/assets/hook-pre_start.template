@@ -6,8 +6,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Import SOLAR_TASK_ROOT and DIR_LOCKS
-# Portable path: works if repo is moved as long as structure is preserved
-SOLAR_TASK_ROOT="${SOLAR_TASK_ROOT:-$HOME/Sites/solar.ai/sun/runtime/async-tasks}"
+# Absolute path written by install_hooks.sh: the queue lives outside the
+# Resolved by task_lib.sh from the framework runtime root when unset.
+# No hardcoded workspace path, no sun/runtime fallback.
 TASK_LIB="REPLACE_WITH_TASK_LIB_PATH"
 source "$TASK_LIB"
 

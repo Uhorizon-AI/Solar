@@ -23,8 +23,17 @@ class ConsoleTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.ws = Path(self.tmp.name)
-        runtime = self.ws / 'sun/runtime'
+        self.ws = Path(self.tmp.name) / 'workspace'
+        (self.ws / 'sun').mkdir(parents=True)
+        # Machine state lives outside the workspace: the console must read the
+        # runtime root, and must never look inside sun/.
+        app_data = Path(self.tmp.name) / 'AppData'
+        app_data.mkdir()
+        patcher = patch.dict(os.environ, {'SOLAR_APP_DATA': str(app_data)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        runtime = app_solar.runtime_dir()
+        self.runtime = runtime
         for name in ('async-tasks', 'router', 'gateway', 'continuity'):
             (runtime / name).mkdir(parents=True)
         for state in app_solar.TASK_STATES:
@@ -32,8 +41,12 @@ class ConsoleTests(unittest.TestCase):
         self.audit = runtime / 'router/audit.jsonl'
         self.audit.write_text('')
 
+    def assertWorkspaceUntouched(self):
+        """No machine state may appear inside sun/ while the console runs."""
+        self.assertEqual(sorted(p.name for p in (self.ws / 'sun').iterdir()), [])
+
     def task(self, state='error', extra='', body='## Execution Error\n- error: provider unavailable'):
-        p = self.ws / 'sun/runtime/async-tasks' / state / 'task.md'
+        p = self.runtime / 'async-tasks' / state / 'task.md'
         p.write_text('---\nid: task\ntitle: A task\ncreated: 2020-01-01T00:00:00Z\nprovider: codex\n'+extra+'---\n'+body)
         return p
 
@@ -44,7 +57,8 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual({t['state'] for t in data['tasks']}, set(app_solar.TASK_STATES))
         self.assertTrue(data['health']['storage_ok'])
         self.assertEqual(data['health']['status'], 'unverified')
-        self.assertFalse((self.ws/'sun/runtime/app').exists())
+        self.assertFalse((self.runtime/'app').exists())
+        self.assertWorkspaceUntouched()
         self.assertTrue(next(t for t in data['tasks'] if t['state']=='drafts')['stale'])
 
     def test_recurring_count_origin_and_outputs(self):
@@ -59,7 +73,7 @@ class ConsoleTests(unittest.TestCase):
 
     def test_task_log_reports_used_provider_not_requested_provider(self):
         self.task('completed')
-        logs = self.ws / 'sun/runtime/async-tasks/logs'
+        logs = self.runtime / 'async-tasks/logs'
         logs.mkdir()
         (logs/'task.log').write_text('- task_id: task\n- provider_used: agent\n## Result\nPrepared report')
         task = app_solar.read_tasks(self.ws)[0][0]
@@ -119,7 +133,7 @@ class ConsoleTests(unittest.TestCase):
             context.unmount()
 
     def test_gateway_failure_dates_and_stale_continuity(self):
-        runtime=self.ws/'sun/runtime'
+        runtime=self.runtime
         (runtime/'gateway/env.fail').write_text('reason=tunnel_recovery_failed\nfailed_at=1788787951\nexhausted=1\nattempts=5\nnext_retry_at=1820323951\n')
         (runtime/'continuity/active.json').write_text(json.dumps(dict(active_task='Incomplete intention',updated_at='2020-01-01T00:00:00Z')))
         data=app_solar.snapshot(self.ws)
@@ -129,11 +143,12 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn('2027',gateway['next_retry_at'])
         continuity=next(c for c in data['health']['components'] if c['component']=='continuity')
         self.assertTrue(continuity['stale'])
+        self.assertWorkspaceUntouched()
 
     def test_mount_never_creates_conversation_store(self):
         with patch.dict(os.environ,{},clear=False):
             context.mount(str(self.ws))
-            self.assertFalse((self.ws/'sun/runtime/app').exists())
+            self.assertFalse((self.runtime/'app').exists())
             context.unmount()
 
     def test_http_console_and_retired_routes(self):

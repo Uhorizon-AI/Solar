@@ -4,15 +4,35 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+_CLIENT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-client" / "scripts"
+if str(_CLIENT_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_CLIENT_SCRIPTS))
+
+import solar_runtime  # noqa: E402
 
 FRESH_SECONDS = 120
 STALE_SECONDS = 86400
 TASK_STATES = ('drafts', 'queued', 'active', 'error', 'completed', 'cancelled')
 PAGE_SIZE = 40
 _AUDIT_INDEX = {}
+
+
+def runtime_dir(*parts):
+    """Framework machine state. Never inside the workspace."""
+    return solar_runtime.runtime_dir(*parts)
+
+
+def display_path(path, workspace):
+    """Workspace-relative when it is inside the workspace, absolute otherwise."""
+    try:
+        return str(Path(path).relative_to(workspace))
+    except ValueError:
+        return str(path)
 
 
 def iso(timestamp=None):
@@ -73,7 +93,7 @@ def artifacts(text, data):
 
 
 def read_tasks(workspace):
-    root = workspace / 'sun/runtime/async-tasks'
+    root = runtime_dir('async-tasks')
     jobs, problems = [], []
     try:
         # A real directory read, not exists() or a process check.
@@ -110,7 +130,7 @@ def read_tasks(workspace):
                         timestamp=iso(stamp), created_at=data.get('created'),
                         provider=provider, provider_requested=data.get('provider'),
                         origin=data.get('origin_channel'), origin_thread_id=data.get('origin_thread_id'),
-                        artifacts=artifacts(text+'\n'+log_text, data), file=str(path.relative_to(workspace)),
+                        artifacts=artifacts(text+'\n'+log_text, data), file=display_path(path, workspace),
                         recurring=data.get('recurring') == 'true', recurring_run_count=data.get('recurring_run_count'),
                         recurring_last_run=data.get('recurring_last_run'),
                         stale=state == 'drafts' and created is not None and time.time()-created > STALE_SECONDS,
@@ -194,7 +214,7 @@ def read_router(workspace, limit=PAGE_SIZE, offset=0, state=None):
             if len(matches) >= wanted or len(candidates) < window:
                 return matches[offset:wanted], problems
             window *= 2
-    path = workspace / 'sun/runtime/router/audit.jsonl'
+    path = runtime_dir('router') / 'audit.jsonl'
     records, problems = {}, []
     try:
         lines = _audit_lines_from_tail(path, offset + limit)
@@ -233,7 +253,7 @@ def read_router(workspace, limit=PAGE_SIZE, offset=0, state=None):
             artifacts=result.get('artifacts') if isinstance(result.get('artifacts'), list) else [],
             history_turns=data.get('history_turns'), summary_used=data.get('summary_used'),
             duration_ms=data.get('duration_ms'), stale=not ended and age > FRESH_SECONDS,
-            file=str(path.relative_to(workspace)),
+            file=display_path(path, workspace),
         ))
     runs.sort(key=lambda row: epoch(row['timestamp']) or 0, reverse=True)
     return runs[offset:offset + limit], problems
@@ -243,14 +263,14 @@ def snapshot(workspace):
     started = time.time()
     tasks, task_problems = read_tasks(workspace)
     runs, router_problems = read_router(workspace)
-    audit = audit_counts(workspace / 'sun/runtime/router/audit.jsonl')
+    audit = audit_counts(runtime_dir('router') / 'audit.jsonl')
     if audit['invalid'] and not router_problems:
         router_problems.append(issue('router audit', 'record_invalid',
                                      f"{audit['invalid']} malformed record(s)",
-                                     workspace / 'sun/runtime/router/audit.jsonl'))
+                                     runtime_dir('router') / 'audit.jsonl'))
     problems = task_problems + router_problems
     components = []
-    gateway = workspace / 'sun/runtime/gateway/env.fail'
+    gateway = runtime_dir('gateway') / 'env.fail'
     try:
         raw = gateway.read_text(encoding='utf-8')
         data = dict(line.split('=', 1) for line in raw.splitlines() if '=' in line)
@@ -259,12 +279,12 @@ def snapshot(workspace):
             cause=data.get('reason') or 'Recorded gateway failure', detail=data.get('reason') or '', observed_at=iso(failed) if failed else None,
             attempts=data.get('attempts'), exhausted=data.get('exhausted') == '1',
             next_retry_at=iso(epoch(data['next_retry_at'])) if epoch(data.get('next_retry_at')) else None,
-            stale=failed is None or started-failed > STALE_SECONDS, path=str(gateway.relative_to(workspace))))
+            stale=failed is None or started-failed > STALE_SECONDS, path=display_path(gateway, workspace)))
     except FileNotFoundError:
         components.append(issue('gateway', 'gateway_unverified', 'No recent gateway probe', state='unverified'))
     except (OSError, ValueError) as exc:
         problems.append(issue('gateway record', 'record_invalid', str(exc), gateway))
-    continuity = workspace / 'sun/runtime/continuity/active.json'
+    continuity = runtime_dir('continuity') / 'active.json'
     try:
         data = json.loads(continuity.read_text(encoding='utf-8'))
         if not isinstance(data, dict):
@@ -273,7 +293,7 @@ def snapshot(workspace):
         stale = updated is None or started-updated > STALE_SECONDS
         components.append(dict(component='continuity', state='stale' if stale else 'observed', cause_code='continuity_state',
             cause=str(data.get('active_task') or 'No active intention'), detail='', observed_at=data.get('updated_at'),
-            stale=stale, path=str(continuity.relative_to(workspace))))
+            stale=stale, path=display_path(continuity, workspace)))
     except FileNotFoundError:
         components.append(issue('continuity', 'continuity_unverified', 'No continuity record', state='unverified'))
     except (OSError, ValueError) as exc:
@@ -282,7 +302,7 @@ def snapshot(workspace):
     components.insert(0, dict(component='storage', state='healthy' if storage_ok else 'problems',
         cause_code='storage_readable' if storage_ok else 'storage_unreadable',
         cause='Task files and router audit are readable' if storage_ok else 'Canonical storage is not readable', detail='',
-        observed_at=iso(), path=str(workspace / 'sun/runtime')))
+        observed_at=iso(), path=str(runtime_dir())))
     components.extend(problems)
     status = 'problems' if any(c['state']=='problems' for c in components) else 'unverified' if any(c['state']=='unverified' for c in components) else 'healthy'
     checked = time.time()

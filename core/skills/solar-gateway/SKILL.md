@@ -99,7 +99,7 @@ solar client sync
 
 - **No listener reuse:** setup fails if WS/HTTP ports are busy unless `--restart`.
 - **Stop** is the only kill path: ownership via bridge cmdline signatures + port/pid file; tunnel via `cloudflared.pid` + cmdline (no global cloudflared scan).
-- **Env stamp** lives at `$SOLAR_WORKSPACE/sun/runtime/gateway/env.stamp` (fingerprint of an allowlisted key set — not `.env` mtime). Missing stamp with live Solar bridges counts as drift.
+- **Env stamp** lives at `$SOLAR_WORKSPACE/<runtime root>/gateway/env.stamp` (fingerprint of an allowlisted key set — not `.env` mtime). Missing stamp with live Solar bridges counts as drift.
 - Fingerprint includes `SOLAR_GATEWAY_CLAIM_TELEGRAM` and a derived `SOLAR_N8N_WEBHOOK_SECRET_SHA256` (never the secret in plaintext). Rotating the secret or changing the claim flag triggers drift → `ensure` restart.
 - **HTTP channels** (`SOLAR_HTTP_WEBHOOK_BASE/<channel>`): `n8n` always; `telegram` when `TELEGRAM_BOT_TOKEN` is set. Distinct from Bot API claim.
 - **Telegram claim** (`SOLAR_GATEWAY_CLAIM_TELEGRAM=true|false`, absent = do not claim):
@@ -109,7 +109,7 @@ solar client sync
 - **n8n auth** (`SOLAR_N8N_WEBHOOK_SECRET`): required. `POST /webhook/n8n` uses `Authorization: Bearer`. Unset secret → fail-closed `401`. Missing header → `401`; wrong token → `403` (constant-time compare). Generate with `openssl rand -base64 32`. HTTP 202 / `GET /webhook/n8n/result` are not part of the production contract.
 - **Drift / restart** runs a **non-destructive preflight** before stopping a healthy runtime. Preflight failure writes `env.fail` and leaves processes running. Provider tokens are validated against solar-router `PROVIDERS` (via `list_supported_providers.sh`), not a duplicated list. Invalid `SOLAR_GATEWAY_CLAIM_TELEGRAM` (not `true|false` or absent) fails preflight.
 - **Backoff:** repeated failures with the same fingerprint are throttled via `env.fail` (exponential, capped). After `GATEWAY_FAIL_ATTEMPTS_CAP` (default 5) failures with the same fingerprint, ensure **stops retrying** until the fingerprint changes (fix `.env` or remove `env.fail`). A fingerprint change resets backoff.
-- **mkdir-lock** (portable, no `flock`) at `sun/runtime/gateway/lock/` serializes ensure/setup/stamp writes. Distinct from the solar-system orchestrator lock. Dead or recycled lock PIDs are reclaimed.
+- **mkdir-lock** (portable, no `flock`) at `<runtime root>/gateway/lock/` serializes ensure/setup/stamp writes. Distinct from the solar-system orchestrator lock. Dead or recycled lock PIDs are reclaimed.
 
 ## Runtime requirements
 
@@ -117,7 +117,7 @@ solar client sync
 - Python dependency resolved at runtime by `uv`: `websockets==12.0`
 - At least one AI client CLI in `PATH`:
   - `codex`, `claude`, `agy`, or `agent`
-- Local runtime write access for conversation memory (default: `sun/runtime/router/`)
+- Local runtime write access for conversation memory (default: `<runtime root>/router/`)
 
 ## System activation (via solar-system)
 

@@ -47,12 +47,18 @@ transport_gateway_router_script() {
 }
 
 # ---------------------------------------------------------------------------
-# Stable runtime paths (workspace-scoped, not /tmp)
+# Stable runtime paths (machine state outside the workspace, not /tmp)
 # ---------------------------------------------------------------------------
 
 gateway_runtime_dir() {
   transport_gateway_bind_workspace
-  printf '%s/sun/runtime/gateway' "$SOLAR_WORKSPACE"
+  if [[ -n "${SOLAR_GATEWAY_RUNTIME_DIR:-}" ]]; then
+    printf '%s' "$SOLAR_GATEWAY_RUNTIME_DIR"
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+  printf '%s' "$(solar_runtime_dir gateway)"
 }
 
 gateway_stamp_path() {

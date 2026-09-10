@@ -162,8 +162,6 @@ link_governance ".cursorrules"
 if [[ ! -f "$WORKSPACE/.cursorignore" ]]; then
   cat > "$WORKSPACE/.cursorignore" <<'EOF'
 .solar/
-sun/runtime/**/logs/
-sun/runtime/**/audit.jsonl
 EOF
 fi
 

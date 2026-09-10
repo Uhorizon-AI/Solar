@@ -51,8 +51,8 @@ or clear `pending`).
 ## Where state lives
 
 Federated, per `references/continuity.md`: machine work in
-`sun/runtime/async-tasks/`, human attention in `sun/daily-log/`, canonical intention
-in `sun/runtime/continuity/active.json`, mandates in `sun/delegations/`.
+`<runtime root>/async-tasks/`, human attention in `sun/daily-log/`, canonical intention
+in `<runtime root>/continuity/active.json`, mandates in `sun/delegations/`.
 
 Continuity never duplicates the queue: if the next move is machine work, reference the
 task instead of restating it in `pending`.

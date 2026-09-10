@@ -112,10 +112,10 @@ Context ≠ authority. Plan ≠ execution. Draft ≠ send. Capability ≠ permis
 
 ### Continuity and state (federated)
 
-- Machine tasks: `sun/runtime/async-tasks/`
+- Machine tasks: `<runtime root>/async-tasks/` (see `core/docs/state-homes.md`)
 - Human attention / blockers: `sun/daily-log/`, planet `operations/`
-- Channel continuity: `sun/runtime/router/conversations/*-summary.txt`
-- Cross-channel canonical summary: `sun/runtime/continuity/`
+- Channel continuity: `<runtime root>/router/conversations/*-summary.txt`
+- Cross-channel canonical summary: `<runtime root>/continuity/`
 - Stable learnings only: `sun/MEMORY.md` (no secrets, no task board)
 - A3 mandates: `sun/delegations/`
 

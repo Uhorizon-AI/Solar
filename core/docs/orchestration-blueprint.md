@@ -15,13 +15,13 @@ Before creating a skill, script, or mandate, ask which layer owns the need. Exac
 | Layer | Owns | Does not own | Home |
 |---|---|---|---|
 | **1. Definition** | Stages of a domain routine (what to do, in what order, with which tools) | Queue, cadence, permission, turn execution | Planet/domain skill (`SKILL.md`, scripts). Examples: `calendar-sync`, `lou-job-triage`, `linkedin-prospecting` |
-| **2. State & cadence** | Deferred work, lifecycle, subtasks, recurrence, scheduled windows | Domain steps, authority, interactive turns | `solar-async-tasks` → `sun/runtime/async-tasks/` (`drafts → planned → queued → active → done/error`) |
+| **2. State & cadence** | Deferred work, lifecycle, subtasks, recurrence, scheduled windows | Domain steps, authority, interactive turns | `solar-async-tasks` → `<runtime root>/async-tasks/` (`drafts → planned → queued → active → done/error`) |
 | **3. Execution** | One turn of work: classify, route, invoke agents/skills, return a reply | Long-lived progress, domain pipeline design, written mandates | `solar-router` (interactive channels **and** `channel=async-task` for approved tasks) |
 | **4. Authority** | May this act / may this routine run without the human present | How the work is done or scheduled | Workspace `AGENTS.md` A0–A4; A3 mandates in `sun/delegations/` via `solar-router/scripts/delegation_ctl.py` |
 
 **Cross-cutting (not a fifth layer):**
 
-- **Continuity** — canonical intention across channels: `sun/runtime/continuity/active.json` (`solar-router/scripts/continuity_cli.py`). Answers *where we are / whose turn*; never duplicates the machine queue.
+- **Continuity** — canonical intention across channels: `<runtime root>/continuity/active.json` (`solar-router/scripts/continuity_cli.py`). Answers *where we are / whose turn*; never duplicates the machine queue.
 - **Human attention** — blockers and commitments: `sun/daily-log/`, planet `operations/`.
 - **On-demand status** — `solar-router/scripts/work_status.sh` (read-only). Periodic briefings, if wanted, are recurring async tasks — not a skill with a timer.
 
@@ -43,9 +43,9 @@ Before creating a skill, script, or mandate, ask which layer owns the need. Exac
 - User preferences: `sun/preferences/profile.md`
 - Stable learnings: `sun/MEMORY.md` (not a task board)
 - Daily attention: `sun/daily-log/YYYY-MM-DD.md` — on demand or execution trace. Format: Top Priorities, Blockers, Log. See `core/templates/daily-log.md`
-- Canonical intention: `sun/runtime/continuity/active.json`
-- Machine queue: `sun/runtime/async-tasks/`
-- A3 mandates: `sun/delegations/*.yaml` (evidence under `sun/runtime/delegations/`)
+- Canonical intention: `<runtime root>/continuity/active.json`
+- Machine queue: `<runtime root>/async-tasks/`
+- A3 mandates: `sun/delegations/*.yaml` (evidence under `<runtime root>/delegations/`)
 - Planet scope: `planets/<planet-name>/AGENTS.md`
 - Planet memory (optional): `planets/<planet-name>/MEMORY.md`
 

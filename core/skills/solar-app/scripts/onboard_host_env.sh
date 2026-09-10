@@ -33,7 +33,10 @@ _resolve_host_runtime_dir() {
   if [[ -n "$v" ]]; then
     printf '%s' "$v"
   else
-    printf '%s' "sun/runtime/host"
+    # Machine state lives outside the workspace; never sun/runtime/host.
+    # shellcheck source=/dev/null
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+    printf '%s' "$(solar_runtime_dir host)"
   fi
 }
 

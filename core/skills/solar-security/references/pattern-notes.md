@@ -22,6 +22,6 @@ length. Adjust `SPECS` order deliberately when extending.
 ## Mapping file (optional)
 
 Mappings persist automatically across runs in:
-`sun/runtime/security-map.json`.
+`<runtime root>/security-map.json`.
 This file lives under `sun/` runtime state and is not committed in the
 framework repository.

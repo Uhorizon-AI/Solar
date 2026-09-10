@@ -240,7 +240,7 @@ if feature_active "async-tasks"; then
   # 3b. Queue directory exists (source task_lib.sh to resolve SOLAR_TASK_ROOT)
   # shellcheck source=/dev/null
   source "$TASK_LIB" 2>/dev/null || true
-  DIR_QUEUED="${DIR_QUEUED:-${SOLAR_TASK_ROOT:-sun/runtime/async-tasks}/queued}"
+  DIR_QUEUED="${DIR_QUEUED:-${SOLAR_TASK_ROOT:?SOLAR_TASK_ROOT unresolved}/queued}"
   if [[ -d "$DIR_QUEUED" ]]; then
     echo "  queue_dir:   present ($DIR_QUEUED)"
   else
@@ -249,7 +249,7 @@ if feature_active "async-tasks"; then
   fi
 
   # 3c. Orphan lock check in $DIR_LOCKS
-  DIR_LOCKS="${DIR_LOCKS:-${SOLAR_TASK_ROOT:-sun/runtime/async-tasks}/.locks}"
+  DIR_LOCKS="${DIR_LOCKS:-${SOLAR_TASK_ROOT:?SOLAR_TASK_ROOT unresolved}/.locks}"
   orphan_found=false
   if [[ -d "$DIR_LOCKS" ]]; then
     for lock_file in "$DIR_LOCKS"/*.lock; do

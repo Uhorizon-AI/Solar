@@ -13,11 +13,20 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
+import sys
+from pathlib import Path
+
+_CLIENT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-client" / "scripts"
+if str(_CLIENT_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_CLIENT_SCRIPTS))
+
+import solar_runtime  # noqa: E402
+
+
 # Same default as sanitize_context.py (paths relative to process cwd, usually repo root).
-DEFAULT_MAPPING_PATH = Path("sun/runtime/security-map.json")
+DEFAULT_MAPPING_PATH = solar_runtime.runtime_root() / "security-map.json"
 
 
 @dataclass(frozen=True)
@@ -167,7 +176,7 @@ def run(
     if not rules:
         raise ValueError(
             "No replacement rules provided. Use --use-mapping (optional --mapping PATH; "
-            "default: sun/runtime/security-map.json) and/or --old/--new."
+            "default: <runtime root>/security-map.json) and/or --old/--new."
         )
 
     dedup: dict[str, str] = {}
@@ -203,7 +212,7 @@ def main() -> int:
         "--mapping",
         default=None,
         help="JSON with CUSTOM / literal_replacements (default with --use-mapping: "
-        "sun/runtime/security-map.json).",
+        "<runtime root>/security-map.json).",
     )
     parser.add_argument(
         "--use-mapping",

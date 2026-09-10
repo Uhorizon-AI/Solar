@@ -30,9 +30,14 @@ def _now_iso() -> str:
 
 
 def stable_hash(workspace: str) -> int:
+    """cksum of the *physical* path, so a symlink and its target agree.
+
+    The digest algorithm is unchanged on purpose: paths that were already
+    canonical keep the ports they had.
+    """
     proc = subprocess.run(
         ["cksum"],
-        input=workspace.encode(),
+        input=_normalize_path(workspace).encode(),
         capture_output=True,
         check=True,
     )
@@ -57,6 +62,48 @@ def _default_registry(seed: str | None = None) -> dict[str, Any]:
     return {"version": 1, "active_path": active, "workspaces": workspaces}
 
 
+def _canonical_view(data: dict[str, Any]) -> dict[str, Any]:
+    """In-memory canonical view of the registry. Never written back.
+
+    Entries whose paths resolve to the same physical directory collapse into
+    one: the oldest entry wins and keeps its label. ``active_path`` resolves to
+    that same identity. The file on disk is left byte for byte as it was.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for item in data.get("workspaces", []):
+        if not isinstance(item, dict):
+            continue
+        raw = str(item.get("path", "")).strip()
+        if not raw:
+            continue
+        try:
+            norm = _normalize_path(raw)
+        except (OSError, RuntimeError):
+            norm = raw
+        entry = dict(item, path=norm)
+        current = seen.get(norm)
+        if current is None:
+            seen[norm] = entry
+            continue
+        # Oldest entry wins, and keeps its label.
+        if str(entry.get("added_at", "")) < str(current.get("added_at", "")):
+            seen[norm] = entry
+
+    active_raw = str(data.get("active_path", "")).strip()
+    if active_raw:
+        try:
+            active = _normalize_path(active_raw)
+        except (OSError, RuntimeError):
+            active = active_raw
+    else:
+        active = ""
+
+    view = dict(data)
+    view["workspaces"] = list(seen.values())
+    view["active_path"] = active
+    return view
+
+
 def load_registry() -> dict[str, Any]:
     if not REGISTRY_FILE.exists():
         REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
@@ -75,7 +122,7 @@ def load_registry() -> dict[str, Any]:
     data.setdefault("version", 1)
     data.setdefault("workspaces", [])
     data.setdefault("active_path", "")
-    return data
+    return _canonical_view(data)
 
 
 def save_registry(data: dict[str, Any]) -> None:
