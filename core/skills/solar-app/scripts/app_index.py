@@ -291,6 +291,95 @@ def stale_sources(target: Path | None = None) -> list[dict]:
     return changed
 
 
+def snapshot_from_index(workspace: Path, target: Path | None = None) -> dict:
+    """The console's shape, served from the projection instead of the files."""
+    target = Path(target or index_path())
+    connection = sqlite3.connect(f'file:{target}?mode=ro', uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        tasks = [dict(
+            id=row['id'], title=row['title'], state=row['state'], source='task',
+            summary=row['summary'], timestamp=row['timestamp'], created_at=row['created_at'],
+            provider=row['provider'], provider_requested=row['provider_requested'],
+            origin=row['origin'], artifacts=json.loads(row['artifacts'] or '[]'),
+            file=row['file'], recurring=bool(row['recurring']),
+            recurring_run_count=row['recurring_run_count'],
+            recurring_last_run=row['recurring_last_run'], stale=bool(row['stale']),
+        ) for row in connection.execute('SELECT * FROM tasks')]
+        runs = [dict(
+            id=row['router_id'], title=row['request_id'], source='router',
+            state=row['state'], summary=row['summary'], timestamp=row['ended_at'] or row['started_at'],
+            provider=row['provider'], user_id=row['user_id'], origin=row['origin'],
+            artifacts=json.loads(row['artifacts'] or '[]'), duration_ms=row['duration_ms'],
+            history_turns=None, summary_used=None, stale=False, file=row['source_path'],
+        ) for row in connection.execute(
+            'SELECT * FROM executions ORDER BY COALESCE(ended_at, started_at) DESC LIMIT ?',
+            (app_solar.PAGE_SIZE,))]
+        counts = {name: value for name, value in connection.execute(
+            'SELECT name, value FROM counters')}
+        components = [dict(component=row['component'], state=row['state'],
+                           cause_code=row['cause_code'], cause=row['cause'], detail='',
+                           observed_at=row['observed_at'], path=row['source_path'])
+                      for row in connection.execute('SELECT * FROM components')]
+        meta = {key: value for key, value in connection.execute('SELECT key, value FROM meta')}
+    finally:
+        connection.close()
+
+    tasks.sort(key=lambda row: app_solar.epoch(row['timestamp']) or 0, reverse=True)
+    checked = time.time()
+    storage_ok = not any(row['state'] == 'problems' for row in components)
+    status = ('problems' if any(row['state'] == 'problems' for row in components)
+              else 'unverified' if any(row['state'] == 'unverified' for row in components)
+              else 'healthy')
+    health = dict(status=status, storage_ok=storage_ok, checked_at=app_solar.iso(checked),
+                  fresh_until=app_solar.iso(checked + app_solar.FRESH_SECONDS),
+                  components=components)
+    return dict(
+        workspace=str(workspace), solar_root=meta.get('runtime_root', ''),
+        checked_at=app_solar.iso(checked),
+        fresh_until=app_solar.iso(checked + app_solar.FRESH_SECONDS),
+        health=health, tasks=tasks[:app_solar.PAGE_SIZE], executions=runs,
+        activity=sorted(tasks + runs, key=lambda row: app_solar.epoch(row['timestamp']) or 0,
+                        reverse=True)[:app_solar.PAGE_SIZE],
+        counts=dict(
+            tasks=counts.get('tasks', len(tasks)), executions=counts.get('executions', 0),
+            errors=counts.get('errors', 0), recurring=counts.get('recurring', 0),
+            task_states={state: counts.get('tasks_' + state, 0)
+                         for state in app_solar.TASK_STATES}),
+        working=sum(row['state'] == 'active' for row in tasks + runs),
+    )
+
+
+def projection(workspace: Path, target: Path | None = None) -> dict:
+    """Serve the console from the index while it is fresh; from the files when not.
+
+    The files stay the truth, so a stale projection is never served as if it
+    were current: the console falls back and says so.
+    """
+    target = Path(target or index_path())
+    if not target.exists():
+        data = app_solar.snapshot(workspace)
+        data['projection'] = dict(source='files', index=str(target), available=False,
+                                  stale=[], reason='index not built')
+        return data
+    try:
+        changed = stale_sources(target)
+    except (sqlite3.Error, OSError) as exc:
+        data = app_solar.snapshot(workspace)
+        data['projection'] = dict(source='files', index=str(target), available=False,
+                                  stale=[], reason=f'index unreadable: {exc}')
+        return data
+    if changed:
+        data = app_solar.snapshot(workspace)
+        data['projection'] = dict(source='files', index=str(target), available=True,
+                                  stale=changed, reason='sources changed since the build')
+        return data
+    data = snapshot_from_index(workspace, target)
+    data['projection'] = dict(source='index', index=str(target), available=True,
+                              stale=[], reason='')
+    return data
+
+
 def counters(target: Path | None = None) -> dict:
     target = Path(target or index_path())
     connection = sqlite3.connect(f'file:{target}?mode=ro', uri=True)

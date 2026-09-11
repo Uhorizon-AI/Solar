@@ -1,5 +1,6 @@
 """Read-only routes for the existing status, activity and execution log views."""
 from pathlib import Path
+import app_index
 import app_solar
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
@@ -27,7 +28,9 @@ def get(handler, path, qs, workspace):
         handler._send_json(app_solar.activity_page(Path(workspace), value('source'), value('state'), offset, limit))
         return
     if path in ("/api/app/bootstrap", "/api/app/logs", "/api/async/jobs", "/api/runtime/health"):
-        data = app_solar.snapshot(Path(workspace))
+        # The SQLite projection when it is fresh, the files when it is not. The
+        # payload says which, so a stale index is never served as current.
+        data = app_index.projection(Path(workspace))
         if path == "/api/runtime/health":
             payload = {"service": "solar-console", **data["health"], "workspace": str(workspace), "solar_root": data["solar_root"]}
             handler._send_json(payload, 200 if payload["storage_ok"] else 503)
