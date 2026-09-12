@@ -54,6 +54,9 @@ python3 core/skills/solar-mcp/scripts/mcp_probe.py call solar_task_status '{}'
 | `solar_telegram_send` | A2 | Same, for one exact message text. Sending outside the machine is never implicit |
 | `solar_action_run` | A3 | The skill and action are registered **and** the mandate is live |
 
+`tools/list` and `resources/list` are the catalog. A name that is not there
+is not this server. An unknown resource URI is refused with the known list.
+
 Approvals are server-side records: they name one tool and one set of arguments,
 expire, and burn on first use. A client cannot mint one — that is what makes
 this a gate.
@@ -80,6 +83,13 @@ The approval covers the exact text. Change a word and the call is refused with
 `approval_scope_mismatch`, because the hash covers the arguments, not the tool
 name alone. The chat must be the configured one or listed in
 `TELEGRAM_ALLOWED_CHAT_IDS`.
+
+## Clients in front of the gate
+
+An IDE may ask the human before the call reaches this server (allowlist card,
+Auto-review). That wait is the client, not a hang in the handler. Allowing
+the IDE still does not send: Solar's approval is a separate record granted
+with `mcp_approve.py`.
 
 ## Where the guarantee ends
 

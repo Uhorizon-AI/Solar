@@ -27,6 +27,14 @@ def test_initialize_announces_the_server(solar_env):
         assert answer["result"] == {}
 
 
+def test_unknown_resource_names_the_catalog(solar_env):
+    with client(solar_env) as probe:
+        answer = probe.request("resources/read", dict(uri="solar://status"))
+        assert answer["error"]["code"] == -32602
+        assert "solar://health" in answer["error"]["message"]
+        assert "solar://status" in answer["error"]["message"]
+
+
 def test_resources_are_open(solar_env):
     with client(solar_env) as probe:
         listed = probe.request("resources/list")["result"]["resources"]
@@ -42,6 +50,7 @@ def test_unknown_resource_is_an_error(solar_env):
     with client(solar_env) as probe:
         answer = probe.request("resources/read", dict(uri="solar://etc/passwd"))
         assert answer["error"]["code"] == -32602
+        assert "Known:" in answer["error"]["message"]
 
 
 def test_tools_are_listed(solar_env):

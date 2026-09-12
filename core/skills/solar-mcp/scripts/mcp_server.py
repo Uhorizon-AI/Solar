@@ -351,7 +351,9 @@ def handle(message: dict) -> dict | None:
         uri = params.get("uri", "")
         reader = READERS.get(uri)
         if reader is None:
-            return _error(request_id, -32602, f"Unknown resource: {uri}")
+            known = ", ".join(READERS)
+            return _error(request_id, -32602,
+                          f"Unknown resource: {uri}. Known: {known}")
         result = dict(contents=[dict(uri=uri, mimeType="application/json",
                                      text=json.dumps(reader(), indent=2, sort_keys=True, default=str))])
     elif method == "tools/list":
