@@ -65,6 +65,7 @@ check_pid_or_listener() {
 
 local_ok=false
 public_ok=false
+connector_ok=false
 ws_ok=false
 http_ok=false
 tunnel_ok=false
@@ -72,6 +73,7 @@ tunnel_ok=false
 if check_pid_or_listener "$RUN_DIR/ws.pid" "${SOLAR_WS_PORT:-8765}"; then ws_ok=true; fi
 if check_pid_or_listener "$RUN_DIR/http.pid" "${SOLAR_HTTP_PORT:-8787}"; then http_ok=true; fi
 if check_pid "$RUN_DIR/cloudflared.pid"; then tunnel_ok=true; fi
+if gateway_cloudflared_connector_ready "$RUN_DIR/cloudflared.log"; then connector_ok=true; fi
 
 local_body="$(curl -fsS --max-time 5 "$local_health_url" 2>/dev/null || true)"
 if [[ "$local_body" == *"\"bridge\": \"${BRIDGE_NAME}\""* ]]; then
@@ -91,9 +93,16 @@ echo "  telegram claim:    $(gateway_telegram_claim_label)"
 echo "  ws process:        $ws_ok"
 echo "  http process:      $http_ok"
 echo "  tunnel process:    $tunnel_ok"
+echo "  tunnel connector:  $connector_ok"
 echo "  local /health:     $local_ok ($local_health_url)"
 if [[ -n "$public_health_url" ]]; then
-  echo "  public /health:    $public_ok ($public_health_url)"
+  if [[ "$public_ok" == true ]]; then
+    echo "  public /health:    true ($public_health_url)"
+  elif [[ "$connector_ok" == true ]]; then
+    echo "  public /health:    unreachable from this host ($public_health_url)"
+  else
+    echo "  public /health:    false ($public_health_url)"
+  fi
 else
   echo "  public /health:    skipped (named hostname not configured)"
 fi
@@ -105,9 +114,11 @@ if [[ "$ws_ok" != true || "$http_ok" != true || "$local_ok" != true ]]; then
   exit 1
 fi
 
-if [[ -n "$public_health_url" && "$public_ok" != true ]]; then
+# Named-tunnel public curl from the origin host hairpins and is not authoritative.
+# PARTIAL only when the connector itself is not ready.
+if [[ -n "$public_health_url" && "$public_ok" != true && "$connector_ok" != true ]]; then
   echo ""
-  echo "PARTIAL: local transport is healthy but public tunnel/route is down."
+  echo "PARTIAL: local transport is healthy but the tunnel connector is not ready."
   echo "Run: bash $(transport_gateway_script start_cloudflared_tunnel.sh)"
   exit 2
 fi

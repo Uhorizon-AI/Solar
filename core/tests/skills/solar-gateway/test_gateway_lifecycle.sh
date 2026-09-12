@@ -701,6 +701,55 @@ write_env "codex,claude"
 rebind
 rm -f "$(gateway_fail_path)"
 
+# --- named-tunnel connector /ready (origin-host public curl is not authoritative) ---
+CONN_LOG="$TMP/run/cloudflared.log"
+if gateway_cloudflared_connector_ready "$TMP/missing-cloudflared.log"; then
+  fail "connector ready is false without log"
+else
+  pass "connector ready is false without log"
+fi
+printf 'INF Starting metrics server on 127.0.0.1:1/metrics\n' >"$CONN_LOG"
+if gateway_cloudflared_connector_ready "$CONN_LOG"; then
+  fail "connector ready is false when metrics are down"
+else
+  pass "connector ready is false when metrics are down"
+fi
+CONN_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+python3 - "$CONN_PORT" <<'PY' &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+port = int(sys.argv[1])
+
+class Ready(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/ready":
+            body = b'{"status":200,"readyConnections":2}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        return
+
+HTTPServer(("127.0.0.1", port), Ready).serve_forever()
+PY
+CONN_PID=$!
+printf 'INF Starting metrics server on 127.0.0.1:%s/metrics\n' "$CONN_PORT" >"$CONN_LOG"
+sleep 0.2
+if gateway_cloudflared_connector_ready "$CONN_LOG"; then
+  pass "connector ready is true when /ready is 200"
+else
+  fail "connector ready is true when /ready is 200"
+fi
+kill "$CONN_PID" 2>/dev/null || true
+wait "$CONN_PID" 2>/dev/null || true
+
 echo ""
 echo "Results: PASS=$PASS FAIL=$FAIL"
 if [[ "$FAIL" -gt 0 ]]; then

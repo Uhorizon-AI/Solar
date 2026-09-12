@@ -64,7 +64,8 @@ bash core/skills/solar-router/scripts/diagnose_router.sh --dry-run
 bash core/skills/solar-router/scripts/diagnose_router.sh
 bash core/skills/solar-router/scripts/list_supported_providers.sh
 
-# Check runtime health (local + public) — exit 0/1/2; drift does not change check exits
+# Check runtime health — local HTTP + named-tunnel connector /ready (exit 0/1/2).
+# Public hostname curl from the origin host is informational (hairpin).
 bash core/skills/solar-gateway/scripts/check_transport_gateway.sh
 
 # Ensure gateway is healthy, recover if not (used by solar-system orchestrator)

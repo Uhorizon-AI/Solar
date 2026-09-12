@@ -87,6 +87,26 @@ gateway_run_dir() {
   printf '%s' "${SOLAR_GATEWAY_RUN_DIR:-/tmp/solar-transport-gateway}"
 }
 
+# Local cloudflared metrics /ready (HA connections). Authoritative for a named
+# tunnel on the origin host: curling the public hostname hairpins through
+# Cloudflare anycast and often times out even when the connector is registered.
+gateway_cloudflared_connector_ready() {
+  local log metrics_bind code i
+  log="${1:-$(gateway_run_dir)/cloudflared.log}"
+  [[ -f "$log" ]] || return 1
+  metrics_bind="$(awk '/Starting metrics server on / { bind=$NF } END { if (bind != "") print bind }' "$log")"
+  [[ -n "$metrics_bind" ]] || return 1
+  metrics_bind="${metrics_bind%/metrics}"
+  for i in 1 2 3; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "http://${metrics_bind}/ready" 2>/dev/null || true)"
+    if [[ "$code" == "200" ]]; then
+      return 0
+    fi
+    sleep 0.3
+  done
+  return 1
+}
+
 gateway_ws_port() {
   printf '%s' "${SOLAR_WS_PORT:-8765}"
 }
