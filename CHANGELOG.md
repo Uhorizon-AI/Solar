@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-12
+
 ### Added
 - feat(solar-async-tasks): route stop requests through canonical task cancellation and report `cancelled` only after the managed process acknowledges termination.
 
