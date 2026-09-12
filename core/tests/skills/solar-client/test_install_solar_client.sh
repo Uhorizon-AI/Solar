@@ -63,7 +63,7 @@ got="$(solar_client_resolve_stable_release_tag)"
 assert_ok "SOLAR_STABLE_RELEASE_TAG override" test "$got" = "v1.2.3"
 unset SOLAR_STABLE_RELEASE_TAG
 
-unset SOLAR_ROOT SOLAR_INSTALL_DIR || true
+unset SOLAR_ROOT SOLAR_INSTALL_DIR SOLAR_WORKSPACE || true
 assert_ok "default install dir is ~/.local/share/solar" \
   test "$(solar_client_default_install_dir)" = "$HOME/.local/share/solar"
 
@@ -151,8 +151,12 @@ assert_ok "uninstall rejects unmanaged install path" test "$guard_ec" -ne 0
 assert_ok "uninstall preserves unmanaged directory" test -f "$NOT_INSTALL/data.txt"
 assert_ok "uninstall preserves wrapper when validation fails" test -f "$GUARD_BIN/solar"
 
-# Workspace init/sync/doctor via absolute wrapper
+# Workspace init/sync/doctor via absolute wrapper.
+# Pin SOLAR_WORKSPACE to the fixture: maintainer shells (and create-release
+# --publish) export the live tree, and resolve_solar_paths then conflicts
+# with cwd discovery after init (sync/doctor exit 1; init still uses pwd).
 export SOLAR_ROOT="$INSTALL_DIR"
+export SOLAR_WORKSPACE="$(cd "$WS" && pwd -P)"
 cd "$WS"
 set +e
 init_out="$("$BIN_DIR/solar" client init 2>&1)"
@@ -169,6 +173,18 @@ echo "init: $init_ec"
 echo "sync: $sync_ec"
 echo "doctor: $doc_ec"
 echo "workspace doctor: $ws_doc_ec"
+
+dump_cmd_out() {
+  local label="$1" ec="$2" out="$3"
+  if [[ "$ec" -ne 0 ]]; then
+    echo "----- $label (exit $ec) -----" >&2
+    printf '%s\n' "$out" >&2
+  fi
+}
+dump_cmd_out "client init" "$init_ec" "$init_out"
+dump_cmd_out "client sync" "$sync_ec" "$sync_out"
+dump_cmd_out "client doctor --strict" "$doc_ec" "$doc_out"
+dump_cmd_out "workspace doctor" "$ws_doc_ec" "$ws_doc_out"
 
 assert_ok "client init exit 0" test "$init_ec" -eq 0
 assert_ok "client sync exit 0" test "$sync_ec" -eq 0
