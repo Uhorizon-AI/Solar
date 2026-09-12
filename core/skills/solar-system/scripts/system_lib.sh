@@ -42,7 +42,12 @@ solar_system_load_env() {
 solar_system_runtime_dir() {
   solar_system_resolve_workspace
   local ws="${1:-$SOLAR_WORKSPACE}"
-  local dir="${SOLAR_SYSTEM_RUNTIME_DIR:-sun/runtime/system}"
+  local dir="${SOLAR_SYSTEM_RUNTIME_DIR:-}"
+  if [[ -z "$dir" ]]; then
+    # shellcheck source=/dev/null
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+    dir="$(solar_runtime_dir system)"
+  fi
   if [[ "$dir" != /* ]]; then
     dir="$ws/$dir"
   fi

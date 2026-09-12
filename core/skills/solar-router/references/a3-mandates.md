@@ -53,7 +53,7 @@ Exit codes: `0` ok · `1` mandate not found · `2` refused (fail-closed).
 - Stop conditions are independent of cadence: three consecutive `failure` results or a
   `stop_requested` event block execution in any mode.
 - `activate` requires `--i-approve` (owner A2 formal) **and** at least one **valid**
-  entry in `sun/runtime/delegations/<name>/shadow.jsonl`: JSON object with
+  entry in `<runtime root>/delegations/<name>/shadow.jsonl`: JSON object with
   `mode: "shadow"`, `applied: false`, and `intended_action` ∈
   `allowed_actions ∩ shadow_safe_actions`.
   Blank lines, non-JSON, `applied: true`, or actions outside the allowlist do **not**

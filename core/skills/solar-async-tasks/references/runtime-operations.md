@@ -149,7 +149,7 @@ task data and environment remain in the workspace.
 
 ## Runtime Structure
 
-Default task root: `sun/runtime/async-tasks/`
+Default task root: `<runtime root>/async-tasks/`
 
 ```text
 drafts/     captured, not planned or approved

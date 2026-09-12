@@ -21,8 +21,11 @@ fi
 TITLE=$(extract_meta "$TASK_FILE" "title")
 [[ -z "$TITLE" ]] && TITLE="Task"
 
-SUN_DIR="$(dirname "$(dirname "$SOLAR_TASK_ROOT")")"
-WORKSPACE_DIR="$(dirname "$SUN_DIR")"
+# The task root is machine state outside the workspace: never climb out of it
+# to find the workspace, its .env or the user's profile. Both come from the
+# workspace itself.
+WORKSPACE_DIR="${SOLAR_WORKSPACE:-$(cd "$SCRIPT_DIR/../../../../.." && pwd)}"
+SUN_DIR="$WORKSPACE_DIR/sun"
 SOLAR_ROOT="${SOLAR_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
 SEND_SCRIPT="$SOLAR_ROOT/core/skills/solar-telegram/scripts/send_telegram.sh"
 record_notify_failure() {
@@ -43,13 +46,26 @@ if [[ -f "$WORKSPACE_DIR/.env" ]]; then
   set +a
 fi
 
+# The workspace `.env` carries the visible configuration (chat id, parse mode).
+# The bot token is not there any more: it belongs to the process, and the
+# notifier is the process. `send_telegram.sh` will not look it up on its own, so
+# loading it here is what lets a completed task still reach Telegram.
+SECRETS_LOADER="$SOLAR_ROOT/core/skills/solar-client/scripts/solar_secrets.sh"
+if [[ -f "$SECRETS_LOADER" ]]; then
+  # shellcheck source=/dev/null
+  source "$SECRETS_LOADER"
+  solar_load_installation_secrets
+fi
+
 ORIGIN_CHAT=$(extract_meta "$TASK_FILE" "origin_chat_id")
 CHAT_ID="${ORIGIN_CHAT:-${TELEGRAM_CHAT_ID:-}}"
 
 PROFILE="$SUN_DIR/preferences/profile.md"
 [[ ! -f "$PROFILE" ]] && PROFILE="$SUN_DIR/preferences/notifications.md"
 if [[ -z "$ORIGIN_CHAT" && -f "$PROFILE" ]]; then
-  PROFILE_CHAT=$(grep -E "telegram_chat_id:\s*[\"']?[0-9]+" "$PROFILE" 2>/dev/null | head -n1 | sed -E "s/.*[\"']?([0-9]+)[\"']?.*/\1/")
+  # Anchor the capture on the key: a bare .* is greedy and swallows every digit
+  # but the last, turning a chat id of 777 into 7.
+  PROFILE_CHAT=$(grep -E "telegram_chat_id:[[:space:]]*[\"']?[0-9]+" "$PROFILE" 2>/dev/null | head -n1 | sed -E "s/.*telegram_chat_id:[[:space:]]*[\"']?([0-9]+)[\"']?.*/\1/")
   [[ -n "$PROFILE_CHAT" ]] && CHAT_ID="$PROFILE_CHAT"
 fi
 

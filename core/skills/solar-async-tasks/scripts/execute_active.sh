@@ -71,6 +71,10 @@ run_one_task() {
         echo "   Log: $LOG_DIR/$(basename "$task_file" .md).log"
         return 0
     else
+        if [[ -f "$SOLAR_TASK_ROOT/cancelled/$(basename "$task_file")" ]]; then
+            echo "Cancelled task: $task_id"
+            return 0
+        fi
         # execute_active.py already moved the file to error/ and wrote the log.
         local error_file="$DIR_ERROR/$(basename "$task_file")"
         if [[ -f "$error_file" ]]; then

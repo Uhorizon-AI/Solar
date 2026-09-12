@@ -42,10 +42,10 @@ else
   pass "legacy keys removed"
 fi
 
-if grep -q '^SOLAR_APP_HOST=127.0.0.8$' "$WS/.env" && grep -q '^SOLAR_APP_PORT=8811$' "$WS/.env"; then
-  pass "legacy values migrated to SOLAR_APP_*"
+if grep -q '^SOLAR_APP_HOST=127.0.0.8$' "$WS/.env" && grep -q '^SOLAR_APP_PORT=9000$' "$WS/.env"; then
+  pass "host migrated; console port fixed at 9000"
 else
-  fail "expected SOLAR_APP_HOST=127.0.0.8 and SOLAR_APP_PORT=8811"
+  fail "expected SOLAR_APP_HOST=127.0.0.8 and SOLAR_APP_PORT=9000"
   grep '^SOLAR_APP_' "$WS/.env" >&2 || true
 fi
 

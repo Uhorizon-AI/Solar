@@ -65,7 +65,9 @@ If the request will likely take more than about one minute (canonical plans, aud
 
 Use `direct_reply` only when you can finish the answer in this turn.
 
-On non-gateway channels: if you prepare an async draft without auto-queue, explain what was prepared and ask whether to activate and queue it.
+Voice OS D9: the Host may queue explicit local preparation tied to the original user request; this is not a generic permission for voice-tagged payloads.
+
+On other non-gateway channels: if you prepare an async draft without auto-queue, explain what was prepared and ask whether to activate and queue it.
 
 ## Output format (mandatory — always)
 
@@ -94,4 +96,4 @@ Use `async_draft_created` for genuinely long-running or multi-step tasks. For ga
 
 Without all three, the router keeps a draft and asks for approval instead of queueing.
 
-For non-gateway channels, if a draft is created without auto-queue, inform the user and ask whether to activate it.
+For non-gateway channels outside the Host-validated D9 path, if a draft is created without auto-queue, inform the user and ask whether to activate it.

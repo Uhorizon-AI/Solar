@@ -109,7 +109,7 @@ Required controls: **limits**, **expiry** (`expires_at`), **stop conditions**, *
 
 ## Async: prepare ≠ queue
 
-Drafting or preparing an async task is not activation. On non-gateway channels, ask before queueing. On gateway channels (e.g. Telegram/n8n), auto-queue may apply only when the draft states **object, scope, and effect**; external sends inside the run still need A2 formal + domain gate.
+Drafting or preparing an async task is not activation. On non-gateway channels, ask before queueing unless an explicit voice request authorizes bounded local preparation (Voice OS D9). For that exception, the Host binds the original request to its scope, destination and effect; an acknowledgement never creates authority. Ambiguous or external actions still require clarification or formal approval. On gateway channels (e.g. Telegram/n8n), auto-queue may apply only when the draft states **object, scope, and effect**; external sends inside the run still need A2 formal + domain gate.
 
 ---
 

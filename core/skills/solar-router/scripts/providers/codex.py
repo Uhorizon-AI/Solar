@@ -12,7 +12,12 @@ class CodexProvider(BaseProvider):
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
-        return f"codex exec --skip-git-repo-check --full-auto -C {SOLAR_WORKSPACE} --"
+        # Codex dropped --full-auto; current CLIs take --sandbox instead.
+        # Exotic installs can override the whole command with SOLAR_ROUTER_CODEX_CMD.
+        return (
+            "codex exec --skip-git-repo-check --sandbox workspace-write "
+            f"-C {SOLAR_WORKSPACE} --"
+        )
 
     def stream(self, prompt: str):
         self.log_prompt(prompt, " --json")

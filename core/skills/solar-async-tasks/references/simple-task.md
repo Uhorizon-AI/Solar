@@ -31,7 +31,7 @@ Read before executing:
 
 Write the output to `<path/final-artifact.md>`.
 
-**Path rules:** Artifacts must never go inside `sun/runtime/`. Correct paths by type:
+**Path rules:** Artifacts must never go inside `<runtime root>/`. Correct paths by type:
 - Sales → `planets/<planet>/operations/sales/`
 - Content → `planets/<planet>/operations/marketing/content/`
 - Research → `planets/<planet>/operations/marketing/research/`
@@ -47,7 +47,7 @@ irreversible actions, or changes outside the task body scope.
 >
 > When needed, find the task file by Task ID:
 > ```bash
-> TASK_FILE=$(grep -rl "id: \"<task_id>\"" sun/runtime/async-tasks/ | head -1)
+> TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
 > ```
 
 ## Minimal frontmatter

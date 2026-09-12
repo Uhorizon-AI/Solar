@@ -12,7 +12,7 @@ A2 for the **declared** body and artifacts; sensitive acts remain A2 formal.
 |---|---|---|
 | Approved execution | Execute the approved task body within declared object/scope/effect. | Changing the task objective or scope. |
 | Declared artifacts | Write files or `## Result` output explicitly declared by the task body. | Writing outside declared output paths. |
-| Runtime state | Write task logs and normal lifecycle state under `sun/runtime/async-tasks/`. | Deleting or rewriting unrelated runtime state. |
+| Runtime state | Write task logs and normal lifecycle state under `<runtime root>/async-tasks/`. | Deleting or rewriting unrelated runtime state. |
 | Sensitive action | None by default. | External sends, destructive deletes, credentials, irreversible actions, and out-of-scope mutations. |
 
 ## Prepare ≠ queue

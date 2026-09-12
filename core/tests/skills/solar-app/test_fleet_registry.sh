@@ -42,8 +42,8 @@ assert_ok "registry under SOLAR_APP_DATA" test -f "$REGISTRY_FILE"
 list="$(python3 "$REGISTRY_PY" list)"
 assert_ok "list contains two workspaces" bash -c "echo '$list' | grep -q '$WS1' && echo '$list' | grep -q '$WS2'"
 
-ports="$(python3 "$REGISTRY_PY" ports "$WS1")"
-assert_ok "ports returns two numbers" bash -c "test $(echo \"$ports\" | wc -w) -eq 2"
+gateway_port="$(python3 "$REGISTRY_PY" gateway-port "$WS1")"
+assert_ok "gateway-port returns one number" bash -c "test $(echo \"$gateway_port\" | wc -w) -eq 1 && test '$gateway_port' -ge 8787"
 
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

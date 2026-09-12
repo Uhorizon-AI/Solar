@@ -20,7 +20,7 @@ Provide one system-level control point for Solar runtime operations:
 - Orchestrate enabled features from `.env`:
   - `async-tasks`
   - `transport-gateway`
-  - `host` — Solar App on `:9000` (canonical human entry; in-process API + tray)
+  - `host` — Solar console on `:9000` (status, activity and execution logs)
 - Keep orchestration deterministic and non-overlapping.
 
 ## Required MCP
@@ -60,7 +60,7 @@ Block format:
 SOLAR_SYSTEM_FEATURES=async-tasks
 ```
 
-The LaunchAgent entrypoint is built at `sun/runtime/system/Solar` during install (default path in code; not versioned in `core/`). Override only if needed: `SOLAR_SYSTEM_RUNTIME_DIR` (absolute or relative to repo root).
+The LaunchAgent entrypoint is built at `<runtime root>/system/Solar` during install (default path in code; not versioned in `core/`). Override only if needed: `SOLAR_SYSTEM_RUNTIME_DIR` (absolute or relative to repo root).
 
 `SOLAR_SYSTEM_FEATURES` is a CSV selector. Supported values:
 - `async-tasks`

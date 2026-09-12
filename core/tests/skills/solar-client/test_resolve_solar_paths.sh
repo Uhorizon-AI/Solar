@@ -162,6 +162,12 @@ pushd "$TMP/empty-nowhere" >/dev/null
 assert_fail "no workspace" run_resolve
 popd >/dev/null
 
+INSTALL_WITH_GIT="$TMP/install-with-git"
+PLANET_WITH_GIT="$TMP/planet-with-git"
+mkdir -p "$INSTALL_WITH_GIT/.git" "$PLANET_WITH_GIT/.git"
+assert_ok "installed root classification ignores .git" test "$(solar_classify_root "$INSTALL_WITH_GIT" "$INSTALL_WITH_GIT")" = installed
+assert_ok "development root classification ignores .git" test "$(solar_classify_root "$PLANET_WITH_GIT" "$INSTALL_WITH_GIT")" = development_checkout
+
 echo "---"
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

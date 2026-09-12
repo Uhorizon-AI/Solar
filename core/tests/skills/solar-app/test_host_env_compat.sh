@@ -49,20 +49,20 @@ echo "SOLAR_APP_PORT=9000" >"$WS/.env"
 assert_port "explicit SOLAR_APP_PORT=9000" "9000"
 
 echo "SOLAR_HOST_PORT=8801" >"$WS/.env"
-assert_port "legacy SOLAR_HOST_PORT" "8801"
+assert_port "legacy port cannot change console port" "9000"
 
 echo "SOLAR_INTERFACE_PORT=8802" >"$WS/.env"
-assert_port "legacy SOLAR_INTERFACE_PORT" "8802"
+assert_port "legacy interface port cannot change console port" "9000"
 
 : >"$WS/.env"
-HASH_PORT="$(python3 -c "import sys; sys.path.insert(0, '$SCRIPTS'); import host_registry as r; print(r.port_offsets('$WS')[0])")"
+HASH_PORT=9000
 (
   cd "$WS"
   # shellcheck source=/dev/null
   source "$HOST_LIB"
   solar_host_load_env
   if [[ "${SOLAR_APP_PORT}" == "$HASH_PORT" ]]; then
-    echo "PASS: unset port uses workspace hash ($HASH_PORT)"
+    echo "PASS: unset port uses console port ($HASH_PORT)"
     exit 0
   fi
   echo "FAIL: unset port expected hash $HASH_PORT got ${SOLAR_APP_PORT}" >&2

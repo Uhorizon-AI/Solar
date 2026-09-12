@@ -169,6 +169,44 @@ if command -v git >/dev/null 2>&1 && git -C "$SOLAR_WORKSPACE" rev-parse --is-in
   fi
 fi
 
+# Installation secrets: the keys Solar's transports send with must be in the
+# process store and out of every file the IDE indexes. This is the check that
+# tells Louis whether that is still true, without printing a value.
+_secrets_report="$(python3 "$SCRIPT_DIR/solar_secrets.py" status "$SOLAR_WORKSPACE" 2>/dev/null || true)"
+if [[ -n "$_secrets_report" ]]; then
+  _secrets_path="$(python3 "$SCRIPT_DIR/solar_secrets.py" path 2>/dev/null || echo "?")"
+  _leaks="$(printf '%s' "$_secrets_report" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+print("|".join(data.get("workspace_leaks") or []))
+print("yes" if data.get("exists") else "no")
+print("yes" if data.get("secure") else "no")
+print(",".join(data.get("missing") or []))
+')"
+  _leak_list="$(printf '%s\n' "$_leaks" | sed -n 1p)"
+  _store_exists="$(printf '%s\n' "$_leaks" | sed -n 2p)"
+  _store_secure="$(printf '%s\n' "$_leaks" | sed -n 3p)"
+  _store_missing="$(printf '%s\n' "$_leaks" | sed -n 4p)"
+
+  if [[ -n "$_leak_list" ]]; then
+    err "installation secrets still in a file the IDE indexes: ${_leak_list//|/, }"
+  else
+    ok "no installation secret in .env or sun/.env"
+  fi
+  if [[ "$_store_exists" != "yes" ]]; then
+    warn "no installation secret store yet at $_secrets_path (create it with solar_secrets.py ensure)"
+  elif [[ "$_store_secure" != "yes" ]]; then
+    err "installation secret store is not 0600: $_secrets_path"
+  elif [[ -n "$_store_missing" ]]; then
+    warn "installation secret store has no ${_store_missing} (transports that need it will fail closed)"
+  else
+    ok "installation secrets in the process store, 0600"
+  fi
+fi
+
 SOLAR_CLIENT_SCRIPT_DIR="$SCRIPT_DIR"
 # shellcheck source=client_doctor_lib.sh
 source "$SCRIPT_DIR/client_doctor_lib.sh"

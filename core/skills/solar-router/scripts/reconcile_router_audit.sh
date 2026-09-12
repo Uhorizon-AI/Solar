@@ -8,7 +8,9 @@ RESOLVE_SCRIPT="$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)/resolve_so
 source "$RESOLVE_SCRIPT"
 solar_resolve_paths --quiet
 
-AUDIT_LOG="$SOLAR_WORKSPACE/sun/runtime/router/audit.jsonl"
+# shellcheck source=/dev/null
+source "$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+AUDIT_LOG="$(solar_runtime_dir router)/audit.jsonl"
 MIN_AGE_HOURS="${SOLAR_ROUTER_RECONCILE_MIN_AGE_HOURS:-1}"
 DRY_RUN=false
 

@@ -17,7 +17,7 @@ Provide a local-first, filesystem task runtime for Solar:
 - queue tasks by priority and schedule,
 - execute approved tasks through `solar-router`,
 - pause parent tasks until child tasks finish,
-- preserve task state under `sun/runtime/async-tasks/`.
+- preserve task state under `<runtime root>/async-tasks/`.
 
 Use this skill when the work should not block the current conversation, needs provider execution, spans multiple AI providers, waits on subtasks, recurs over time, or depends on external resources.
 
@@ -171,7 +171,7 @@ Do not append `## Result` when the task writes a dedicated artifact such as a pl
 Find the current task file by Task ID because files move between state folders:
 
 ```bash
-TASK_FILE=$(grep -rl "id: \"<task_id>\"" sun/runtime/async-tasks/ | head -1)
+TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
 ```
 
 ## Parent Tasks With Subtasks
@@ -203,7 +203,7 @@ See `references/task-with-subtasks.md`.
 
 ## Runtime States
 
-Default root: `sun/runtime/async-tasks/`
+Default root: `<runtime root>/async-tasks/`
 
 - `drafts/`: captured, not executable.
 - `planned/`: ready for review, not executable.
@@ -230,3 +230,9 @@ After any `core/skills/` change, run:
 ```bash
 solar client sync
 ```
+
+## Cancellation
+
+Request cancellation with `python3 core/skills/solar-async-tasks/scripts/task_cancel.py <task-root> <task-id>`.
+The executor confirms `cancelled` only after process-group termination and cleanup.
+Voice OS D9 may queue explicit, bounded local preparation through the Host; the original request supplies authority, not the acknowledgement.

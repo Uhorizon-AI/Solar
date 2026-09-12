@@ -40,7 +40,7 @@ solar workspace doctor [--strict] [--check-git] [--check-plans] [--no-summary]
 |-------|-----|
 | **solar-workspace** | `sun/` + `planets/` doctors |
 | **solar-client** | Manifest, bundle, sync, client doctor |
-| **solar-app** | Control plane + CLI (`solar status`, chat REPL) |
+| **solar-app** | Consola local de estado, actividad y registros (`solar status`, `:9000/app`) |
 
 ## Future
 

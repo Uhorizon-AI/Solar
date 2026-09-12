@@ -3,7 +3,7 @@ name: solar-router
 description: >
   Shared router that runs AI providers (Codex, Claude, Agy/Antigravity, Agent, Ollama) with Solar repo context.
   Single source of truth for provider selection, fallback, and async routing policy.
-  Use when solar-gateway, async-tasks, or other runtimes need to invoke an AI with
+  Use when solar-gateway, solar-app (channel=app), async-tasks, or other runtimes need to invoke an AI with
   cwd = SOLAR_WORKSPACE and paths resolved against the active workspace.
 ---
 
@@ -29,12 +29,12 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 - Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `SOLAR_WORKSPACE` when relative.
 - Codex default command includes `-C <repo-root>` and `--add-dir ~/.codex`.
 - Persist conversation turns in runtime dir (JSONL) and inject continuity into each prompt: rolling `*-summary.txt` from `<solar_summary>` plus recent turns (`SOLAR_ROUTER_CONTEXT_TURNS`).
-- Also inject cross-channel canonical intention from `sun/runtime/continuity/active.json` when present. See `references/continuity.md`.
+- Also inject cross-channel canonical intention from `<runtime root>/continuity/active.json` when present. See `references/continuity.md`.
 - Own the A3 mandate controller (`scripts/delegation_ctl.py`) for `sun/delegations/`: any caller gates mutating routines through `check` and fails closed. See `references/a3-mandates.md`. Unrelated to JIT agent/skill delegation.
 - Answer "where are we" on demand with `scripts/work_status.sh` (intention, machine queue, today's blockers, mandates). Read-only, no cadence: periodic briefings are recurring async tasks. Behaviour layer in `references/signal-orchestration.md`.
-- Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output. On telegram/n8n, `async_draft_created` queues work + `notify_when: completed` and returns a short ACK.
+- Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output. On telegram/n8n/app, `async_draft_created` queues work + `notify_when: completed` and returns a short ACK.
 - Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
-- Write audit log (`sun/runtime/router/audit.jsonl`) with `start`/`end` events per execution for traceability (including failed early-exit paths).
+- Write audit log (`<runtime root>/router/audit.jsonl`) with `start`/`end` events per execution for traceability (including failed early-exit paths).
 
 ## Internal architecture
 
@@ -71,7 +71,7 @@ bash core/skills/solar-router/scripts/onboard_router_env.sh
 
 **Key environment variables:**
 - `SOLAR_ROUTER_PROVIDER_PRIORITY` — Comma-separated provider list (e.g., `codex,claude,agy,agent,ollama`)
-- `SOLAR_ROUTER_RUNTIME_DIR` — Where conversation history is stored (default: `sun/runtime/router`)
+- `SOLAR_ROUTER_RUNTIME_DIR` — Where conversation history is stored (default: `<runtime root>/router`)
 - `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` — System prompt file path (default: `core/skills/solar-router/assets/system_prompt.md`)
 - `SOLAR_ROUTER_CONTEXT_TURNS` — Number of conversation turns to include (default: `12`)
 - `SOLAR_ROUTER_TIMEOUT_SEC` — End-to-end router timeout, including provider execution (default: `300`)
@@ -154,9 +154,9 @@ To prevent JSON parsing errors (invalid control characters, unescaped newlines),
 
 ### Method A: Temporary JSON File (Recommended for Agents)
 
-1. Use `write_file` to create a temporary JSON file (e.g., `sun/runtime/router/request_<id>.json`).
+1. Use `write_file` to create a temporary JSON file (e.g., `<runtime root>/router/request_<id>.json`).
 2. Ensure the `text` field contains explicit `\n` for newlines.
-3. Execute the router piping the file: `python3 core/skills/solar-router/scripts/run_router.py < sun/runtime/router/request_<id>.json`.
+3. Execute the router piping the file: `python3 core/skills/solar-router/scripts/run_router.py < <runtime root>/router/request_<id>.json`.
 
 ### Method B: Heredoc with Single Quotes (Shell)
 
@@ -211,9 +211,13 @@ EOF
 
 ## Runtime files
 
-- `sun/runtime/router/conversations/<user_id>.jsonl` — conversation history per user (for context continuity).
-- `sun/runtime/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`.
+- `<runtime root>/router/conversations/<user_id>.jsonl` — conversation history per user (for context continuity).
+- `<runtime root>/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`.
 
 ## References
 
 - `references/routing-policy.md` — provider priority, env keys, repo-context policy, v3 contract rules.
+
+## Managed execution
+
+`managed_process.py` is an internal helper used by app and async executors to bound and cancel router process groups; it is not a separate provider entrypoint.

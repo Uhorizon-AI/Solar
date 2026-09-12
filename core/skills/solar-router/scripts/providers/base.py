@@ -17,9 +17,19 @@ _CLIENT_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-client" / "scripts"
 if str(_CLIENT_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_CLIENT_SCRIPTS))
 
+import solar_runtime  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
 SOLAR_WORKSPACE, _SOLAR_ROOT = resolve_solar_paths()
+
+
+def _runtime_router_dir() -> pathlib.Path:
+    """Router machine state: explicit override, else the framework runtime root."""
+    raw = os.getenv("SOLAR_ROUTER_RUNTIME_DIR") or os.getenv("SOLAR_RUNTIME_DIR") or ""
+    if raw:
+        path = pathlib.Path(raw)
+        return path if path.is_absolute() else SOLAR_WORKSPACE / path
+    return solar_runtime.runtime_dir("router")
 FALLBACK_PATHS = [
     "/opt/homebrew/bin",
     "/usr/local/bin",
@@ -87,7 +97,7 @@ class BaseProvider(ABC):
         return SOLAR_WORKSPACE
 
     def log_prompt(self, prompt: str, extra_flags: str = "") -> None:
-        """Write prompt to sun/runtime/router/prompts.log when SOLAR_ROUTER_LOG_PROMPTS=true."""
+        """Write prompt to <runtime root>/router/prompts.log when SOLAR_ROUTER_LOG_PROMPTS=true."""
         if os.getenv("SOLAR_ROUTER_LOG_PROMPTS", "false").lower() != "true":
             return
         new_key = f"SOLAR_ROUTER_{self.name.upper()}_CMD"
@@ -95,7 +105,7 @@ class BaseProvider(ABC):
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
         entry = f"\n[solar-router][{self.name}] CMD: {raw}{extra_flags} <prompt>\n[PROMPT]\n{prompt}\n[/PROMPT]\n"
         print(entry, file=sys.stderr, flush=True)
-        log_path = SOLAR_WORKSPACE / "sun/runtime/router/prompts.log"
+        log_path = _runtime_router_dir() / "prompts.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(entry)

@@ -42,7 +42,7 @@ fi
 # Optional variables: only preserve if they exist (for migration)
 optional_vars=()
 
-# Runtime dir (optional, default in code: sun/runtime/router)
+# Runtime dir (optional; default in code: <runtime root>/router, outside the workspace)
 if existing="$(read_key "SOLAR_ROUTER_RUNTIME_DIR")"; then
   optional_vars+=("SOLAR_ROUTER_RUNTIME_DIR=${existing}")
 elif existing="$(read_key "SOLAR_RUNTIME_DIR")"; then

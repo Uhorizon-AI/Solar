@@ -28,6 +28,10 @@ for NEXT_TASK in $QUEUED_TASKS; do
 
     TASK_ID=$(extract_meta "$NEXT_TASK" "id")
     TITLE=$(extract_meta "$NEXT_TASK" "title")
+    if [[ -f "$SOLAR_TASK_ROOT/cancellation/$TASK_ID.json" ]]; then
+        PYTHONPATH="$SCRIPT_DIR" python3 -c 'import sys; from task_cancel import acknowledge; acknowledge(sys.argv[1])' "$NEXT_TASK"
+        continue
+    fi
 
     if has_unresolved_dependencies "$NEXT_TASK"; then
         blocked_by=$(list_unresolved_dependencies "$NEXT_TASK" | paste -sd ',' -)

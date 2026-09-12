@@ -51,9 +51,9 @@ For each task, write the prompt to a temp file and call create.sh:
 cat > /tmp/task-a.md <<'BODY'
 <complete instructions for task A>
 
-When done, find this task file by Task ID inside sun/runtime/async-tasks/
+When done, find this task file by Task ID inside <runtime root>/async-tasks/
 and write your result under ## Result:
-  TASK_FILE=$(grep -rl "id: \"<task_id>\"" sun/runtime/async-tasks/ | head -1)
+  TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
 BODY
 
 bash core/skills/solar-async-tasks/scripts/create.sh \
@@ -66,9 +66,9 @@ bash core/skills/solar-async-tasks/scripts/create.sh \
 cat > /tmp/task-b.md <<'BODY'
 <complete instructions for task B>
 
-When done, find this task file by Task ID inside sun/runtime/async-tasks/
+When done, find this task file by Task ID inside <runtime root>/async-tasks/
 and write your result under ## Result:
-  TASK_FILE=$(grep -rl "id: \"<task_id>\"" sun/runtime/async-tasks/ | head -1)
+  TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
 BODY
 
 bash core/skills/solar-async-tasks/scripts/create.sh \
@@ -80,9 +80,9 @@ bash core/skills/solar-async-tasks/scripts/create.sh \
 
 ## Result
 
-When done, find this task file by Task ID inside `sun/runtime/async-tasks/`
+When done, find this task file by Task ID inside `<runtime root>/async-tasks/`
 and list the created tasks under `## Result`:
-  TASK_FILE=$(grep -rl "id: \"<task_id>\"" sun/runtime/async-tasks/ | head -1)
+  TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
 ```
 
 ## Notes

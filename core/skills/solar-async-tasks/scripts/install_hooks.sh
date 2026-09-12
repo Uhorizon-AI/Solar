@@ -67,10 +67,9 @@ echo "📋 Installing hook templates for: $RESOURCE_NAME"
 echo "   Target: $HOOKS_DIR"
 echo ""
 
-# Calculate portable path to task_lib.sh (relative from SOLAR_TASK_ROOT)
-# Assumes SOLAR_TASK_ROOT is sun/runtime/async-tasks (default structure)
-# If repo is moved, hooks remain functional as long as structure is intact
-TASK_LIB_RELATIVE_PATH="\$SOLAR_TASK_ROOT/../../../core/skills/solar-async-tasks/scripts/task_lib.sh"
+# Absolute path to task_lib.sh. The task root is machine state outside the
+# workspace, so hooks must not climb out of $SOLAR_TASK_ROOT to find core/.
+TASK_LIB_RELATIVE_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/task_lib.sh"
 
 for hook in pre_start post_complete on_error; do
     SOURCE="$ASSETS_DIR/hook-${hook}.template"

@@ -92,6 +92,15 @@ if [[ "$cleanup_required" == "true" ]]; then
     fi
 fi
 
+# Cancellation still runs the same resource cleanup before becoming terminal.
+if [[ "${SOLAR_TASK_CANCELLED:-}" == "1" ]]; then
+    ensure_dirs
+    sed -i.bak 's/^status:.*/status: cancelled/' "$TASK_FILE"
+    rm -f "${TASK_FILE}.bak"
+    mv "$TASK_FILE" "$DIR_CANCELLED/$(basename "$TASK_FILE")"
+    exit 0
+fi
+
 # 2. Move to completed/
 ensure_dirs
 NEW_FILE="$DIR_COMPLETED/$(basename "$TASK_FILE")"

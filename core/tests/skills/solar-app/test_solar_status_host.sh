@@ -13,8 +13,11 @@ fail=0
 pass() { echo "PASS: $1"; pass=$((pass + 1)); }
 fail() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
-mkdir -p "$TMP/sun/runtime/router"
-AUDIT="$TMP/sun/runtime/router"
+# Machine state lives outside the workspace: the audit log belongs to the
+# framework runtime root, not to sun/.
+export SOLAR_APP_DATA="$TMP/AppData"
+AUDIT="$SOLAR_APP_DATA/Solar/runtime/router"
+mkdir -p "$AUDIT"
 mkdir -p "$TMP/sun/preferences" "$TMP/.solar" "$TMP/planets"
 touch "$TMP/sun/preferences/profile.md" "$TMP/sun/MEMORY.md"
 echo '{"layout":"solar-client-v1"}' >"$TMP/.solar/manifest.json"

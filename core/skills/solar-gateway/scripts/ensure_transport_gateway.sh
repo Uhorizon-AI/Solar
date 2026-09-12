@@ -28,7 +28,7 @@ if gateway_backoff_active; then
   if gateway_fail_exhausted; then
     attempts="$(grep -E '^attempts=' "$(gateway_fail_path)" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
     echo "❌ Gateway fail cap reached (attempts=${attempts:-?}/${GATEWAY_FAIL_ATTEMPTS_CAP}, same fingerprint)." >&2
-    echo "   Fix .env (or remove sun/runtime/gateway/env.fail) then rerun setup manually." >&2
+    echo "   Fix .env (or remove \"$(gateway_runtime_dir)/env.fail\") then rerun setup manually." >&2
     exit 0
   fi
   next_at="$(grep -E '^next_retry_at=' "$(gateway_fail_path)" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"

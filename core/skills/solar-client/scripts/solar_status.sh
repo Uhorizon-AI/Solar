@@ -69,15 +69,19 @@ if [[ -f "$HOST_SCRIPTS/check_host.sh" ]]; then
   # shellcheck source=/dev/null
   source "$HOST_SCRIPTS/host_lib.sh"
   solar_host_load_env
-  if bash "$HOST_SCRIPTS/check_host.sh" --quiet 2>/dev/null; then
-    host_state="OK"
-    host_detail="$SOLAR_APP_BASE_URL"
-    if command -v curl >/dev/null 2>&1; then
-      runtime_json="$(curl -fsS --max-time 3 "$SOLAR_APP_BASE_URL/api/runtime/health" 2>/dev/null || true)"
-      if [[ -n "$runtime_json" ]] && echo "$runtime_json" | grep -q '"status"[[:space:]]*:[[:space:]]*"not_ready"'; then
-        host_state="WARN"
-        host_detail="$SOLAR_APP_BASE_URL in-process not ready"
-      fi
+  host_check="$(bash "$HOST_SCRIPTS/check_host.sh" --json 2>/dev/null || true)"
+  if [[ -n "$host_check" ]]; then
+    read -r host_available host_storage host_runtime_status < <(python3 -c 'import json,sys; d=json.load(sys.stdin); print(int(bool(d.get("available"))), int(bool(d.get("storage_ok"))), d.get("runtime_status", "unknown"))' <<<"$host_check" 2>/dev/null || echo '0 0 unknown')
+  else
+    host_available=0 host_storage=0 host_runtime_status=unknown
+  fi
+  if [[ "$host_available" == 1 && "$host_storage" == 1 ]]; then
+    if [[ "$host_runtime_status" == "problems" ]]; then
+      host_state="WARN"
+      host_detail="$SOLAR_APP_BASE_URL console and storage available; operational component reports problems"
+    else
+      host_state="OK"
+      host_detail="$SOLAR_APP_BASE_URL console and storage verified"
     fi
   fi
 fi
@@ -188,12 +192,27 @@ if [[ -f "$MANIFEST" ]]; then
   fi
 fi
 
+_installed_root=""
+for _candidate in "${SOLAR_INSTALL_DIR:-}" "$HOME/.local/share/solar" "$HOME/Solar/solar"; do
+  if [[ -n "$_candidate" ]] && _resolve_validate_root "$_candidate"; then
+    _installed_root="$_candidate"
+    break
+  fi
+done
+solar_root_kind="$(solar_classify_root "$SOLAR_ROOT" "$_installed_root")"
+if [[ "$solar_root_kind" == "installed" ]]; then
+  solar_root_label="installed"
+else
+  solar_root_label="development checkout"
+fi
+
 if [[ "$JSON" == true ]]; then
   python3 - <<PY
 import json
 print(json.dumps({
   "SOLAR_WORKSPACE": "$SOLAR_WORKSPACE",
   "SOLAR_ROOT": "$SOLAR_ROOT",
+  "SOLAR_ROOT_KIND": "$solar_root_kind",
   "host": "$host_state",
   "host_detail": "$host_detail",
   "workspace": "$workspace_state",
@@ -211,6 +230,7 @@ PY
 fi
 
 echo "Solar status  SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
+echo "SOLAR_ROOT=$SOLAR_ROOT ($solar_root_label)"
 block_line "host" "$host_state" "$host_detail"
 block_line "client" "$client_state" "$client_detail"
 block_line "workspace" "$workspace_state" "$workspace_detail"
@@ -236,7 +256,7 @@ if [[ "$VERBOSE" == true ]]; then
   if [[ -f "$HOST_SCRIPTS/check_host.sh" ]]; then
     bash "$HOST_SCRIPTS/check_host.sh" 2>/dev/null || true
   else
-    bash "$SCRIPT_DIR/status_interface.sh" 2>/dev/null || true
+    echo "Console check unavailable"
   fi
   if [[ -n "$orch_out" ]]; then
     echo "$orch_out"

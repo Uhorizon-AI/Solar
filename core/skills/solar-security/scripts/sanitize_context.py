@@ -9,10 +9,18 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
-import sys
 from dataclasses import dataclass
+
+import sys
+from pathlib import Path
+
+_CLIENT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-client" / "scripts"
+if str(_CLIENT_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_CLIENT_SCRIPTS))
+
+import solar_runtime  # noqa: E402
+
 from typing import Callable, Dict, List, Optional, Tuple
 
 
@@ -63,7 +71,7 @@ def _build_specs() -> List[PatternSpec]:
 
 
 SPECS: List[PatternSpec] = _build_specs()
-DEFAULT_MAPPING_PATH = Path("sun/runtime/security-map.json")
+DEFAULT_MAPPING_PATH = solar_runtime.runtime_root() / "security-map.json"
 
 SKIP_DIR_NAMES = frozenset({".git", "__pycache__", "node_modules", ".venv"})
 # Directory mode scans only these suffixes by default (narrow on purpose).

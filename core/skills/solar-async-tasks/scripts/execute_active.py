@@ -22,6 +22,13 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "solar-router/scripts"))
+from managed_process import run_managed, ProcessCancelled
+from task_cancel import requested, acknowledge
+
+_CANCEL_CHECK = lambda: False
+_START_HOOK = lambda pid: None
+
 # Interpreters allowed as argv[0] when local_command runs a script under workspace.
 _LOCAL_INTERPRETERS = frozenset({"bash", "sh", "python3", "python", "ruby"})
 
@@ -167,7 +174,7 @@ def call_router(
     Call solar-router v3 with channel=async-task, mode=direct_only.
     Returns parsed router v3 response dict.
     """
-    router_python = os.getenv("SOLAR_AI_ROUTER_PYTHON", "python3")
+    router_python = os.getenv("SOLAR_AI_ROUTER_PYTHON", sys.executable)
     timeout_sec = _env_int_with_comment(
         "SOLAR_ROUTER_TIMEOUT_SEC",
         _env_int_with_comment("SOLAR_AI_ROUTER_TIMEOUT_SEC", 310),
@@ -184,12 +191,11 @@ def call_router(
     if provider:
         payload["provider"] = provider
 
-    proc = subprocess.run(
+    proc = run_managed(
         [router_python, str(router_script)],
         input=json.dumps(payload),
-        text=True,
-        capture_output=True,
         timeout=timeout_sec,
+        cancelled=_CANCEL_CHECK, on_start=_START_HOOK,
     )
 
     stdout = proc.stdout.strip()
@@ -303,8 +309,30 @@ def main() -> int:
     log_file = log_dir / (task_file.stem + ".log")
 
     # Read per-task provider override from frontmatter
+    global _CANCEL_CHECK, _START_HOOK
+    _CANCEL_CHECK = lambda: requested(task_root, task_id)
+    def record_pid(pid):
+        handles = task_root / "handles"
+        handles.mkdir(exist_ok=True)
+        (handles / (task_id + ".json")).write_text(json.dumps({"pid": pid, "task_id": task_id}))
+    _START_HOOK = record_pid
+    if _CANCEL_CHECK():
+        acknowledge(task_file)
+        return 130
+
     task_provider = read_frontmatter_key(task_file, "provider").strip().lower() or None
     executor = read_frontmatter_key(task_file, "executor").strip().lower()
+    if read_frontmatter_key(task_file, "origin_channel") in ("app", "voice"):
+        # Phase 1 preparation worker: read context, return text. No write/shell/MCP tools.
+        task_provider = "claude"
+        os.environ["SOLAR_ROUTER_CLAUDE_CMD"] = shlex.join([
+            'claude', '-p', '--no-session-persistence', '--permission-mode', 'plan',
+            '--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep',
+            '--strict-mcp-config', '--mcp-config', json.dumps({'mcpServers': {}}),
+            '--settings', json.dumps({'disableAllHooks': True}),
+        ])
+        if executor == "local":
+            raise ValueError("Voice preparation cannot use local executors")
 
     if executor == "local":
         local_command = read_frontmatter_key(task_file, "local_command").strip()
@@ -338,13 +366,15 @@ def main() -> int:
             return 1
         print(f"  Running approved local executor: {local_command}", flush=True)
         try:
-            proc = subprocess.run(
+            proc = run_managed(
                 argv,
                 cwd=workspace,
-                text=True,
-                capture_output=True,
                 timeout=timeout_sec,
+                cancelled=_CANCEL_CHECK, on_start=_START_HOOK,
             )
+        except ProcessCancelled:
+            acknowledge(task_file)
+            return 130
         except subprocess.TimeoutExpired:
             mark_task_error(
                 task_file, task_id, title, "local",
@@ -387,6 +417,9 @@ def main() -> int:
     print(f"  Calling router (channel=async-task, mode=direct_only, provider={task_provider or 'priority'}) ...", flush=True)
     try:
         response = call_router(router_script, task_id, prompt, task_provider)
+    except ProcessCancelled:
+        acknowledge(task_file)
+        return 130
     except subprocess.TimeoutExpired:
         mark_task_error(
             task_file, task_id, title, task_provider,

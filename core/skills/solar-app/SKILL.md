@@ -1,12 +1,15 @@
 ---
 name: solar-app
 description: >
-  Solar App local control plane on :9000 — dashboard, fleet, governance editor, voice (tray + CLI via solar app voice).
+  Read-only Solar console on :9000. Inspect runtime health, async tasks, gateway
+  failures, continuity freshness and router executions with injected context.
 ---
 
-# Solar App (`solar-app`)
+# Solar Console
 
-Preferred human entrypoint for local operations UI/API on `:9000`.
+Open `http://localhost:9000/app`. The existing status, logs and activity views
+read task Markdown files and router `audit.jsonl` directly. No conversation
+store, voice runtime, execution worker or mutation endpoints are provided.
 
 ## Required MCP
 
@@ -17,29 +20,31 @@ None
 ```bash
 solar app start|stop|status|open
 solar app workspace list|add|remove|use <path>
-solar app voice once|paste|command|read|ask|doctor   # ops/debug; primary UX = Solar.app tray
+solar status
 ```
 
-Global dispatcher: `core/skills/solar-client/scripts/solar` (`solar client *`, `solar status`, chat REPL).
+The global dispatcher is `core/skills/solar-client/scripts/solar`.
+`app_http.py` serves the console; `app_solar.py` reads its canonical sources.
+`host_registry.py` and `host_workspace_context.py` retain workspace selection.
+The console port is fixed at 9000. The registry and metrics keep their current
+machine-local paths; runtime files remain under `<runtime root>/`.
 
-## Runtime ownership
-
-- Runtime scripts: `core/skills/solar-app/scripts/`
-- Shared runtime modules: `interface_http.py`, `interface_store.py` (in-process on `:9000`)
-- Voice: `voice_*.py`, macOS tray under `host_platform/macos/`
-- `solar-interface` skill **removed** — legacy `:7741` daemon sunset
+Health requires a fresh source read. Task failures describe the task, not the
+health of Solar. A router start without a recent end is not proof of a live
+process. History turns and summaries are traceability, not a contamination detector.
+A missing gateway probe is unverified, not healthy. Recorded failures retain their
+date. The browser marks readings older than 120 seconds as unverified.
 
 ## Validation commands
 
 ```bash
-bash core/tests/skills/solar-app/test_host_governance_tree.sh
-bash core/tests/skills/solar-app/test_host_chat_e2e.sh
-bash core/tests/skills/solar-app/test_host_api_smoke.sh
-bash core/tests/skills/solar-app/test_host_fleet_client_actions.sh
-bash core/tests/skills/solar-app/test_fleet_registry.sh
-bash core/tests/skills/solar-app/test_workspace_mount.sh
-bash core/tests/skills/solar-client/test_client_bundle.sh
+python3 -m unittest discover -s core/tests/skills/solar-app -p 'test_*.py'
 python3 -m py_compile core/skills/solar-app/scripts/host_server.py
-python3 -m py_compile core/skills/solar-app/scripts/interface_http.py
 bash -n core/skills/solar-client/scripts/solar
+python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-app /tmp
 ```
+
+## Laptop runtime note
+
+Host sleep stops availability. Only one active host should serve the same public
+route. This console is local and does not replace the gateway or transports.

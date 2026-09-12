@@ -11,7 +11,9 @@ RESOLVE_SCRIPT="$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)/resolve_so
 source "$RESOLVE_SCRIPT"
 solar_resolve_paths --quiet
 SOLAR_WORKSPACE="${SOLAR_WORKSPACE:-$SOLAR_WORKSPACE}"
-AUDIT_LOG="$SOLAR_WORKSPACE/sun/runtime/router/audit.jsonl"
+# shellcheck source=/dev/null
+source "$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+AUDIT_LOG="$(solar_runtime_dir router)/audit.jsonl"
 PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 LAST_N=10
 

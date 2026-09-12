@@ -6,6 +6,21 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-async-tasks): route stop requests through canonical task cancellation and report `cancelled` only after the managed process acknowledges termination.
+
+### Changed
+- Show the effective `SOLAR_ROOT` and classify it as an installed root or development checkout in text and JSON status output.
+- Retain the existing App status, logs and activity shell as a read-only console on port 9000. Read canonical Markdown tasks and router audit records, including injected history, summary use and duration.
+- Require recent console and storage access checks for host availability. Report gateway failures and stale records with their causes and dates, separately from task execution failures.
+
+### Removed
+- App conversation APIs, SQLite conversation store and reconciliation worker; CLI chat and voice commands; macOS tray, HUD, dictation, TTS and Whisper integration.
+- Dashboard mutation and fleet surfaces. `/` and `/dashboard` now lead to the existing console at `/app`.
+
+### Fixed
+- fix(codex): invoke current Codex CLIs with `--sandbox workspace-write` instead of the removed `--full-auto` flag.
+
 ## [0.22.1] - 2026-09-06
 
 ### Fixed

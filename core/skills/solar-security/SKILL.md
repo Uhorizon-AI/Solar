@@ -58,7 +58,7 @@ For repository path consistency (rename files with placeholder tokens and
 rewrite markdown links), use `scripts/sanitize_paths.py`.
 
 For stable placeholders across runs, use the global Solar runtime mapping file:
-`sun/runtime/security-map.json`.
+`<runtime root>/security-map.json`.
 
 ## Script usage (`scripts/`)
 
@@ -104,8 +104,8 @@ python3 core/skills/solar-security/scripts/sanitize_context.py \
   --report /tmp/sanitize-report.json
 ```
 
-**Mapping file (automatic):** every run also reads and then **rewrites** `sun/runtime/security-map.json`
-(paths are relative to the shell’s current working directory; from repo root that is `sun/runtime/security-map.json`).
+**Mapping file (automatic):** every run also reads and then **rewrites** `<runtime root>/security-map.json`
+(paths are relative to the shell’s current working directory; from repo root that is `<runtime root>/security-map.json`).
 That file stores stable placeholder assignments (for example `[EMAIL_001]`) across runs and for directory mode
 is updated **once after processing all files**. It is separate from the sanitized document path (for example `/tmp/example.sanitized.md` above).
 
@@ -113,10 +113,10 @@ is updated **once after processing all files**. It is separate from the sanitize
 
 ### Path sanitizer (`sanitize_paths.py`)
 
-Requires replacement rules: either `--use-mapping` (reads `sun/runtime/security-map.json` by default when run from repo root) and/or `--old` / `--new`. Paths are relative to the shell’s current working directory, same as `sanitize_context.py`.
+Requires replacement rules: either `--use-mapping` (reads `<runtime root>/security-map.json` by default when run from repo root) and/or `--old` / `--new`. Paths are relative to the shell’s current working directory, same as `sanitize_context.py`.
 
 ```bash
-# Preview: rules from default sun/runtime/security-map.json (no --mapping needed)
+# Preview: rules from default <runtime root>/security-map.json (no --mapping needed)
 python3 core/skills/solar-security/scripts/sanitize_paths.py \
   planets/<planet>/workspace \
   --use-mapping \

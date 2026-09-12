@@ -16,7 +16,7 @@ $SOLAR_TASK_ROOT/hooks/<resource-name>/
 └── on_error.sh        (optional)
 ```
 
-Default location: `sun/runtime/async-tasks/hooks/`
+Default location: `<runtime root>/async-tasks/hooks/`
 
 ## Hook Types
 

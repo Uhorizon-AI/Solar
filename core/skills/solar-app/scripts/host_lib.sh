@@ -9,9 +9,9 @@ source "$_CLIENT_SCRIPTS/resolve_solar_paths.sh"
 # shellcheck source=host_env_compat.sh
 source "$_HOST_LIB_DIR/host_env_compat.sh"
 
-solar_host_workspace_ports() {
+solar_host_workspace_gateway_port() {
   local ws="$1"
-  python3 "$_HOST_LIB_DIR/host_registry.py" ports "$ws"
+  python3 "$_HOST_LIB_DIR/host_registry.py" gateway-port "$ws"
 }
 
 solar_host_apply_active_registry() {
@@ -32,26 +32,38 @@ solar_host_load_env() {
     set +a
   fi
   solar_app_apply_legacy_env
-  if [[ -z "${SOLAR_APP_PORT:-}" || -z "${SOLAR_HTTP_PORT:-}" ]]; then
-    read -r _host_port _gw < <(solar_host_workspace_ports "$SOLAR_WORKSPACE")
-    if [[ -z "${SOLAR_APP_PORT:-}" ]]; then
-      export SOLAR_APP_PORT="${_host_port:-9000}"
-    fi
-    if [[ -z "${SOLAR_HTTP_PORT:-}" ]]; then
-      export SOLAR_HTTP_PORT="${_gw:-8787}"
-    fi
+  if [[ -z "${SOLAR_HTTP_PORT:-}" ]]; then
+    _gw="$(solar_host_workspace_gateway_port "$SOLAR_WORKSPACE")"
+    export SOLAR_HTTP_PORT="${_gw:-8787}"
   fi
   export SOLAR_APP_HOST="${SOLAR_APP_HOST:-127.0.0.1}"
-  export SOLAR_APP_PORT="${SOLAR_APP_PORT:-9000}"
+  export SOLAR_APP_PORT=9000
   export SOLAR_APP_BASE_URL="http://${SOLAR_APP_HOST}:${SOLAR_APP_PORT}"
-  export SOLAR_HOST_RUNTIME_DIR="${SOLAR_HOST_RUNTIME_DIR:-sun/runtime/host}"
-  export SOLAR_HOST_PID_FILE="$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR/host.pid"
+  # Host state is machine state: it lives under the framework runtime root,
+  # never inside the workspace. A relative override stays relative to the
+  # workspace for backward compatibility with explicit deployments.
+  if [[ -z "${SOLAR_HOST_RUNTIME_DIR:-}" ]]; then
+    # shellcheck source=/dev/null
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+    export SOLAR_HOST_RUNTIME_DIR="$(solar_runtime_dir host)"
+  fi
+  export SOLAR_HOST_PID_FILE="$(solar_host_runtime_path)/host.pid"
+}
+
+# Absolute host runtime dir (does not create it).
+solar_host_runtime_path() {
+  case "$SOLAR_HOST_RUNTIME_DIR" in
+    /*) printf '%s\n' "$SOLAR_HOST_RUNTIME_DIR" ;;
+    *)  printf '%s\n' "$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR" ;;
+  esac
 }
 
 solar_host_runtime_dir() {
   solar_host_load_env
-  mkdir -p "$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR"
-  printf '%s\n' "$SOLAR_WORKSPACE/$SOLAR_HOST_RUNTIME_DIR"
+  local dir
+  dir="$(solar_host_runtime_path)"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
 }
 
 # PIDs listening on SOLAR_APP_HOST:SOLAR_APP_PORT (orphan recovery when host.pid is missing).

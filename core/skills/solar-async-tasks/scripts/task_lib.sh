@@ -14,14 +14,14 @@ if [[ -z "${SOLAR_WORKSPACE:-}" ]]; then
   fi
 fi
 
+# Machine state lives outside the workspace. SOLAR_TASK_ROOT is the explicit
+# override; otherwise the queue derives from the framework runtime root. There
+# is no fallback to sun/runtime/async-tasks.
 if [[ -z "${SOLAR_TASK_ROOT:-}" ]]; then
-  if [[ -n "${SOLAR_WORKSPACE:-}" ]]; then
-    export SOLAR_TASK_ROOT="$SOLAR_WORKSPACE/sun/runtime/async-tasks"
-  elif [[ -d "$(pwd)/sun/runtime/async-tasks" ]]; then
-    export SOLAR_TASK_ROOT="$(pwd)/sun/runtime/async-tasks"
-  else
-    export SOLAR_TASK_ROOT="${HOME:-}/Sites/solar.ai/sun/runtime/async-tasks"
-  fi
+  _TASK_RUNTIME_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+  # shellcheck source=/dev/null
+  source "$_TASK_RUNTIME_LIB"
+  export SOLAR_TASK_ROOT="$(solar_runtime_dir async-tasks)"
 else
   export SOLAR_TASK_ROOT
 fi
@@ -34,11 +34,12 @@ export DIR_ACTIVE="$SOLAR_TASK_ROOT/active"
 export DIR_COMPLETED="$SOLAR_TASK_ROOT/completed"
 export DIR_ERROR="$SOLAR_TASK_ROOT/error"
 export DIR_ARCHIVE="$SOLAR_TASK_ROOT/archive"
+export DIR_CANCELLED="$SOLAR_TASK_ROOT/cancelled"
 export DIR_LOCKS="$SOLAR_TASK_ROOT/.locks"
 
 # Ensure directories exist
 ensure_dirs() {
-    mkdir -p "$DIR_DRAFTS" "$DIR_PLANNED" "$DIR_QUEUED" "$DIR_ACTIVE" "$DIR_COMPLETED" "$DIR_ERROR" "$DIR_ARCHIVE" "$DIR_LOCKS"
+    mkdir -p "$DIR_DRAFTS" "$DIR_PLANNED" "$DIR_QUEUED" "$DIR_ACTIVE" "$DIR_COMPLETED" "$DIR_ERROR" "$DIR_ARCHIVE" "$DIR_CANCELLED" "$DIR_LOCKS"
 }
 
 # Setup logging directory: flat logs/ (one .log file per task, same name as task .md).
@@ -105,7 +106,7 @@ task_basename_exists() {
     local logs_dir="$SOLAR_TASK_ROOT/logs"
     local d
 
-    for d in "$DIR_DRAFTS" "$DIR_PLANNED" "$DIR_QUEUED" "$DIR_ACTIVE" "$DIR_COMPLETED" "$DIR_ERROR" "$DIR_ARCHIVE"; do
+    for d in "$DIR_DRAFTS" "$DIR_PLANNED" "$DIR_QUEUED" "$DIR_ACTIVE" "$DIR_COMPLETED" "$DIR_ERROR" "$DIR_ARCHIVE" "$DIR_CANCELLED"; do
         [[ -e "$d/$base.md" ]] && return 0
     done
 
@@ -122,7 +123,7 @@ log_msg() {
 find_task() {
     local task_id="$1"
     local f id
-    for f in "$DIR_DRAFTS"/*.md "$DIR_PLANNED"/*.md "$DIR_QUEUED"/*.md "$DIR_ACTIVE"/*.md "$DIR_COMPLETED"/*.md "$DIR_ERROR"/*.md "$DIR_ARCHIVE"/*.md; do
+    for f in "$DIR_DRAFTS"/*.md "$DIR_PLANNED"/*.md "$DIR_QUEUED"/*.md "$DIR_ACTIVE"/*.md "$DIR_COMPLETED"/*.md "$DIR_ERROR"/*.md "$DIR_ARCHIVE"/*.md "$DIR_CANCELLED"/*.md; do
         [[ -e "$f" ]] || continue
         id="$(extract_meta "$f" "id")"
         if [[ "$id" == "$task_id" ]]; then
@@ -488,7 +489,7 @@ is_task_terminal() {
     [[ -z "$task_file" ]] && return 0
 
     case "$(get_status "$task_file")" in
-        completed|archived|error) return 0 ;;
+        completed|archived|error|cancelled) return 0 ;;
         *) return 1 ;;
     esac
 }

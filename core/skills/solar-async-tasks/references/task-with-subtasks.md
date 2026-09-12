@@ -53,9 +53,9 @@ Child tasks **must** write their result under `## Result` in their own task file
 cat > /tmp/child-prompt.md <<'BODY'
 <instructions for the child task>
 
-When done, find this task file by Task ID inside sun/runtime/async-tasks/
+When done, find this task file by Task ID inside <runtime root>/async-tasks/
 and write your response under ## Result:
-  TASK_FILE=$(grep -rl "id: \"<task_id>\"" sun/runtime/async-tasks/ | head -1)
+  TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
 BODY
 
 # 2. Get available providers, excluding the current one
@@ -86,7 +86,7 @@ Children have completed and their results are in their task files:
 
 ```bash
 # Child task files are in completed/ with ## Result appended
-TASK_FILE=$(grep -rl "id: \"<child_task_id>\"" sun/runtime/async-tasks/ | head -1)
+TASK_FILE=$(grep -rl "id: \"<child_task_id>\"" <runtime root>/async-tasks/ | head -1)
 cat "$TASK_FILE"  # includes the ## Result section written by the child
 ```
 

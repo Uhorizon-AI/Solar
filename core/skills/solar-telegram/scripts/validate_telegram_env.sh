@@ -11,6 +11,9 @@ Usage:
 
 Options:
   --ping   Validate TELEGRAM_BOT_TOKEN against Telegram getMe API.
+
+The chat id and the display options come from `.env`; the bot token comes from
+the installation secret store, which only the process reads.
 EOF
 }
 
@@ -30,19 +33,24 @@ if [[ -f "$ROOT_ENV_FILE" ]]; then
   set +a
 fi
 
-missing=()
-for key in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
-  if [[ -z "${!key:-}" ]]; then
-    missing+=("$key")
-  fi
-done
+SECRETS_LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_secrets.sh"
+# shellcheck source=../../solar-client/scripts/solar_secrets.sh
+source "$SECRETS_LOADER"
+solar_load_installation_secrets
 
-if [[ ${#missing[@]} -gt 0 ]]; then
-  printf 'Missing required .env keys: %s\n' "${missing[*]}"
+if [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
+  echo "Missing TELEGRAM_CHAT_ID (visible configuration, .env)."
   exit 1
 fi
 
-echo "OK: required Telegram keys are present in environment."
+if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+  echo "Missing TELEGRAM_BOT_TOKEN in the installation secret store:"
+  echo "  $(solar_secrets_file)"
+  echo "It is not read from .env: the workspace is indexed by the IDE."
+  exit 1
+fi
+
+echo "OK: chat id from the workspace, bot token from the process store."
 
 if [[ "$PING_MODE" != "true" ]]; then
   exit 0

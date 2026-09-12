@@ -1,5 +1,0 @@
-data: {"type": "chunk", "text": "Mock "}
-
-data: {"type": "chunk", "text": "stream reply."}
-
-data: {"type": "done", "run_id": "run_mock", "status": "succeeded", "provider": "mock"}

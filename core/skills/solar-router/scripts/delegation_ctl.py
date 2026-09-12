@@ -27,13 +27,16 @@ _CLIENT = _SCRIPTS.parent.parent / "solar-client" / "scripts"
 if str(_CLIENT) not in sys.path:
     sys.path.insert(0, str(_CLIENT))
 
+import solar_runtime  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
 WORKSPACE, _ = resolve_solar_paths()
+# Mandates stay readable and versioned in sun/delegations/. Their enforcement
+# evidence is machine state and lives under the framework runtime root.
 # Overridable so tests never touch live mandates or evidence.
 DEL_DIR = Path(os.environ.get("SOLAR_DELEGATIONS_DIR") or WORKSPACE / "sun" / "delegations")
 RUNTIME = Path(
-    os.environ.get("SOLAR_DELEGATIONS_RUNTIME") or WORKSPACE / "sun" / "runtime" / "delegations"
+    os.environ.get("SOLAR_DELEGATIONS_RUNTIME") or solar_runtime.runtime_dir("delegations")
 )
 
 REQUIRED_FIELDS = (

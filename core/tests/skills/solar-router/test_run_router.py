@@ -138,7 +138,7 @@ class TestChannelNormalization(unittest.TestCase):
 
     @patch("router.run_with_fallback", return_value=("ok", "claude"))
     def test_known_channel_passes(self, _):
-        for channel in ("telegram", "n8n", "async-task", "other"):
+        for channel in ("telegram", "n8n", "app", "async-task", "other"):
             with self.subTest(channel=channel):
                 result = route(_req(channel=channel))
                 self.assertEqual(result["status"], "success")
