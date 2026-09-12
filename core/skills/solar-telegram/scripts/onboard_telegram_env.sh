@@ -11,8 +11,10 @@ Usage:
 
 What it does:
 - Creates .env if missing.
-- Writes a single compact Telegram block (no blank lines inside block).
+- Writes a single compact Telegram block with the *visible* configuration only.
 - Preserves existing Telegram values when already defined.
+- Removes TELEGRAM_BOT_TOKEN from .env: the token is an installation secret and
+  lives in the process store, outside every tree the IDE indexes.
 EOF
 }
 
@@ -35,14 +37,10 @@ read_key() {
   return 1
 }
 
-token="REPLACE_ME"
 chat_id="REPLACE_ME"
 parse_mode="Markdown"
 disable_preview="true"
 
-if existing="$(read_key "TELEGRAM_BOT_TOKEN")"; then
-  token="$existing"
-fi
 if existing="$(read_key "TELEGRAM_CHAT_ID")"; then
   chat_id="$existing"
 fi
@@ -56,6 +54,7 @@ fi
 tmp="$(mktemp)"
 awk '
   $0 ~ /^TELEGRAM_BOT_TOKEN=/ { next }
+  $0 ~ /^# TELEGRAM_BOT_TOKEN is deliberately absent/ { next }
   $0 ~ /^TELEGRAM_CHAT_ID=/ { next }
   $0 ~ /^TELEGRAM_PARSE_MODE=/ { next }
   $0 ~ /^TELEGRAM_DISABLE_PREVIEW=/ { next }
@@ -73,7 +72,7 @@ insert_line="$(awk '
 block_file="$(mktemp)"
 {
   echo "$BLOCK_HEADER"
-  echo "TELEGRAM_BOT_TOKEN=${token}"
+  echo "# TELEGRAM_BOT_TOKEN is deliberately absent: installation secret, process store."
   echo "TELEGRAM_CHAT_ID=${chat_id}"
   echo "TELEGRAM_PARSE_MODE=${parse_mode}"
   echo "TELEGRAM_DISABLE_PREVIEW=${disable_preview}"
@@ -97,6 +96,13 @@ else
 fi
 rm -f "$block_file"
 
+SECRETS_LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_secrets.sh"
+# shellcheck source=../../solar-client/scripts/solar_secrets.sh
+source "$SECRETS_LOADER"
+solar_secrets_ensure >/dev/null
+
 echo ""
-echo "OK: wrote compact Telegram block in .env."
-echo "Next step: set real TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID if still REPLACE_ME."
+echo "OK: wrote compact Telegram block in .env (no token in it)."
+echo "Next step: set a real TELEGRAM_CHAT_ID if still REPLACE_ME, and put"
+echo "TELEGRAM_BOT_TOKEN in the process store (0600, never in the workspace):"
+echo "  $(solar_secrets_file)"

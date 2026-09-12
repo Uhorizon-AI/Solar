@@ -31,6 +31,12 @@ transport_gateway_bind_workspace() {
     source "$SOLAR_WORKSPACE/.env"
     set +a
   fi
+  # Installation secrets come from the process store, after the workspace and
+  # over it: `TELEGRAM_BOT_TOKEN` and `SOLAR_N8N_WEBHOOK_SECRET` no longer live
+  # in a file the IDE indexes, and a stale copy there must not win.
+  # shellcheck source=../../solar-client/scripts/solar_secrets.sh
+  source "$_TGW_LIB_DIR/../../solar-client/scripts/solar_secrets.sh"
+  solar_load_installation_secrets
   _TGW_BOUND=1
 }
 

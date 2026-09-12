@@ -234,6 +234,39 @@ get_source() {
   return 0
 }
 
+# A skill can be kept out of every client, core included. Two ways, both checked
+# on the *index*, so one decision reaches Codex, Claude, Cursor and Gemini alike:
+#
+#   1. the skill itself declares `sync: false` in its SKILL.md frontmatter — the
+#      property travels with the skill and survives a settings edit. This is how
+#      a skill whose verb became a gated MCP tool stops being shipped to IDEs;
+#   2. `sync_exclude_skills` in .solar/settings.json — the operator's list, the
+#      per-skill counterpart of `sync_exclude_planets`.
+#
+# `sync_exclude_planets` cannot express either: core is not a planet.
+skill_declares_no_sync() {
+  local skill_md="$1"
+  [ -f "$skill_md" ] || return 1
+  # `exit` inside a rule still runs END, so the verdict is carried in a flag
+  # instead of in the exit code of the rule.
+  awk '
+    BEGIN { found = 0 }
+    NR == 1 && $0 != "---" { exit }
+    NR > 1 && $0 == "---" { exit }
+    NR > 1 && $0 ~ /^sync:[[:space:]]*false[[:space:]]*$/ { found = 1; exit }
+    END { exit (found ? 0 : 1) }
+  ' "$skill_md"
+}
+
+skill_is_excluded() {
+  local indexed_name="$1"
+  local skill_md="$2"
+  if printf '%s\n' "${_SYNC_EXCLUDE_SKILLS:-}" | grep -Fxq -- "$indexed_name"; then
+    return 0
+  fi
+  skill_declares_no_sync "$skill_md"
+}
+
 # Discover planet skills via find */skills/*/SKILL.md (supports nested structures like phuryn)
 discover_planet_skills() {
   local planet_dir="$1"
@@ -244,6 +277,10 @@ discover_planet_skills() {
     local name
     name="$(basename "$skill_dir")"
     local prefixed_name="$planet_name:$name"
+    if skill_is_excluded "$prefixed_name" "$skill_md"; then
+      log_ok "Skipping excluded skill: $prefixed_name"
+      continue
+    fi
     if is_duplicate "$SKILLS_INDEX" "$prefixed_name"; then
       log_warn "Duplicate skill $prefixed_name, skipping (first match wins)"
       continue
@@ -256,6 +293,19 @@ discover_planet_skills() {
 discover_resources() {
   log_section "🔍 Discovering resources..."
 
+  # Per-skill exclusions are read before anything is indexed: they apply to core
+  # skills too, which no planet-level setting can reach.
+  local _skill_exclude_raw
+  if ! _skill_exclude_raw="$(solar_client_read_sync_exclude_skills "$ROOT_DIR")"; then
+    echo "ERROR: cannot read per-skill sync exclusions; run solar client update --repair" >&2
+    return 1
+  fi
+  _SYNC_EXCLUDE_SKILLS=""
+  while IFS= read -r _ex; do
+    [[ -n "$_ex" ]] || continue
+    _SYNC_EXCLUDE_SKILLS="${_SYNC_EXCLUDE_SKILLS}"$'\n'"${_ex}"
+  done <<<"$_skill_exclude_raw"
+
   # Discover core skills
   if [ -d "$SRC_SKILLS" ]; then
     for item in "$SRC_SKILLS"/*; do
@@ -263,6 +313,10 @@ discover_resources() {
       [ -f "$item/SKILL.md" ] || continue
       local name
       name="$(basename "$item")"
+      if skill_is_excluded "$name" "$item/SKILL.md"; then
+        log_ok "Skipping excluded skill: $name"
+        continue
+      fi
       add_to_index "$SKILLS_INDEX" "$name" "$item"
     done
   fi

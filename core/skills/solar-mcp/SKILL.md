@@ -26,6 +26,10 @@ python3 core/skills/solar-mcp/scripts/mcp_server.py
 python3 core/skills/solar-mcp/scripts/mcp_approve.py grant solar_task_create \
   --args '{"title":"Revisar propuesta"}'
 
+# the same for an outbound message: the text is part of what is approved
+python3 core/skills/solar-mcp/scripts/mcp_approve.py grant solar_telegram_send \
+  --args '{"text":"Listo el informe"}'
+
 # exercise the server as a client would
 python3 core/skills/solar-mcp/scripts/mcp_probe.py list
 python3 core/skills/solar-mcp/scripts/mcp_probe.py call solar_task_status '{}'
@@ -47,6 +51,7 @@ python3 core/skills/solar-mcp/scripts/mcp_probe.py call solar_task_status '{}'
 |---|---|---|
 | `solar_task_status` | A0 | Always. Reading is not gated. |
 | `solar_task_create` | A2 | An approval granted out of band matches this exact call |
+| `solar_telegram_send` | A2 | Same, for one exact message text. Sending outside the machine is never implicit |
 | `solar_action_run` | A3 | The skill and action are registered **and** the mandate is live |
 
 Approvals are server-side records: they name one tool and one set of arguments,
@@ -63,8 +68,29 @@ Action skills are opt-in, listed in `<runtime>/mcp/action-skills.json`:
 **Instruction skills never become tools.** They stay native to the harness; only
 action verbs pass through here.
 
-## What this does not close yet
+## Sending Telegram
 
-The gate can be walked around: credentials still live in the workspace, so
-anything able to read them can act without ever talking to this server. Closing
-that path is the next corte. Until then, do not claim there is no other route.
+`solar_telegram_send` is the route an agent has to Telegram, and the reason the
+`solar-telegram` skill is no longer published to any client. The bot token is an
+installation secret held by the process
+(`<app data>/Solar/secrets/installation.env`, 0600): the server reads it and
+hands it to `send_telegram.sh`, which refuses to look it up on its own.
+
+The approval covers the exact text. Change a word and the call is refused with
+`approval_scope_mismatch`, because the hash covers the arguments, not the tool
+name alone. The chat must be the configured one or listed in
+`TELEGRAM_ALLOWED_CHAT_IDS`.
+
+## Where the guarantee ends
+
+Inside: the Solar runtime and this server, with installation secrets the process
+custodies. The two keys Solar sends with are no longer in a file the IDE indexes.
+
+Outside, and said plainly rather than disguised:
+
+- a process running as the user can read the 0600 store; this closes the
+  mediated route, not the machine;
+- a browser session already authenticated is untouched — `zoho-mail`,
+  `whatsapp`, `linkedin-messages` and `linkedin-analytics` remain declarative,
+  not coercive, until their send becomes a gated tool;
+- the `.env` of a planet is the planet's. Solar does not mediate it.

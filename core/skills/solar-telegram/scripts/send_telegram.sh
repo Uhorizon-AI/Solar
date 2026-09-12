@@ -12,9 +12,11 @@ Usage:
   echo "Message text" | bash core/skills/solar-telegram/scripts/send_telegram.sh
 
 Behavior:
-- Loads `.env` if present.
-- Uses TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
-- Optionally uses TELEGRAM_PARSE_MODE and TELEGRAM_DISABLE_PREVIEW.
+- Loads `.env` for visible configuration only (chat id, parse mode, preview).
+- Takes TELEGRAM_BOT_TOKEN from the environment. It is never read from `.env`,
+  and this script does not open the installation secret store: the Solar runtime
+  that calls it (gateway, task notifier, MCP send tool) puts the token in the
+  environment after passing its own gate.
 EOF
 }
 
@@ -28,6 +30,9 @@ fi
 _PRESERVE_PARSE_MODE="${TELEGRAM_PARSE_MODE-__UNSET__}"
 _PRESERVE_DISABLE_PREVIEW="${TELEGRAM_DISABLE_PREVIEW-__UNSET__}"
 _PRESERVE_CHAT_ID="${TELEGRAM_CHAT_ID-__UNSET__}"
+# The token is an installation secret: whatever a workspace `.env` still says
+# about it is ignored, including an empty value.
+_PRESERVE_BOT_TOKEN="${TELEGRAM_BOT_TOKEN-__UNSET__}"
 
 if [[ -f "$ROOT_ENV_FILE" ]]; then
   set -a
@@ -45,15 +50,26 @@ fi
 if [[ "$_PRESERVE_CHAT_ID" != "__UNSET__" ]]; then
   TELEGRAM_CHAT_ID="$_PRESERVE_CHAT_ID"
 fi
-unset _PRESERVE_PARSE_MODE _PRESERVE_DISABLE_PREVIEW _PRESERVE_CHAT_ID
+if [[ "$_PRESERVE_BOT_TOKEN" == "__UNSET__" ]]; then
+  unset TELEGRAM_BOT_TOKEN
+else
+  TELEGRAM_BOT_TOKEN="$_PRESERVE_BOT_TOKEN"
+fi
+unset _PRESERVE_PARSE_MODE _PRESERVE_DISABLE_PREVIEW _PRESERVE_CHAT_ID _PRESERVE_BOT_TOKEN
 
-for key in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
-  if [[ -z "${!key:-}" ]]; then
-    echo "Missing required key: $key"
-    echo "Define it in .env (root) or environment."
-    exit 1
-  fi
-done
+if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+  echo "Missing required key: TELEGRAM_BOT_TOKEN"
+  echo "It is an installation secret held by the Solar process, not by the"
+  echo "workspace. To send from an agent, use the gated MCP tool"
+  echo "solar_telegram_send, which needs an approval Louis grants out of band."
+  exit 1
+fi
+
+if [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
+  echo "Missing required key: TELEGRAM_CHAT_ID"
+  echo "Define it in .env (root) or environment."
+  exit 1
+fi
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "Missing dependency: curl"

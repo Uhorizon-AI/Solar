@@ -15,10 +15,15 @@ Authority levels follow `core/docs/authority-model.md`:
     A0  read what is already authorized          -> allowed
     A2  mutate a local artifact                  -> needs a granted approval
     A3  execute under a written mandate          -> needs a live mandate
-    A4  irreversible / external communication    -> never granted here
+    A4  irreversible, or never grantable here    -> refused
 
-External communication is not gated, it is refused: this server has no way to
-put a human in front of the send, so the answer is always no.
+**External communication.** A tool that sends outside the machine is marked
+`external_communication`. The rule from the authority model is that such an act
+is never A2-implicit: it needs formal A2, in front of a human, before the send.
+That is exactly what a granted approval is — a record Louis creates out of band,
+bound by hash to this tool and this text, single-use and expiring — so an
+external tool is reachable only through the A2 branch below. Declared external
+at any other authority is refused outright: there is no human in that path.
 """
 from __future__ import annotations
 
@@ -127,9 +132,11 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
     checks: list = [dict(check="authority", value=authority)]
 
     if spec.get("external_communication"):
-        return Verdict(False, "external_communication_refused",
-                       "External communication always needs formal A2 in front of a human; "
-                       "this server cannot provide one.", A4, tool, checks)
+        checks.append(dict(check="external_communication", value=True))
+        if authority != A2:
+            return Verdict(False, "external_communication_refused",
+                           "External communication always needs formal A2 in front of a "
+                           f"human; {authority} never provides one.", A4, tool, checks)
 
     if authority == A0:
         return Verdict(True, "read_allowed", "Read-only context needs no approval.",
@@ -168,8 +175,10 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
         approval_id = str(arguments.get("approval_id") or "")
         checks.append(dict(check="approval_id_present", value=bool(approval_id)))
         if not approval_id:
+            what = ("This verb sends outside the machine"
+                    if spec.get("external_communication") else "This verb mutates state")
             return Verdict(False, "approval_required",
-                           "This verb mutates state. Ask Louis for an approval "
+                           f"{what}. Ask Louis for an approval "
                            "(`mcp_approve.py grant`) and call again with its id.",
                            A2, tool, checks)
         record = _read_approval(approval_id)

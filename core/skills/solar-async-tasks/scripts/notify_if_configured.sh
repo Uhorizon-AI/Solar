@@ -46,6 +46,17 @@ if [[ -f "$WORKSPACE_DIR/.env" ]]; then
   set +a
 fi
 
+# The workspace `.env` carries the visible configuration (chat id, parse mode).
+# The bot token is not there any more: it belongs to the process, and the
+# notifier is the process. `send_telegram.sh` will not look it up on its own, so
+# loading it here is what lets a completed task still reach Telegram.
+SECRETS_LOADER="$SOLAR_ROOT/core/skills/solar-client/scripts/solar_secrets.sh"
+if [[ -f "$SECRETS_LOADER" ]]; then
+  # shellcheck source=/dev/null
+  source "$SECRETS_LOADER"
+  solar_load_installation_secrets
+fi
+
 ORIGIN_CHAT=$(extract_meta "$TASK_FILE" "origin_chat_id")
 CHAT_ID="${ORIGIN_CHAT:-${TELEGRAM_CHAT_ID:-}}"
 

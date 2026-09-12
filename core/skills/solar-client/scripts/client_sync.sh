@@ -11,9 +11,19 @@ Usage:
   solar client sync exclude list
   solar client sync exclude add <planet>
   solar client sync exclude remove <planet>
+  solar client sync exclude-skill list
+  solar client sync exclude-skill add <skill>
+  solar client sync exclude-skill remove <skill>
 
 sync exclude mutates .solar/settings.json (sync_exclude_planets) only;
-it does not publish skills. Run solar client sync afterwards to apply.
+exclude-skill mutates sync_exclude_skills. Neither publishes skills: run
+solar client sync afterwards to apply.
+
+A skill name is the catalog name: "solar-telegram" for a core skill,
+"planet:skill" for a planet one. Per-skill exclusion is the only one that
+reaches core; excluding the planet "solar" does not remove a core skill.
+A skill that declares "sync: false" in its own SKILL.md is excluded without
+any entry here.
 EOF
 }
 
@@ -96,6 +106,92 @@ if [[ "${1:-}" == "exclude" ]]; then
       ;;
     *)
       echo "ERROR: unknown sync exclude subcommand: ${1:-}" >&2
+      usage_sync >&2
+      exit 2
+      ;;
+  esac
+fi
+
+# Per-skill exclusion. Same shape as `exclude`, different list: this one reaches
+# core skills, which no planet name can name.
+if [[ "${1:-}" == "exclude-skill" ]]; then
+  shift
+  solar_resolve_paths --quiet
+  if ! _skill_raw="$(solar_client_read_sync_exclude_skills "$SOLAR_WORKSPACE")"; then
+    echo "ERROR: cannot read per-skill sync exclusions; repair workspace settings before continuing" >&2
+    exit 1
+  fi
+  case "${1:-}" in
+    list)
+      _any=false
+      while IFS= read -r _s; do
+        [[ -n "$_s" ]] || continue
+        printf '%s\n' "$_s"
+        _any=true
+      done <<<"$_skill_raw"
+      if [[ "$_any" != true ]]; then
+        echo "(none)"
+      fi
+      exit 0
+      ;;
+    add)
+      shift
+      skill="${1:-}"
+      if [[ -z "$skill" || "$skill" == -* ]]; then
+        echo "ERROR: sync exclude-skill add requires <skill>" >&2
+        usage_sync >&2
+        exit 2
+      fi
+      _excl=()
+      while IFS= read -r _s; do
+        [[ -n "$_s" ]] || continue
+        if [[ "$_s" == "$skill" ]]; then
+          echo "OK: already excluded: $skill"
+          exit 0
+        fi
+        _excl+=("$_s")
+      done <<<"$_skill_raw"
+      _excl+=("$skill")
+      solar_client_write_sync_exclude_skills "$SOLAR_WORKSPACE" "${_excl[@]}"
+      echo "OK: excluded skill from sync: $skill"
+      exit 0
+      ;;
+    remove)
+      shift
+      skill="${1:-}"
+      if [[ -z "$skill" || "$skill" == -* ]]; then
+        echo "ERROR: sync exclude-skill remove requires <skill>" >&2
+        usage_sync >&2
+        exit 2
+      fi
+      _new=()
+      found=false
+      while IFS= read -r _s; do
+        [[ -n "$_s" ]] || continue
+        if [[ "$_s" == "$skill" ]]; then
+          found=true
+          continue
+        fi
+        _new+=("$_s")
+      done <<<"$_skill_raw"
+      if [[ "$found" != true ]]; then
+        echo "OK: skill was not excluded: $skill"
+        exit 0
+      fi
+      if [[ ${#_new[@]} -gt 0 ]]; then
+        solar_client_write_sync_exclude_skills "$SOLAR_WORKSPACE" "${_new[@]}"
+      else
+        solar_client_write_sync_exclude_skills "$SOLAR_WORKSPACE"
+      fi
+      echo "OK: removed skill from sync exclude: $skill"
+      exit 0
+      ;;
+    -h|--help|"")
+      usage_sync
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown sync exclude-skill subcommand: ${1:-}" >&2
       usage_sync >&2
       exit 2
       ;;

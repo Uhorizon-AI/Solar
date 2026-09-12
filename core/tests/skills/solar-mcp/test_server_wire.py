@@ -47,7 +47,8 @@ def test_unknown_resource_is_an_error(solar_env):
 def test_tools_are_listed(solar_env):
     with client(solar_env) as probe:
         names = {row["name"] for row in probe.request("tools/list")["result"]["tools"]}
-        assert names == {"solar_task_status", "solar_task_create", "solar_action_run"}
+        assert names == {"solar_task_status", "solar_task_create",
+                         "solar_telegram_send", "solar_action_run"}
 
 
 def test_reading_a_verb_needs_no_approval(solar_env):
@@ -135,11 +136,32 @@ def test_every_call_leaves_a_decision_in_the_gate_log(solar_env):
     assert "approval_id" not in decisions[-1]["arguments"]
 
 
+def _fingerprint(path: Path):
+    """Size and mtime, or None when the path is not there."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns)
+
+
 def test_nothing_was_written_outside_the_fixture(solar_env):
+    """The suite writes in the fixture and the live store does not move.
+
+    Not "the live store does not exist": Louis exercises this server against the
+    cable on purpose, so its audit is expected to hold real decisions. What must
+    never happen is a test adding one.
+    """
+    live = Path.home() / "Library" / "Application Support" / "Solar" / "runtime" / "mcp"
+    before = [(path, _fingerprint(path))
+              for path in (live, live / "audit.jsonl", live / "approvals")]
+
     with client(solar_env) as probe:
         probe.call_tool("solar_task_status", {})
         probe.call_tool("solar_task_create", {"title": "X"})
+
     for path in (solar_env.gate_audit, solar_env.runtime):
         assert str(path).startswith(str(solar_env.tmp_path))
-    live = Path.home() / "Library" / "Application Support" / "Solar" / "runtime" / "mcp"
-    assert not live.exists(), f"the gate wrote into the live store: {live}"
+    assert solar_env.gate_audit.exists(), "the fixture audit was never written"
+    for path, mark in before:
+        assert _fingerprint(path) == mark, f"the live gate store was written: {path}"

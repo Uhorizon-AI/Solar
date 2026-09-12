@@ -12,9 +12,11 @@ Speaks JSON-RPC 2.0 over stdio (MCP): `initialize`, `resources/list`,
 
     python3 mcp_server.py            # serve on stdio
 
-This gate can still be walked around: the credentials live in the workspace, so
-anything that can read them can act without ever talking to this server. Closing
-that path is the next corte; until then, do not claim there is no other route.
+The installation credentials Solar sends with no longer live in the workspace:
+`solar_secrets` holds them in a 0600 file outside every tree an IDE indexes, and
+`solar_telegram_send` is the route an agent has to Telegram. That closes the
+mediated path, not the machine — a process running as the user can still read
+that file, and a browser session already logged in is not covered at all.
 """
 from __future__ import annotations
 
@@ -77,6 +79,21 @@ TOOLS = {
             queued=dict(type="boolean", description="Queue it directly instead of drafts/."),
             approval_id=dict(type="string", description="Approval granted by Louis for this exact call."),
         ), required=["title"], additionalProperties=False),
+    ),
+    "solar_telegram_send": dict(
+        authority=A2,
+        external_communication=True,
+        description=("Send one Telegram message as the Solar runtime. This is the only "
+                     "route an agent has to Telegram: the bot token is an installation "
+                     "secret the server holds, not a key in the workspace. Sending outside "
+                     "the machine is never implicit, so it needs an approval granted out "
+                     "of band with mcp_approve.py, bound to this exact text."),
+        inputSchema=dict(type="object", properties=dict(
+            text=dict(type="string", description="The message, exactly as it will be sent."),
+            chat_id=dict(type="string", description="Optional: an allowlisted chat. Defaults to TELEGRAM_CHAT_ID."),
+            parse_mode=dict(type="string", description="Optional: Markdown (default) or HTML."),
+            approval_id=dict(type="string", description="Approval granted by Louis for this exact send."),
+        ), required=["text"], additionalProperties=False),
     ),
     "solar_action_run": dict(
         authority=A3,
@@ -215,6 +232,59 @@ def _do_task_create(arguments: dict) -> dict:
     return dict(created=True, output=(proc.stdout or "").strip()[:1000])
 
 
+def _telegram_chat_allowed(chat_id: str, env: dict) -> bool:
+    """Same allowlist rule the task notifier uses: a named chat, or the default."""
+    allowed = (env.get("TELEGRAM_ALLOWED_CHAT_IDS") or "").strip()
+    if allowed:
+        return chat_id in {part.strip() for part in allowed.split(",") if part.strip()}
+    return bool(chat_id) and chat_id == (env.get("TELEGRAM_CHAT_ID") or "").strip()
+
+
+def _do_telegram_send(arguments: dict) -> dict:
+    """Send as the Solar runtime. Reached only with an approval: see the gate.
+
+    The token never touches the workspace. It is read here, from the installation
+    secret store, and handed to `send_telegram.sh` through the environment — that
+    script refuses to look it up on its own, so this is the mediated route.
+    """
+    import solar_secrets
+
+    env = dict(os.environ)
+    # Visible configuration still lives in the workspace, and the sender only
+    # ever reads the TELEGRAM_* half of it; nothing else from `.env` is carried
+    # into the subprocess.
+    env.update({key: value
+                for key, value in solar_secrets.parse_env_file(workspace() / ".env").items()
+                if key.startswith("TELEGRAM_")})
+    # The secret comes from the store, through the loader that allows only the
+    # installation's own names. A stray key in that file reaches nothing.
+    solar_secrets.load_into_environ(env)
+
+    token = (env.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        raise RuntimeError(
+            "No TELEGRAM_BOT_TOKEN in the installation secret store "
+            f"({solar_secrets.secrets_file()}). The server sends with the process "
+            "credentials or it does not send.")
+
+    chat_id = str(arguments.get("chat_id") or env.get("TELEGRAM_CHAT_ID") or "").strip()
+    if not _telegram_chat_allowed(chat_id, env):
+        raise RuntimeError(f"chat_id {chat_id or '(none)'} is not an allowlisted chat")
+
+    env["TELEGRAM_BOT_TOKEN"] = token
+    env["TELEGRAM_CHAT_ID"] = chat_id
+    if arguments.get("parse_mode"):
+        env["TELEGRAM_PARSE_MODE"] = str(arguments["parse_mode"])
+
+    script = _SKILLS / "solar-telegram" / "scripts" / "send_telegram.sh"
+    proc = subprocess.run(["bash", str(script), str(arguments["text"])],
+                          capture_output=True, text=True, timeout=60,
+                          cwd=str(workspace()), env=env)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "send failed").strip()[:500])
+    return dict(sent=True, chat_id=chat_id, output=(proc.stdout or "").strip()[:500])
+
+
 def _do_action_run(arguments: dict) -> dict:
     entry = action_skills().get(arguments["skill"], {})
     command = list(entry.get("command") or [])
@@ -231,6 +301,7 @@ def _do_action_run(arguments: dict) -> dict:
 HANDLERS = {
     "solar_task_status": _do_task_status,
     "solar_task_create": _do_task_create,
+    "solar_telegram_send": _do_telegram_send,
     "solar_action_run": _do_action_run,
 }
 

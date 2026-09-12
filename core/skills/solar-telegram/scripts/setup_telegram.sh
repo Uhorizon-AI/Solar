@@ -17,15 +17,17 @@ Options:
   --non-interactive      Do not prompt for missing values.
   --ping                 Validate token with Telegram getMe API.
   --test-message "TEXT"  Send test Telegram message after validation.
-  --token "VALUE"        Set TELEGRAM_BOT_TOKEN.
-  --chat-id "VALUE"      Set TELEGRAM_CHAT_ID.
+  --token "VALUE"        Refused. The bot token is an installation secret and
+                         never travels through argv or .env; put it in the
+                         process store instead (the script prints the path).
+  --chat-id "VALUE"      Set TELEGRAM_CHAT_ID (visible configuration).
   -h, --help             Show this help.
 
 Examples:
   bash core/skills/solar-telegram/scripts/setup_telegram.sh
   bash core/skills/solar-telegram/scripts/setup_telegram.sh --ping
   bash core/skills/solar-telegram/scripts/setup_telegram.sh --ping --test-message "Solar Telegram OK"
-  bash core/skills/solar-telegram/scripts/setup_telegram.sh --token "123:ABC" --chat-id "999"
+  bash core/skills/solar-telegram/scripts/setup_telegram.sh --chat-id "999"
 EOF
 }
 
@@ -113,28 +115,40 @@ upsert_key() {
   mv "$tmp" "$ROOT_ENV_FILE"
 }
 
+SECRETS_LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_secrets.sh"
+# shellcheck source=../../solar-client/scripts/solar_secrets.sh
+source "$SECRETS_LOADER"
+solar_secrets_ensure >/dev/null
+
 if [[ -n "$TOKEN_VALUE" ]]; then
-  upsert_key "TELEGRAM_BOT_TOKEN" "$TOKEN_VALUE"
-  echo "Updated TELEGRAM_BOT_TOKEN from provided flag."
+  echo "Refused: --token would write the bot token into .env, which the IDE"
+  echo "indexes, and would leave it in this shell's history."
+  echo "Put it in the installation secret store instead (0600, process only):"
+  echo "  $(solar_secrets_file)"
+  exit 1
 fi
+
+# Whatever is in the store is what the runtime sends with.
+solar_load_installation_secrets
 
 if [[ -n "$CHAT_ID_VALUE" ]]; then
   upsert_key "TELEGRAM_CHAT_ID" "$CHAT_ID_VALUE"
   echo "Updated TELEGRAM_CHAT_ID from provided flag."
 fi
 
-needs_input="false"
-for key in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
-  val="${!key:-}"
-  if [[ -z "$val" || "$val" == "REPLACE_ME" ]]; then
-    needs_input="true"
-  fi
-done
+if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+  echo ""
+  echo "No bot token in the installation secret store. Setup does not ask for it"
+  echo "and does not write it: add the line yourself to the 0600 file"
+  echo "  $(solar_secrets_file)"
+  echo "as TELEGRAM_BOT_TOKEN=..., then run this again."
+  exit 1
+fi
 
-if [[ "$needs_input" == "true" ]]; then
+chat_value="${TELEGRAM_CHAT_ID:-}"
+if [[ -z "$chat_value" || "$chat_value" == "REPLACE_ME" ]]; then
   if [[ "$NON_INTERACTIVE" == "true" ]]; then
-    echo "Missing required Telegram values in .env."
-    echo "Pass --token and --chat-id, or set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env."
+    echo "Missing TELEGRAM_CHAT_ID in .env. Pass --chat-id or set it there."
     exit 1
   fi
 
@@ -145,18 +159,14 @@ if [[ "$needs_input" == "true" ]]; then
   fi
 
   echo ""
-  echo "Telegram setup requires 2 values:"
-  read -r -p "TELEGRAM_BOT_TOKEN: " token
   read -r -p "TELEGRAM_CHAT_ID: " chat_id
-
-  if [[ -z "$token" || -z "$chat_id" ]]; then
-    echo "Both values are required."
+  if [[ -z "$chat_id" ]]; then
+    echo "A chat id is required."
     exit 1
   fi
-
-  upsert_key "TELEGRAM_BOT_TOKEN" "$token"
   upsert_key "TELEGRAM_CHAT_ID" "$chat_id"
-  echo "Updated .env with Telegram credentials."
+  export TELEGRAM_CHAT_ID="$chat_id"
+  echo "Updated .env with the Telegram chat id."
 fi
 
 if [[ "$DO_PING" == "true" ]]; then

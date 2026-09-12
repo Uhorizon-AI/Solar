@@ -162,6 +162,97 @@ for p in planets:
 PY
 }
 
+# Print sync_exclude_skills one per line (empty if absent/[]).
+# Names are as they appear in the catalog: "solar-telegram" for a core skill,
+# "planet:skill" for a planet one.
+solar_client_read_sync_exclude_skills() {
+  local workspace="$1"
+  local path
+  path="$(solar_client_settings_path "$workspace")"
+  [[ -f "$path" ]] || return 0
+  python3 - <<'PY' "$path"
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception as exc:
+    sys.stderr.write(f"ERROR: invalid Solar workspace settings: {path}: {exc}\n")
+    sys.exit(1)
+if not isinstance(data, dict):
+    sys.stderr.write(f"ERROR: Solar workspace settings must be a JSON object: {path}\n")
+    sys.exit(1)
+skills = data.get("sync_exclude_skills", [])
+if not isinstance(skills, list):
+    sys.stderr.write(f"ERROR: sync_exclude_skills must be an array of skill names: {path}\n")
+    sys.exit(1)
+for s in skills:
+    if not isinstance(s, str) or not s.strip() or "/" in s or "\\" in s or s in (".", ".."):
+        sys.stderr.write(f"ERROR: invalid skill name in sync_exclude_skills: {s!r}\n")
+        sys.exit(1)
+    print(s.strip())
+PY
+}
+
+# Replace sync_exclude_skills with the given list (args after workspace).
+solar_client_write_sync_exclude_skills() {
+  local workspace="$1"
+  shift
+  local write_path read_path
+  write_path="$(solar_client_settings_write_path "$workspace")"
+  read_path="$(solar_client_settings_path "$workspace")"
+  mkdir -p "$workspace/.solar"
+  python3 - <<'PY' "$write_path" "$read_path" "$@"
+import json, os, sys, tempfile
+
+write_path, read_path = sys.argv[1], sys.argv[2]
+skills = []
+seen = set()
+for skill in sys.argv[3:]:
+    skill = skill.strip()
+    if not skill or "/" in skill or "\\" in skill or skill in (".", ".."):
+        sys.stderr.write(f"ERROR: invalid skill name: {skill!r}\n")
+        sys.exit(2)
+    if skill not in seen:
+        seen.add(skill)
+        skills.append(skill)
+
+data = {}
+if os.path.isfile(read_path):
+    try:
+        with open(read_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:
+        sys.stderr.write(f"ERROR: invalid Solar workspace settings: {read_path}: {exc}\n")
+        sys.exit(1)
+    if not isinstance(data, dict):
+        sys.stderr.write(f"ERROR: Solar workspace settings must be a JSON object: {read_path}\n")
+        sys.exit(1)
+
+data["sync_exclude_skills"] = skills
+data["scope"] = "workspace"
+data["layout"] = "solar-client-v1.2"
+
+os.makedirs(os.path.dirname(write_path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, write_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+
+legacy = os.path.join(os.path.dirname(write_path), "manifest.json")
+if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write_path):
+    os.unlink(legacy)
+PY
+}
+
 # Replace sync_exclude_planets with the given list (args after workspace).
 # Empty list → write "sync_exclude_planets": [] (key kept).
 solar_client_write_sync_exclude_planets() {
