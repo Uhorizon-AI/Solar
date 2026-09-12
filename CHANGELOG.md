@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-09-12
+
 ### Fixed
 - fix(solar-gateway): treat a named tunnel as healthy when cloudflared `/ready` reports HA connections, so a hairpinned public `/health` curl from the origin host no longer marks the orchestrator PARTIAL or restarts the tunnel.
 
