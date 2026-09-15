@@ -6,7 +6,7 @@ Two rules make this a gate and not a request:
    that omits the check, lies about it, or never read the contract gets the same
    answer.
 2. **Approval is server-side state.** A client cannot approve itself by setting
-   a flag: it must name an approval that a human granted out of band, and that
+   a flag: it must name an approval issued after trusted human confirmation, and that
    approval is bound to this exact tool and these exact arguments, expires, and
    is single-use.
 
@@ -20,7 +20,7 @@ Authority levels follow `core/docs/authority-model.md`:
 **External communication.** A tool that sends outside the machine is marked
 `external_communication`. The rule from the authority model is that such an act
 is never A2-implicit: it needs formal A2, in front of a human, before the send.
-That is exactly what a granted approval is — a record Louis creates out of band,
+That is exactly what a granted approval is: a runtime or trusted-operator record,
 bound by hash to this tool and this text, single-use and expiring — so an
 external tool is reachable only through the A2 branch below. Declared external
 at any other authority is refused outright: there is no human in that path.
@@ -28,6 +28,8 @@ at any other authority is refused outright: there is no human in that path.
 from __future__ import annotations
 
 import hashlib
+import math
+from contextlib import contextmanager
 import json
 import os
 import subprocess
@@ -73,7 +75,8 @@ def approvals_dir() -> Path:
 
 def scope_hash(tool: str, arguments: dict) -> str:
     """Binds an approval to one tool and one set of arguments, canonically."""
-    payload = json.dumps(dict(tool=tool, arguments=arguments or {}),
+    payload = json.dumps(dict(tool=tool, arguments=arguments or {},
+                              workspace=str(Path(os.environ.get("SOLAR_WORKSPACE") or Path.cwd()).resolve())),
                          sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -87,7 +90,8 @@ def _read_approval(approval_id: str) -> dict | None:
         return None
     path = approvals_dir() / f"{approval_id}.json"
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
     except (OSError, ValueError):
         return None
 
@@ -178,8 +182,8 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
             what = ("This verb sends outside the machine"
                     if spec.get("external_communication") else "This verb mutates state")
             return Verdict(False, "approval_required",
-                           f"{what}. Ask Louis for an approval "
-                           "(`mcp_approve.py grant`) and call again with its id.",
+                           f"{what}. Use the client confirmation flow; the runtime manages "
+                           "the approval internally. If unsupported, a trusted host must supply approval.",
                            A2, tool, checks)
         record = _read_approval(approval_id)
         checks.append(dict(check="approval_found", value=bool(record)))
@@ -192,8 +196,11 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
             return Verdict(False, "approval_consumed",
                            f"That approval was already used at {record['consumed_at']}.",
                            A2, tool, checks)
-        expires = float(record.get("expires_at") or 0)
-        if expires and expires < _now():
+        try:
+            expires = float(record.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires = 0
+        if not math.isfinite(expires) or expires <= _now():
             checks.append(dict(check="approval_live", value=False))
             return Verdict(False, "approval_expired", "That approval has expired.",
                            A2, tool, checks)
@@ -205,7 +212,7 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
             return Verdict(False, "approval_scope_mismatch",
                            "That approval was granted for a different call. Approvals are "
                            "bound to one tool and one set of arguments.", A2, tool, checks)
-        return Verdict(True, "approval_ok", f"Approval {approval_id} matches this call.",
+        return Verdict(True, "approval_ok", "Approval matches this exact call.",
                        A2, tool, checks)
 
     return Verdict(False, "authority_not_grantable",
@@ -213,7 +220,7 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
 
 
 def consume(tool: str, arguments: dict, registry: dict) -> None:
-    """Burn the approval after a successful A2 execution, never before."""
+    """Reserve before execution while holding execution_lock; failures need new consent."""
     spec = registry.get(tool) or {}
     if spec.get("authority") != A2:
         return
@@ -234,3 +241,18 @@ def record(verdict: Verdict, arguments: dict) -> None:
                pid=os.getpid())
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+@contextmanager
+def execution_lock(tool: str, registry: dict):
+    """Serialize A2 validation/reservation across stdio server processes."""
+    if (registry.get(tool) or {}).get('authority') != A2:
+        yield
+        return
+    import fcntl
+    folder = approvals_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(folder / '.execution.lock', os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(descriptor, 'a') as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        yield

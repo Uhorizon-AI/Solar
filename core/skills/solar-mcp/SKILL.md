@@ -12,28 +12,51 @@ A client connects from any folder, reads Solar's context as **resources**, and
 calls **tools** that cannot execute until the handler says so. The refusal is
 the point: it does not depend on the calling agent choosing to behave.
 
+Runtime dependencies: `core/skills/solar-client/`, `core/skills/solar-app/`,
+`core/skills/solar-router/`, `core/skills/solar-async-tasks/` and
+`core/skills/solar-telegram/` (private sending implementation, not an agent tool).
+
 ## Required MCP
 
 None. This *is* the server.
 
 ## CLI
 
+Each client starts `solar mcp` as a stdio child; that child does not use a LaunchAgent.
+Register once at user level; do not copy per-planet MCP configurations.
+Python 3.11+ is required for registration; entries pin the interpreter for GUI launches.
+
 ```bash
-# serve on stdio (this is what an MCP client launches)
-python3 core/skills/solar-mcp/scripts/mcp_server.py
-
-# grant an approval for one exact call, then hand over the id
-python3 core/skills/solar-mcp/scripts/mcp_approve.py grant solar_task_create \
-  --args '{"title":"Revisar propuesta"}'
-
-# the same for an outbound message: the text is part of what is approved
-python3 core/skills/solar-mcp/scripts/mcp_approve.py grant solar_telegram_send \
-  --args '{"text":"Listo el informe"}'
-
-# exercise the server as a client would
-python3 core/skills/solar-mcp/scripts/mcp_probe.py list
-python3 core/skills/solar-mcp/scripts/mcp_probe.py call solar_task_status '{}'
+solar mcp
+solar mcp print --workspace /path/to/workspace
+solar mcp install --workspace /path/to/workspace --dry-run
+solar mcp install --workspace /path/to/workspace
+solar mcp uninstall --dry-run
+solar mcp uninstall
 ```
+
+Client destinations, recovery and validation: [references/clients.md](references/clients.md).
+
+## Approval workflow
+
+1. Prepare the exact action, scope and destination. For Telegram include an explicit
+   `chat_id` and final text; apply the relevant communication gate first.
+2. Call the tool without `approval_id`. On clients advertising MCP form elicitation,
+   the runtime presents the exact action for confirmation, creates the approval and
+   executes internally. Do not ask the user to create or copy an identifier.
+3. Do not ask for conversational confirmation immediately before that native prompt.
+   An existing valid approval may be passed internally and does not prompt again.
+4. Never manufacture consent with `approved=true`, an agent-authored note or a shell
+   grant. If the client lacks elicitation, report the integration limitation and use
+   a trusted operator/host approval path. Never bypass the gate.
+5. Report success only from the execution result. On uncertain failure, check the
+   resulting state before requesting another execution.
+
+An explicit local instruction can provide A2-implicit authority, but MCP does not
+carry the original user turn. Until a trusted host binds that instruction to the
+exact call, this server requires native confirmation. Do not claim to verify
+conversational authority from caller-supplied fields. See
+[references/approvals.md](references/approvals.md) for trust boundaries and operator recovery.
 
 ## Resources (open)
 
@@ -50,7 +73,7 @@ python3 core/skills/solar-mcp/scripts/mcp_probe.py call solar_task_status '{}'
 | Tool | Authority | Passes when |
 |---|---|---|
 | `solar_task_status` | A0 | Always. Reading is not gated. |
-| `solar_task_create` | A2 | An approval granted out of band matches this exact call |
+| `solar_task_create` | A2 | Native client confirmation or an existing exact-call approval |
 | `solar_telegram_send` | A2 | Same, for one exact message text. Sending outside the machine is never implicit |
 | `solar_action_run` | A3 | The skill and action are registered **and** the mandate is live |
 
@@ -58,8 +81,8 @@ python3 core/skills/solar-mcp/scripts/mcp_probe.py call solar_task_status '{}'
 is not this server. An unknown resource URI is refused with the known list.
 
 Approvals are server-side records: they name one tool and one set of arguments,
-expire, and burn on first use. A client cannot mint one — that is what makes
-this a gate.
+expire, bind the workspace, and are reserved before the first execution attempt. Tool arguments cannot mint one. A trusted client confirmation response can;
+the MCP client is part of the trust boundary.
 
 Action skills are opt-in, listed in `<runtime>/mcp/action-skills.json`:
 
@@ -86,10 +109,10 @@ name alone. The chat must be the configured one or listed in
 
 ## Clients in front of the gate
 
-An IDE may ask the human before the call reaches this server (allowlist card,
-Auto-review). That wait is the client, not a hang in the handler. Allowing
-the IDE still does not send: Solar's approval is a separate record granted
-with `mcp_approve.py`.
+Client tool allowlists and native Solar confirmation serve different purposes.
+A generic "allow this tool" card does not approve its exact destination and content.
+The runtime uses [MCP form elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)
+when supported. Clients must route that request to the human, never to the model.
 
 ## Where the guarantee ends
 
@@ -104,3 +127,12 @@ Outside, and said plainly rather than disguised:
   `whatsapp`, `linkedin-messages` and `linkedin-analytics` remain declarative,
   not coercive, until their send becomes a gated tool;
 - the `.env` of a planet is the planet's. Solar does not mediate it.
+
+## Runtime dependencies
+
+Starting the stdio child does not start Solar services. Tools still depend on
+Solar's configured workspace, runtime storage and (for sends) installation secrets.
+`solar_task_create` invokes `create.sh` to write a task; the supervised
+orchestrator processes queued tasks separately. Console and background services
+have their own startup/LaunchAgent lifecycle. A connected MCP child is not evidence
+that the queue worker, console or transport is running.

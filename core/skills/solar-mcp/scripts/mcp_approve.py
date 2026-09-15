@@ -1,9 +1,9 @@
 """Grant, list and revoke the approvals the MCP gate asks for.
 
-This is the human side of the gate and it lives outside the server on purpose:
-a client that could mint its own approval would not be passing a gate, it would
-be knocking on an open door. Run it yourself, read what it says it will allow,
-and hand the id to whoever is calling.
+The normal workflow is native client confirmation: the server calls grant only
+following the user's accepted form response. This CLI remains a trusted operator
+recovery path, not an agent self-approval route. It does not attest to an earlier
+conversation. See references/approvals.md for the trust boundary.
 
     python3 mcp_approve.py grant solar_task_create --args '{"title":"Revisar X"}'
     python3 mcp_approve.py list
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import uuid
@@ -36,8 +37,9 @@ def grant(tool: str, arguments: dict, ttl: int, note: str) -> dict:
     )
     folder = mcp_gate.approvals_dir()
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"{approval_id}.json").write_text(
-        json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    fd = os.open(folder / f"{approval_id}.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(record, stream, indent=2, sort_keys=True)
     return record
 
 
@@ -59,6 +61,8 @@ def listing() -> list:
 
 
 def revoke(approval_id: str) -> bool:
+    if not approval_id or not all(c in "0123456789abcdef" for c in approval_id):
+        return False
     path = mcp_gate.approvals_dir() / f"{approval_id}.json"
     try:
         path.unlink()
