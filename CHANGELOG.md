@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-09-15
+
 ### Added
 - feat(solar-mcp): user-level Cursor, Claude and Codex registration via `solar mcp print|install|uninstall`, with dry-run, validated workspace, pinned interpreter, atomic/idempotent updates and portable bundle inclusion. Gemini registration is not supported.
 - feat(solar-mcp): native client form confirmation manages approval IDs internally when supported; approvals bind the workspace and are reserved before execution to prevent replay. Clients without form elicitation still need trusted out-of-band approval; original-turn authority binding is not implemented.
