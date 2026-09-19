@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-async-tasks): task notifications are sent to Telegram as plain text. In Markdown, a stray `_` or `*` in a task title or path made Telegram reject the notification with HTTP 400 (`notify_status: failed`, `telegram_send_failed`). `send_telegram.sh` accepts `TELEGRAM_PARSE_MODE=none` to omit `parse_mode`.
+
 ## [0.24.1] - 2026-09-19
 
 ### Fixed

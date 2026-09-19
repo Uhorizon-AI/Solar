@@ -50,6 +50,11 @@ fi
 # The bot token is not there any more: it belongs to the process, and the
 # notifier is the process. `send_telegram.sh` will not look it up on its own, so
 # loading it here is what lets a completed task still reach Telegram.
+# Notifications carry task titles and paths the notifier does not control. In
+# Markdown a stray `_` or `*` makes Telegram reject the whole message (HTTP 400),
+# so they are always sent as plain text, whatever `.env` sets.
+export TELEGRAM_PARSE_MODE="none"
+
 SECRETS_LOADER="$SOLAR_ROOT/core/skills/solar-client/scripts/solar_secrets.sh"
 if [[ -f "$SECRETS_LOADER" ]]; then
   # shellcheck source=/dev/null

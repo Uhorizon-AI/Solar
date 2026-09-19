@@ -82,3 +82,18 @@ def test_cleanup_failure_notifies_origin(tmp_path):
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'notify_delivered: true' in (root / 'error/delivery.md').read_text()
     assert 'Task failed' in (workspace / 'sent.log').read_text()
+
+
+def test_notification_is_sent_as_plain_text(tmp_path):
+    """Regression: a title with `_` made Telegram reject a Markdown notify (HTTP 400)."""
+    workspace, root, env = fixture_env(tmp_path)
+    sender = Path(env['SOLAR_ROOT']) / 'core/skills/solar-telegram/scripts/send_telegram.sh'
+    sender.write_text('#!/bin/bash\nprintf "%s|%s\\n" "${TELEGRAM_PARSE_MODE:-}" "$1" '
+                      '>> "$SOLAR_WORKSPACE/sent.log"\n')
+    task = task_file(root)
+    task.write_text(task.read_text().replace('title: "Delivery"',
+                                             'title: "Review 2026-09-16_audit.md"'))
+    (workspace / '.env').write_text('TELEGRAM_PARSE_MODE=Markdown\n')
+    assert notify(task, {**env, 'TELEGRAM_PARSE_MODE': 'MarkdownV2'}).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert sent.startswith('none|Task completed: Review 2026-09-16_audit.md')
