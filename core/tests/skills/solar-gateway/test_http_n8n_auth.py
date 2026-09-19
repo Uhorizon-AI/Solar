@@ -369,3 +369,311 @@ def test_simultaneous_posts_execute_router_once(monkeypatch, tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ---------------------------------------------------------------------------
+# Platform-agnostic identity: n8n sends parts, Solar composes session/request
+# ---------------------------------------------------------------------------
+
+def _parts_body(**kwargs) -> Dict[str, Any]:
+    base = {
+        "type": "request",
+        "channel": "telegram",
+        "conversation_id": "456",
+        "message_id": "77",
+        "user_id": "1",
+        "text": "hi",
+    }
+    base.update(kwargs)
+    return base
+
+
+def test_compose_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    assert mod.compose_identity("telegram", "456", "77") == {
+        "session_id": "telegram:456",
+        "request_id": "telegram:456:77",
+    }
+    assert mod.compose_identity("whatsapp", "34600@s.whatsapp.net")["request_id"] == ""
+
+
+def test_parse_n8n_parts_compose_session_and_request(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    parsed = mod.parse_n8n_request(_parts_body())
+    assert parsed["session_id"] == "telegram:456"
+    assert parsed["request_id"] == "telegram:456:77"
+    assert parsed["chat_id"] == "456"
+    assert parsed["identity_error"] == ""
+
+
+def test_parse_n8n_non_telegram_has_no_reply_chat(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    parsed = mod.parse_n8n_request(
+        _parts_body(channel="whatsapp", conversation_id="34600@s.whatsapp.net", message_id="w1")
+    )
+    assert parsed["session_id"] == "whatsapp:34600@s.whatsapp.net"
+    assert parsed["request_id"] == "whatsapp:34600@s.whatsapp.net:w1"
+    assert parsed["chat_id"] == ""
+
+
+def test_parse_n8n_legacy_body_unchanged(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    parsed = mod.parse_n8n_request(_n8n_body())
+    assert parsed["session_id"] == "telegram:456"
+    assert parsed["request_id"] == "tg:1"
+    assert parsed["chat_id"] == "456"
+    assert parsed["identity_error"] == ""
+
+
+def test_parse_n8n_legacy_without_session_has_no_shared_default(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    body = _n8n_body()
+    body.pop("session_id")
+    body.pop("chat_id")
+    parsed = mod.parse_n8n_request(body)
+    # Empty, so the router keys continuity by user_id instead of "n8n:default".
+    assert parsed["session_id"] == ""
+    assert parsed["identity_error"] == ""
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        {"channel": "telegram"},
+        {"conversation_id": "456"},
+        {"message_id": "77"},
+        {"channel": "telegram", "message_id": "77"},
+        {"conversation_id": "456", "message_id": "77"},
+    ],
+)
+def test_parse_n8n_partial_identity_is_rejected(monkeypatch, tmp_path, parts):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    parsed = mod.parse_n8n_request({"type": "request", "user_id": "1", "text": "hi", **parts})
+    assert parsed["identity_error"] == "identity_incomplete"
+
+
+@pytest.mark.parametrize("channel", ["tele:gram", "tele gram", "telegram/x", "ñ"])
+def test_parse_n8n_invalid_channel_is_rejected(monkeypatch, tmp_path, channel):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    parsed = mod.parse_n8n_request(_parts_body(channel=channel))
+    assert parsed["identity_error"] == "invalid_channel"
+
+
+def test_parse_n8n_channel_is_case_insensitive(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    parsed = mod.parse_n8n_request(_parts_body(channel=" Telegram ", session_id="telegram:456"))
+    assert parsed["session_id"] == "telegram:456"
+    assert parsed["request_id"] == "telegram:456:77"
+    assert parsed["chat_id"] == "456"
+    assert parsed["identity_error"] == ""
+
+
+def test_post_n8n_parts_forward_origin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    seen: list[Dict[str, Any]] = []
+
+    async def fake_solar(payload: Dict[str, Any]) -> Dict[str, Any]:
+        seen.append(payload)
+        return {"status": "success", "reply_text": "pong", "decision": {"kind": "direct_reply"}}
+
+    monkeypatch.setattr(mod, "request_solar", fake_solar)
+    server, base = _start_server(mod)
+    try:
+        code, payload = _http_json("POST", f"{base}/webhook/n8n", _parts_body(), headers=_bearer())
+        assert code == 200
+        assert payload.get("reply_text") == "pong"
+        assert seen[0]["session_id"] == "telegram:456"
+        assert seen[0]["request_id"] == "telegram:456:77"
+        assert seen[0]["metadata"]["origin_chat_id"] == "456"
+        assert seen[0]["metadata"]["origin_request_id"] == "telegram:456:77"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_post_n8n_parts_reject_conflicting_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    called = []
+
+    async def fake_solar(payload: Dict[str, Any]) -> Dict[str, Any]:
+        called.append(payload)
+        return {"status": "success", "reply_text": "nope"}
+
+    monkeypatch.setattr(mod, "request_solar", fake_solar)
+    server, base = _start_server(mod)
+    try:
+        code, payload = _http_json(
+            "POST",
+            f"{base}/webhook/n8n",
+            _parts_body(session_id="telegram:999"),
+            headers=_bearer(),
+        )
+        assert code == 200
+        assert payload.get("status") == "failed"
+        assert payload.get("error") == "session_chat_mismatch"
+        assert called == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_post_n8n_partial_identity_rejected_without_router(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    called = []
+
+    async def fake_solar(payload):
+        called.append(payload)
+        return {"status": "success", "reply_text": "nope"}
+
+    monkeypatch.setattr(mod, "request_solar", fake_solar)
+    server, base = _start_server(mod)
+    try:
+        code, payload = _http_json(
+            "POST",
+            f"{base}/webhook/n8n",
+            {"type": "request", "channel": "telegram", "user_id": "1", "text": "hi"},
+            headers=_bearer(),
+        )
+        assert code == 200
+        assert payload.get("error") == "identity_incomplete"
+        assert called == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_post_n8n_mismatch_neither_replays_nor_is_stored(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    calls = []
+
+    async def fake_solar(payload):
+        calls.append(payload)
+        return {"status": "success", "reply_text": f"reply {len(calls)}"}
+
+    monkeypatch.setattr(mod, "request_solar", fake_solar)
+    server, base = _start_server(mod)
+    try:
+        # 1. A valid request is processed and stored under telegram:456:77.
+        code, first = _http_json("POST", f"{base}/webhook/n8n", _parts_body(), headers=_bearer())
+        assert first.get("reply_text") == "reply 1"
+        # 2. Same parts with a conflicting session: rejected, not the stored reply.
+        code, bad = _http_json(
+            "POST", f"{base}/webhook/n8n", _parts_body(message_id="78", session_id="telegram:999"),
+            headers=_bearer(),
+        )
+        assert bad.get("error") == "session_chat_mismatch"
+        code, bad_replay = _http_json(
+            "POST", f"{base}/webhook/n8n", _parts_body(session_id="telegram:999"), headers=_bearer()
+        )
+        assert bad_replay.get("error") == "session_chat_mismatch"
+        assert bad_replay.get("reply_text") != "reply 1"
+        # 3. The rejection was not stored: the corrected body for 78 still runs.
+        assert mod.n8n_ledger_load("telegram:456:78") is None
+        code, fixed = _http_json(
+            "POST", f"{base}/webhook/n8n", _parts_body(message_id="78"), headers=_bearer()
+        )
+        assert fixed.get("reply_text") == "reply 2"
+        assert len(calls) == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_telegram_webhook_uses_stable_request_id(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    monkeypatch.setattr(mod, "TELEGRAM_BOT_TOKEN", "test-token")
+    seen = []
+    done = threading.Event()
+
+    async def fake_solar(payload):
+        seen.append(payload)
+        return {"status": "success", "reply_text": "ok", "decision": {"kind": "direct_reply"}}
+
+    monkeypatch.setattr(mod, "request_solar", fake_solar)
+    monkeypatch.setattr(mod, "send_telegram", lambda chat_id, text: done.set())
+    server, base = _start_server(mod)
+    update = {
+        "update_id": 9001,
+        "message": {
+            "message_id": 77,
+            "chat": {"id": 456},
+            "from": {"id": 1},
+            "text": "hello",
+        },
+    }
+    try:
+        code, payload = _http_json("POST", f"{base}/webhook/telegram", update)
+        assert code == 200
+        assert payload.get("request_id") == "telegram:456:77"
+        assert done.wait(timeout=5)
+        assert seen[0]["request_id"] == "telegram:456:77"
+        assert seen[0]["session_id"] == "telegram:456"
+        assert not seen[0]["request_id"].startswith("tg_")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_compose_identity_escapes_separator(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    left = mod.compose_identity("custom", "a:b", "c")
+    right = mod.compose_identity("custom", "a", "b:c")
+    assert left["request_id"] != right["request_id"]
+    assert left["session_id"] != right["session_id"]
+    assert left["request_id"] == "custom:a%3Ab:c"
+    assert right["request_id"] == "custom:a:b%3Ac"
+    # '%' is escaped too, so an already-escaped part cannot forge a colon.
+    assert mod.compose_identity("custom", "a%3Ab", "c")["request_id"] == "custom:a%253Ab:c"
+    # Numeric Telegram ids are unchanged.
+    assert mod.compose_identity("telegram", "-100123", "77") == {
+        "session_id": "telegram:-100123",
+        "request_id": "telegram:-100123:77",
+    }
+
+
+def test_post_n8n_colliding_parts_do_not_share_replay(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    calls = []
+
+    async def fake_solar(payload):
+        calls.append(payload)
+        return {"status": "success", "reply_text": f"reply {len(calls)}"}
+
+    monkeypatch.setattr(mod, "request_solar", fake_solar)
+    server, base = _start_server(mod)
+    try:
+        _, first = _http_json(
+            "POST", f"{base}/webhook/n8n",
+            _parts_body(channel="custom", conversation_id="a:b", message_id="c"), headers=_bearer(),
+        )
+        _, second = _http_json(
+            "POST", f"{base}/webhook/n8n",
+            _parts_body(channel="custom", conversation_id="a", message_id="b:c"), headers=_bearer(),
+        )
+        assert first.get("reply_text") == "reply 1"
+        assert second.get("reply_text") == "reply 2"
+        assert len(calls) == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_post_n8n_untyped_legacy_mismatch_rejected(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    called = []
+
+    async def fake_solar(payload):
+        called.append(payload)
+        return {"status": "success", "reply_text": "nope"}
+
+    monkeypatch.setattr(mod, "request_solar", fake_solar)
+    server, base = _start_server(mod)
+    body = {"request_id": "legacy:1", "session_id": "telegram:999", "chat_id": "456", "text": "hi"}
+    try:
+        _, payload = _http_json("POST", f"{base}/webhook/n8n", body, headers=_bearer())
+        assert payload.get("error") == "session_chat_mismatch"
+        assert called == []
+        assert mod.n8n_ledger_load("legacy:1") is None
+    finally:
+        server.shutdown()
+        server.server_close()

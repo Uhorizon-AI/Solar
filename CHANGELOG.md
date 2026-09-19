@@ -6,6 +6,16 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-gateway): platform-agnostic message identity. n8n may send `channel` (platform, e.g. `telegram`), `conversation_id` and `message_id`; the gateway composes `session_id = channel:conversation_id` and `request_id = channel:conversation_id:message_id` and never splits a composed id. `channel` is lowercased and must match `^[a-z0-9_-]+$`. `%` and `:` inside `conversation_id` and `message_id` are escaped (`%25`, `%3A`) so different parts never compose the same id; numeric Telegram ids are unchanged. Telegram conversations become the reply chat for origin notify. Partial parts, a malformed `channel` or a conflicting `session_id` are rejected before the replay ledger and never stored. The previous n8n body (`request_id`, `session_id`, optional `chat_id`) is still accepted; without `session_id` it no longer falls back to a shared `n8n:default` session.
+
+### Changed
+- Router continuity is keyed by `session_id` instead of `user_id` (`conversation_key`). Existing history stored per `user_id` is not migrated: the next message in each conversation starts without prior turns.
+
+### Fixed
+- Async tasks no longer share one router conversation (`user_id = solar-async-tasks`); each task keeps its own `task_<id>` context.
+- Direct Telegram webhook requests use a stable `request_id` (`telegram:<chat>:<message_id>`) instead of a random one.
+
 ## [0.23.2] - 2026-09-15
 
 ### Added

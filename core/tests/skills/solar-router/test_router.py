@@ -263,6 +263,64 @@ class TestConversationContinuity(unittest.TestCase):
                 self.assertEqual(router.load_summary("u"), "plan creado")
 
 
+class TestConversationIsolation(unittest.TestCase):
+    """Continuity is per session (channel:conversation_id), not per person."""
+
+    def _two_turns(self, first, second, stream=False):
+        """Route two requests; return the prompt the provider saw on the second."""
+        prompts = []
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            router, "RUNTIME_ROOT", pathlib.Path(tmp)
+        ):
+            if stream:
+                def fake_stream(prompt, provider_override=None):
+                    prompts.append(prompt)
+                    return iter([("ok\n<solar_decision>direct_reply</solar_decision>", "claude")])
+
+                with patch("router.stream_provider", side_effect=fake_stream):
+                    for payload in (first, second):
+                        list(router.route_stream(_payload(**payload)))
+            else:
+                def fake_run(prompt):
+                    prompts.append(prompt)
+                    return ("ok\n<solar_decision>direct_reply</solar_decision>", "claude")
+
+                with patch("router.run_with_fallback", side_effect=fake_run):
+                    for payload in (first, second):
+                        router.route(_payload(**payload))
+        return prompts[-1]
+
+    def _cases(self, stream):
+        base = {"mode": "auto", "channel": "telegram"}
+        # Same person in two sessions (e.g. two async tasks): no shared history.
+        prompt = self._two_turns(
+            {**base, "user_id": "solar-async-tasks", "session_id": "task_a", "text": "TASK-A-SECRET"},
+            {**base, "user_id": "solar-async-tasks", "session_id": "task_b", "text": "second"},
+            stream=stream,
+        )
+        self.assertNotIn("TASK-A-SECRET", prompt)
+        # Two people in one session (e.g. a group chat): shared history.
+        prompt = self._two_turns(
+            {**base, "user_id": "1", "session_id": "telegram:456", "text": "GROUP-CONTEXT"},
+            {**base, "user_id": "2", "session_id": "telegram:456", "text": "second"},
+            stream=stream,
+        )
+        self.assertIn("GROUP-CONTEXT", prompt)
+        # Without a session_id the user_id is the fallback key.
+        prompt = self._two_turns(
+            {**base, "user_id": "u", "session_id": "", "text": "USER-U-CONTEXT"},
+            {**base, "user_id": "u", "session_id": "", "text": "second"},
+            stream=stream,
+        )
+        self.assertIn("USER-U-CONTEXT", prompt)
+
+    def test_route(self):
+        self._cases(stream=False)
+
+    def test_route_stream(self):
+        self._cases(stream=True)
+
+
 # ---------------------------------------------------------------------------
 # Codex review hardening (context turns, consent body, notify, ACK)
 # ---------------------------------------------------------------------------

@@ -118,6 +118,14 @@ def sanitize_id(value: str) -> str:
     return cleaned[:120] if cleaned else "unknown"
 
 
+def conversation_key(session_id: str, user_id: str) -> str:
+    """Continuity is per session (channel:conversation_id), not per person.
+
+    user_id is only a fallback for callers that send no session_id.
+    """
+    return session_id or user_id or "default"
+
+
 def conversation_file(conversation_id: str) -> pathlib.Path:
     return RUNTIME_ROOT / "conversations" / f"{sanitize_id(conversation_id)}.jsonl"
 
@@ -1272,7 +1280,7 @@ def route_stream(raw: str):
         yield json.dumps({"type": "done", "status": "failed", "error": "async_tasks_disabled", "provider": None, "request_id": request_id, "error_code": "async_tasks_disabled"})
         return
 
-    conversation_id = user_id or session_id or "default"
+    conversation_id = conversation_key(session_id, user_id)
     conv_path = conversation_file(conversation_id)
     metadata = payload.get("metadata") or {}
     jit_context = resolve_jit_context(metadata) if metadata else None
@@ -1423,7 +1431,7 @@ def route(raw: str) -> Dict[str, Any]:
     if channel not in VALID_CHANNELS:
         channel = "other"
 
-    conversation_id = user_id or session_id or "default"
+    conversation_id = conversation_key(session_id, user_id)
     conv_path = conversation_file(conversation_id)
 
     t_start = time.monotonic()
