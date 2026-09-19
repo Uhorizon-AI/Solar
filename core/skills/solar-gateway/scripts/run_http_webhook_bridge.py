@@ -26,6 +26,12 @@ from pathlib import Path
 from time import time
 from typing import Any, Dict, Optional, Tuple
 from uuid import uuid4
+import sys
+
+_CLIENT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-client" / "scripts"
+if str(_CLIENT_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_CLIENT_SCRIPTS))
+import solar_runtime  # noqa: E402
 
 try:
     from websockets.client import connect
@@ -223,15 +229,23 @@ def n8n_poll_disabled_body(request_id: Optional[str] = None) -> Dict[str, Any]:
     return body
 
 
+def async_task_root() -> Path:
+    """Same queue as task_lib.sh: SOLAR_TASK_ROOT, else the framework runtime.
+
+    There is no fallback to sun/runtime/async-tasks.
+    """
+    override = os.getenv("SOLAR_TASK_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return solar_runtime.runtime_dir("async-tasks")
+
+
 def find_task_for_origin_request(origin_request_id: str) -> Optional[str]:
     """Return task_id if a task already correlates to this origin_request_id."""
     rid = str(origin_request_id or "").strip()
     if not rid:
         return None
-    workspace = os.getenv("SOLAR_WORKSPACE", "").strip()
-    if not workspace:
-        return None
-    root = Path(workspace) / "sun" / "runtime" / "async-tasks"
+    root = async_task_root()
     needle = f'origin_request_id: "{rid}"'
     needle_plain = f"origin_request_id: {rid}"
     for sub in ("queued", "active", "completed", "drafts", "planned", "error"):
