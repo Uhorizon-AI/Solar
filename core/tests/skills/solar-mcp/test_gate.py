@@ -51,31 +51,31 @@ def test_a_true_looking_flag_does_not_help(solar_env):
 
 def test_approval_is_bound_to_the_exact_call(solar_env, monkeypatch):
     import mcp_approve
-    granted = mcp_approve.grant("solar_task_create", {"title": "Uno"}, 900, "test")
+    granted = mcp_approve.grant("solar_task_create", {"title": "One"}, 900, "test")
     # Same approval, different arguments: refused.
     verdict = mcp_gate.preflight(
-        "solar_task_create", {"title": "Otro", "approval_id": granted["approval_id"]}, registry())
+        "solar_task_create", {"title": "Other", "approval_id": granted["approval_id"]}, registry())
     assert not verdict.allowed
     assert verdict.code == "approval_scope_mismatch"
     # The call it was granted for: allowed.
     verdict = mcp_gate.preflight(
-        "solar_task_create", {"title": "Uno", "approval_id": granted["approval_id"]}, registry())
+        "solar_task_create", {"title": "One", "approval_id": granted["approval_id"]}, registry())
     assert verdict.allowed and verdict.code == "approval_ok"
 
 
 def test_approval_expires(solar_env):
     import mcp_approve
-    granted = mcp_approve.grant("solar_task_create", {"title": "Uno"}, -1, "already old")
+    granted = mcp_approve.grant("solar_task_create", {"title": "One"}, -1, "already old")
     verdict = mcp_gate.preflight(
-        "solar_task_create", {"title": "Uno", "approval_id": granted["approval_id"]}, registry())
+        "solar_task_create", {"title": "One", "approval_id": granted["approval_id"]}, registry())
     assert not verdict.allowed
     assert verdict.code == "approval_expired"
 
 
 def test_approval_burns_on_use(solar_env):
     import mcp_approve
-    granted = mcp_approve.grant("solar_task_create", {"title": "Uno"}, 900, "test")
-    arguments = {"title": "Uno", "approval_id": granted["approval_id"]}
+    granted = mcp_approve.grant("solar_task_create", {"title": "One"}, 900, "test")
+    arguments = {"title": "One", "approval_id": granted["approval_id"]}
     assert mcp_gate.preflight("solar_task_create", arguments, registry()).allowed
     mcp_gate.consume("solar_task_create", arguments, registry())
     second = mcp_gate.preflight("solar_task_create", arguments, registry())

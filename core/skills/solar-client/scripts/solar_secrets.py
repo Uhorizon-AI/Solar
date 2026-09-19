@@ -150,7 +150,7 @@ def status() -> dict:
 def workspace_leaks(workspace: Path) -> list[str]:
     """Files inside the workspace that still carry a name from KNOWN_SECRETS.
 
-    The corte closes when this list is empty: these keys must not sit in a file
+    The change closes when this list is empty: these keys must not sit in a file
     the IDE indexes.
     """
     leaks = []

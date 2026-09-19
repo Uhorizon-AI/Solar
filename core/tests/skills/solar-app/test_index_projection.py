@@ -27,11 +27,11 @@ def store(tmp_path, monkeypatch):
     workspace.mkdir(exist_ok=True)
     monkeypatch.setenv("SOLAR_APP_DATA", str(app_data))
 
-    (runtime / "async-tasks" / "queued" / "uno.md").write_text(
-        '---\nid: "t-uno"\ntitle: "Uno"\ncreated: "2026-09-01T10:00:00+02:00"\n'
-        'recurring: true\nrecurring_run_count: 7\n---\n\n# Uno\n', encoding="utf-8")
-    (runtime / "async-tasks" / "drafts" / "dos.md").write_text(
-        '---\nid: "t-dos"\ntitle: "Dos"\ncreated: "2026-09-02T10:00:00+02:00"\n---\n\n# Dos\n',
+    (runtime / "async-tasks" / "queued" / "one.md").write_text(
+        '---\nid: "t-one"\ntitle: "One"\ncreated: "2026-09-01T10:00:00+02:00"\n'
+        'recurring: true\nrecurring_run_count: 7\n---\n\n# One\n', encoding="utf-8")
+    (runtime / "async-tasks" / "drafts" / "two.md").write_text(
+        '---\nid: "t-two"\ntitle: "Two"\ncreated: "2026-09-02T10:00:00+02:00"\n---\n\n# Two\n',
         encoding="utf-8")
     audit = runtime / "router" / "audit.jsonl"
     audit.write_text("\n".join(json.dumps(row) for row in [
@@ -82,8 +82,8 @@ def test_a_fresh_index_serves_the_same_numbers(store):
 
 def test_a_changed_source_marks_the_projection_stale_and_falls_back(store):
     store.index.build(store.workspace)
-    (store.runtime / "async-tasks" / "queued" / "tres.md").write_text(
-        '---\nid: "t-tres"\ntitle: "Tres"\ncreated: "2026-09-04T10:00:00+02:00"\n---\n\n# Tres\n',
+    (store.runtime / "async-tasks" / "queued" / "three.md").write_text(
+        '---\nid: "t-three"\ntitle: "Three"\ncreated: "2026-09-04T10:00:00+02:00"\n---\n\n# Three\n',
         encoding="utf-8")
 
     data = store.index.projection(store.workspace)
@@ -96,8 +96,8 @@ def test_a_changed_source_marks_the_projection_stale_and_falls_back(store):
 
 def test_rebuilding_makes_it_fresh_again(store):
     store.index.build(store.workspace)
-    (store.runtime / "async-tasks" / "queued" / "tres.md").write_text(
-        '---\nid: "t-tres"\ntitle: "Tres"\ncreated: "2026-09-04T10:00:00+02:00"\n---\n\n# Tres\n',
+    (store.runtime / "async-tasks" / "queued" / "three.md").write_text(
+        '---\nid: "t-three"\ntitle: "Three"\ncreated: "2026-09-04T10:00:00+02:00"\n---\n\n# Three\n',
         encoding="utf-8")
     assert store.index.projection(store.workspace)["projection"]["source"] == "files"
     store.index.build(store.workspace)

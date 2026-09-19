@@ -168,37 +168,37 @@ class TestBuildPrompt(unittest.TestCase):
 
     def test_includes_recent_turns_when_no_summary(self):
         recent = [
-            {"role": "user", "text": "crea el plan"},
-            {"role": "assistant", "text": "Propongo Autonomía Supervisada v2"},
+            {"role": "user", "text": "create the plan"},
+            {"role": "assistant", "text": "I propose Supervised Autonomy v2"},
         ]
         result = router.build_prompt(
             "sys",
-            "Si, crea el plan",
+            "Yes, create the plan",
             "conv1",
             mode="direct_only",
             channel="telegram",
             recent=recent,
         )
         self.assertIn("Recent turns", result)
-        self.assertIn("Propongo Autonomía Supervisada v2", result)
-        self.assertIn("Si, crea el plan", result)
+        self.assertIn("I propose Supervised Autonomy v2", result)
+        self.assertIn("Yes, create the plan", result)
 
     def test_summary_plus_supplement_turns(self):
         recent = [
-            {"role": "user", "text": "Si, crea el plan"},
-            {"role": "assistant", "text": "¿Cuál?"},
+            {"role": "user", "text": "Yes, create the plan"},
+            {"role": "assistant", "text": "Which one?"},
         ]
         result = router.build_prompt(
             "sys",
-            "El plan del mensaje anterior",
+            "The plan from the previous message",
             "conv1",
             mode="direct_only",
             channel="telegram",
             recent=recent,
-            summary="Pendiente: crear plan Autonomía Supervisada v2 tras aprobación.",
+            summary="Pending: create the Supervised Autonomy v2 plan after approval.",
         )
         self.assertIn("Conversation summary", result)
-        self.assertIn("Autonomía Supervisada v2", result)
+        self.assertIn("Supervised Autonomy v2", result)
         self.assertIn("Most recent turns", result)
         self.assertNotIn("Recent turns (oldest", result)
 
@@ -217,15 +217,15 @@ class TestConversationContinuity(unittest.TestCase):
             runtime = pathlib.Path(tmp)
             conv = runtime / "conversations" / "u1.jsonl"
             with patch.object(router, "RUNTIME_ROOT", runtime):
-                router.append_message(conv, "user", "hola")
+                router.append_message(conv, "user", "hello")
                 router.append_message(
                     conv,
                     "assistant",
-                    "respuesta\n<solar_summary>ignore in history</solar_summary>",
+                    "answer\n<solar_summary>ignore in history</solar_summary>",
                 )
                 recent = router.load_recent_messages(conv)
                 self.assertEqual(len(recent), 2)
-                self.assertEqual(recent[1]["text"], "respuesta")
+                self.assertEqual(recent[1]["text"], "answer")
                 router.save_summary("u1", "rolling context")
                 self.assertEqual(router.load_summary("u1"), "rolling context")
                 summary, supplement = router.conversation_context("u1", conv)
@@ -235,17 +235,17 @@ class TestConversationContinuity(unittest.TestCase):
     @patch("router.run_with_fallback")
     def test_route_injects_history_into_prompt(self, mock_run):
         mock_run.return_value = (
-            "hecho\n<solar_decision>direct_reply</solar_decision>\n"
-            "<solar_summary>plan creado</solar_summary>",
+            "done\n<solar_decision>direct_reply</solar_decision>\n"
+            "<solar_summary>plan created</solar_summary>",
             "claude",
         )
         with tempfile.TemporaryDirectory() as tmp:
             runtime = pathlib.Path(tmp)
             conv = runtime / "conversations" / "u.jsonl"
             with patch.object(router, "RUNTIME_ROOT", runtime):
-                router.append_message(conv, "user", "analiza Solar")
+                router.append_message(conv, "user", "analyze Solar")
                 router.append_message(
-                    conv, "assistant", "Propongo crear Autonomía Supervisada v2"
+                    conv, "assistant", "I propose creating Supervised Autonomy v2"
                 )
                 result = router.route(
                     _payload(
@@ -253,14 +253,14 @@ class TestConversationContinuity(unittest.TestCase):
                         channel="telegram",
                         user_id="u",
                         session_id="u",
-                        text="Si, crea el plan",
+                        text="Yes, create the plan",
                     )
                 )
                 self.assertEqual(result["status"], "success")
                 prompt = mock_run.call_args[0][0]
-                self.assertIn("Autonomía Supervisada v2", prompt)
-                self.assertIn("Si, crea el plan", prompt)
-                self.assertEqual(router.load_summary("u"), "plan creado")
+                self.assertIn("Supervised Autonomy v2", prompt)
+                self.assertIn("Yes, create the plan", prompt)
+                self.assertEqual(router.load_summary("u"), "plan created")
 
 
 class TestConversationIsolation(unittest.TestCase):
@@ -347,7 +347,7 @@ class TestParseContextTurns(unittest.TestCase):
 
 class TestGatewayTaskBodyConsent(unittest.TestCase):
     def test_allows_read_analysis_without_reactivation(self):
-        body = router._gateway_task_body("analiza el pipeline", "telegram")
+        body = router._gateway_task_body("analyze the pipeline", "telegram")
         self.assertIn("read/analysis", body.lower())
         self.assertIn("declared artifact", body.lower())
         self.assertIn("without asking to re-activate", body.lower())
@@ -356,7 +356,7 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
         self.assertIn("Do **not** pass `--metadata`", body)
 
     def test_requires_approval_for_mutable_actions(self):
-        body = router._gateway_task_body("envía el WhatsApp a Jorge", "n8n")
+        body = router._gateway_task_body("send the WhatsApp to Jorge", "n8n")
         self.assertIn("external sends", body.lower())
         self.assertIn("destructive deletes", body.lower())
         self.assertIn("credential", body.lower())
@@ -367,16 +367,18 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
 class TestGatewayAsyncReply(unittest.TestCase):
     def test_canonical_ack_ignores_model_prose(self):
         reply = router.gateway_async_reply("tid-1")
-        self.assertEqual(reply, f"{router.GATEWAY_ASYNC_ACK}\n\n(Tarea: tid-1)")
-        self.assertNotIn("¿Quieres", reply)
+        self.assertEqual(reply, f"{router.GATEWAY_ASYNC_ACK}\n\n(Task: tid-1)")
+        self.assertNotIn("Do you want", reply)
 
     def test_includes_notify_warning(self):
         reply = router.gateway_async_reply("tid-2", notify_warning="notify_failed")
         self.assertIn(router.GATEWAY_ASYNC_ACK_NO_NOTIFY, reply)
         self.assertNotIn(router.GATEWAY_ASYNC_ACK, reply)
-        self.assertNotIn("Te aviso por aquí cuando termine", reply)
-        self.assertNotIn("te aviso manualmente", reply.lower())
+        self.assertNotIn("I'll let you know here", reply)
+        self.assertNotIn("notify you manually", reply.lower())
         self.assertIn("notify_failed", reply)
+        self.assertIn("[Detail: notify_failed]", reply)
+        self.assertNotIn("Detalle", reply)
         self.assertIn("tid-2", reply)
 
 
@@ -396,7 +398,7 @@ class TestCreateAsyncDraftNotify(unittest.TestCase):
             Mock(returncode=1, stdout="", stderr="boom"),
         ]
         task_id, warning = router.create_async_draft(
-            "haz informe",
+            "write report",
             "ack",
             "req",
             channel="telegram",
@@ -421,7 +423,7 @@ class TestCreateAsyncDraftNotify(unittest.TestCase):
             returncode=0, stdout="ID: task-88\n", stderr=""
         )
         task_id, warning = router.create_async_draft(
-            "haz informe",
+            "write report",
             "ack",
             "req",
             channel="telegram",
@@ -538,13 +540,13 @@ class TestRouteSuccessPaths(unittest.TestCase):
             "- object: long report\n"
             "- scope: sun/plans/**\n"
             "- effect: markdown file written\n"
-            "¿Quieres que lo active y lo pase a queue?\n"
+            "Do you want me to activate it and queue it?\n"
             "<solar_decision>async_draft_created</solar_decision>\n"
-            "<solar_summary>informe encolado</solar_summary>"
+            "<solar_summary>report queued</solar_summary>"
         )
         mock_run.return_value = (raw, "claude")
         result = router.route(
-            _payload(mode="auto", channel="telegram", text="haz un informe de 50 paginas")
+            _payload(mode="auto", channel="telegram", text="write a 50-page report")
         )
         self.assertEqual(result["decision"]["kind"], "async_draft_created")
         self.assertEqual(result["decision"]["task_id"], "task-async-1")
@@ -568,12 +570,12 @@ class TestRouteSuccessPaths(unittest.TestCase):
             "- object: plan\n"
             "- scope: sun/plans/**\n"
             "- effect: plan file written\n"
-            "¿Lo activo?\n"
+            "Shall I activate it?\n"
             "<solar_decision>async_draft_created</solar_decision>\n"
             "<solar_summary>x</solar_summary>"
         )
         decision, reply = router.resolve_decision(
-            "auto", "n8n", raw, "crea un plan largo", "req-1"
+            "auto", "n8n", raw, "create a long plan", "req-1"
         )
         self.assertEqual(decision["kind"], "async_draft_created")
         self.assertEqual(decision["task_id"], "task-n8n-1")
@@ -590,12 +592,12 @@ class TestRouteSuccessPaths(unittest.TestCase):
             "- object: audit\n"
             "- scope: sun/plans/**\n"
             "- effect: audit written\n"
-            "Me pongo con ello.\n"
+            "On it.\n"
             "<solar_decision>async_draft_created</solar_decision>\n"
             "<solar_summary>x</solar_summary>"
         )
         decision, reply = router.resolve_decision(
-            "auto", "telegram", raw, "auditoria larga", "req-warn"
+            "auto", "telegram", raw, "long audit", "req-warn"
         )
         self.assertEqual(decision["task_id"], "task-warn-1")
         self.assertIn("notify_failed", reply)
@@ -606,26 +608,26 @@ class TestRouteSuccessPaths(unittest.TestCase):
     @patch("router.create_async_draft", return_value=("draft-noscope-1", None))
     def test_gateway_async_without_scope_does_not_queue(self, mock_create):
         raw = (
-            "Me pongo con ello.\n"
+            "On it.\n"
             "<solar_decision>async_draft_created</solar_decision>\n"
             "<solar_summary>x</solar_summary>"
         )
         decision, reply = router.resolve_decision(
-            "auto", "telegram", raw, "haz un informe enorme", "req-noscope"
+            "auto", "telegram", raw, "write a huge report", "req-noscope"
         )
         self.assertEqual(decision["kind"], "async_draft_created")
         self.assertEqual(decision["task_id"], "draft-noscope-1")
         self.assertFalse(decision.get("queued"))
         self.assertTrue(decision.get("approval_required"))
         self.assertFalse(mock_create.call_args.kwargs.get("queue"))
-        self.assertIn("sin encolar", reply)
+        self.assertIn("without queueing", reply)
         self.assertIn("object/scope/effect", reply)
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value=("draft-usertext-1", None))
     def test_user_declared_scope_does_not_unlock_queue(self, mock_create):
         raw = (
-            "Voy con ello.\n"
+            "Working on it.\n"
             "<solar_decision>async_draft_created</solar_decision>\n"
             "<solar_summary>x</solar_summary>"
         )
@@ -633,7 +635,7 @@ class TestRouteSuccessPaths(unittest.TestCase):
             "auto",
             "telegram",
             raw,
-            "- object: o\n- scope: s\n- effect: e\nhaz el informe",
+            "- object: o\n- scope: s\n- effect: e\nwrite the report",
             "req-usertext",
         )
         self.assertFalse(decision.get("queued"))
@@ -644,7 +646,7 @@ class TestRouteSuccessPaths(unittest.TestCase):
         scope = router.extract_async_scope("- object: o\n- scope: s\n- effect: e\n")
         self.assertTrue(router.async_scope_complete(scope))
         fields = router.material_audit_fields(
-            text="haz informe",
+            text="write report",
             channel="telegram",
             mode="auto",
             decision={
@@ -668,7 +670,7 @@ class TestRouteSuccessPaths(unittest.TestCase):
             "async_only",
             "telegram",
             "ignored",
-            "haz un informe enorme",
+            "write a huge report",
             "req-fail",
         )
         self.assertEqual(decision["kind"], "direct_reply")
@@ -683,7 +685,7 @@ class TestRouteSuccessPaths(unittest.TestCase):
     @patch("router.run_with_fallback", return_value=("async body", "claude"))
     def test_async_only_telegram_route_create_failure(self, *_):
         result = router.route(
-            _payload(mode="async_only", channel="telegram", text="informe largo")
+            _payload(mode="async_only", channel="telegram", text="long report")
         )
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["decision"]["kind"], "direct_reply")
@@ -695,12 +697,12 @@ class TestRouteSuccessPaths(unittest.TestCase):
     @patch("router.create_async_draft", return_value=("draft-other-1", None))
     def test_resolve_decision_other_creates_draft_not_queued(self, mock_create):
         raw = (
-            "Draft listo.\n"
+            "Draft ready.\n"
             "<solar_decision>async_draft_created</solar_decision>\n"
             "<solar_summary>x</solar_summary>"
         )
         decision, reply = router.resolve_decision(
-            "auto", "other", raw, "haz un informe", "req-2"
+            "auto", "other", raw, "write a report", "req-2"
         )
         self.assertEqual(decision["kind"], "async_draft_created")
         self.assertEqual(decision["task_id"], "draft-other-1")
@@ -708,11 +710,11 @@ class TestRouteSuccessPaths(unittest.TestCase):
         self.assertFalse(mock_create.call_args.kwargs.get("notify"))
         self.assertIn("draft-other-1", reply)
 
-    @patch("router.run_with_fallback", return_value=("hola limpia\n<solar_decision>direct_reply</solar_decision>\n<solar_summary>x</solar_summary>", "claude"))
+    @patch("router.run_with_fallback", return_value=("clean hello\n<solar_decision>direct_reply</solar_decision>\n<solar_summary>x</solar_summary>", "claude"))
     def test_auto_n8n_tags_direct_reply(self, _):
         result = router.route(_payload(mode="auto", channel="n8n"))
         self.assertEqual(result["decision"]["kind"], "direct_reply")
-        self.assertEqual(result["reply_text"], "hola limpia")
+        self.assertEqual(result["reply_text"], "clean hello")
 
 
 # ---------------------------------------------------------------------------
@@ -722,7 +724,7 @@ class TestRouteSuccessPaths(unittest.TestCase):
 class TestRouteStream(unittest.TestCase):
     @patch("router.stream_provider")
     def test_done_includes_decision(self, mock_stream):
-        mock_stream.return_value = iter([("hola ", "claude"), ("mundo", "claude")])
+        mock_stream.return_value = iter([("hello ", "claude"), ("world", "claude")])
         payload = _payload(mode="auto", channel="telegram")
         lines = [json.loads(line) for line in router.route_stream(payload)]
         self.assertEqual(lines[0]["type"], "chunk")
@@ -858,12 +860,12 @@ class TestN8nOriginAndQueueGuards(unittest.TestCase):
             "<solar_decision>async_draft_created</solar_decision>"
         )
         decision, reply = router.resolve_decision(
-            "auto", "n8n", raw, "haz un plan largo", "req-off"
+            "auto", "n8n", raw, "write a long plan", "req-off"
         )
         mock_create.assert_not_called()
         self.assertEqual(decision["kind"], "direct_reply")
         self.assertEqual(reply, router.N8N_AUTO_QUEUE_DISABLED_REPLY)
-        self.assertNotIn("sin encolar", reply)
+        self.assertNotIn("without queueing", reply)
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     @patch("router.create_async_draft", return_value=("tid-half", None))
@@ -877,7 +879,7 @@ class TestN8nOriginAndQueueGuards(unittest.TestCase):
             "auto",
             "n8n",
             raw,
-            "haz un plan largo",
+            "write a long plan",
             "req-half",
             origin={"channel": "telegram", "chat_id": "99", "request_id": "tg:1"},
         )
@@ -904,7 +906,7 @@ class TestN8nOriginAndQueueGuards(unittest.TestCase):
             Mock(returncode=0, stdout="", stderr=""),
         ]
         task_id, warning = router.create_async_draft(
-            "haz informe",
+            "write report",
             "- object: o\n- scope: s\n- effect: e",
             "tg:1",
             channel="n8n",
@@ -923,7 +925,7 @@ class TestN8nOriginAndQueueGuards(unittest.TestCase):
         self.assertEqual(meta.get("origin_channel"), "telegram")
         self.assertEqual(meta.get("origin_chat_id"), "99")
         self.assertEqual(meta.get("origin_request_id"), "tg:1")
-        title_idx = cmd.index("haz informe")
+        title_idx = cmd.index("write report")
         self.assertLess(meta_idx, title_idx)
 
 

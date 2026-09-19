@@ -91,7 +91,7 @@ def test_n8n_timeout_kills_own_pgid(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert result["status"] == "failed"
     assert result["error_code"] == "n8n_sync_timeout"
     assert result["decision"]["task_id"] is None
-    assert "tiempo" in result["reply_text"].lower()
+    assert "in time" in result["reply_text"].lower()
 
 
 def test_non_n8n_uses_subprocess_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

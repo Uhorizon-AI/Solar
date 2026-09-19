@@ -89,7 +89,7 @@ if [[ ! -f "$WORKSPACE/sun/preferences/profile.md" ]]; then
 ## Identity Handshake
 - Your name:
 - How you want me to call you:
-- Preferred language: Español
+- Preferred language:
 
 ## Working Preferences
 - Deep work windows:

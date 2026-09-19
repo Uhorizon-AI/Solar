@@ -1,6 +1,6 @@
 # Native packaging (backlog)
 
-Stabilise the Git install + GitHub Release contract before packaging. This document is the Corte 4 backlog for Solar Client distribution without requiring Git familiarity.
+Stabilise the Git install + GitHub Release contract before packaging. This document is the stage 4 backlog for Solar Client distribution without requiring Git familiarity.
 
 ## Targets
 
@@ -29,4 +29,4 @@ Stabilise the Git install + GitHub Release contract before packaging. This docum
 
 ## Prerequisite
 
-Corte 1–2 install E2E + `create-release --publish` producing a real GitHub Release.
+Stage 1–2 install E2E + `create-release --publish` producing a real GitHub Release.

@@ -237,7 +237,7 @@ def test_post_n8n_direct_reply_bearer_and_origin(monkeypatch: pytest.MonkeyPatch
     server, base = _start_server(mod)
     try:
         code, payload = _http_json(
-            "POST", f"{base}/webhook/n8n", _n8n_body(text="hola"), headers=_bearer()
+            "POST", f"{base}/webhook/n8n", _n8n_body(text="hello"), headers=_bearer()
         )
         assert code == 200
         assert payload.get("reply_text") == "pong"
@@ -258,7 +258,7 @@ def test_post_n8n_long_forwards_origin(monkeypatch: pytest.MonkeyPatch, tmp_path
         seen.append(payload)
         return {
             "status": "success",
-            "reply_text": "Me pongo con ello. Te aviso por aquí cuando termine.\n\n(Tarea: t-1)",
+            "reply_text": "On it. I'll let you know here when it's done.\n\n(Task: t-1)",
             "decision": {"kind": "async_draft_created", "task_id": "t-1", "queued": True},
             "request_id": payload.get("request_id"),
         }
@@ -269,11 +269,11 @@ def test_post_n8n_long_forwards_origin(monkeypatch: pytest.MonkeyPatch, tmp_path
         code, payload = _http_json(
             "POST",
             f"{base}/webhook/n8n",
-            _n8n_body(request_id="tg:long", text="haz un plan"),
+            _n8n_body(request_id="tg:long", text="write a plan"),
             headers=_bearer(),
         )
         assert code == 200
-        assert "Me pongo con ello" in payload.get("reply_text", "")
+        assert "On it." in payload.get("reply_text", "")
         assert seen[0]["metadata"]["origin_chat_id"] == "456"
         assert seen[0]["metadata"]["origin_request_id"] == "tg:long"
     finally:
@@ -332,7 +332,7 @@ def test_post_n8n_unauthorized_chat(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         )
         assert code == 200
         assert payload.get("status") == "failed"
-        assert "no autorizado" in (payload.get("reply_text") or "").lower()
+        assert "not authorized" in (payload.get("reply_text") or "").lower()
         assert called == []
     finally:
         server.shutdown()

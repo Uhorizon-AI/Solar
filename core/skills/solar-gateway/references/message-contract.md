@@ -90,7 +90,7 @@ Legacy body, still accepted when no parts are sent, with or without `type: reque
 }
 ```
 
-Canonical long-task ACK `reply_text` is `Me pongo con ello. Te aviso por aquí cuando termine.` (`GATEWAY_ASYNC_ACK`).
+Canonical long-task ACK `reply_text` is `On it. I'll let you know here when it's done.` (`GATEWAY_ASYNC_ACK`).
 
 ## Error response
 

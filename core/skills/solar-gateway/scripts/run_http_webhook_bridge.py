@@ -216,7 +216,7 @@ def n8n_poll_disabled_body(request_id: Optional[str] = None) -> Dict[str, Any]:
         "status": "failed",
         "error": _N8N_POLL_DISABLED_ERROR,
         "bridge": BRIDGE_NAME,
-        "reply_text": "No pude tomar esta petición en modo asíncrono.",
+        "reply_text": "Could not take this request in async mode.",
     }
     if request_id:
         body["request_id"] = request_id
@@ -342,7 +342,7 @@ _CHANNEL_RE = re.compile(r"^[a-z0-9_-]+$")
 _IDENTITY_ERRORS = {
     "identity_incomplete": "Missing channel or conversation_id.",
     "invalid_channel": "Invalid channel.",
-    "session_chat_mismatch": "session_id y chat_id no coinciden.",
+    "session_chat_mismatch": "session_id and chat_id do not match.",
 }
 
 
@@ -694,7 +694,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
                             "status": "failed",
                             "request_id": rid,
                             "bridge": BRIDGE_NAME,
-                            "reply_text": "Chat no autorizado.",
+                            "reply_text": "Chat not authorized.",
                             "error": "chat_not_allowed",
                         }
                         self.write_n8n_json(HTTPStatus.OK, body, rid)
@@ -708,8 +708,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
                             "bridge": BRIDGE_NAME,
                             "route": self.path.split("?", 1)[0],
                             "reply_text": (
-                                "Me pongo con ello. Te aviso por aquí cuando termine."
-                                f"\n\n(Tarea: {correlated})"
+                                "On it. I'll let you know here when it's done."
+                                f"\n\n(Task: {correlated})"
                             ),
                             "decision": {
                                 "kind": "async_draft_created",

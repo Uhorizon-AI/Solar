@@ -42,7 +42,7 @@ STUB
 chmod +x "$FAKE_ROOT/core/skills/solar-telegram/scripts/send_telegram.sh"
 export SOLAR_ROOT="$FAKE_ROOT"
 
-# The workspace: visible configuration, no token. This is the point of the corte.
+# The workspace: visible configuration, no token. This is the point of the change.
 cat >"$SOLAR_WORKSPACE/.env" <<'EOF'
 # [solar-telegram] required environment
 TELEGRAM_CHAT_ID=111
@@ -60,7 +60,7 @@ ensure_dirs
 
 OUT="$(bash "$CREATE" --queued --scheduled-time now \
   --metadata '{"origin_channel":"telegram","origin_chat_id":"111","origin_request_id":"tg:1"}' \
-  "Tarea con aviso" "Do the thing")"
+  "Task with notify" "Do the thing")"
 ID="$(printf '%s' "$OUT" | awk '/^ID:/{print $2}')"
 FILE="$(find_task "$ID")"
 
@@ -86,7 +86,7 @@ fi
 # silently swallowed: a notification that did not go out must be visible.
 OUT2="$(bash "$CREATE" --queued --scheduled-time now \
   --metadata '{"origin_channel":"telegram","origin_chat_id":"111","origin_request_id":"tg:2"}' \
-  "Tarea sin almacen" "Do the other thing")"
+  "Task without store" "Do the other thing")"
 ID2="$(printf '%s' "$OUT2" | awk '/^ID:/{print $2}')"
 FILE2="$(find_task "$ID2")"
 
