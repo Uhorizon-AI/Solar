@@ -300,6 +300,117 @@ unset SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE
 unset SOLAR_CLIENT_LAUNCHAGENT_INSTALL_SCRIPT
 unset SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
 
+# --- restart running services after update ---
+SVC_LOG="$TMP/services.log"
+FAKE_SVC_SETUP="$TMP/svc-setup.sh"
+FAKE_HOST_STOP="$TMP/host-stop.sh"
+FAKE_HOST_START="$TMP/host-start.sh"
+printf '#!/usr/bin/env bash\necho "gateway $*" >>"%s"\n' "$SVC_LOG" >"$FAKE_SVC_SETUP"
+printf '#!/usr/bin/env bash\necho host-stop >>"%s"\n' "$SVC_LOG" >"$FAKE_HOST_STOP"
+printf '#!/usr/bin/env bash\necho host-start >>"%s"\n' "$SVC_LOG" >"$FAKE_HOST_START"
+chmod +x "$FAKE_SVC_SETUP" "$FAKE_HOST_STOP" "$FAKE_HOST_START"
+export SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT="$FAKE_SVC_SETUP"
+export SOLAR_CLIENT_HOST_STOP_SCRIPT="$FAKE_HOST_STOP"
+export SOLAR_CLIENT_HOST_START_SCRIPT="$FAKE_HOST_START"
+
+: >"$SVC_LOG"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host"
+svc_out="$(solar_client_restart_running_services "$MOCK_INSTALL_ROOT" 2>&1)"
+assert_ok "restart: gateway restarted with --restart" grep -qx 'gateway --restart' "$SVC_LOG"
+assert_ok "restart: console stopped then started" \
+  test "$(grep -E '^host-' "$SVC_LOG" | paste -sd, -)" = "host-stop,host-start"
+assert_ok "restart: reports both services" \
+  bash -c 'grep -q "OK: transport gateway restarted" <<<"$1" && grep -q "OK: console restarted" <<<"$1"' _ "$svc_out"
+
+: >"$SVC_LOG"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="host"
+solar_client_restart_running_services "$MOCK_INSTALL_ROOT" >/dev/null 2>&1
+assert_ok "restart: a stopped gateway is not started" bash -c '! grep -q gateway "$1"' _ "$SVC_LOG"
+
+: >"$SVC_LOG"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="none"
+none_out="$(solar_client_restart_running_services "$MOCK_INSTALL_ROOT" 2>&1)"
+assert_ok "restart: nothing running runs nothing" test ! -s "$SVC_LOG"
+assert_ok "restart: nothing running is reported" grep -q 'none running' <<<"$none_out"
+
+: >"$SVC_LOG"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host"
+SOLAR_CLIENT_GATEWAY_RESTARTED=true solar_client_restart_running_services "$MOCK_INSTALL_ROOT" >/dev/null 2>&1
+assert_ok "restart: gateway not restarted twice after LaunchAgent reinstall" \
+  bash -c '! grep -q gateway "$1" && grep -q host-start "$1"' _ "$SVC_LOG"
+
+printf '#!/usr/bin/env bash\nexit 1\n' >"$FAKE_SVC_SETUP"
+set +e
+svc_fail_out="$(solar_client_restart_running_services "$MOCK_INSTALL_ROOT" 2>&1)"
+svc_fail_ec=$?
+set -e
+assert_ok "restart: failure returns non-zero" test "$svc_fail_ec" -ne 0
+assert_ok "restart: failure prints the manual command" grep -q -- '--restart' <<<"$svc_fail_out"
+unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
+unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT
+
+# --- detection is scoped to this install (another Solar install may be running) ---
+PS_FILE="$TMP/ps.txt"
+INSTALL_A="$TMP/install-a"
+INSTALL_B="$TMP/install-b"
+mkdir -p "$INSTALL_A" "$INSTALL_B"
+cat >"$PS_FILE" <<EOF
+/usr/bin/python3 $INSTALL_A/core/skills/solar-gateway/scripts/run_http_webhook_bridge.py
+/usr/bin/python3 -u $INSTALL_A/core/skills/solar-app/scripts/host_server.py
+uv run python3 $INSTALL_B/core/skills/solar-gateway/scripts/run_websocket_bridge.py
+EOF
+export SOLAR_CLIENT_PS_OUTPUT_FILE="$PS_FILE"
+unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE
+assert_ok "detect: install A runs gateway and console" \
+  test "$(solar_client_running_services "$INSTALL_A" | paste -sd, -)" = "gateway,host"
+assert_ok "detect: install B runs only its gateway" \
+  test "$(solar_client_running_services "$INSTALL_B" | paste -sd, -)" = "gateway"
+assert_ok "detect: another install's services are not ours" \
+  test -z "$(solar_client_running_services "$TMP/install-c")"
+: >"$SVC_LOG"
+printf '#!/usr/bin/env bash\necho "gateway $*" >>"%s"\n' "$SVC_LOG" >"$FAKE_SVC_SETUP"
+export SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT="$FAKE_SVC_SETUP"
+solar_client_restart_running_services "$TMP/install-c" >/dev/null 2>&1
+assert_ok "detect: nothing restarted for an install with no services" test ! -s "$SVC_LOG"
+unset SOLAR_CLIENT_PS_OUTPUT_FILE SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
+
+# --- integration: the restart follows the NEW version's client_lib.sh ---
+# The updater starts from the old install and loaded the old client_lib.sh.
+# After checkout it must reload the new one before restarting services.
+WS_UP="$TMP/ws-up"
+INSTALL_UP="$WS_UP/solar"
+UP_LIB="$INSTALL_UP/core/skills/solar-client/scripts/client_lib.sh"
+mkdir -p "$WS_UP/sun" "$WS_UP/.solar" "$INSTALL_UP/core/skills"
+printf '%s\n' '{"layout":"solar-client-v1.2","core_version":"v0.0.1","core_commit":"unknown","core_source":"global"}' >"$WS_UP/.solar/settings.json"
+cp -R "$CORE_ROOT/skills/solar-client" "$INSTALL_UP/core/skills/"
+rm -rf "$INSTALL_UP/core/skills/solar-client/scripts/__pycache__"
+cp "$UP_LIB" "$TMP/client_lib.base"
+RESTART_MARK="$TMP/restart-version"
+{ cat "$TMP/client_lib.base"; printf '\nsolar_client_restart_running_services() { echo old >"%s"; }\n' "$RESTART_MARK"; } >"$UP_LIB"
+git -C "$INSTALL_UP" init -q
+git -C "$INSTALL_UP" config user.email "test@test"
+git -C "$INSTALL_UP" config user.name "Test"
+git -C "$INSTALL_UP" add -A && git -C "$INSTALL_UP" commit -q -m "v1" && git -C "$INSTALL_UP" tag v0.0.1
+{ cat "$TMP/client_lib.base"; printf '\nsolar_client_restart_running_services() { echo new >"%s"; }\n' "$RESTART_MARK"; } >"$UP_LIB"
+git -C "$INSTALL_UP" add -A && git -C "$INSTALL_UP" commit -q -m "v2" && git -C "$INSTALL_UP" tag v0.0.2
+git -C "$INSTALL_UP" checkout -q v0.0.1
+set +e
+up_out="$(SOLAR_ROOT="$INSTALL_UP" SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
+  bash "$INSTALL_UP/core/skills/solar-client/scripts/client_update.sh" \
+  --workspace "$WS_UP" --ref v0.0.2 --yes 2>&1)"
+up_ec=$?
+set -e
+assert_ok "update from the old install exits 0" test "$up_ec" -eq 0
+assert_ok "update moved the install to the new version" \
+  test "$(git -C "$INSTALL_UP" rev-parse HEAD)" = "$(git -C "$INSTALL_UP" rev-parse v0.0.2)"
+assert_ok "restart ran the new version's client_lib.sh" \
+  test "$(cat "$RESTART_MARK" 2>/dev/null)" = "new"
+[[ "$up_ec" -eq 0 ]] || echo "$up_out" >&2
+
+usage_out="$(bash "$UPDATE_SCRIPT" -h 2>&1)"
+assert_ok "usage lists --no-restart" grep -q -- '--no-restart' <<<"$usage_out"
+assert_ok "usage lists --restart" grep -q -- '  --restart ' <<<"$usage_out"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

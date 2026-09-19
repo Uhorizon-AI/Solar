@@ -50,8 +50,9 @@ Resolve paths first (`resolve_solar_paths.sh` + `solar_paths.py` in this skill):
 ```bash
 solar client init
 solar client update [options]
-# common: --check | --repair | --ref/--tag | --bundle | --reinstall-launchagent
-# --check is read-only (incompatible with --reinstall-launchagent)
+# common: --check | --repair | --ref/--tag | --bundle | --reinstall-launchagent | --no-restart | --restart
+# --check is read-only (incompatible with --reinstall-launchagent; never restarts services,
+#   so --restart / --no-restart do not apply to it)
 solar client upgrade [--check|--restructure]
 solar client sync [--portable]
 solar client sync exclude list
@@ -78,6 +79,13 @@ On macOS, `solar client update --check` and a normal update **report** LaunchAge
 update (not with `--check`): it rewrites the plist and restarts the transport
 gateway; if gateway restart fails after a successful LaunchAgent reinstall, the
 command exits non-zero.
+
+When the installed version changes, a real update restarts the long-running
+services that are already running (transport gateway, console on :9000) so they
+load the new code; nothing that is stopped gets started, and the async-tasks
+worker needs no restart. `--no-restart` skips this; `--restart` forces it even
+when the version did not change. If a restart fails, the update still applies,
+the manual command is printed and the command exits non-zero.
 
 `solar status` maps orchestrator `HEALTHY|PARTIAL|DOWN` → `OK|WARN|FAIL`. On WARN/FAIL, the `system` line points to `check_orchestrator.sh` for detail (no inline remediations).
 
