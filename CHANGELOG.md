@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.24.3] - 2026-09-19
+
 ### Fixed
 - fix(solar-async-tasks): a completed task records `result_path` pointing at its execution log, which is where the result is written (a provider sandbox may not be able to write into the task queue). The completion notification linked the task file instead, which holds no result. An explicit `result_url`/`result_path` set by the task author still wins, and failed tasks record nothing.
 
