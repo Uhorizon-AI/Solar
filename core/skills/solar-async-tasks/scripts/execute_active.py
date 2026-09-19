@@ -254,6 +254,35 @@ def write_log(
     log_file.write_text("\n".join(lines), encoding="utf-8")
 
 
+def record_result_path(task_file: pathlib.Path, log_file: pathlib.Path) -> None:
+    """Point the task at the file that holds its result: the execution log.
+
+    The result is written to the log, not to the task (a provider sandbox may
+    not be able to write into the task queue). Without this, the completion
+    notify falls back to the task file itself, which has no result. An explicit
+    result_url/result_path set by the task author always wins.
+    """
+    try:
+        content = task_file.read_text(encoding="utf-8")
+    except OSError:
+        return
+    if not content.startswith("---\n"):
+        return
+    end = content.find("\n---", 4)
+    if end == -1:
+        return
+    frontmatter = content[4:end]
+    if re.search(r"^result_(path|url):", frontmatter, flags=re.MULTILINE):
+        return
+    # Absolute and resolved: this string is what the notification sends out.
+    line = f'result_path: "{log_file.resolve()}"'
+    frontmatter = frontmatter.rstrip("\n") + "\n" + line
+    try:
+        task_file.write_text("---\n" + frontmatter + content[end:], encoding="utf-8")
+    except OSError:
+        return
+
+
 def mark_task_error(
     task_file: pathlib.Path,
     task_id: str,
@@ -402,6 +431,7 @@ def main() -> int:
             return 1
         result_text = output or "Local command completed with no changes."
         write_log(log_file, task_id, title, "success", "local", result_text, None, None)
+        record_result_path(task_file, log_file)
         print(result_text, flush=True)
         return 0
 
@@ -449,6 +479,7 @@ def main() -> int:
 
     # Success: write log
     write_log(log_file, task_id, title, "success", provider_used, reply_text, None, None)
+    record_result_path(task_file, log_file)
     print(f"  → provider_used: {provider_used}", flush=True)
     # Output reply_text to stdout for execute_active.sh to capture if needed
     print(reply_text, flush=True)

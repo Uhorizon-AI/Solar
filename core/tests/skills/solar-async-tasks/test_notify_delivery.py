@@ -97,3 +97,14 @@ def test_notification_is_sent_as_plain_text(tmp_path):
     assert notify(task, {**env, 'TELEGRAM_PARSE_MODE': 'MarkdownV2'}).returncode == 0
     sent = (workspace / 'sent.log').read_text()
     assert sent.startswith('none|Task completed: Review 2026-09-16_audit.md')
+
+
+def test_notification_points_at_result_path(tmp_path):
+    """With result_path set by the executor, the notify links the result, not the task."""
+    workspace, root, env = fixture_env(tmp_path)
+    log = root / 'logs' / 'delivery.log'
+    log.parent.mkdir(exist_ok=True)
+    log.write_text('# Async Task Execution\n\n## Result\n\nall good\n')
+    task = task_file(root, extra=f'result_path: "{log}"\n')
+    assert notify(task, env).returncode == 0
+    assert str(log) in (workspace / 'sent.log').read_text()
