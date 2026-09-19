@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-09-19
+
 ### Added
 - feat(solar-gateway): platform-agnostic message identity. n8n may send `channel` (platform, e.g. `telegram`), `conversation_id` and `message_id`; the gateway composes `session_id = channel:conversation_id` and `request_id = channel:conversation_id:message_id` and never splits a composed id. `channel` is lowercased and must match `^[a-z0-9_-]+$`. `%` and `:` inside `conversation_id` and `message_id` are escaped (`%25`, `%3A`) so different parts never compose the same id; numeric Telegram ids are unchanged. Telegram conversations become the reply chat for origin notify. Partial parts, a malformed `channel` or a conflicting `session_id` are rejected before the replay ledger and never stored. The previous n8n body (`request_id`, `session_id`, optional `chat_id`) is still accepted; without `session_id` it no longer falls back to a shared `n8n:default` session.
 
