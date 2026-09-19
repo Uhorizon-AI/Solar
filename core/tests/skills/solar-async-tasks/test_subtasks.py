@@ -189,3 +189,17 @@ def test_start_next_treats_scheduled_time_now_as_immediately_eligible(tmp_path: 
     assert result.returncode == 0, result.stderr
     assert (task_root / "active" / "run-now-task.md").exists()
     assert "Started task" in result.stdout
+
+
+def test_start_next_handles_task_root_with_spaces(tmp_path: Path) -> None:
+    """Regression: the real queue lives under ~/Library/Application Support."""
+    task_root = tmp_path / "Application Support" / "Solar" / "runtime" / "async-tasks"
+    write_task(task_root, "queued", "first-task", "first-1", priority="high")
+    write_task(task_root, "queued", "second-task", "second-1", priority="low")
+
+    result = run_script("start_next.sh", task_root)
+
+    assert result.returncode == 0, result.stderr
+    assert "No tasks ready to start" not in result.stdout
+    assert (task_root / "active" / "first-task.md").exists()
+    assert (task_root / "queued" / "second-task.md").exists()

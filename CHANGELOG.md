@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-router, solar-gateway): look up async tasks in the same queue `task_lib.sh` writes (`SOLAR_TASK_ROOT`, else the framework runtime `async-tasks`) instead of the removed `sun/runtime/async-tasks`. A long request queued from Telegram/n8n no longer answers "I couldn't queue the task" (with `queued: false`) while the task is actually queued, and the gateway replay path finds the task already created for an `origin_request_id` instead of risking a duplicate.
+- fix(solar-async-tasks): `start_next.sh` reads the queue one path per line instead of word-splitting it. With the queue under `~/Library/Application Support`, every path was split at the space, so no queued task ever started ("No tasks ready to start").
+
 ## [0.24.0] - 2026-09-19
 
 ### Added

@@ -470,11 +470,22 @@ def origin_from_metadata(
     }
 
 
+def async_task_root() -> pathlib.Path:
+    """Same queue as task_lib.sh: SOLAR_TASK_ROOT, else the framework runtime.
+
+    There is no fallback to sun/runtime/async-tasks.
+    """
+    override = os.getenv("SOLAR_TASK_ROOT", "").strip()
+    if override:
+        return pathlib.Path(override).expanduser()
+    return solar_runtime.runtime_dir("async-tasks")
+
+
 def _task_file_for_id(task_id: str) -> Optional[pathlib.Path]:
     tid = str(task_id or "").strip()
     if not tid:
         return None
-    root = pathlib.Path(SOLAR_WORKSPACE) / "sun" / "runtime" / "async-tasks"
+    root = async_task_root()
     for sub in ("queued", "active", "drafts", "planned", "completed", "error", "archive"):
         folder = root / sub
         if not folder.is_dir():

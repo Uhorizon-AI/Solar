@@ -22,9 +22,11 @@ QUEUED_TASKS=$(find "$DIR_QUEUED" -name "*.md" 2>/dev/null | while read -r f; do
     printf '%s\t%s\t%s\n' "$prio_val" "$ts" "$f"
 done | sort -t$'\t' -k1,1nr -k2,2n | awk -F'\t' '{print $3}')
 
-# Try each task in order until one can start
-for NEXT_TASK in $QUEUED_TASKS; do
-    [[ -e "$NEXT_TASK" ]] || continue
+# Try each task in order until one can start. One path per line: the queue lives
+# under "Application Support", so word-splitting the list would break every path.
+# Read on fd 3 so hooks and helpers inside the loop cannot consume the list.
+while IFS= read -r NEXT_TASK <&3; do
+    [[ -n "$NEXT_TASK" && -e "$NEXT_TASK" ]] || continue
 
     TASK_ID=$(extract_meta "$NEXT_TASK" "id")
     TITLE=$(extract_meta "$NEXT_TASK" "title")
@@ -93,7 +95,7 @@ for NEXT_TASK in $QUEUED_TASKS; do
     echo "✅ Started task: [$TASK_ID] $TITLE"
     echo "File: $NEW_FILE"
     exit 0
-done
+done 3<<< "$QUEUED_TASKS"
 
 # No tasks available to start
 echo "⏸️  No tasks ready to start"

@@ -677,3 +677,29 @@ def test_post_n8n_untyped_legacy_mismatch_rejected(monkeypatch, tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_find_task_for_origin_request_reads_framework_runtime(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(runtime))
+    monkeypatch.delenv("SOLAR_TASK_ROOT", raising=False)
+    queued = runtime / "async-tasks" / "queued"
+    queued.mkdir(parents=True)
+    (queued / "slugged-title.md").write_text(
+        '---\nid: "task-9"\nstatus: queued\norigin_request_id: "telegram:456:77"\n---\n',
+        encoding="utf-8",
+    )
+    assert mod.find_task_for_origin_request("telegram:456:77") == "task-9"
+    assert mod.find_task_for_origin_request("telegram:456:78") is None
+
+
+def test_find_task_for_origin_request_honours_task_root(monkeypatch, tmp_path):
+    mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    root = tmp_path / "tasks"
+    monkeypatch.setenv("SOLAR_TASK_ROOT", str(root))
+    (root / "active").mkdir(parents=True)
+    (root / "active" / "x.md").write_text(
+        '---\nid: "task-10"\norigin_request_id: "telegram:456:80"\n---\n', encoding="utf-8"
+    )
+    assert mod.find_task_for_origin_request("telegram:456:80") == "task-10"

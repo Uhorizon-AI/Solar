@@ -2,6 +2,7 @@
 Unit tests for router.py — no real subprocess calls unless mocked.
 """
 import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -362,6 +363,60 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
         self.assertIn("credential", body.lower())
         self.assertIn("execution-consent", body.lower())
         self.assertIn("Validation Gate", body)
+
+
+class TestAsyncTaskRoot(unittest.TestCase):
+    """The router reads the same queue task_lib.sh writes (framework runtime)."""
+
+    def _write_task(self, root, sub, task_id, status):
+        folder = pathlib.Path(root) / sub
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "slugged-title.md").write_text(
+            f'---\nid: "{task_id}"\nstatus: {status}\n---\n', encoding="utf-8"
+        )
+
+    def test_default_root_is_framework_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"SOLAR_RUNTIME_ROOT": tmp}
+        ):
+            os.environ.pop("SOLAR_TASK_ROOT", None)
+            self.assertEqual(
+                router.async_task_root().resolve(),
+                (pathlib.Path(tmp) / "async-tasks").resolve(),
+            )
+            self._write_task(pathlib.Path(tmp) / "async-tasks", "queued", "t-1", "queued")
+            self.assertTrue(router.task_runtime_is_queued("t-1"))
+
+    def test_task_root_override(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"SOLAR_TASK_ROOT": tmp}
+        ):
+            self._write_task(tmp, "active", "t-2", "active")
+            self.assertTrue(router.task_runtime_is_queued("t-2"))
+            self.assertFalse(router.task_runtime_is_queued("missing"))
+
+    @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
+    def test_queued_task_gets_canonical_ack(self):
+        """Regression: a task queued in the runtime must not answer 'couldn't queue'."""
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"SOLAR_TASK_ROOT": tmp}
+        ):
+            def fake_create(*_a, **_k):
+                self._write_task(tmp, "queued", "task-real-1", "queued")
+                return ("task-real-1", None)
+
+            raw = (
+                "- object: long report\n- scope: sun/plans/**\n- effect: file written\n"
+                "<solar_decision>async_draft_created</solar_decision>\n"
+                "<solar_summary>x</solar_summary>"
+            )
+            with patch("router.create_async_draft", side_effect=fake_create):
+                decision, reply = router.resolve_decision(
+                    "auto", "n8n", raw, "write a long report", "req-real"
+                )
+        self.assertTrue(decision.get("queued"))
+        self.assertEqual(reply, router.gateway_async_reply("task-real-1"))
+        self.assertNotIn(router.TASK_NOT_QUEUED_REPLY, reply)
 
 
 class TestGatewayAsyncReply(unittest.TestCase):
