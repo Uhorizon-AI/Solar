@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-09-19
+
 ### Fixed
 - fix(solar-async-tasks): task notifications are sent to Telegram as plain text. In Markdown, a stray `_` or `*` in a task title or path made Telegram reject the notification with HTTP 400 (`notify_status: failed`, `telegram_send_failed`). `send_telegram.sh` accepts `TELEGRAM_PARSE_MODE=none` to omit `parse_mode`.
 - fix(solar-client): when the installed version changes, `solar client update` restarts the long-running services that are already running (transport gateway, console on :9000), so they stop running the previous code from memory. Nothing that is stopped gets started. Only services whose command line holds this install's path count, so another Solar install on the machine is never touched. After the update the restart logic reloads the newly installed `client_lib.sh`, so it follows the new version's rules. New `--no-restart` and `--restart` options; a failed restart prints the manual command and exits non-zero.
