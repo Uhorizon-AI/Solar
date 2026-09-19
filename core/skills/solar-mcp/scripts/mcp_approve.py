@@ -5,7 +5,7 @@ following the user's accepted form response. This CLI remains a trusted operator
 recovery path, not an agent self-approval route. It does not attest to an earlier
 conversation. See references/approvals.md for the trust boundary.
 
-    python3 mcp_approve.py grant solar_task_create --args '{"title":"Revisar X"}'
+    python3 mcp_approve.py grant solar_task_create --args '{"title":"Review X"}'
     python3 mcp_approve.py list
     python3 mcp_approve.py revoke <approval_id>
 

@@ -2,7 +2,7 @@
 
 Every test here redirects `SOLAR_SECRETS_FILE` (or `SOLAR_APP_DATA`) into a
 temporary directory. Nothing reads or writes the machine's real store: the point
-of the corte is that these keys stop living where things can stumble onto them,
+of the change is that these keys stop living where things can stumble onto them,
 and a test suite is a thing that can stumble onto them.
 """
 from __future__ import annotations
@@ -83,7 +83,7 @@ def test_the_store_wins_over_a_stale_copy_in_the_environment(fixture_store):
 
 
 def test_it_reports_a_key_left_behind_in_the_workspace(tmp_path):
-    """The closing condition of the corte, as something a script can check."""
+    """The closing condition of the change, as something a script can check."""
     workspace = tmp_path / "workspace"
     (workspace / "sun").mkdir(parents=True)
     (workspace / ".env").write_text(

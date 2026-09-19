@@ -185,8 +185,8 @@ This skill is a **pure delegate** to `solar-router`. No provider selection, no f
 
 Inbound `request` (WS bridge):
 - `type`: `request`
-- `request_id`: unique id
-- `session_id`: conversation session id
+- `request_id`: unique id (`channel:conversation_id:message_id` when composed by the HTTP bridge)
+- `session_id`: continuity key (`channel:conversation_id`); the router keys history by it, falling back to `user_id` only when empty
 - `user_id`: user identifier
 - `text`: user message
 - `channel`: `telegram|n8n|async-task|other` (set by HTTP bridge before forwarding)
@@ -207,6 +207,8 @@ Outbound `response` (WS bridge — router v3 JSON + envelope):
 HTTP bridge channel mapping:
 - Telegram inbound → `channel=telegram`, `mode=auto` (only when Solar registered the webhook)
 - n8n inbound → `channel=n8n`, `mode=auto`; require `Authorization: Bearer` (`SOLAR_N8N_WEBHOOK_SECRET`). Unset secret → fail-closed `401`
+- n8n message identity: n8n sends `channel` (platform, e.g. `telegram`), `conversation_id` and `message_id`; the bridge composes `session_id` and `request_id` and never splits them. Partial parts, a malformed `channel` or a conflicting `session_id` are rejected before the replay ledger and not stored. The legacy body (`request_id`, `session_id`, optional `chat_id`) is still accepted. See `references/message-contract.md`
+- Telegram direct inbound composes `request_id = telegram:<chat>:<message_id>`
 - n8n production contract: one synchronous `POST /webhook/n8n`. HTTP 202, `SOLAR_N8N_DEFAULT_ASYNC`, and `GET /webhook/n8n/result` return `status: failed` (no poll)
 - n8n response: router v3 JSON exposed directly (no legacy double-wrapper). Replay uses `$SOLAR_GATEWAY_RUN_DIR/n8n-jobs/`
 

@@ -49,7 +49,7 @@ def test_failed_delivery_recorded_and_successful_retry_deduplicated(tmp_path):
     assert notify(task, env).returncode == 0
     assert 'notify_status: delivered' in task.read_text()
     assert notify(task, env).returncode == 0
-    assert (workspace / 'sent.log').read_text().count('Tarea completada') == 1
+    assert (workspace / 'sent.log').read_text().count('Task completed') == 1
 
 
 @pytest.mark.parametrize('body,timeout', [('exit 3', '5'), ('sleep 3', '1')])
@@ -66,7 +66,7 @@ def test_executor_failure_and_timeout_notify_origin(tmp_path, body, timeout):
     assert result.returncode == 1, result.stdout + result.stderr
     failed = root / 'error/delivery.md'
     assert 'notify_delivered: true' in failed.read_text()
-    assert 'ha fallado' in (workspace / 'sent.log').read_text()
+    assert 'Task failed' in (workspace / 'sent.log').read_text()
     assert 'error_code' not in (workspace / 'sent.log').read_text()
 
 
@@ -81,4 +81,4 @@ def test_cleanup_failure_notifies_origin(tmp_path):
                             env=env, text=True, capture_output=True, timeout=15)
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'notify_delivered: true' in (root / 'error/delivery.md').read_text()
-    assert 'ha fallado' in (workspace / 'sent.log').read_text()
+    assert 'Task failed' in (workspace / 'sent.log').read_text()

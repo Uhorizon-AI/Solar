@@ -105,7 +105,7 @@ for f in "$DIR_ERROR"/*.md; do
         ERROR_TIME=$(grep "^- time:" "$f" 2>/dev/null | tail -n1 | sed 's/^- time: //' | tr -d ' ')
     fi
     echo "[$ID] ❌ $TITLE (error at: ${ERROR_TIME:-see file})"
-    echo "    → Detalle: $f"
+    echo "    → Detail: $f"
 done
 
 echo ""

@@ -93,7 +93,7 @@ export TELEGRAM_ALLOWED_CHAT_IDS="456,789"
 : >"$SOLAR_WORKSPACE/notify.log"
 bash "$NOTIFY" "$FILE"
 if grep -q 'chat=456' "$SOLAR_WORKSPACE/notify.log" \
-  && grep -q 'Tarea completada' "$SOLAR_WORKSPACE/notify.log" \
+  && grep -q 'Task completed' "$SOLAR_WORKSPACE/notify.log" \
   && grep -q 'notify_delivered: true' "$FILE"; then
   pass "notify sends to origin_chat_id and marks notify_delivered"
 else

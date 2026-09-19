@@ -4,7 +4,7 @@ Nothing here reaches Telegram. `send_telegram.sh` is replaced by a stub that
 records what it was handed, so the assertions are about the gate and about where
 the token came from — never about a real message.
 
-The corte this covers: the token stopped living in the workspace, so the only
+The change this covers: the token stopped living in the workspace, so the only
 route an agent has to Telegram is this tool, and this tool refuses without an
 approval Louis granted out of band.
 """
@@ -67,7 +67,7 @@ def stubbed_send(solar_env, monkeypatch, tmp_path):
 # --------------------------------------------------------------------------
 
 def test_sending_without_an_approval_is_refused(solar_env):
-    verdict = mcp_gate.preflight("solar_telegram_send", {"text": "hola"}, registry())
+    verdict = mcp_gate.preflight("solar_telegram_send", {"text": "hello"}, registry())
     assert not verdict.allowed
     assert verdict.code == "approval_required"
     assert verdict.authority == A2
@@ -78,21 +78,21 @@ def test_a_client_cannot_approve_its_own_send(solar_env):
     for forged in ({"approved": True}, {"authority": "A2"}, {"external": "ok"},
                    {"approval_id": ""}, {"approval_id": "deadbeef"}):
         verdict = mcp_gate.preflight(
-            "solar_telegram_send", {"text": "hola", **forged}, registry())
+            "solar_telegram_send", {"text": "hello", **forged}, registry())
         assert not verdict.allowed, forged
 
 
 def test_the_approval_is_bound_to_the_exact_text(solar_env):
-    granted = mcp_approve.grant("solar_telegram_send", {"text": "hola"}, 900, "test")
+    granted = mcp_approve.grant("solar_telegram_send", {"text": "hello"}, 900, "test")
     swapped = mcp_gate.preflight(
         "solar_telegram_send",
-        {"text": "otra cosa", "approval_id": granted["approval_id"]}, registry())
+        {"text": "something else", "approval_id": granted["approval_id"]}, registry())
     assert not swapped.allowed
     assert swapped.code == "approval_scope_mismatch"
 
     exact = mcp_gate.preflight(
         "solar_telegram_send",
-        {"text": "hola", "approval_id": granted["approval_id"]}, registry())
+        {"text": "hello", "approval_id": granted["approval_id"]}, registry())
     assert exact.allowed and exact.code == "approval_ok"
 
 
@@ -101,7 +101,7 @@ def test_external_communication_is_refused_at_any_other_authority(solar_env, aut
     """A2 in front of a human is the only shape an outbound send may take."""
     reg = registry(solar_telegram_send=dict(
         **{**mcp_server.TOOLS["solar_telegram_send"], "authority": authority}))
-    verdict = mcp_gate.preflight("solar_telegram_send", {"text": "hola"}, reg)
+    verdict = mcp_gate.preflight("solar_telegram_send", {"text": "hello"}, reg)
     assert not verdict.allowed
     assert verdict.code == "external_communication_refused"
 
@@ -119,12 +119,12 @@ def test_the_tool_declares_what_it_is(solar_env):
 # --------------------------------------------------------------------------
 
 def test_the_send_uses_the_process_store_not_the_workspace(solar_env, stubbed_send):
-    result = mcp_server._do_telegram_send({"text": "hola"})
+    result = mcp_server._do_telegram_send({"text": "hello"})
     assert result["sent"] is True
     handed = json.loads(stubbed_send.read_text(encoding="utf-8"))
     assert handed["token"] == "fixture-token"
     assert handed["chat_id"] == "4242"
-    assert handed["cmd"][-1] == "hola"
+    assert handed["cmd"][-1] == "hello"
     assert handed["cmd"][1].endswith("send_telegram.sh")
 
 
@@ -133,7 +133,7 @@ def test_a_token_in_the_workspace_does_not_reach_the_sender(solar_env, stubbed_s
     (solar_env.workspace / ".env").write_text(
         "TELEGRAM_CHAT_ID=4242\nTELEGRAM_BOT_TOKEN=leftover-in-the-workspace\n",
         encoding="utf-8")
-    mcp_server._do_telegram_send({"text": "hola"})
+    mcp_server._do_telegram_send({"text": "hello"})
     handed = json.loads(stubbed_send.read_text(encoding="utf-8"))
     assert handed["token"] == "fixture-token"
 
@@ -152,7 +152,7 @@ def test_a_stray_key_in_the_store_reaches_nothing(solar_env, stubbed_send, tmp_p
         "TELEGRAM_CHAT_ID=9999\n",
         encoding="utf-8")
 
-    mcp_server._do_telegram_send({"text": "hola"})
+    mcp_server._do_telegram_send({"text": "hello"})
     assert not trace.exists()
     handed = json.loads(stubbed_send.read_text(encoding="utf-8"))
     assert handed["token"] == "fixture-token"
@@ -168,19 +168,19 @@ def test_without_a_store_there_is_nothing_to_send_with(solar_env, monkeypatch, t
     import importlib
     importlib.reload(solar_secrets)
     with pytest.raises(RuntimeError, match="TELEGRAM_BOT_TOKEN"):
-        mcp_server._do_telegram_send({"text": "hola"})
+        mcp_server._do_telegram_send({"text": "hello"})
 
 
 def test_a_chat_outside_the_allowlist_is_refused(solar_env, stubbed_send):
     with pytest.raises(RuntimeError, match="not an allowlisted chat"):
-        mcp_server._do_telegram_send({"text": "hola", "chat_id": "999"})
+        mcp_server._do_telegram_send({"text": "hello", "chat_id": "999"})
     assert not stubbed_send.exists()
 
 
 def test_a_named_allowlist_widens_it(solar_env, stubbed_send, monkeypatch):
     (solar_env.workspace / ".env").write_text(
         "TELEGRAM_CHAT_ID=4242\nTELEGRAM_ALLOWED_CHAT_IDS=4242, 777\n", encoding="utf-8")
-    mcp_server._do_telegram_send({"text": "hola", "chat_id": "777"})
+    mcp_server._do_telegram_send({"text": "hello", "chat_id": "777"})
     assert json.loads(stubbed_send.read_text(encoding="utf-8"))["chat_id"] == "777"
 
 
@@ -202,7 +202,7 @@ def test_send_telegram_refuses_when_the_token_is_only_in_dot_env(solar_env, tmp_
 
     env = {k: v for k, v in os.environ.items()
            if k not in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")}
-    proc = subprocess.run(["bash", str(script), "hola"], capture_output=True,
+    proc = subprocess.run(["bash", str(script), "hello"], capture_output=True,
                           text=True, cwd=str(workspace), env=env)
     assert proc.returncode == 1
     assert "Missing required key: TELEGRAM_BOT_TOKEN" in proc.stdout

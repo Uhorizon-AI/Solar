@@ -68,9 +68,9 @@ def test_reading_a_verb_needs_no_approval(solar_env):
 
 
 def test_the_handler_refuses_the_mutation(solar_env):
-    """The closure of this corte: refused by the handler, not by the caller."""
+    """The closure of this change: refused by the handler, not by the caller."""
     with client(solar_env) as probe:
-        answer = probe.call_tool("solar_task_create", {"title": "Tarea sin aprobar"})
+        answer = probe.call_tool("solar_task_create", {"title": "Unapproved task"})
     assert answer["result"]["isError"] is True
     refused = payload(answer)["refused"]
     assert refused["allowed"] is False
@@ -89,8 +89,8 @@ def test_a_forged_approval_does_not_open_the_door(solar_env):
 
 
 def test_granted_approval_lets_exactly_that_call_through_once(solar_env):
-    granted = mcp_approve.grant("solar_task_create", {"title": "Tarea aprobada"}, 900, "wire test")
-    arguments = {"title": "Tarea aprobada", "approval_id": granted["approval_id"]}
+    granted = mcp_approve.grant("solar_task_create", {"title": "Approved task"}, 900, "wire test")
+    arguments = {"title": "Approved task", "approval_id": granted["approval_id"]}
     with client(solar_env) as probe:
         first = probe.call_tool("solar_task_create", arguments)
         second = probe.call_tool("solar_task_create", arguments)
@@ -99,7 +99,7 @@ def test_granted_approval_lets_exactly_that_call_through_once(solar_env):
     assert payload(first)["verdict"]["code"] == "approval_ok"
     created = list((solar_env.tasks / "drafts").glob("*.md"))
     assert len(created) == 1
-    assert "Tarea aprobada" in created[0].read_text(encoding="utf-8")
+    assert "Approved task" in created[0].read_text(encoding="utf-8")
 
     assert second["result"]["isError"] is True
     assert payload(second)["refused"]["code"] == "approval_consumed"

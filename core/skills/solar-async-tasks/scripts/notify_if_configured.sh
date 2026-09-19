@@ -76,9 +76,9 @@ export TELEGRAM_CHAT_ID="$CHAT_ID"
 
 LOCATION="$(task_result_location "$TASK_FILE")"
 TASK_STATUS=$(extract_meta "$TASK_FILE" "status")
-BRIEF="Tarea completada: ${TITLE}"
+BRIEF="Task completed: ${TITLE}"
 if [[ "$TASK_STATUS" == "error" ]]; then
-  BRIEF="La tarea ha fallado y necesita atención: ${TITLE}"
+  BRIEF="Task failed and needs attention: ${TITLE}"
   LOCATION="" # Keep execution errors and sensitive details in local logs.
 fi
 if [[ -n "$LOCATION" ]]; then

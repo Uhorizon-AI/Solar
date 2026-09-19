@@ -15,6 +15,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+import re
 import secrets
 import threading
 import urllib.parse
@@ -215,7 +216,7 @@ def n8n_poll_disabled_body(request_id: Optional[str] = None) -> Dict[str, Any]:
         "status": "failed",
         "error": _N8N_POLL_DISABLED_ERROR,
         "bridge": BRIDGE_NAME,
-        "reply_text": "No pude tomar esta petición en modo asíncrono.",
+        "reply_text": "Could not take this request in async mode.",
     }
     if request_id:
         body["request_id"] = request_id
@@ -293,6 +294,7 @@ def parse_telegram_update(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
         return None
     return {
         "chat_id": str(chat["id"]),
+        "message_id": str(msg.get("message_id") or ""),
         "user_id": str(from_user.get("id", "unknown")),
         "text": str(text),
     }
@@ -336,18 +338,87 @@ def finish_telegram_update(key: str, success: bool) -> None:
 # n8n helpers
 # ---------------------------------------------------------------------------
 
-def parse_n8n_request(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
+_CHANNEL_RE = re.compile(r"^[a-z0-9_-]+$")
+_IDENTITY_ERRORS = {
+    "identity_incomplete": "Missing channel or conversation_id.",
+    "invalid_channel": "Invalid channel.",
+    "session_chat_mismatch": "session_id and chat_id do not match.",
+}
+
+
+def _encode_part(value: str) -> str:
+    """Escape the separator so composed ids stay unambiguous.
+
+    Without it, conversation a:b + message c and conversation a + message b:c
+    would both compose ...:a:b:c. Numeric ids (Telegram) are unchanged.
+    """
+    return value.replace("%", "%25").replace(":", "%3A")
+
+
+def compose_identity(
+    channel: str, conversation_id: str, message_id: str = ""
+) -> Dict[str, str]:
+    """Platform-agnostic message identity.
+
+    channel         platform the message comes from (telegram, whatsapp, app)
+    conversation_id native address to reply to (Telegram chat.id, WhatsApp JID)
+    message_id      native message id; unique only inside its conversation
+    session_id      Solar continuity key = channel:conversation_id
+    request_id      Solar idempotency key = channel:conversation_id:message_id
+
+    Solar composes these from the parts; it never splits a composed id back.
+    channel must match _CHANNEL_RE and the other parts escape '%' and ':', so
+    two different part sets never compose the same id.
+    """
+    session_id = f"{channel}:{_encode_part(conversation_id)}"
+    identity = {"session_id": session_id, "request_id": ""}
+    if message_id:
+        identity["request_id"] = f"{session_id}:{_encode_part(message_id)}"
+    return identity
+
+
+def parse_n8n_request(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Parse an n8n body. `identity_error` is set when the identity is unusable.
+
+    With parts (channel, conversation_id, message_id) Solar composes session_id
+    and request_id. Without parts the legacy body is used as sent. A missing
+    session_id stays empty so the router falls back to user_id instead of a
+    shared default session.
+    """
     chat_id = str(payload.get("chat_id") or "").strip()
     if payload.get("type") == "request":
         text = str(payload.get("text", ""))
         if not text:
             return None
+        channel = str(payload.get("channel") or "").strip().lower()
+        conversation_id = str(payload.get("conversation_id") or "").strip()
+        message_id = str(payload.get("message_id") or "").strip()
+        request_id = str(payload.get("request_id", f"n8n_{uuid4().hex[:12]}"))
+        session_id = str(payload.get("session_id") or "").strip()
+        identity_error = ""
+        if channel or conversation_id or message_id:
+            if not (channel and conversation_id):
+                identity_error = "identity_incomplete"
+            elif not _CHANNEL_RE.match(channel):
+                identity_error = "invalid_channel"
+            else:
+                identity = compose_identity(channel, conversation_id, message_id)
+                # A legacy session_id sent alongside the parts must agree with them.
+                if session_id and session_id != identity["session_id"]:
+                    identity_error = "session_chat_mismatch"
+                session_id = identity["session_id"]
+                request_id = identity["request_id"] or request_id
+                # Only Telegram has a notifier today: its conversation is the reply chat.
+                chat_id = conversation_id if channel == "telegram" else ""
+        elif chat_id and not session_matches_chat(session_id, chat_id):
+            identity_error = "session_chat_mismatch"
         return {
-            "request_id": str(payload.get("request_id", f"n8n_{uuid4().hex[:12]}")),
-            "session_id": str(payload.get("session_id", "n8n:default")),
+            "request_id": request_id,
+            "session_id": session_id,
             "user_id": str(payload.get("user_id", "n8n-user")),
             "text": text,
             "chat_id": chat_id,
+            "identity_error": identity_error,
         }
 
     text = payload.get("text") or payload.get("message_text") or payload.get("message")
@@ -359,12 +430,17 @@ def parse_n8n_request(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
     if not text:
         return None
 
+    session_id = str(payload.get("session_id") or "").strip()
+    identity_error = ""
+    if chat_id and not session_matches_chat(session_id, chat_id):
+        identity_error = "session_chat_mismatch"
     return {
         "request_id": str(payload.get("request_id", f"n8n_{uuid4().hex[:12]}")),
-        "session_id": str(payload.get("session_id", "n8n:default")),
+        "session_id": session_id,
         "user_id": str(payload.get("user_id", "n8n-user")),
         "text": str(text),
         "chat_id": chat_id,
+        "identity_error": identity_error,
     }
 
 
@@ -543,10 +619,13 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     )
                     return
 
+                identity = compose_identity(
+                    "telegram", parsed["chat_id"], parsed["message_id"]
+                )
                 request_payload = {
                     "type": "request",
-                    "request_id": f"tg_{uuid4().hex[:12]}",
-                    "session_id": f"telegram:{parsed['chat_id']}",
+                    "request_id": identity["request_id"] or f"tg_{uuid4().hex[:12]}",
+                    "session_id": identity["session_id"],
                     "user_id": parsed["user_id"],
                     "text": parsed["text"],
                     "channel": "telegram",
@@ -578,6 +657,23 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     raise ValueError("Unsupported n8n payload")
 
                 rid = parsed_n8n["request_id"]
+                identity_error = parsed_n8n.get("identity_error") or ""
+                if identity_error:
+                    # Checked before the ledger: never replay another request's
+                    # response to a bad identity, and never store the rejection,
+                    # so a corrected body with the same request_id still runs.
+                    self.write_json(
+                        HTTPStatus.OK,
+                        {
+                            "status": "failed",
+                            "request_id": rid,
+                            "bridge": BRIDGE_NAME,
+                            "reply_text": _IDENTITY_ERRORS[identity_error],
+                            "error": identity_error,
+                        },
+                    )
+                    return
+
                 with n8n_request_lock(rid):
                     replay = n8n_ledger_load(rid)
                     if replay is not None:
@@ -592,24 +688,13 @@ class WebhookHandler(BaseHTTPRequestHandler):
                         return
 
                     chat_id = parsed_n8n.get("chat_id") or ""
-                    if chat_id and not session_matches_chat(parsed_n8n["session_id"], chat_id):
-                        body = {
-                            "status": "failed",
-                            "request_id": rid,
-                            "bridge": BRIDGE_NAME,
-                            "reply_text": "session_id y chat_id no coinciden.",
-                            "error": "session_chat_mismatch",
-                        }
-                        self.write_n8n_json(HTTPStatus.OK, body, rid)
-                        return
-
                     origin_ok = bool(chat_id) and telegram_chat_allowed(chat_id)
                     if chat_id and not origin_ok:
                         body = {
                             "status": "failed",
                             "request_id": rid,
                             "bridge": BRIDGE_NAME,
-                            "reply_text": "Chat no autorizado.",
+                            "reply_text": "Chat not authorized.",
                             "error": "chat_not_allowed",
                         }
                         self.write_n8n_json(HTTPStatus.OK, body, rid)
@@ -623,8 +708,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
                             "bridge": BRIDGE_NAME,
                             "route": self.path.split("?", 1)[0],
                             "reply_text": (
-                                "Me pongo con ello. Te aviso por aquí cuando termine."
-                                f"\n\n(Tarea: {correlated})"
+                                "On it. I'll let you know here when it's done."
+                                f"\n\n(Task: {correlated})"
                             ),
                             "decision": {
                                 "kind": "async_draft_created",

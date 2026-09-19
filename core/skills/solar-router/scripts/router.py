@@ -118,6 +118,14 @@ def sanitize_id(value: str) -> str:
     return cleaned[:120] if cleaned else "unknown"
 
 
+def conversation_key(session_id: str, user_id: str) -> str:
+    """Continuity is per session (channel:conversation_id), not per person.
+
+    user_id is only a fallback for callers that send no session_id.
+    """
+    return session_id or user_id or "default"
+
+
 def conversation_file(conversation_id: str) -> pathlib.Path:
     return RUNTIME_ROOT / "conversations" / f"{sanitize_id(conversation_id)}.jsonl"
 
@@ -332,22 +340,22 @@ def extract_tag_decision_kind(ai_output: str) -> Optional[str]:
 
 GATEWAY_ASYNC_CHANNELS = frozenset({"telegram", "n8n", "app"})
 GATEWAY_ASYNC_ACK = (
-    "Me pongo con ello. Te aviso por aquí cuando termine."
+    "On it. I'll let you know here when it's done."
 )
 GATEWAY_ASYNC_ACK_NO_NOTIFY = (
-    "La tarea quedó encolada, pero no pude activar la notificación automática. "
-    "Revisa el estado en async-tasks; no asumas que llegará un aviso."
+    "The task is queued, but automatic notification could not be enabled. "
+    "Check its status in async-tasks; do not expect a notification."
 )
 ASYNC_CREATE_FAILED_SUFFIX = (
     "\n\n[Warning: could not create the async task; answer kept as direct reply.]"
 )
 ASYNC_SCOPE_APPROVAL_SUFFIX = (
-    "\n\nHe creado el draft `{task_id}` sin encolar: faltan object/scope/effect "
-    "estructurados. Decláralos o aprueba el encolado explícitamente."
+    "\n\nI created draft `{task_id}` without queueing it: structured object/scope/effect "
+    "are missing. Declare them or approve queueing explicitly."
 )
-N8N_AUTO_QUEUE_DISABLED_REPLY = "No puedo tomar tareas largas ahora."
+N8N_AUTO_QUEUE_DISABLED_REPLY = "I can't take long tasks right now."
 TASK_NOT_QUEUED_REPLY = (
-    "No pude encolar la tarea. Revisa async-tasks; no asumas que llegará un aviso."
+    "I couldn't queue the task. Check async-tasks; do not expect a notification."
 )
 
 RE_ASYNC_SCOPE_TAG = re.compile(
@@ -668,12 +676,12 @@ def gateway_async_reply(
     if notify_warning:
         parts = [GATEWAY_ASYNC_ACK_NO_NOTIFY]
         if task_id:
-            parts.append(f"(Tarea: {task_id})")
-        parts.append(f"[Detalle: {notify_warning}]")
+            parts.append(f"(Task: {task_id})")
+        parts.append(f"[Detail: {notify_warning}]")
         return "\n\n".join(parts)
     parts = [GATEWAY_ASYNC_ACK]
     if task_id:
-        parts.append(f"(Tarea: {task_id})")
+        parts.append(f"(Task: {task_id})")
     return "\n\n".join(parts)
 
 
@@ -871,7 +879,7 @@ def resolve_decision(
             if "active" not in fallback_reply.lower():
                 reply = (
                     f"{fallback_reply}\n\n"
-                    f"He creado el draft `{task_id}`. ¿Quieres que lo active y lo pase a queue?"
+                    f"I created draft `{task_id}`. Do you want me to activate it and queue it?"
                 )
             else:
                 reply = fallback_reply
@@ -1002,7 +1010,7 @@ def build_prompt(
             f"[Solar routing] channel={channel_l}, mode=auto. "
             "If the request likely needs more than ~60 seconds (plans, audits, multi-file work, "
             "research, batch processing), do NOT execute it in this turn. Reply with a short ACK "
-            "like 'Me pongo con ello. Te aviso cuando termine.' and append "
+            "like 'On it. I will let you know when it is done.' and append "
             "<solar_decision>async_draft_created</solar_decision>. "
             "The router will queue the real work and notify on completion. "
             "Use <solar_decision>direct_reply</solar_decision> only for quick answers. "
@@ -1272,7 +1280,7 @@ def route_stream(raw: str):
         yield json.dumps({"type": "done", "status": "failed", "error": "async_tasks_disabled", "provider": None, "request_id": request_id, "error_code": "async_tasks_disabled"})
         return
 
-    conversation_id = user_id or session_id or "default"
+    conversation_id = conversation_key(session_id, user_id)
     conv_path = conversation_file(conversation_id)
     metadata = payload.get("metadata") or {}
     jit_context = resolve_jit_context(metadata) if metadata else None
@@ -1423,7 +1431,7 @@ def route(raw: str) -> Dict[str, Any]:
     if channel not in VALID_CHANNELS:
         channel = "other"
 
-    conversation_id = user_id or session_id or "default"
+    conversation_id = conversation_key(session_id, user_id)
     conv_path = conversation_file(conversation_id)
 
     t_start = time.monotonic()

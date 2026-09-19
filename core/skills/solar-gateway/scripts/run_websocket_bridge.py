@@ -68,7 +68,7 @@ def n8n_sync_timeout_sec() -> int:
     return _env_int_with_comment("SOLAR_N8N_SYNC_TIMEOUT_SEC", 90)
 
 
-N8N_SYNC_TIMEOUT_REPLY = "No pude responder a tiempo. Inténtalo de nuevo."
+N8N_SYNC_TIMEOUT_REPLY = "I couldn't answer in time. Please try again."
 
 
 def _failed_router_result(

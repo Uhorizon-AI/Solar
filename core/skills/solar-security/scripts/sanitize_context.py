@@ -108,7 +108,7 @@ def _load_custom_rules_from_mapping(
     # New preferred format inside security-map.json:
     # {
     #   "CUSTOM": {
-    #      "ASCENDION": "[COM_001]"
+    #      "ACME": "[COM_001]"
     #   }
     # }
     custom_inline = loaded_mapping.get("CUSTOM", {})

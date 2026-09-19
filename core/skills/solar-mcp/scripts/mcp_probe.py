@@ -6,7 +6,7 @@ through the wire.
 
     python3 mcp_probe.py list
     python3 mcp_probe.py read solar://health
-    python3 mcp_probe.py call solar_task_create '{"title":"Prueba"}'
+    python3 mcp_probe.py call solar_task_create '{"title":"Test"}'
 """
 from __future__ import annotations
 
