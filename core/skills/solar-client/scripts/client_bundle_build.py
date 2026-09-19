@@ -93,6 +93,7 @@ BUNDLE_SEED_SKILLS = (
     "solar-client",
     "solar-workspace",
     "solar-app",
+    "solar-mcp",
 )
 
 

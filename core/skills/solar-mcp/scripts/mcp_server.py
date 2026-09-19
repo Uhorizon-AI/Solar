@@ -23,6 +23,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections import deque
+import queue
+import threading
+import time
+import uuid
 import sys
 from pathlib import Path
 
@@ -72,12 +77,12 @@ TOOLS = {
     "solar_task_create": dict(
         authority=A2,
         description=("Create an async task file. Mutates the queue, so it needs an "
-                     "approval id granted out of band with mcp_approve.py."),
+                     "exact-call approval. The runtime asks through the client UI when supported; omit approval_id."),
         inputSchema=dict(type="object", properties=dict(
             title=dict(type="string"),
             description=dict(type="string"),
             queued=dict(type="boolean", description="Queue it directly instead of drafts/."),
-            approval_id=dict(type="string", description="Approval granted by Louis for this exact call."),
+            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
         ), required=["title"], additionalProperties=False),
     ),
     "solar_telegram_send": dict(
@@ -86,13 +91,13 @@ TOOLS = {
         description=("Send one Telegram message as the Solar runtime. This is the only "
                      "route an agent has to Telegram: the bot token is an installation "
                      "secret the server holds, not a key in the workspace. Sending outside "
-                     "the machine is never implicit, so it needs an approval granted out "
-                     "of band with mcp_approve.py, bound to this exact text."),
+                     "the machine is never implicit, so it needs an approval granted "
+                     "through the client confirmation UI or a trusted operator, bound to this exact text."),
         inputSchema=dict(type="object", properties=dict(
             text=dict(type="string", description="The message, exactly as it will be sent."),
             chat_id=dict(type="string", description="Optional: an allowlisted chat. Defaults to TELEGRAM_CHAT_ID."),
             parse_mode=dict(type="string", description="Optional: Markdown (default) or HTML."),
-            approval_id=dict(type="string", description="Approval granted by Louis for this exact send."),
+            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
         ), required=["text"], additionalProperties=False),
     ),
     "solar_action_run": dict(
@@ -310,15 +315,17 @@ def call_tool(name: str, arguments: dict) -> tuple[dict, bool]:
     """Gate first, then act. There is no path to a handler that skips this."""
     registry = dict(TOOLS)
     registry["_action_skills"] = action_skills()
-    verdict = mcp_gate.preflight(name, arguments, registry)
-    mcp_gate.record(verdict, arguments)
-    if not verdict.allowed:
-        return dict(refused=verdict.as_dict()), True
+    with mcp_gate.execution_lock(name, registry):
+        verdict = mcp_gate.preflight(name, arguments, registry)
+        mcp_gate.record(verdict, arguments)
+        if not verdict.allowed:
+            return dict(refused=verdict.as_dict()), True
+        # Reserve before side effects: an uncertain failure must not be replayed.
+        mcp_gate.consume(name, arguments, registry)
     try:
         result = HANDLERS[name](arguments or {})
-    except Exception as exc:  # the verb failed; the approval is not burned
+    except Exception as exc:
         return dict(error=str(exc)[:500], verdict=verdict.as_dict()), True
-    mcp_gate.consume(name, arguments, registry)
     return dict(result=result, verdict=verdict.as_dict()), False
 
 
@@ -330,7 +337,7 @@ def _text(payload) -> list:
     return [dict(type="text", text=json.dumps(payload, indent=2, sort_keys=True, default=str))]
 
 
-def handle(message: dict) -> dict | None:
+def handle(message: dict, confirm=None) -> dict | None:
     method = message.get("method")
     request_id = message.get("id")
     params = message.get("params") or {}
@@ -340,7 +347,9 @@ def handle(message: dict) -> dict | None:
                       capabilities=dict(resources=dict(listChanged=False), tools=dict(listChanged=False)),
                       instructions=("Resources are open context. Tools are gated verbs: the "
                                     "handler validates authority and mandate and refuses on its "
-                                    "own. Approvals are granted out of band, never by the caller."))
+                                    "own. Omit approval_id to request native client confirmation. Never "
+                                    "ask users to manage IDs or self-grant through shell. Clients without "
+                                    "elicitation need a trusted host/operator approval path."))
     elif method in ("notifications/initialized", "notifications/cancelled"):
         return None
     elif method == "ping":
@@ -361,7 +370,26 @@ def handle(message: dict) -> dict | None:
                                   inputSchema=spec["inputSchema"])
                              for name, spec in TOOLS.items()])
     elif method == "tools/call":
-        payload, is_error = call_tool(params.get("name", ""), params.get("arguments") or {})
+        name = params.get("name", "")
+        arguments = dict(params.get("arguments") or {})
+        if confirm and TOOLS.get(name, {}).get("authority") == A2 and not arguments.get("approval_id"):
+            # Only the transport callback receives client UI responses. No tool
+            # parameter or caller-supplied approved flag can grant authority.
+            schema = TOOLS[name]["inputSchema"]
+            properties = schema["properties"]
+            types = {"string": str, "boolean": bool}
+            valid = (all(key in arguments for key in schema.get("required", []))
+                     and all(key in properties and type(value) is types.get(properties[key].get("type"))
+                             for key, value in arguments.items()))
+            if not valid:
+                return _error(request_id, -32602, "Invalid tool arguments")
+            if name == "solar_telegram_send" and not arguments.get("chat_id"):
+                return _error(request_id, -32602, "Supply the exact chat_id before confirming a send")
+            if confirm(name, arguments, request_id):
+                import mcp_approve
+                granted = mcp_approve.grant(name, arguments, 120, "client elicitation: explicit confirmation")
+                arguments["approval_id"] = granted["approval_id"]
+        payload, is_error = call_tool(name, arguments)
         result = dict(content=_text(payload), isError=is_error)
     elif method == "shutdown":
         result = {}
@@ -377,26 +405,137 @@ def _error(request_id, code: int, message: str) -> dict:
     return dict(jsonrpc="2.0", id=request_id, error=dict(code=code, message=message))
 
 
+class ConfirmationCancelled(Exception):
+    """The client cancelled the originating request; send no response."""
+
+
+CONFIRMATION_TIMEOUT = 120
+
+
 def serve(stdin=None, stdout=None) -> int:
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
-    for line in stdin:
-        line = line.strip()
-        if not line:
+    incoming = queue.Queue()
+    def read_lines():
+        for line in stdin:
+            incoming.put(line)
+        incoming.put(None)
+    threading.Thread(target=read_lines, daemon=True).start()
+    supports_confirmation = False
+    deferred = deque()
+    cancelled = set()
+    active_key = None
+
+    def request_key(value):
+        return (type(value).__name__, value)
+
+    def remember_cancel(message):
+        if message.get("method") == "notifications/cancelled":
+            value = (message.get("params") or {}).get("requestId")
+            if isinstance(value, (str, int)):
+                key = request_key(value)
+                # Only live requests can be cancelled. A late/unknown ID must
+                # not poison a future request that legitimately reuses it.
+                pending = (json.loads(raw) for raw in deferred)
+                if key == active_key or any(
+                    'method' in item and 'id' in item and request_key(item['id']) == key
+                    for item in pending
+                ):
+                    cancelled.add(key)
+            return True
+        return False
+
+    def emit(message):
+        stdout.write(json.dumps(message, default=str) + "\n")
+        stdout.flush()
+
+    def confirm(name, arguments, request_id):
+        elicitation_id = 'approval-' + uuid.uuid4().hex
+        emit(dict(jsonrpc="2.0", id=elicitation_id, method="elicitation/create", params=dict(
+            message=("Approve this exact Solar action?\nWorkspace: " + str(workspace()) +
+                     "\nTool: " + name + "\n" + json.dumps(arguments, ensure_ascii=False, indent=2) +
+                     "\nOne execution only. A failed or uncertain execution requires new approval."),
+            requestedSchema=dict(type="object", properties=dict(
+                approve=dict(type="boolean", title="Approve this action", default=False)), required=["approve"]))))
+        def close_form():
+            emit(dict(jsonrpc="2.0", method="notifications/cancelled",
+                      params=dict(requestId=elicitation_id, reason="Origin cancelled or confirmation expired")))
+        deadline = time.monotonic() + CONFIRMATION_TIMEOUT
+        while time.monotonic() < deadline:
+            try:
+                raw = incoming.get(timeout=max(0.01, deadline - time.monotonic()))
+            except queue.Empty:
+                close_form()
+                return False
+            if raw is None:
+                incoming.put(None)
+                return False
+            try:
+                response = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(response, dict):
+                continue
+            if response.get('id') == elicitation_id and 'method' not in response:
+                result = response.get('result') or {}
+                if not isinstance(result, dict) or not isinstance(result.get('content', {}), dict):
+                    return False
+                return (not response.get('error') and result.get('action') == 'accept'
+                        and (result.get('content') or {}).get('approve') is True)
+            if remember_cancel(response):
+                target = (response.get('params') or {}).get('requestId')
+                if request_key(target) == request_key(request_id):
+                    close_form()
+                    raise ConfirmationCancelled()
+                if target == elicitation_id:
+                    cancelled.discard(request_key(target))
+                    return False
+                continue
+            if response.get('method') == 'ping':
+                if 'id' in response:
+                    emit(dict(jsonrpc="2.0", id=response['id'], result={}))
+            elif 'method' in response:
+                deferred.append(raw)
+        close_form()
+        return False
+
+    while True:
+        line = deferred.popleft() if deferred else incoming.get()
+        if line is None:
+            break
+        if not line.strip():
             continue
         try:
             message = json.loads(line)
+            if not isinstance(message, dict):
+                raise ValueError('object expected')
         except ValueError:
-            stdout.write(json.dumps(_error(None, -32700, "Parse error")) + "\n")
-            stdout.flush()
+            emit(_error(None, -32700, "Parse error"))
             continue
+        # Ignore unmatched responses; they cannot authorize future calls.
+        if 'method' not in message:
+            continue
+        if remember_cancel(message):
+            continue
+        if request_key(message.get('id')) in cancelled:
+            cancelled.discard(request_key(message.get('id')))
+            continue
+        if message.get('method') == 'initialize':
+            capabilities = (message.get('params') or {}).get('capabilities') or {}
+            elicitation = capabilities.get('elicitation')
+            supports_confirmation = isinstance(elicitation, dict) and (not elicitation or 'form' in elicitation)
+        active_key = request_key(message['id']) if 'id' in message else None
         try:
-            response = handle(message)
-        except Exception as exc:  # never take the server down for one bad call
+            response = handle(message, confirm if supports_confirmation else None)
+        except ConfirmationCancelled:
+            cancelled.discard(request_key(message.get('id')))
+            continue
+        except Exception as exc:
             response = _error(message.get("id"), -32603, str(exc)[:300])
+        finally:
+            active_key = None
         if response is not None:
-            stdout.write(json.dumps(response, default=str) + "\n")
-            stdout.flush()
+            emit(response)
     return 0
 
 

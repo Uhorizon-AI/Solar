@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOLAR_VERSION="0.22.1"
+SOLAR_VERSION="0.23.2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=update_notice.sh
@@ -24,6 +24,8 @@ Subcommands:
   app workspace ...        Workspace registry helpers
   status [--verbose] [--json] [--strict]
   paths                    Resolvable paths for IDE references
+  mcp                      Stdio MCP server (what an IDE launches)
+  mcp print|install|uninstall  User-level snippets / merge into Cursor, Claude, Codex
   -v, --version            Show version
   -h, --help               Show help
 EOF
@@ -159,6 +161,11 @@ case "${1:-}" in
   paths)
     shift
     exec bash "$SCRIPT_DIR/solar_paths.sh" "$@"
+    ;;
+  mcp)
+    shift
+    MCP_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-mcp/scripts" && pwd)"
+    exec "${SOLAR_MCP_PYTHON:-python3}" "$MCP_SCRIPTS/mcp_cli.py" "$@"
     ;;
   update)
     # Alias: users often type `solar update` for client update (not chat).

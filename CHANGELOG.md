@@ -6,6 +6,25 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-09-15
+
+### Added
+- feat(solar-mcp): user-level Cursor, Claude and Codex registration via `solar mcp print|install|uninstall`, with dry-run, validated workspace, pinned interpreter, atomic/idempotent updates and portable bundle inclusion. Gemini registration is not supported.
+- feat(solar-mcp): native client form confirmation manages approval IDs internally when supported; approvals bind the workspace and are reserved before execution to prevent replay. Clients without form elicitation still need trusted out-of-band approval; original-turn authority binding is not implemented.
+- fix(solar-mcp): preserve TOML comments, quoted tables and unrelated settings, reject unsafe layouts, detect observed concurrent configuration changes and retain one current backup.
+
+### Fixed
+- MCP cancellation closes pending forms and skips cancelled deferred calls; registration resolves its executable once before output or writes.
+- MCP snippets include the Solar server key; registration preserves and validates a stable interpreter without requiring TOML support for stdio startup.
+- Native confirmation queues interleaved messages and respects request cancellation; config locks live in the Solar runtime instead of client directories.
+
+## [0.23.1] - 2026-09-12
+
+### Fixed
+- fix(solar-gateway): treat a named tunnel as healthy when cloudflared `/ready` reports HA connections, so a hairpinned public `/health` curl from the origin host no longer marks the orchestrator PARTIAL or restarts the tunnel.
+
+## [0.23.0] - 2026-09-12
+
 ### Added
 - feat(solar-async-tasks): route stop requests through canonical task cancellation and report `cancelled` only after the managed process acknowledges termination.
 

@@ -23,8 +23,10 @@ Provide one reusable skill for Telegram transport in Solar:
 Cursor and Gemini read one index, and it is not in it. The reason is not
 tidiness: an agent that can read these scripts and a token in the same tree can
 send without passing any gate. The verb moved to `solar_telegram_send` in
-`solar-mcp`, which needs an approval Louis grants out of band, bound by hash to
-the exact text, single-use and expiring.
+`solar-mcp`, which uses native client confirmation when supported, or a trusted operator
+approval. The runtime manages the identifier, bound to workspace and exact
+arguments, expiring and reserved before execution. See
+`core/skills/solar-mcp/references/approvals.md` for the trust boundary.
 
 Do not re-add it to the sync. If a client still shows it, its copy under
 `.cursor/skills/` (or the symlink under `.claude/`, `.codex/`, `.gemini/`) is

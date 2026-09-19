@@ -487,7 +487,8 @@ function run_local_install_e2e() {
     error "E2E test missing: $INSTALL_E2E_TEST"
     exit 2
   fi
-  if ! bash "$INSTALL_E2E_TEST"; then
+  # Drop maintainer SOLAR_WORKSPACE/SOLAR_ROOT so the fixture workspace is used.
+  if ! env -u SOLAR_WORKSPACE -u SOLAR_ROOT bash "$INSTALL_E2E_TEST"; then
     error "Local install E2E failed — aborting publish (no git push)"
     exit 1
   fi

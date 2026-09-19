@@ -64,6 +64,8 @@ solar setup                # onboarding facade
 solar uninstall            # remove wrapper; optional --remove-install
 solar status               # compact health; system = check_orchestrator verdict
 solar paths
+solar mcp                  # stdio MCP server (IDE child)
+solar mcp print|install|uninstall # user-level registration; install supports --dry-run
 solar app …                # delegates to solar-app
 ```
 
