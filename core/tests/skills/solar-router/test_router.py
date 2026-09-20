@@ -398,7 +398,8 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
     def test_delivery_is_prose_not_a_filled_in_template(self):
         """A labelled form reads like a machine; the notice has to read human."""
         body = router._gateway_task_body("update the plan", "telegram")
-        self.assertIn("one or two short paragraphs", body)
+        self.assertIn("plain prose", body)
+        self.assertIn("Being clear matters more than being short", body)
         self.assertIn("No labels, no template", body)
 
 
