@@ -523,6 +523,7 @@ def test_the_object_reaches_the_child_in_its_prompt(tmp_path):
     assert "## Object" in prompt
     assert "el informe" in prompt and "solo lectura" in prompt
     assert "a child cannot widen it" in prompt
+    assert "$SOLAR_ROOT" in prompt
     assert "Revisa la parte A." in prompt
     # The frontmatter copy stays for checking, but it is not what was sent.
     assert "parent_task_id" not in prompt

@@ -6,7 +6,7 @@ import io
 import unittest
 from unittest.mock import MagicMock, patch
 
-from providers.base import BaseProvider, SOLAR_WORKSPACE, FALLBACK_PATHS
+from providers.base import BaseProvider, SOLAR_WORKSPACE, SOLAR_ROOT, FALLBACK_PATHS
 from providers.claude import ClaudeProvider
 from providers.codex import CodexProvider
 from providers.agy import AgyProvider
@@ -362,6 +362,30 @@ class TestClaudeProvider(unittest.TestCase):
 
     def test_name(self):
         self.assertEqual(ClaudeProvider().name, "claude")
+
+
+class TestProviderKnowsWhereItIs(unittest.TestCase):
+    """A prompt that names `core/...` must be openable from the provider's cwd."""
+
+    def test_prepare_env_carries_the_framework_and_workspace_paths(self):
+        provider = PROVIDERS["claude"]
+        env = provider.prepare_env({})
+        self.assertEqual(env["SOLAR_WORKSPACE"], str(SOLAR_WORKSPACE))
+        self.assertEqual(env["SOLAR_ROOT"], str(SOLAR_ROOT))
+
+    def test_every_provider_gets_them(self):
+        for name, provider in PROVIDERS.items():
+            with self.subTest(provider=name):
+                env = provider.prepare_env({})
+                self.assertIn("SOLAR_ROOT", env)
+                self.assertIn("SOLAR_WORKSPACE", env)
+
+    def test_an_exported_value_is_not_overwritten(self):
+        env = PROVIDERS["claude"].prepare_env(
+            {"SOLAR_WORKSPACE": "/elsewhere", "SOLAR_ROOT": "/another"}
+        )
+        self.assertEqual(env["SOLAR_WORKSPACE"], "/elsewhere")
+        self.assertEqual(env["SOLAR_ROOT"], "/another")
 
 
 if __name__ == "__main__":

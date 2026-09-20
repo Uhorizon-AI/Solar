@@ -358,6 +358,8 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
         self.assertIn("<subtasks>", body)
         self.assertIn("Do **not** run `create.sh`", body)
         self.assertIn("## Subtask results", body)
+        # The framework is not inside the workspace it runs from.
+        self.assertIn("$SOLAR_ROOT", body)
         self.assertNotIn("create.sh --queued", body)
 
     def test_requires_approval_for_mutable_actions(self):

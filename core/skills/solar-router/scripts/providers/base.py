@@ -20,7 +20,7 @@ if str(_CLIENT_SCRIPTS) not in sys.path:
 import solar_runtime  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
-SOLAR_WORKSPACE, _SOLAR_ROOT = resolve_solar_paths()
+SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
 
 
 def _runtime_router_dir() -> pathlib.Path:
@@ -87,6 +87,18 @@ class BaseProvider(ABC):
         return parts + [prompt]
 
     def prepare_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
+        """Tell the provider where it is, before it has to guess.
+
+        It runs from SOLAR_WORKSPACE (get_cwd), and the framework is not inside
+        it: a prompt that names `core/skills/...` resolves nowhere from that
+        directory. A subtask hit this on 2026-09-20 and asked which path to use
+        instead of reading the file. The router already resolved both paths at
+        import and kept them to itself; passing them down is what makes such a
+        path openable. An exported value wins: a caller that redirected the
+        workspace meant it.
+        """
+        base_env.setdefault("SOLAR_WORKSPACE", str(SOLAR_WORKSPACE))
+        base_env.setdefault("SOLAR_ROOT", str(SOLAR_ROOT))
         return base_env
 
     def clean_output(self, output: str) -> str:

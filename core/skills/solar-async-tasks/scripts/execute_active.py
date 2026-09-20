@@ -611,6 +611,14 @@ def find_task_by_subtask_key(task_root: pathlib.Path, key: str) -> Optional[path
     return None
 
 
+# The child runs from the workspace and the framework is not inside it. The
+# parent is told the same thing by the router; a child's body is written here.
+FRAMEWORK_PATH_NOTE = (
+    "A path that starts with `core/` belongs to the framework, which lives at "
+    "`$SOLAR_ROOT` and is not inside the workspace: resolve it there.\n"
+)
+
+
 def child_object_section(parent_file: pathlib.Path) -> str:
     """Restate the parent's object in the child's own body.
 
@@ -628,7 +636,8 @@ def child_object_section(parent_file: pathlib.Path) -> str:
             "## Object\n"
             "- not declared for this request.\n"
             "Name the artifact you act on in your result, and ask before acting "
-            "on anything the request does not name.\n\n"
+            "on anything the request does not name.\n"
+            f"{FRAMEWORK_PATH_NOTE}\n"
         )
     return (
         "## Object\n"
@@ -639,7 +648,8 @@ def child_object_section(parent_file: pathlib.Path) -> str:
         "request this subtask belongs to and a child cannot widen it. If it "
         "cannot be resolved (it does not exist, it is ambiguous, or the work "
         "points elsewhere), stop and return a concrete question instead of "
-        "working on a substitute.\n\n"
+        "working on a substitute.\n"
+        f"{FRAMEWORK_PATH_NOTE}\n"
     )
 
 

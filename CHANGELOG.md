@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-router, solar-async-tasks): a task that names a framework file can find it. Providers run from `SOLAR_WORKSPACE` so their CLIs discover `CLAUDE.md` and `profile.md`, but the framework is not inside that tree: `core/` exists in the install and in the source repo, never at the workspace root. A prompt naming `core/skills/...` therefore resolved nowhere, and on 2026-09-20 a subtask stopped and asked which path to use instead of reading the file. The router had both paths resolved at import and kept them to itself (`_SOLAR_ROOT`, unused). `prepare_env` now passes `SOLAR_ROOT` and `SOLAR_WORKSPACE` down to every provider, without overwriting an exported value, and both the gateway parent body and a subtask's inherited `## Object` section say that a `core/` path belongs to the framework at `$SOLAR_ROOT`. No file or link is added to the workspace.
+
 ## [0.25.3] - 2026-09-20
 
 ### Changed
