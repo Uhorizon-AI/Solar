@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.25.5] - 2026-09-21
+
 ### Fixed
 - fix(solar-async-tasks): two holes the first real Telegram request with subtasks exposed. `create.sh` wrote `title:` and `scheduled_time:` into the frontmatter unquoted, unlike every field beside them, so text that reaches a title — a Telegram message, or a `<subtasks>` declaration written by a provider — could close the quote and add frontmatter lines of its own, including `notify_when` or an origin. Both are quoted now, `--priority` is validated against its three values instead of being interpolated, and a declared subtask title that spans more than one line is rejected at the parser. The quoting keeps non-ASCII text as it was written: it exists to stop a value from closing its quote, not to flatten the alphabet, and nothing downstream decodes JSON — an accented request was already reaching the queue as `object: "revisi\u00f3n ..."`, which is what the listing and the completion notice would show. Separately, the pre-phase treated a complete manifest as a finished batch: a parent that never got parked (the worker died between the reserved exit code and `await_subtasks.sh`) arrived active with its children still queued and synthesized over results that did not exist. It now waits again unless every child is terminal, while a child whose file is gone is still reported as missing rather than waited for forever.
 
