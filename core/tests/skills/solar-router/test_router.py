@@ -353,8 +353,12 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
         self.assertIn("declared artifact", body.lower())
         self.assertIn("without asking to re-activate", body.lower())
         self.assertIn("task-with-subtasks.md", body)
-        self.assertIn("create.sh --queued", body)
-        self.assertIn("Do **not** pass `--metadata`", body)
+        # The provider declares children; the worker creates them. Its sandbox
+        # cannot write into the queue, so asking it to would strand the task.
+        self.assertIn("<subtasks>", body)
+        self.assertIn("Do **not** run `create.sh`", body)
+        self.assertIn("## Subtask results", body)
+        self.assertNotIn("create.sh --queued", body)
 
     def test_requires_approval_for_mutable_actions(self):
         body = router._gateway_task_body("send the WhatsApp to Jorge", "n8n")

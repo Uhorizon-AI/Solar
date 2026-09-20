@@ -602,9 +602,10 @@ def _gateway_task_body(
 ) -> str:
     """Worker prompt for a gateway-originated parent task.
 
-    This file already has origin metadata and notify_when. Children created with
-    create.sh --queued must omit --metadata so only the parent notifies.
-    Follow solar-async-tasks task-with-subtasks.md.
+    This file already has origin metadata and notify_when. Children are created
+    by the worker from a <subtasks> declaration, never by the provider: its
+    sandbox cannot write into the task queue, and the children it creates must
+    not notify. Follow solar-async-tasks task-with-subtasks.md.
     """
     return (
         f"## Origin\n"
@@ -616,13 +617,26 @@ def _gateway_task_body(
         f"{user_text.strip()}\n\n"
         f"## Instructions\n"
         f"Follow `core/skills/solar-async-tasks/references/task-with-subtasks.md`.\n"
-        f"1. If this is execution 1 and the work needs children: create them with "
-        f"`create.sh --queued` (plus `--provider` / `--body-file` as needed). "
-        f"Do **not** pass `--metadata`. Children must not notify. Stop after creating "
-        f"children; `await_subtasks` re-queues this parent.\n"
-        f"2. If this is execution 2 (children done, or no children were needed): "
-        f"synthesize, write declared artifacts, and add `## Result`. Only this parent "
-        f"notifies the origin chat.\n"
+        f"1. If this is execution 1 and the work needs children: **declare** them and "
+        f"stop. Close your reply with a `<subtasks>` block holding a JSON list:\n"
+        f"   ```\n"
+        f"   <subtasks>\n"
+        f"   [\n"
+        f"     {{\"title\": \"...\", \"body\": \"...\", \"provider\": \"claude\"}},\n"
+        f"     {{\"title\": \"...\", \"body\": \"...\"}}\n"
+        f"   ]\n"
+        f"   </subtasks>\n"
+        f"   ```\n"
+        f"   `title` and `body` are required, `provider` is optional "
+        f"(codex | claude | agy | agent) and picks the model for that child. No other "
+        f"key is accepted, and at most 5 children: anything else rejects the whole "
+        f"block and fails this task. Do **not** run `create.sh` and do **not** write "
+        f"into the task queue — the worker creates the children, waits for them, and "
+        f"hands you their results.\n"
+        f"2. If this is execution 2 (the children's results are in this task under "
+        f"`## Subtask results`, or no children were needed): synthesize, write declared "
+        f"artifacts, and add `## Result`. Do not declare subtasks again. Only this "
+        f"parent notifies the origin chat.\n"
         f"3. Prefer read/analysis and writing declared deliverable paths under the Solar workspace.\n"
         f"4. The gateway already acknowledged the user for starting this work. Proceed with "
         f"in-scope read/analysis and declared artifact writes without asking to re-activate "

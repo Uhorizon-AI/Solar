@@ -16,6 +16,8 @@ SCHEDULED_TIME=""
 BODY_FILE=""
 PROVIDER=""
 METADATA_JSON=""
+PARENT_TASK_ID=""
+SUBTASK_KEY=""
 
 # Parse flags
 while [[ $# -gt 0 ]]; do
@@ -26,6 +28,8 @@ while [[ $# -gt 0 ]]; do
         --body-file)      BODY_FILE="$2"; shift 2 ;;
         --provider)       PROVIDER="$2"; shift 2 ;;
         --metadata)       METADATA_JSON="$2"; shift 2 ;;
+        --parent-task-id) PARENT_TASK_ID="$2"; shift 2 ;;
+        --subtask-key)    SUBTASK_KEY="$2"; shift 2 ;;
         --origin-channel|--origin-chat-id|--origin-request-id)
             echo "Unknown option: $1 (use --metadata JSON)" >&2
             exit 1
@@ -54,6 +58,12 @@ Options:
   --provider P         Lock this task to a specific provider: codex | claude | agy | agent.
                        The worker passes it to solar-router as strict mode (no fallback).
                        Only valid with --queued.
+  --parent-task-id ID  Only valid with --queued. Mark this task as a child of ID. Written with the file, not
+                       after it: the task is published into queued/ and can be picked
+                       up immediately, so a key added afterwards leaves a window where
+                       the child exists and cannot be reconciled with its parent.
+  --subtask-key KEY    Only valid with --queued. Stable key of this child inside its
+                       parent's manifest. Same reason: written with the file or not at all.
   --metadata JSON      Origin and scope metadata (message-contract). Accepts flat keys
                        origin_channel, origin_chat_id, origin_request_id and/or
                        nested origin: {channel, chat_id, request_id}, plus the
@@ -72,6 +82,10 @@ Examples:
 
   # AI subtask: locked to a specific provider (strict mode)
   create.sh --queued --provider claude --body-file /tmp/review.md "Claude review"
+
+  # Child of a parent task: identity written with the file, never after it
+  create.sh --queued --parent-task-id "<uuid>" --subtask-key "<key>" \
+    --body-file /tmp/child.md "Review A"
 
   # Parent from gateway: origin metadata + notify_when
   create.sh --queued --metadata '{"origin_channel":"telegram","origin_chat_id":"456","origin_request_id":"tg:1"}' "Parent"
@@ -139,6 +153,14 @@ yaml_quoted() {
 
 ID=$(generate_id)
 
+# A draft carries the minimal schema, so these two would be parsed and then
+# dropped without a word — and a child whose identity was silently discarded is
+# exactly the failure these flags exist to prevent. Fail instead.
+if [[ "$DEST" != "queued" ]] && [[ -n "$PARENT_TASK_ID" || -n "$SUBTASK_KEY" ]]; then
+    echo "Error: --parent-task-id and --subtask-key require --queued." >&2
+    exit 1
+fi
+
 # Choose destination directory
 case "$DEST" in
     queued)  TARGET_DIR="$DIR_QUEUED" ;;
@@ -195,6 +217,10 @@ if [[ "$DEST" == "queued" ]]; then
         echo "scheduled_time: \"$SCHED_TIME\""
         echo "recurring: false"
         [[ -n "$PROVIDER" ]] && echo "provider: $(yaml_quoted "$PROVIDER")"
+        # Part of the same atomic write as the rest of the file: the parent must
+        # never see a child of its own that it cannot identify.
+        [[ -n "$PARENT_TASK_ID" ]] && echo "parent_task_id: $(yaml_quoted "$PARENT_TASK_ID")"
+        [[ -n "$SUBTASK_KEY" ]] && echo "subtask_key: $(yaml_quoted "$SUBTASK_KEY")"
         [[ -n "$ORIGIN_CHANNEL" ]] && echo "origin_channel: $(yaml_quoted "$ORIGIN_CHANNEL")"
         [[ -n "$ORIGIN_CHAT_ID" ]] && echo "origin_chat_id: $(yaml_quoted "$ORIGIN_CHAT_ID")"
         [[ -n "$ORIGIN_REQUEST_ID" ]] && echo "origin_request_id: $(yaml_quoted "$ORIGIN_REQUEST_ID")"

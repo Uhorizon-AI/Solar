@@ -182,11 +182,11 @@ Use parent tasks when final output depends on independent child tasks, such as m
 
 Rules:
 
-- Execution 1 creates child tasks and stops.
-- The runtime requeues the parent with `blocked_by_task_ids`.
+- Execution 1 **declares** children in a `<subtasks>` block and stops. The provider never writes into the queue: the worker creates them.
+- The worker records them in `subtask_ids` (durable) and requeues the parent with `blocked_by_task_ids` (the wait's traffic light).
 - `start_next.sh` skips the parent until child tasks are terminal.
 - `completed`, `archived`, and `error` are terminal for dependency purposes.
-- Execution 2 reads child `## Result` sections and synthesizes the final artifact.
+- Execution 2 reads `## Subtask results`, written into the parent by the worker, and synthesizes the final artifact.
 - Do not use `blocked_by_task_ids` as the task body's execution-2 signal; it is internal runtime metadata and is removed before activation.
 
 See `references/task-with-subtasks.md`.

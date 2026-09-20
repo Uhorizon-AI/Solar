@@ -12,6 +12,7 @@ Handles I/O JSON with solar-router v3. Called by execute_active.sh.
 Usage:
     python3 execute_active.py <task_file> <router_script> <task_id> <title>
 """
+import hashlib
 import json
 import os
 import pathlib
@@ -19,6 +20,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -412,6 +414,513 @@ def record_delivery(task_file: pathlib.Path, reply_text: str) -> None:
     set_frontmatter_flag(task_file, "delivery_missing", expected and not delivery)
 
 
+# ---------------------------------------------------------------------------
+# Subtasks: the provider declares them, the worker creates them.
+#
+# The provider runs sandboxed and cannot write into the queue, so it closes its
+# reply with a <subtasks> block and stops. Everything below turns that block
+# into real child tasks, remembers which children belong to which parent, and
+# serves their results back to the parent for its second execution.
+# ---------------------------------------------------------------------------
+
+# Returned to execute_active.sh when this task is now waiting for children.
+# The shell moves the parent with await_subtasks.sh; the executor never touches
+# the queue. Kept in sync with SUBTASK_WAITING_EXIT in execute_active.sh.
+SUBTASK_WAITING_EXIT = 20
+
+SUBTASK_MAX = 5
+SUBTASK_TITLE_MAX = 120
+SUBTASK_BODY_MAX = 8000
+SUBTASK_RESULT_MAX = 4000
+SUBTASK_ALLOWED_KEYS = frozenset({"title", "body", "provider"})
+SUBTASK_PROVIDERS = frozenset({"codex", "claude", "agy", "agent"})
+
+RE_SUBTASKS = re.compile(r"<subtasks>(.*?)</subtasks>", re.IGNORECASE | re.DOTALL)
+
+# A re-run replaces its own section, never stacks a second one. `### ` headings
+# inside the section do not close it: the lookahead needs "## " exactly.
+RE_SUBTASK_RESULTS_SECTION = re.compile(r"\n## Subtask results\n.*?(?=\n## |\Z)", re.DOTALL)
+
+# The executor's own log: `## Result` on success, `## Error` on failure.
+RE_LOG_OUTCOME_SECTION = re.compile(r"\n## (?:Result|Error)\n(.*)", re.DOTALL)
+RE_TASK_ERROR_SECTION = re.compile(r"\n## Execution Error\n(.*)", re.DOTALL)
+
+
+def extract_subtasks(reply_text: str) -> Optional[str]:
+    """Return the last <subtasks> block of a reply, or None when there is none.
+
+    The last block wins, like <delivery>: a reply that shows the format before
+    using it would otherwise create the example.
+    """
+    matches = RE_SUBTASKS.findall(reply_text or "")
+    if not matches:
+        return None
+    return matches[-1].strip()
+
+
+def parse_subtasks(raw: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Validate a declaration. Returns (children, rejection reason).
+
+    All or nothing: a block that breaks any rule creates no children at all.
+    Half a batch is worse than none — the parent would synthesize over work that
+    was never done.
+    """
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        return [], f"subtasks block is not valid JSON: {exc}"
+    if not isinstance(data, list):
+        return [], "subtasks block must be a JSON list"
+    if not data:
+        return [], "subtasks block declares no children"
+    if len(data) > SUBTASK_MAX:
+        return [], f"subtasks block declares {len(data)} children, the cap is {SUBTASK_MAX}"
+
+    children: List[Dict[str, Any]] = []
+    for position, item in enumerate(data, start=1):
+        if not isinstance(item, dict):
+            return [], f"child {position} is not a JSON object"
+        extra = sorted(set(item) - SUBTASK_ALLOWED_KEYS)
+        if extra:
+            return [], f"child {position} has keys that are not allowed: {', '.join(extra)}"
+        title = item.get("title")
+        body = item.get("body")
+        if not isinstance(title, str) or not title.strip():
+            return [], f"child {position} has no title"
+        if not isinstance(body, str) or not body.strip():
+            return [], f"child {position} has no body"
+        if len(title) > SUBTASK_TITLE_MAX:
+            return [], f"child {position} title is over {SUBTASK_TITLE_MAX} characters"
+        if len(body) > SUBTASK_BODY_MAX:
+            return [], f"child {position} body is over {SUBTASK_BODY_MAX} characters"
+        provider = item.get("provider")
+        if provider is not None:
+            if not isinstance(provider, str) or provider.strip().lower() not in SUBTASK_PROVIDERS:
+                return [], f"child {position} declares an unknown provider: {provider!r}"
+            provider = provider.strip().lower()
+        children.append({
+            "title": title.strip(),
+            "body": body.strip(),
+            "provider": provider,
+        })
+    return children, None
+
+
+def subtask_key(parent_id: str, position: int, title: str, body: str) -> str:
+    """Stable key for a declared child: same declaration, same key, always.
+
+    It does not depend on when the worker runs, which is what makes a retry
+    after a crash idempotent.
+    """
+    digest = hashlib.sha256((title + "\n" + body).encode("utf-8")).hexdigest()[:8]
+    return f"{parent_id[:8]}-{position}-{digest}"
+
+
+def read_subtask_manifest(task_file: pathlib.Path) -> List[Tuple[str, str]]:
+    """Read `subtask_ids` as (key, task_id) pairs. The id is "" until created."""
+    raw = read_frontmatter_key(task_file, "subtask_ids")
+    pairs: List[Tuple[str, str]] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        key, _, task_id = chunk.partition("=")
+        pairs.append((key.strip(), task_id.strip()))
+    return pairs
+
+
+def write_subtask_manifest(task_file: pathlib.Path, pairs: List[Tuple[str, str]]) -> None:
+    """Write the manifest as one scalar line, the only shape set_meta supports.
+
+    This field is the durable record of which children were this parent's, and
+    it is never cleared — unlike blocked_by_task_ids, which is the traffic light
+    of the wait and is dropped on unblock and on activate.
+    """
+    value = ",".join(f"{key}={task_id}" for key, task_id in pairs)
+    upsert_frontmatter_key(task_file, "subtask_ids", json.dumps(value))
+
+
+def subtask_plan_path(task_root: pathlib.Path, task_id: str) -> pathlib.Path:
+    return task_root / "subtasks" / f"{task_id}.json"
+
+
+def record_subtask_plan(
+    task_root: pathlib.Path, task_id: str, children: List[Dict[str, Any]]
+) -> None:
+    """Persist the declaration itself, beside the queue.
+
+    The manifest holds keys, not payloads, so a crash halfway through creation
+    would leave the worker knowing that a child is missing but not what it was.
+    It lives outside the task file on purpose: the task body is the prompt the
+    provider gets in execution 2, and five child bodies in it would drown the
+    synthesis.
+    """
+    path = subtask_plan_path(task_root, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(children, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def read_subtask_plan(task_root: pathlib.Path, task_id: str) -> List[Dict[str, Any]]:
+    path = subtask_plan_path(task_root, task_id)
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+_TASK_DIRS = (
+    "queued", "active", "completed", "error", "archive", "cancelled", "drafts", "planned",
+)
+
+
+def find_task_file(task_root: pathlib.Path, task_id: str) -> Optional[pathlib.Path]:
+    """Locate a task by id across every state directory."""
+    for name in _TASK_DIRS:
+        directory = task_root / name
+        if not directory.is_dir():
+            continue
+        for candidate in sorted(directory.glob("*.md")):
+            try:
+                if read_frontmatter_key(candidate, "id") == task_id:
+                    return candidate
+            except OSError:
+                continue
+    return None
+
+
+def find_task_by_subtask_key(task_root: pathlib.Path, key: str) -> Optional[pathlib.Path]:
+    """Locate a child by its stable key.
+
+    Closes the narrow window between create.sh returning and the manifest being
+    updated: on retry the child exists but the parent does not know its id yet.
+    find_task cannot do this — it searches by id, not by key.
+    """
+    for name in _TASK_DIRS:
+        directory = task_root / name
+        if not directory.is_dir():
+            continue
+        for candidate in sorted(directory.glob("*.md")):
+            try:
+                if read_frontmatter_key(candidate, "subtask_key") == key:
+                    return candidate
+            except OSError:
+                continue
+    return None
+
+
+def child_object_section(parent_file: pathlib.Path) -> str:
+    """Restate the parent's object in the child's own body.
+
+    The child inherits object/scope/effect in its frontmatter, but frontmatter
+    is stripped before the prompt is built: the provider would never see it.
+    The router writes the same section into a gateway parent for exactly this
+    reason — the frontmatter copy is for checking, this one is what the executor
+    reads. Kept in the same shape as router._gateway_object_section.
+    """
+    obj = read_frontmatter_key(parent_file, "object")
+    bounds = read_frontmatter_key(parent_file, "scope")
+    effect = read_frontmatter_key(parent_file, "effect")
+    if not (obj or bounds or effect):
+        return (
+            "## Object\n"
+            "- not declared for this request.\n"
+            "Name the artifact you act on in your result, and ask before acting "
+            "on anything the request does not name.\n\n"
+        )
+    return (
+        "## Object\n"
+        f"- object: {obj or 'not declared'}\n"
+        f"- scope: {bounds or 'not declared'}\n"
+        f"- effect: {effect or 'not declared'}\n"
+        "Act on this object and only on this object. It is inherited from the "
+        "request this subtask belongs to and a child cannot widen it. If it "
+        "cannot be resolved (it does not exist, it is ambiguous, or the work "
+        "points elsewhere), stop and return a concrete question instead of "
+        "working on a substitute.\n\n"
+    )
+
+
+def create_child_task(
+    task_root: pathlib.Path,
+    parent_file: pathlib.Path,
+    parent_id: str,
+    child: Dict[str, Any],
+    key: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Create one child with create.sh. Returns (task_id, error).
+
+    The provider only chose title, body and provider. Everything else is the
+    worker's: the object travels down from the parent unchanged, and the child
+    gets no origin metadata — so create.sh writes no notify_when and only the
+    parent ever speaks to the chat.
+    """
+    scripts_dir = pathlib.Path(__file__).resolve().parent
+    create_script = scripts_dir / "create.sh"
+    if not create_script.is_file():
+        return None, f"create.sh not found: {create_script}"
+
+    metadata = {}
+    for field in ("object", "scope", "effect"):
+        value = read_frontmatter_key(parent_file, field)
+        if value:
+            metadata[field] = value
+    priority = read_frontmatter_key(parent_file, "priority") or "normal"
+
+    body_file = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8"
+        ) as handle:
+            handle.write(child_object_section(parent_file) + child["body"] + "\n")
+            body_file = pathlib.Path(handle.name)
+
+        cmd = [
+            "bash", str(create_script), "--queued",
+            "--priority", priority,
+            "--body-file", str(body_file),
+            # Identity goes in with the file. create.sh publishes into queued/
+            # atomically and the worker can pick the child up at once, so a key
+            # written afterwards leaves a window where the child exists, runs,
+            # and cannot be matched back to its parent on a retry.
+            "--parent-task-id", parent_id,
+            "--subtask-key", key,
+        ]
+        if child.get("provider"):
+            cmd += ["--provider", child["provider"]]
+        if metadata:
+            cmd += ["--metadata", json.dumps(metadata, ensure_ascii=False)]
+        cmd += [child["title"]]
+
+        env = os.environ.copy()
+        env["SOLAR_TASK_ROOT"] = str(task_root)
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, env=env, timeout=120
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, f"create.sh failed for {child['title']!r}: {exc}"
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()[:300]
+            return None, f"create.sh exited {proc.returncode} for {child['title']!r}: {detail}"
+
+        child_id = ""
+        for line in (proc.stdout or "").splitlines():
+            if line.startswith("ID: "):
+                child_id = line[4:].strip()
+        if not child_id:
+            return None, f"create.sh printed no id for {child['title']!r}"
+    finally:
+        if body_file is not None:
+            try:
+                body_file.unlink()
+            except OSError:
+                pass
+
+    if find_task_file(task_root, child_id) is None:
+        return None, f"child {child_id} was created but cannot be found in the queue"
+    return child_id, None
+
+
+def create_declared_children(
+    task_file: pathlib.Path, task_root: pathlib.Path, task_id: str
+) -> Optional[str]:
+    """Create every child the manifest still lacks. Returns an error, or None.
+
+    The manifest is written before the first child exists and updated after each
+    one, so an interruption is recoverable: a pair that already has an id is
+    skipped, an empty one is created.
+    """
+    plan = read_subtask_plan(task_root, task_id)
+    pairs = read_subtask_manifest(task_file)
+    if not pairs:
+        return "subtask manifest is empty"
+    if len(plan) != len(pairs):
+        return (
+            f"subtask plan has {len(plan)} children but the manifest has {len(pairs)}"
+        )
+
+    updated = list(pairs)
+    for index, (key, existing_id) in enumerate(pairs):
+        if existing_id:
+            continue
+        already = find_task_by_subtask_key(task_root, key)
+        if already is not None:
+            updated[index] = (key, read_frontmatter_key(already, "id"))
+            write_subtask_manifest(task_file, updated)
+            continue
+        child_id, error = create_child_task(
+            task_root, task_file, task_id, plan[index], key
+        )
+        if error:
+            return error
+        updated[index] = (key, child_id or "")
+        write_subtask_manifest(task_file, updated)
+        print(f"  → subtask created: {key} = {child_id}", flush=True)
+    return None
+
+
+def read_child_outcome(task_root: pathlib.Path, child_id: str) -> Tuple[str, str]:
+    """Return (status, result text) for one child, read from its own log."""
+    if not child_id:
+        return "missing", "child was never created"
+    child_file = find_task_file(task_root, child_id)
+    if child_file is None:
+        return "missing", f"task {child_id} is not in the queue"
+
+    status = read_frontmatter_key(child_file, "status") or "unknown"
+    text = ""
+    # result_path is written on success only: it is what the completion notify
+    # points at, and a failed task must not advertise a result. A failed child
+    # still has its log, under the name it was written with.
+    candidates = []
+    result_path = read_frontmatter_key(child_file, "result_path")
+    if result_path:
+        candidates.append(pathlib.Path(result_path))
+    candidates.append(task_root / "logs" / (child_file.stem + ".log"))
+    for log_path in candidates:
+        if not log_path.is_file():
+            continue
+        try:
+            match = RE_LOG_OUTCOME_SECTION.search(log_path.read_text(encoding="utf-8"))
+        except OSError:
+            match = None
+        if match:
+            text = match.group(1).strip()
+            break
+    if not text:
+        # Nothing in the log: the task file carries its own account.
+        try:
+            match = RE_TASK_ERROR_SECTION.search(child_file.read_text(encoding="utf-8"))
+        except OSError:
+            match = None
+        if match:
+            text = match.group(1).strip()
+    if not text:
+        text = "no result recorded"
+    if len(text) > SUBTASK_RESULT_MAX:
+        text = text[:SUBTASK_RESULT_MAX].rstrip() + f"\n\n[truncated at {SUBTASK_RESULT_MAX} characters]"
+    return status, text
+
+
+def record_subtask_results(task_file: pathlib.Path, task_root: pathlib.Path) -> None:
+    """Write the children's results into the parent as `## Subtask results`.
+
+    This is what replaces the child writing into the parent's file: a sandboxed
+    child cannot reach the queue, so the worker serves the results instead. A
+    child that failed appears with its status and its reason; it is never
+    dropped, because the parent has to say which part was not covered.
+    """
+    pairs = read_subtask_manifest(task_file)
+    if not pairs:
+        return
+    blocks = []
+    for key, child_id in pairs:
+        status, text = read_child_outcome(task_root, child_id)
+        blocks.append(f"### {key} — {status}\n\n{text}")
+    try:
+        content = task_file.read_text(encoding="utf-8")
+    except OSError:
+        return
+    body = RE_SUBTASK_RESULTS_SECTION.sub("", content).rstrip()
+    body += "\n\n## Subtask results\n\n" + "\n\n".join(blocks)
+    try:
+        task_file.write_text(body + "\n", encoding="utf-8")
+    except OSError:
+        return
+
+
+def subtask_pre_phase(
+    task_file: pathlib.Path,
+    task_root: pathlib.Path,
+    task_id: str,
+    title: str,
+    log_file: pathlib.Path,
+) -> str:
+    """Decide what this task needs before the provider is called.
+
+    Three states, read from the manifest:
+      - no manifest        → nothing to do; the provider may declare children
+      - manifest half done → finish creating them and wait. The provider is NOT
+                             called: it would re-declare, be ignored as a second
+                             batch, and synthesize over children that never were
+      - manifest complete  → serve the children's results and let it synthesize
+
+    Returns "none", "waiting", "ready" or "error".
+    """
+    pairs = read_subtask_manifest(task_file)
+    if not pairs:
+        return "none"
+    if any(not child_id for _, child_id in pairs):
+        print("  Resuming an interrupted subtask creation ...", flush=True)
+        error = create_declared_children(task_file, task_root, task_id)
+        if error:
+            mark_task_error(
+                task_file, task_id, title, None,
+                "subtask_create_failed", error, log_file,
+            )
+            return "error"
+        return "waiting"
+    record_subtask_results(task_file, task_root)
+    return "ready"
+
+
+def handle_declared_subtasks(
+    task_file: pathlib.Path,
+    task_root: pathlib.Path,
+    task_id: str,
+    title: str,
+    reply_text: str,
+    log_file: pathlib.Path,
+) -> Optional[int]:
+    """Act on a <subtasks> block in a reply. Returns an exit code, or None.
+
+    None means "there was nothing to act on, carry on with the normal ending".
+    """
+    declared = extract_subtasks(reply_text)
+    if declared is None:
+        return None
+
+    if read_frontmatter_key(task_file, "parent_task_id"):
+        # Depth is one. A child that asks for children is ignored, not failed:
+        # its own work is done and its parent is waiting for it.
+        print("  Ignoring <subtasks> from a child task: depth is one.", flush=True)
+        return None
+
+    if read_subtask_manifest(task_file):
+        # Execution 2 carries the same body, so the parent can declare again.
+        # Ignoring it is the one exception to visible rejection: sending a
+        # synthesizing parent to error/ would throw away its children's work.
+        print("  Ignoring a second <subtasks> block: this task already has children.", flush=True)
+        return None
+
+    children, error = parse_subtasks(declared)
+    if error:
+        mark_task_error(
+            task_file, task_id, title, None, "subtasks_rejected", error, log_file
+        )
+        return 1
+
+    record_subtask_plan(task_root, task_id, children)
+    write_subtask_manifest(
+        task_file,
+        [
+            (subtask_key(task_id, position, child["title"], child["body"]), "")
+            for position, child in enumerate(children, start=1)
+        ],
+    )
+    error = create_declared_children(task_file, task_root, task_id)
+    if error:
+        mark_task_error(
+            task_file, task_id, title, None, "subtask_create_failed", error, log_file
+        )
+        return 1
+    print(f"  Declared {len(children)} subtask(s); waiting for them.", flush=True)
+    return SUBTASK_WAITING_EXIT
+
+
 def mark_task_error(
     task_file: pathlib.Path,
     task_id: str,
@@ -569,6 +1078,16 @@ def main() -> int:
         print(f"Error: router script not found: {router_script}", file=sys.stderr)
         return 1
 
+    # Children first: finish creating them, or serve their results, before this
+    # task reaches a provider. start_next.sh is what reactivates a parent and it
+    # stays untouched — by the time the executor has the task it is already
+    # active, so the wait and the unblock never notice this step.
+    phase = subtask_pre_phase(task_file, task_root, task_id, title, log_file)
+    if phase == "error":
+        return 1
+    if phase == "waiting":
+        return SUBTASK_WAITING_EXIT
+
     # Build prompt
     body = strip_frontmatter(task_file)
     prompt = build_prompt(task_id, title, body)
@@ -610,6 +1129,16 @@ def main() -> int:
     # Success: write log
     write_log(log_file, task_id, title, "success", provider_used, reply_text, None, None)
     record_result_path(task_file, log_file)
+
+    # A declared batch ends execution 1 here. No delivery is expected yet, and
+    # record_delivery would mark this task as missing one.
+    subtask_exit = handle_declared_subtasks(
+        task_file, task_root, task_id, title, reply_text, log_file
+    )
+    if subtask_exit is not None:
+        print(f"  → provider_used: {provider_used}", flush=True)
+        return subtask_exit
+
     record_delivery(task_file, reply_text)
     print(f"  → provider_used: {provider_used}", flush=True)
     # Output reply_text to stdout for execute_active.sh to capture if needed

@@ -1,5 +1,13 @@
 # Reference: Detached Subtasks (Fire & Forget)
 
+> **Retired pattern.** It relied on the provider calling `create.sh` itself and on the
+> worker discovering new tasks by diffing the queue before and after an execution. The
+> provider runs sandboxed and cannot write into `SOLAR_TASK_ROOT`, and that diff was
+> withdrawn: the worker now creates the children it was asked for, from a `<subtasks>`
+> declaration, and always waits for them. `detach_subtasks: true` no longer has any
+> effect. Dispatching without waiting would need a new mechanism; what follows is kept
+> as the record of how this used to work.
+
 A task that creates children and completes **immediately** without waiting for their results. Children run autonomously. The parent does not synthesize or resume.
 
 ## When to use this pattern
