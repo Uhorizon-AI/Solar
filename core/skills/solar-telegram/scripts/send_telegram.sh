@@ -13,6 +13,9 @@ Usage:
 
 Behavior:
 - Loads `.env` for visible configuration only (chat id, parse mode, preview).
+- TELEGRAM_PARSE_MODE=none sends plain text (no parse_mode): use it for text you
+  do not control, such as titles or paths, where a stray `_` or `*` would make
+  Telegram reject the message with HTTP 400.
 - Takes TELEGRAM_BOT_TOKEN from the environment. It is never read from `.env`,
   and this script does not open the installation secret store: the Solar runtime
   that calls it (gateway, task notifier, MCP send tool) puts the token in the
@@ -93,13 +96,15 @@ parse_mode="${TELEGRAM_PARSE_MODE:-$parse_mode_default}"
 disable_preview="${TELEGRAM_DISABLE_PREVIEW:-$disable_preview_default}"
 
 api_url="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
-resp="$(
-  curl -fsS -X POST "$api_url" \
-    --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-    --data-urlencode "text=${msg}" \
-    --data-urlencode "parse_mode=${parse_mode}" \
-    --data-urlencode "disable_web_page_preview=${disable_preview}"
-)"
+curl_args=(
+  --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}"
+  --data-urlencode "text=${msg}"
+  --data-urlencode "disable_web_page_preview=${disable_preview}"
+)
+if [[ "$(printf '%s' "$parse_mode" | tr '[:upper:]' '[:lower:]')" != "none" ]]; then
+  curl_args+=(--data-urlencode "parse_mode=${parse_mode}")
+fi
+resp="$(curl -fsS -X POST "$api_url" "${curl_args[@]}")"
 
 if [[ "$resp" == *'"ok":true'* ]]; then
   echo "OK: message sent to Telegram chat ${TELEGRAM_CHAT_ID}."

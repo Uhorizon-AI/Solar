@@ -147,6 +147,27 @@ are eligible, and the origin allowlist still applies. Failure messages are brief
 and omit execution details. The sender is resolved from the installation root;
 task data and environment remain in the workspace.
 
+### What the notice contains
+
+A gateway parent is asked to end its reply with a `<delivery>` block: one or two
+short paragraphs in the language of the request, written the way a colleague who
+did the work would: what was done and what it means, with the evidence worked
+into the closing sentence. No labels and no template, because a filled-in form
+reads like a machine. The worker copies that block into the task as `## Delivery` (capped at
+1200 characters, keeping the last line; a cut sets `delivery_truncated: true`),
+and the notifier sends that section as the whole message. It is what the user
+reads on a phone, so no fixed prefix and no local path go in front of it.
+
+`## Result` is never sent. It is the provider's own account, unbounded, and
+transporting it is not the same as compressing it.
+
+Tasks created with `delivery_expected: true` that finish without the block are
+marked `delivery_missing: true`, and their notice says the task finished without
+a delivery instead of announcing it as resolved. The flag is written by the same
+call that puts the instruction in the task body: removing the instruction must
+remove the flag, or every task would report a missing delivery. A task without
+the flag keeps the earlier notice — a brief line plus the result location.
+
 ## Runtime Structure
 
 Default task root: `<runtime root>/async-tasks/`

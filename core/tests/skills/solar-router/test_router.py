@@ -364,6 +364,43 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
         self.assertIn("execution-consent", body.lower())
         self.assertIn("Validation Gate", body)
 
+    def test_carries_the_object_the_router_already_accepted(self):
+        """The scope was validated and then dropped: the executor never saw it."""
+        body = router._gateway_task_body(
+            "update the plan",
+            "telegram",
+            {
+                "object": "update docs/audit.md",
+                "scope": "read planets/solar",
+                "effect": "edit docs/audit.md",
+            },
+        )
+        self.assertIn("## Object", body)
+        self.assertIn("object: update docs/audit.md", body)
+        self.assertIn("scope: read planets/solar", body)
+        self.assertIn("effect: edit docs/audit.md", body)
+        self.assertIn("only on this object", body)
+        self.assertLess(body.index("## Object"), body.index("## User request"))
+
+    def test_undeclared_object_says_so_instead_of_inventing_one(self):
+        body = router._gateway_task_body("do the thing", "telegram", {})
+        self.assertIn("## Object", body)
+        self.assertIn("not declared", body)
+
+    def test_asks_for_the_one_screen_delivery(self):
+        body = router._gateway_task_body("update the plan", "telegram")
+        self.assertIn("<delivery>", body)
+        self.assertIn("</delivery>", body)
+        self.assertIn("language of the user request", body)
+        self.assertIn("evidence", body.lower())
+        self.assertIn("1200", body)
+
+    def test_delivery_is_prose_not_a_filled_in_template(self):
+        """A labelled form reads like a machine; the notice has to read human."""
+        body = router._gateway_task_body("update the plan", "telegram")
+        self.assertIn("one or two short paragraphs", body)
+        self.assertIn("No labels, no template", body)
+
 
 class TestAsyncTaskRoot(unittest.TestCase):
     """The router reads the same queue task_lib.sh writes (framework runtime)."""
@@ -488,6 +525,40 @@ class TestCreateAsyncDraftNotify(unittest.TestCase):
         self.assertEqual(task_id, "task-88")
         self.assertEqual(warning, "notify_script_missing")
         self.assertEqual(mock_run.call_count, 1)
+
+    @patch("router.subprocess.run")
+    @patch("router._resolve_under_home")
+    def test_queued_task_carries_scope_and_delivery_flag(self, mock_resolve, mock_run):
+        """create.sh only writes keys it knows: the scope has to be handed over."""
+        script = MagicMock()
+        script.is_file.return_value = True
+        mock_resolve.return_value = script
+        mock_run.return_value = Mock(returncode=0, stdout="ID: task-77\n", stderr="")
+        router.create_async_draft(
+            "update the plan",
+            "ack",
+            "req",
+            channel="telegram",
+            queue=True,
+            notify=False,
+            origin_channel="telegram",
+            origin_chat_id="456",
+            origin_request_id="telegram:456:9",
+            scope={
+                "object": "update docs/audit.md",
+                "scope": "read planets/solar",
+                "effect": "edit docs/audit.md",
+            },
+        )
+        cmd = mock_run.call_args[0][0]
+        meta = json.loads(cmd[cmd.index("--metadata") + 1])
+        self.assertEqual(meta["object"], "update docs/audit.md")
+        self.assertEqual(meta["scope"], "read planets/solar")
+        self.assertEqual(meta["effect"], "edit docs/audit.md")
+        # Flag and instruction leave together, or a rollback would report every
+        # task as missing its delivery.
+        self.assertIs(meta["delivery_expected"], True)
+        self.assertEqual(meta["origin_chat_id"], "456")
 
 
 # ---------------------------------------------------------------------------

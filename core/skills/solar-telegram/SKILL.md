@@ -68,7 +68,7 @@ solar client sync
 - `TELEGRAM_CHAT_ID` (default target chat for alerts) — root `.env`.
 
 Optional:
-- `TELEGRAM_PARSE_MODE` (default: `Markdown`)
+- `TELEGRAM_PARSE_MODE` (default: `Markdown`). `none` omits `parse_mode` and sends plain text: use it for text Solar does not control (task titles, paths), where a stray `_` or `*` makes Telegram reject the message with HTTP 400. Task notifications always send plain text.
 - `TELEGRAM_DISABLE_PREVIEW` (default: `true`)
 
 ## Laptop runtime note (optional, bridge mode)

@@ -54,11 +54,14 @@ Options:
   --provider P         Lock this task to a specific provider: codex | claude | agy | agent.
                        The worker passes it to solar-router as strict mode (no fallback).
                        Only valid with --queued.
-  --metadata JSON      Origin metadata (message-contract). Accepts flat keys
+  --metadata JSON      Origin and scope metadata (message-contract). Accepts flat keys
                        origin_channel, origin_chat_id, origin_request_id and/or
-                       nested origin: {channel, chat_id, request_id}. Written as
-                       flat frontmatter. notify_when: completed is set only when
-                       origin metadata is present. Children should omit this flag.
+                       nested origin: {channel, chat_id, request_id}, plus the
+                       declared scope of the request: object, scope, effect, and
+                       delivery_expected. Written as flat frontmatter. Any other key
+                       is ignored: this is a closed allowlist, not a metadata
+                       passthrough. notify_when: completed is set only when origin
+                       metadata is present. Children should omit this flag.
 
 Examples:
   # Human workflow (draft → plan → approve)
@@ -79,6 +82,10 @@ fi
 ORIGIN_CHANNEL=""
 ORIGIN_CHAT_ID=""
 ORIGIN_REQUEST_ID=""
+SCOPE_OBJECT=""
+SCOPE_BOUNDS=""
+SCOPE_EFFECT=""
+DELIVERY_EXPECTED=""
 
 if [[ -n "$METADATA_JSON" ]]; then
     META_OUT="$(python3 -c '
@@ -96,17 +103,23 @@ origin = data.get("origin")
 if not isinstance(origin, dict):
     origin = {}
 
-def pick(flat_key, nested_key):
+def pick(flat_key, nested_key=None):
     v = data.get(flat_key)
-    if v is None:
+    if v is None and nested_key is not None:
         v = origin.get(nested_key)
     if v is None:
         return ""
-    return str(v).strip()
+    # One value per output line: the caller reads these positionally, and the
+    # scope keys carry prose that may arrive wrapped.
+    return " ".join(str(v).split())
 
 print(pick("origin_channel", "channel"))
 print(pick("origin_chat_id", "chat_id"))
 print(pick("origin_request_id", "request_id"))
+print(pick("object"))
+print(pick("scope"))
+print(pick("effect"))
+print("true" if data.get("delivery_expected") is True else "")
 ' "$METADATA_JSON")" || {
         echo "Error: --metadata must be a JSON object (flat origin_* or nested origin)." >&2
         exit 1
@@ -114,6 +127,10 @@ print(pick("origin_request_id", "request_id"))
     ORIGIN_CHANNEL="$(printf '%s\n' "$META_OUT" | sed -n '1p')"
     ORIGIN_CHAT_ID="$(printf '%s\n' "$META_OUT" | sed -n '2p')"
     ORIGIN_REQUEST_ID="$(printf '%s\n' "$META_OUT" | sed -n '3p')"
+    SCOPE_OBJECT="$(printf '%s\n' "$META_OUT" | sed -n '4p')"
+    SCOPE_BOUNDS="$(printf '%s\n' "$META_OUT" | sed -n '5p')"
+    SCOPE_EFFECT="$(printf '%s\n' "$META_OUT" | sed -n '6p')"
+    DELIVERY_EXPECTED="$(printf '%s\n' "$META_OUT" | sed -n '7p')"
 fi
 
 yaml_quoted() {
@@ -164,6 +181,13 @@ if [[ "$DEST" == "queued" ]]; then
         [[ -n "$ORIGIN_CHANNEL" ]] && echo "origin_channel: $(yaml_quoted "$ORIGIN_CHANNEL")"
         [[ -n "$ORIGIN_CHAT_ID" ]] && echo "origin_chat_id: $(yaml_quoted "$ORIGIN_CHAT_ID")"
         [[ -n "$ORIGIN_REQUEST_ID" ]] && echo "origin_request_id: $(yaml_quoted "$ORIGIN_REQUEST_ID")"
+        [[ -n "$SCOPE_OBJECT" ]] && echo "object: $(yaml_quoted "$SCOPE_OBJECT")"
+        [[ -n "$SCOPE_BOUNDS" ]] && echo "scope: $(yaml_quoted "$SCOPE_BOUNDS")"
+        [[ -n "$SCOPE_EFFECT" ]] && echo "effect: $(yaml_quoted "$SCOPE_EFFECT")"
+        # Written by the same call that puts the <delivery> instruction in the
+        # body: dropping the instruction must drop this flag, or every task
+        # would report a missing delivery.
+        [[ -n "$DELIVERY_EXPECTED" ]] && echo "delivery_expected: true"
         [[ "$HAS_ORIGIN" -eq 1 ]] && echo "notify_when: completed"
         echo "---"
         echo ""

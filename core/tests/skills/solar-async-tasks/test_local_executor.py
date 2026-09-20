@@ -180,3 +180,77 @@ def test_local_timeout_expires(tmp_path: Path):
     err = task_root / "error" / "local-task.md"
     assert err.exists()
     assert "local_timeout" in err.read_text(encoding="utf-8")
+
+
+def test_success_records_result_path_to_the_log(tmp_path: Path):
+    """The notify needs the file that holds the result: the execution log."""
+    workspace, script = _workspace_with_script(tmp_path, "#!/bin/bash\necho done\n")
+    task_root = tmp_path / "sun" / "runtime" / "async-tasks"
+    rel = script.relative_to(workspace).as_posix()
+    task = _write_task(task_root, local_command=f"bash {rel}")
+    assert _run_executor(task, workspace).returncode == 0
+    log = (task_root / "logs" / "local-task.log").resolve()
+    assert f'result_path: "{log}"' in task.read_text(encoding="utf-8")
+    assert "## Result" in log.read_text(encoding="utf-8")
+
+
+def test_existing_result_url_is_kept(tmp_path: Path):
+    workspace, script = _workspace_with_script(tmp_path, "#!/bin/bash\necho done\n")
+    task_root = tmp_path / "sun" / "runtime" / "async-tasks"
+    rel = script.relative_to(workspace).as_posix()
+    task = _write_task(task_root, local_command=f"bash {rel}")
+    task.write_text(
+        task.read_text(encoding="utf-8").replace(
+            "status: active\n", 'status: active\nresult_url: "https://example.test/r"\n'
+        ),
+        encoding="utf-8",
+    )
+    assert _run_executor(task, workspace).returncode == 0
+    body = task.read_text(encoding="utf-8")
+    assert 'result_url: "https://example.test/r"' in body
+    assert "result_path:" not in body
+
+
+def test_existing_result_path_is_kept(tmp_path: Path):
+    workspace, script = _workspace_with_script(tmp_path, "#!/bin/bash\necho done\n")
+    task_root = tmp_path / "sun" / "runtime" / "async-tasks"
+    rel = script.relative_to(workspace).as_posix()
+    task = _write_task(task_root, local_command=f"bash {rel}")
+    task.write_text(
+        task.read_text(encoding="utf-8").replace(
+            "status: active\n", 'status: active\nresult_path: "/tmp/author-choice.md"\n'
+        ),
+        encoding="utf-8",
+    )
+    assert _run_executor(task, workspace).returncode == 0
+    body = task.read_text(encoding="utf-8")
+    assert 'result_path: "/tmp/author-choice.md"' in body
+    assert body.count("result_path:") == 1
+
+
+def test_result_path_is_absolute(tmp_path: Path):
+    """The notification sends this string: a relative path would be useless."""
+    workspace, script = _workspace_with_script(tmp_path, "#!/bin/bash\necho done\n")
+    task_root = tmp_path / "sun" / "runtime" / "async-tasks"
+    rel = script.relative_to(workspace).as_posix()
+    task = _write_task(task_root, local_command=f"bash {rel}")
+    proc = subprocess.run(
+        [sys.executable, str(EXECUTE), str(task.relative_to(tmp_path)), "/nonexistent/router.py",
+         "local-1", "Local Task"],
+        capture_output=True, text=True, cwd=tmp_path,
+        env={**os.environ, "SOLAR_WORKSPACE": str(workspace)}, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    recorded = [line for line in task.read_text(encoding="utf-8").splitlines()
+                if line.startswith("result_path:")][0]
+    path = Path(recorded.split('"')[1])
+    assert path.is_absolute() and path == path.resolve() and path.is_file()
+
+
+def test_error_does_not_record_a_result_path(tmp_path: Path):
+    workspace, script = _workspace_with_script(tmp_path, "#!/bin/bash\nexit 3\n")
+    task_root = tmp_path / "sun" / "runtime" / "async-tasks"
+    rel = script.relative_to(workspace).as_posix()
+    task = _write_task(task_root, local_command=f"bash {rel}")
+    assert _run_executor(task, workspace).returncode == 1
+    assert "result_path:" not in (task_root / "error" / "local-task.md").read_text(encoding="utf-8")

@@ -1289,6 +1289,7 @@ solar_client_report_launchagent_binding() {
         echo "  bash \"$setup_script\" --restart" >&2
         return 1
       fi
+      SOLAR_CLIENT_GATEWAY_RESTARTED=true
     fi
     # Clear override so post-repair assess can reflect mocks / real state.
     if [[ -n "${SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE:-}" ]]; then
@@ -1313,6 +1314,91 @@ solar_client_report_launchagent_binding() {
   if [[ -f "$setup_script" ]]; then
     echo "    bash \"$setup_script\" --restart"
   fi
+}
+
+# Long-running services of THIS install that are running: "gateway" (transport
+# bridges) and "host" (console on :9000). A process counts only if its command
+# line holds this install's script path (fixed-string match), so services of
+# another Solar install on the machine are never mistaken for ours. The
+# async-tasks worker is not listed: it starts fresh on every orchestrator tick.
+# Args: install_root.
+# Test hooks: SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE ("gateway,host", or "none");
+# SOLAR_CLIENT_PS_OUTPUT_FILE (file with `ps -axo command=` lines).
+solar_client_running_services() {
+  local install_root="${1:-${SOLAR_ROOT:-}}"
+  local override="${SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE-__UNSET__}"
+  if [[ "$override" != "__UNSET__" ]]; then
+    [[ "$override" == "none" ]] || printf '%s\n' "$override" | tr ',' '\n' | sed '/^$/d'
+    return 0
+  fi
+  [[ -n "$install_root" ]] || return 0
+  local resolved commands root patterns
+  resolved="$(_resolve_abs "$install_root" 2>/dev/null || echo "$install_root")"
+  if [[ -n "${SOLAR_CLIENT_PS_OUTPUT_FILE:-}" ]]; then
+    commands="$(cat "$SOLAR_CLIENT_PS_OUTPUT_FILE")"
+  else
+    commands="$(ps -axo command= 2>/dev/null || true)"
+  fi
+  # Match the install path as given and as resolved (it may be a symlink).
+  patterns=()
+  for root in "${install_root%/}" "${resolved%/}"; do
+    patterns+=(-e "$root/core/skills/solar-gateway/scripts/run_http_webhook_bridge.py")
+    patterns+=(-e "$root/core/skills/solar-gateway/scripts/run_websocket_bridge.py")
+  done
+  if grep -qF "${patterns[@]}" <<<"$commands"; then
+    echo gateway
+  fi
+  if grep -qF -e "${install_root%/}/core/skills/solar-app/scripts/host_server.py" \
+      -e "${resolved%/}/core/skills/solar-app/scripts/host_server.py" <<<"$commands"; then
+    echo host
+  fi
+}
+
+# After an update, Python services keep the old code in memory until restarted.
+# Restart only the services that are already running; never start new ones.
+# Args: install_root. Returns non-zero if any restart failed (commands printed).
+# Test hooks: SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT, SOLAR_CLIENT_HOST_STOP_SCRIPT,
+# SOLAR_CLIENT_HOST_START_SCRIPT.
+solar_client_restart_running_services() {
+  local install_root="$1"
+  local setup_script stop_script start_script services service failed=0
+  setup_script="${SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT:-${install_root}/core/skills/solar-gateway/scripts/setup_transport_gateway.sh}"
+  stop_script="${SOLAR_CLIENT_HOST_STOP_SCRIPT:-${install_root}/core/skills/solar-app/scripts/stop_host.sh}"
+  start_script="${SOLAR_CLIENT_HOST_START_SCRIPT:-${install_root}/core/skills/solar-app/scripts/start_host.sh}"
+  services="$(solar_client_running_services "$install_root")"
+  if [[ -z "$services" ]]; then
+    echo "Services: none running; nothing to restart"
+    return 0
+  fi
+  while IFS= read -r service; do
+    case "$service" in
+      gateway)
+        if [[ "${SOLAR_CLIENT_GATEWAY_RESTARTED:-false}" == true ]]; then
+          echo "Services: transport gateway already restarted with the LaunchAgent"
+          continue
+        fi
+        echo "Services: restarting transport gateway so it runs the new code…"
+        if bash "$setup_script" --restart; then
+          echo "OK: transport gateway restarted"
+        else
+          echo "ERROR: transport gateway restart failed. Run:" >&2
+          echo "  bash \"$setup_script\" --restart" >&2
+          failed=1
+        fi
+        ;;
+      host)
+        echo "Services: restarting console (:9000) so it runs the new code…"
+        if bash "$stop_script" && bash "$start_script"; then
+          echo "OK: console restarted"
+        else
+          echo "ERROR: console restart failed. Run:" >&2
+          echo "  bash \"$stop_script\" && bash \"$start_script\"" >&2
+          failed=1
+        fi
+        ;;
+    esac
+  done <<<"$services"
+  return "$failed"
 }
 
 solar_client_restructure_apply() {

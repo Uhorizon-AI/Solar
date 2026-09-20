@@ -16,6 +16,7 @@ FORCE_WORKSPACE=""
 TARGET_TAG=""
 CHANNEL=""
 REINSTALL_LAUNCHAGENT=false
+RESTART_SERVICES=auto
 
 usage() {
   cat <<'EOF'
@@ -28,12 +29,18 @@ SOLAR_AI_PROVIDER_PRIORITY in the workspace .env (gemini→agy) before apply.
 The first router run after a legacy updater performs the same one-time migration.
 --repair only touches .solar/settings.json (migrates legacy manifest.json).
 
+When the installed version changes, restarts the long-running services that are
+already running (transport gateway, console on :9000) so they load the new code.
+Nothing that is stopped gets started. The async-tasks worker needs no restart.
+
 On macOS, after a successful update, reports LaunchAgent SOLAR_ROOT binding (read-only
 status). Use --reinstall-launchagent on a real update (not with --check) to rewrite
 the plist and restart the transport gateway.
 
 Options:
-  --check              Report installed vs remote/settings/LaunchAgent; no changes
+  --check              Report installed vs remote/settings/LaunchAgent; no changes.
+                       Read-only: never restarts services, so --restart and
+                       --no-restart do not apply to it
   --repair             Repair workspace .solar/settings.json (OneDrive conflicts)
   --workspace <path>   Workspace for settings checks/repair (default: discover cwd)
   --ref <ref>          Git checkout <ref> in SOLAR_ROOT (tag, branch, or commit)
@@ -48,6 +55,8 @@ Options:
                        After update completes, reinstall macOS LaunchAgent when
                        SOLAR_ROOT binding is stale and restart transport gateway.
                        Incompatible with --check (read-only).
+  --no-restart         Do not restart running services after the update
+  --restart            Restart running services even if the version did not change
   --yes, -y            Proceed if SOLAR_ROOT git working tree is dirty
   -h, --help           Show help
 
@@ -87,6 +96,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --backup) FORCE_BACKUP=true; shift ;;
     --reinstall-launchagent) REINSTALL_LAUNCHAGENT=true; shift ;;
+    --no-restart) RESTART_SERVICES=never; shift ;;
+    --restart) RESTART_SERVICES=always; shift ;;
     --yes|-y) AUTO_YES=true; shift ;;
     --workspace|--home)
       shift
@@ -219,9 +230,47 @@ if ! solar_client_paths_equal "$INSTALL_ROOT" "$SOLAR_WORKSPACE"; then
 fi
 
 echo ""
+export SOLAR_ROOT="$INSTALL_ROOT" SOLAR_WORKSPACE
+SOLAR_CLIENT_GATEWAY_RESTARTED=false
 solar_client_report_launchagent_binding "$INSTALL_ROOT" "$REINSTALL_LAUNCHAGENT"
+
+restart_failed=0
+version_changed=false
+# This process loaded client_lib.sh from the previous install. Reload the one just
+# installed so the restart below follows the new version's rules, not the old ones.
+NEW_CLIENT_LIB="$INSTALL_ROOT/core/skills/solar-client/scripts/client_lib.sh"
+if [[ -f "$NEW_CLIENT_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$NEW_CLIENT_LIB"
+fi
+# A bundle install has no git identity to compare: the rsync just replaced core/.
+if [[ "$use_git" != true || "$cur_ver $cur_commit" != "$new_ver $new_commit" ]]; then
+  version_changed=true
+fi
+echo ""
+case "$RESTART_SERVICES" in
+  never)
+    echo "Services: not restarted (--no-restart). Running services keep the old code until restarted."
+    ;;
+  always)
+    solar_client_restart_running_services "$INSTALL_ROOT" || restart_failed=1
+    ;;
+  auto)
+    if [[ "$version_changed" == true ]]; then
+      solar_client_restart_running_services "$INSTALL_ROOT" || restart_failed=1
+    else
+      echo "Services: version unchanged; not restarted (use --restart to force)"
+    fi
+    ;;
+esac
 
 echo "Next steps (per workspace):"
 echo "  cd \"$SOLAR_WORKSPACE\""
 echo "  solar client sync"
 echo "  solar client doctor"
+
+if [[ "$restart_failed" -ne 0 ]]; then
+  echo "" >&2
+  echo "ERROR: update applied, but a running service could not be restarted (see above)." >&2
+  exit 1
+fi

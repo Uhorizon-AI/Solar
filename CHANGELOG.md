@@ -6,6 +6,26 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-09-20
+
+### Added
+- feat(solar-async-tasks): the completion notice is the delivery the executor wrote, not a fixed line plus a path. A gateway parent is asked to close its reply with a `<delivery>` block: one or two short paragraphs in the language of the request, written the way a colleague who did the work would, with the evidence in the closing sentence. No labels and no template. The worker copies that block into the task as `## Delivery` (capped at 1200 characters, keeping the last line; a cut sets `delivery_truncated: true`) and the notification sends that section as the whole message, so it can be read on a phone without opening the Mac. `## Result` is never sent: it is the provider's own account, and transporting it is not compressing it. Every execution rewrites the section and recomputes the flags, so a parent that runs twice or is requeued from error never notifies a previous run's delivery. Tasks created with `delivery_expected: true` that finish without the block are marked `delivery_missing: true` and their notice says so instead of announcing the work as resolved; tasks without the flag keep the previous notice. The `notify_long` path is retired: it read the unbounded `## Result` and no task used it.
+- feat(solar-async-tasks, solar-router): the declared scope of a request reaches the task that carries it out. The router already extracted and validated `object`, `scope` and `effect` before queueing, then recorded them only in the audit: the executor saw the raw user text alone, so a request naming one artifact could be carried out on another. `create.sh --metadata` now accepts those three keys plus `delivery_expected` as a closed allowlist (unknown keys are still dropped), writes them as frontmatter, and the task body restates them in an `## Object` section with the instruction to act on that object and return a question instead of working on a substitute. `delivery_expected` is written by the same call that puts the `<delivery>` instruction in the body, so removing the instruction removes the flag.
+
+## [0.24.3] - 2026-09-19
+
+### Fixed
+- fix(solar-async-tasks): a completed task records `result_path` pointing at its execution log, which is where the result is written (a provider sandbox may not be able to write into the task queue). The completion notification linked the task file instead, which holds no result. An explicit `result_url`/`result_path` set by the task author still wins, and failed tasks record nothing.
+
+## [0.24.2] - 2026-09-19
+
+### Fixed
+- fix(solar-async-tasks): task notifications are sent to Telegram as plain text. In Markdown, a stray `_` or `*` in a task title or path made Telegram reject the notification with HTTP 400 (`notify_status: failed`, `telegram_send_failed`). `send_telegram.sh` accepts `TELEGRAM_PARSE_MODE=none` to omit `parse_mode`.
+- fix(solar-client): when the installed version changes, `solar client update` restarts the long-running services that are already running (transport gateway, console on :9000), so they stop running the previous code from memory. Nothing that is stopped gets started. Only services whose command line holds this install's path count, so another Solar install on the machine is never touched. After the update the restart logic reloads the newly installed `client_lib.sh`, so it follows the new version's rules. New `--no-restart` and `--restart` options; a failed restart prints the manual command and exits non-zero.
+  - **Upgrade note:** updating from 0.24.1 or earlier runs the previous updater, which cannot restart services yet. Run `solar client update --restart` once after this update.
+
+## [0.24.1] - 2026-09-19
+
 ### Fixed
 - fix(solar-router, solar-gateway): look up async tasks in the same queue `task_lib.sh` writes (`SOLAR_TASK_ROOT`, else the framework runtime `async-tasks`) instead of the removed `sun/runtime/async-tasks`. A long request queued from Telegram/n8n no longer answers "I couldn't queue the task" (with `queued: false`) while the task is actually queued, and the gateway replay path finds the task already created for an `origin_request_id` instead of risking a duplicate.
 - fix(solar-async-tasks): `start_next.sh` reads the queue one path per line instead of word-splitting it. With the queue under `~/Library/Application Support`, every path was split at the space, so no queued task ever started ("No tasks ready to start").
