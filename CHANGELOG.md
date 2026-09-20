@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-09-20
+
 ### Changed
 - change(solar-router): the `<delivery>` block is plain prose with no length target. It asked for "one or two short paragraphs", which reads as a budget rather than a shape; the message now takes the room the work needs, up to the 1200-character cap, because being clear matters more than being short. No labels and no template either way.
 
