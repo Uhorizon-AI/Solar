@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- change(solar-router): the `<delivery>` instruction spends its budget on the reader. The first real delivery (2026-09-20) filled a quarter of the cap with a closing line that described where the detail lived instead of pointing at it, a repeat of its own opening sentence, and a note about a missing local dependency. It now ranks the evidence: a link the reader can open from the channel when one exists, because that is the only kind they can follow from a phone, and otherwise a verifiable reference (a relative path or a stable id) named together with the system it lives in. A local path is not phone-followable and is no longer offered as if it were. It also asks for no restating of the opening line at the end, nothing about the executor's own tooling unless it changed the answer or left work unverified, and bullets when listing things the user has to decide. The cap is stated as a ceiling rather than a target.
+
 ## [0.25.1] - 2026-09-20
 
 ### Changed

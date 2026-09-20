@@ -399,7 +399,27 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
         """A labelled form reads like a machine; the notice has to read human."""
         body = router._gateway_task_body("update the plan", "telegram")
         self.assertIn("plain prose", body)
+        self.assertIn("No labels, no template", body)
         self.assertIn("Being clear matters more than being short", body)
+
+    def test_evidence_prefers_a_link_and_falls_back_to_a_named_reference(self):
+        """A local path cannot be opened from Telegram, so it is not the same
+        kind of evidence as a link. The instruction has to rank them."""
+        body = router._gateway_task_body("update the plan", "telegram")
+        link = body.index("link the user can open from this channel")
+        fallback = body.index("verifiable reference")
+        self.assertLess(link, fallback, "the link has to be asked for first")
+        self.assertIn("name the system it lives in", body)
+        self.assertIn("is not evidence", body)
+
+    def test_delivery_spends_its_budget_on_the_user_not_on_itself(self):
+        """The first real delivery filled a quarter of the cap with filler."""
+        body = router._gateway_task_body("update the plan", "telegram")
+        # No restating the opening line at the end, no reports on its own tools.
+        self.assertIn("what you already said in the opening one", body)
+        self.assertIn("not about your own run", body)
+        # The cap is a ceiling, not something to fill.
+        self.assertIn("never a target", body)
         self.assertIn("No labels, no template", body)
 
 

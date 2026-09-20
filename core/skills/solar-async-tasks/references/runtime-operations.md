@@ -154,7 +154,15 @@ in the language of the request, written the way a colleague who did the work
 would: what was done and what it means, with the evidence worked into the
 closing sentence. No labels and no template, because a filled-in form reads like
 a machine. Clarity comes before brevity: the block takes the room the work needs,
-up to the cap.
+up to the cap, and the cap is a ceiling rather than a target.
+
+The evidence is something the reader can go to. A link they can open from the
+channel is the only kind they can follow from a phone, so it wins whenever one
+exists; today none does, and the executor falls back to a verifiable reference:
+a relative path or a stable id, named together with the system it lives in, to
+be checked later from a machine. A sentence describing where the detail lives is
+not evidence either way. Tooling that failed on the executor's side belongs in
+the block only when it changed the answer or left part of the work unverified.
 
 The worker copies that block into the task as `## Delivery` (capped at 1200
 characters, keeping the last line; a cut sets `delivery_truncated: true`),
@@ -169,7 +177,7 @@ marked `delivery_missing: true`, and their notice says the task finished without
 a delivery instead of announcing it as resolved. The flag is written by the same
 call that puts the instruction in the task body: removing the instruction must
 remove the flag, or every task would report a missing delivery. A task without
-the flag keeps the earlier notice — a brief line plus the result location.
+the flag keeps the earlier notice: a brief line plus the result location.
 
 ## Runtime Structure
 
