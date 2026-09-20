@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- change(solar-router): the `<delivery>` block is plain prose with no length target. It asked for "one or two short paragraphs", which reads as a budget rather than a shape; the message now takes the room the work needs, up to the 1200-character cap, because being clear matters more than being short. No labels and no template either way.
+
+### Fixed
+- fix(solar-async-tasks): `create.sh` fails instead of announcing a task it did not write. The script has no `set -e`, so a failed redirect left it running and it still printed `Task created` with an ID for a file that does not exist; the caller then queued work on that file and found out much later. Observed when a provider sandbox could not write into `SOLAR_TASK_ROOT`: the executor read the success, delegated, and only afterwards discovered the child task was missing. The task is now written to a temporary file beside its destination and moved into place only once the write succeeded whole, so a write that emits some bytes and then fails (a full disk, a killed sandbox) leaves no truncated task for the worker to pick up. Any partial file is removed and the exit code is non-zero. This makes the failure visible; it does not make the write possible — a sandboxed provider still cannot create child tasks.
+
 ## [0.25.0] - 2026-09-20
 
 ### Added

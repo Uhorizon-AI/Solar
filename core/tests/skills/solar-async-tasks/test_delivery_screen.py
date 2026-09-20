@@ -69,6 +69,55 @@ def test_create_writes_declared_scope_and_ignores_unknown_keys(tmp_path):
     assert "notify_when: completed" in text
 
 
+def test_create_fails_loudly_when_the_task_cannot_be_written(tmp_path):
+    """A provider sandbox that cannot write the queue must not be told it worked."""
+    root = tmp_path / "runtime" / "async-tasks"
+    (root / "queued").mkdir(parents=True)
+    (root / "queued").chmod(0o500)
+    body = tmp_path / "body.md"
+    body.write_text("work\n", encoding="utf-8")
+    try:
+        result = subprocess.run(
+            [
+                "bash", str(SCRIPTS / "create.sh"), "--queued",
+                "--body-file", str(body), "Unwritable task",
+            ],
+            env={**os.environ, "SOLAR_WORKSPACE": str(tmp_path),
+                 "SOLAR_TASK_ROOT": str(root)},
+            text=True, capture_output=True, timeout=30,
+        )
+    finally:
+        (root / "queued").chmod(0o700)
+    assert result.returncode != 0
+    assert "Task created" not in result.stdout
+    assert "was not written" in result.stderr
+
+
+def test_create_leaves_no_task_when_the_write_dies_halfway(tmp_path):
+    """Some bytes reaching disk is not the same as the task being written.
+
+    A file size limit cuts the redirect after it has already emitted content,
+    which is what a full disk or a killed sandbox looks like.
+    """
+    root = tmp_path / "runtime" / "async-tasks"
+    (root / "queued").mkdir(parents=True)
+    body = tmp_path / "body.md"
+    body.write_text("x" * 20000 + "\n", encoding="utf-8")
+    result = subprocess.run(
+        ["bash", "-c",
+         f'ulimit -f 1; exec bash {SCRIPTS / "create.sh"} --queued '
+         f'--body-file {body} "Truncated task"'],
+        env={**os.environ, "SOLAR_WORKSPACE": str(tmp_path),
+             "SOLAR_TASK_ROOT": str(root)},
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "Task created" not in result.stdout
+    assert "ID:" not in result.stdout
+    # Neither the task nor the partial file it was being written into.
+    assert list((root / "queued").iterdir()) == []
+
+
 def test_create_without_scope_keeps_previous_shape(tmp_path):
     task = _create(tmp_path, {"origin_channel": "telegram", "origin_chat_id": "456"})
     text = task.read_text(encoding="utf-8")

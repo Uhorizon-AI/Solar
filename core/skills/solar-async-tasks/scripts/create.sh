@@ -164,6 +164,23 @@ if [[ -n "$ORIGIN_CHANNEL" || -n "$ORIGIN_CHAT_ID" || -n "$ORIGIN_REQUEST_ID" ]]
     HAS_ORIGIN=1
 fi
 
+# The task is written to a temporary file beside its destination and moved into
+# place only once the write succeeded whole. A failed redirect leaves the script
+# running (no `set -e`), and a write that emits some bytes and then fails would
+# otherwise leave a truncated task that looks valid: the worker would pick it up
+# and the caller would be told it was created. A provider sandbox that cannot
+# write into the task root hits exactly this.
+TMP_FILE="${FILENAME}.partial.$$"
+cleanup_partial() {
+    rm -f "$TMP_FILE"
+}
+trap cleanup_partial EXIT
+
+write_failed() {
+    echo "Error: task file was not written: $FILENAME" >&2
+    exit 1
+}
+
 # Build frontmatter based on destination
 if [[ "$DEST" == "queued" ]]; then
     # --queued: full schema required for worker compatibility
@@ -194,10 +211,10 @@ if [[ "$DEST" == "queued" ]]; then
         echo "# $TITLE"
         echo ""
         echo "$BODY"
-    } > "$FILENAME"
+    } > "$TMP_FILE" || write_failed
 else
     # drafts: minimal schema (plan.sh / approve.sh add the rest)
-    cat > "$FILENAME" <<EOF
+    cat > "$TMP_FILE" <<EOF || write_failed
 ---
 id: "$ID"
 title: "$TITLE"
@@ -211,6 +228,12 @@ priority: $PRIORITY
 $BODY
 EOF
 fi
+
+# Empty means the redirect never reached the filesystem, which some shells and
+# sandboxes report without a non-zero status.
+[[ -s "$TMP_FILE" ]] || write_failed
+mv "$TMP_FILE" "$FILENAME" || write_failed
+trap - EXIT
 
 echo "Task created: $FILENAME"
 echo "ID: $ID"

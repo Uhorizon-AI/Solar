@@ -149,12 +149,15 @@ task data and environment remain in the workspace.
 
 ### What the notice contains
 
-A gateway parent is asked to end its reply with a `<delivery>` block: one or two
-short paragraphs in the language of the request, written the way a colleague who
-did the work would: what was done and what it means, with the evidence worked
-into the closing sentence. No labels and no template, because a filled-in form
-reads like a machine. The worker copies that block into the task as `## Delivery` (capped at
-1200 characters, keeping the last line; a cut sets `delivery_truncated: true`),
+A gateway parent is asked to end its reply with a `<delivery>` block: plain prose
+in the language of the request, written the way a colleague who did the work
+would: what was done and what it means, with the evidence worked into the
+closing sentence. No labels and no template, because a filled-in form reads like
+a machine. Clarity comes before brevity: the block takes the room the work needs,
+up to the cap.
+
+The worker copies that block into the task as `## Delivery` (capped at 1200
+characters, keeping the last line; a cut sets `delivery_truncated: true`),
 and the notifier sends that section as the whole message. It is what the user
 reads on a phone, so no fixed prefix and no local path go in front of it.
 
