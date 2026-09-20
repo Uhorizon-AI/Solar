@@ -147,8 +147,13 @@ print("true" if data.get("delivery_expected") is True else "")
     DELIVERY_EXPECTED="$(printf '%s\n' "$META_OUT" | sed -n '7p')"
 fi
 
+# Quote a value as a YAML scalar. ensure_ascii=False on purpose: the escaping
+# is there to stop a value from closing its quote and inventing frontmatter
+# lines, not to flatten the alphabet. Without it an accented title arrives as
+# "Informe \u00f1o\u00f1o", and nothing downstream decodes JSON — extract_meta
+# strips the quotes and the listing and the completion notice show the escape.
 yaml_quoted() {
-    python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+    python3 -c 'import json,sys; print(json.dumps(sys.argv[1], ensure_ascii=False))' "$1"
 }
 
 ID=$(generate_id)
@@ -160,6 +165,11 @@ if [[ "$DEST" != "queued" ]] && [[ -n "$PARENT_TASK_ID" || -n "$SUBTASK_KEY" ]];
     echo "Error: --parent-task-id and --subtask-key require --queued." >&2
     exit 1
 fi
+
+case "$PRIORITY" in
+    high|normal|low) ;;
+    *) echo "Error: --priority must be high, normal or low (got: $PRIORITY)" >&2; exit 1 ;;
+esac
 
 # Choose destination directory
 case "$DEST" in
@@ -210,11 +220,11 @@ if [[ "$DEST" == "queued" ]]; then
     {
         echo "---"
         echo "id: \"$ID\""
-        echo "title: \"$TITLE\""
+        echo "title: $(yaml_quoted "$TITLE")"
         echo "created: \"$(date -Iseconds)\""
         echo "status: queued"
         echo "priority: $PRIORITY"
-        echo "scheduled_time: \"$SCHED_TIME\""
+        echo "scheduled_time: $(yaml_quoted "$SCHED_TIME")"
         echo "recurring: false"
         [[ -n "$PROVIDER" ]] && echo "provider: $(yaml_quoted "$PROVIDER")"
         # Part of the same atomic write as the rest of the file: the parent must
@@ -243,7 +253,7 @@ else
     cat > "$TMP_FILE" <<EOF || write_failed
 ---
 id: "$ID"
-title: "$TITLE"
+title: $(yaml_quoted "$TITLE")
 created: "$(date -Iseconds)"
 status: draft
 priority: $PRIORITY

@@ -491,6 +491,11 @@ def parse_subtasks(raw: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
             return [], f"child {position} has no body"
         if len(title) > SUBTASK_TITLE_MAX:
             return [], f"child {position} title is over {SUBTASK_TITLE_MAX} characters"
+        # It ends up on a frontmatter line. `create.sh` quotes it, so this is
+        # the second lock rather than the only one, but a title spanning lines
+        # is malformed on its own terms.
+        if "\n" in title or "\r" in title:
+            return [], f"child {position} title spans more than one line"
         if len(body) > SUBTASK_BODY_MAX:
             return [], f"child {position} body is over {SUBTASK_BODY_MAX} characters"
         provider = item.get("provider")
@@ -570,6 +575,8 @@ def read_subtask_plan(task_root: pathlib.Path, task_id: str) -> List[Dict[str, A
         return []
     return data if isinstance(data, list) else []
 
+
+TERMINAL_STATUSES = frozenset({"completed", "archived", "error", "cancelled"})
 
 _TASK_DIRS = (
     "queued", "active", "completed", "error", "archive", "cancelled", "drafts", "planned",
@@ -856,7 +863,8 @@ def subtask_pre_phase(
       - manifest half done → finish creating them and wait. The provider is NOT
                              called: it would re-declare, be ignored as a second
                              batch, and synthesize over children that never were
-      - manifest complete  → serve the children's results and let it synthesize
+      - children still running → wait again, without calling the provider
+      - manifest complete      → serve the children's results and let it synthesize
 
     Returns "none", "waiting", "ready" or "error".
     """
@@ -873,6 +881,25 @@ def subtask_pre_phase(
             )
             return "error"
         return "waiting"
+
+    # A complete manifest is not a finished batch. Normally `start_next.sh`
+    # only reactivates a parent once every child is terminal, but a parent that
+    # never got parked — the worker died between the reserved exit code and
+    # `await_subtasks.sh` — arrives here still active, with children queued.
+    # Synthesizing then would be done over results that do not exist yet.
+    pending = []
+    for _, child_id in pairs:
+        child_file = find_task_file(task_root, child_id)
+        # A child whose file is gone can never become terminal; it is reported
+        # as missing in the results rather than waited for forever.
+        if child_file is None:
+            continue
+        if read_frontmatter_key(child_file, "status") not in TERMINAL_STATUSES:
+            pending.append(child_id)
+    if pending:
+        print(f"  {len(pending)} subtask(s) still running; waiting.", flush=True)
+        return "waiting"
+
     record_subtask_results(task_file, task_root)
     return "ready"
 

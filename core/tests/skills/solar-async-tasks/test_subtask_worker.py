@@ -642,3 +642,109 @@ def test_create_refuses_the_identity_flags_without_queued(tmp_path):
     assert proc.returncode == 1
     assert "require --queued" in proc.stderr
     assert not list((root / "drafts").glob("*.md"))
+
+
+# --- what the provider writes cannot become frontmatter --------------------
+
+def test_a_title_cannot_inject_frontmatter(tmp_path):
+    root = make_root(tmp_path)
+    body = tmp_path / "child.md"
+    body.write_text("x\n", encoding="utf-8")
+    hostile = 'Uno"\nnotify_when: completed\norigin_chat_id: "456'
+
+    proc = _create(root, "--queued", "--body-file", str(body), hostile)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    text = children_files(root)[0].read_text(encoding="utf-8")
+    # The hostile text survives as one quoted scalar; what must not exist is a
+    # frontmatter *line* it invented.
+    keys = [line.split(":", 1)[0] for line in text.split("\n---", 1)[0].splitlines()
+            if ":" in line]
+    assert "notify_when" not in keys
+    assert "origin_chat_id" not in keys
+    assert len([k for k in keys if k == "title"]) == 1
+
+
+def test_a_multiline_title_is_rejected_at_the_boundary(tmp_path):
+    root = make_root(tmp_path)
+    task = write_parent(root)
+    proc = run_executor(task, root, block([
+        {"title": 'Uno"\nnotify_when: completed', "body": "x"},
+    ]), tmp_path)
+    assert proc.returncode == 1
+    assert "spans more than one line" in (root / "error" / "parent.md").read_text(encoding="utf-8")
+
+
+def test_create_refuses_an_unknown_priority(tmp_path):
+    root = make_root(tmp_path)
+    proc = _create(root, "--queued", "--priority", "urgent\nnotify_when: completed", "Uno")
+    assert proc.returncode == 1
+    assert "must be high, normal or low" in proc.stderr
+    assert not list(root.rglob("*.md"))
+
+
+def test_an_accented_title_stays_readable(tmp_path):
+    """The escaping stops injection; it must not flatten the alphabet."""
+    root = make_root(tmp_path)
+    body = tmp_path / "child.md"
+    body.write_text("x\n", encoding="utf-8")
+
+    assert _create(root, "--queued", "--body-file", str(body), "Informe ñoño").returncode == 0
+    text = children_files(root)[0].read_text(encoding="utf-8")
+    assert 'title: "Informe ñoño"' in text
+    assert "\\u00f1" not in text
+
+
+# --- a parent that was never parked does not synthesize early --------------
+
+def test_a_complete_manifest_with_running_children_waits_again(tmp_path):
+    """The worker died between the reserved exit code and await_subtasks.sh."""
+    root = make_root(tmp_path)
+    child = root / "queued" / "uno.md"
+    child.write_text(
+        '---\nid: "child-1"\ntitle: "Uno"\nstatus: queued\nsubtask_key: "k1"\n---\n\n# Uno\n',
+        encoding="utf-8",
+    )
+    task = write_parent(root, extra='subtask_ids: "k1=child-1"\n')
+
+    marker = tmp_path / "router-was-called"
+    proc = run_executor(task, root, "lo que sea", tmp_path, marker=marker)
+
+    assert proc.returncode == 20, proc.stdout + proc.stderr
+    assert not marker.exists(), "the provider must not synthesize over unfinished children"
+    assert "## Subtask results" not in task.read_text(encoding="utf-8")
+
+
+def test_a_missing_child_does_not_hold_the_parent_forever(tmp_path):
+    root = make_root(tmp_path)
+    task = write_parent(root, extra='subtask_ids: "k1=child-gone"\n')
+    assert run_executor(task, root, "done", tmp_path).returncode == 0
+    assert "### k1 — missing" in task.read_text(encoding="utf-8")
+
+
+def test_the_shell_re_queues_a_parent_that_was_never_parked(tmp_path):
+    """The same window, through execute_active.sh: it must end in queued/."""
+    scripts = _scripts_tree(tmp_path)
+    marker = tmp_path / "router-was-called"
+    (scripts.parent.parent / "solar-router" / "scripts" / "run_router.py").write_text(
+        ROUTER_STUB, encoding="utf-8")
+
+    root = make_root(tmp_path)
+    (root / "queued" / "uno.md").write_text(
+        '---\nid: "child-1"\ntitle: "Uno"\nstatus: queued\nsubtask_key: "k1"\n---\n\n# Uno\n',
+        encoding="utf-8",
+    )
+    write_parent(root, extra='subtask_ids: "k1=child-1"\n')
+
+    proc = subprocess.run(
+        ["bash", str(scripts / "execute_active.sh"), "--once"],
+        capture_output=True, text=True, timeout=120,
+        env={**os.environ, "SOLAR_TASK_ROOT": str(root), "SOLAR_WORKSPACE": str(tmp_path),
+             "STUB_MARKER": str(marker), "STUB_REPLY": "no deberia llamarse"},
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not marker.exists()
+    assert not (root / "completed" / "parent.md").exists()
+    parked = root / "queued" / "parent.md"
+    assert parked.exists(), proc.stdout
+    assert 'blocked_by_task_ids: "child-1"' in parked.read_text(encoding="utf-8")
