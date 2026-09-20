@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-async-tasks): the completion notice is the delivery the executor wrote, not a fixed line plus a path. A gateway parent is asked to close its reply with a `<delivery>` block: one or two short paragraphs in the language of the request, written the way a colleague who did the work would, with the evidence in the closing sentence. No labels and no template. The worker copies that block into the task as `## Delivery` (capped at 1200 characters, keeping the last line; a cut sets `delivery_truncated: true`) and the notification sends that section as the whole message, so it can be read on a phone without opening the Mac. `## Result` is never sent: it is the provider's own account, and transporting it is not compressing it. Every execution rewrites the section and recomputes the flags, so a parent that runs twice or is requeued from error never notifies a previous run's delivery. Tasks created with `delivery_expected: true` that finish without the block are marked `delivery_missing: true` and their notice says so instead of announcing the work as resolved; tasks without the flag keep the previous notice. The `notify_long` path is retired: it read the unbounded `## Result` and no task used it.
+- feat(solar-async-tasks, solar-router): the declared scope of a request reaches the task that carries it out. The router already extracted and validated `object`, `scope` and `effect` before queueing, then recorded them only in the audit: the executor saw the raw user text alone, so a request naming one artifact could be carried out on another. `create.sh --metadata` now accepts those three keys plus `delivery_expected` as a closed allowlist (unknown keys are still dropped), writes them as frontmatter, and the task body restates them in an `## Object` section with the instruction to act on that object and return a question instead of working on a substitute. `delivery_expected` is written by the same call that puts the `<delivery>` instruction in the body, so removing the instruction removes the flag.
+
 ## [0.24.3] - 2026-09-19
 
 ### Fixed

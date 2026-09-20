@@ -283,6 +283,135 @@ def record_result_path(task_file: pathlib.Path, log_file: pathlib.Path) -> None:
         return
 
 
+RE_DELIVERY = re.compile(r"<delivery>(.*?)</delivery>", re.IGNORECASE | re.DOTALL)
+
+# A re-run must replace its own section, never stack a second one.
+RE_DELIVERY_SECTION = re.compile(r"\n## Delivery\n.*?(?=\n## |\Z)", re.DOTALL)
+
+# One Telegram message, well under the notifier's chunking threshold.
+DELIVERY_MAX_CHARS = 1200
+
+
+def extract_delivery(reply_text: str) -> str:
+    """Return the <delivery> block of a reply, or "" when there is none.
+
+    The last block wins: a reply that shows the format before using it would
+    otherwise send the example.
+    """
+    matches = RE_DELIVERY.findall(reply_text or "")
+    if not matches:
+        return ""
+    return matches[-1].strip()
+
+
+def clamp_delivery(delivery: str) -> Tuple[str, bool]:
+    """Cap the delivery at DELIVERY_MAX_CHARS, keeping its last line.
+
+    That line carries the evidence, which is what the reader needs to reach the
+    detail. Returns (text, truncated).
+    """
+    text = delivery.strip()
+    if len(text) <= DELIVERY_MAX_CHARS:
+        return text, False
+    lines = [line for line in text.splitlines() if line.strip()]
+    tail = lines[-1].strip() if lines else ""
+    room = DELIVERY_MAX_CHARS - len(tail) - 2
+    if room <= 0:
+        return text[:DELIVERY_MAX_CHARS].rstrip(), True
+    return text[:room].rstrip() + "…\n" + tail, True
+
+
+def upsert_frontmatter_key(task_file: pathlib.Path, key: str, value: str) -> None:
+    """Set a frontmatter key, replacing it when already present."""
+    try:
+        content = task_file.read_text(encoding="utf-8")
+    except OSError:
+        return
+    if not content.startswith("---\n"):
+        return
+    end = content.find("\n---", 4)
+    if end == -1:
+        return
+    frontmatter = content[4:end]
+    line = f"{key}: {value}"
+    pattern = re.compile(rf"^{re.escape(key)}:.*$", flags=re.MULTILINE)
+    if pattern.search(frontmatter):
+        frontmatter = pattern.sub(line, frontmatter, count=1)
+    else:
+        frontmatter = frontmatter.rstrip("\n") + "\n" + line
+    try:
+        task_file.write_text("---\n" + frontmatter + content[end:], encoding="utf-8")
+    except OSError:
+        return
+
+
+def set_frontmatter_flag(task_file: pathlib.Path, key: str, value: bool) -> None:
+    """Set a boolean frontmatter flag, removing it when false.
+
+    Removing matters as much as setting: these flags describe the run that just
+    finished, and one inherited from an earlier run would be read as current.
+    """
+    if value:
+        upsert_frontmatter_key(task_file, key, "true")
+        return
+    try:
+        content = task_file.read_text(encoding="utf-8")
+    except OSError:
+        return
+    if not content.startswith("---\n"):
+        return
+    end = content.find("\n---", 4)
+    if end == -1:
+        return
+    frontmatter = content[4:end]
+    stripped = re.sub(
+        rf"^{re.escape(key)}:.*\n?", "", frontmatter, flags=re.MULTILINE
+    )
+    if stripped == frontmatter:
+        return
+    try:
+        task_file.write_text("---\n" + stripped + content[end:], encoding="utf-8")
+    except OSError:
+        return
+
+
+def record_delivery(task_file: pathlib.Path, reply_text: str) -> None:
+    """Copy the reply's delivery block into the task as `## Delivery`.
+
+    The worker does this, not the provider: the provider can write here but only
+    does so when it obeys an instruction, and the notification depends on the
+    section being there. `## Result` is left alone — it is the provider's own
+    account, unbounded, and sending it would be transport, not compression.
+    A task that was asked for a delivery and returned none is marked, so the
+    notification can say so instead of announcing the work as resolved.
+    """
+    expected = read_frontmatter_key(task_file, "delivery_expected") == "true"
+    delivery = extract_delivery(reply_text)
+    if delivery:
+        delivery, truncated = clamp_delivery(delivery)
+    else:
+        truncated = False
+
+    # Every run starts from a clean slate: a parent executes twice by design
+    # (create children, then synthesize) and can be requeued from error, so a
+    # section or a flag left by the previous run would be notified as if it
+    # described this one.
+    try:
+        content = task_file.read_text(encoding="utf-8")
+    except OSError:
+        return
+    body = RE_DELIVERY_SECTION.sub("", content).rstrip()
+    if delivery:
+        body += "\n\n## Delivery\n\n" + delivery
+    try:
+        task_file.write_text(body + "\n", encoding="utf-8")
+    except OSError:
+        return
+
+    set_frontmatter_flag(task_file, "delivery_truncated", truncated)
+    set_frontmatter_flag(task_file, "delivery_missing", expected and not delivery)
+
+
 def mark_task_error(
     task_file: pathlib.Path,
     task_id: str,
@@ -432,6 +561,7 @@ def main() -> int:
         result_text = output or "Local command completed with no changes."
         write_log(log_file, task_id, title, "success", "local", result_text, None, None)
         record_result_path(task_file, log_file)
+        record_delivery(task_file, result_text)
         print(result_text, flush=True)
         return 0
 
@@ -480,6 +610,7 @@ def main() -> int:
     # Success: write log
     write_log(log_file, task_id, title, "success", provider_used, reply_text, None, None)
     record_result_path(task_file, log_file)
+    record_delivery(task_file, reply_text)
     print(f"  → provider_used: {provider_used}", flush=True)
     # Output reply_text to stdout for execute_active.sh to capture if needed
     print(reply_text, flush=True)

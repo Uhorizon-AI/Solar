@@ -1,8 +1,10 @@
 #!/bin/bash
 
 # If the completed task has notify_when: completed, send a Telegram notification
-# to the allowlisted origin chat (or TELEGRAM_CHAT_ID). Brief by default; optional
-# notify_long: true sends the result in small ordered batches (~1s apart).
+# to the allowlisted origin chat (or TELEGRAM_CHAT_ID). When the task carries a
+# `## Delivery` section, that is the message: the one-screen delivery the
+# executor wrote, ending in its own evidence line. Otherwise a brief line plus
+# the result location. Long text is chunked (~1s apart).
 # Usage: notify_if_configured.sh <path_to_completed_task.md>
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -90,6 +92,23 @@ if [[ -n "$LOCATION" ]]; then
   BRIEF="${BRIEF}"$'\n'"${LOCATION}"
 fi
 
+# The delivery the executor wrote, copied into the task by the worker. It is the
+# message: a fixed line plus a path to a file on the Mac cannot be read from a
+# phone. `## Result` is deliberately not read here — it is the provider's full
+# account, and sending it would be transport, not compression.
+task_delivery() {
+  awk '
+    /^## Delivery[[:space:]]*$/ { found = 1; next }
+    found && /^## / { exit }
+    found { print }
+  ' "$1"
+}
+
+DELIVERY=""
+if [[ "$TASK_STATUS" != "error" ]]; then
+  DELIVERY="$(task_delivery "$TASK_FILE" | sed -e '/./,$!d')"
+fi
+
 send_chunks() {
   local text="$1"
   local chunk rest
@@ -112,15 +131,21 @@ send_chunks() {
   return 0
 }
 
-NOTIFY_LONG=$(extract_meta "$TASK_FILE" "notify_long")
-if [[ "$NOTIFY_LONG" == "true" && "$TASK_STATUS" != "error" ]]; then
-  BODY="$(awk 'found{print} /^## Result/{found=1}' "$TASK_FILE")"
-  [[ -z "$BODY" ]] && BODY="$BRIEF"
-  LONG_TEXT="${BRIEF}"$'\n\n'"${BODY}"
-  send_chunks "$LONG_TEXT" || { record_notify_failure "telegram_send_failed"; exit 1; }
+DELIVERY_EXPECTED=$(extract_meta "$TASK_FILE" "delivery_expected")
+if [[ -n "$DELIVERY" ]]; then
+  # The delivery already ends with its own evidence line: the title and the log
+  # path would only push it off the top of the screen.
+  MESSAGE="$DELIVERY"
+elif [[ "$DELIVERY_EXPECTED" == "true" && "$TASK_STATUS" != "error" ]]; then
+  # The work ran and the log holds it, but the one-screen delivery never came.
+  # Saying so beats announcing the task as resolved.
+  MESSAGE="Task finished without a delivery: ${TITLE}"
+  [[ -n "$LOCATION" ]] && MESSAGE="${MESSAGE}"$'\n'"${LOCATION}"
 else
-  (cd "$WORKSPACE_DIR" && bash "$SEND_SCRIPT" "$BRIEF") || { record_notify_failure "telegram_send_failed"; exit 1; }
+  MESSAGE="$BRIEF"
 fi
+
+send_chunks "$MESSAGE" || { record_notify_failure "telegram_send_failed"; exit 1; }
 
 upsert_frontmatter_key "$TASK_FILE" "notify_status" "delivered"
 upsert_frontmatter_key "$TASK_FILE" "notify_error" "null"

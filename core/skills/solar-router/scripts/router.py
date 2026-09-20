@@ -532,7 +532,60 @@ def _parse_create_task_id(stdout: str, stderr: str) -> Optional[str]:
     return None
 
 
-def _gateway_task_body(user_text: str, channel: str) -> str:
+def _gateway_object_section(scope: Optional[Dict[str, str]]) -> str:
+    """Restate the scope the router already accepted for this request.
+
+    The router validates object/scope/effect before queueing, but the executor
+    never saw them: it only got the raw user text, so a request naming one
+    artifact could be carried out on another. The frontmatter copy is for
+    checking; this one is what the executor reads.
+    """
+    scope = scope or {}
+    obj = " ".join(str(scope.get("object") or "").split())
+    bounds = " ".join(str(scope.get("scope") or "").split())
+    effect = " ".join(str(scope.get("effect") or "").split())
+    if not (obj or bounds or effect):
+        return (
+            "## Object\n"
+            "- not declared for this request.\n"
+            "Name the artifact you act on in your delivery, and ask before "
+            "acting on anything the request does not name.\n\n"
+        )
+    return (
+        "## Object\n"
+        f"- object: {obj or 'not declared'}\n"
+        f"- scope: {bounds or 'not declared'}\n"
+        f"- effect: {effect or 'not declared'}\n"
+        "Act on this object and only on this object. If it cannot be resolved "
+        "— it does not exist, it is ambiguous, or the work points elsewhere — "
+        "stop and return a concrete question instead of working on a "
+        "substitute.\n\n"
+    )
+
+
+DELIVERY_INSTRUCTION = (
+    "6. End your reply with a `<delivery>` block:\n"
+    "   ```\n"
+    "   <delivery>\n"
+    "   ...\n"
+    "   </delivery>\n"
+    "   ```\n"
+    "   What is inside is the whole message the user reads on their phone, so "
+    "write it the way a colleague who did the work would: one or two short "
+    "paragraphs in the language of the user request, saying what you did and "
+    "what it means for them. No labels, no template, no headings; bullets only "
+    "when they genuinely make it easier to read. Name the artifact you acted on, "
+    "and work the evidence, the path or link, into the closing sentence so "
+    "they can reach the detail. Raise a decision only when there really is one, "
+    "and say what you recommend. Stay under 1200 characters and well under it "
+    "when the work allows: what is over that gets cut. The full account belongs "
+    "in your reply above the block, not inside it.\n"
+)
+
+
+def _gateway_task_body(
+    user_text: str, channel: str, scope: Optional[Dict[str, str]] = None
+) -> str:
     """Worker prompt for a gateway-originated parent task.
 
     This file already has origin metadata and notify_when. Children created with
@@ -544,6 +597,7 @@ def _gateway_task_body(user_text: str, channel: str) -> str:
         f"- channel: {channel}\n"
         f"- mode: fulfill user request asynchronously\n"
         f"- this task is the **parent**. Completion notify is already on this file.\n\n"
+        f"{_gateway_object_section(scope)}"
         f"## User request\n\n"
         f"{user_text.strip()}\n\n"
         f"## Instructions\n"
@@ -562,6 +616,7 @@ def _gateway_task_body(user_text: str, channel: str) -> str:
         f"5. Still require explicit approval before external sends, destructive deletes, "
         f"credential access, irreversible actions, or anything outside the declared task "
         f"scope (solar-async-tasks execution-consent / Validation Gate).\n"
+        f"{DELIVERY_INSTRUCTION}"
     )
 
 
@@ -576,6 +631,7 @@ def create_async_draft(
     origin_channel: Optional[str] = None,
     origin_chat_id: Optional[str] = None,
     origin_request_id: Optional[str] = None,
+    scope: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Create an async task via solar-async-tasks create.sh.
 
@@ -595,7 +651,7 @@ def create_async_draft(
     proc = None
     try:
         if queue:
-            body = _gateway_task_body(user_text, channel_l)
+            body = _gateway_task_body(user_text, channel_l, scope)
             with tempfile.NamedTemporaryFile(
                 "w", encoding="utf-8", suffix=".md", delete=False
             ) as fh:
@@ -615,13 +671,22 @@ def create_async_draft(
             origin_ch = (origin_channel or "").strip()
             origin_chat = (origin_chat_id or "").strip()
             origin_rid = (origin_request_id or request_id or "").strip()
-            meta: Dict[str, str] = {}
+            meta: Dict[str, Any] = {}
             if origin_ch:
                 meta["origin_channel"] = origin_ch
             if origin_chat:
                 meta["origin_chat_id"] = origin_chat
             if origin_rid:
                 meta["origin_request_id"] = origin_rid
+            scope_meta = scope or {}
+            for key in ("object", "scope", "effect"):
+                value = " ".join(str(scope_meta.get(key) or "").split())
+                if value:
+                    meta[key] = value
+            # Same call that put the <delivery> instruction in the body: the two
+            # must be added and removed together, or every task would be
+            # reported as missing its delivery.
+            meta["delivery_expected"] = True
             if meta:
                 cmd.extend(["--metadata", json.dumps(meta, separators=(",", ":"))])
             cmd.append(title)
@@ -809,6 +874,7 @@ def resolve_decision(
             channel=channel_l,
             queue=do_queue,
             notify=do_queue,
+            scope=scope,
             **origin_kwargs,
         )
         if not task_id:
@@ -865,6 +931,7 @@ def resolve_decision(
             channel=channel_l,
             queue=do_queue,
             notify=do_queue,
+            scope=scope,
             **origin_kwargs,
         )
         if not task_id:

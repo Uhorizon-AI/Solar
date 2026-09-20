@@ -168,6 +168,8 @@ Use `## Result` in the task file when:
 
 Do not append `## Result` when the task writes a dedicated artifact such as a plan, report, message draft, or recurring run output. In that case, the artifact is the result.
 
+`## Result` is never what the origin chat receives. A gateway parent ends its reply with a `<delivery>` block, the worker copies it into the task as `## Delivery`, and the notification sends that section — see `references/runtime-operations.md`. `## Result` stays the full account, for the parent reading its children and for anyone opening the file.
+
 Find the current task file by Task ID because files move between state folders:
 
 ```bash
