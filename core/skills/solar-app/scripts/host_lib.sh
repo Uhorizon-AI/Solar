@@ -3,9 +3,9 @@
 set -euo pipefail
 
 _HOST_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_CLIENT_SCRIPTS="$(cd "$_HOST_LIB_DIR/../../solar-client/scripts" && pwd)"
-# shellcheck source=../../solar-client/scripts/resolve_solar_paths.sh
-source "$_CLIENT_SCRIPTS/resolve_solar_paths.sh"
+_PATHS_SCRIPTS="$(cd "$_HOST_LIB_DIR/../../solar-paths/scripts" && pwd)"
+# shellcheck source=../../solar-paths/scripts/resolve_solar_paths.sh
+source "$_PATHS_SCRIPTS/resolve_solar_paths.sh"
 # shellcheck source=host_env_compat.sh
 source "$_HOST_LIB_DIR/host_env_compat.sh"
 
@@ -44,7 +44,7 @@ solar_host_load_env() {
   # workspace for backward compatibility with explicit deployments.
   if [[ -z "${SOLAR_HOST_RUNTIME_DIR:-}" ]]; then
     # shellcheck source=/dev/null
-    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-paths/scripts" && pwd)/solar_runtime_paths.sh"
     export SOLAR_HOST_RUNTIME_DIR="$(solar_runtime_dir host)"
   fi
   export SOLAR_HOST_PID_FILE="$(solar_host_runtime_path)/host.pid"

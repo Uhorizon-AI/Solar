@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 _CORE = Path(__file__).resolve().parents[3]
-for _skill in ("solar-app", "solar-client"):
+for _skill in ("solar-app", "solar-paths", "solar-client"):
     _scripts = _CORE / "skills" / _skill / "scripts"
     if str(_scripts) not in sys.path:
         sys.path.insert(0, str(_scripts))

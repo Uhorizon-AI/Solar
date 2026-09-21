@@ -214,6 +214,12 @@ cp "$INSTALL_SCRIPT" "$BOOT_SRC/core/skills/solar-client/scripts/install_solar_c
 cp "$BOOTSTRAP_SCRIPT" "$BOOT_SRC/core/skills/solar-client/scripts/bootstrap_solar_client.sh"
 cp "$CORE_ROOT/skills/solar-client/scripts/client_lib.sh" \
   "$BOOT_SRC/core/skills/solar-client/scripts/client_lib.sh"
+# client_lib.sh resolves paths through solar-paths, so the clone gets the
+# working tree's base too — not the one its HEAD happens to carry.
+mkdir -p "$BOOT_SRC/core/skills/solar-paths/scripts"
+cp -R "$CORE_ROOT/skills/solar-paths/scripts/." \
+  "$BOOT_SRC/core/skills/solar-paths/scripts/"
+rm -rf "$BOOT_SRC/core/skills/solar-paths/scripts/__pycache__"
 cp "$CORE_ROOT/skills/solar-client/scripts/solar" \
   "$BOOT_SRC/core/skills/solar-client/scripts/solar"
 cp "$CORE_ROOT/skills/solar-client/scripts/update_notice.sh" \

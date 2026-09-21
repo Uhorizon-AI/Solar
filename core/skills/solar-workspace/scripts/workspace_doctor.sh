@@ -3,9 +3,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_CLIENT_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)"
-# shellcheck source=../../solar-client/scripts/resolve_solar_paths.sh
-source "$_CLIENT_SCRIPTS/resolve_solar_paths.sh"
+_PATHS_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)"
+# shellcheck source=../../solar-paths/scripts/resolve_solar_paths.sh
+source "$_PATHS_SCRIPTS/resolve_solar_paths.sh"
 
 STRICT=false
 CHECK_GIT=false

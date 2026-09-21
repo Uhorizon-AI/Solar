@@ -115,8 +115,8 @@ upsert_key() {
   mv "$tmp" "$ROOT_ENV_FILE"
 }
 
-SECRETS_LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_secrets.sh"
-# shellcheck source=../../solar-client/scripts/solar_secrets.sh
+SECRETS_LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-paths/scripts" && pwd)/solar_secrets.sh"
+# shellcheck source=../../solar-paths/scripts/solar_secrets.sh
 source "$SECRETS_LOADER"
 solar_secrets_ensure >/dev/null
 

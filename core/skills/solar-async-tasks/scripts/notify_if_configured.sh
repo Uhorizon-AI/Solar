@@ -57,7 +57,7 @@ fi
 # so they are always sent as plain text, whatever `.env` sets.
 export TELEGRAM_PARSE_MODE="none"
 
-SECRETS_LOADER="$SOLAR_ROOT/core/skills/solar-client/scripts/solar_secrets.sh"
+SECRETS_LOADER="$SOLAR_ROOT/core/skills/solar-paths/scripts/solar_secrets.sh"
 if [[ -f "$SECRETS_LOADER" ]]; then
   # shellcheck source=/dev/null
   source "$SECRETS_LOADER"

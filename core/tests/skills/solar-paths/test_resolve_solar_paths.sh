@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Unit tests for resolve_solar_paths.sh (canonical: solar-client)
+# Unit tests for resolve_solar_paths.sh (canonical: solar-paths)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOLVE_SCRIPT="$(cd "$SCRIPT_DIR/../../../skills/solar-client/scripts" && pwd)/resolve_solar_paths.sh"
+RESOLVE_SCRIPT="$(cd "$SCRIPT_DIR/../../../skills/solar-paths/scripts" && pwd)/resolve_solar_paths.sh"
 GLOBAL_ROOT="$(cd "$(dirname "$RESOLVE_SCRIPT")/../../../.." && pwd)"
 PASS=0
 FAIL=0

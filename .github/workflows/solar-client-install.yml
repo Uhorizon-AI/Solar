@@ -6,6 +6,8 @@ on:
     paths:
       - "core/skills/solar-client/**"
       - "core/tests/skills/solar-client/**"
+      - "core/skills/solar-paths/**"
+      - "core/tests/skills/solar-paths/**"
       - "core/scripts/create-release.sh"
       - ".github/workflows/solar-client-install.yml"
       - "README.md"
@@ -13,6 +15,8 @@ on:
     paths:
       - "core/skills/solar-client/**"
       - "core/tests/skills/solar-client/**"
+      - "core/skills/solar-paths/**"
+      - "core/tests/skills/solar-paths/**"
       - "core/scripts/create-release.sh"
       - ".github/workflows/solar-client-install.yml"
       - "README.md"
@@ -73,7 +77,7 @@ jobs:
 
       - name: Existing client unit tests
         run: |
-          bash core/tests/skills/solar-client/test_resolve_solar_paths.sh
+          bash core/tests/skills/solar-paths/test_resolve_solar_paths.sh
           bash core/tests/skills/solar-client/test_client_update.sh
 
   install-ubuntu-informative:

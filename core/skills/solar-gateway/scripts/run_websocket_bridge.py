@@ -45,9 +45,9 @@ AI_ROUTER_TIMEOUT_SEC = _env_int_with_comment(
 )
 
 _SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
-_CLIENT_SCRIPTS = _SCRIPT_DIR.parent.parent / "solar-client" / "scripts"
-if str(_CLIENT_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_CLIENT_SCRIPTS))
+_PATHS_SCRIPTS = _SCRIPT_DIR.parent.parent / "solar-paths" / "scripts"
+if str(_PATHS_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_PATHS_SCRIPTS))
 
 from solar_paths import resolve_solar_paths  # noqa: E402
 

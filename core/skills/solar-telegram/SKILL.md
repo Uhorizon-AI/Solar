@@ -50,7 +50,7 @@ None
 
 ```bash
 # Where the token must live (prints the path; never a value)
-python3 core/skills/solar-client/scripts/solar_secrets.py status
+python3 core/skills/solar-paths/scripts/solar_secrets.py status
 
 # Full setup runbook (recommended)
 bash core/skills/solar-telegram/scripts/setup_telegram.sh --ping --test-message "Solar Telegram OK"

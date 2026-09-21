@@ -6,7 +6,7 @@
 # NOTE: Worker inherits SOLAR_WORKSPACE from parent caller; skip re-discovery when set.
 # CLI and sync paths always run discovery (resolve_solar_paths.sh). Intentional exception.
 if [[ -z "${SOLAR_WORKSPACE:-}" ]]; then
-  _TASK_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/resolve_solar_paths.sh"
+  _TASK_RESOLVE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-paths/scripts" && pwd)/resolve_solar_paths.sh"
   if [[ -f "$_TASK_RESOLVE_SCRIPT" ]]; then
     # shellcheck source=/dev/null
     source "$_TASK_RESOLVE_SCRIPT"
@@ -18,7 +18,7 @@ fi
 # override; otherwise the queue derives from the framework runtime root. There
 # is no fallback to sun/runtime/async-tasks.
 if [[ -z "${SOLAR_TASK_ROOT:-}" ]]; then
-  _TASK_RUNTIME_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+  _TASK_RUNTIME_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-paths/scripts" && pwd)/solar_runtime_paths.sh"
   # shellcheck source=/dev/null
   source "$_TASK_RUNTIME_LIB"
   export SOLAR_TASK_ROOT="$(solar_runtime_dir async-tasks)"

@@ -9,9 +9,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-_CLIENT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-client" / "scripts"
-if str(_CLIENT_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_CLIENT_SCRIPTS))
+_PATHS_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-paths" / "scripts"
+if str(_PATHS_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_PATHS_SCRIPTS))
 
 import solar_runtime  # noqa: E402
 

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 _SCRIPTS = Path(__file__).resolve().parent
-_CLIENT = _SCRIPTS.parent.parent / "solar-client" / "scripts"
+_CLIENT = _SCRIPTS.parent.parent / "solar-paths" / "scripts"
 if str(_CLIENT) not in sys.path:
     sys.path.insert(0, str(_CLIENT))
 

@@ -3,13 +3,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOLVE_SCRIPT="$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)/resolve_solar_paths.sh"
+RESOLVE_SCRIPT="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/resolve_solar_paths.sh"
 # shellcheck source=/dev/null
 source "$RESOLVE_SCRIPT"
 solar_resolve_paths --quiet
 
 # shellcheck source=/dev/null
-source "$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+source "$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_runtime_paths.sh"
 AUDIT_LOG="$(solar_runtime_dir router)/audit.jsonl"
 MIN_AGE_HOURS="${SOLAR_ROUTER_RECONCILE_MIN_AGE_HOURS:-1}"
 DRY_RUN=false

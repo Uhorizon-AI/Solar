@@ -4,7 +4,7 @@
 set -euo pipefail
 
 _TGW_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_RESOLVE_SCRIPT="$_TGW_LIB_DIR/../../solar-client/scripts/resolve_solar_paths.sh"
+_RESOLVE_SCRIPT="$_TGW_LIB_DIR/../../solar-paths/scripts/resolve_solar_paths.sh"
 
 # Backoff: 30s, 60s, 120s, ... capped at 15 minutes.
 # After GATEWAY_FAIL_ATTEMPTS_CAP failures with the same fingerprint, stop retrying
@@ -34,8 +34,8 @@ transport_gateway_bind_workspace() {
   # Installation secrets come from the process store, after the workspace and
   # over it: `TELEGRAM_BOT_TOKEN` and `SOLAR_N8N_WEBHOOK_SECRET` no longer live
   # in a file the IDE indexes, and a stale copy there must not win.
-  # shellcheck source=../../solar-client/scripts/solar_secrets.sh
-  source "$_TGW_LIB_DIR/../../solar-client/scripts/solar_secrets.sh"
+  # shellcheck source=../../solar-paths/scripts/solar_secrets.sh
+  source "$_TGW_LIB_DIR/../../solar-paths/scripts/solar_secrets.sh"
   solar_load_installation_secrets
   _TGW_BOUND=1
 }
@@ -63,7 +63,7 @@ gateway_runtime_dir() {
     return 0
   fi
   # shellcheck source=/dev/null
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-paths/scripts" && pwd)/solar_runtime_paths.sh"
   printf '%s' "$(solar_runtime_dir gateway)"
 }
 

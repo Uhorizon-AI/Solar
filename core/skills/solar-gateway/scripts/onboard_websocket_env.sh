@@ -183,8 +183,8 @@ else
   echo "OK: wrote compact solar-gateway block in .env."
 fi
 
-SECRETS_LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-client/scripts" && pwd)/solar_secrets.sh"
-# shellcheck source=../../solar-client/scripts/solar_secrets.sh
+SECRETS_LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../solar-paths/scripts" && pwd)/solar_secrets.sh"
+# shellcheck source=../../solar-paths/scripts/solar_secrets.sh
 source "$SECRETS_LOADER"
 solar_secrets_ensure >/dev/null
 echo "SOLAR_N8N_WEBHOOK_SECRET goes in the process store (0600, never in .env):"

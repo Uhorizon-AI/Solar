@@ -30,10 +30,10 @@ None
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-client /tmp
 bash -n core/skills/solar-client/scripts/client_lib.sh
 bash -n core/skills/solar-client/scripts/client_doctor.sh
-bash -n core/skills/solar-client/scripts/resolve_solar_paths.sh
-python3 -m py_compile core/skills/solar-client/scripts/solar_paths.py
-bash core/tests/skills/solar-client/test_resolve_solar_paths.sh
-bash core/tests/skills/solar-client/test_solar_paths_py.sh
+bash -n core/skills/solar-paths/scripts/resolve_solar_paths.sh
+python3 -m py_compile core/skills/solar-paths/scripts/solar_paths.py
+bash core/tests/skills/solar-paths/test_resolve_solar_paths.sh
+bash core/tests/skills/solar-paths/test_solar_paths_py.sh
 bash core/tests/skills/solar-client/test_sync_clients_prune.sh
 bash core/tests/skills/solar-client/test_sync_exclude.sh
 bash core/tests/skills/solar-client/test_install_solar_client.sh
@@ -45,7 +45,7 @@ bash core/skills/solar-client/scripts/smoke-solar-client.sh "$PWD"
 
 Canonical entry: `core/skills/solar-client/scripts/solar`
 
-Resolve paths first (`resolve_solar_paths.sh` + `solar_paths.py` in this skill):
+Resolve paths first (`resolve_solar_paths.sh` + `solar_paths.py`, in `solar-paths`):
 
 ```bash
 solar client init

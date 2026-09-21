@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 _CORE = Path(__file__).resolve().parents[3]
-_SCRIPTS = _CORE / "skills" / "solar-client" / "scripts"
+_SCRIPTS = _CORE / "skills" / "solar-paths" / "scripts"
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 

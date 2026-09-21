@@ -14,7 +14,7 @@ echo '{"layout":"solar-client-v1.1"}' > "$WS_B/.solar/manifest.json"
 
 export SOLAR_WORKSPACE="$(cd "$WS_A" && pwd -P)"
 
-SOLAR_PATHS_PY="$ROOT/core/skills/solar-client/scripts/solar_paths.py"
+SOLAR_PATHS_PY="$ROOT/core/skills/solar-paths/scripts/solar_paths.py"
 
 canon_out="$(cd "$WS_A" && python3 "$SOLAR_PATHS_PY" 2>/dev/null || true)"
 if ! echo "$canon_out" | grep -q "^SOLAR_WORKSPACE=" || ! echo "$canon_out" | grep -q "^SOLAR_ROOT="; then

@@ -14,6 +14,11 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+# Where things live is solar-paths' job, including the OS app-data directory.
+_PATHS_SCRIPTS = _SCRIPT_DIR.parent.parent / "solar-paths" / "scripts"
+if str(_PATHS_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_PATHS_SCRIPTS))
+
 from host_platform.paths import host_global_dir  # noqa: E402
 
 REGISTRY_DIR = host_global_dir()

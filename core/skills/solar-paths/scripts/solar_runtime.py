@@ -26,11 +26,10 @@ import tempfile
 from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parent
-_APP_SCRIPTS = _SCRIPTS.parent.parent / "solar-app" / "scripts"
-if str(_APP_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_APP_SCRIPTS))
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
 
-try:  # solar-app owns the cross-platform app-data location
+try:  # host_platform sits beside this file, with no dependencies of its own
     from host_platform.paths import app_data_dir as _app_data_dir
 except Exception:  # pragma: no cover - keeps the resolver usable standalone
 

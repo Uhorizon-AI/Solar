@@ -6,13 +6,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOLVE_SCRIPT="$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)/resolve_solar_paths.sh"
+RESOLVE_SCRIPT="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/resolve_solar_paths.sh"
 # shellcheck source=/dev/null
 source "$RESOLVE_SCRIPT"
 solar_resolve_paths --quiet
 SOLAR_WORKSPACE="${SOLAR_WORKSPACE:-$SOLAR_WORKSPACE}"
 # shellcheck source=/dev/null
-source "$(cd "$SCRIPT_DIR/../../solar-client/scripts" && pwd)/solar_runtime_paths.sh"
+source "$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_runtime_paths.sh"
 AUDIT_LOG="$(solar_runtime_dir router)/audit.jsonl"
 PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 LAST_N=10

@@ -90,6 +90,7 @@ def refs_from_text(text: str, skill_dir: Path, core: Path) -> tuple[set[str], se
 
 # R2: no backward compatibility — bundle only canonical app stack.
 BUNDLE_SEED_SKILLS = (
+    "solar-paths",
     "solar-client",
     "solar-workspace",
     "solar-app",

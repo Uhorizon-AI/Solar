@@ -172,9 +172,9 @@ fi
 # Installation secrets: the keys Solar's transports send with must be in the
 # process store and out of every file the IDE indexes. This is the check that
 # tells Louis whether that is still true, without printing a value.
-_secrets_report="$(python3 "$SCRIPT_DIR/solar_secrets.py" status "$SOLAR_WORKSPACE" 2>/dev/null || true)"
+_secrets_report="$(python3 "$SCRIPT_DIR/../../solar-paths/scripts/solar_secrets.py" status "$SOLAR_WORKSPACE" 2>/dev/null || true)"
 if [[ -n "$_secrets_report" ]]; then
-  _secrets_path="$(python3 "$SCRIPT_DIR/solar_secrets.py" path 2>/dev/null || echo "?")"
+  _secrets_path="$(python3 "$SCRIPT_DIR/../../solar-paths/scripts/solar_secrets.py" path 2>/dev/null || echo "?")"
   _leaks="$(printf '%s' "$_secrets_report" | python3 -c '
 import json, sys
 try:

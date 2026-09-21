@@ -65,7 +65,7 @@ def solar_bin() -> str:
 
 
 def workspace_path(explicit: str | None) -> Path:
-    resolver = SCRIPT_DIR.parents[1] / 'solar-client/scripts/resolve_solar_paths.sh'
+    resolver = SCRIPT_DIR.parents[1] / 'solar-paths/scripts/resolve_solar_paths.sh'
     # Pass paths as argv, never interpolate them into shell source.
     argv = ['bash', '-c', 'source "$1"; shift; solar_resolve_paths --export "$@"',
             'solar-mcp', str(resolver)]
@@ -188,7 +188,7 @@ def _replace(path: Path, content: bytes, mode: int) -> None:
 
 @lru_cache(maxsize=1)
 def runtime_module():
-    scripts = str(SCRIPT_DIR.parents[1] / 'solar-client/scripts')
+    scripts = str(SCRIPT_DIR.parents[1] / 'solar-paths/scripts')
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
     import solar_runtime

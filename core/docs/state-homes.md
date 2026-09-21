@@ -66,16 +66,16 @@ console reads. It holds no credentials and no skill content.
 
 ## Resolvers
 
-- Python: `core/skills/solar-client/scripts/solar_runtime.py` —
+- Python: `core/skills/solar-paths/scripts/solar_runtime.py` —
   `runtime_root()`, `runtime_dir(*parts)`, `planet_state_dir(path, skill)`,
   `canonical(path)`.
-- Bash: `core/skills/solar-client/scripts/solar_runtime_paths.sh` —
+- Bash: `core/skills/solar-paths/scripts/solar_runtime_paths.sh` —
   `solar_runtime_root`, `solar_runtime_dir`, `solar_planet_state_dir`,
   `solar_canonical_path`.
 
 Both expose the same CLI through `solar_runtime.py`:
 
 ```bash
-python3 core/skills/solar-client/scripts/solar_runtime.py runtime async-tasks
-python3 core/skills/solar-client/scripts/solar_runtime.py planet /path/to/planets/louis calendar-sync
+python3 core/skills/solar-paths/scripts/solar_runtime.py runtime async-tasks
+python3 core/skills/solar-paths/scripts/solar_runtime.py planet /path/to/planets/louis calendar-sync
 ```

@@ -5,11 +5,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../../solar-client/scripts/resolve_solar_paths.sh
-source "$SCRIPT_DIR/../../solar-client/scripts/resolve_solar_paths.sh"
+# shellcheck source=../../solar-paths/scripts/resolve_solar_paths.sh
+source "$SCRIPT_DIR/../../solar-paths/scripts/resolve_solar_paths.sh"
 solar_resolve_paths --quiet
-# shellcheck source=../../solar-client/scripts/solar_runtime_paths.sh
-source "$SCRIPT_DIR/../../solar-client/scripts/solar_runtime_paths.sh"
+# shellcheck source=../../solar-paths/scripts/solar_runtime_paths.sh
+source "$SCRIPT_DIR/../../solar-paths/scripts/solar_runtime_paths.sh"
 cd "$SOLAR_WORKSPACE"
 
 SOLAR_CONTINUITY_JSON="$(solar_runtime_dir continuity)/active.json"

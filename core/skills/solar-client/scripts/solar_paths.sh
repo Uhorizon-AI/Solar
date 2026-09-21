@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=resolve_solar_paths.sh
-source "$SCRIPT_DIR/resolve_solar_paths.sh"
+# shellcheck source=../../solar-paths/scripts/resolve_solar_paths.sh
+source "$SCRIPT_DIR/../../solar-paths/scripts/resolve_solar_paths.sh"
 solar_resolve_paths --quiet
 
 echo "SOLAR_WORKSPACE=$SOLAR_WORKSPACE"

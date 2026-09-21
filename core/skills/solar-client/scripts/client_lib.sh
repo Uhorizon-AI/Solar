@@ -3,8 +3,8 @@
 set -euo pipefail
 
 _CLIENT_LIB_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=resolve_solar_paths.sh
-source "$_CLIENT_LIB_SCRIPT_DIR/resolve_solar_paths.sh"
+# shellcheck source=../../solar-paths/scripts/resolve_solar_paths.sh
+source "$_CLIENT_LIB_SCRIPT_DIR/../../solar-paths/scripts/resolve_solar_paths.sh"
 
 solar_client_install_root() {
   _resolve_global_root

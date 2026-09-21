@@ -39,9 +39,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _SKILLS = Path(__file__).resolve().parents[2]
-_CLIENT_SCRIPTS = _SKILLS / "solar-client" / "scripts"
-if str(_CLIENT_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_CLIENT_SCRIPTS))
+_PATHS_SCRIPTS = _SKILLS / "solar-paths" / "scripts"
+if str(_PATHS_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_PATHS_SCRIPTS))
 
 import solar_runtime  # noqa: E402
 

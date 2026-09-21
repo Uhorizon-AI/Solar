@@ -13,9 +13,9 @@ from abc import ABC
 from typing import Dict, List
 
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1]
-_CLIENT_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-client" / "scripts"
-if str(_CLIENT_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_CLIENT_SCRIPTS))
+_PATHS_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-paths" / "scripts"
+if str(_PATHS_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_PATHS_SCRIPTS))
 
 import solar_runtime  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
