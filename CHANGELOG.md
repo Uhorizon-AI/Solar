@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.25.7] - 2026-09-21
+
 ### Changed
 - change(solar-paths, solar-client): the base everyone imports is its own skill. `solar-client` was two things at once — the library that resolves the workspace, the framework, the runtime directories and the secret store, which ten of the other thirteen skills import, and the CLI that installs, syncs and starts the rest. Base and top in the same package, so every dependency cycle in the framework ran through it (`client → gateway → client`, `client → router → async-tasks → client`). The six resolvers move to `solar-paths`, which depends on nothing: `resolve_solar_paths.sh`, `solar_paths.py`, `solar_runtime.py`, `solar_runtime_paths.sh`, `solar_secrets.sh` and `solar_secrets.py`, plus `host_platform/` — the OS app-data location, which lived in `solar-app` and was imported *back* by the runtime resolver, inverting the layer. `solar-client` keeps the CLI and now imports the base like everybody else. No behaviour changes: the four resolvers never had dependencies of their own, only the folder did. The portable bundle seeds `solar-paths` first, and its tests move to `core/tests/skills/solar-paths/`.
 
