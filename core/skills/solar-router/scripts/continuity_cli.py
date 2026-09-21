@@ -18,6 +18,7 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 import solar_runtime  # noqa: E402
+import continuity_store  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
 SOLAR_WORKSPACE, _ = resolve_solar_paths()
@@ -42,7 +43,16 @@ def empty() -> dict:
     }
 
 
+def _adopt_legacy() -> None:
+    # Before any read or write: a `set` on the stale runtime copy would otherwise
+    # make it look newer than the live legacy record and lose it.
+    continuity_store.adopt_legacy(
+        SOLAR_WORKSPACE, ACTIVE,
+        on_error=lambda exc: print(f"continuity adoption failed: {exc}", file=sys.stderr))
+
+
 def load() -> dict:
+    _adopt_legacy()
     if not ACTIVE.exists():
         return empty()
     try:
@@ -53,6 +63,7 @@ def load() -> dict:
 
 
 def save(data: dict) -> None:
+    _adopt_legacy()
     data["updated_at"] = utc_now()
     ACTIVE.parent.mkdir(parents=True, exist_ok=True)
     ACTIVE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

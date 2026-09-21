@@ -71,7 +71,7 @@ class SimpleRuntime:
         self.root = root
         self.workspace = workspace
         self.audit = root / "router" / "audit.jsonl"
-        self.continuity = workspace / "sun" / "runtime" / "continuity" / "active.json"
+        self.continuity = root / "continuity" / "active.json"
         self.tasks = workspace / "sun" / "runtime" / "async-tasks"
 
 

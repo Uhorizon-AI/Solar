@@ -32,6 +32,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 from providers import PROVIDERS  # noqa: E402
 import solar_runtime  # noqa: E402
+import continuity_store  # noqa: E402
 from solar_paths import resolve_solar_paths, resolve_under_home as _resolve_under_home  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -149,7 +150,9 @@ def save_summary(conversation_id: str, summary: str) -> None:
 
 
 def continuity_root() -> pathlib.Path:
-    return SOLAR_WORKSPACE / "sun" / "runtime" / "continuity"
+    # Same record continuity_cli, the console and work_status read. No fallback
+    # to sun/runtime: that path kept a second, diverging copy.
+    return solar_runtime.runtime_dir("continuity")
 
 
 def continuity_active_path() -> pathlib.Path:
@@ -170,7 +173,24 @@ def empty_continuity(channel: str = "") -> Dict[str, Any]:
     }
 
 
+def _report_adoption_failure(exc: OSError) -> None:
+    # A turn never fails over a 600-byte record: leave a trace and retry next turn.
+    detail = f"{type(exc).__name__}: {exc}"
+    print(f"[router] continuity adoption failed: {detail}", file=sys.stderr)
+    try:
+        audit_log("continuity", "continuity_adoption_failed", error=detail)
+    except OSError:
+        pass
+
+
+def adopt_legacy_continuity() -> str:
+    """Bring over the record older routers kept under sun/runtime (see continuity_store)."""
+    return continuity_store.adopt_legacy(
+        SOLAR_WORKSPACE, continuity_active_path(), on_error=_report_adoption_failure)
+
+
 def load_continuity() -> Optional[Dict[str, Any]]:
+    adopt_legacy_continuity()
     path = continuity_active_path()
     if not path.exists():
         return None

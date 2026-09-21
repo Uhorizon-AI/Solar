@@ -52,7 +52,7 @@ class TestRuntimeIsolation(unittest.TestCase):
     def test_router_writes_inside_the_fixture(self):
         self.assertTrue(str(router.RUNTIME_ROOT).startswith(str(self.runtime.root)))
         self.assertTrue(
-            str(router.continuity_root()).startswith(str(self.runtime.workspace)))
+            str(router.continuity_root()).startswith(str(self.runtime.root)))
 
     def test_router_does_not_point_at_any_live_runtime(self):
         for live in _live_runtime_candidates():
