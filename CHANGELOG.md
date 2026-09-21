@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-async-tasks): a subtask's result is not introduced twice. The child is asked to write its own `## Result`, and the execution log wraps another one around it, so the parent read `### <key> — completed` followed by a heading that told it nothing. The aggregation drops the repeated heading.
+
 ## [0.25.5] - 2026-09-21
 
 ### Fixed

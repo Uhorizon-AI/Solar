@@ -443,6 +443,11 @@ RE_SUBTASK_RESULTS_SECTION = re.compile(r"\n## Subtask results\n.*?(?=\n## |\Z)"
 
 # The executor's own log: `## Result` on success, `## Error` on failure.
 RE_LOG_OUTCOME_SECTION = re.compile(r"\n## (?:Result|Error)\n(.*)", re.DOTALL)
+
+# The provider is asked to write its own `## Result`, and the log adds one
+# around it. Without this the parent reads `### <key> — completed` followed
+# by a heading that says nothing it does not already know.
+RE_LEADING_OUTCOME_HEADING = re.compile(r"^##\s+(?:Result|Error)\s*$", re.IGNORECASE)
 RE_TASK_ERROR_SECTION = re.compile(r"\n## Execution Error\n(.*)", re.DOTALL)
 
 
@@ -779,6 +784,14 @@ def create_declared_children(
     return None
 
 
+def strip_outcome_heading(text: str) -> str:
+    """Drop the `## Result` / `## Error` headings a child's own reply repeats."""
+    lines = text.strip().splitlines()
+    while lines and (not lines[0].strip() or RE_LEADING_OUTCOME_HEADING.match(lines[0].strip())):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
 def read_child_outcome(task_root: pathlib.Path, child_id: str) -> Tuple[str, str]:
     """Return (status, result text) for one child, read from its own log."""
     if not child_id:
@@ -805,7 +818,7 @@ def read_child_outcome(task_root: pathlib.Path, child_id: str) -> Tuple[str, str
         except OSError:
             match = None
         if match:
-            text = match.group(1).strip()
+            text = strip_outcome_heading(match.group(1))
             break
     if not text:
         # Nothing in the log: the task file carries its own account.
@@ -814,7 +827,7 @@ def read_child_outcome(task_root: pathlib.Path, child_id: str) -> Tuple[str, str
         except OSError:
             match = None
         if match:
-            text = match.group(1).strip()
+            text = strip_outcome_heading(match.group(1))
     if not text:
         text = "no result recorded"
     if len(text) > SUBTASK_RESULT_MAX:

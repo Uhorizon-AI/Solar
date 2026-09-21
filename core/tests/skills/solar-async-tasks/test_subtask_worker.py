@@ -748,3 +748,16 @@ def test_the_shell_re_queues_a_parent_that_was_never_parked(tmp_path):
     parked = root / "queued" / "parent.md"
     assert parked.exists(), proc.stdout
     assert 'blocked_by_task_ids: "child-1"' in parked.read_text(encoding="utf-8")
+
+
+def test_the_childs_own_result_heading_is_not_repeated(tmp_path):
+    root = make_root(tmp_path)
+    _finished_child(root, "completed", "uno", "child-1", "k1", "completed",
+                    "# Async Task Execution\n\n- outcome: success\n\n## Result\n\n"
+                    "## Result\n\nrevisé A\n")
+    task = write_parent(root, extra='subtask_ids: "k1=child-1"\n')
+
+    assert run_executor(task, root, "done", tmp_path).returncode == 0
+    section = task.read_text(encoding="utf-8").split("## Subtask results", 1)[1]
+    assert "### k1 — completed\n\nrevisé A" in section
+    assert "## Result" not in section
