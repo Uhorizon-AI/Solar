@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.25.8] - 2026-09-21
+### Fixed
+- fix(solar-router): one continuity record, adopted from sun/runtime once
+
+
 ## [0.25.7] - 2026-09-21
 
 ### Changed
