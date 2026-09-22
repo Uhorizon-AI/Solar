@@ -50,38 +50,38 @@ def test_runtime_dir_composes_and_creates_on_request(app_data):
 
 
 def test_symlinked_and_real_workspace_are_one_identity(app_data, tmp_path):
-    real = tmp_path / "real" / "planets" / "louis"
+    real = tmp_path / "real" / "planets" / "alpha"
     real.mkdir(parents=True)
     link = tmp_path / "link"
     link.symlink_to(tmp_path / "real")
 
-    via_real = solar_runtime.planet_state_dir(real, "calendar-sync")
-    via_link = solar_runtime.planet_state_dir(link / "planets" / "louis", "calendar-sync")
+    via_real = solar_runtime.planet_state_dir(real, "example-skill")
+    via_link = solar_runtime.planet_state_dir(link / "planets" / "alpha", "example-skill")
 
     assert via_real == via_link
-    assert solar_runtime.planet_key(real) == solar_runtime.planet_key(link / "planets" / "louis")
+    assert solar_runtime.planet_key(real) == solar_runtime.planet_key(link / "planets" / "alpha")
 
     index = json.loads(solar_runtime.planets_index_path().read_text(encoding="utf-8"))
     assert len(index["planets"]) == 1
 
 
 def test_same_name_different_planets_get_different_buckets(app_data, tmp_path):
-    one = tmp_path / "ws-a" / "planets" / "louis"
-    two = tmp_path / "ws-b" / "planets" / "louis"
+    one = tmp_path / "ws-a" / "planets" / "alpha"
+    two = tmp_path / "ws-b" / "planets" / "alpha"
     one.mkdir(parents=True)
     two.mkdir(parents=True)
 
     bucket_one = solar_runtime.planet_bucket(one)
     bucket_two = solar_runtime.planet_bucket(two)
 
-    assert bucket_one == "louis"
+    assert bucket_one == "alpha"
     assert bucket_two != bucket_one
-    assert bucket_two.startswith("louis-")
-    assert len(bucket_two) == len("louis-") + 12
+    assert bucket_two.startswith("alpha-")
+    assert len(bucket_two) == len("alpha-") + 12
 
 
 def test_bucket_assignment_is_stable_across_calls(app_data, tmp_path):
-    planet = tmp_path / "ws" / "planets" / "louis"
+    planet = tmp_path / "ws" / "planets" / "alpha"
     planet.mkdir(parents=True)
     first = solar_runtime.planet_bucket(planet)
     second = solar_runtime.planet_bucket(planet)
@@ -89,16 +89,16 @@ def test_bucket_assignment_is_stable_across_calls(app_data, tmp_path):
 
 
 def test_planet_state_dir_is_never_inside_the_repo(app_data, tmp_path):
-    planet = tmp_path / "ws" / "planets" / "louis"
+    planet = tmp_path / "ws" / "planets" / "alpha"
     planet.mkdir(parents=True)
-    state = solar_runtime.planet_state_dir(planet, "calendar-sync", create=True)
+    state = solar_runtime.planet_state_dir(planet, "example-skill", create=True)
     assert state.is_dir()
     assert not str(state).startswith(str(tmp_path / "ws"))
-    assert state == app_data.resolve() / "Solar" / "planets" / "louis" / "calendar-sync"
+    assert state == app_data.resolve() / "Solar" / "planets" / "alpha" / "example-skill"
 
 
 def test_index_is_written_atomically_and_holds_no_secrets(app_data, tmp_path):
-    planet = tmp_path / "ws" / "planets" / "louis"
+    planet = tmp_path / "ws" / "planets" / "alpha"
     planet.mkdir(parents=True)
     solar_runtime.planet_bucket(planet)
     index_path = solar_runtime.planets_index_path()
@@ -132,13 +132,13 @@ def test_no_string_literal_composes_sun_runtime(app_data):
 
 
 def test_resolved_homes_never_land_inside_a_workspace(app_data, tmp_path):
-    planet = tmp_path / "ws" / "planets" / "louis"
+    planet = tmp_path / "ws" / "planets" / "alpha"
     planet.mkdir(parents=True)
     for path in (
         solar_runtime.runtime_root(),
         solar_runtime.runtime_dir("async-tasks"),
         solar_runtime.runtime_dir("delegations"),
-        solar_runtime.planet_state_dir(planet, "calendar-sync"),
+        solar_runtime.planet_state_dir(planet, "example-skill"),
     ):
         assert "/sun/" not in str(path)
         assert not str(path).startswith(str(tmp_path / "ws"))

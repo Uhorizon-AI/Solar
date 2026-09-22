@@ -51,9 +51,11 @@ else
   fail "reconcile_router_audit" "stale_all=$after after reconcile"
 fi
 
-# solar status JSON uses host key (smoke on real workspace if host up)
-if [[ -d "/Users/louisjimenezp/Solar/.solar" ]]; then
-  out="$(cd /Users/louisjimenezp/Solar && bash "$SOLAR" status --json 2>/dev/null || true)"
+# solar status JSON uses host key. Opt-in smoke on a real workspace:
+#   SOLAR_SMOKE_WORKSPACE=/path/to/workspace bash test_solar_status_host.sh
+SMOKE_WS="${SOLAR_SMOKE_WORKSPACE:-}"
+if [[ -n "$SMOKE_WS" && -d "$SMOKE_WS/.solar" ]]; then
+  out="$(cd "$SMOKE_WS" && bash "$SOLAR" status --json 2>/dev/null || true)"
   if echo "$out" | grep -q '"host"'; then
     pass "solar status --json has host block"
   else

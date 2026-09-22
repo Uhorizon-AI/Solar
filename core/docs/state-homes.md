@@ -77,5 +77,5 @@ Both expose the same CLI through `solar_runtime.py`:
 
 ```bash
 python3 core/skills/solar-paths/scripts/solar_runtime.py runtime async-tasks
-python3 core/skills/solar-paths/scripts/solar_runtime.py planet /path/to/planets/louis calendar-sync
+python3 core/skills/solar-paths/scripts/solar_runtime.py planet /path/to/planets/<planet> <skill>
 ```

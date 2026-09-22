@@ -9,7 +9,7 @@
 | Path | Role |
 |---|---|
 | `~/.local/share/solar` (default `SOLAR_ROOT`) | Global framework install (git checkout; hidden data dir) |
-| Any directory (e.g. `~/Solar`, `~/Projects/acme`) | Workspace (`sun/`, `planets/`, `.solar/`) |
+| Any directory (e.g. `~/Solar`) | Workspace (`sun/`, `planets/`, `.solar/`) |
 | `~/.local/bin/solar` | Wrapper on PATH (`SOLAR_BIN_DIR` override) |
 
 Install and workspace stay separate so core updates never overwrite `sun/` / `planets/`.

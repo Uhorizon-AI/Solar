@@ -87,8 +87,8 @@ the MCP client is part of the trust boundary.
 Action skills are opt-in, listed in `<runtime>/mcp/action-skills.json`:
 
 ```json
-{"calendar-sync": {"actions": ["status"], "mandate": "calendar-busy-sync",
-                   "command": ["bash", "planets/louis/skills/calendar-sync/scripts/calendar_sync.sh"]}}
+{"example-sync": {"actions": ["status"], "mandate": "example-sync-mandate",
+                  "command": ["bash", "planets/<planet>/skills/example-sync/scripts/example_sync.sh"]}}
 ```
 
 **Instruction skills never become tools.** They stay native to the harness; only

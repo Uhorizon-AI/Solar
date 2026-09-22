@@ -269,9 +269,9 @@ def test_audit_and_mandate_events_keep_their_lines(ready):
         s.audit_append({"ts": "t2", "event": "end", "router_id": "r"})
         assert [r["event"] for r in s.audit_rows()] == ["start", "end"]
         assert s.audit_rows(limit=1) == [{"ts": "t2", "event": "end", "router_id": "r"}]
-        s.delegation_event_append("calendar-busy-sync", "shadow", {"ts": "t", "ok": True})
-        assert s.delegation_events("calendar-busy-sync", "shadow") == [{"ts": "t", "ok": True}]
-        assert s.delegation_events("calendar-busy-sync", "events") == []
+        s.delegation_event_append("example-mandate", "shadow", {"ts": "t", "ok": True})
+        assert s.delegation_events("example-mandate", "shadow") == [{"ts": "t", "ok": True}]
+        assert s.delegation_events("example-mandate", "events") == []
 
 
 # --- backups -----------------------------------------------------------------

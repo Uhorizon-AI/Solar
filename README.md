@@ -161,7 +161,7 @@ cd ~/Solar
 solar setup
 ```
 
-(`solar setup` runs init + sync + doctors. You can use `~/Projects/acme` or any other directory instead of `~/Solar`.)
+(`solar setup` runs init + sync + doctors. `~/Solar` is only a convention: any directory works.)
 
 The bootstrap URL above is pinned to a release tag by `create-release` (do not edit by hand). Runtime installs resolve the latest stable GitHub Release via the API.
 

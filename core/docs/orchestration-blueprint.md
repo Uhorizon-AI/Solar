@@ -14,7 +14,7 @@ Before creating a skill, script, or mandate, ask which layer owns the need. Exac
 
 | Layer | Owns | Does not own | Home |
 |---|---|---|---|
-| **1. Definition** | Stages of a domain routine (what to do, in what order, with which tools) | Queue, cadence, permission, turn execution | Planet/domain skill (`SKILL.md`, scripts). Examples: `calendar-sync`, `lou-job-triage`, `linkedin-prospecting` |
+| **1. Definition** | Stages of a domain routine (what to do, in what order, with which tools) | Queue, cadence, permission, turn execution | Planet/domain skill (`SKILL.md`, scripts). Examples: a calendar sync, a job-offer triage, a lead-prospecting pipeline |
 | **2. State & cadence** | Deferred work, lifecycle, subtasks, recurrence, scheduled windows | Domain steps, authority, interactive turns | `solar-async-tasks` → `<runtime root>/async-tasks/` (`drafts → planned → queued → active → done/error`) |
 | **3. Execution** | One turn of work: classify, route, invoke agents/skills, return a reply | Long-lived progress, domain pipeline design, written mandates | `solar-router` (interactive channels **and** `channel=async-task` for approved tasks) |
 | **4. Authority** | May this act / may this routine run without the human present | How the work is done or scheduled | Workspace `AGENTS.md` A0–A4; A3 mandates in `sun/delegations/` via `solar-router/scripts/delegation_ctl.py` |

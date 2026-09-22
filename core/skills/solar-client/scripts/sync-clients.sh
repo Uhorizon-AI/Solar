@@ -11,7 +11,7 @@
 #
 # Naming:
 # - core/ resources: unprefixed (e.g. solar-router, solar-telegram)
-# - planets/* resources: always prefixed <planet-name>:<resource-name> (e.g. uhorizon:linkedin-prospecting)
+# - planets/* resources: always prefixed <planet-name>:<resource-name> (e.g. uhorizon:lead-scoring)
 #
 # Usage:
 #   bash core/scripts/sync-clients.sh [--codex-only|--claude-only|--cursor-only|--gemini-only|--vscode-only]
@@ -267,7 +267,7 @@ skill_is_excluded() {
   skill_declares_no_sync "$skill_md"
 }
 
-# Discover planet skills via find */skills/*/SKILL.md (supports nested structures like phuryn)
+# Discover planet skills via find */skills/*/SKILL.md (supports nested structures)
 discover_planet_skills() {
   local planet_dir="$1"
   local planet_name="$2"

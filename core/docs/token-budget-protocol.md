@@ -31,7 +31,7 @@ Skills add another 1,500–6,000 tokens each when invoked.
 
 **When:** The first user message is a question, quick task, or does not reference a specific planet domain or Solar framework files.
 
-**Examples:** "Summarize this article", "What is the status of my Acme tasks?", "Draft a short email", "What day is it today?"
+**Examples:** "Summarize this article", "What is the status of my tasks?", "Draft a short email", "What day is it today?"
 
 **Load:**
 - `sun/preferences/profile.md` (already present via CLAUDE.md context in most clients)
@@ -43,13 +43,13 @@ Skills add another 1,500–6,000 tokens each when invoked.
 
 ### Level 2 — Planet
 
-**When:** The task clearly belongs to a specific planet (uhorizon, louis, website, etc.) or requires planet-specific rules, skills, or data.
+**When:** The task clearly belongs to a specific planet (uhorizon, website, etc.) or requires planet-specific rules, skills, or data.
 
 **Trigger signals:**
 - User mentions a planet name, company, or project
 - Task involves writing files inside `planets/<name>/`
-- Skill invocation that is planet-prefixed (e.g., `uhorizon:linkedin-post`)
-- User says "in Uhorizon", "for Acme", "update the CRM", etc.
+- Skill invocation that is planet-prefixed (e.g., `uhorizon:weekly-report`)
+- User says "in Uhorizon", "update the CRM", etc.
 
 **Load:**
 - `sun/preferences/profile.md`
