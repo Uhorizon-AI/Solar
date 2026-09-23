@@ -87,6 +87,8 @@ COLUMN_KEYS = (
 )
 # Internal columns a transition may set besides the status. Nothing else reaches SQL.
 TRANSITION_COLUMNS = ("claimed_by", "claimed_at", "pid", "log_path")
+# Set once when an existing task enters the base.
+IMPORT_COLUMNS = ("log_path", "source_name")
 
 MIGRATIONS: tuple[str, ...] = (
     # v1
@@ -145,7 +147,31 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX delegation_events_mandate ON delegation_events(mandate, stream, seq);
     """,
+    # v2: what the cutover needs to give files back exactly
+    """
+    ALTER TABLE tasks ADD COLUMN source_name TEXT;   -- the file it came from, for a rollback
+    CREATE TABLE subtask_plans (
+        parent_id TEXT PRIMARY KEY,
+        plan      TEXT NOT NULL                    -- the declared children, JSON verbatim
+    );
+    CREATE TABLE cancellation_requests (
+        task_id      TEXT PRIMARY KEY,
+        requested_at TEXT NOT NULL
+    );
+    CREATE TABLE delegation_streams (              -- a stream exists even when it is empty
+        mandate TEXT NOT NULL,
+        stream  TEXT NOT NULL CHECK (stream IN ('events', 'shadow')),
+        PRIMARY KEY (mandate, stream)
+    );
+    """,
+    # v3: an empty audit file is still a file; rollback must bring it back
+    """
+    CREATE TABLE audit_source (                    -- the audit file existed, even with no lines
+        id INTEGER PRIMARY KEY CHECK (id = 1)
+    );
+    """,
 )
+
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -405,6 +431,15 @@ def _check_field(key: str, value: str) -> None:
         raise FormatError(f"value for {key!r} spans lines; import the document instead")
 
 
+def _check_id(task_id: str) -> str:
+    """A task id ends up as a file name on the way out: no separators, no dots
+    that climb, nothing empty."""
+    if (not task_id or task_id in (".", "..") or any(c in task_id for c in "/\\")
+            or any(ord(c) < 32 or ord(c) == 127 for c in task_id)):
+        raise FormatError(f"task id {task_id!r} cannot be a file name")
+    return task_id
+
+
 def _check_unique(pairs: list[list[str]]) -> None:
     seen: set[str] = set()
     for key, _ in pairs:
@@ -435,11 +470,15 @@ def _projection(pairs: list[list[str]]) -> dict[str, Any]:
 
 
 def _write_task(conn, task_id: str, status: str, pairs, body: str, *, insert: bool,
-                extra: Optional[dict] = None) -> None:
+                extra: Optional[dict] = None, imported: Optional[dict] = None) -> None:
     cols = _projection(pairs)
     for name, value in (extra or {}).items():
         if name not in TRANSITION_COLUMNS:
             raise StateError(f"{name} is not a column a transition may set")
+        cols[name] = value
+    for name, value in (imported or {}).items():
+        if name not in IMPORT_COLUMNS:
+            raise StateError(f"{name} is not a column an import may set")
         cols[name] = value
     cols["status"] = status
     cols["frontmatter"] = json.dumps(pairs, ensure_ascii=False)
@@ -453,6 +492,11 @@ def _write_task(conn, task_id: str, status: str, pairs, body: str, *, insert: bo
         sets = ", ".join(f"{name} = ?" for name in cols)
         conn.execute(f"UPDATE tasks SET {sets}, row_version = row_version + 1 WHERE id = ?",
                      [*cols.values(), task_id])
+
+
+def _register_stream(conn, mandate: str, stream: str) -> None:
+    conn.execute("INSERT OR IGNORE INTO delegation_streams (mandate, stream) VALUES (?, ?)",
+                 (mandate, stream))
 
 
 def _task_dict(row: sqlite3.Row) -> dict:
@@ -489,7 +533,7 @@ class Session:
         declared = value_of(_get_pair(pairs, "id")) or None   # an empty id is no id
         if task_id and declared and declared != task_id:
             raise StateError(f"task_id {task_id!r} and frontmatter id {declared!r} differ")
-        task_id = task_id or declared or str(uuid.uuid4())
+        task_id = _check_id(task_id or declared or str(uuid.uuid4()))
         # A declared id is kept as it was written. Only an id this call supplies
         # is written, JSON-encoded, so value_of() reads back exactly task_id.
         if _get_pair(pairs, "id") is None:
@@ -501,7 +545,8 @@ class Session:
         return task_id
 
     def task_import(self, document: str, status: Optional[str] = None,
-                    actor: str = "import") -> str:
+                    actor: str = "import", log_path: Optional[str] = None,
+                    source_name: Optional[str] = None) -> str:
         """Store a task document exactly as written: the pairs `parse_task_document`
         returns, untouched. Any status is accepted (this is how existing tasks
         enter). `status`, when given, wins over the frontmatter one and is written
@@ -511,18 +556,20 @@ class Session:
         task_id = value_of(_get_pair(pairs, "id"))
         if not task_id:
             raise FormatError("an imported task needs an id in its frontmatter")
+        _check_id(task_id)
         declared = value_of(_get_pair(pairs, "status"))
         final = status or declared
         if final not in STATUSES:
             raise FormatError(f"status {final!r} is not one of {', '.join(STATUSES)}")
         if final != declared:
             _set_pair(pairs, "status", f" {final}")
-        self._insert(task_id, final, pairs, body, actor)
+        imported = {k: v for k, v in (("log_path", log_path), ("source_name", source_name)) if v}
+        self._insert(task_id, final, pairs, body, actor, imported)
         return task_id
 
-    def _insert(self, task_id, status, pairs, body, actor) -> None:
+    def _insert(self, task_id, status, pairs, body, actor, imported=None) -> None:
         with _transaction(self.conn) as conn:
-            _write_task(conn, task_id, status, pairs, body, insert=True)
+            _write_task(conn, task_id, status, pairs, body, insert=True, imported=imported)
             conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                          "VALUES (?, ?, NULL, ?, ?)", (task_id, _now(), status, actor))
 
@@ -601,6 +648,34 @@ class Session:
             conn.execute("INSERT OR REPLACE INTO task_links (parent_id, child_id, subtask_key) "
                          "VALUES (?, ?, ?)", (parent_id, child_id, subtask_key))
 
+    def subtask_plan_import_text(self, parent_id: str, text: str) -> None:
+        """The children a parent declared, stored as the JSON text it was."""
+        json.loads(text)
+        with _transaction(self.conn) as conn:
+            conn.execute("INSERT OR REPLACE INTO subtask_plans (parent_id, plan) VALUES (?, ?)",
+                         (parent_id, text))
+
+    def subtask_plan_text(self, parent_id: str) -> Optional[str]:
+        row = self.conn.execute("SELECT plan FROM subtask_plans WHERE parent_id = ?",
+                                (parent_id,)).fetchone()
+        return row[0] if row else None
+
+    def subtask_plan_parents(self) -> list[str]:
+        return [r[0] for r in self.conn.execute("SELECT parent_id FROM subtask_plans ORDER BY parent_id")]
+
+    def cancellation_request(self, task_id: str) -> None:
+        with _transaction(self.conn) as conn:
+            conn.execute("INSERT OR IGNORE INTO cancellation_requests (task_id, requested_at) "
+                         "VALUES (?, ?)", (task_id, _now()))
+
+    def cancellation_requested(self, task_id: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?",
+                                 (task_id,)).fetchone() is not None
+
+    def cancellation_ids(self) -> list[str]:
+        return [r[0] for r in self.conn.execute(
+            "SELECT task_id FROM cancellation_requests ORDER BY task_id")]
+
     def task_children(self, parent_id: str) -> list[dict]:
         return [dict(r) for r in self.conn.execute(
             "SELECT child_id, subtask_key FROM task_links WHERE parent_id = ? ORDER BY child_id",
@@ -623,6 +698,14 @@ class Session:
             cur = conn.execute("INSERT INTO audit (ts, event, router_id, row) VALUES (?, ?, ?, ?)",
                                (row.get("ts"), row.get("event"), row.get("router_id"), text))
         return int(cur.lastrowid)
+
+    def audit_file_register(self) -> None:
+        """The audit file existed on disk, whether or not it had lines."""
+        with _transaction(self.conn) as conn:
+            conn.execute("INSERT OR IGNORE INTO audit_source (id) VALUES (1)")
+
+    def audit_file_present(self) -> bool:
+        return self.conn.execute("SELECT 1 FROM audit_source WHERE id = 1").fetchone() is not None
 
     def audit_lines(self) -> list[str]:
         """Every audit line, verbatim, in order: what an export writes back."""
@@ -673,15 +756,26 @@ class Session:
     def delegation_event_append(self, mandate: str, stream: str, row: dict) -> int:
         line = json.dumps(row, ensure_ascii=False)
         with _transaction(self.conn) as conn:
+            _register_stream(conn, mandate, stream)
             cur = conn.execute("INSERT INTO delegation_events (mandate, stream, ts, row) "
                                "VALUES (?, ?, ?, ?)", (mandate, stream, row.get("ts"), line))
         return int(cur.lastrowid)
+
+    def delegation_stream_register(self, mandate: str, stream: str) -> None:
+        """Record that a stream exists, with or without events."""
+        with _transaction(self.conn) as conn:
+            _register_stream(conn, mandate, stream)
+
+    def delegation_streams(self) -> list[tuple[str, str]]:
+        return [(r[0], r[1]) for r in self.conn.execute(
+            "SELECT mandate, stream FROM delegation_streams ORDER BY mandate, stream")]
 
     def delegation_event_import_line(self, mandate: str, stream: str, line: str) -> int:
         """Store one mandate event line as written."""
         text = line.rstrip("\n")
         row = json.loads(text)
         with _transaction(self.conn) as conn:
+            _register_stream(conn, mandate, stream)
             cur = conn.execute("INSERT INTO delegation_events (mandate, stream, ts, row) "
                                "VALUES (?, ?, ?, ?)", (mandate, stream, row.get("ts"), text))
         return int(cur.lastrowid)

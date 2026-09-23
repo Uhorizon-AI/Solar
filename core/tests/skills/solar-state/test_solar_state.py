@@ -18,6 +18,8 @@ from solar_state import (StateBusy, StateUnavailable, TransitionRefused, cutover
                          parse_task_document, render_task_document, session)
 
 _SCRIPT = Path(solar_state.__file__)
+# SHA-256 of MIGRATIONS[0] as released in 1a02d6b.
+V1_SHA256 = "0a6665f28fb8f5da3d113209658450cf98f023ad65586557d35e10241015833f"
 
 
 def _tree(path: Path) -> set[str]:
@@ -83,8 +85,10 @@ def test_refuses_an_older_schema_instead_of_upgrading(ready):
 def test_upgrade_copies_an_existing_base_first(ready):
     conn = sqlite3.connect(solar_state.db_path(ready))
     conn.execute("PRAGMA user_version = 0")
-    for table in ("delegation_events", "continuity", "audit", "task_events", "task_links",
-                  "tasks", "transitions", "statuses"):
+    conn.execute("PRAGMA foreign_keys = OFF")
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")]
+    for table in tables:
         conn.execute(f"DROP TABLE {table}")
     conn.close()
     with cutover(ready) as cut:
@@ -517,7 +521,7 @@ def test_whatever_create_and_set_accept_reimports_identically(ready):
 
 # --- review round 3: ids that need escaping, how the block may close ---------
 
-@pytest.mark.parametrize("tid", ['a"b', "a\\nb", "a\nb", "ñ-ü", "back\\slash"])
+@pytest.mark.parametrize("tid", ['a"b', "ñ-ü", "con espacio", "a:b", "a.b-c_d"])
 def test_an_explicit_id_reads_back_identical(ready, tid):
     with session(ready, auto_backup=False) as s:
         assert s.task_create([("title", '"t"')], task_id=tid) == tid
@@ -551,3 +555,55 @@ def test_forms_that_would_not_round_trip_are_refused(text):
 def test_accepted_forms_render_identically(text):
     pairs, body = parse_task_document(text)
     assert render_task_document(pairs, body) == text
+
+
+
+# --- schema v2 on top of a published v1 --------------------------------------
+
+def test_a_v1_base_is_refused_then_upgraded_to_v2_without_losing_data(root):
+    conn = solar_state._connect(solar_state.db_path(root))
+    conn.execute("BEGIN IMMEDIATE")
+    for statement in solar_state._statements(solar_state.MIGRATIONS[0]):
+        conn.execute(statement)
+    conn.executemany("INSERT INTO statuses (name) VALUES (?)", [(x,) for x in solar_state.STATUSES])
+    conn.executemany("INSERT INTO transitions VALUES (?, ?)", solar_state.TRANSITIONS)
+    conn.execute("INSERT INTO tasks (id, status, frontmatter, body) VALUES "
+                 "('old', 'draft', '[[\"id\", \" \\\"old\\\"\"], [\"status\", \" draft\"]]', '')")
+    conn.execute("PRAGMA user_version = 1")
+    conn.execute("COMMIT")
+    conn.close()
+    with cutover(root) as cut:
+        cut.set_format(solar_state.FORMAT_SQLITE)
+    with pytest.raises(StateUnavailable, match="v1"):
+        with session(root):
+            pass
+
+    with cutover(root) as cut:
+        result = cut.upgrade_schema()
+    assert result["from_version"] == 1 and result["to_version"] == solar_state.SCHEMA_VERSION
+    assert Path(result["backup"]).parent.name == "pre-migration"
+    with session(root, auto_backup=False) as s:
+        assert s.task_get("old")["status"] == "draft"
+        assert s.task_get("old")["source_name"] is None
+        s.delegation_stream_register("m", "events")
+        s.subtask_plan_import_text("old", "[]")
+        s.cancellation_request("old")
+        assert s.delegation_streams() == [("m", "events")]
+
+
+def test_published_v1_migration_is_unchanged():
+    """v1 shipped in 1a02d6b: its SQL may never change, only new versions are added."""
+    import hashlib
+    digest = hashlib.sha256(solar_state.MIGRATIONS[0].encode()).hexdigest()
+    assert digest == V1_SHA256
+
+
+@pytest.mark.parametrize("bad", ["../escape", "a/b", "..", ".", "back\\slash",
+                                 "nul\x00byte", "line\nbreak"])
+def test_an_id_that_is_not_a_file_name_is_refused(ready, bad):
+    with session(ready, auto_backup=False) as s:
+        with pytest.raises(solar_state.FormatError, match="cannot be a file name"):
+            s.task_create([("title", '"t"')], task_id=bad)
+        with pytest.raises(solar_state.FormatError, match="cannot be a file name"):
+            s.task_import(f'---\nid: "{bad}"\nstatus: draft\n---\n')
+        assert s.task_list() == []

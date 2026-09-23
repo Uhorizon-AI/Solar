@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-state): the runtime state gets an owner. Tasks, the router audit, cross-channel continuity and the events of A3 mandates live in one SQLite file, `state.sqlite`, that only this skill opens. `solar-paths` says where; this says what, and nothing else is imported. A shared flock on `state.lock` covers every read and write; a cutover holds it exclusive. `STATE_FORMAT` is read inside that lock and any value other than `sqlite` is refused, so a cutover that dies halfway leaves the runtime on files. Schema v1 is the published foundation and a test pins its SQL; v2 adds what a rollback needs to write the files back (`source_name`, subtask plans, cancellation requests, and mandate streams that exist even when empty); v3 records that an empty `router/audit.jsonl` existed. No component calls the skill yet, and no runtime has been moved onto it.
+- feat(solar-state): the cutover between the file runtime and the base (`migrate`, `rollback`, `rehearse`). `rehearse` imports into a throwaway base and touches nothing. `migrate` and `rollback` refuse unless `SOLAR_STATE_ALLOW_CUTOVER=1`, and neither is wired to `solar client update` or `sync`. A resume that already finds `STATE_FORMAT=sqlite` checks the marker, the base and the schema, waits for old writers — including the bare names `create.sh`, `task_cancel.py`, `reconcile_router_audit.sh`, `continuity_cli.py` and `delegation_ctl.py` — and brings in what that old code wrote meanwhile. A task, log, subtask plan, cancellation, the audit, continuity or a mandate stream that is neither still in place nor already under `*.migrated-<stamp>` is refused. Rollback copies `task-logs/` back to `async-tasks/logs/` without moving the source, and an empty audit file comes back empty. `tmp/`, `hooks/` and anything unknown stay where they are.
+
 ## [0.25.8] - 2026-09-21
 ### Fixed
 - fix(solar-router): one continuity record, adopted from sun/runtime once

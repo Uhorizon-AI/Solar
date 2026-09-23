@@ -14,12 +14,13 @@ description: >
 is there**, and is the only thing that reads or writes the state more than one
 component uses.
 
-**Status: foundation.** The base, its API and its guards exist and are tested.
-No component uses them yet, and no runtime has been moved onto them: the
-cutover (`migrate` / `rollback`), the import of the existing files, the checks
-in every entry point, the move of each reader and writer, and the MCP verbs are
-later steps of the plan. Until then every runtime is on `STATE_FORMAT=files`
-(or unset), and this skill refuses to open it.
+**Status: foundation and cutover.** The base, its API, its guards and the
+cutover (`migrate`, `rollback`, `rehearse`) exist and are tested. No component
+uses them yet and no runtime has been moved: the checks in every entry point,
+the move of each reader and writer, the MCP verbs, and wiring the cutover into
+`solar client update` / `sync` are later steps. Until then every runtime is on
+`STATE_FORMAT=files` (or unset), this skill refuses to open it, and `migrate` /
+`rollback` refuse unless `SOLAR_STATE_ALLOW_CUTOVER=1`.
 
 ## Required MCP
 
@@ -34,7 +35,9 @@ None
 | `task_links`, `task_events` | Parent–child relations; every status change, with who made it |
 | `audit` | The router audit, one JSON line per row, verbatim |
 | `continuity` | The cross-channel intention, one JSON document |
-| `delegation_events` | The `events` and `shadow` streams of each A3 mandate |
+| `delegation_events`, `delegation_streams` | The `events` and `shadow` streams of each A3 mandate; a stream exists even when empty |
+| `subtask_plans` | The children a parent declared, JSON verbatim |
+| `cancellation_requests` | Pending cancellation requests |
 
 Not here, on purpose: the mandates themselves (YAML that Louis writes in
 `sun/delegations/`), execution logs (files; a task keeps the path), and state
@@ -88,13 +91,55 @@ python3 "$SCRIPT_DIR/../../solar-state/scripts/solar_state.py" status   # says w
    base or an older schema refuses with `StateUnavailable`. It never falls
    back to reading the old files.
 5. **Schema migrations run only inside a cutover**, with a copy of the base
-   first. A session never upgrades under other readers.
+   first. A session never upgrades under other readers. **A released migration
+   never changes**: v1 is pinned by a test; changes go in a new version.
 6. **What comes in verbatim goes out verbatim.** A task's frontmatter is
    stored as `[key, text after the colon]` in order, and the columns are a
    projection of it, rewritten in the same transaction. Audit lines, mandate
    events and the continuity document are stored as the text they were.
-7. **One id per task.** A frontmatter `id` that differs from the one given, or a
-   key that appears twice, is refused.
+7. **One id per task, and it must be a file name.** A frontmatter `id` that
+   differs from the one given, a key that appears twice, or an id with a path
+   separator, a control character or a climbing `..` is refused. The cutover
+   checks every destination again on the way out: ids and file names are data.
+
+## Cutover
+
+`scripts/solar_state_cutover.py` moves a runtime from files to the base and
+back. Both directions hold the exclusive lock throughout, wait for anything
+still running (an active task, a live executor — a reused pid does not count —
+or old router / async-tasks code), copy the sources aside, import or export,
+verify, and only then change the format and move the old files aside.
+
+```bash
+python3 scripts/solar_state_cutover.py rehearse          # import into a throwaway base, verify; touches nothing
+SOLAR_STATE_ALLOW_CUTOVER=1 python3 scripts/solar_state_cutover.py migrate
+SOLAR_STATE_ALLOW_CUTOVER=1 python3 scripts/solar_state_cutover.py rollback
+```
+
+- **Migrate.** Tasks take the status of the folder they sit in. Logs are copied
+  to `task-logs/`. Task folders, handles, subtask plans, cancellations and logs
+  move to `async-tasks.migrated-<stamp>/`; `tmp/`, `hooks/` and anything unknown
+  stay. The audit, continuity and mandate streams are renamed
+  `*.migrated-<stamp>`. The originals are also copied to `pre-state-<stamp>/`.
+  Killed at any step, running it again completes it. A run that finds
+  `STATE_FORMAT=sqlite` checks the marker, the base and its schema first, waits
+  for running code, and brings in what old code wrote to the files meanwhile
+  (new tasks with their children, a child that arrives later for a parent that
+  already named it, logs, a clean tail of audit or mandate lines)
+  before moving them. Anything else — a task, log or subtask plan that changed,
+  a shortened or rewritten audit or mandate stream, a different continuity, or a
+  source that is neither still in place nor already under `*.migrated-<stamp>` —
+  is refused, and nothing is moved aside.
+- **Rollback.** Writes every task back under its original file name, restores
+  logs, subtask plans, cancellations, audit (an empty file comes back empty),
+  continuity and mandate streams (an empty stream comes back empty). Everything is written to a staging folder
+  and verified there; only then the files move into place, listed with their
+  hashes in `state-rollback.json`. Killed halfway, the next run removes what it
+  had placed — only files still byte for byte what it wrote — and starts over;
+  killed after the format changed, the next run finishes. A copy of the base
+  goes to `pre-rollback-<stamp>/`. It refuses to overwrite a file that exists.
+- **Stopping and starting** what Solar runs is the caller's job: this skill
+  imports only `solar-paths`.
 
 ## Backups
 
