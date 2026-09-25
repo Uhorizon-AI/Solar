@@ -99,21 +99,11 @@ See hook examples for implementation.
 ## Creating Hooks for Your Resources
 
 1. **Identify your resource**: What MCP or shared resource needs lifecycle management?
-2. **Install hook templates**: Run `install_hooks.sh <resource-name>` to copy templates from `assets/` to your runtime workspace
-3. **Customize hooks**: Edit the generated hooks in `$SOLAR_TASK_ROOT/hooks/<resource-name>/` to add your cleanup logic
-4. **Test**: Configure task with `resources: "<resource-name>"` and `cleanup_required: true`
+2. **Install hook templates**: copy the templates from `assets/` into `$SOLAR_TASK_ROOT/hooks/<resource-name>/`
+3. **Customize hooks**: edit `pre_start.sh`, `post_complete.sh` and `on_error.sh` there
+4. **Test**: set `resources: "<resource-name>"` and `cleanup_required: true` on the task
 
-**Quick start:**
-```bash
-# Install templates for chrome-dev-tools MCP
-bash scripts/install_hooks.sh chrome-dev-tools
-
-# Edit the hooks to add your cleanup logic
-vim $SOLAR_TASK_ROOT/hooks/chrome-dev-tools/post_complete.sh
-
-# Configure a task to use this resource
-bash scripts/set_cleanup.sh <task_id> chrome-dev-tools
-```
+There is no MCP verb for installing hooks or for `resources` and `cleanup_required`. The agent stops. It does not do this through the shell.
 
 ## Security Notes
 

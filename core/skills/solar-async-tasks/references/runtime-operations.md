@@ -6,6 +6,8 @@ Operational details for scheduling, recurrence, resource cleanup, notifications,
 
 Tasks can run only at a specific time and on specific weekdays.
 
+There is no MCP verb for `scheduled_time` or `scheduled_weekdays`. The agent stops. It does not set them through the shell.
+
 Frontmatter:
 
 ```yaml
@@ -17,30 +19,13 @@ Behavior:
 
 - A +/- 15 minute window applies around `scheduled_time`.
 - Tasks without schedule fields are always eligible.
-- `start_next.sh` and `run_worker.sh` only pick eligible queued tasks.
-
-Command:
-
-```bash
-bash core/skills/solar-async-tasks/scripts/schedule.sh <task_id> "10:00" "1,2,3,4,5"
-```
+- The worker only picks eligible queued tasks.
 
 ## Recurring Tasks
 
 Use recurring tasks for periodic execution, such as daily searches or weekly reports.
 
-Commands:
-
-```bash
-# Unlimited runs, 24h interval
-bash core/skills/solar-async-tasks/scripts/set_recurring.sh <task_id>
-
-# Max 10 runs, 24h interval
-bash core/skills/solar-async-tasks/scripts/set_recurring.sh <task_id> 10
-
-# Unlimited runs, 1h interval
-bash core/skills/solar-async-tasks/scripts/set_recurring.sh <task_id> 0 3600
-```
+There is no MCP verb for `recurring` or its interval fields. The agent stops. It does not set them through the shell.
 
 Frontmatter:
 
@@ -55,7 +40,7 @@ recurring_min_interval: 86400  # seconds
 Behavior:
 
 1. Task completes successfully.
-2. `complete.sh` checks `recurring: true`.
+2. On success the worker checks `recurring: true`.
 3. If max runs is not reached, the task is moved back to `queued/`.
 4. If max runs is reached, the task is moved to `archive/`.
 
@@ -68,18 +53,7 @@ Race protection:
 
 Tasks that use resources such as browser sessions, databases, or MCP servers can declare cleanup requirements.
 
-Command:
-
-```bash
-# Single resource, default 30s timeout
-bash core/skills/solar-async-tasks/scripts/set_cleanup.sh <task_id> chrome-dev-tools
-
-# Multiple resources
-bash core/skills/solar-async-tasks/scripts/set_cleanup.sh <task_id> chrome-dev-tools,postgres
-
-# Custom timeout
-bash core/skills/solar-async-tasks/scripts/set_cleanup.sh <task_id> chrome-dev-tools 60
-```
+There is no MCP verb for `resources`, `cleanup_required` or `cleanup_timeout`. The agent stops. It does not set them through the shell.
 
 Frontmatter:
 
@@ -102,17 +76,13 @@ $SOLAR_TASK_ROOT/
     └── <resource-name>.lock
 ```
 
-Install hook templates:
-
-```bash
-bash core/skills/solar-async-tasks/scripts/install_hooks.sh <resource-name>
-```
+Hook templates live next to the resource, under `hooks/<resource-name>/`.
 
 Execution flow:
 
-1. `start_next.sh` runs `pre_start.sh` hooks.
+1. The worker runs `pre_start.sh` hooks.
 2. If a pre-start hook fails, the task is skipped and the worker tries another task.
-3. `complete.sh` runs `post_complete.sh` hooks.
+3. On completion the worker runs `post_complete.sh` hooks.
 4. If cleanup fails, `on_error.sh` runs and the task moves to `error/`.
 
 See `hook-system.md` for full hook behavior.
@@ -123,23 +93,15 @@ When a long-running user request should notify on completion:
 
 1. Offer to create an async task.
 2. Confirm title, objective, and priority.
-3. Create, plan, and approve the task.
-4. Run:
+3. Create the task with `solar_task_create` and approve it with `solar_task_approve`.
+4. Set `notify_when: completed` on that task. Origin metadata does this for a gateway parent.
 
-```bash
-bash core/skills/solar-async-tasks/scripts/add_notify.sh <task_id>
-```
-
-This sets `notify_when: completed`.
-
-`complete.sh` calls `notify_if_configured.sh`. Send happens only when `notify_when: completed` is set and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from `create.sh --metadata`; children created with bare `--queued` do not.
+On completion the runtime notifies when `notify_when: completed` is set and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
 
 Delivery failures are recorded on the task as `notify_status: failed`,
 `notify_error`, and `notify_attempted_at`; the notifier returns nonzero. A successful
 retry records `notify_status: delivered` and `notify_delivered: true`, so a later
-invocation skips delivery. Retry explicitly with
-`bash core/skills/solar-async-tasks/scripts/notify_if_configured.sh <task-file>`
-after resolving the failure. Automatic retry scheduling is not enabled.
+invocation skips delivery. A later run of the notifier retries after the failure is resolved. Automatic retry scheduling is not enabled.
 
 The executor also invokes the notifier after execution failure or timeout; cleanup
 failure uses the same path. Only tasks already carrying `notify_when: completed`
@@ -205,11 +167,7 @@ Tasks in `error/` are terminal until an operator acts.
 To run a failed task again:
 
 1. Fix the underlying cause: provider auth, env, binary, prompt, hook, or resource.
-2. Requeue the task:
-
-```bash
-bash core/skills/solar-async-tasks/scripts/requeue_from_error.sh <task_id>
-```
+2. Requeue the task with `solar_task_requeue`. It moves `error` back to the queue and leaves object, scope and effect as they are.
 
 The task will run on the next eligible worker cycle.
 

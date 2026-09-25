@@ -19,7 +19,7 @@ Notes:
 - `decision.kind` from router v3 controls the response flow:
   - `direct_reply`: send `reply_text` directly to Telegram chat.
   - `async_draft_created` / `async_draft_proposal`: send control message (draft created, ask for activation confirmation).
-  - Activation (`plan.sh` + `approve.sh`) requires a second explicit confirmation from the user — never auto-queued.
+  - Activation (`solar_task_approve`) requires a second explicit confirmation from the user — never auto-queued, and never under an A3 mandate.
 
 ### 2) Alert mode (local -> Telegram)
 

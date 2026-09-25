@@ -91,15 +91,15 @@ changes still require explicit approval.
 
 ## Async draft creation rule
 
-- Router calls `core/skills/solar-async-tasks/scripts/create.sh` directly via subprocess.
+- The router creates the parent task. The agent does not write the queue.
 - No direct file writes from router.
 - Creation only if `async-tasks` is in `SOLAR_SYSTEM_FEATURES`.
 - When `mode=auto` and the model emits `<solar_decision>async_draft_created</solar_decision>`:
   - **telegram / n8n / app:** create a **parent** with `--queued --scheduled-time now --metadata JSON` (message-contract origin keys). `notify_when: completed` is written only because metadata is present. Return the canonical ACK (`On it. I'll let you know here when it's done.`) only after re-reading the task file as `queued` or `active`. The parent body follows `task-with-subtasks.md`. If `add_notify.sh` fails, keep the `task_id` and return `GATEWAY_ASYNC_ACK_NO_NOTIFY`. If task creation fails (`task_id` is None) or the file is not queued/active, do not emit a false ACK.
   - `SOLAR_N8N_AUTO_QUEUE=false` on channel n8n: brief error, no draft, no approval suffix. Unset keeps auto-queue.
   - Queued worker prompts keep Validation Gate / execution-consent: read/analysis + declared artifacts may proceed; external sends, destructive deletes, credentials, and irreversible actions still require explicit approval.
-  - **other channels:** create a draft; human `plan.sh` + `approve.sh` still required before queue unless the caller uses `async_only` with queue semantics.
-- Completion notify uses `notify_when: completed` → `notify_if_configured.sh` (origin chat when allowlisted). Only the parent created with `--metadata` gets `notify_when`. Children created with bare `create.sh --queued` do not notify. There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` kill-switch.
+  - **other channels:** create a draft; a human `solar_task_approve` is still required before the queue unless the caller uses `async_only` with queue semantics.
+- Completion notify uses `notify_when: completed` → `notify_if_configured.sh` (origin chat when allowlisted). Only the parent created with origin metadata gets `notify_when`. Children created already queued, without that metadata, do not notify. There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` kill-switch.
 - `SOLAR_ROUTER_CONTEXT_TURNS` is parsed safely (invalid/≤0 → default 12; hard cap 100).
 
 ## Caller mapping (approved)

@@ -73,7 +73,10 @@ conversational authority from caller-supplied fields. See
 | Tool | Authority | Passes when |
 |---|---|---|
 | `solar_task_status` | A0 | Always. Reading is not gated. |
-| `solar_task_create` | A2 | Native client confirmation or an existing exact-call approval |
+| `solar_task_create` | A2 | Native client confirmation or an existing exact-call approval. Still writes the task file until the runtime cutover |
+| `solar_task_approve` | A2 | Same approval. Moves a draft, or a task already planned, to the queue. Refuses an A3 mandate. Does not change object, scope or effect |
+| `solar_task_cancel` | A2 | Same approval. Cancels a queued task, or records the request for an active one. Does not change object, scope or effect |
+| `solar_task_requeue` | A2 | Same approval. Moves an error task back to the queue and drops its `## Execution Error` section. Does not change object, scope or effect |
 | `solar_telegram_send` | A2 | Same, for one exact message text. Sending outside the machine is never implicit |
 | `solar_action_run` | A3 | The skill and action are registered **and** the mandate is live |
 
@@ -132,7 +135,7 @@ Outside, and said plainly rather than disguised:
 
 Starting the stdio child does not start Solar services. Tools still depend on
 Solar's configured workspace, runtime storage and (for sends) installation secrets.
-`solar_task_create` invokes `create.sh` to write a task; the supervised
+`solar_task_create` writes the task file until the runtime cutover. `solar_task_approve`, `solar_task_cancel` and `solar_task_requeue` follow the active format: the task files while it is unset or `files`, and solar-state once it is `sqlite`. The supervised
 orchestrator processes queued tasks separately. Console and background services
 have their own startup/LaunchAgent lifecycle. A connected MCP child is not evidence
 that the queue worker, console or transport is running.

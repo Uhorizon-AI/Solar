@@ -176,6 +176,11 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
                        A3, tool, checks)
 
     if authority == A2:
+        if tool == "solar_task_approve" and (
+                "mandate" in arguments or arguments.get("authority") == A3):
+            return Verdict(False, "a3_refused",
+                           "solar_task_approve refuses an A3 mandate: activating "
+                           "work is never implicit.", A2, tool, checks)
         approval_id = str(arguments.get("approval_id") or "")
         checks.append(dict(check="approval_id_present", value=bool(approval_id)))
         if not approval_id:

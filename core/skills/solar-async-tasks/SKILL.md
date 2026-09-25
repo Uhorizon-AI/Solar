@@ -39,39 +39,15 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 
 ## Core Commands
 
-```bash
-# Setup runtime directories
-bash core/skills/solar-async-tasks/scripts/setup_async_tasks.sh
+The agent uses the MCP verbs. Each one asks for client approval. `solar_task_create` writes the task file until the runtime cutover; it does not talk to solar-state. `solar_task_approve`, `solar_task_cancel` and `solar_task_requeue` follow the active queue format: the task files while `STATE_FORMAT` is unset or `files`, and solar-state once it is `sqlite`. They do not change the task's object, scope or effect.
 
-# Create a task draft
-bash core/skills/solar-async-tasks/scripts/create.sh "My Task" "Do something useful"
+- `solar_task_create` — a draft file, or queued when `queued` is true
+- `solar_task_approve` — a draft, or a task already planned, to the queue. Refuses an A3 mandate. There is no separate plan verb
+- `solar_task_status` — read the queue
+- `solar_task_requeue` — error back to the queue
+- `solar_task_cancel` — a queued task becomes cancelled; an active task stays active and the request is recorded. Same result on the file queue and on solar-state
 
-# Plan and approve
-bash core/skills/solar-async-tasks/scripts/plan.sh <task_id>
-bash core/skills/solar-async-tasks/scripts/approve.sh <task_id> normal
-
-# List task state
-bash core/skills/solar-async-tasks/scripts/list.sh
-
-# Schedule or recur
-bash core/skills/solar-async-tasks/scripts/schedule.sh <task_id> "10:00" "1,2,3,4,5"
-bash core/skills/solar-async-tasks/scripts/set_recurring.sh <task_id>
-
-# Requeue after fixing an error
-bash core/skills/solar-async-tasks/scripts/requeue_from_error.sh <task_id>
-
-# Validate lifecycle and packaging
-bash core/skills/solar-async-tasks/scripts/validate_lifecycle.sh
-python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-async-tasks /tmp
-```
-
-Operator-only execution entrypoint:
-
-```bash
-bash core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh
-```
-
-Do not call `run_worker.sh` directly. `ensure_async_tasks.sh` is the only execution entrypoint, and normally `solar-system` calls it automatically.
+Host setup stays with `solar-system` and the LaunchAgent. The agent does not start the worker and does not drive the queue through the shell.
 
 ## System Activation
 
@@ -88,17 +64,16 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 bash core/skills/solar-system/scripts/check_orchestrator.sh
 ```
 
-When `solar-system` supervises `async-tasks`, the agent stops after `approve.sh`; the LaunchAgent picks up the queued task on its tick.
+When `solar-system` supervises `async-tasks`, the agent stops after `solar_task_approve`; the LaunchAgent picks up the queued task on its tick.
 
 Fallback rule: if `solar-system` is not supervising `async-tasks`, use `ensure_async_tasks.sh` once as documented fallback. Do not bypass the runtime with direct provider CLIs.
 
 ## Workflow
 
-1. Draft: `create.sh` writes to `drafts/`.
-2. Plan: `plan.sh` moves the task to `planned/`.
-3. Approve: `approve.sh` moves it to `queued/` with priority.
-4. Execute: `solar-system` calls `ensure_async_tasks.sh`, which starts one eligible queued task and executes it.
-5. Complete: success moves to `completed/`, recurrence may requeue, failure moves to `error/`.
+1. Draft: `solar_task_create` writes a draft file.
+2. Approve: `solar_task_approve` moves that draft to the queue. A task that is already planned uses the same verb. There is no verb that creates the plan.
+3. Execute: `solar-system` starts one eligible queued task and executes it.
+4. Complete: success moves to `completed/`, recurrence may requeue, failure moves to `error/`.
 
 For user-facing work, approval ends the conversational agent's execution role. The system runtime owns actual execution.
 
@@ -112,7 +87,7 @@ If the user asked for review before final edits, write a proposal or result arti
 
 ## Execution Consent
 
-**Prepare ≠ queue.** Draft/plan is preparation. `approve.sh` (or a scoped Telegram/n8n auto-queue ACK) is A2 only for the declared object/scope/effect.
+**Prepare ≠ queue.** A draft is preparation. `solar_task_approve` moves that draft to the queue and is A2 only for the declared object, scope and effect. An A3 mandate cannot approve.
 
 Queued or active tasks are already approved to execute their declared body and write declared artifacts/output paths.
 
@@ -223,7 +198,6 @@ After modifying this skill:
 
 ```bash
 uv run --project core/tests pytest core/tests/skills/solar-async-tasks -q
-bash core/skills/solar-async-tasks/scripts/validate_lifecycle.sh
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-async-tasks /tmp
 ```
 
@@ -235,6 +209,6 @@ solar client sync
 
 ## Cancellation
 
-Request cancellation with `python3 core/skills/solar-async-tasks/scripts/task_cancel.py <task-root> <task-id>`.
+Request cancellation with `solar_task_cancel`. An active task stays active until the worker stops it.
 The executor confirms `cancelled` only after process-group termination and cleanup.
 Voice OS D9 may queue explicit, bounded local preparation through the Host; the original request supplies authority, not the acknowledgement.

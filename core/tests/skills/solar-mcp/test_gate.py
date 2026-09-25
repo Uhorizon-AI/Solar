@@ -26,6 +26,22 @@ def test_reading_is_not_gated(solar_env):
     assert verdict.allowed and verdict.authority == A0
 
 
+def test_approve_under_a_mandate_is_refused(solar_env):
+    verdict = mcp_gate.preflight(
+        "solar_task_approve", {"task_id": "t1", "mandate": "nightly"}, registry())
+    assert not verdict.allowed
+    assert verdict.code == "a3_refused"
+    assert verdict.authority == A2
+
+
+def test_approve_cancel_and_requeue_need_approval(solar_env):
+    for name in ("solar_task_approve", "solar_task_cancel", "solar_task_requeue"):
+        verdict = mcp_gate.preflight(name, {"task_id": "t1"}, registry())
+        assert not verdict.allowed
+        assert verdict.code == "approval_required"
+        assert verdict.authority == A2
+
+
 def test_mutation_without_approval_is_refused(solar_env):
     verdict = mcp_gate.preflight("solar_task_create", {"title": "X"}, registry())
     assert not verdict.allowed

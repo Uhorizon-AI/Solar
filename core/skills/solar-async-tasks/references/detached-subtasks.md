@@ -1,6 +1,6 @@
 # Reference: Detached Subtasks (Fire & Forget)
 
-> **Retired pattern.** It relied on the provider calling `create.sh` itself and on the
+> **Retired pattern.** It relied on the provider creating queue files itself and on the
 > worker discovering new tasks by diffing the queue before and after an execution. The
 > provider runs sandboxed and cannot write into `SOLAR_TASK_ROOT`, and that diff was
 > withdrawn: the worker now creates the children it was asked for, from a `<subtasks>`
@@ -52,39 +52,7 @@ Act as <agent>. Goal: dispatch the following tasks autonomously.
 
 ## Tasks to create
 
-For each task, write the prompt to a temp file and call create.sh:
-
-```bash
-# Task A
-cat > /tmp/task-a.md <<'BODY'
-<complete instructions for task A>
-
-When done, find this task file by Task ID inside <runtime root>/async-tasks/
-and write your result under ## Result:
-  TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
-BODY
-
-bash core/skills/solar-async-tasks/scripts/create.sh \
-  --queued \
-  --priority normal \
-  --body-file /tmp/task-a.md \
-  "<Task A title>"
-
-# Task B
-cat > /tmp/task-b.md <<'BODY'
-<complete instructions for task B>
-
-When done, find this task file by Task ID inside <runtime root>/async-tasks/
-and write your result under ## Result:
-  TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
-BODY
-
-bash core/skills/solar-async-tasks/scripts/create.sh \
-  --queued \
-  --priority normal \
-  --body-file /tmp/task-b.md \
-  "<Task B title>"
-```
+Do not follow this pattern. A new task is `solar_task_create` with `queued: true`. Children that must be waited on are declared in `task-with-subtasks.md`, not dispatched from here.
 
 ## Result
 

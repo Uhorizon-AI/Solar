@@ -63,7 +63,7 @@ Rules, all of them hard:
 A malformed block, an unknown provider, a key that is not allowed or more than five children creates **nothing** and sends the task to `error/` with the reason named. Half a batch is never created.
 
 **Critical rules:**
-- Do not run `create.sh` and do not write anything into the task queue
+- Do not write anything into the task queue
 - Do not write the final artifact in execution 1 — results are not available yet
 - Do not call `run_router.py` directly — it bypasses the worker and providers fail without auth
 - Do not touch any gate or state file in execution 1
@@ -74,7 +74,7 @@ A malformed block, an unknown provider, a key that is not allowed or more than f
 |---|---|
 | `title`, `body`, `provider` | The provider, inside the contract above |
 | `object`, `scope`, `effect` | The worker, inherited from the parent unchanged, in the frontmatter and as an `## Object` section at the top of the child's body — frontmatter is stripped before the prompt, so the section is what the child actually reads |
-| `parent_task_id`, `subtask_key` | The worker, written by `create.sh` in the same atomic write as the rest of the file |
+| `parent_task_id`, `subtask_key` | The worker, written in the same atomic write as the rest of the task |
 | `priority` | The worker: the parent's |
 | Origin and notification | The worker: **none**. Only the parent notifies the chat |
 | `delivery_expected` | The worker: **no**. The delivery belongs to the parent |

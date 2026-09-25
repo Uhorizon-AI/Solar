@@ -38,7 +38,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 _PATHS_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-paths" / "scripts"
 if str(_PATHS_SCRIPTS) not in sys.path:
@@ -431,6 +431,19 @@ def _check_field(key: str, value: str) -> None:
         raise FormatError(f"value for {key!r} spans lines; import the document instead")
 
 
+def _strip_execution_error(body: str) -> str:
+    """Drop `## Execution Error` and everything after it.
+
+    Same cut `requeue_from_error.sh` makes, so the next execution reads the
+    prompt and not the failure it is being asked to run again.
+    """
+    lines = body.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.rstrip("\r\n") == "## Execution Error":
+            return "".join(lines[:index])
+    return body
+
+
 def _check_id(task_id: str) -> str:
     """A task id ends up as a file name on the way out: no separators, no dots
     that climb, nothing empty."""
@@ -608,9 +621,16 @@ class Session:
 
     def task_transition(self, task_id: str, to_status: str,
                         expected_from: Optional[str | Iterable[str]] = None,
-                        actor: Optional[str] = None, **columns: Any) -> str:
+                        actor: Optional[str] = None,
+                        rewrite_body: Optional[Callable[[str], str]] = None,
+                        **columns: Any) -> str:
         """Move a task. Refuses a move the table does not allow, or a task that is
-        no longer where the caller saw it. Returns the status it came from."""
+        no longer where the caller saw it. Returns the status it came from.
+
+        `rewrite_body`, when given, runs on the stored body inside this same
+        transaction, so a status change and a body edit commit together or not
+        at all.
+        """
         allowed_from = ({expected_from} if isinstance(expected_from, str)
                         else set(expected_from) if expected_from else None)
         with _transaction(self.conn) as conn:
@@ -625,11 +645,94 @@ class Session:
                                 (current, to_status)).fetchone():
                 raise TransitionRefused(f"{current} -> {to_status} is not an allowed transition")
             pairs = json.loads(row["frontmatter"])
+            body = rewrite_body(row["body"]) if rewrite_body is not None else row["body"]
             _set_pair(pairs, "status", f" {to_status}")
-            _write_task(conn, task_id, to_status, pairs, row["body"], insert=False, extra=columns)
+            _write_task(conn, task_id, to_status, pairs, body, insert=False, extra=columns)
             conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                          "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, to_status, actor))
         return current
+
+    def _unchanged_scope(self, task_id: str, before: tuple) -> None:
+        row = self.conn.execute(
+            "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None or tuple(row) != before:
+            raise StateError(f"{task_id}: object, scope or effect changed")
+
+    def task_approve(self, task_id: str, actor: Optional[str] = None) -> str:
+        """draft or planned -> queued. Never rewrites object, scope or effect.
+
+        New work is approved from draft. A task already in planned, including
+        one that was there before this verb existed, uses the same move.
+        """
+        row = self.conn.execute(
+            "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None:
+            raise TransitionRefused(f"no task {task_id}")
+        before = tuple(row)
+        came = self.task_transition(task_id, "queued", expected_from=("draft", "planned"),
+                                    actor=actor or "approve")
+        self._unchanged_scope(task_id, before)
+        return came
+
+    def task_requeue(self, task_id: str, actor: Optional[str] = None) -> str:
+        """error -> queued, and drop `## Execution Error` plus everything after it.
+
+        The status change and the body cut commit in one transaction. Object,
+        scope and effect stay as they were, so the next execution reads the
+        original prompt.
+        """
+        row = self.conn.execute(
+            "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None:
+            raise TransitionRefused(f"no task {task_id}")
+        before = tuple(row)
+        came = self.task_transition(task_id, "queued", expected_from="error",
+                                    actor=actor or "requeue",
+                                    rewrite_body=_strip_execution_error)
+        self._unchanged_scope(task_id, before)
+        return came
+
+    def task_cancel(self, task_id: str, actor: Optional[str] = None) -> dict:
+        """Cancel a queued task, or record the request for an active one.
+
+        Only `queued` and `active`, the same limit as the plan. A queued task
+        moves to cancelled. An active task stays active until the worker stops
+        it. The request and the status change, when there is one, are one
+        transaction: a refused transition leaves no request behind. Object,
+        scope and effect are left as they were.
+        """
+        with _transaction(self.conn) as conn:
+            row = conn.execute(
+                "SELECT status, frontmatter, body, object, scope, effect FROM tasks WHERE id = ?",
+                (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            status = row["status"]
+            if status not in ("queued", "active"):
+                raise TransitionRefused(f"{task_id} is {status}, not queued/active")
+            before = (row["object"], row["scope"], row["effect"])
+            conn.execute(
+                "INSERT OR IGNORE INTO cancellation_requests (task_id, requested_at) VALUES (?, ?)",
+                (task_id, _now()))
+            task_status = status
+            if status == "queued":
+                if not conn.execute(
+                        "SELECT 1 FROM transitions WHERE from_status = ? AND to_status = ?",
+                        ("queued", "cancelled")).fetchone():
+                    raise TransitionRefused("queued -> cancelled is not an allowed transition")
+                pairs = json.loads(row["frontmatter"])
+                _set_pair(pairs, "status", " cancelled")
+                _write_task(conn, task_id, "cancelled", pairs, row["body"], insert=False)
+                conn.execute(
+                    "INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (task_id, _now(), "queued", "cancelled", actor or "cancel"))
+                task_status = "cancelled"
+            after = conn.execute(
+                "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if after is None or tuple(after) != before:
+                raise StateError(f"{task_id}: object, scope or effect changed")
+        return dict(task_id=task_id, status="cancellation_requested", task_status=task_status)
 
     def task_claim(self, task_id: str, worker: str) -> bool:
         """queued -> active, atomically. True: it is yours. False: it exists and is no
@@ -802,6 +905,26 @@ class Session:
         )
 
 
+def _open_ready(base: Path, auto_backup: bool) -> Session:
+    """Open a sqlite session. The caller already holds the state lock."""
+    path = db_path(base)
+    if not path.is_file():
+        raise StateUnavailable(f"{path} is missing although the format says sqlite")
+    conn = _connect(path)
+    try:
+        version = _schema_version(conn)
+        if version != SCHEMA_VERSION:
+            raise StateUnavailable(
+                f"state schema v{version}, this code speaks v{SCHEMA_VERSION}: "
+                "the schema migration has not run")
+        if auto_backup:
+            backup_if_due(conn, base)
+        return Session(conn, base)
+    except Exception:
+        conn.close()
+        raise
+
+
 @contextmanager
 def session(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT,
             auto_backup: bool = True) -> Iterator[Session]:
@@ -813,21 +936,38 @@ def session(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT,
             raise StateUnavailable(
                 f"runtime state format is {fmt or 'unset'}, not sqlite: "
                 "this runtime has not been migrated to solar-state")
-        path = db_path(base)
-        if not path.is_file():
-            raise StateUnavailable(f"{path} is missing although the format says sqlite")
-        conn = _connect(path)
+        store = _open_ready(base, auto_backup)
         try:
-            version = _schema_version(conn)
-            if version != SCHEMA_VERSION:
-                raise StateUnavailable(
-                    f"state schema v{version}, this code speaks v{SCHEMA_VERSION}: "
-                    "the schema migration has not run")
-            if auto_backup:
-                backup_if_due(conn, base)
-            yield Session(conn, base)
+            yield store
         finally:
-            conn.close()
+            store.conn.close()
+
+
+@contextmanager
+def operate(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT,
+            auto_backup: bool = True) -> Iterator[tuple]:
+    """Shared lock for a caller that still has a file queue and a sqlite queue.
+
+    The format is read inside the lock, and the lock is held until the caller
+    finishes the file write or the sqlite write. `unset` and `files` yield
+    `(format, None)`. `sqlite` yields `(sqlite, Session)`. Any other marker
+    refuses: it is not treated as the file queue. A cutover cannot take the
+    exclusive lock until this returns.
+    """
+    base = _root(root)
+    with _flock(base, exclusive=False, timeout=timeout):
+        fmt = read_format(base)
+        if fmt not in (None, FORMAT_FILES, FORMAT_SQLITE):
+            raise StateUnavailable(
+                f"runtime state format is {fmt!r}: expected unset, files or sqlite")
+        if fmt != FORMAT_SQLITE:
+            yield fmt, None
+            return
+        store = _open_ready(base, auto_backup)
+        try:
+            yield FORMAT_SQLITE, store
+        finally:
+            store.conn.close()
 
 
 def describe(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT) -> dict:
@@ -963,6 +1103,8 @@ def _cli(argv: list[str]) -> int:
     claim = task.add_parser("claim")
     claim.add_argument("id")
     claim.add_argument("--worker", required=True)
+    for name in ("approve", "cancel", "requeue"):
+        task.add_parser(name).add_argument("id")
 
     audit = sub.add_parser("audit").add_subparsers(dest="cmd", required=True)
     audit.add_parser("append", help="one JSON row on stdin")
@@ -1014,6 +1156,14 @@ def _cli(argv: list[str]) -> int:
                     won = s.task_claim(args.id, args.worker)
                     _print(dict(id=args.id, claimed=won))
                     return 0 if won else 3
+                elif args.cmd == "approve":
+                    came = s.task_approve(args.id)
+                    _print(dict(id=args.id, from_status=came, to_status="queued"))
+                elif args.cmd == "requeue":
+                    came = s.task_requeue(args.id)
+                    _print(dict(id=args.id, from_status=came, to_status="queued"))
+                elif args.cmd == "cancel":
+                    _print(s.task_cancel(args.id))
             elif args.area == "audit":
                 if args.cmd == "append":
                     _print(dict(seq=s.audit_append(json.loads(sys.stdin.read()))))

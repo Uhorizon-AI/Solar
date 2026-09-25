@@ -4,8 +4,11 @@
     tools      verbs. Every call goes through `mcp_gate.preflight` first, and a
                refusal is produced by this handler, not by the caller's manners.
 
-The verbs wrap what already exists —`solar-async-tasks`' `create.sh`, the task
-files, the registered action skills— instead of reimplementing any of it.
+The verbs wrap what already exists. `solar_task_create` writes the task file
+through the queue script until the runtime cutover. `solar_task_approve`,
+`solar_task_cancel` and `solar_task_requeue` follow the active format: the
+queue scripts while `STATE_FORMAT` is unset or `files`, and solar-state once
+it is `sqlite`. Approve is one move, draft to the queue.
 
 Speaks JSON-RPC 2.0 over stdio (MCP): `initialize`, `resources/list`,
 `resources/read`, `tools/list`, `tools/call`, `ping`.
@@ -32,7 +35,7 @@ import sys
 from pathlib import Path
 
 _SKILLS = Path(__file__).resolve().parents[2]
-for _extra in ("solar-app/scripts", "solar-paths/scripts"):
+for _extra in ("solar-app/scripts", "solar-paths/scripts", "solar-state/scripts"):
     _path = _SKILLS / _extra
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
@@ -84,6 +87,32 @@ TOOLS = {
             queued=dict(type="boolean", description="Queue it directly instead of drafts/."),
             approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
         ), required=["title"], additionalProperties=False),
+    ),
+    "solar_task_approve": dict(
+        authority=A2,
+        description=("Move a draft, or a task that is already planned, to the queue. "
+                     "A2 only: an A3 mandate cannot activate work. Does not change "
+                     "the task's object, scope or effect."),
+        inputSchema=dict(type="object", properties=dict(
+            task_id=dict(type="string"),
+            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
+        ), required=["task_id"], additionalProperties=False),
+    ),
+    "solar_task_cancel": dict(
+        authority=A2,
+        description=("Request cancellation of one task. Does not change its object, scope or effect."),
+        inputSchema=dict(type="object", properties=dict(
+            task_id=dict(type="string"),
+            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
+        ), required=["task_id"], additionalProperties=False),
+    ),
+    "solar_task_requeue": dict(
+        authority=A2,
+        description=("Move a task from error back to the queue. Does not change its object, scope or effect."),
+        inputSchema=dict(type="object", properties=dict(
+            task_id=dict(type="string"),
+            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
+        ), required=["task_id"], additionalProperties=False),
     ),
     "solar_telegram_send": dict(
         authority=A2,
@@ -237,6 +266,133 @@ def _do_task_create(arguments: dict) -> dict:
     return dict(created=True, output=(proc.stdout or "").strip()[:1000])
 
 
+def _refuse_a3(arguments: dict) -> None:
+    if "mandate" in arguments or arguments.get("authority") == A3:
+        raise RuntimeError(
+            "solar_task_approve refuses an A3 mandate: activating work is never implicit")
+
+
+def _run_queue(cmd: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
+    merged = os.environ.copy()
+    if env:
+        merged.update(env)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                          cwd=str(workspace()), env=merged)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "queue script failed").strip()[:500])
+    return proc
+
+
+def _files_approve(task_id: str) -> str:
+    """draft or planned -> queued on the file queue. Same contract as task_approve.
+
+    Does not call approve.sh: that script refuses a draft and rewrites priority.
+    This move only changes the status line, so object, scope and effect stay.
+    """
+    lib = str(ASYNC_SCRIPTS / "task_lib.sh")
+    proc = _run_queue(["bash", "-c", r'''
+set -euo pipefail
+source "$SOLAR_QUEUE_LIB"
+file=$(find_task "$SOLAR_TASK_ID")
+if [[ -z "$file" ]]; then
+  echo "no task $SOLAR_TASK_ID" >&2
+  exit 2
+fi
+status=$(get_status "$file")
+if [[ "$status" != "draft" && "$status" != "planned" ]]; then
+  echo "$SOLAR_TASK_ID is ${status:-unknown}, not draft/planned" >&2
+  exit 2
+fi
+ensure_dirs
+tmp=$(mktemp)
+awk -v from="$status" 'BEGIN {done=0} $0 ~ "^status: \"?" from "\"?$" && !done {print "status: queued"; done=1; next} {print}' "$file" > "$tmp"
+mv "$tmp" "$file"
+mv "$file" "$DIR_QUEUED/$(basename "$file")"
+printf '%s' "$status"
+'''], env={"SOLAR_QUEUE_LIB": lib, "SOLAR_TASK_ID": task_id})
+    return proc.stdout.strip()
+
+
+def _do_task_approve(arguments: dict) -> dict:
+    import solar_state
+
+    _refuse_a3(arguments)
+    task_id = str(arguments["task_id"])
+    with solar_state.operate() as (fmt, store):
+        if fmt == solar_state.FORMAT_SQLITE:
+            came = store.task_approve(task_id)
+        else:
+            came = _files_approve(task_id)
+    return dict(approved=True, id=task_id, from_status=came, to_status="queued")
+
+
+def _files_cancel(task_id: str) -> str:
+    """Same end state as task_cancel: queued becomes cancelled, active stays active.
+
+    Does not call task_cancel.py: that CLI only writes the request and leaves a
+    queued task queued. The marker and the move happen in this one step.
+    """
+    lib = str(ASYNC_SCRIPTS / "task_lib.sh")
+    proc = _run_queue(["bash", "-c", r'''
+set -euo pipefail
+source "$SOLAR_QUEUE_LIB"
+file=$(find_task "$SOLAR_TASK_ID")
+if [[ -z "$file" ]]; then
+  echo "no task $SOLAR_TASK_ID" >&2
+  exit 2
+fi
+status=$(get_status "$file")
+if [[ "$status" != "queued" && "$status" != "active" ]]; then
+  echo "$SOLAR_TASK_ID is ${status:-unknown}, not queued/active" >&2
+  exit 2
+fi
+if [[ "$status" == "queued" ]]; then
+  tmp=$(mktemp)
+  awk 'BEGIN {done=0} /^status: "?queued"?$/ && !done {print "status: cancelled"; done=1; next} {print}' "$file" > "$tmp"
+  mv "$tmp" "$file"
+  mkdir -p "$DIR_CANCELLED"
+  mv "$file" "$DIR_CANCELLED/$(basename "$file")"
+  task_status=cancelled
+else
+  task_status=active
+fi
+python3 -c 'import json, os
+from pathlib import Path
+root = Path(os.environ["SOLAR_TASK_ROOT"])
+task_id = os.environ["SOLAR_TASK_ID"]
+path = root / "cancellation" / (task_id + ".json")
+path.parent.mkdir(parents=True, exist_ok=True)
+if not path.exists():
+    path.write_text(json.dumps({"task_id": task_id, "status": "cancellation_requested"}))'
+printf '%s' "$task_status"
+'''], env={"SOLAR_QUEUE_LIB": lib, "SOLAR_TASK_ID": task_id})
+    return proc.stdout.strip()
+
+
+def _do_task_cancel(arguments: dict) -> dict:
+    import solar_state
+
+    task_id = str(arguments["task_id"])
+    with solar_state.operate() as (fmt, store):
+        if fmt == solar_state.FORMAT_SQLITE:
+            return store.task_cancel(task_id)
+        task_status = _files_cancel(task_id)
+    return dict(task_id=task_id, status="cancellation_requested", task_status=task_status)
+
+
+def _do_task_requeue(arguments: dict) -> dict:
+    import solar_state
+
+    task_id = str(arguments["task_id"])
+    with solar_state.operate() as (fmt, store):
+        if fmt == solar_state.FORMAT_SQLITE:
+            came = store.task_requeue(task_id)
+        else:
+            _run_queue(["bash", str(ASYNC_SCRIPTS / "requeue_from_error.sh"), task_id])
+            came = "error"
+    return dict(requeued=True, id=task_id, from_status=came, to_status="queued")
+
+
 def _telegram_chat_allowed(chat_id: str, env: dict) -> bool:
     """Same allowlist rule the task notifier uses: a named chat, or the default."""
     allowed = (env.get("TELEGRAM_ALLOWED_CHAT_IDS") or "").strip()
@@ -306,6 +462,9 @@ def _do_action_run(arguments: dict) -> dict:
 HANDLERS = {
     "solar_task_status": _do_task_status,
     "solar_task_create": _do_task_create,
+    "solar_task_approve": _do_task_approve,
+    "solar_task_cancel": _do_task_cancel,
+    "solar_task_requeue": _do_task_requeue,
     "solar_telegram_send": _do_telegram_send,
     "solar_action_run": _do_action_run,
 }

@@ -99,6 +99,81 @@ def test_upgrade_copies_an_existing_base_first(ready):
 
 # --- tasks -------------------------------------------------------------------
 
+def test_approve_cancel_and_requeue_keep_scope(ready):
+    body = (
+        "Do the work.\n\n"
+        "## Keep this\n\n"
+        "The prompt the next run must still see.\n\n"
+        "## Execution Error\n"
+        "- error: disk full\n\n"
+        "## Do not carry this\n"
+        "stale failure\n"
+    )
+    with session(ready, auto_backup=False) as s:
+        draft = s.task_create(
+            [("title", '"t"'), ("object", '"the plan"'), ("scope", '"one file"'),
+             ("effect", '"a draft saved"')],
+            body, status="draft")
+        planned = s.task_create(
+            [("title", '"p"'), ("object", '"kept"'), ("scope", '"one"'), ("effect", '"same"')],
+            status="planned")
+        assert s.task_approve(planned) == "planned"
+        assert s.task_get(planned)["status"] == "queued"
+        assert (s.task_get(planned)["object"], s.task_get(planned)["scope"],
+                s.task_get(planned)["effect"]) == ("kept", "one", "same")
+        assert s.task_approve(draft) == "draft"
+        approved = s.task_get(draft)
+        assert approved["status"] == "queued"
+        assert (approved["object"], approved["scope"], approved["effect"]) == (
+            "the plan", "one file", "a draft saved")
+        assert "disk full" in approved["body"]
+
+        s.task_transition(draft, "active")
+        s.task_transition(draft, "error")
+        assert s.task_requeue(draft) == "error"
+        requeued = s.task_get(draft)
+        assert requeued["status"] == "queued"
+        assert requeued["object"] == "the plan"
+        assert "The prompt the next run must still see." in requeued["body"]
+        assert "## Execution Error" not in requeued["body"]
+        assert "disk full" not in requeued["body"]
+        assert "stale failure" not in requeued["body"]
+        exported = s.task_export(draft)
+        assert "\n## Execution Error\n" not in exported
+
+        s.task_transition(draft, "active")
+        held = s.task_cancel(draft)
+        assert held["status"] == "cancellation_requested"
+        assert s.task_get(draft)["status"] == "active"
+        assert s.cancellation_requested(draft)
+        assert s.task_get(draft)["effect"] == "a draft saved"
+
+        other = s.task_create([("title", '"q"'), ("object", '"o"')], status="queued")
+        done = s.task_cancel(other)
+        assert done["task_status"] == "cancelled"
+        assert s.task_get(other)["object"] == "o"
+        assert s.cancellation_requested(other)
+
+        planned = s.task_create([("title", '"p"')], status="planned")
+        with pytest.raises(TransitionRefused, match="not queued/active"):
+            s.task_cancel(planned)
+        assert not s.cancellation_requested(planned)
+        with pytest.raises(TransitionRefused, match="no task"):
+            s.task_approve("missing")
+
+
+def test_cancel_rolls_back_when_the_transition_is_refused(ready):
+    with session(ready, auto_backup=False) as s:
+        tid = s.task_create([("title", '"q"'), ("object", '"o"')], status="queued")
+        s.conn.execute(
+            "DELETE FROM transitions WHERE from_status = 'queued' AND to_status = 'cancelled'")
+        with pytest.raises(TransitionRefused, match="queued -> cancelled"):
+            s.task_cancel(tid)
+        assert s.task_get(tid)["status"] == "queued"
+        assert s.task_get(tid)["object"] == "o"
+        assert not s.cancellation_requested(tid)
+
+
 def test_transitions_follow_the_table(ready):
     with session(ready, auto_backup=False) as s:
         tid = s.task_create([("title", '"t"')], status="draft")

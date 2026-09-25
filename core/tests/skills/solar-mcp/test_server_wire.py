@@ -7,10 +7,15 @@ read the rules.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
+
+import pytest
 
 import mcp_approve
 import mcp_probe
+import mcp_server
 
 
 def client(solar_env):
@@ -57,6 +62,7 @@ def test_tools_are_listed(solar_env):
     with client(solar_env) as probe:
         names = {row["name"] for row in probe.request("tools/list")["result"]["tools"]}
         assert names == {"solar_task_status", "solar_task_create",
+                         "solar_task_approve", "solar_task_cancel", "solar_task_requeue",
                          "solar_telegram_send", "solar_action_run"}
 
 
@@ -143,6 +149,184 @@ def test_every_call_leaves_a_decision_in_the_gate_log(solar_env):
     assert decisions[-1]["allowed"] is False
     # The approval id never reaches the log.
     assert "approval_id" not in decisions[-1]["arguments"]
+
+
+def test_create_then_approve_moves_the_same_draft_to_the_queue(solar_env):
+    """The public path: solar_task_create, then solar_task_approve. No plan step."""
+    import re
+    granted = mcp_approve.grant(
+        "solar_task_create",
+        {"title": "Ship it", "description": "Do the work."},
+        900, "wire test")
+    with client(solar_env) as probe:
+        created = probe.call_tool("solar_task_create", {
+            "title": "Ship it",
+            "description": "Do the work.",
+            "approval_id": granted["approval_id"],
+        })
+    assert created["result"]["isError"] is False, created
+    drafts = list((solar_env.tasks / "drafts").glob("*.md"))
+    assert len(drafts) == 1
+    original = drafts[0].read_text(encoding="utf-8")
+    task_id = re.search(r'^id: "?([^"\n]+)', original, re.M).group(1)
+    approved = mcp_approve.grant("solar_task_approve", {"task_id": task_id}, 900, "wire test")
+    with client(solar_env) as probe:
+        answer = probe.call_tool("solar_task_approve", {
+            "task_id": task_id,
+            "approval_id": approved["approval_id"],
+        })
+    assert answer["result"]["isError"] is False, answer
+    result = payload(answer)["result"]
+    assert result["from_status"] == "draft"
+    assert result["to_status"] == "queued"
+    assert list((solar_env.tasks / "drafts").glob("*.md")) == []
+    queued = list((solar_env.tasks / "queued").glob("*.md"))
+    assert len(queued) == 1
+    text = queued[0].read_text(encoding="utf-8")
+    assert "status: queued" in text
+    assert "Do the work." in text
+    assert 'title:' in text and "Ship it" in text
+
+
+def test_an_already_planned_file_is_approved(solar_env):
+    import re
+    created = mcp_server._do_task_create({"title": "Already planned", "description": "x"})
+    task_id = re.search(r"ID: (\S+)", created["output"]).group(1)
+    draft = next((solar_env.tasks / "drafts").glob("*.md"))
+    planned = solar_env.tasks / "planned" / draft.name
+    planned.parent.mkdir(parents=True, exist_ok=True)
+    planned.write_text(
+        draft.read_text(encoding="utf-8").replace("status: draft", "status: planned", 1),
+        encoding="utf-8")
+    draft.unlink()
+    result = mcp_server._do_task_approve({"task_id": task_id})
+    assert result == dict(approved=True, id=task_id, from_status="planned", to_status="queued")
+    assert not planned.exists()
+    queued = next((solar_env.tasks / "queued").glob("*.md"))
+    text = queued.read_text(encoding="utf-8")
+    assert "status: queued" in text
+    assert "Already planned" in text
+
+
+def _cancel(solar_env, task_id: str) -> dict:
+    granted = mcp_approve.grant("solar_task_cancel", {"task_id": task_id}, 900, "wire test")
+    with client(solar_env) as probe:
+        answer = probe.call_tool("solar_task_cancel", {
+            "task_id": task_id,
+            "approval_id": granted["approval_id"],
+        })
+    assert answer["result"]["isError"] is False, answer
+    return payload(answer)["result"]
+
+
+def _queued_file(solar_env) -> tuple[str, Path]:
+    import re
+    args = {"title": "Stop me", "queued": True}
+    granted = mcp_approve.grant("solar_task_create", args, 900, "wire test")
+    with client(solar_env) as probe:
+        created = probe.call_tool("solar_task_create", dict(args, approval_id=granted["approval_id"]))
+    assert created["result"]["isError"] is False, created
+    queued = list((solar_env.tasks / "queued").glob("*.md"))
+    assert len(queued) == 1
+    task_id = re.search(r'^id: "?([^"\n]+)', queued[0].read_text(encoding="utf-8"), re.M).group(1)
+    return task_id, queued[0]
+
+
+def test_cancel_has_one_contract_on_files_and_on_sqlite(solar_env):
+    """A queued task becomes cancelled, an active one stays active, in both formats."""
+    import json as _json
+    import solar_state
+
+    queued_id, queued_path = _queued_file(solar_env)
+    queued_files = _cancel(solar_env, queued_id)
+    assert queued_files == dict(task_id=queued_id, status="cancellation_requested",
+                                task_status="cancelled")
+    assert not queued_path.exists()
+    cancelled = solar_env.tasks / "cancelled" / queued_path.name
+    assert "status: cancelled" in cancelled.read_text(encoding="utf-8")
+    marker = _json.loads((solar_env.tasks / "cancellation" / f"{queued_id}.json").read_text())
+    assert marker["status"] == "cancellation_requested"
+
+    active_id, active_path = _queued_file(solar_env)
+    active_dir = solar_env.tasks / "active"
+    active_dir.mkdir(parents=True, exist_ok=True)
+    moved = active_dir / active_path.name
+    moved.write_text(active_path.read_text(encoding="utf-8").replace(
+        "status: queued", "status: active", 1), encoding="utf-8")
+    active_path.unlink()
+    active_files = _cancel(solar_env, active_id)
+    assert active_files == dict(task_id=active_id, status="cancellation_requested",
+                                task_status="active")
+    assert "status: active" in moved.read_text(encoding="utf-8")
+    assert (solar_env.tasks / "cancellation" / f"{active_id}.json").is_file()
+
+    with solar_state.cutover(solar_env.runtime) as cut:
+        cut.upgrade_schema()
+        cut.set_format("sqlite")
+    with solar_state.session(solar_env.runtime, auto_backup=False) as store:
+        queued_sql = store.task_create([("title", '"Q"'), ("object", '"o"')], status="queued")
+        active_sql = store.task_create([("title", '"A"')], status="queued")
+        store.task_transition(active_sql, "active")
+    queued_base = _cancel(solar_env, queued_sql)
+    active_base = _cancel(solar_env, active_sql)
+    assert queued_base == dict(task_id=queued_sql, status="cancellation_requested",
+                               task_status="cancelled")
+    assert active_base == dict(task_id=active_sql, status="cancellation_requested",
+                               task_status="active")
+    assert set(queued_files) == set(queued_base) == set(active_files) == set(active_base)
+    with solar_state.session(solar_env.runtime, auto_backup=False) as store:
+        assert store.task_get(queued_sql)["status"] == "cancelled"
+        assert store.task_get(queued_sql)["object"] == "o"
+        assert store.task_get(active_sql)["status"] == "active"
+        assert store.cancellation_requested(queued_sql)
+        assert store.cancellation_requested(active_sql)
+
+
+def test_an_unknown_format_is_refused(solar_env):
+    import solar_state
+    mcp_server._do_task_create({"title": "Stay a draft", "description": "x"})
+    draft = next((solar_env.tasks / "drafts").glob("*.md"))
+    (solar_env.runtime / "STATE_FORMAT").write_text("banana\n", encoding="utf-8")
+    with pytest.raises(solar_state.StateUnavailable, match="banana"):
+        mcp_server._do_task_approve({"task_id": "unused"})
+    assert draft.is_file()
+    assert list((solar_env.tasks / "queued").glob("*.md")) == []
+
+
+def test_a_cutover_waits_for_an_mcp_file_operation(solar_env, monkeypatch):
+    import re
+    import solar_state
+    created = mcp_server._do_task_create({"title": "Hold the lock", "description": "x"})
+    task_id = re.search(r"ID: (\S+)", created["output"]).group(1)
+    started, release = threading.Event(), threading.Event()
+    finished: list[float] = []
+    real = mcp_server._files_approve
+
+    def slow(held_id: str) -> str:
+        started.set()
+        assert release.wait(30)
+        result = real(held_id)
+        finished.append(time.monotonic())
+        return result
+
+    monkeypatch.setattr(mcp_server, "_files_approve", slow)
+    holder = threading.Thread(target=lambda: mcp_server._do_task_approve({"task_id": task_id}))
+    holder.start()
+    assert started.wait(30)
+    acquired: list[float] = []
+
+    def take() -> None:
+        with solar_state.cutover(timeout=30):
+            acquired.append(time.monotonic())
+
+    cutter = threading.Thread(target=take)
+    cutter.start()
+    time.sleep(0.4)
+    assert acquired == []
+    release.set()
+    holder.join(30)
+    cutter.join(30)
+    assert finished and acquired and finished[0] <= acquired[0]
 
 
 def _fingerprint(path: Path):
