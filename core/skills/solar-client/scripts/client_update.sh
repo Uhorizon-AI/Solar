@@ -29,9 +29,11 @@ SOLAR_AI_PROVIDER_PRIORITY in the workspace .env (gemini→agy) before apply.
 The first router run after a legacy updater performs the same one-time migration.
 --repair only touches .solar/settings.json (migrates legacy manifest.json).
 
-When the installed version changes, restarts the long-running services that are
-already running (transport gateway, console on :9000) so they load the new code.
-Nothing that is stopped gets started. The async-tasks worker needs no restart.
+When the installed version changes, the runtime is migrated into state.sqlite
+(stop, cutover, start) and the long-running services that were already running
+are started again so they load the new code. Nothing that was stopped gets
+started. --check does not migrate. --no-restart migrates and leaves services
+stopped. The async-tasks worker needs no restart.
 
 On macOS, after a successful update, reports LaunchAgent SOLAR_ROOT binding (read-only
 status). Use --reinstall-launchagent on a real update (not with --check) to rewrite
@@ -248,19 +250,13 @@ if [[ "$use_git" != true || "$cur_ver $cur_commit" != "$new_ver $new_commit" ]];
   version_changed=true
 fi
 echo ""
+export SOLAR_CLIENT_CUTOVER_DONE=1
+if ! solar_client_state_cutover "$INSTALL_ROOT" "$RESTART_SERVICES"; then
+  restart_failed=1
+fi
 case "$RESTART_SERVICES" in
   never)
-    echo "Services: not restarted (--no-restart). Running services keep the old code until restarted."
-    ;;
-  always)
-    solar_client_restart_running_services "$INSTALL_ROOT" || restart_failed=1
-    ;;
-  auto)
-    if [[ "$version_changed" == true ]]; then
-      solar_client_restart_running_services "$INSTALL_ROOT" || restart_failed=1
-    else
-      echo "Services: version unchanged; not restarted (use --restart to force)"
-    fi
+    echo "Services: left stopped after the state cutover (--no-restart)."
     ;;
 esac
 

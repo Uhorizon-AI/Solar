@@ -1354,14 +1354,106 @@ solar_client_running_services() {
   fi
 }
 
+# Stop what Solar starts, migrate the runtime, then start what was running.
+# A failed migration leaves those services stopped. restart_mode "never" migrates
+# and does not start them. Args: install_root [restart_mode].
+# Test hooks: SOLAR_CLIENT_CUTOVER_SCRIPT, SOLAR_CLIENT_CUTOVER_ROOT,
+# SOLAR_CLIENT_GATEWAY_STOP_SCRIPT, SOLAR_CLIENT_LAUNCHCTL, and the restart hooks.
+solar_client_state_cutover() {
+  local install_root="$1"
+  local restart_mode="${2:-auto}"
+  local state_skill="solar-state"
+  local cutover_py gateway_stop stop_script start_script setup_script
+  local services=" " service failed=0 launchagent_was_loaded=false
+  local launchagent_label plist
+  cutover_py="${SOLAR_CLIENT_CUTOVER_SCRIPT:-${install_root}/core/skills/${state_skill}/scripts/solar_state_cutover.py}"
+  gateway_stop="${SOLAR_CLIENT_GATEWAY_STOP_SCRIPT:-${install_root}/core/skills/solar-gateway/scripts/stop_transport_gateway.sh}"
+  stop_script="${SOLAR_CLIENT_HOST_STOP_SCRIPT:-${install_root}/core/skills/solar-app/scripts/stop_host.sh}"
+  start_script="${SOLAR_CLIENT_HOST_START_SCRIPT:-${install_root}/core/skills/solar-app/scripts/start_host.sh}"
+  setup_script="${SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT:-${install_root}/core/skills/solar-gateway/scripts/setup_transport_gateway.sh}"
+  launchagent_label="${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}"
+
+  while IFS= read -r service; do
+    [[ -n "$service" ]] && services+="$service "
+  done < <(solar_client_running_services "$install_root")
+
+  if [[ "$(uname -s)" == "Darwin" || -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
+    if [[ -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
+      if bash "$SOLAR_CLIENT_LAUNCHCTL" print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1; then
+        launchagent_was_loaded=true
+        echo "State: stopping LaunchAgent ${launchagent_label}"
+        bash "$SOLAR_CLIENT_LAUNCHCTL" bootout "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
+      fi
+    elif launchctl print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1; then
+      launchagent_was_loaded=true
+      echo "State: stopping LaunchAgent ${launchagent_label}"
+      launchctl bootout "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
+    fi
+  fi
+  if [[ "$services" == *" host "* && -f "$stop_script" ]]; then
+    echo "State: stopping console"
+    bash "$stop_script" || true
+  fi
+  if [[ "$services" == *" gateway "* && -f "$gateway_stop" ]]; then
+    echo "State: stopping transport gateway"
+    bash "$gateway_stop" || true
+  fi
+
+  echo "State: migrating the runtime"
+  local -a cutover_args=(migrate)
+  if [[ -n "${SOLAR_CLIENT_CUTOVER_ROOT:-}" ]]; then
+    cutover_args+=(--root "$SOLAR_CLIENT_CUTOVER_ROOT")
+  fi
+  if ! SOLAR_STATE_ALLOW_CUTOVER=1 python3 "$cutover_py" "${cutover_args[@]}"; then
+    echo "ERROR: state migration failed. Stopped services were not started." >&2
+    return 1
+  fi
+  if [[ "$restart_mode" == "never" ]]; then
+    echo "State: migrated. Services left stopped (--no-restart)."
+    return 0
+  fi
+
+  if [[ "$launchagent_was_loaded" == true ]]; then
+    plist="${HOME}/Library/LaunchAgents/${launchagent_label}.plist"
+    echo "State: starting LaunchAgent ${launchagent_label}"
+    if [[ -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
+      bash "$SOLAR_CLIENT_LAUNCHCTL" bootstrap "gui/${UID}" "$plist" || failed=1
+    elif [[ -f "$plist" ]]; then
+      launchctl bootstrap "gui/${UID}" "$plist" || failed=1
+      launchctl kickstart -k "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
+    fi
+  fi
+  if [[ "$services" == *" gateway "* && -f "$setup_script" ]]; then
+    echo "State: starting transport gateway"
+    bash "$setup_script" --restart || failed=1
+  fi
+  if [[ "$services" == *" host "* && -f "$start_script" ]]; then
+    echo "State: starting console"
+    bash "$start_script" || failed=1
+  fi
+  return "$failed"
+}
+
 # After an update, Python services keep the old code in memory until restarted.
 # Restart only the services that are already running; never start new ones.
 # Args: install_root. Returns non-zero if any restart failed (commands printed).
 # Test hooks: SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT, SOLAR_CLIENT_HOST_STOP_SCRIPT,
 # SOLAR_CLIENT_HOST_START_SCRIPT.
+#
+# The published updater does not call solar_client_state_cutover. It reloads this
+# file and then calls this function. The first jump therefore migrates here,
+# before any new process starts. A later caller in the same shell sees
+# SOLAR_CLIENT_CUTOVER_DONE and only restarts.
 solar_client_restart_running_services() {
   local install_root="$1"
   local setup_script stop_script start_script services service failed=0
+  local state_skill="solar-state"
+  local cutover_py="${SOLAR_CLIENT_CUTOVER_SCRIPT:-${install_root}/core/skills/${state_skill}/scripts/solar_state_cutover.py}"
+  if [[ "${SOLAR_CLIENT_CUTOVER_DONE:-}" != 1 && -f "$cutover_py" ]]; then
+    export SOLAR_CLIENT_CUTOVER_DONE=1
+    solar_client_state_cutover "$install_root" auto || return 1
+    return 0
+  fi
   setup_script="${SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT:-${install_root}/core/skills/solar-gateway/scripts/setup_transport_gateway.sh}"
   stop_script="${SOLAR_CLIENT_HOST_STOP_SCRIPT:-${install_root}/core/skills/solar-app/scripts/stop_host.sh}"
   start_script="${SOLAR_CLIENT_HOST_START_SCRIPT:-${install_root}/core/skills/solar-app/scripts/start_host.sh}"

@@ -10,7 +10,7 @@ Handles I/O JSON with solar-router v3. Called by execute_active.sh.
 - Writes structured log and returns exit code for lifecycle management
 
 Usage:
-    python3 execute_active.py <task_file> <router_script> <task_id> <title>
+    python3 execute_active.py <task_id> <router_script>
 """
 import hashlib
 import json
@@ -20,13 +20,15 @@ import re
 import shlex
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "solar-router/scripts"))
+_STATE_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "solar-state" / "scripts"
+if str(_STATE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_STATE_SCRIPTS))
 from managed_process import run_managed, ProcessCancelled
-from task_cancel import requested, acknowledge
+import solar_state
 
 _CANCEL_CHECK = lambda: False
 _START_HOOK = lambda pid: None
@@ -40,6 +42,68 @@ _LOCAL_SCRIPT_PATTERNS = (
     re.compile(r"^solar/core/skills/[^/]+/scripts/.+"),
     re.compile(r"^core/skills/[^/]+/scripts/.+"),
 )
+
+
+def _field(task_id: str, key: str) -> str:
+    with solar_state.session() as store:
+        value = store.task_field(task_id, key)
+    return "" if value is None else str(value)
+
+
+def _body(task_id: str) -> str:
+    with solar_state.session() as store:
+        task = store.task_get(task_id)
+    if not task:
+        return ""
+    return task.get("body") or ""
+
+
+def _status(task_id: str) -> str:
+    with solar_state.session() as store:
+        return store.task_status(task_id) or ""
+
+
+def _set(task_id: str, key: str, value: str) -> None:
+    with solar_state.session() as store:
+        store.task_set(task_id, key, value)
+
+
+def _unset(task_id: str, key: str) -> None:
+    with solar_state.session() as store:
+        if store.task_field(task_id, key) is not None:
+            store.task_unset(task_id, key)
+
+
+def _set_body(task_id: str, body: str) -> None:
+    with solar_state.session() as store:
+        store.task_set_body(task_id, body)
+
+
+def _log_file(task_id: str) -> pathlib.Path:
+    paths = pathlib.Path(__file__).resolve().parents[2] / "solar-paths" / "scripts"
+    if str(paths) not in sys.path:
+        sys.path.insert(0, str(paths))
+    import solar_runtime
+    directory = solar_runtime.runtime_dir("task-logs")
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{task_id}.log"
+    with solar_state.session() as store:
+        store.task_record(task_id, log_path=str(path))
+    return path
+
+
+def _cancel_requested(task_id: str) -> bool:
+    with solar_state.session() as store:
+        return store.cancellation_requested(task_id)
+
+
+def _acknowledge(task_id: str) -> None:
+    script = pathlib.Path(__file__).with_name("complete.sh")
+    subprocess.run(
+        ["bash", str(script), task_id],
+        env={**os.environ, "SOLAR_TASK_CANCELLED": "1"},
+        check=False,
+    )
 
 
 def utc_now() -> str:
@@ -106,43 +170,16 @@ def authorize_local_argv(
     return argv, None
 
 
-def read_frontmatter_key(task_file: pathlib.Path, key: str) -> str:
-    """Extract a single frontmatter key value from a markdown file."""
-    in_fm = False
-    for line in task_file.read_text(encoding="utf-8").splitlines():
-        if line.strip() == "---":
-            if not in_fm:
-                in_fm = True
-                continue
-            else:
-                break
-        if in_fm and line.startswith(f"{key}:"):
-            value = line[len(f"{key}:"):].strip().strip('"')
-            return value
-    return ""
+def read_frontmatter_key(task_id: str, key: str) -> str:
+    """One frontmatter value. The argument is a task id."""
+    if key == "status":
+        return _status(str(task_id))
+    return _field(str(task_id), key)
 
 
-def strip_frontmatter(task_file: pathlib.Path) -> str:
-    """Return task body with frontmatter removed."""
-    lines = task_file.read_text(encoding="utf-8").splitlines()
-    in_fm = False
-    fm_done = False
-    body_lines = []
-    for line in lines:
-        if not fm_done:
-            if line.strip() == "---":
-                if not in_fm:
-                    in_fm = True
-                    continue
-                else:
-                    fm_done = True
-                    continue
-            elif not in_fm:
-                fm_done = True
-                body_lines.append(line)
-        else:
-            body_lines.append(line)
-    return "\n".join(body_lines).strip()
+def strip_frontmatter(task_id: str) -> str:
+    """Return the task body. The argument is a task id."""
+    return _body(str(task_id)).strip()
 
 
 def build_prompt(task_id: str, title: str, body: str) -> str:
@@ -256,33 +293,14 @@ def write_log(
     log_file.write_text("\n".join(lines), encoding="utf-8")
 
 
-def record_result_path(task_file: pathlib.Path, log_file: pathlib.Path) -> None:
+def record_result_path(task_id: str, log_file: pathlib.Path) -> None:
     """Point the task at the file that holds its result: the execution log.
 
-    The result is written to the log, not to the task (a provider sandbox may
-    not be able to write into the task queue). Without this, the completion
-    notify falls back to the task file itself, which has no result. An explicit
-    result_url/result_path set by the task author always wins.
+    An explicit result_url or result_path set by the task author always wins.
     """
-    try:
-        content = task_file.read_text(encoding="utf-8")
-    except OSError:
+    if _field(task_id, "result_url") or _field(task_id, "result_path"):
         return
-    if not content.startswith("---\n"):
-        return
-    end = content.find("\n---", 4)
-    if end == -1:
-        return
-    frontmatter = content[4:end]
-    if re.search(r"^result_(path|url):", frontmatter, flags=re.MULTILINE):
-        return
-    # Absolute and resolved: this string is what the notification sends out.
-    line = f'result_path: "{log_file.resolve()}"'
-    frontmatter = frontmatter.rstrip("\n") + "\n" + line
-    try:
-        task_file.write_text("---\n" + frontmatter + content[end:], encoding="utf-8")
-    except OSError:
-        return
+    _set(task_id, "result_path", json.dumps(str(log_file.resolve()), ensure_ascii=False))
 
 
 RE_DELIVERY = re.compile(r"<delivery>(.*?)</delivery>", re.IGNORECASE | re.DOTALL)
@@ -323,95 +341,38 @@ def clamp_delivery(delivery: str) -> Tuple[str, bool]:
     return text[:room].rstrip() + "…\n" + tail, True
 
 
-def upsert_frontmatter_key(task_file: pathlib.Path, key: str, value: str) -> None:
+def upsert_frontmatter_key(task_id: str, key: str, value: str) -> None:
     """Set a frontmatter key, replacing it when already present."""
-    try:
-        content = task_file.read_text(encoding="utf-8")
-    except OSError:
-        return
-    if not content.startswith("---\n"):
-        return
-    end = content.find("\n---", 4)
-    if end == -1:
-        return
-    frontmatter = content[4:end]
-    line = f"{key}: {value}"
-    pattern = re.compile(rf"^{re.escape(key)}:.*$", flags=re.MULTILINE)
-    if pattern.search(frontmatter):
-        frontmatter = pattern.sub(line, frontmatter, count=1)
-    else:
-        frontmatter = frontmatter.rstrip("\n") + "\n" + line
-    try:
-        task_file.write_text("---\n" + frontmatter + content[end:], encoding="utf-8")
-    except OSError:
-        return
+    _set(str(task_id), key, value)
 
 
-def set_frontmatter_flag(task_file: pathlib.Path, key: str, value: bool) -> None:
-    """Set a boolean frontmatter flag, removing it when false.
-
-    Removing matters as much as setting: these flags describe the run that just
-    finished, and one inherited from an earlier run would be read as current.
-    """
+def set_frontmatter_flag(task_id: str, key: str, value: bool) -> None:
+    """Set a boolean frontmatter flag, removing it when false."""
     if value:
-        upsert_frontmatter_key(task_file, key, "true")
-        return
-    try:
-        content = task_file.read_text(encoding="utf-8")
-    except OSError:
-        return
-    if not content.startswith("---\n"):
-        return
-    end = content.find("\n---", 4)
-    if end == -1:
-        return
-    frontmatter = content[4:end]
-    stripped = re.sub(
-        rf"^{re.escape(key)}:.*\n?", "", frontmatter, flags=re.MULTILINE
-    )
-    if stripped == frontmatter:
-        return
-    try:
-        task_file.write_text("---\n" + stripped + content[end:], encoding="utf-8")
-    except OSError:
-        return
+        _set(str(task_id), key, "true")
+    else:
+        _unset(str(task_id), key)
 
 
-def record_delivery(task_file: pathlib.Path, reply_text: str) -> None:
-    """Copy the reply's delivery block into the task as `## Delivery`.
+def record_delivery(task_id: str, reply_text: str) -> None:
+    """Copy the reply's delivery block into the task body as `## Delivery`.
 
-    The worker does this, not the provider: the provider can write here but only
-    does so when it obeys an instruction, and the notification depends on the
-    section being there. `## Result` is left alone — it is the provider's own
-    account, unbounded, and sending it would be transport, not compression.
-    A task that was asked for a delivery and returned none is marked, so the
-    notification can say so instead of announcing the work as resolved.
+    Only the body changes. A flag left by an earlier run is cleared when this
+    run does not set it.
     """
-    expected = read_frontmatter_key(task_file, "delivery_expected") == "true"
+    expected = read_frontmatter_key(task_id, "delivery_expected") == "true"
     delivery = extract_delivery(reply_text)
     if delivery:
         delivery, truncated = clamp_delivery(delivery)
     else:
         truncated = False
 
-    # Every run starts from a clean slate: a parent executes twice by design
-    # (create children, then synthesize) and can be requeued from error, so a
-    # section or a flag left by the previous run would be notified as if it
-    # described this one.
-    try:
-        content = task_file.read_text(encoding="utf-8")
-    except OSError:
-        return
-    body = RE_DELIVERY_SECTION.sub("", content).rstrip()
+    body = RE_DELIVERY_SECTION.sub("", _body(str(task_id))).rstrip()
     if delivery:
         body += "\n\n## Delivery\n\n" + delivery
-    try:
-        task_file.write_text(body + "\n", encoding="utf-8")
-    except OSError:
-        return
-
-    set_frontmatter_flag(task_file, "delivery_truncated", truncated)
-    set_frontmatter_flag(task_file, "delivery_missing", expected and not delivery)
+    _set_body(str(task_id), body + "\n")
+    set_frontmatter_flag(task_id, "delivery_truncated", truncated)
+    set_frontmatter_flag(task_id, "delivery_missing", expected and not delivery)
 
 
 # ---------------------------------------------------------------------------
@@ -550,77 +511,47 @@ def write_subtask_manifest(task_file: pathlib.Path, pairs: List[Tuple[str, str]]
     upsert_frontmatter_key(task_file, "subtask_ids", json.dumps(value))
 
 
-def subtask_plan_path(task_root: pathlib.Path, task_id: str) -> pathlib.Path:
-    return task_root / "subtasks" / f"{task_id}.json"
-
-
 def record_subtask_plan(
     task_root: pathlib.Path, task_id: str, children: List[Dict[str, Any]]
 ) -> None:
-    """Persist the declaration itself, beside the queue.
+    """Persist the declaration in solar-state, not beside the queue.
 
-    The manifest holds keys, not payloads, so a crash halfway through creation
-    would leave the worker knowing that a child is missing but not what it was.
-    It lives outside the task file on purpose: the task body is the prompt the
-    provider gets in execution 2, and five child bodies in it would drown the
-    synthesis.
+    The manifest holds keys, not payloads. The plan stays out of the task body:
+    that body is the prompt the provider gets in execution 2.
     """
-    path = subtask_plan_path(task_root, task_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(children, ensure_ascii=False, indent=2), encoding="utf-8")
+    del task_root
+    with solar_state.session() as store:
+        store.subtask_plan_import_text(task_id, json.dumps(children, ensure_ascii=False))
 
 
 def read_subtask_plan(task_root: pathlib.Path, task_id: str) -> List[Dict[str, Any]]:
-    path = subtask_plan_path(task_root, task_id)
-    if not path.is_file():
+    del task_root
+    with solar_state.session() as store:
+        text = store.subtask_plan_text(task_id)
+    if not text:
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        data = json.loads(text)
+    except ValueError:
         return []
     return data if isinstance(data, list) else []
 
 
 TERMINAL_STATUSES = frozenset({"completed", "archived", "error", "cancelled"})
 
-_TASK_DIRS = (
-    "queued", "active", "completed", "error", "archive", "cancelled", "drafts", "planned",
-)
+
+def find_task_file(task_root: pathlib.Path, task_id: str) -> Optional[str]:
+    """Return the id when the task exists. The queue is not a directory."""
+    del task_root
+    with solar_state.session() as store:
+        return task_id if store.task_get(task_id) else None
 
 
-def find_task_file(task_root: pathlib.Path, task_id: str) -> Optional[pathlib.Path]:
-    """Locate a task by id across every state directory."""
-    for name in _TASK_DIRS:
-        directory = task_root / name
-        if not directory.is_dir():
-            continue
-        for candidate in sorted(directory.glob("*.md")):
-            try:
-                if read_frontmatter_key(candidate, "id") == task_id:
-                    return candidate
-            except OSError:
-                continue
-    return None
-
-
-def find_task_by_subtask_key(task_root: pathlib.Path, key: str) -> Optional[pathlib.Path]:
-    """Locate a child by its stable key.
-
-    Closes the narrow window between create.sh returning and the manifest being
-    updated: on retry the child exists but the parent does not know its id yet.
-    find_task cannot do this — it searches by id, not by key.
-    """
-    for name in _TASK_DIRS:
-        directory = task_root / name
-        if not directory.is_dir():
-            continue
-        for candidate in sorted(directory.glob("*.md")):
-            try:
-                if read_frontmatter_key(candidate, "subtask_key") == key:
-                    return candidate
-            except OSError:
-                continue
-    return None
+def find_task_by_subtask_key(task_root: pathlib.Path, key: str) -> Optional[str]:
+    """Locate a child by its stable key. Returns the child id."""
+    del task_root
+    with solar_state.session() as store:
+        return store.task_find_subtask_key(key)
 
 
 # The child runs from the workspace and the framework is not inside it. The
@@ -667,82 +598,45 @@ def child_object_section(parent_file: pathlib.Path) -> str:
 
 def create_child_task(
     task_root: pathlib.Path,
-    parent_file: pathlib.Path,
+    parent_file: str,
     parent_id: str,
     child: Dict[str, Any],
     key: str,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Create one child with create.sh. Returns (task_id, error).
+    """Create one child in solar-state. Returns (task_id, error).
 
-    The provider only chose title, body and provider. Everything else is the
-    worker's: the object travels down from the parent unchanged, and the child
-    gets no origin metadata — so create.sh writes no notify_when and only the
-    parent ever speaks to the chat.
+    The provider only chose title, body and provider. The object travels down
+    from the parent unchanged, and the child gets no origin metadata, so it
+    has no notify_when and only the parent speaks to the chat. The subtask key
+    is written in the same create as the row.
     """
-    scripts_dir = pathlib.Path(__file__).resolve().parent
-    create_script = scripts_dir / "create.sh"
-    if not create_script.is_file():
-        return None, f"create.sh not found: {create_script}"
-
-    metadata = {}
-    for field in ("object", "scope", "effect"):
-        value = read_frontmatter_key(parent_file, field)
-        if value:
-            metadata[field] = value
+    del task_root
     priority = read_frontmatter_key(parent_file, "priority") or "normal"
-
-    body_file = None
+    if priority not in ("high", "normal", "low"):
+        priority = "normal"
+    created = datetime.now().astimezone().isoformat(timespec="seconds")
+    fields = [
+        ("title", json.dumps(child["title"], ensure_ascii=False)),
+        ("created", json.dumps(created, ensure_ascii=False)),
+        ("priority", priority),
+        ("scheduled_time", json.dumps("now")),
+        ("recurring", "false"),
+        ("parent_task_id", json.dumps(parent_id, ensure_ascii=False)),
+        ("subtask_key", json.dumps(key, ensure_ascii=False)),
+    ]
+    if child.get("provider"):
+        fields.append(("provider", json.dumps(child["provider"], ensure_ascii=False)))
+    for name in ("object", "scope", "effect"):
+        value = read_frontmatter_key(parent_file, name)
+        if value:
+            fields.append((name, json.dumps(value, ensure_ascii=False)))
+    body = "\n# " + child["title"] + "\n\n" + child_object_section(parent_file) + child["body"] + "\n"
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False, encoding="utf-8"
-        ) as handle:
-            handle.write(child_object_section(parent_file) + child["body"] + "\n")
-            body_file = pathlib.Path(handle.name)
-
-        cmd = [
-            "bash", str(create_script), "--queued",
-            "--priority", priority,
-            "--body-file", str(body_file),
-            # Identity goes in with the file. create.sh publishes into queued/
-            # atomically and the worker can pick the child up at once, so a key
-            # written afterwards leaves a window where the child exists, runs,
-            # and cannot be matched back to its parent on a retry.
-            "--parent-task-id", parent_id,
-            "--subtask-key", key,
-        ]
-        if child.get("provider"):
-            cmd += ["--provider", child["provider"]]
-        if metadata:
-            cmd += ["--metadata", json.dumps(metadata, ensure_ascii=False)]
-        cmd += [child["title"]]
-
-        env = os.environ.copy()
-        env["SOLAR_TASK_ROOT"] = str(task_root)
-        try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, env=env, timeout=120
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            return None, f"create.sh failed for {child['title']!r}: {exc}"
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip()[:300]
-            return None, f"create.sh exited {proc.returncode} for {child['title']!r}: {detail}"
-
-        child_id = ""
-        for line in (proc.stdout or "").splitlines():
-            if line.startswith("ID: "):
-                child_id = line[4:].strip()
-        if not child_id:
-            return None, f"create.sh printed no id for {child['title']!r}"
-    finally:
-        if body_file is not None:
-            try:
-                body_file.unlink()
-            except OSError:
-                pass
-
-    if find_task_file(task_root, child_id) is None:
-        return None, f"child {child_id} was created but cannot be found in the queue"
+        with solar_state.session() as store:
+            child_id = store.task_create(fields, body, status="queued")
+            store.task_link(parent_id, child_id, key)
+    except solar_state.StateError as exc:
+        return None, f"task create failed for {child['title']!r}: {exc}"
     return child_id, None
 
 
@@ -794,22 +688,22 @@ def strip_outcome_heading(text: str) -> str:
 
 def read_child_outcome(task_root: pathlib.Path, child_id: str) -> Tuple[str, str]:
     """Return (status, result text) for one child, read from its own log."""
+    del task_root
     if not child_id:
         return "missing", "child was never created"
-    child_file = find_task_file(task_root, child_id)
-    if child_file is None:
+    with solar_state.session() as store:
+        task = store.task_get(child_id)
+    if task is None:
         return "missing", f"task {child_id} is not in the queue"
 
-    status = read_frontmatter_key(child_file, "status") or "unknown"
+    status = task["status"] or "unknown"
     text = ""
-    # result_path is written on success only: it is what the completion notify
-    # points at, and a failed task must not advertise a result. A failed child
-    # still has its log, under the name it was written with.
     candidates = []
-    result_path = read_frontmatter_key(child_file, "result_path")
+    result_path = read_frontmatter_key(child_id, "result_path")
     if result_path:
         candidates.append(pathlib.Path(result_path))
-    candidates.append(task_root / "logs" / (child_file.stem + ".log"))
+    if task.get("log_path"):
+        candidates.append(pathlib.Path(task["log_path"]))
     for log_path in candidates:
         if not log_path.is_file():
             continue
@@ -821,11 +715,7 @@ def read_child_outcome(task_root: pathlib.Path, child_id: str) -> Tuple[str, str
             text = strip_outcome_heading(match.group(1))
             break
     if not text:
-        # Nothing in the log: the task file carries its own account.
-        try:
-            match = RE_TASK_ERROR_SECTION.search(child_file.read_text(encoding="utf-8"))
-        except OSError:
-            match = None
+        match = RE_TASK_ERROR_SECTION.search(task.get("body") or "")
         if match:
             text = strip_outcome_heading(match.group(1))
     if not text:
@@ -850,16 +740,9 @@ def record_subtask_results(task_file: pathlib.Path, task_root: pathlib.Path) -> 
     for key, child_id in pairs:
         status, text = read_child_outcome(task_root, child_id)
         blocks.append(f"### {key} — {status}\n\n{text}")
-    try:
-        content = task_file.read_text(encoding="utf-8")
-    except OSError:
-        return
-    body = RE_SUBTASK_RESULTS_SECTION.sub("", content).rstrip()
+    body = RE_SUBTASK_RESULTS_SECTION.sub("", _body(str(task_file))).rstrip()
     body += "\n\n## Subtask results\n\n" + "\n\n".join(blocks)
-    try:
-        task_file.write_text(body + "\n", encoding="utf-8")
-    except OSError:
-        return
+    _set_body(str(task_file), body + "\n")
 
 
 def subtask_pre_phase(
@@ -972,7 +855,7 @@ def handle_declared_subtasks(
 
 
 def mark_task_error(
-    task_file: pathlib.Path,
+    task_file: str,
     task_id: str,
     title: str,
     provider_used: Optional[str],
@@ -980,61 +863,52 @@ def mark_task_error(
     error_text: str,
     log_file: pathlib.Path,
 ) -> None:
-    """Update task frontmatter status to error and move to error/ dir."""
-    content = task_file.read_text(encoding="utf-8")
-    content = re.sub(r"^status:.*$", "status: error", content, flags=re.MULTILINE)
+    """Move the task to error and append the failure to its body, together."""
+    del task_file
     err_ts = utc_now()
-    content += (
-        f"\n\n## Execution Error\n"
+    suffix = (
+        "## Execution Error\n"
         f"- time: {err_ts}\n"
         f"- provider_attempted: {provider_used or 'unknown'}\n"
         f"- error_code: {error_code or 'unknown'}\n"
         f"- error: {error_text}\n"
     )
-    task_file.write_text(content, encoding="utf-8")
-
+    with solar_state.session() as store:
+        store.task_fail(task_id, suffix)
     write_log(log_file, task_id, title, "error", provider_used, "", error_text, error_code)
-
-    error_dir = task_file.parent.parent / "error"
-    error_dir.mkdir(parents=True, exist_ok=True)
-    dest = error_dir / task_file.name
-    task_file.rename(dest)
-    print(f"❌ Task execution failed and moved to error/: {task_id}", flush=True)
+    print(f"❌ Task execution failed: {task_id}", flush=True)
     print(f"   Log: {log_file}", flush=True)
 
 
 def main() -> int:
-    if len(sys.argv) < 5:
+    if len(sys.argv) < 3:
         print(
-            "Usage: execute_active.py <task_file> <router_script> <task_id> <title>",
+            "Usage: execute_active.py <task_id> <router_script>",
             file=sys.stderr,
         )
         return 1
 
-    task_file = pathlib.Path(sys.argv[1])
+    task_id = sys.argv[1]
     router_script = pathlib.Path(sys.argv[2])
-    task_id = sys.argv[3]
-    title = sys.argv[4]
+    task_file = task_id
+    task_root = pathlib.Path(".")
 
-    if not task_file.exists():
-        print(f"Error: task file not found: {task_file}", file=sys.stderr)
+    if not _status(task_id):
+        print(f"Error: task not found: {task_id}", file=sys.stderr)
         return 1
+    title = _field(task_id, "title") or task_id
+    log_file = _log_file(task_id)
 
-    # Derive log path
-    task_root = task_file.parent.parent
-    log_dir = task_root / "logs"
-    log_file = log_dir / (task_file.stem + ".log")
-
-    # Read per-task provider override from frontmatter
     global _CANCEL_CHECK, _START_HOOK
-    _CANCEL_CHECK = lambda: requested(task_root, task_id)
+    _CANCEL_CHECK = lambda: _cancel_requested(task_id)
+
     def record_pid(pid):
-        handles = task_root / "handles"
-        handles.mkdir(exist_ok=True)
-        (handles / (task_id + ".json")).write_text(json.dumps({"pid": pid, "task_id": task_id}))
+        with solar_state.session() as store:
+            store.task_record(task_id, pid=pid)
+
     _START_HOOK = record_pid
     if _CANCEL_CHECK():
-        acknowledge(task_file)
+        _acknowledge(task_id)
         return 130
 
     task_provider = read_frontmatter_key(task_file, "provider").strip().lower() or None
@@ -1090,7 +964,7 @@ def main() -> int:
                 cancelled=_CANCEL_CHECK, on_start=_START_HOOK,
             )
         except ProcessCancelled:
-            acknowledge(task_file)
+            _acknowledge(task_id)
             return 130
         except subprocess.TimeoutExpired:
             mark_task_error(
@@ -1147,7 +1021,7 @@ def main() -> int:
     try:
         response = call_router(router_script, task_id, prompt, task_provider)
     except ProcessCancelled:
-        acknowledge(task_file)
+        _acknowledge(task_id)
         return 130
     except subprocess.TimeoutExpired:
         mark_task_error(

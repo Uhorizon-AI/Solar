@@ -124,21 +124,28 @@ class DelegationCtlTestCase(unittest.TestCase):
         (self.del_dir / "fixture-expired.yaml").write_text(EXPIRED_MANDATE, encoding="utf-8")
         (self.del_dir / "fixture-incomplete.yaml").write_text(INCOMPLETE_MANDATE, encoding="utf-8")
         (self.del_dir / "fixture-bad-freq.yaml").write_text(ACTIVE_BAD_FREQ, encoding="utf-8")
-        self._orig = (delegation_ctl.DEL_DIR, delegation_ctl.RUNTIME)
-        delegation_ctl.DEL_DIR = self.del_dir
-        delegation_ctl.RUNTIME = self.runtime
+        self._env = {
+            "SOLAR_DELEGATIONS_DIR": str(self.del_dir),
+            "SOLAR_RUNTIME_ROOT": str(self.runtime),
+        }
+        self._saved = {key: os.environ.get(key) for key in self._env}
+        os.environ.update(self._env)
+        import solar_state
+        with solar_state.cutover(self.runtime) as cut:
+            cut.upgrade_schema()
+            cut.set_format("sqlite")
         self.addCleanup(self._restore)
 
     def _restore(self):
-        delegation_ctl.DEL_DIR, delegation_ctl.RUNTIME = self._orig
+        for key, value in self._saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         self._tmp.cleanup()
 
     def cli(self, *args: str) -> subprocess.CompletedProcess:
-        env = {
-            **os.environ,
-            "SOLAR_DELEGATIONS_DIR": str(self.del_dir),
-            "SOLAR_DELEGATIONS_RUNTIME": str(self.runtime),
-        }
+        env = {**os.environ, **self._env}
         return subprocess.run(
             [sys.executable, str(CTL), *args], env=env, text=True, capture_output=True
         )
@@ -147,14 +154,11 @@ class DelegationCtlTestCase(unittest.TestCase):
     def payload(proc: subprocess.CompletedProcess) -> dict:
         return json.loads(proc.stdout or proc.stderr)
 
-    def write_events(self, name: str, *records: dict) -> Path:
-        path = self.runtime / name / "events.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "".join(json.dumps(r) + "\n" for r in records),
-            encoding="utf-8",
-        )
-        return path
+    def write_events(self, name: str, *records: dict) -> None:
+        import solar_state
+        with solar_state.session() as store:
+            for record in records:
+                store.delegation_event_append(name, "events", record)
 
 
 class TestMandateChecks(DelegationCtlTestCase):
@@ -235,40 +239,16 @@ class TestActivation(DelegationCtlTestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertTrue(any("revoked" in e for e in self.payload(proc)["errors"]))
 
-    def test_activate_rejects_non_json_or_forged_shadow_lines(self):
-        path = self.runtime / "fixture-shadow" / "shadow.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "\n".join(
-                [
-                    "not-json",
-                    "",
-                    json.dumps(
-                        {
-                            "mode": "shadow",
-                            "applied": True,
-                            "intended_action": "dry-run",
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "mode": "active",
-                            "applied": False,
-                            "intended_action": "dry-run",
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "mode": "shadow",
-                            "applied": False,
-                            "intended_action": "send",
-                        }
-                    ),
-                ]
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+    def test_activate_rejects_forged_shadow_lines(self):
+        import solar_state
+        forged = [
+            {"mode": "shadow", "applied": True, "intended_action": "dry-run"},
+            {"mode": "active", "applied": False, "intended_action": "dry-run"},
+            {"mode": "shadow", "applied": False, "intended_action": "send"},
+        ]
+        with solar_state.session() as store:
+            for row in forged:
+                store.delegation_event_append("fixture-shadow", "shadow", row)
         proc = self.cli("activate", "fixture-shadow", "--i-approve")
         self.assertNotEqual(proc.returncode, 0)
         self.assertTrue(any("valid shadow evidence" in e for e in self.payload(proc)["errors"]))

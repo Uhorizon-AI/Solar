@@ -44,6 +44,17 @@ def _load_bridge(
     monkeypatch.setenv("SOLAR_WS_PATH", "/ws")
     monkeypatch.setenv("SOLAR_N8N_WEBHOOK_SECRET", secret)
     monkeypatch.setenv("SOLAR_GATEWAY_RUN_DIR", str(run_dir))
+    runtime = run_dir / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(runtime))
+    monkeypatch.delenv("SOLAR_TASK_ROOT", raising=False)
+    state_scripts = BRIDGE_PATH.parents[2] / "solar-state" / "scripts"
+    if str(state_scripts) not in sys.path:
+        sys.path.insert(0, str(state_scripts))
+    import solar_state
+    with solar_state.cutover(runtime) as cut:
+        cut.upgrade_schema()
+        cut.set_format("sqlite")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", allowed_chat)
     monkeypatch.delenv("TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
     if default_async:
@@ -679,27 +690,44 @@ def test_post_n8n_untyped_legacy_mismatch_rejected(monkeypatch, tmp_path):
         server.server_close()
 
 
+def _seed_origin(runtime, task_id, origin):
+    import sys
+    scripts = Path(__file__).resolve().parents[3] / "skills" / "solar-state" / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import solar_state
+    runtime.mkdir(parents=True, exist_ok=True)
+    with solar_state.cutover(runtime) as cut:
+        cut.upgrade_schema()
+        cut.set_format("sqlite")
+    with solar_state.session() as store:
+        store.task_import(
+            f'---\nid: "{task_id}"\nstatus: queued\norigin_request_id: "{origin}"\n---\n',
+            status="queued",
+        )
+
+
 def test_find_task_for_origin_request_reads_framework_runtime(monkeypatch, tmp_path):
     mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
     runtime = tmp_path / "runtime"
     monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(runtime))
     monkeypatch.delenv("SOLAR_TASK_ROOT", raising=False)
-    queued = runtime / "async-tasks" / "queued"
-    queued.mkdir(parents=True)
-    (queued / "slugged-title.md").write_text(
-        '---\nid: "task-9"\nstatus: queued\norigin_request_id: "telegram:456:77"\n---\n',
-        encoding="utf-8",
-    )
+    _seed_origin(runtime, "task-9", "telegram:456:77")
     assert mod.find_task_for_origin_request("telegram:456:77") == "task-9"
     assert mod.find_task_for_origin_request("telegram:456:78") is None
 
 
-def test_find_task_for_origin_request_honours_task_root(monkeypatch, tmp_path):
+def test_find_task_for_origin_request_ignores_a_task_folder(monkeypatch, tmp_path):
+    """SOLAR_TASK_ROOT is where hooks live. It is not the queue."""
     mod = _load_bridge(monkeypatch, secret=SECRET, tmp_path=tmp_path)
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(runtime))
     root = tmp_path / "tasks"
     monkeypatch.setenv("SOLAR_TASK_ROOT", str(root))
     (root / "active").mkdir(parents=True)
     (root / "active" / "x.md").write_text(
         '---\nid: "task-10"\norigin_request_id: "telegram:456:80"\n---\n', encoding="utf-8"
     )
-    assert mod.find_task_for_origin_request("telegram:456:80") == "task-10"
+    _seed_origin(runtime, "task-11", "telegram:456:81")
+    assert mod.find_task_for_origin_request("telegram:456:80") is None
+    assert mod.find_task_for_origin_request("telegram:456:81") == "task-11"

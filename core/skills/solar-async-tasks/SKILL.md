@@ -10,14 +10,14 @@ description: >
 
 ## Purpose
 
-Provide a local-first, filesystem task runtime for Solar:
+Provide a local-first task runtime for Solar. The task is a row in `solar-state`, not a file:
 
 - capture work as drafts,
-- plan and approve work before execution,
+- approve work before execution,
 - queue tasks by priority and schedule,
 - execute approved tasks through `solar-router`,
 - pause parent tasks until child tasks finish,
-- preserve task state under `<runtime root>/async-tasks/`.
+- keep resource hooks and their locks under `<runtime root>/async-tasks/hooks/` and `.locks/`.
 
 Use this skill when the work should not block the current conversation, needs provider execution, spans multiple AI providers, waits on subtasks, recurs over time, or depends on external resources.
 
@@ -39,13 +39,13 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 
 ## Core Commands
 
-The agent uses the MCP verbs. Each one asks for client approval. `solar_task_create` writes the task file until the runtime cutover; it does not talk to solar-state. `solar_task_approve`, `solar_task_cancel` and `solar_task_requeue` follow the active queue format: the task files while `STATE_FORMAT` is unset or `files`, and solar-state once it is `sqlite`. They do not change the task's object, scope or effect.
+The agent uses the MCP verbs. Each one asks for client approval and writes only through `solar-state`. If the runtime format is not `sqlite`, the verb refuses. They do not change the task's object, scope or effect.
 
-- `solar_task_create` — a draft file, or queued when `queued` is true
+- `solar_task_create` — a draft. Queuing is `solar_task_approve`, not a flag on create
 - `solar_task_approve` — a draft, or a task already planned, to the queue. Refuses an A3 mandate. There is no separate plan verb
 - `solar_task_status` — read the queue
 - `solar_task_requeue` — error back to the queue
-- `solar_task_cancel` — a queued task becomes cancelled; an active task stays active and the request is recorded. Same result on the file queue and on solar-state
+- `solar_task_cancel` — a queued task becomes cancelled; an active task stays active and the request is recorded
 
 Host setup stays with `solar-system` and the LaunchAgent. The agent does not start the worker and does not drive the queue through the shell.
 
@@ -70,10 +70,10 @@ Fallback rule: if `solar-system` is not supervising `async-tasks`, use `ensure_a
 
 ## Workflow
 
-1. Draft: `solar_task_create` writes a draft file.
-2. Approve: `solar_task_approve` moves that draft to the queue. A task that is already planned uses the same verb. There is no verb that creates the plan.
+1. Draft: `solar_task_create` stores a draft.
+2. Approve: `solar_task_approve` moves that draft to `queued`. A task that is already `planned` uses the same verb. There is no verb that creates the plan.
 3. Execute: `solar-system` starts one eligible queued task and executes it.
-4. Complete: success moves to `completed/`, recurrence may requeue, failure moves to `error/`.
+4. Complete: success sets `completed`, recurrence may requeue, failure sets `error`.
 
 For user-facing work, approval ends the conversational agent's execution role. The system runtime owns actual execution.
 
@@ -110,7 +110,7 @@ and the primary script must resolve under an allowlisted tree:
 
 Paths such as `planets/*/operations/scripts/…` are refused. Arbitrary binaries,
 paths outside the workspace, or scripts outside those trees are refused
-(`local_command_unauthorized`) and the task moves to `error/`.
+(`local_command_unauthorized`) and the status becomes `error`.
 
 Exit codes treated as success:
 
@@ -120,7 +120,7 @@ Exit codes treated as success:
 | `10` | Success with no changes (caller convention; e.g. calendar-sync `NO_CHANGES`) |
 
 Any other exit, missing `local_command`, invalid `local_timeout`, or unauthorized
-path moves the task to `error/` with the real command output (fail-closed).
+path sets the status to `error` with the real command output (fail-closed).
 
 Still request **A2 formal** approval for:
 
@@ -143,13 +143,9 @@ Use `## Result` in the task file when:
 
 Do not append `## Result` when the task writes a dedicated artifact such as a plan, report, message draft, or recurring run output. In that case, the artifact is the result.
 
-`## Result` is never what the origin chat receives. A gateway parent ends its reply with a `<delivery>` block, the worker copies it into the task as `## Delivery`, and the notification sends that section — see `references/runtime-operations.md`. `## Result` stays the full account, for the parent reading its children and for anyone opening the file.
+`## Result` is never what the origin chat receives. A gateway parent ends its reply with a `<delivery>` block, the worker copies it into the task body as `## Delivery`, and the notification sends that section — see `references/runtime-operations.md`. `## Result` stays the full account, for the parent reading its children.
 
-Find the current task file by Task ID because files move between state folders:
-
-```bash
-TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
-```
+Read a task with `solar_task_status`. The status is a column. Do not search `async-tasks/` for a markdown file.
 
 ## Parent Tasks With Subtasks
 
@@ -180,17 +176,18 @@ See `references/task-with-subtasks.md`.
 
 ## Runtime States
 
-Default root: `<runtime root>/async-tasks/`
+The status is a column on the task row:
 
-- `drafts/`: captured, not executable.
-- `planned/`: ready for review, not executable.
-- `queued/`: approved and eligible for execution.
-- `active/`: currently executing.
-- `completed/`: finished successfully.
-- `error/`: failed and requires manual fix/requeue.
-- `archive/`: historical or max-run recurring tasks.
+- `draft`: captured, not executable.
+- `planned`: ready for review, not executable.
+- `queued`: approved and eligible for execution.
+- `active`: currently executing.
+- `completed`: finished successfully.
+- `error`: failed and requires manual fix/requeue.
+- `archived`: historical or max-run recurring tasks.
+- `cancelled`: stopped before or during execution.
 
-Only `queued/` is worker input.
+Only `queued` is worker input. Execution logs live in `<runtime root>/task-logs/`. Resource hooks and lock files stay under `<runtime root>/async-tasks/hooks/` and `.locks/`.
 
 ## Validation
 

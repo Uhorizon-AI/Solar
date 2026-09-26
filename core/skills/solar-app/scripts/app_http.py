@@ -28,8 +28,7 @@ def get(handler, path, qs, workspace):
         handler._send_json(app_solar.activity_page(Path(workspace), value('source'), value('state'), offset, limit))
         return
     if path in ("/api/app/bootstrap", "/api/app/logs", "/api/async/jobs", "/api/runtime/health"):
-        # The SQLite projection when it is fresh, the files when it is not. The
-        # payload says which, so a stale index is never served as current.
+        # The console reads the views in state.sqlite.
         data = app_index.projection(Path(workspace))
         if path == "/api/runtime/health":
             payload = {"service": "solar-console", **data["health"], "workspace": str(workspace), "solar_root": data["solar_root"]}

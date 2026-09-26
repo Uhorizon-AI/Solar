@@ -13,7 +13,8 @@ solar_resolve_paths --quiet
 SOLAR_WORKSPACE="${SOLAR_WORKSPACE:-$SOLAR_WORKSPACE}"
 # shellcheck source=/dev/null
 source "$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_runtime_paths.sh"
-AUDIT_LOG="$(solar_runtime_dir router)/audit.jsonl"
+STATE_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-state/scripts" && pwd)"
+export STATE_SCRIPTS
 PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 LAST_N=10
 
@@ -36,35 +37,31 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$STALE_COUNT_ONLY" == true ]]; then
-  if [[ ! -f "$AUDIT_LOG" ]]; then
-    echo "0"
-    exit 0
-  fi
   export STALE_ALL STALE_MAX_AGE_HOURS
-  $PYTHON - "$AUDIT_LOG" <<'PYEOF'
+  $PYTHON - <<'PYEOF'
 import json, os, sys
 from datetime import datetime, timezone
+from pathlib import Path
+sys.path.insert(0, os.environ["STATE_SCRIPTS"])
+import solar_state
 
-audit_path = sys.argv[1]
 count_all = os.environ.get("STALE_ALL", "false").lower() == "true"
 max_age_h = float(os.environ.get("STALE_MAX_AGE_HOURS", "24"))
 
 starts = {}
 ends = set()
-with open(audit_path, encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        rid = row.get("router_id", "")
-        if row.get("event") == "start":
-            starts[rid] = row
-        elif row.get("event") == "end":
-            ends.add(rid)
+try:
+    with solar_state.session() as store:
+        loaded = store.audit_rows()
+except solar_state.StateError:
+    print("0")
+    raise SystemExit(0)
+for row in loaded:
+    rid = row.get("router_id", "")
+    if row.get("event") == "start":
+        starts[rid] = row
+    elif row.get("event") == "end":
+        ends.add(rid)
 
 now = datetime.now(timezone.utc)
 stale = 0
@@ -110,30 +107,25 @@ bash "$SCRIPT_DIR/diagnose_router.sh" --dry-run 2>/dev/null \
 echo ""
 echo "  In-flight:"
 
-if [[ ! -f "$AUDIT_LOG" ]]; then
-  echo "    (no audit log yet)"
-else
-  $PYTHON - "$AUDIT_LOG" <<'PYEOF'
-import json, sys, datetime
+$PYTHON - <<'PYEOF'
+import os, sys, datetime
+sys.path.insert(0, os.environ["STATE_SCRIPTS"])
+import solar_state
 
-audit_path = sys.argv[1]
 starts = {}
 ends = set()
-
-with open(audit_path, encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        rid = row.get("router_id", "")
-        if row.get("event") == "start":
-            starts[rid] = row
-        elif row.get("event") == "end":
-            ends.add(rid)
+try:
+    with solar_state.session() as store:
+        loaded = store.audit_rows()
+except solar_state.StateError:
+    print("    (no audit yet)")
+    raise SystemExit(0)
+for row in loaded:
+    rid = row.get("router_id", "")
+    if row.get("event") == "start":
+        starts[rid] = row
+    elif row.get("event") == "end":
+        ends.add(rid)
 
 in_flight = {rid: row for rid, row in starts.items() if rid not in ends}
 
@@ -153,7 +145,6 @@ else:
         user = row.get("user_id", "")
         print(f"    - router_id={rid[:8]}...  request_id={req_id}  user={user}  started {elapsed_str}")
 PYEOF
-fi
 
 # ---------------------------------------------------------------------------
 # 3. Last N executions
@@ -161,32 +152,26 @@ fi
 echo ""
 echo "  Last $LAST_N executions:"
 
-if [[ ! -f "$AUDIT_LOG" ]]; then
-  echo "    (no audit log yet)"
-else
-  $PYTHON - "$AUDIT_LOG" "$LAST_N" <<'PYEOF'
-import json, sys
+$PYTHON - "$LAST_N" <<'PYEOF'
+import os, sys
+sys.path.insert(0, os.environ["STATE_SCRIPTS"])
+import solar_state
 
-audit_path = sys.argv[1]
-last_n = int(sys.argv[2])
-
+last_n = int(sys.argv[1])
 starts = {}
 ends = {}
-
-with open(audit_path, encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        rid = row.get("router_id", "")
-        if row.get("event") == "start":
-            starts[rid] = row
-        elif row.get("event") == "end":
-            ends[rid] = row
+try:
+    with solar_state.session() as store:
+        loaded = store.audit_rows()
+except solar_state.StateError:
+    print("    (no audit yet)")
+    raise SystemExit(0)
+for row in loaded:
+    rid = row.get("router_id", "")
+    if row.get("event") == "start":
+        starts[rid] = row
+    elif row.get("event") == "end":
+        ends[rid] = row
 
 # Merge start+end, sorted by start ts descending
 merged = []
@@ -218,7 +203,6 @@ else:
         else:
             print(f"    - {time_str}  router={rid[:8]}  req={req_id[:12]}  user={user}  (in-flight)  agent={agent}  planet={planet}")
 PYEOF
-fi
 
 echo ""
 echo "══════════════════════════════════════════════"

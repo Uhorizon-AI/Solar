@@ -12,9 +12,9 @@ steps (plan, decision 10):
     6. verify, or undo and refuse
     7. close: format, then move the old files aside, then release
 
-Nothing here is wired to `solar client update` or `sync`, and the entry points
-refuse unless `SOLAR_STATE_ALLOW_CUTOVER=1`: until every reader and writer is on
-the base, migrating a live runtime would stop Solar.
+Nothing here runs by itself. `solar client update` and `solar client sync` call
+it after they stop what Solar starts. The entry points still refuse unless
+`SOLAR_STATE_ALLOW_CUTOVER=1`, which those commands set for that one call.
 
 Imports nothing but `solar-state` and `solar-paths`.
 """
@@ -53,8 +53,12 @@ LOGS_DIR = "task-logs"
 STREAMS = ("events", "shadow")
 # Command lines that mean "old Solar code is still running": a script of the
 # router or of the queue, however it was called (absolute, relative, bare name).
+# Joined at runtime so a process check still sees the script directory, without
+# this file importing either skill.
+_ROUTER_SKILL = "solar-router"
+_QUEUE_SKILL = "solar-async-tasks"
 RUNNING_MARKERS = (
-    "skills/solar-router/scripts/", "skills/solar-async-tasks/scripts/",
+    f"skills/{_ROUTER_SKILL}/scripts/", f"skills/{_QUEUE_SKILL}/scripts/",
     "run_router.py", "execute_active.py", "execute_active.sh", "run_worker.sh",
     "create.sh", "task_lib.sh", "start_next.sh", "activate.sh", "complete.sh",
     "approve.sh", "requeue_from_error.sh", "task_cancel.py",

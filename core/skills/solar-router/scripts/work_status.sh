@@ -12,19 +12,12 @@ solar_resolve_paths --quiet
 source "$SCRIPT_DIR/../../solar-paths/scripts/solar_runtime_paths.sh"
 cd "$SOLAR_WORKSPACE"
 
-SOLAR_CONTINUITY_JSON="$(solar_runtime_dir continuity)/active.json"
-SOLAR_ASYNC_ROOT="$(solar_runtime_dir async-tasks)"
-export SOLAR_CONTINUITY_JSON SOLAR_ASYNC_ROOT
-
 echo "## Continuity"
-if [[ -f "$SOLAR_CONTINUITY_JSON" ]]; then
-  python3 - <<'PY'
-import json
-from pathlib import Path
-
-import os
-
-data = json.loads(Path(os.environ["SOLAR_CONTINUITY_JSON"]).read_text(encoding="utf-8"))
+STATE_PY="$(cd "$SCRIPT_DIR/../../solar-state/scripts" && pwd)/solar_state.py"
+if continuity="$(python3 "$STATE_PY" continuity get 2>/dev/null)" && [[ "$continuity" != "null" ]]; then
+  CONTINUITY_JSON="$continuity" python3 - <<'PY'
+import json, os
+data = json.loads(os.environ["CONTINUITY_JSON"]) or {}
 fields = [
     ("intention_id", "(none)"),
     ("active_task", "(none)"),
@@ -35,21 +28,26 @@ for key, fallback in fields:
     print(f"- {key}: {data.get(key) or fallback}")
 for key in ("pending", "constraints", "channels_seen"):
     values = data.get(key) or []
-    print(f"- {key}: {'; '.join(values) if values else '(none)'}")
+    shown = "; ".join(str(value) for value in values) if values else "(none)"
+    print(f"- {key}: {shown}")
 PY
 else
-  echo "- (no active.json yet)"
+  echo "- (no continuity record yet)"
 fi
 
 echo
 echo "## Async tasks (machine)"
-for state in drafts planned queued active error; do
-  dir="$SOLAR_ASYNC_ROOT/$state"
-  if [[ -d "$dir" ]]; then
-    count=$(find "$dir" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')
-    echo "- $state: $count"
-  fi
-done
+STATE_PY="$(cd "$SCRIPT_DIR/../../solar-state/scripts" && pwd)/solar_state.py"
+if counts="$(python3 "$STATE_PY" task counts 2>/dev/null)"; then
+  printf '%s' "$counts" | python3 -c 'import json,sys
+data=json.load(sys.stdin)
+labels=("draft","planned","queued","active","error","completed","cancelled","archived")
+names={"draft":"drafts","archived":"archive"}
+for key in labels:
+    print(f"- {names.get(key, key)}: {data.get(key, 0)}")'
+else
+  echo "- (task queue is not sqlite yet)"
+fi
 
 echo
 echo "## Blockers today"
@@ -63,8 +61,4 @@ fi
 
 echo
 echo "## A3 mandates"
-if [[ -d sun/delegations ]]; then
-  python3 "$SCRIPT_DIR/delegation_ctl.py" status
-else
-  echo "- (no sun/delegations yet)"
-fi
+python3 "$SCRIPT_DIR/delegation_ctl.py" status

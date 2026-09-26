@@ -230,3 +230,8 @@ else
   solar_client_bump_manifest_from_install "$SOLAR_WORKSPACE" "$SOLAR_ROOT"
   solar_client_touch_manifest_synced "$SOLAR_WORKSPACE"
 fi
+
+if ! solar_client_state_cutover "${SOLAR_ROOT}" auto; then
+  echo "ERROR: state migration failed after sync. Stopped services were not started." >&2
+  exit 1
+fi

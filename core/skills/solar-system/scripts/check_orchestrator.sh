@@ -237,14 +237,17 @@ if feature_active "async-tasks"; then
     async_severity="$(worst_severity "$async_severity" "DOWN")"
   fi
 
-  # 3b. Queue directory exists (source task_lib.sh to resolve SOLAR_TASK_ROOT)
+  # 3b. The queue is solar-state. A runtime that has not been migrated still
+  # reports its format; that is not a missing directory.
   # shellcheck source=/dev/null
   source "$TASK_LIB" 2>/dev/null || true
-  DIR_QUEUED="${DIR_QUEUED:-${SOLAR_TASK_ROOT:?SOLAR_TASK_ROOT unresolved}/queued}"
-  if [[ -d "$DIR_QUEUED" ]]; then
-    echo "  queue_dir:   present ($DIR_QUEUED)"
+  STATE_PY="$(cd "$(dirname "$TASK_LIB")/../../solar-state/scripts" && pwd)/solar_state.py"
+  queue_line="$(python3 "$STATE_PY" status 2>/dev/null || true)"
+  if [[ -n "$queue_line" ]]; then
+    queue_fmt="$(printf '%s' "$queue_line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("format") or "unset")')"
+    echo "  queue:       $queue_fmt (solar-state)"
   else
-    echo "  queue_dir:   MISSING ($DIR_QUEUED)"
+    echo "  queue:       unreadable"
     async_severity="$(worst_severity "$async_severity" "DOWN")"
   fi
 
@@ -423,11 +426,7 @@ if [[ "$verdict" != "HEALTHY" ]]; then
   # async-tasks issues
   if feature_active "async-tasks"; then
     if [[ ! -x "$TASK_LIB" ]]; then
-      echo "  • async-tasks not set up — initialize runtime directories:"
-      _suggest_script "skills/solar-async-tasks/scripts/setup_async_tasks.sh"
-    fi
-    if [[ ! -d "$DIR_QUEUED" ]]; then
-      echo "  • Queue directory missing — initialize runtime directories:"
+      echo "  • async-tasks not set up — initialize hook configuration:"
       _suggest_script "skills/solar-async-tasks/scripts/setup_async_tasks.sh"
     fi
     if [[ "${orphan_found:-false}" == "true" ]]; then

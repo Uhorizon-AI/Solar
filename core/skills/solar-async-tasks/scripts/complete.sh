@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Complete a task (move from active to completed, handle cleanup + recurring)
+# Finish an active task. Resource hooks run first. The status change, including
+# a recurring requeue or archive, is one call to solar-state.
 
 set -euo pipefail
 
@@ -14,41 +15,37 @@ if [[ -z "$TASK_ID" ]]; then
     exit 1
 fi
 
-TASK_FILE=$(find_task "$TASK_ID")
-
-if [[ -z "$TASK_FILE" ]]; then
+STATUS="$(task_status_of "$TASK_ID" 2>/dev/null || true)"
+if [[ -z "$STATUS" ]]; then
     echo "Error: Task $TASK_ID not found." >&2
     exit 1
 fi
-
-STATUS=$(get_status "$TASK_FILE")
-
 if [[ "$STATUS" != "active" ]]; then
-    log_msg "Warning: Completing task from state '$STATUS' (normally 'active')."
+    echo "Error: Task $TASK_ID is '$STATUS', not active." >&2
+    exit 1
 fi
 
-# 1. Run cleanup hooks FIRST (before moving file)
-cleanup_required=$(extract_meta "$TASK_FILE" "cleanup_required")
+export_file="$(task_export_tmp "$TASK_ID")"
+cleanup_required="$(task_field "$TASK_ID" "cleanup_required")"
 
 if [[ "$cleanup_required" == "true" ]]; then
-    resources=$(extract_meta "$TASK_FILE" "resources")
-    cleanup_timeout=$(extract_meta "$TASK_FILE" "cleanup_timeout")
+    resources="$(task_field "$TASK_ID" "resources")"
+    cleanup_timeout="$(task_field "$TASK_ID" "cleanup_timeout")"
     cleanup_timeout=${cleanup_timeout:-30}
     timeout_cmd=$(get_timeout_cmd)
-
     cleanup_failed=false
 
     for resource in $(parse_resources "$resources"); do
-        hook="$SOLAR_TASK_ROOT/hooks/${resource}/post_complete.sh"
+        hook="$HOOKS_DIR/${resource}/post_complete.sh"
         if [[ -x "$hook" ]]; then
             echo "Running cleanup hook for: $resource"
             if [[ -n "$timeout_cmd" ]]; then
-                if ! $timeout_cmd "$cleanup_timeout" "$hook" "$TASK_FILE"; then
+                if ! $timeout_cmd "$cleanup_timeout" "$hook" "$export_file"; then
                     echo "❌ Cleanup hook failed for $resource" >&2
                     cleanup_failed=true
                 fi
             else
-                if ! "$hook" "$TASK_FILE"; then
+                if ! "$hook" "$export_file"; then
                     echo "❌ Cleanup hook failed for $resource" >&2
                     cleanup_failed=true
                 fi
@@ -56,110 +53,45 @@ if [[ "$cleanup_required" == "true" ]]; then
         fi
     done
 
-    # Per MEMORY.md: block on cleanup failure → run on_error hooks + move to error/
     if [[ "$cleanup_failed" == "true" ]]; then
-        # Run on_error hooks for emergency cleanup
         for resource in $(parse_resources "$resources"); do
-            error_hook="$SOLAR_TASK_ROOT/hooks/${resource}/on_error.sh"
+            error_hook="$HOOKS_DIR/${resource}/on_error.sh"
             if [[ -x "$error_hook" ]]; then
                 echo "Running on_error hook for: $resource"
-                "$error_hook" "$TASK_FILE" || true  # Don't fail if error hook fails
+                "$error_hook" "$export_file" || true
             fi
         done
-
-        ensure_dirs
-        ERROR_FILE="$DIR_ERROR/$(basename "$TASK_FILE")"
-
-        # Update status and add error metadata
-        sed -i.bak 's/^status:.*/status: error/' "$TASK_FILE"
-        if ! grep -q "^cleanup_error:" "$TASK_FILE"; then
-            # Insert before closing --- (2nd occurrence)
-            awk -v error_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
-                /^---$/ && ++count == 2 && !done {
-                    print "cleanup_error: true"
-                    print "cleanup_error_time: " error_time
-                    done = 1
-                }
-                { print }
-            ' "$TASK_FILE" > "$TASK_FILE.tmp" && mv "$TASK_FILE.tmp" "$TASK_FILE"
-        fi
-
-        mv "$TASK_FILE" "$ERROR_FILE"
-        rm -f "${TASK_FILE}.bak"
-        bash "$SCRIPT_DIR/notify_if_configured.sh" "$ERROR_FILE" || true
-        echo "❌ Task moved to error/ due to cleanup failure: $TASK_ID"
+        rm -f "$export_file"
+        state task fail "$TASK_ID" \
+            --field cleanup_error=true \
+            --field "cleanup_error_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
+        bash "$SCRIPT_DIR/notify_if_configured.sh" "$TASK_ID" || true
+        echo "❌ Task moved to error due to cleanup failure: $TASK_ID"
         exit 1
     fi
 fi
+rm -f "$export_file"
 
-# Cancellation still runs the same resource cleanup before becoming terminal.
 if [[ "${SOLAR_TASK_CANCELLED:-}" == "1" ]]; then
-    ensure_dirs
-    sed -i.bak 's/^status:.*/status: cancelled/' "$TASK_FILE"
-    rm -f "${TASK_FILE}.bak"
-    mv "$TASK_FILE" "$DIR_CANCELLED/$(basename "$TASK_FILE")"
+    state task complete "$TASK_ID" --cancelled >/dev/null
     exit 0
 fi
 
-# 2. Move to completed/
-ensure_dirs
-NEW_FILE="$DIR_COMPLETED/$(basename "$TASK_FILE")"
+landed="$(state task complete "$TASK_ID")"
+status="$(printf '%s' "$landed" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
 
-# Update status and timestamp (always refresh completed_at for recurring)
-sed -i.bak 's/^status:.*/status: completed/' "$TASK_FILE"
-sed -i.bak '/^completed_at:/d' "$TASK_FILE"  # Remove old timestamp
+bash "$SCRIPT_DIR/notify_if_configured.sh" "$TASK_ID" || true
 
-# Insert before closing --- (2nd occurrence)
-awk -v completed_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
-    /^---$/ && ++count == 2 && !done {
-        print "completed_at: " completed_time
-        done = 1
-    }
-    { print }
-' "$TASK_FILE" > "$TASK_FILE.tmp" && mv "$TASK_FILE.tmp" "$TASK_FILE"
-
-mv "$TASK_FILE" "$NEW_FILE"
-rm -f "${TASK_FILE}.bak"
-
-# Optional: notify via Telegram if configured
-[[ -x "$SCRIPT_DIR/notify_if_configured.sh" ]] && "$SCRIPT_DIR/notify_if_configured.sh" "$NEW_FILE" || true
-
-# 3. Check if recurring
-recurring=$(extract_meta "$NEW_FILE" "recurring")
-
-if [[ "$recurring" == "true" ]]; then
-    recurring_max_runs=$(extract_meta "$NEW_FILE" "recurring_max_runs")
-    recurring_run_count=$(extract_meta "$NEW_FILE" "recurring_run_count")
-
-    recurring_max_runs=${recurring_max_runs:-0}
-    recurring_run_count=${recurring_run_count:-0}
-    recurring_run_count=$((recurring_run_count + 1))
-
-    # Check if max runs reached
-    if [[ $recurring_max_runs -gt 0 ]] && [[ $recurring_run_count -ge $recurring_max_runs ]]; then
-        # Archive task (finished all runs)
-        ARCHIVE_FILE="$DIR_ARCHIVE/$(basename "$NEW_FILE")"
-
-        sed -i.bak 's/^status:.*/status: archived/' "$NEW_FILE"
-        sed -i.bak "/^recurring_run_count:.*/c\\
-recurring_run_count: $recurring_run_count
-" "$NEW_FILE"
-
-        mv "$NEW_FILE" "$ARCHIVE_FILE"
-        rm -f "${NEW_FILE}.bak"
-        echo "✅ Recurring task archived after $recurring_run_count runs: $TASK_ID"
-    else
-        # Re-queue task
-        QUEUED_FILE="$DIR_QUEUED/$(basename "$NEW_FILE")"
-
-        # Update metadata
-        sed -i.bak 's/^status:.*/status: queued/' "$NEW_FILE"
-        rm -f "${NEW_FILE}.bak"
-        set_meta "$NEW_FILE" "recurring_run_count" "$recurring_run_count"
-
-        mv "$NEW_FILE" "$QUEUED_FILE"
-        echo "✅ Recurring task re-queued (run $recurring_run_count): $TASK_ID"
-    fi
-else
-    echo "✅ Task completed: $TASK_ID"
-fi
+case "$status" in
+    archived)
+        count="$(task_field "$TASK_ID" "recurring_run_count")"
+        echo "✅ Recurring task archived after ${count:-?} runs: $TASK_ID"
+        ;;
+    queued)
+        count="$(task_field "$TASK_ID" "recurring_run_count")"
+        echo "✅ Recurring task re-queued (run ${count:-?}): $TASK_ID"
+        ;;
+    *)
+        echo "✅ Task completed: $TASK_ID"
+        ;;
+esac

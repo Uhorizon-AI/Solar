@@ -1,11 +1,10 @@
 """Derived SQLite projection of the framework runtime, for the console and MCP.
 
-The files stay the truth. This index only projects what a reader would already
-compute from `Solar/runtime/`: the task queue, the router audit, the gateway
-record and the continuity record. Every row carries the identity and the
-fingerprint of the file it came from, so a consumer can tell whether the
-projection is still valid, and nothing is stored that could not be re-read from
-disk. Delete `index.sqlite` and it comes back from the same files.
+Tasks come from solar-state. The audit, the gateway record and continuity are
+still read from their files. Every row carries the fingerprint of the file it
+came from, so a consumer can tell whether the projection is still valid.
+Delete `index.sqlite` and it comes back from those same sources. The live
+runtime's index is never deleted by this module.
 
 Parsing is not duplicated: tasks reuse `app_solar`'s readers, so the console and
 the index can never drift into two different ideas of the same file.
@@ -89,55 +88,57 @@ class _Sources:
         return key
 
 
-def _task_sources(root: Path, sources: _Sources) -> None:
-    for state in app_solar.TASK_STATES:
-        folder = root / state
-        if not folder.is_dir():
-            continue
-        for path in sorted(folder.iterdir()):
-            if path.suffix == '.md':
-                sources.add(path, 'task')
-                log = root / 'logs' / (path.stem + '.log')
-                if log.exists():
-                    sources.add(log, 'task_log')
+def _task_sources(sources: _Sources, tasks: list[dict]) -> None:
+    """Fingerprint state.sqlite, and any log the row already points at."""
+    db = app_solar.solar_state.db_path()
+    if db.is_file():
+        sources.add(db, 'task')
+        # WAL commits land in the sidecar. The main file can stay byte-identical
+        # until a checkpoint, so a new task has to move this fingerprint too.
+        for suffix in ('-wal', '-shm'):
+            side = Path(str(db) + suffix)
+            if side.is_file():
+                sources.add(side, 'task')
+    for row in tasks:
+        log = row.get('log_path')
+        if log and Path(log).is_file():
+            sources.add(Path(log), 'task_log')
 
 
-def _task_source_path(root: Path, row: dict, workspace: Path) -> str:
-    candidate = Path(row['file'])
-    if not candidate.is_absolute():
-        candidate = workspace / candidate
-    return str(candidate)
+def _task_source_path(row: dict, workspace: Path) -> str:
+    del row, workspace
+    return str(app_solar.solar_state.db_path())
 
 
-def _scan_audit(path: Path) -> tuple[list[dict], dict]:
-    """Full pass over the append-only audit. The console reads only its tail."""
+def _scan_audit() -> tuple[list[dict], dict]:
+    """Full pass over the audit rows. The console reads only its tail."""
     records: dict[str, dict] = {}
     counters = dict(executions=0, router_errors=0, invalid=0)
     try:
-        stream = path.open('r', encoding='utf-8', errors='replace')
-    except OSError:
+        with app_solar.solar_state.session() as store:
+            lines = store.audit_lines()
+    except app_solar.solar_state.StateError:
         return [], counters
-    with stream:
-        for line in stream:
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-                if not isinstance(row, dict) or not row.get('router_id'):
-                    raise ValueError('Missing router_id')
-            except ValueError:
-                counters['invalid'] += 1
-                continue
-            if row.get('event') == 'start':
-                counters['executions'] += 1
-            elif row.get('event') == 'end' and row.get('status') in ('error', 'failed'):
-                counters['router_errors'] += 1
-            item = records.setdefault(row['router_id'], {})
-            item.update(row)
-            if row.get('event') == 'start':
-                item['started_at'] = row.get('ts')
-            elif row.get('event') == 'end':
-                item['ended_at'] = row.get('ts')
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict) or not row.get('router_id'):
+                raise ValueError('Missing router_id')
+        except ValueError:
+            counters['invalid'] += 1
+            continue
+        if row.get('event') == 'start':
+            counters['executions'] += 1
+        elif row.get('event') == 'end' and row.get('status') in ('error', 'failed'):
+            counters['router_errors'] += 1
+        item = records.setdefault(row['router_id'], {})
+        item.update(row)
+        if row.get('event') == 'start':
+            item['started_at'] = row.get('ts')
+        elif row.get('event') == 'end':
+            item['ended_at'] = row.get('ts')
     runs = []
     for router_id, data in records.items():
         metadata = data.get('metadata') if isinstance(data.get('metadata'), dict) else {}
@@ -164,19 +165,16 @@ def build(workspace: Path | None = None, target: Path | None = None) -> Path:
     target = Path(target or index_path())
     stamp = app_solar.iso()
     sources = _Sources(stamp)
-    root = app_solar.runtime_dir('async-tasks')
 
-    _task_sources(root, sources)
     tasks, _ = app_solar.read_tasks(workspace)
+    _task_sources(sources, tasks)
 
-    audit = app_solar.runtime_dir('router') / 'audit.jsonl'
-    audit_key = sources.add(audit, 'router_audit')
-    runs, counters = _scan_audit(audit)
+    audit_key = str(app_solar.solar_state.db_path())
+    runs, counters = _scan_audit()
 
     gateway = app_solar.runtime_dir('gateway') / 'env.fail'
     stamp_file = app_solar.runtime_dir('gateway') / 'env.stamp'
-    continuity = app_solar.runtime_dir('continuity') / 'active.json'
-    for path, kind in ((gateway, 'gateway'), (stamp_file, 'gateway'), (continuity, 'continuity')):
+    for path, kind in ((gateway, 'gateway'), (stamp_file, 'gateway')):
         if path.exists():
             sources.add(path, kind)
 
@@ -199,7 +197,7 @@ def build(workspace: Path | None = None, target: Path | None = None) -> Path:
               row['provider'], row['provider_requested'], row['origin'], row['summary'],
               json.dumps(row['artifacts'], sort_keys=True), int(bool(row['recurring'])),
               row['recurring_run_count'], row['recurring_last_run'], int(bool(row['stale'])),
-              row['file'], _task_source_path(root, row, workspace))
+              row['file'], _task_source_path(row, workspace))
              for row in sorted(tasks, key=lambda row: row['id'])])
         connection.executemany(
             'INSERT OR REPLACE INTO executions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -280,14 +278,6 @@ def stale_sources(target: Path | None = None) -> list[dict]:
         if stat.st_size != size or stat.st_mtime_ns != mtime_ns:
             changed.append(dict(path=path, kind=kind,
                                 reason='rewritten' if _digest(file) != sha else 'touched'))
-    root = app_solar.runtime_dir('async-tasks')
-    for state in app_solar.TASK_STATES:
-        folder = root / state
-        if not folder.is_dir():
-            continue
-        for file in folder.iterdir():
-            if file.suffix == '.md' and str(file) not in recorded:
-                changed.append(dict(path=str(file), kind='task', reason='new'))
     return changed
 
 
@@ -351,32 +341,12 @@ def snapshot_from_index(workspace: Path, target: Path | None = None) -> dict:
 
 
 def projection(workspace: Path, target: Path | None = None) -> dict:
-    """Serve the console from the index while it is fresh; from the files when not.
-
-    The files stay the truth, so a stale projection is never served as if it
-    were current: the console falls back and says so.
-    """
-    target = Path(target or index_path())
-    if not target.exists():
-        data = app_solar.snapshot(workspace)
-        data['projection'] = dict(source='files', index=str(target), available=False,
-                                  stale=[], reason='index not built')
-        return data
-    try:
-        changed = stale_sources(target)
-    except (sqlite3.Error, OSError) as exc:
-        data = app_solar.snapshot(workspace)
-        data['projection'] = dict(source='files', index=str(target), available=False,
-                                  stale=[], reason=f'index unreadable: {exc}')
-        return data
-    if changed:
-        data = app_solar.snapshot(workspace)
-        data['projection'] = dict(source='files', index=str(target), available=True,
-                                  stale=changed, reason='sources changed since the build')
-        return data
-    data = snapshot_from_index(workspace, target)
-    data['projection'] = dict(source='index', index=str(target), available=True,
-                              stale=[], reason='')
+    """The console reads the views in state.sqlite. index.sqlite is not the source."""
+    del target
+    data = app_solar.snapshot(workspace)
+    data['projection'] = dict(
+        source='state', index=str(app_solar.solar_state.db_path()), available=True,
+        stale=[], reason='')
     return data
 
 

@@ -5,22 +5,23 @@
 # `## Delivery` section, that is the message: the one-screen delivery the
 # executor wrote, ending in its own evidence line. Otherwise a brief line plus
 # the result location. Long text is chunked (~1s apart).
-# Usage: notify_if_configured.sh <path_to_completed_task.md>
+# Usage: notify_if_configured.sh <task_id>
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
 
-TASK_FILE="${1:-}"
-[[ -z "$TASK_FILE" || ! -f "$TASK_FILE" ]] && exit 0
+TASK_ID="${1:-}"
+[[ -z "$TASK_ID" ]] && exit 0
+task_status_of "$TASK_ID" >/dev/null 2>&1 || exit 0
 
-NOTIFY_WHEN=$(extract_meta "$TASK_FILE" "notify_when")
+NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
 [[ "$NOTIFY_WHEN" != "completed" ]] && exit 0
 
-if [[ "$(extract_meta "$TASK_FILE" "notify_delivered")" == "true" ]]; then
+if [[ "$(task_field "$TASK_ID" "notify_delivered")" == "true" ]]; then
   exit 0
 fi
 
-TITLE=$(extract_meta "$TASK_FILE" "title")
+TITLE=$(task_field "$TASK_ID" "title")
 [[ -z "$TITLE" ]] && TITLE="Task"
 
 # The task root is machine state outside the workspace: never climb out of it
@@ -31,10 +32,10 @@ SUN_DIR="$WORKSPACE_DIR/sun"
 SOLAR_ROOT="${SOLAR_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
 SEND_SCRIPT="$SOLAR_ROOT/core/skills/solar-telegram/scripts/send_telegram.sh"
 record_notify_failure() {
-  upsert_frontmatter_key "$TASK_FILE" "notify_status" "failed"
-  upsert_frontmatter_key "$TASK_FILE" "notify_error" "$1"
-  upsert_frontmatter_key "$TASK_FILE" "notify_attempted_at" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "Task notification failed: $1 ($TASK_FILE)" >&2
+  state task set "$TASK_ID" notify_status failed >/dev/null
+  state task set "$TASK_ID" notify_error "$1" >/dev/null
+  state task set "$TASK_ID" notify_attempted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
+  echo "Task notification failed: $1 ($TASK_ID)" >&2
 }
 if [[ ! -x "$SEND_SCRIPT" ]]; then
   record_notify_failure "sender_unavailable"
@@ -57,14 +58,14 @@ fi
 # so they are always sent as plain text, whatever `.env` sets.
 export TELEGRAM_PARSE_MODE="none"
 
-SECRETS_LOADER="$SOLAR_ROOT/core/skills/solar-paths/scripts/solar_secrets.sh"
+SECRETS_LOADER="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_secrets.sh"
 if [[ -f "$SECRETS_LOADER" ]]; then
   # shellcheck source=/dev/null
   source "$SECRETS_LOADER"
   solar_load_installation_secrets
 fi
 
-ORIGIN_CHAT=$(extract_meta "$TASK_FILE" "origin_chat_id")
+ORIGIN_CHAT=$(task_field "$TASK_ID" "origin_chat_id")
 CHAT_ID="${ORIGIN_CHAT:-${TELEGRAM_CHAT_ID:-}}"
 
 PROFILE="$SUN_DIR/preferences/profile.md"
@@ -81,8 +82,8 @@ telegram_chat_allowed "$CHAT_ID" || exit 0
 
 export TELEGRAM_CHAT_ID="$CHAT_ID"
 
-LOCATION="$(task_result_location "$TASK_FILE")"
-TASK_STATUS=$(extract_meta "$TASK_FILE" "status")
+LOCATION="$(task_result_location "$TASK_ID")"
+TASK_STATUS=$(task_status_of "$TASK_ID")
 BRIEF="Task completed: ${TITLE}"
 if [[ "$TASK_STATUS" == "error" ]]; then
   BRIEF="Task failed and needs attention: ${TITLE}"
@@ -97,16 +98,16 @@ fi
 # phone. `## Result` is deliberately not read here — it is the provider's full
 # account, and sending it would be transport, not compression.
 task_delivery() {
-  awk '
+  task_body "$1" | awk '
     /^## Delivery[[:space:]]*$/ { found = 1; next }
     found && /^## / { exit }
     found { print }
-  ' "$1"
+  '
 }
 
 DELIVERY=""
 if [[ "$TASK_STATUS" != "error" ]]; then
-  DELIVERY="$(task_delivery "$TASK_FILE" | sed -e '/./,$!d')"
+  DELIVERY="$(task_delivery "$TASK_ID" | sed -e '/./,$!d')"
 fi
 
 send_chunks() {
@@ -131,7 +132,7 @@ send_chunks() {
   return 0
 }
 
-DELIVERY_EXPECTED=$(extract_meta "$TASK_FILE" "delivery_expected")
+DELIVERY_EXPECTED=$(task_field "$TASK_ID" "delivery_expected")
 if [[ -n "$DELIVERY" ]]; then
   # The delivery already ends with its own evidence line: the title and the log
   # path would only push it off the top of the screen.
@@ -147,6 +148,6 @@ fi
 
 send_chunks "$MESSAGE" || { record_notify_failure "telegram_send_failed"; exit 1; }
 
-upsert_frontmatter_key "$TASK_FILE" "notify_status" "delivered"
-upsert_frontmatter_key "$TASK_FILE" "notify_error" "null"
-upsert_frontmatter_key "$TASK_FILE" "notify_delivered" "true"
+state task set "$TASK_ID" notify_status delivered >/dev/null
+state task set "$TASK_ID" notify_error null >/dev/null
+state task set "$TASK_ID" notify_delivered true >/dev/null

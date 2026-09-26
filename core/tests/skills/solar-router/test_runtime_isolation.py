@@ -75,14 +75,13 @@ class TestRuntimeIsolation(unittest.TestCase):
         result = route(request)
         self.assertEqual(result["status"], "success")
 
-        # The writes happened — in the fixture.
-        self.assertTrue(self.runtime.audit.exists(), "the fixture audit was never written")
-        events = [json.loads(line) for line in
-                  self.runtime.audit.read_text(encoding="utf-8").splitlines() if line.strip()]
-        self.assertTrue(any(row.get("event") == "start" for row in events))
-        self.assertTrue(any(row.get("event") == "end" for row in events))
-        self.assertTrue(self.runtime.continuity.exists(),
-                        "the fixture continuity record was never written")
+        import solar_state
+        with solar_state.session() as store:
+            events = store.audit_rows()
+            self.assertTrue(any(row.get("event") == "start" for row in events))
+            self.assertTrue(any(row.get("event") == "end" for row in events))
+            self.assertIsNotNone(store.continuity_get())
+        self.assertFalse(self.runtime.audit.exists())
 
         # And the live store did not move.
         for path, before in live:

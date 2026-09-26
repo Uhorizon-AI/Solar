@@ -86,6 +86,10 @@ def test_upgrade_copies_an_existing_base_first(ready):
     conn = sqlite3.connect(solar_state.db_path(ready))
     conn.execute("PRAGMA user_version = 0")
     conn.execute("PRAGMA foreign_keys = OFF")
+    views = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'view'")]
+    for name in views:
+        conn.execute(f"DROP VIEW {name}")
     tables = [r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")]
     for table in tables:
@@ -671,6 +675,107 @@ def test_published_v1_migration_is_unchanged():
     import hashlib
     digest = hashlib.sha256(solar_state.MIGRATIONS[0].encode()).hexdigest()
     assert digest == V1_SHA256
+
+
+def test_claim_next_takes_the_highest_priority_and_only_one(ready):
+    from datetime import datetime
+    moment = datetime(2026, 9, 25, 12, 0)
+    with session(ready, auto_backup=False) as s:
+        low = s.task_create([("title", '"low"'), ("priority", "low"),
+                             ("created", "2026-09-01T00:00:00Z")], status="queued", task_id="low")
+        high = s.task_create([("title", '"high"'), ("priority", "high"),
+                              ("created", "2026-09-02T00:00:00Z")], status="queued", task_id="high")
+        later = s.task_create([("title", '"later"'), ("priority", "high"),
+                               ("scheduled_time", '"18:00"')], status="queued", task_id="later")
+        claimed = s.task_claim_next("worker-a", now=moment)
+        assert claimed["id"] == high
+        assert claimed["status"] == "active"
+        assert claimed["claimed_by"] == "worker-a"
+        again = s.task_claim_next("worker-b", now=moment)
+        assert again["id"] == low
+        assert s.task_status(later) == "queued"
+        assert s.task_claim_next("worker-c", now=moment) is None
+
+
+def test_claim_next_cancels_a_requested_task_and_takes_the_next(ready):
+    with session(ready, auto_backup=False) as s:
+        s.task_create([("title", '"stop"'), ("priority", "high")], status="queued", task_id="stop")
+        s.task_create([("title", '"go"'), ("priority", "low")], status="queued", task_id="go")
+        s.cancellation_request("stop")
+        claimed = s.task_claim_next("worker")
+        assert claimed["id"] == "go"
+        assert s.task_status("stop") == "cancelled"
+
+
+def test_a_released_claim_is_skipped_until_the_next_pass(ready):
+    with session(ready, auto_backup=False) as s:
+        s.task_create([("title", '"a"'), ("priority", "high")], status="queued", task_id="a")
+        s.task_create([("title", '"b"')], status="queued", task_id="b")
+        first = s.task_claim_next("worker")
+        assert first["id"] == "a"
+        s.task_release("a", "worker")
+        assert s.task_status("a") == "queued"
+        second = s.task_claim_next("worker", exclude=["a"])
+        assert second["id"] == "b"
+
+
+def test_complete_sets_the_stamp_and_recurring_comes_back_or_archives(ready):
+    with session(ready, auto_backup=False) as s:
+        s.task_create([("title", '"once"')], status="queued", task_id="once")
+        s.task_claim("once", "w")
+        assert s.task_complete("once") == "completed"
+        assert s.task_field("once", "completed_at")
+
+        s.task_create([("title", '"loop"'), ("recurring", "true"),
+                       ("recurring_run_count", "1"), ("recurring_max_runs", "3")],
+                      status="queued", task_id="loop")
+        s.task_claim("loop", "w")
+        assert s.task_complete("loop") == "queued"
+        assert s.task_field("loop", "recurring_run_count") == "2"
+        assert s.task_status("loop") == "queued"
+
+        s.task_create([("title", '"last"'), ("recurring", "true"),
+                       ("recurring_run_count", "2"), ("recurring_max_runs", "3")],
+                      status="queued", task_id="last")
+        s.task_claim("last", "w")
+        assert s.task_complete("last") == "archived"
+        assert s.task_status("last") == "archived"
+
+
+def test_complete_cancelled_and_status_is_the_column(ready):
+    with session(ready, auto_backup=False) as s:
+        s.task_create([("title", '"c"'), ("origin_request_id", '"req-1"')],
+                      status="queued", task_id="c")
+        assert s.task_status("c") == "queued"
+        assert s.task_find_origin("req-1") == "c"
+        assert s.task_status("missing") is None
+        s.task_claim("c", "w")
+        assert s.task_complete("c", cancelled=True) == "cancelled"
+        assert s.task_status("c") == "cancelled"
+
+
+def _claim_next_once(root, worker, barrier, out):
+    os.environ["SOLAR_RUNTIME_ROOT"] = root
+    barrier.wait()
+    with solar_state.session(root, auto_backup=False) as store:
+        task = store.task_claim_next(worker)
+    out.put(task["id"] if task else None)
+
+
+def test_claim_next_has_one_winner(ready):
+    with session(ready, auto_backup=False) as s:
+        s.task_create([("title", '"only"')], status="queued", task_id="only")
+    ctx = multiprocessing.get_context("spawn")
+    barrier, out = ctx.Barrier(2), ctx.Queue()
+    procs = [ctx.Process(target=_claim_next_once, args=(str(ready), w, barrier, out))
+             for w in ("w1", "w2")]
+    for proc in procs:
+        proc.start()
+    winners = [out.get(timeout=30) for _ in procs]
+    for proc in procs:
+        proc.join(30)
+    assert winners.count("only") == 1
+    assert winners.count(None) == 1
 
 
 @pytest.mark.parametrize("bad", ["../escape", "a/b", "..", ".", "back\\slash",

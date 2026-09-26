@@ -83,8 +83,9 @@ def test_the_handler_refuses_the_mutation(solar_env):
     assert refused["code"] == "approval_required"
     assert refused["gate"] == "solar-mcp/handler"
     # And nothing was created.
-    drafts = list((solar_env.tasks / "drafts").glob("*.md")) if (solar_env.tasks / "drafts").is_dir() else []
-    assert drafts == []
+    import solar_state
+    with solar_state.session() as store:
+        assert store.task_list() == []
 
 
 def test_a_forged_approval_does_not_open_the_door(solar_env):
@@ -103,9 +104,11 @@ def test_granted_approval_lets_exactly_that_call_through_once(solar_env):
 
     assert first["result"]["isError"] is False, first
     assert payload(first)["verdict"]["code"] == "approval_ok"
-    created = list((solar_env.tasks / "drafts").glob("*.md"))
-    assert len(created) == 1
-    assert "Approved task" in created[0].read_text(encoding="utf-8")
+    import solar_state
+    with solar_state.session() as store:
+        rows = store.task_list("draft")
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Approved task"
 
     assert second["result"]["isError"] is True
     assert payload(second)["refused"]["code"] == "approval_consumed"
@@ -165,10 +168,7 @@ def test_create_then_approve_moves_the_same_draft_to_the_queue(solar_env):
             "approval_id": granted["approval_id"],
         })
     assert created["result"]["isError"] is False, created
-    drafts = list((solar_env.tasks / "drafts").glob("*.md"))
-    assert len(drafts) == 1
-    original = drafts[0].read_text(encoding="utf-8")
-    task_id = re.search(r'^id: "?([^"\n]+)', original, re.M).group(1)
+    task_id = payload(created)["result"]["id"]
     approved = mcp_approve.grant("solar_task_approve", {"task_id": task_id}, 900, "wire test")
     with client(solar_env) as probe:
         answer = probe.call_tool("solar_task_approve", {
@@ -179,33 +179,26 @@ def test_create_then_approve_moves_the_same_draft_to_the_queue(solar_env):
     result = payload(answer)["result"]
     assert result["from_status"] == "draft"
     assert result["to_status"] == "queued"
-    assert list((solar_env.tasks / "drafts").glob("*.md")) == []
-    queued = list((solar_env.tasks / "queued").glob("*.md"))
-    assert len(queued) == 1
-    text = queued[0].read_text(encoding="utf-8")
-    assert "status: queued" in text
-    assert "Do the work." in text
-    assert 'title:' in text and "Ship it" in text
+    import solar_state
+    with solar_state.session() as store:
+        task = store.task_get(task_id)
+    assert task["status"] == "queued"
+    assert "Do the work." in task["body"]
+    assert task["title"] == "Ship it"
 
 
-def test_an_already_planned_file_is_approved(solar_env):
-    import re
+def test_an_already_planned_task_is_approved(solar_env):
+    import solar_state
     created = mcp_server._do_task_create({"title": "Already planned", "description": "x"})
-    task_id = re.search(r"ID: (\S+)", created["output"]).group(1)
-    draft = next((solar_env.tasks / "drafts").glob("*.md"))
-    planned = solar_env.tasks / "planned" / draft.name
-    planned.parent.mkdir(parents=True, exist_ok=True)
-    planned.write_text(
-        draft.read_text(encoding="utf-8").replace("status: draft", "status: planned", 1),
-        encoding="utf-8")
-    draft.unlink()
+    task_id = created["id"]
+    with solar_state.session() as store:
+        store.task_transition(task_id, "planned", expected_from="draft")
     result = mcp_server._do_task_approve({"task_id": task_id})
     assert result == dict(approved=True, id=task_id, from_status="planned", to_status="queued")
-    assert not planned.exists()
-    queued = next((solar_env.tasks / "queued").glob("*.md"))
-    text = queued.read_text(encoding="utf-8")
-    assert "status: queued" in text
-    assert "Already planned" in text
+    with solar_state.session() as store:
+        task = store.task_get(task_id)
+    assert task["status"] == "queued"
+    assert task["title"] == "Already planned"
 
 
 def _cancel(solar_env, task_id: str) -> dict:
@@ -219,98 +212,62 @@ def _cancel(solar_env, task_id: str) -> dict:
     return payload(answer)["result"]
 
 
-def _queued_file(solar_env) -> tuple[str, Path]:
-    import re
-    args = {"title": "Stop me", "queued": True}
-    granted = mcp_approve.grant("solar_task_create", args, 900, "wire test")
-    with client(solar_env) as probe:
-        created = probe.call_tool("solar_task_create", dict(args, approval_id=granted["approval_id"]))
-    assert created["result"]["isError"] is False, created
-    queued = list((solar_env.tasks / "queued").glob("*.md"))
-    assert len(queued) == 1
-    task_id = re.search(r'^id: "?([^"\n]+)', queued[0].read_text(encoding="utf-8"), re.M).group(1)
-    return task_id, queued[0]
-
-
-def test_cancel_has_one_contract_on_files_and_on_sqlite(solar_env):
-    """A queued task becomes cancelled, an active one stays active, in both formats."""
-    import json as _json
+def test_cancel_is_the_row_and_files_are_refused(solar_env):
+    """A queued task becomes cancelled. An active one stays active. Files refuse."""
     import solar_state
 
-    queued_id, queued_path = _queued_file(solar_env)
-    queued_files = _cancel(solar_env, queued_id)
-    assert queued_files == dict(task_id=queued_id, status="cancellation_requested",
-                                task_status="cancelled")
-    assert not queued_path.exists()
-    cancelled = solar_env.tasks / "cancelled" / queued_path.name
-    assert "status: cancelled" in cancelled.read_text(encoding="utf-8")
-    marker = _json.loads((solar_env.tasks / "cancellation" / f"{queued_id}.json").read_text())
-    assert marker["status"] == "cancellation_requested"
+    with solar_state.session() as store:
+        queued_id = store.task_create([("title", '"Q"'), ("object", '"o"')], "\n# Q\n", status="queued")
+        active_id = store.task_create([("title", '"A"')], "\n# A\n", status="queued")
+        store.task_transition(active_id, "active", expected_from="queued")
+    queued = _cancel(solar_env, queued_id)
+    active = _cancel(solar_env, active_id)
+    assert queued == dict(task_id=queued_id, status="cancellation_requested",
+                          task_status="cancelled")
+    assert active == dict(task_id=active_id, status="cancellation_requested",
+                          task_status="active")
+    with solar_state.session() as store:
+        assert store.task_get(queued_id)["status"] == "cancelled"
+        assert store.task_get(queued_id)["object"] == "o"
+        assert store.task_get(active_id)["status"] == "active"
+        assert store.cancellation_requested(queued_id)
+        assert store.cancellation_requested(active_id)
 
-    active_id, active_path = _queued_file(solar_env)
-    active_dir = solar_env.tasks / "active"
-    active_dir.mkdir(parents=True, exist_ok=True)
-    moved = active_dir / active_path.name
-    moved.write_text(active_path.read_text(encoding="utf-8").replace(
-        "status: queued", "status: active", 1), encoding="utf-8")
-    active_path.unlink()
-    active_files = _cancel(solar_env, active_id)
-    assert active_files == dict(task_id=active_id, status="cancellation_requested",
-                                task_status="active")
-    assert "status: active" in moved.read_text(encoding="utf-8")
-    assert (solar_env.tasks / "cancellation" / f"{active_id}.json").is_file()
-
-    with solar_state.cutover(solar_env.runtime) as cut:
-        cut.upgrade_schema()
-        cut.set_format("sqlite")
-    with solar_state.session(solar_env.runtime, auto_backup=False) as store:
-        queued_sql = store.task_create([("title", '"Q"'), ("object", '"o"')], status="queued")
-        active_sql = store.task_create([("title", '"A"')], status="queued")
-        store.task_transition(active_sql, "active")
-    queued_base = _cancel(solar_env, queued_sql)
-    active_base = _cancel(solar_env, active_sql)
-    assert queued_base == dict(task_id=queued_sql, status="cancellation_requested",
-                               task_status="cancelled")
-    assert active_base == dict(task_id=active_sql, status="cancellation_requested",
-                               task_status="active")
-    assert set(queued_files) == set(queued_base) == set(active_files) == set(active_base)
-    with solar_state.session(solar_env.runtime, auto_backup=False) as store:
-        assert store.task_get(queued_sql)["status"] == "cancelled"
-        assert store.task_get(queued_sql)["object"] == "o"
-        assert store.task_get(active_sql)["status"] == "active"
-        assert store.cancellation_requested(queued_sql)
-        assert store.cancellation_requested(active_sql)
+    (solar_env.runtime / "STATE_FORMAT").write_text("files\n", encoding="utf-8")
+    granted = mcp_approve.grant("solar_task_cancel", {"task_id": queued_id}, 900, "wire test")
+    with client(solar_env) as probe:
+        refused = probe.call_tool("solar_task_cancel", {
+            "task_id": queued_id, "approval_id": granted["approval_id"],
+        })
+    assert refused["result"]["isError"] is True
+    (solar_env.runtime / "STATE_FORMAT").write_text("sqlite\n", encoding="utf-8")
 
 
 def test_an_unknown_format_is_refused(solar_env):
     import solar_state
-    mcp_server._do_task_create({"title": "Stay a draft", "description": "x"})
-    draft = next((solar_env.tasks / "drafts").glob("*.md"))
+    created = mcp_server._do_task_create({"title": "Stay a draft", "description": "x"})
+    task_id = created["id"]
     (solar_env.runtime / "STATE_FORMAT").write_text("banana\n", encoding="utf-8")
     with pytest.raises(solar_state.StateUnavailable, match="banana"):
-        mcp_server._do_task_approve({"task_id": "unused"})
-    assert draft.is_file()
-    assert list((solar_env.tasks / "queued").glob("*.md")) == []
+        mcp_server._do_task_approve({"task_id": task_id})
+    (solar_env.runtime / "STATE_FORMAT").write_text("sqlite\n", encoding="utf-8")
+    with solar_state.session() as store:
+        assert store.task_get(task_id)["status"] == "draft"
 
 
-def test_a_cutover_waits_for_an_mcp_file_operation(solar_env, monkeypatch):
-    import re
+def test_a_cutover_waits_while_a_session_holds_the_lock(solar_env):
     import solar_state
-    created = mcp_server._do_task_create({"title": "Hold the lock", "description": "x"})
-    task_id = re.search(r"ID: (\S+)", created["output"]).group(1)
     started, release = threading.Event(), threading.Event()
     finished: list[float] = []
-    real = mcp_server._files_approve
 
-    def slow(held_id: str) -> str:
-        started.set()
-        assert release.wait(30)
-        result = real(held_id)
-        finished.append(time.monotonic())
-        return result
+    def hold() -> None:
+        with solar_state.session() as store:
+            started.set()
+            assert release.wait(30)
+            store.task_create([("title", '"Hold"')], "\n# Hold\n", status="draft")
+            finished.append(time.monotonic())
 
-    monkeypatch.setattr(mcp_server, "_files_approve", slow)
-    holder = threading.Thread(target=lambda: mcp_server._do_task_approve({"task_id": task_id}))
+    holder = threading.Thread(target=hold)
     holder.start()
     assert started.wait(30)
     acquired: list[float] = []

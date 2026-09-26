@@ -19,6 +19,7 @@ SCRIPTS = CORE_ROOT / "skills" / "solar-async-tasks" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import execute_active as ea  # noqa: E402
+from queue_mirror import env_for, mirror, seed, task_id_of  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -27,14 +28,9 @@ import execute_active as ea  # noqa: E402
 
 def _create(tmp_path: Path, metadata: dict) -> Path:
     root = tmp_path / "runtime" / "async-tasks"
-    root.mkdir(parents=True)
     body = tmp_path / "body.md"
     body.write_text("work\n", encoding="utf-8")
-    env = {
-        **os.environ,
-        "SOLAR_WORKSPACE": str(tmp_path),
-        "SOLAR_TASK_ROOT": str(root),
-    }
+    env = env_for(root, {**os.environ, "SOLAR_WORKSPACE": str(tmp_path)})
     result = subprocess.run(
         [
             "bash", str(SCRIPTS / "create.sh"), "--queued",
@@ -45,6 +41,7 @@ def _create(tmp_path: Path, metadata: dict) -> Path:
         env=env, text=True, capture_output=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
+    mirror(root)
     return next((root / "queued").glob("*.md"))
 
 
@@ -69,53 +66,23 @@ def test_create_writes_declared_scope_and_ignores_unknown_keys(tmp_path):
     assert "notify_when: completed" in text
 
 
-def test_create_fails_loudly_when_the_task_cannot_be_written(tmp_path):
-    """A provider sandbox that cannot write the queue must not be told it worked."""
+def test_create_refuses_when_the_runtime_is_not_sqlite(tmp_path):
+    """A runtime that is still files must not be told a task was created."""
     root = tmp_path / "runtime" / "async-tasks"
-    (root / "queued").mkdir(parents=True)
-    (root / "queued").chmod(0o500)
+    root.mkdir(parents=True)
     body = tmp_path / "body.md"
     body.write_text("work\n", encoding="utf-8")
-    try:
-        result = subprocess.run(
-            [
-                "bash", str(SCRIPTS / "create.sh"), "--queued",
-                "--body-file", str(body), "Unwritable task",
-            ],
-            env={**os.environ, "SOLAR_WORKSPACE": str(tmp_path),
-                 "SOLAR_TASK_ROOT": str(root)},
-            text=True, capture_output=True, timeout=30,
-        )
-    finally:
-        (root / "queued").chmod(0o700)
-    assert result.returncode != 0
-    assert "Task created" not in result.stdout
-    assert "was not written" in result.stderr
-
-
-def test_create_leaves_no_task_when_the_write_dies_halfway(tmp_path):
-    """Some bytes reaching disk is not the same as the task being written.
-
-    A file size limit cuts the redirect after it has already emitted content,
-    which is what a full disk or a killed sandbox looks like.
-    """
-    root = tmp_path / "runtime" / "async-tasks"
-    (root / "queued").mkdir(parents=True)
-    body = tmp_path / "body.md"
-    body.write_text("x" * 20000 + "\n", encoding="utf-8")
+    env = {**os.environ, "SOLAR_WORKSPACE": str(tmp_path), "SOLAR_TASK_ROOT": str(root)}
+    env["SOLAR_RUNTIME_ROOT"] = str(tmp_path / "runtime")
+    env.pop("SOLAR_APP_DATA", None)
     result = subprocess.run(
-        ["bash", "-c",
-         f'ulimit -f 1; exec bash {SCRIPTS / "create.sh"} --queued '
-         f'--body-file {body} "Truncated task"'],
-        env={**os.environ, "SOLAR_WORKSPACE": str(tmp_path),
-             "SOLAR_TASK_ROOT": str(root)},
-        text=True, capture_output=True, timeout=30,
+        ["bash", str(SCRIPTS / "create.sh"), "--queued", "--body-file", str(body), "Unwritten"],
+        env=env, text=True, capture_output=True, timeout=30,
     )
     assert result.returncode != 0
     assert "Task created" not in result.stdout
     assert "ID:" not in result.stdout
-    # Neither the task nor the partial file it was being written into.
-    assert list((root / "queued").iterdir()) == []
+    assert list(root.rglob("*.md")) == []
 
 
 def test_create_without_scope_keeps_previous_shape(tmp_path):
@@ -130,23 +97,32 @@ def test_create_without_scope_keeps_previous_shape(tmp_path):
 # execute_active: the worker copies the delivery, never the whole account
 # ---------------------------------------------------------------------------
 
-def _task(tmp_path: Path, extra: str = "", body: str = "# Task\n") -> Path:
-    path = tmp_path / "task.md"
+def _task(tmp_path: Path, extra: str = "", body: str = "# Task\n", task_id: str = "t1") -> Path:
+    root = tmp_path / "async-tasks"
+    folder = root / "active"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{task_id}.md"
     path.write_text(
-        '---\nid: "t1"\ntitle: "T"\nstatus: active\n' + extra + "---\n\n" + body,
+        f'---\nid: "{task_id}"\ntitle: "T"\nstatus: active\n' + extra + "---\n\n" + body,
         encoding="utf-8",
     )
+    seed(root)
     return path
+
+
+def record(task: Path, reply: str) -> str:
+    ea.record_delivery(task_id_of(task), reply)
+    mirror(task.parent.parent)
+    return task.read_text(encoding="utf-8")
 
 
 def test_last_delivery_block_wins_and_result_is_untouched(tmp_path):
     task = _task(tmp_path, body="# Task\n\n## Result\n\nThe long account.\n")
-    ea.record_delivery(task, (
+    text = record(task, (
         "Format example: <delivery>IGNORE ME</delivery>\n"
         "Here is the work.\n"
         "<delivery>\nRESULTADO: existe x.md\nEVIDENCIA: docs/x.md\n</delivery>"
     ))
-    text = task.read_text(encoding="utf-8")
     assert "## Delivery\n\nRESULTADO: existe x.md\nEVIDENCIA: docs/x.md" in text
     assert "IGNORE ME" not in text
     assert "The long account." in text
@@ -154,9 +130,8 @@ def test_last_delivery_block_wins_and_result_is_untouched(tmp_path):
 
 def test_rerun_replaces_its_own_section(tmp_path):
     task = _task(tmp_path)
-    ea.record_delivery(task, "<delivery>first</delivery>")
-    ea.record_delivery(task, "<delivery>second</delivery>")
-    text = task.read_text(encoding="utf-8")
+    record(task, "<delivery>first</delivery>")
+    text = record(task, "<delivery>second</delivery>")
     assert text.count("## Delivery") == 1
     assert "first" not in text
     assert "second" in text
@@ -164,21 +139,17 @@ def test_rerun_replaces_its_own_section(tmp_path):
 
 def test_missing_delivery_is_marked_only_when_it_was_asked_for(tmp_path):
     asked = _task(tmp_path, extra="delivery_expected: true\n")
-    ea.record_delivery(asked, "No block here.")
-    assert "delivery_missing: true" in asked.read_text(encoding="utf-8")
+    assert "delivery_missing: true" in record(asked, "No block here.")
 
-    not_asked = tmp_path / "plain.md"
-    not_asked.write_text('---\nid: "t2"\nstatus: active\n---\n\n# Task\n', encoding="utf-8")
-    ea.record_delivery(not_asked, "No block here.")
-    assert "delivery_missing" not in not_asked.read_text(encoding="utf-8")
+    not_asked = _task(tmp_path, task_id="t2")
+    assert "delivery_missing" not in record(not_asked, "No block here.")
 
 
 def test_rerun_without_a_block_does_not_notify_the_previous_delivery(tmp_path):
     """A parent runs twice by design, and can be requeued from error."""
     task = _task(tmp_path, extra="delivery_expected: true\n")
-    ea.record_delivery(task, "<delivery>stale delivery from run one</delivery>")
-    ea.record_delivery(task, "Run two produced no block.")
-    text = task.read_text(encoding="utf-8")
+    record(task, "<delivery>stale delivery from run one</delivery>")
+    text = record(task, "Run two produced no block.")
     assert "stale delivery from run one" not in text
     assert "## Delivery" not in text
     assert "delivery_missing: true" in text
@@ -187,11 +158,9 @@ def test_rerun_without_a_block_does_not_notify_the_previous_delivery(tmp_path):
 def test_flags_describe_the_current_run_not_an_earlier_one(tmp_path):
     task = _task(tmp_path, extra="delivery_expected: true\n")
     long_delivery = ("x" * (ea.DELIVERY_MAX_CHARS + 200)) + "\nEVIDENCIA: /log"
-    ea.record_delivery(task, f"<delivery>\n{long_delivery}\n</delivery>")
-    assert "delivery_truncated: true" in task.read_text(encoding="utf-8")
+    assert "delivery_truncated: true" in record(task, f"<delivery>\n{long_delivery}\n</delivery>")
 
-    ea.record_delivery(task, "<delivery>short one</delivery>")
-    text = task.read_text(encoding="utf-8")
+    text = record(task, "<delivery>short one</delivery>")
     assert "delivery_truncated" not in text
     assert "delivery_missing" not in text
     assert "short one" in text
@@ -201,8 +170,7 @@ def test_oversized_delivery_is_cut_but_keeps_its_evidence_line(tmp_path):
     evidence = "EVIDENCIA: /path/to/log"
     long_delivery = ("x" * (ea.DELIVERY_MAX_CHARS + 500)) + "\n" + evidence
     task = _task(tmp_path, extra="delivery_expected: true\n")
-    ea.record_delivery(task, f"<delivery>\n{long_delivery}\n</delivery>")
-    text = task.read_text(encoding="utf-8")
+    text = record(task, f"<delivery>\n{long_delivery}\n</delivery>")
     assert "delivery_truncated: true" in text
     assert text.rstrip().endswith(evidence)
     section = text.split("## Delivery\n\n", 1)[1].rstrip()
@@ -247,9 +215,12 @@ def _completed(root: Path, extra: str, body: str) -> Path:
 
 
 def _notify(task: Path, env) -> subprocess.CompletedProcess:
+    root = task.parent.parent
+    seed(root)
+    merged = env_for(root, env)
     return subprocess.run(
-        ["bash", str(SCRIPTS / "notify_if_configured.sh"), str(task)],
-        env=env, text=True, capture_output=True, timeout=30,
+        ["bash", str(SCRIPTS / "notify_if_configured.sh"), task_id_of(task)],
+        env=merged, text=True, capture_output=True, timeout=30,
     )
 
 

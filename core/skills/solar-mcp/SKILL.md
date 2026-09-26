@@ -63,8 +63,8 @@ conversational authority from caller-supplied fields. See
 | URI | What it serves |
 |---|---|
 | `solar://health` | Storage, gateway and continuity, as the console sees them |
-| `solar://tasks` | Every task file by state, with its recurrence |
-| `solar://index` | Counters of the SQLite projection and which sources went stale |
+| `solar://tasks` | Tasks in `state.sqlite`, by state, with recurrence |
+| `solar://index` | Counts from the `console_task_counts` view |
 | `solar://delegations` | Written A3 mandates: mode and validity |
 | `solar://gate` | What this server allowed and refused |
 
@@ -73,7 +73,7 @@ conversational authority from caller-supplied fields. See
 | Tool | Authority | Passes when |
 |---|---|---|
 | `solar_task_status` | A0 | Always. Reading is not gated. |
-| `solar_task_create` | A2 | Native client confirmation or an existing exact-call approval. Still writes the task file until the runtime cutover |
+| `solar_task_create` | A2 | Native client confirmation or an existing exact-call approval. Stores a draft through `solar-state` and refuses when the format is not `sqlite` |
 | `solar_task_approve` | A2 | Same approval. Moves a draft, or a task already planned, to the queue. Refuses an A3 mandate. Does not change object, scope or effect |
 | `solar_task_cancel` | A2 | Same approval. Cancels a queued task, or records the request for an active one. Does not change object, scope or effect |
 | `solar_task_requeue` | A2 | Same approval. Moves an error task back to the queue and drops its `## Execution Error` section. Does not change object, scope or effect |
@@ -135,7 +135,7 @@ Outside, and said plainly rather than disguised:
 
 Starting the stdio child does not start Solar services. Tools still depend on
 Solar's configured workspace, runtime storage and (for sends) installation secrets.
-`solar_task_create` writes the task file until the runtime cutover. `solar_task_approve`, `solar_task_cancel` and `solar_task_requeue` follow the active format: the task files while it is unset or `files`, and solar-state once it is `sqlite`. The supervised
+Task verbs write only through `solar-state` and refuse when the runtime format is not `sqlite`. The supervised
 orchestrator processes queued tasks separately. Console and background services
 have their own startup/LaunchAgent lifecycle. A connected MCP child is not evidence
 that the queue worker, console or transport is running.

@@ -7,9 +7,9 @@ description: >
 
 # Solar Console
 
-Open `http://localhost:9000/app`. The existing status, logs and activity views
-read task Markdown files and router `audit.jsonl` directly. No conversation
-store, voice runtime, execution worker or mutation endpoints are provided.
+Open `http://localhost:9000/app`. Status, logs and activity come from the views in
+`state.sqlite` (`runtime_views`). No conversation store, voice runtime, execution
+worker or mutation endpoints are provided. `index.sqlite` is not the source.
 
 ## Required MCP
 

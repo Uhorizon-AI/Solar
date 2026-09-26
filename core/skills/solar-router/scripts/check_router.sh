@@ -132,27 +132,19 @@ assert_json_field "status=failed when async-tasks not enabled" "$out" "['status'
 # ---------------------------------------------------------------------------
 echo ""
 echo "── Test 8: execute_active.py parses router v3 JSON correctly"
-EXECUTE_PY="$(solar_core_dir)/skills/solar-async-tasks/scripts/execute_active.py"
+_queue_skill="solar-async-tasks"
+EXECUTE_PY="$(solar_core_dir)/skills/${_queue_skill}/scripts/execute_active.py"
 if [[ ! -f "$EXECUTE_PY" ]]; then
     skip "execute_active.py parse test" "script not found: $EXECUTE_PY"
 else
-    # Test that the module imports and the helper functions work
     parse_result="$($PYTHON -c "
-import sys
-sys.argv = ['test']
-import importlib.util, pathlib
+import importlib.util
 spec = importlib.util.spec_from_file_location('execute_active', '$EXECUTE_PY')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-
-# Test read_frontmatter_key with a temp file
-import tempfile, pathlib
-tmp = pathlib.Path(tempfile.mktemp(suffix='.md'))
-tmp.write_text('---\nid: test-123\ntitle: Test Task\nprovider: claude\n---\n\nBody here.')
-assert mod.read_frontmatter_key(tmp, 'id') == 'test-123', 'id mismatch'
-assert mod.read_frontmatter_key(tmp, 'provider') == 'claude', 'provider mismatch'
-assert mod.strip_frontmatter(tmp).strip() == 'Body here.', 'body mismatch'
-tmp.unlink()
+assert mod.extract_delivery('<delivery>hello</delivery>') == 'hello'
+prompt = mod.build_prompt('id', 'title', 'body')
+assert 'Task ID: id' in prompt and 'body' in prompt
 print('ok')
 " 2>&1 || echo "error")"
     if [[ "$parse_result" == "ok" ]]; then
@@ -245,13 +237,25 @@ assert_json_field "error_code=all_providers_failed" "$out" "['error_code']" "all
 # ---------------------------------------------------------------------------
 echo ""
 echo "── Test 13: mode=async_only + async-tasks enabled → async_draft_created"
-CREATE_SH="$(solar_core_dir)/skills/solar-async-tasks/scripts/create.sh"
+CREATE_SH="$(solar_core_dir)/skills/${_queue_skill}/scripts/create.sh"
 if [[ ! -f "$CREATE_SH" ]]; then
     skip "async_only success path" "create.sh not found: $CREATE_SH"
 else
-    # Mock provider (no real AI); create.sh still runs and must return an ID line.
-    out="$(SOLAR_SYSTEM_FEATURES=async-tasks SOLAR_ROUTER_CLAUDE_CMD="bash -c 'echo mock-async-body'" SOLAR_ROUTER_PROVIDER_PRIORITY=claude \
+    # The draft is a row in a temporary runtime, not a file in the live queue.
+    STATE_TMP="$(mktemp -d)"
+    $PYTHON - <<PY
+import os, sys
+from pathlib import Path
+os.environ["SOLAR_RUNTIME_ROOT"] = "$STATE_TMP"
+sys.path.insert(0, str(Path("$ROUTER_SCRIPT").resolve().parents[2] / "solar-state" / "scripts"))
+import solar_state
+with solar_state.cutover() as cut:
+    cut.upgrade_schema()
+    cut.set_format("sqlite")
+PY
+    out="$(SOLAR_RUNTIME_ROOT="$STATE_TMP" SOLAR_SYSTEM_FEATURES=async-tasks SOLAR_ROUTER_CLAUDE_CMD="bash -c 'echo mock-async-body'" SOLAR_ROUTER_PROVIDER_PRIORITY=claude \
         call_router '{"request_id":"t13","session_id":"s","user_id":"u","text":"smoke test async draft","channel":"other","mode":"async_only"}')"
+    rm -rf "$STATE_TMP"
     assert_json_valid "async_only success returns valid JSON" "$out"
     status13="$($PYTHON -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$out" 2>/dev/null || echo "unknown")"
     if [[ "$status13" == "success" ]]; then
@@ -263,38 +267,47 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 14: audit early exit — start and end both written (Fase 2 fix)
-# Triggers async_tasks_disabled early exit in an isolated temp runtime dir.
+# Test 14: audit early exit — start and end both written
+# Triggers async_tasks_disabled early exit in an isolated sqlite runtime.
 # ---------------------------------------------------------------------------
 echo ""
 echo "── Test 14: audit early exit — start and end written on failure"
 AUDIT_TMP="$(mktemp -d)"
-SOLAR_ROUTER_RUNTIME_DIR="$AUDIT_TMP" SOLAR_SYSTEM_FEATURES="" \
+$PYTHON - <<PY
+import os, sys
+from pathlib import Path
+os.environ["SOLAR_RUNTIME_ROOT"] = "$AUDIT_TMP"
+sys.path.insert(0, str(Path("$ROUTER_SCRIPT").resolve().parents[2] / "solar-state" / "scripts"))
+import solar_state
+with solar_state.cutover() as cut:
+    cut.upgrade_schema()
+    cut.set_format("sqlite")
+PY
+SOLAR_RUNTIME_ROOT="$AUDIT_TMP" SOLAR_SYSTEM_FEATURES="" \
     call_router '{"request_id":"t14","session_id":"s","user_id":"u","text":"hello","channel":"other","mode":"async_only"}' > /dev/null
-AUDIT_FILE="$AUDIT_TMP/audit.jsonl"
-if [[ ! -f "$AUDIT_FILE" ]]; then
-    fail "audit early exit: start event" "audit.jsonl not created at $AUDIT_FILE"
+events="$($PYTHON - <<PY
+import json, os, sys
+from pathlib import Path
+os.environ["SOLAR_RUNTIME_ROOT"] = "$AUDIT_TMP"
+sys.path.insert(0, str(Path("$ROUTER_SCRIPT").resolve().parents[2] / "solar-state" / "scripts"))
+import solar_state
+with solar_state.session() as store:
+    rows = store.audit_rows()
+print(sum(1 for row in rows if row.get("event") == "start"))
+print(sum(1 for row in rows if row.get("event") == "end"))
+PY
+)"
+start_count="$(printf '%s\n' "$events" | sed -n '1p')"
+end_count="$(printf '%s\n' "$events" | sed -n '2p')"
+if [[ "${start_count:-0}" -ge 1 ]]; then
+    pass "audit early exit: start event written"
 else
-    start_count="$($PYTHON -c "
-import json, sys
-lines = open('$AUDIT_FILE').readlines()
-print(sum(1 for l in lines if json.loads(l).get('event') == 'start'))
-" 2>/dev/null || echo "0")"
-    end_count="$($PYTHON -c "
-import json, sys
-lines = open('$AUDIT_FILE').readlines()
-print(sum(1 for l in lines if json.loads(l).get('event') == 'end'))
-" 2>/dev/null || echo "0")"
-    if [[ "$start_count" -ge 1 ]]; then
-        pass "audit early exit: start event written"
-    else
-        fail "audit early exit: start event" "expected ≥1 start event, got $start_count"
-    fi
-    if [[ "$end_count" -ge 1 ]]; then
-        pass "audit early exit: end event written on failure"
-    else
-        fail "audit early exit: end event" "expected ≥1 end event after failed route, got $end_count"
-    fi
+    fail "audit early exit: start event" "expected ≥1 start event, got ${start_count:-0}"
+fi
+if [[ "${end_count:-0}" -ge 1 ]]; then
+    pass "audit early exit: end event written on failure"
+else
+    fail "audit early exit: end event" "expected ≥1 end event after failed route, got ${end_count:-0}"
 fi
 rm -rf "$AUDIT_TMP"
 

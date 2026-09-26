@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from queue_mirror import env_for, mirror, seed, task_id_of
+
 SCRIPTS = Path(__file__).resolve().parents[3] / 'skills/solar-async-tasks/scripts'
 
 
@@ -17,9 +19,9 @@ def fixture_env(tmp_path):
     sender.parent.mkdir(parents=True)
     sender.write_text('#!/bin/bash\nif [[ "${FAIL_SEND:-}" == 1 ]]; then exit 7; fi\nprintf "%s\\n" "$1" >> "$SOLAR_WORKSPACE/sent.log"\n')
     sender.chmod(0o755)
-    env = {**os.environ, 'SOLAR_WORKSPACE': str(workspace), 'SOLAR_ROOT': str(install),
-           'SOLAR_TASK_ROOT': str(root), 'TELEGRAM_CHAT_ID': '456',
-           'TELEGRAM_ALLOWED_CHAT_IDS': '456', 'TELEGRAM_BOT_TOKEN': 'fake'}
+    env = env_for(root, {**os.environ, 'SOLAR_WORKSPACE': str(workspace), 'SOLAR_ROOT': str(install),
+                         'TELEGRAM_CHAT_ID': '456', 'TELEGRAM_ALLOWED_CHAT_IDS': '456',
+                         'TELEGRAM_BOT_TOKEN': 'fake'})
     env.pop('FAIL_SEND', None)
     return workspace, root, env
 
@@ -34,8 +36,14 @@ def task_file(root, status='completed', extra=''):
 
 
 def notify(path, env):
-    return subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), str(path)],
-                          env=env, text=True, capture_output=True, timeout=10)
+    root = path.parent.parent
+    seed(root)
+    result = subprocess.run(
+        ['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(path)],
+        env=env_for(root, env), text=True, capture_output=True, timeout=10,
+    )
+    mirror(root)
+    return result
 
 
 def test_failed_delivery_recorded_and_successful_retry_deduplicated(tmp_path):
@@ -61,8 +69,10 @@ def test_executor_failure_and_timeout_notify_origin(tmp_path, body, timeout):
     command.chmod(0o755)
     task_file(root, 'active', 'executor: local\n'
               f'local_command: bash {command}\nlocal_timeout: {timeout}\n')
+    seed(root)
     result = subprocess.run(['bash', str(SCRIPTS / 'execute_active.sh'), '--once'],
-                            env=env, text=True, capture_output=True, timeout=15)
+                            env=env_for(root, env), text=True, capture_output=True, timeout=15)
+    mirror(root)
     assert result.returncode == 1, result.stdout + result.stderr
     failed = root / 'error/delivery.md'
     assert 'notify_delivered: true' in failed.read_text()
@@ -77,8 +87,10 @@ def test_cleanup_failure_notifies_origin(tmp_path):
     hook.parent.mkdir(parents=True)
     hook.write_text('#!/bin/bash\nexit 1\n')
     hook.chmod(0o755)
+    seed(root)
     result = subprocess.run(['bash', str(SCRIPTS / 'complete.sh'), 'delivery'],
-                            env=env, text=True, capture_output=True, timeout=15)
+                            env=env_for(root, env), text=True, capture_output=True, timeout=15)
+    mirror(root)
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'notify_delivered: true' in (root / 'error/delivery.md').read_text()
     assert 'Task failed' in (workspace / 'sent.log').read_text()

@@ -4,11 +4,9 @@
     tools      verbs. Every call goes through `mcp_gate.preflight` first, and a
                refusal is produced by this handler, not by the caller's manners.
 
-The verbs wrap what already exists. `solar_task_create` writes the task file
-through the queue script until the runtime cutover. `solar_task_approve`,
-`solar_task_cancel` and `solar_task_requeue` follow the active format: the
-queue scripts while `STATE_FORMAT` is unset or `files`, and solar-state once
-it is `sqlite`. Approve is one move, draft to the queue.
+The task verbs write only through solar-state. A runtime whose format is not
+sqlite is refused: there is no file-queue path. Approve is one move, draft
+or planned to queued, and it does not rewrite priority.
 
 Speaks JSON-RPC 2.0 over stdio (MCP): `initialize`, `resources/list`,
 `resources/read`, `tools/list`, `tools/call`, `ping`.
@@ -23,6 +21,7 @@ that file, and a browser session already logged in is not covered at all.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
@@ -35,20 +34,19 @@ import sys
 from pathlib import Path
 
 _SKILLS = Path(__file__).resolve().parents[2]
-for _extra in ("solar-app/scripts", "solar-paths/scripts", "solar-state/scripts"):
+for _extra in ("solar-paths/scripts", "solar-state/scripts"):
     _path = _SKILLS / _extra
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import app_solar  # noqa: E402
 import mcp_gate  # noqa: E402
+import runtime_views  # noqa: E402
 from mcp_gate import A0, A2, A3  # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = dict(name="solar-mcp", version="0.1.0")
-ASYNC_SCRIPTS = _SKILLS / "solar-async-tasks" / "scripts"
 
 
 def workspace() -> Path:
@@ -166,14 +164,14 @@ RESOURCES = [
 # --------------------------------------------------------------------------
 
 def _read_health() -> dict:
-    snapshot = app_solar.snapshot(workspace())
+    snapshot = runtime_views.snapshot(workspace())
     return dict(status=snapshot["health"]["status"], counts=snapshot["counts"],
                 components=[dict(component=row["component"], state=row["state"])
                             for row in snapshot["health"]["components"]])
 
 
 def _read_tasks() -> dict:
-    tasks, problems = app_solar.read_tasks(workspace())
+    tasks, problems = runtime_views.read_tasks(workspace())
     return dict(count=len(tasks), problems=len(problems), tasks=[
         dict(id=row["id"], title=row["title"], state=row["state"],
              recurring=row["recurring"], recurring_run_count=row["recurring_run_count"],
@@ -182,33 +180,31 @@ def _read_tasks() -> dict:
 
 
 def _read_index() -> dict:
+    import solar_state
     try:
-        import app_index
-    except ImportError as exc:  # pragma: no cover
-        return dict(available=False, reason=str(exc))
-    path = app_index.index_path()
-    if not path.exists():
-        return dict(available=False, reason="index not built", path=str(path))
-    stale = app_index.stale_sources()
-    return dict(available=True, path=str(path), counters=app_index.counters(),
-                stale=stale, fresh=not stale)
+        snap = runtime_views.snapshot(workspace())
+    except Exception as exc:  # noqa: BLE001
+        return dict(available=False, source="state", reason=str(exc))
+    return dict(available=True, source="state", path=str(solar_state.db_path()),
+                counts=snap["counts"], counters=snap["counts"])
 
 
 def _read_delegations() -> dict:
-    root = Path(os.environ.get("SOLAR_DELEGATIONS_DIR") or (workspace() / "sun" / "delegations"))
-    mandates = []
+    import mandates as mandate_store
+    root = mandate_store.mandate_dir()
     try:
-        paths = sorted(p for p in root.iterdir() if p.suffix in (".yaml", ".yml"))
+        paths = mandate_store.list_mandates()
     except OSError:
         return dict(root=str(root), mandates=[], readable=False)
+    rows = []
     for path in paths:
         fields = {}
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        for line in mandate_store.read_text(path).splitlines():
             key, sep, value = line.strip().partition(":")
             if sep and key in ("name", "mode", "valid_from", "expires_at"):
                 fields.setdefault(key, value.strip().strip('"').strip("'"))
-        mandates.append(dict(file=path.name, **fields))
-    return dict(root=str(root), readable=True, mandates=mandates)
+        rows.append(dict(file=path.name, **fields))
+    return dict(root=str(root), readable=True, mandates=rows)
 
 
 def _read_gate(limit: int = 20) -> dict:
@@ -253,17 +249,24 @@ def _do_task_status(arguments: dict) -> dict:
 
 
 def _do_task_create(arguments: dict) -> dict:
-    cmd = ["bash", str(ASYNC_SCRIPTS / "create.sh")]
-    if arguments.get("queued"):
-        cmd.append("--queued")
-    cmd.append(str(arguments["title"]))
-    if arguments.get("description"):
-        cmd.append(str(arguments["description"]))
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
-                          cwd=str(workspace()))
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "create.sh failed").strip()[:500])
-    return dict(created=True, output=(proc.stdout or "").strip()[:1000])
+    import solar_state
+
+    title = str(arguments["title"])
+    description = str(arguments.get("description") or "")
+    queued = bool(arguments.get("queued"))
+    created = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    fields = [
+        ("title", json.dumps(title, ensure_ascii=False)),
+        ("created", json.dumps(created, ensure_ascii=False)),
+        ("priority", "normal"),
+    ]
+    if queued:
+        fields.append(("scheduled_time", json.dumps("now")))
+        fields.append(("recurring", "false"))
+    body = f"\n# {title}\n\n{description}\n" if description else f"\n# {title}\n\n"
+    with solar_state.session() as store:
+        task_id = store.task_create(fields, body, status="queued" if queued else "draft")
+    return dict(created=True, id=task_id)
 
 
 def _refuse_a3(arguments: dict) -> None:
@@ -272,124 +275,30 @@ def _refuse_a3(arguments: dict) -> None:
             "solar_task_approve refuses an A3 mandate: activating work is never implicit")
 
 
-def _run_queue(cmd: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
-    merged = os.environ.copy()
-    if env:
-        merged.update(env)
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
-                          cwd=str(workspace()), env=merged)
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "queue script failed").strip()[:500])
-    return proc
-
-
-def _files_approve(task_id: str) -> str:
-    """draft or planned -> queued on the file queue. Same contract as task_approve.
-
-    Does not call approve.sh: that script refuses a draft and rewrites priority.
-    This move only changes the status line, so object, scope and effect stay.
-    """
-    lib = str(ASYNC_SCRIPTS / "task_lib.sh")
-    proc = _run_queue(["bash", "-c", r'''
-set -euo pipefail
-source "$SOLAR_QUEUE_LIB"
-file=$(find_task "$SOLAR_TASK_ID")
-if [[ -z "$file" ]]; then
-  echo "no task $SOLAR_TASK_ID" >&2
-  exit 2
-fi
-status=$(get_status "$file")
-if [[ "$status" != "draft" && "$status" != "planned" ]]; then
-  echo "$SOLAR_TASK_ID is ${status:-unknown}, not draft/planned" >&2
-  exit 2
-fi
-ensure_dirs
-tmp=$(mktemp)
-awk -v from="$status" 'BEGIN {done=0} $0 ~ "^status: \"?" from "\"?$" && !done {print "status: queued"; done=1; next} {print}' "$file" > "$tmp"
-mv "$tmp" "$file"
-mv "$file" "$DIR_QUEUED/$(basename "$file")"
-printf '%s' "$status"
-'''], env={"SOLAR_QUEUE_LIB": lib, "SOLAR_TASK_ID": task_id})
-    return proc.stdout.strip()
-
-
 def _do_task_approve(arguments: dict) -> dict:
     import solar_state
 
     _refuse_a3(arguments)
     task_id = str(arguments["task_id"])
-    with solar_state.operate() as (fmt, store):
-        if fmt == solar_state.FORMAT_SQLITE:
-            came = store.task_approve(task_id)
-        else:
-            came = _files_approve(task_id)
+    with solar_state.session() as store:
+        came = store.task_approve(task_id)
     return dict(approved=True, id=task_id, from_status=came, to_status="queued")
-
-
-def _files_cancel(task_id: str) -> str:
-    """Same end state as task_cancel: queued becomes cancelled, active stays active.
-
-    Does not call task_cancel.py: that CLI only writes the request and leaves a
-    queued task queued. The marker and the move happen in this one step.
-    """
-    lib = str(ASYNC_SCRIPTS / "task_lib.sh")
-    proc = _run_queue(["bash", "-c", r'''
-set -euo pipefail
-source "$SOLAR_QUEUE_LIB"
-file=$(find_task "$SOLAR_TASK_ID")
-if [[ -z "$file" ]]; then
-  echo "no task $SOLAR_TASK_ID" >&2
-  exit 2
-fi
-status=$(get_status "$file")
-if [[ "$status" != "queued" && "$status" != "active" ]]; then
-  echo "$SOLAR_TASK_ID is ${status:-unknown}, not queued/active" >&2
-  exit 2
-fi
-if [[ "$status" == "queued" ]]; then
-  tmp=$(mktemp)
-  awk 'BEGIN {done=0} /^status: "?queued"?$/ && !done {print "status: cancelled"; done=1; next} {print}' "$file" > "$tmp"
-  mv "$tmp" "$file"
-  mkdir -p "$DIR_CANCELLED"
-  mv "$file" "$DIR_CANCELLED/$(basename "$file")"
-  task_status=cancelled
-else
-  task_status=active
-fi
-python3 -c 'import json, os
-from pathlib import Path
-root = Path(os.environ["SOLAR_TASK_ROOT"])
-task_id = os.environ["SOLAR_TASK_ID"]
-path = root / "cancellation" / (task_id + ".json")
-path.parent.mkdir(parents=True, exist_ok=True)
-if not path.exists():
-    path.write_text(json.dumps({"task_id": task_id, "status": "cancellation_requested"}))'
-printf '%s' "$task_status"
-'''], env={"SOLAR_QUEUE_LIB": lib, "SOLAR_TASK_ID": task_id})
-    return proc.stdout.strip()
 
 
 def _do_task_cancel(arguments: dict) -> dict:
     import solar_state
 
     task_id = str(arguments["task_id"])
-    with solar_state.operate() as (fmt, store):
-        if fmt == solar_state.FORMAT_SQLITE:
-            return store.task_cancel(task_id)
-        task_status = _files_cancel(task_id)
-    return dict(task_id=task_id, status="cancellation_requested", task_status=task_status)
+    with solar_state.session() as store:
+        return store.task_cancel(task_id)
 
 
 def _do_task_requeue(arguments: dict) -> dict:
     import solar_state
 
     task_id = str(arguments["task_id"])
-    with solar_state.operate() as (fmt, store):
-        if fmt == solar_state.FORMAT_SQLITE:
-            came = store.task_requeue(task_id)
-        else:
-            _run_queue(["bash", str(ASYNC_SCRIPTS / "requeue_from_error.sh"), task_id])
-            came = "error"
+    with solar_state.session() as store:
+        came = store.task_requeue(task_id)
     return dict(requeued=True, id=task_id, from_status=came, to_status="queued")
 
 

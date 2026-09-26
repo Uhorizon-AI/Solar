@@ -18,21 +18,23 @@ import pathlib
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
 _PATHS_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-paths" / "scripts"
+_STATE_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-state" / "scripts"
 if str(_PATHS_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_PATHS_SCRIPTS))
+if str(_STATE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_STATE_SCRIPTS))
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from providers import PROVIDERS  # noqa: E402
 import solar_runtime  # noqa: E402
-import continuity_store  # noqa: E402
+import solar_state  # noqa: E402
 from solar_paths import resolve_solar_paths, resolve_under_home as _resolve_under_home  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -184,20 +186,26 @@ def _report_adoption_failure(exc: OSError) -> None:
 
 
 def adopt_legacy_continuity() -> str:
-    """Bring over the record older routers kept under sun/runtime (see continuity_store)."""
-    return continuity_store.adopt_legacy(
-        SOLAR_WORKSPACE, continuity_active_path(), on_error=_report_adoption_failure)
+    """Bring over the record older routers kept under sun/runtime."""
+    failure: Optional[OSError] = None
+    with solar_state.session() as store:
+        try:
+            result = store.continuity_adopt_legacy(SOLAR_WORKSPACE)
+        except OSError as exc:
+            failure = exc
+            result = "failed"
+    if failure is not None:
+        _report_adoption_failure(failure)
+    return result
 
 
 def load_continuity() -> Optional[Dict[str, Any]]:
     adopt_legacy_continuity()
-    path = continuity_active_path()
-    if not path.exists():
-        return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+        with solar_state.session() as store:
+            data = store.continuity_get()
+    except solar_state.StateError:
+        raise
     return data if isinstance(data, dict) else None
 
 
@@ -231,36 +239,42 @@ def format_continuity_block(data: Dict[str, Any]) -> str:
 
 
 def touch_continuity_channel(channel: str) -> None:
-    """Record that a channel touched the active intention; create file if missing."""
-    path = continuity_active_path()
-    data = load_continuity() or empty_continuity(channel)
-    seen = data.get("channels_seen")
-    if not isinstance(seen, list):
-        seen = []
-    if channel and channel not in seen:
-        seen.append(channel)
-    data["channels_seen"] = seen[-12:]
-    data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    """Record that a channel touched the active intention."""
+    def change(current: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        data = current if isinstance(current, dict) else empty_continuity(channel)
+        seen = data.get("channels_seen")
+        if not isinstance(seen, list):
+            seen = []
+        if channel and channel not in seen:
+            seen.append(channel)
+        data["channels_seen"] = seen[-12:]
+        data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return data
+
+    adopt_legacy_continuity()
+    with solar_state.session() as store:
+        store.continuity_update(change)
 
 
 def maybe_update_continuity_from_summary(summary: str, channel: str) -> None:
     """Light-touch sync: keep active_task text from rolling summary when empty/stale."""
-    data = load_continuity() or empty_continuity(channel)
-    compact = " ".join(summary.strip().split())
-    if compact and (not data.get("active_task") or len(str(data.get("active_task"))) < 8):
-        data["active_task"] = compact[:280]
-    seen = data.get("channels_seen")
-    if not isinstance(seen, list):
-        seen = []
-    if channel and channel not in seen:
-        seen.append(channel)
-    data["channels_seen"] = seen[-12:]
-    data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    path = continuity_active_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    def change(current: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        data = current if isinstance(current, dict) else empty_continuity(channel)
+        compact = " ".join(summary.strip().split())
+        if compact and (not data.get("active_task") or len(str(data.get("active_task"))) < 8):
+            data["active_task"] = compact[:280]
+        seen = data.get("channels_seen")
+        if not isinstance(seen, list):
+            seen = []
+        if channel and channel not in seen:
+            seen.append(channel)
+        data["channels_seen"] = seen[-12:]
+        data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return data
+
+    adopt_legacy_continuity()
+    with solar_state.session() as store:
+        store.continuity_update(change)
 
 
 def read_system_prompt() -> str:
@@ -317,16 +331,14 @@ def append_message(path: pathlib.Path, role: str, text: str) -> None:
 
 
 def audit_log(router_id: str, event: str, **kwargs: Any) -> None:
-    audit_path = RUNTIME_ROOT / "audit.jsonl"
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
     row = {
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "event": event,
         "router_id": router_id,
         **kwargs,
     }
-    with audit_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=True) + "\n")
+    with solar_state.session() as store:
+        store.audit_append(row)
 
 
 # ---------------------------------------------------------------------------
@@ -490,66 +502,18 @@ def origin_from_metadata(
     }
 
 
-def async_task_root() -> pathlib.Path:
-    """Same queue as task_lib.sh: SOLAR_TASK_ROOT, else the framework runtime.
-
-    There is no fallback to sun/runtime/async-tasks.
-    """
-    override = os.getenv("SOLAR_TASK_ROOT", "").strip()
-    if override:
-        return pathlib.Path(override).expanduser()
-    return solar_runtime.runtime_dir("async-tasks")
-
-
-def _task_file_for_id(task_id: str) -> Optional[pathlib.Path]:
+def task_runtime_status(task_id: str) -> Optional[str]:
+    """The status column. Refuses when the runtime format is not sqlite."""
     tid = str(task_id or "").strip()
     if not tid:
         return None
-    root = async_task_root()
-    for sub in ("queued", "active", "drafts", "planned", "completed", "error", "archive"):
-        folder = root / sub
-        if not folder.is_dir():
-            continue
-        for path in folder.glob("*.md"):
-            try:
-                text = path.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            for line in text.splitlines():
-                if not line.startswith("id:"):
-                    continue
-                value = line.split(":", 1)[1].strip().strip('"').strip("'")
-                if value == tid:
-                    return path
-    return None
-
-
-def task_runtime_status(task_id: str) -> Optional[str]:
-    path = _task_file_for_id(task_id)
-    if path is None:
-        return None
-    try:
-        text = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        if line.startswith("status:"):
-            return line.split(":", 1)[1].strip().strip('"').strip("'").lower()
-    return None
+    with solar_state.session() as store:
+        return store.task_status(tid)
 
 
 def task_runtime_is_queued(task_id: str) -> bool:
     status = task_runtime_status(task_id)
     return status in ("queued", "active")
-
-
-def _parse_create_task_id(stdout: str, stderr: str) -> Optional[str]:
-    out = (stdout or "") + "\n" + (stderr or "")
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith("ID:"):
-            return line.split("ID:", 1)[1].strip()
-    return None
 
 
 def _gateway_object_section(scope: Optional[Dict[str, str]]) -> str:
@@ -670,6 +634,10 @@ def _gateway_task_body(
     )
 
 
+def _quoted(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
 def create_async_draft(
     user_text: str,
     ai_output: str,
@@ -683,110 +651,63 @@ def create_async_draft(
     origin_request_id: Optional[str] = None,
     scope: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Create an async task via solar-async-tasks create.sh.
+    """Create an async task in solar-state.
 
     Returns `(task_id, warning)`.
-    - `task_id` is None when creation failed.
+    - `task_id` is None when creation failed, including when the runtime format
+      is not sqlite.
     - `warning` is set when `notify=True` but `notify_when: completed` could not
-      be configured (missing script, non-zero exit, or exception). Callers must
-      surface that warning so the user is not promised a completion ping.
+      be stored. Callers must surface that warning so the user is not promised
+      a completion ping.
     """
-    script = _resolve_under_home("core/skills/solar-async-tasks/scripts/create.sh")
-    if not script.is_file():
-        return None, None
     title = (user_text.strip() or "async task")[:120]
     channel_l = (channel or "other").strip().lower()
-
-    body_path: Optional[pathlib.Path] = None
-    proc = None
+    created = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    fields = [
+        ("title", _quoted(title)),
+        ("created", _quoted(created)),
+        ("priority", "normal"),
+    ]
+    if queue:
+        inner = _gateway_task_body(user_text, channel_l, scope)
+        body = f"\n# {title}\n\n{inner}"
+        fields.append(("scheduled_time", _quoted("now")))
+        fields.append(("recurring", "false"))
+        origin_ch = (origin_channel or "").strip()
+        origin_chat = (origin_chat_id or "").strip()
+        origin_rid = (origin_request_id or request_id or "").strip()
+        scope_meta = scope or {}
+        for key, value in (
+            ("origin_channel", origin_ch),
+            ("origin_chat_id", origin_chat),
+            ("origin_request_id", origin_rid),
+        ):
+            if value:
+                fields.append((key, _quoted(value)))
+        for key in ("object", "scope", "effect"):
+            value = " ".join(str(scope_meta.get(key) or "").split())
+            if value:
+                fields.append((key, _quoted(value)))
+        fields.append(("delivery_expected", "true"))
+        if origin_ch or origin_chat or origin_rid:
+            fields.append(("notify_when", "completed"))
+        status = "queued"
+    else:
+        desc = (strip_solar_metadata(ai_output) or ai_output or user_text).strip()[:8000]
+        body = f"\n# {title}\n\n{desc}\n"
+        status = "draft"
     try:
-        if queue:
-            body = _gateway_task_body(user_text, channel_l, scope)
-            with tempfile.NamedTemporaryFile(
-                "w", encoding="utf-8", suffix=".md", delete=False
-            ) as fh:
-                fh.write(body)
-                body_path = pathlib.Path(fh.name)
-            cmd = [
-                "bash",
-                str(script),
-                "--queued",
-                "--scheduled-time",
-                "now",
-                "--priority",
-                "normal",
-                "--body-file",
-                str(body_path),
-            ]
-            origin_ch = (origin_channel or "").strip()
-            origin_chat = (origin_chat_id or "").strip()
-            origin_rid = (origin_request_id or request_id or "").strip()
-            meta: Dict[str, Any] = {}
-            if origin_ch:
-                meta["origin_channel"] = origin_ch
-            if origin_chat:
-                meta["origin_chat_id"] = origin_chat
-            if origin_rid:
-                meta["origin_request_id"] = origin_rid
-            scope_meta = scope or {}
-            for key in ("object", "scope", "effect"):
-                value = " ".join(str(scope_meta.get(key) or "").split())
-                if value:
-                    meta[key] = value
-            # Same call that put the <delivery> instruction in the body: the two
-            # must be added and removed together, or every task would be
-            # reported as missing its delivery.
-            meta["delivery_expected"] = True
-            if meta:
-                cmd.extend(["--metadata", json.dumps(meta, separators=(",", ":"))])
-            cmd.append(title)
-        else:
-            desc = (strip_solar_metadata(ai_output) or ai_output or user_text).strip()[:8000]
-            cmd = ["bash", str(script), title, desc]
-
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(SOLAR_WORKSPACE),
-            timeout=120,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        with solar_state.session() as store:
+            task_id = store.task_create(fields, body, status=status)
+            if notify:
+                try:
+                    store.task_set(task_id, "notify_when", "completed")
+                except solar_state.StateError:
+                    return task_id, "notify_failed"
+    except solar_state.StateError:
         return None, None
-    finally:
-        if body_path is not None:
-            try:
-                body_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-    if proc is None or proc.returncode != 0:
-        return None, None
-    task_id = _parse_create_task_id(proc.stdout or "", proc.stderr or "")
-    if not task_id:
-        return None, None
-
     if not notify:
         return task_id, None
-
-    notify_script = _resolve_under_home(
-        "core/skills/solar-async-tasks/scripts/add_notify.sh"
-    )
-    if not notify_script.is_file():
-        return task_id, "notify_script_missing"
-    try:
-        nproc = subprocess.run(
-            ["bash", str(notify_script), task_id],
-            capture_output=True,
-            text=True,
-            cwd=str(SOLAR_WORKSPACE),
-            timeout=60,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return task_id, "notify_failed"
-    if nproc.returncode != 0:
-        return task_id, "notify_failed"
     return task_id, None
 
 

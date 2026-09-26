@@ -1,70 +1,35 @@
 #!/bin/bash
 
-# Start the next task from queue (supports recurring, scheduling, resource locks)
+# Claim the next ready task. Eligibility (priority, dependencies, schedule,
+# recurring interval, a pending cancellation) is decided inside solar-state.
+# Resource hooks run after the claim; a hook that blocks releases the task.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
 
-ensure_dirs
+WORKER="start-next-$$"
+EXCLUDE=""
 
-# Get all queued tasks sorted by priority (high > normal > low)
-QUEUED_TASKS=$(find "$DIR_QUEUED" -name "*.md" 2>/dev/null | while read -r f; do
-    [[ -e "$f" ]] || continue
-    prio=$(extract_meta "$f" "priority")
-    prio_val=0
-    [[ "$prio" == "high" ]] && prio_val=2
-    [[ "$prio" == "normal" ]] && prio_val=1
-    [[ "$prio" == "low" ]] && prio_val=0
-    ts="$(created_epoch "$f")"
-    # Sort key: priority desc, created asc (FIFO)
-    printf '%s\t%s\t%s\n' "$prio_val" "$ts" "$f"
-done | sort -t$'\t' -k1,1nr -k2,2n | awk -F'\t' '{print $3}')
-
-# Try each task in order until one can start. One path per line: the queue lives
-# under "Application Support", so word-splitting the list would break every path.
-# Read on fd 3 so hooks and helpers inside the loop cannot consume the list.
-while IFS= read -r NEXT_TASK <&3; do
-    [[ -n "$NEXT_TASK" && -e "$NEXT_TASK" ]] || continue
-
-    TASK_ID=$(extract_meta "$NEXT_TASK" "id")
-    TITLE=$(extract_meta "$NEXT_TASK" "title")
-    if [[ -f "$SOLAR_TASK_ROOT/cancellation/$TASK_ID.json" ]]; then
-        PYTHONPATH="$SCRIPT_DIR" python3 -c 'import sys; from task_cancel import acknowledge; acknowledge(sys.argv[1])' "$NEXT_TASK"
-        continue
+while true; do
+    claimed_json="$(state task claim-next --worker "$WORKER" --exclude "$EXCLUDE")"
+    TASK_ID="$(printf '%s' "$claimed_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id") or "")')"
+    TITLE="$(printf '%s' "$claimed_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title") or "")')"
+    if [[ -z "$TASK_ID" ]]; then
+        echo "⏸️  No tasks ready to start"
+        exit 0
     fi
 
-    if has_unresolved_dependencies "$NEXT_TASK"; then
-        blocked_by=$(list_unresolved_dependencies "$NEXT_TASK" | paste -sd ',' -)
-        echo "⏸️  Skipping blocked task (waiting on subtasks): $TASK_ID -> ${blocked_by:-unknown}"
-        continue
-    fi
-
-    # Check recurring ready (race protection)
-    if ! is_recurring_ready "$NEXT_TASK"; then
-        echo "⏸️  Skipping recurring task (min_interval not elapsed): $TASK_ID"
-        continue
-    fi
-
-    # Check schedule (timezone support in Phase 2 - use is_scheduled_now_tz when implemented)
-    if ! is_scheduled_now "$NEXT_TASK"; then
-        echo "⏸️  Skipping scheduled task (not in window): $TASK_ID"
-        continue
-    fi
-
-    # Try pre-start hooks (e.g., acquire resource locks)
-    cleanup_required=$(extract_meta "$NEXT_TASK" "cleanup_required")
+    export_file="$(task_export_tmp "$TASK_ID")"
     hook_failed=false
-
-    if [[ "$cleanup_required" == "true" ]]; then
-        resources=$(extract_meta "$NEXT_TASK" "resources")
-
+    if [[ "$(task_field "$TASK_ID" "cleanup_required")" == "true" ]]; then
+        resources="$(task_field "$TASK_ID" "resources")"
         for resource in $(parse_resources "$resources"); do
-            hook="$SOLAR_TASK_ROOT/hooks/${resource}/pre_start.sh"
+            hook="$HOOKS_DIR/${resource}/pre_start.sh"
             if [[ -x "$hook" ]]; then
                 echo "Running pre-start hook for: $resource"
-                if ! "$hook" "$NEXT_TASK"; then
+                if ! "$hook" "$export_file"; then
                     echo "⏸️  Pre-start hook blocked task (resource busy): $TASK_ID"
                     hook_failed=true
                     break
@@ -72,31 +37,19 @@ while IFS= read -r NEXT_TASK <&3; do
             fi
         done
     fi
+    rm -f "$export_file"
 
-    # If hook failed, try next task in queue (avoid head-of-line blocking)
     if [[ "$hook_failed" == "true" ]]; then
+        state task release "$TASK_ID" --worker "$WORKER" >/dev/null
+        EXCLUDE="${EXCLUDE:+$EXCLUDE,}$TASK_ID"
         continue
     fi
 
-    # Task can start! Update recurring_last_run if needed
-    if [[ "$(extract_meta "$NEXT_TASK" "recurring")" == "true" ]]; then
-        set_meta "$NEXT_TASK" "recurring_last_run" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ "$(task_field "$TASK_ID" "recurring")" == "true" ]]; then
+        state task set "$TASK_ID" recurring_last_run "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
     fi
-
-    # Move to active
-    NEW_FILE="$DIR_ACTIVE/$(basename "$NEXT_TASK")"
-    mv "$NEXT_TASK" "$NEW_FILE"
-
-    # Update status
-    sed -i.bak 's/^status:.*/status: active/' "$NEW_FILE"
-    sed -i.bak '/^blocked_by_task_ids:/d' "$NEW_FILE"
-    rm -f "${NEW_FILE}.bak"
+    state task unset "$TASK_ID" blocked_by_task_ids >/dev/null
 
     echo "✅ Started task: [$TASK_ID] $TITLE"
-    echo "File: $NEW_FILE"
     exit 0
-done 3<<< "$QUEUED_TASKS"
-
-# No tasks available to start
-echo "⏸️  No tasks ready to start"
-exit 0
+done

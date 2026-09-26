@@ -41,8 +41,8 @@ Behavior:
 
 1. Task completes successfully.
 2. On success the worker checks `recurring: true`.
-3. If max runs is not reached, the task is moved back to `queued/`.
-4. If max runs is reached, the task is moved to `archive/`.
+3. If max runs is not reached, the status goes back to `queued`.
+4. If max runs is reached, the status becomes `archived`.
 
 Race protection:
 
@@ -83,7 +83,7 @@ Execution flow:
 1. The worker runs `pre_start.sh` hooks.
 2. If a pre-start hook fails, the task is skipped and the worker tries another task.
 3. On completion the worker runs `post_complete.sh` hooks.
-4. If cleanup fails, `on_error.sh` runs and the task moves to `error/`.
+4. If cleanup fails, `on_error.sh` runs and the status becomes `error`.
 
 See `hook-system.md` for full hook behavior.
 
@@ -143,26 +143,17 @@ the flag keeps the earlier notice: a brief line plus the result location.
 
 ## Runtime Structure
 
-Default task root: `<runtime root>/async-tasks/`
+The task is a row. Its status is a column: `draft`, `planned`, `queued`, `active`, `completed`, `error`, `archived`, `cancelled`. Only `queued` is worker input. `draft`, `planned`, `error` and `archived` are never re-run automatically.
 
 ```text
-drafts/     captured, not planned or approved
-planned/    ready for review, not executable
-queued/     approved and eligible for worker selection
-active/     currently being executed
-completed/  finished successfully
-error/      failed execution or cleanup
-archive/    historical or max-run recurring tasks
-logs/       last execution log per task
-hooks/      user-defined resource hooks
-.locks/     resource lock files
+<runtime root>/task-logs/          last execution log per task
+<runtime root>/async-tasks/hooks/  resource hooks (configuration)
+<runtime root>/async-tasks/.locks/ resource lock files
 ```
-
-Only `queued/` is worker input. `drafts/`, `planned/`, `error/`, and `archive/` are never re-run automatically.
 
 ## Error Recovery
 
-Tasks in `error/` are terminal until an operator acts.
+A task in `error` is terminal until an operator acts.
 
 To run a failed task again:
 
@@ -173,6 +164,6 @@ The task will run on the next eligible worker cycle.
 
 Logs:
 
-- Each task has one log with the same base filename and `.log` extension.
+- Each task has one log, `<runtime root>/task-logs/<task-id>.log`.
 - Logs reflect the last run.
 - Logs older than seven days are cleaned by the worker.

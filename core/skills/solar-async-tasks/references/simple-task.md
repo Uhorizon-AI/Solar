@@ -1,6 +1,6 @@
 # Reference: Simple Task
 
-A single-execution task. The worker activates it, the AI follows the instructions, writes the artifact and result, and the task moves to `completed/`.
+A single-execution task. The worker activates it, the AI follows the instructions, writes the artifact and result, and the status becomes `completed`.
 
 ## When to use this pattern
 
@@ -43,12 +43,7 @@ already approved. Do not request extra approval just to write that artifact.
 Still request explicit approval for external sends, deletions, credentials,
 irreversible actions, or changes outside the task body scope.
 
-> **When to add `## Result`:** Only include a `## Result` section in the task file if this task has **no defined output path** above (i.e. the response text itself is the deliverable, not a file). If the body already specifies where to write the artifact, skip `## Result` — the artifact is the output. Never use `## Result` on recurring tasks; it would accumulate across runs.
->
-> When needed, find the task file by Task ID:
-> ```bash
-> TASK_FILE=$(grep -rl "id: \"<task_id>\"" <runtime root>/async-tasks/ | head -1)
-> ```
+> **When to add `## Result`:** Only include a `## Result` section in the task body if this task has **no defined output path** above (i.e. the response text itself is the deliverable, not a file). If the body already specifies where to write the artifact, skip `## Result` — the artifact is the output. Never use `## Result` on recurring tasks; it would accumulate across runs. Read the task with `solar_task_status`. Do not search the runtime for a markdown file.
 
 ## Minimal frontmatter
 
@@ -65,6 +60,6 @@ recurring: false
 
 ## Notes
 
-- The worker moves the file: `queued/` → `active/` → `completed/`
+- The worker changes the status: `queued` → `active` → `completed`
 - The Task ID is injected automatically into the prompt by `execute_active.py`
 - The log at `logs/<slug>.log` records timing, provider, and errors — the artifact and `## Result` belong in the task file

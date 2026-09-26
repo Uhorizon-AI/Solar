@@ -12,10 +12,21 @@ cd "$SOLAR_WORKSPACE"
 _CORE="$(solar_core_dir)"
 _TASKS="$_CORE/skills/solar-async-tasks/scripts"
 
-# Isolate this verification from real runtime data.
+# Isolate this verification from real runtime data. The queue is solar-state.
 TMP_ROOT="$(mktemp -d /tmp/solar-async-tasks-verify.XXXXXX)"
-export SOLAR_TASK_ROOT="$TMP_ROOT"
+export SOLAR_RUNTIME_ROOT="$TMP_ROOT"
+export SOLAR_TASK_ROOT="$TMP_ROOT/async-tasks"
 trap 'rm -rf "$TMP_ROOT"' EXIT
+python3 - <<PY
+import os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path("${_CORE}") / "skills" / "solar-state" / "scripts"))
+import solar_state
+root = Path(os.environ["SOLAR_RUNTIME_ROOT"])
+with solar_state.cutover(root) as cut:
+    cut.upgrade_schema()
+    cut.set_format("sqlite")
+PY
 
 # Setup
 echo "Running setup in isolated root: $SOLAR_TASK_ROOT"

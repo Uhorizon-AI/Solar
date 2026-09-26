@@ -29,7 +29,7 @@ class ConsoleTests(unittest.TestCase):
         # runtime root, and must never look inside sun/.
         app_data = Path(self.tmp.name) / 'AppData'
         app_data.mkdir()
-        patcher = patch.dict(os.environ, {'SOLAR_APP_DATA': str(app_data)})
+        patcher = patch.dict(os.environ, {'SOLAR_APP_DATA': str(app_data), 'SOLAR_RUNTIME_ROOT': ''})
         patcher.start()
         self.addCleanup(patcher.stop)
         runtime = app_solar.runtime_dir()
@@ -40,19 +40,35 @@ class ConsoleTests(unittest.TestCase):
             (runtime / 'async-tasks' / state).mkdir()
         self.audit = runtime / 'router/audit.jsonl'
         self.audit.write_text('')
+        import solar_state
+        with solar_state.cutover(runtime) as cut:
+            cut.upgrade_schema()
+            cut.set_format('sqlite')
+
+    def task(self, state='error', extra='', body='## Execution Error\n- error: provider unavailable', task_id='task', log_path=None):
+        import solar_state
+        status = {'drafts': 'draft', 'archive': 'archived'}.get(state, state)
+        document = (
+            f'---\nid: {task_id}\ntitle: A task\ncreated: 2020-01-01T00:00:00Z\n'
+            f'provider: codex\n{extra}status: {status}\n---\n{body}'
+        )
+        with solar_state.session() as store:
+            store.task_import(document, status=status, log_path=str(log_path) if log_path else None)
+        return task_id
+
+    def write_audit(self, *rows):
+        import solar_state
+        with solar_state.session() as store:
+            for row in rows:
+                store.audit_append(row)
 
     def assertWorkspaceUntouched(self):
         """No machine state may appear inside sun/ while the console runs."""
         self.assertEqual(sorted(p.name for p in (self.ws / 'sun').iterdir()), [])
 
-    def task(self, state='error', extra='', body='## Execution Error\n- error: provider unavailable'):
-        p = self.runtime / 'async-tasks' / state / 'task.md'
-        p.write_text('---\nid: task\ntitle: A task\ncreated: 2020-01-01T00:00:00Z\nprovider: codex\n'+extra+'---\n'+body)
-        return p
-
     def test_discovers_all_real_states_without_turning_task_error_into_bad_storage(self):
         for state in app_solar.TASK_STATES:
-            self.task(state)
+            self.task(state, task_id=f'task-{state}')
         data = app_solar.snapshot(self.ws)
         self.assertEqual({t['state'] for t in data['tasks']}, set(app_solar.TASK_STATES))
         self.assertTrue(data['health']['storage_ok'])
@@ -72,19 +88,19 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(app_solar.artifacts('## Result\nDone\n## Report\nSaved to: `sun/report.md`', {}), ['sun/report.md'])
 
     def test_task_log_reports_used_provider_not_requested_provider(self):
-        self.task('completed')
-        logs = self.runtime / 'async-tasks/logs'
-        logs.mkdir()
-        (logs/'task.log').write_text('- task_id: task\n- provider_used: agent\n## Result\nPrepared report')
+        log = self.runtime / 'task-logs' / 'task.log'
+        log.parent.mkdir()
+        log.write_text('- task_id: task\n- provider_used: agent\n## Result\nPrepared report')
+        self.task('completed', log_path=log)
         task = app_solar.read_tasks(self.ws)[0][0]
         self.assertEqual(task['provider'], 'agent')
         self.assertEqual(task['provider_requested'], 'codex')
         self.assertEqual(task['summary'], 'Prepared report')
 
     def test_pairs_router_records_and_preserves_zero_and_false(self):
-        rows = [dict(event='start', router_id='r', user_id='independent-reviewer', channel='other', ts=app_solar.iso()),
-                dict(event='end', router_id='r', status='success', provider='agent', history_turns=0, summary_used=False, duration_ms=71000, ts=app_solar.iso())]
-        self.audit.write_text('\n'.join(map(json.dumps, rows)))
+        self.write_audit(
+            dict(event='start', router_id='r', user_id='independent-reviewer', channel='other', ts=app_solar.iso()),
+            dict(event='end', router_id='r', status='success', provider='agent', history_turns=0, summary_used=False, duration_ms=71000, ts=app_solar.iso()))
         runs, errors = app_solar.read_router(self.ws)
         self.assertFalse(errors)
         self.assertEqual(len(runs), 1)
@@ -94,7 +110,7 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(runs[0]['duration_ms'], 71000)
 
     def test_old_unclosed_router_start_is_not_working(self):
-        self.audit.write_text(json.dumps(dict(event='start',router_id='old',ts='2020-01-01T00:00:00Z')))
+        self.write_audit(dict(event='start', router_id='old', ts='2020-01-01T00:00:00Z'))
         data=app_solar.snapshot(self.ws)
         self.assertEqual(data['working'], 0)
         self.assertEqual(data['executions'][0]['state'], 'unverified')
@@ -105,7 +121,7 @@ class ConsoleTests(unittest.TestCase):
             rid=f'r{number}'
             rows.extend((dict(event='start',router_id=rid,ts=app_solar.iso()),
                          dict(event='end',router_id=rid,status='failed' if number < 7 else 'success',ts=app_solar.iso())))
-        self.audit.write_text('\n'.join(map(json.dumps, rows))+'\n')
+        self.write_audit(*rows)
         data=app_solar.snapshot(self.ws)
         self.assertEqual(len(data['executions']), app_solar.PAGE_SIZE)
         self.assertEqual(data['counts']['executions'], 55)
@@ -114,14 +130,10 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(len(page['items']), 15)
         self.assertFalse(page['has_more'])
 
-    def test_malformed_record_warns_but_storage_remains_available(self):
-        self.audit.write_text('{broken\n')
+    def test_session_failure_marks_storage_unreadable(self):
         data=app_solar.snapshot(self.ws)
         self.assertTrue(data['health']['storage_ok'])
-        self.assertNotEqual(data['health']['status'], 'problems')
-        self.assertIn('record 1',data['health']['components'][-1]['cause'])
-        self.assertEqual(data['health']['components'][-1]['cause_code'], 'record_invalid')
-        with patch.object(Path,'iterdir',side_effect=PermissionError('denied')):
+        with patch.object(app_solar.solar_state, 'session', side_effect=app_solar.solar_state.StateError('denied')):
             self.assertFalse(app_solar.snapshot(self.ws)['health']['storage_ok'])
 
     def test_mount_ignores_legacy_workspace_ports(self):
@@ -135,7 +147,9 @@ class ConsoleTests(unittest.TestCase):
     def test_gateway_failure_dates_and_stale_continuity(self):
         runtime=self.runtime
         (runtime/'gateway/env.fail').write_text('reason=tunnel_recovery_failed\nfailed_at=1788787951\nexhausted=1\nattempts=5\nnext_retry_at=1820323951\n')
-        (runtime/'continuity/active.json').write_text(json.dumps(dict(active_task='Incomplete intention',updated_at='2020-01-01T00:00:00Z')))
+        import solar_state
+        with solar_state.session() as store:
+            store.continuity_import_text(json.dumps(dict(active_task='Incomplete intention', updated_at='2020-01-01T00:00:00Z')) + '\n')
         data=app_solar.snapshot(self.ws)
         self.assertEqual(data['health']['status'],'problems')
         gateway=next(c for c in data['health']['components'] if c['component']=='gateway')
@@ -166,12 +180,12 @@ class ConsoleTests(unittest.TestCase):
                     self.assertNotIn('data-action=',html)
                     with urllib.request.urlopen(base+'/api/runtime/health') as response:
                         self.assertTrue(json.load(response)['storage_ok'])
-                    self.audit.unlink()
                     with urllib.request.urlopen(base+'/health') as response:
                         self.assertTrue(json.load(response)['process_ok'])
+                    (self.runtime / 'state.sqlite').unlink()
                     with self.assertRaises(urllib.error.HTTPError) as raised:
                         urllib.request.urlopen(base+'/api/runtime/health')
-                    self.assertEqual(raised.exception.code,503)
+                    self.assertEqual(raised.exception.code, 503)
                     raised.exception.close()
                     for path in ('/api/chat','/api/app/conversations','/api/voice/turn','/api/approvals','/api/threads'):
                         with self.assertRaises(urllib.error.HTTPError) as raised:

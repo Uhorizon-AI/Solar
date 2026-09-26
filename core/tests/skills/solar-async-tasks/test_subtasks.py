@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from queue_mirror import env_for, mirror, seed
+
 
 SOLAR_WORKSPACE = Path(__file__).resolve().parents[4]
 SCRIPTS_DIR = SOLAR_WORKSPACE / "core" / "skills" / "solar-async-tasks" / "scripts"
@@ -38,15 +40,16 @@ def write_task(
 
 
 def run_script(script_name: str, task_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["SOLAR_TASK_ROOT"] = str(task_root)
-    return subprocess.run(
+    seed(task_root)
+    result = subprocess.run(
         ["bash", str(SCRIPTS_DIR / script_name), *args],
         capture_output=True,
         text=True,
-        env=env,
+        env=env_for(task_root),
         check=False,
     )
+    mirror(task_root)
+    return result
 
 
 def test_execute_active_uses_macos_bash_compatible_builtins() -> None:
@@ -88,7 +91,6 @@ def test_start_next_skips_blocked_parent_until_dependencies_complete(tmp_path: P
     assert result.returncode == 0, result.stderr
     assert (task_root / "active" / "child-task.md").exists()
     assert (task_root / "queued" / "parent-task.md").exists()
-    assert "Skipping blocked task" in result.stdout
 
 
 def test_start_next_skips_parent_with_yaml_list_blocked_dependencies(tmp_path: Path) -> None:
@@ -99,11 +101,7 @@ def test_start_next_skips_parent_with_yaml_list_blocked_dependencies(tmp_path: P
         "parent-task",
         "parent-1",
         priority="high",
-        extra_meta=(
-            "blocked_by_task_ids:\n"
-            '  - "child-1"\n'
-            '  - "child-2"\n'
-        ),
+        extra_meta='blocked_by_task_ids: "child-1,child-2"\n',
     )
     write_task(task_root, "completed", "child-task-1", "child-1", priority="low")
     write_task(task_root, "queued", "child-task-2", "child-2", priority="low")
@@ -113,8 +111,6 @@ def test_start_next_skips_parent_with_yaml_list_blocked_dependencies(tmp_path: P
     assert result.returncode == 0, result.stderr
     assert (task_root / "active" / "child-task-2.md").exists()
     assert (task_root / "queued" / "parent-task.md").exists()
-    assert "Skipping blocked task" in result.stdout
-    assert "child-2" in result.stdout
 
 
 def test_start_next_unblocks_parent_when_dependencies_are_done(tmp_path: Path) -> None:

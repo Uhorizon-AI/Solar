@@ -1,16 +1,13 @@
 #!/bin/bash
 
-# Create a new task.
-# Default: creates in drafts/ (human workflow: create → plan → approve).
-# With --queued: creates directly in queued/ for AI-generated subtasks.
+# Create a task through solar-state. Nothing is written under async-tasks/.
+# Default status is draft. --queued creates it already queued.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=task_lib.sh
 source "$SCRIPT_DIR/task_lib.sh"
 
-ensure_dirs
-
-# Defaults
-DEST="drafts"
+DEST="draft"
 PRIORITY="normal"
 SCHEDULED_TIME=""
 BODY_FILE=""
@@ -19,7 +16,6 @@ METADATA_JSON=""
 PARENT_TASK_ID=""
 SUBTASK_KEY=""
 
-# Parse flags
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --queued)         DEST="queued"; shift ;;
@@ -40,128 +36,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-TITLE="$1"
+TITLE="${1:-}"
 DESCRIPTION="${2:-}"
 
 if [[ -z "$TITLE" ]]; then
-    cat >&2 <<'USAGE'
-Usage: create.sh [OPTIONS] "Task Title" ["Description"]
-
-Options:
-  --queued             Create directly in queued/ (for AI-generated subtasks).
-                       Skips draft/planned states and generates complete schema.
-  --priority P         Task priority: high | normal | low  (default: normal)
-  --scheduled-time T   scheduled_time value, e.g. "now" or "10:00"  (default: now when --queued)
-  --body-file FILE     Read task body from FILE instead of using Description arg.
-                       Use this for multi-line prompts. The file content replaces
-                       the body section; title heading is added automatically.
-  --provider P         Lock this task to a specific provider: codex | claude | agy | agent.
-                       The worker passes it to solar-router as strict mode (no fallback).
-                       Only valid with --queued.
-  --parent-task-id ID  Only valid with --queued. Mark this task as a child of ID. Written with the file, not
-                       after it: the task is published into queued/ and can be picked
-                       up immediately, so a key added afterwards leaves a window where
-                       the child exists and cannot be reconciled with its parent.
-  --subtask-key KEY    Only valid with --queued. Stable key of this child inside its
-                       parent's manifest. Same reason: written with the file or not at all.
-  --metadata JSON      Origin and scope metadata (message-contract). Accepts flat keys
-                       origin_channel, origin_chat_id, origin_request_id and/or
-                       nested origin: {channel, chat_id, request_id}, plus the
-                       declared scope of the request: object, scope, effect, and
-                       delivery_expected. Written as flat frontmatter. Any other key
-                       is ignored: this is a closed allowlist, not a metadata
-                       passthrough. notify_when: completed is set only when origin
-                       metadata is present. Children should omit this flag.
-
-Examples:
-  # Human workflow (draft → plan → approve)
-  create.sh "My Task" "Do something"
-
-  # AI subtask: direct to queued with a body file (no notify)
-  create.sh --queued --priority normal --body-file /tmp/body.md "My Task"
-
-  # AI subtask: locked to a specific provider (strict mode)
-  create.sh --queued --provider claude --body-file /tmp/review.md "Claude review"
-
-  # Child of a parent task: identity written with the file, never after it
-  create.sh --queued --parent-task-id "<uuid>" --subtask-key "<key>" \
-    --body-file /tmp/child.md "Review A"
-
-  # Parent from gateway: origin metadata + notify_when
-  create.sh --queued --metadata '{"origin_channel":"telegram","origin_chat_id":"456","origin_request_id":"tg:1"}' "Parent"
-USAGE
+    echo "Usage: create.sh [OPTIONS] \"Task Title\" [\"Description\"]" >&2
     exit 1
 fi
 
-ORIGIN_CHANNEL=""
-ORIGIN_CHAT_ID=""
-ORIGIN_REQUEST_ID=""
-SCOPE_OBJECT=""
-SCOPE_BOUNDS=""
-SCOPE_EFFECT=""
-DELIVERY_EXPECTED=""
-
-if [[ -n "$METADATA_JSON" ]]; then
-    META_OUT="$(python3 -c '
-import json, sys
-raw = sys.argv[1]
-try:
-    data = json.loads(raw)
-except Exception:
-    sys.exit(2)
-if data is None:
-    data = {}
-if not isinstance(data, dict):
-    sys.exit(2)
-origin = data.get("origin")
-if not isinstance(origin, dict):
-    origin = {}
-
-def pick(flat_key, nested_key=None):
-    v = data.get(flat_key)
-    if v is None and nested_key is not None:
-        v = origin.get(nested_key)
-    if v is None:
-        return ""
-    # One value per output line: the caller reads these positionally, and the
-    # scope keys carry prose that may arrive wrapped.
-    return " ".join(str(v).split())
-
-print(pick("origin_channel", "channel"))
-print(pick("origin_chat_id", "chat_id"))
-print(pick("origin_request_id", "request_id"))
-print(pick("object"))
-print(pick("scope"))
-print(pick("effect"))
-print("true" if data.get("delivery_expected") is True else "")
-' "$METADATA_JSON")" || {
-        echo "Error: --metadata must be a JSON object (flat origin_* or nested origin)." >&2
-        exit 1
-    }
-    ORIGIN_CHANNEL="$(printf '%s\n' "$META_OUT" | sed -n '1p')"
-    ORIGIN_CHAT_ID="$(printf '%s\n' "$META_OUT" | sed -n '2p')"
-    ORIGIN_REQUEST_ID="$(printf '%s\n' "$META_OUT" | sed -n '3p')"
-    SCOPE_OBJECT="$(printf '%s\n' "$META_OUT" | sed -n '4p')"
-    SCOPE_BOUNDS="$(printf '%s\n' "$META_OUT" | sed -n '5p')"
-    SCOPE_EFFECT="$(printf '%s\n' "$META_OUT" | sed -n '6p')"
-    DELIVERY_EXPECTED="$(printf '%s\n' "$META_OUT" | sed -n '7p')"
-fi
-
-# Quote a value as a YAML scalar. ensure_ascii=False on purpose: the escaping
-# is there to stop a value from closing its quote and inventing frontmatter
-# lines, not to flatten the alphabet. Without it an accented title arrives as
-# "Informe \u00f1o\u00f1o", and nothing downstream decodes JSON — extract_meta
-# strips the quotes and the listing and the completion notice show the escape.
-yaml_quoted() {
-    python3 -c 'import json,sys; print(json.dumps(sys.argv[1], ensure_ascii=False))' "$1"
-}
-
-ID=$(generate_id)
-
-# A draft carries the minimal schema, so these two would be parsed and then
-# dropped without a word — and a child whose identity was silently discarded is
-# exactly the failure these flags exist to prevent. Fail instead.
-if [[ "$DEST" != "queued" ]] && [[ -n "$PARENT_TASK_ID" || -n "$SUBTASK_KEY" ]]; then
+if [[ "$DEST" != "queued" && ( -n "$PARENT_TASK_ID" || -n "$SUBTASK_KEY" ) ]]; then
     echo "Error: --parent-task-id and --subtask-key require --queued." >&2
     exit 1
 fi
@@ -171,105 +54,132 @@ case "$PRIORITY" in
     *) echo "Error: --priority must be high, normal or low (got: $PRIORITY)" >&2; exit 1 ;;
 esac
 
-# Choose destination directory
-case "$DEST" in
-    queued)  TARGET_DIR="$DIR_QUEUED" ;;
-    drafts)  TARGET_DIR="$DIR_DRAFTS" ;;
-    *)       echo "Error: unknown dest '$DEST'" >&2; exit 1 ;;
-esac
-
-FILENAME="$(build_task_filename "$TARGET_DIR" "$TITLE")"
-
-# Resolve body content
-if [[ -n "$BODY_FILE" ]]; then
-    if [[ ! -f "$BODY_FILE" ]]; then
-        echo "Error: body file not found: $BODY_FILE" >&2
-        exit 1
-    fi
-    BODY="$(cat "$BODY_FILE")"
-else
-    BODY="$DESCRIPTION"
-fi
-
-HAS_ORIGIN=0
-if [[ -n "$ORIGIN_CHANNEL" || -n "$ORIGIN_CHAT_ID" || -n "$ORIGIN_REQUEST_ID" ]]; then
-    HAS_ORIGIN=1
-fi
-
-# The task is written to a temporary file beside its destination and moved into
-# place only once the write succeeded whole. A failed redirect leaves the script
-# running (no `set -e`), and a write that emits some bytes and then fails would
-# otherwise leave a truncated task that looks valid: the worker would pick it up
-# and the caller would be told it was created. A provider sandbox that cannot
-# write into the task root hits exactly this.
-TMP_FILE="${FILENAME}.partial.$$"
-cleanup_partial() {
-    rm -f "$TMP_FILE"
-}
-trap cleanup_partial EXIT
-
-write_failed() {
-    echo "Error: task file was not written: $FILENAME" >&2
+if [[ -n "$BODY_FILE" && ! -f "$BODY_FILE" ]]; then
+    echo "Error: body file not found: $BODY_FILE" >&2
     exit 1
-}
-
-# Build frontmatter based on destination
-if [[ "$DEST" == "queued" ]]; then
-    # --queued: full schema required for worker compatibility
-    SCHED_TIME="${SCHEDULED_TIME:-now}"
-    {
-        echo "---"
-        echo "id: \"$ID\""
-        echo "title: $(yaml_quoted "$TITLE")"
-        echo "created: \"$(date -Iseconds)\""
-        echo "status: queued"
-        echo "priority: $PRIORITY"
-        echo "scheduled_time: $(yaml_quoted "$SCHED_TIME")"
-        echo "recurring: false"
-        [[ -n "$PROVIDER" ]] && echo "provider: $(yaml_quoted "$PROVIDER")"
-        # Part of the same atomic write as the rest of the file: the parent must
-        # never see a child of its own that it cannot identify.
-        [[ -n "$PARENT_TASK_ID" ]] && echo "parent_task_id: $(yaml_quoted "$PARENT_TASK_ID")"
-        [[ -n "$SUBTASK_KEY" ]] && echo "subtask_key: $(yaml_quoted "$SUBTASK_KEY")"
-        [[ -n "$ORIGIN_CHANNEL" ]] && echo "origin_channel: $(yaml_quoted "$ORIGIN_CHANNEL")"
-        [[ -n "$ORIGIN_CHAT_ID" ]] && echo "origin_chat_id: $(yaml_quoted "$ORIGIN_CHAT_ID")"
-        [[ -n "$ORIGIN_REQUEST_ID" ]] && echo "origin_request_id: $(yaml_quoted "$ORIGIN_REQUEST_ID")"
-        [[ -n "$SCOPE_OBJECT" ]] && echo "object: $(yaml_quoted "$SCOPE_OBJECT")"
-        [[ -n "$SCOPE_BOUNDS" ]] && echo "scope: $(yaml_quoted "$SCOPE_BOUNDS")"
-        [[ -n "$SCOPE_EFFECT" ]] && echo "effect: $(yaml_quoted "$SCOPE_EFFECT")"
-        # Written by the same call that puts the <delivery> instruction in the
-        # body: dropping the instruction must drop this flag, or every task
-        # would report a missing delivery.
-        [[ -n "$DELIVERY_EXPECTED" ]] && echo "delivery_expected: true"
-        [[ "$HAS_ORIGIN" -eq 1 ]] && echo "notify_when: completed"
-        echo "---"
-        echo ""
-        echo "# $TITLE"
-        echo ""
-        echo "$BODY"
-    } > "$TMP_FILE" || write_failed
-else
-    # drafts: minimal schema (plan.sh / approve.sh add the rest)
-    cat > "$TMP_FILE" <<EOF || write_failed
----
-id: "$ID"
-title: $(yaml_quoted "$TITLE")
-created: "$(date -Iseconds)"
-status: draft
-priority: $PRIORITY
----
-
-# $TITLE
-
-$BODY
-EOF
 fi
 
-# Empty means the redirect never reached the filesystem, which some shells and
-# sandboxes report without a non-zero status.
-[[ -s "$TMP_FILE" ]] || write_failed
-mv "$TMP_FILE" "$FILENAME" || write_failed
-trap - EXIT
+CREATED="$(date -Iseconds)"
+export SOLAR_CREATE_TITLE="$TITLE"
+export SOLAR_CREATE_DESCRIPTION="$DESCRIPTION"
+export SOLAR_CREATE_BODY_FILE="${BODY_FILE:-}"
+export SOLAR_CREATE_DEST="$DEST"
+export SOLAR_CREATE_PRIORITY="$PRIORITY"
+export SOLAR_CREATE_SCHEDULED="${SCHEDULED_TIME:-}"
+export SOLAR_CREATE_PROVIDER="${PROVIDER:-}"
+export SOLAR_CREATE_PARENT="${PARENT_TASK_ID:-}"
+export SOLAR_CREATE_KEY="${SUBTASK_KEY:-}"
+export SOLAR_CREATE_META="${METADATA_JSON:-}"
+export SOLAR_CREATE_CREATED="$CREATED"
+export SOLAR_STATE_PY
 
-echo "Task created: $FILENAME"
-echo "ID: $ID"
+python3 - <<'PY'
+import json, os, subprocess, sys, tempfile
+from pathlib import Path
+
+def quoted(value):
+    return json.dumps(value, ensure_ascii=False)
+
+title = os.environ["SOLAR_CREATE_TITLE"]
+description = os.environ.get("SOLAR_CREATE_DESCRIPTION") or ""
+body_file = os.environ.get("SOLAR_CREATE_BODY_FILE") or ""
+dest = os.environ["SOLAR_CREATE_DEST"]
+priority = os.environ["SOLAR_CREATE_PRIORITY"]
+body = Path(body_file).read_text(encoding="utf-8") if body_file else description
+
+meta = {}
+raw = os.environ.get("SOLAR_CREATE_META") or ""
+if raw:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        print("Error: --metadata must be a JSON object (flat origin_* or nested origin).", file=sys.stderr)
+        sys.exit(1)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        print("Error: --metadata must be a JSON object (flat origin_* or nested origin).", file=sys.stderr)
+        sys.exit(1)
+    origin = data.get("origin") if isinstance(data.get("origin"), dict) else {}
+
+    def pick(flat, nested=None):
+        value = data.get(flat)
+        if value is None and nested is not None:
+            value = origin.get(nested)
+        if value is None:
+            return ""
+        return " ".join(str(value).split())
+
+    meta = {
+        "origin_channel": pick("origin_channel", "channel"),
+        "origin_chat_id": pick("origin_chat_id", "chat_id"),
+        "origin_request_id": pick("origin_request_id", "request_id"),
+        "object": pick("object"),
+        "scope": pick("scope"),
+        "effect": pick("effect"),
+        "delivery_expected": "true" if data.get("delivery_expected") is True else "",
+    }
+
+fields = [
+    ("title", quoted(title)),
+    ("created", quoted(os.environ["SOLAR_CREATE_CREATED"])),
+    ("priority", priority),
+]
+if dest == "queued":
+    fields.append(("scheduled_time", quoted(os.environ.get("SOLAR_CREATE_SCHEDULED") or "now")))
+    fields.append(("recurring", "false"))
+    for name, env in (
+        ("provider", "SOLAR_CREATE_PROVIDER"),
+        ("parent_task_id", "SOLAR_CREATE_PARENT"),
+        ("subtask_key", "SOLAR_CREATE_KEY"),
+    ):
+        value = os.environ.get(env) or ""
+        if value:
+            fields.append((name, quoted(value)))
+    for key in ("origin_channel", "origin_chat_id", "origin_request_id", "object", "scope", "effect"):
+        if meta.get(key):
+            fields.append((key, quoted(meta[key])))
+    if meta.get("delivery_expected"):
+        fields.append(("delivery_expected", "true"))
+    if any(meta.get(key) for key in ("origin_channel", "origin_chat_id", "origin_request_id")):
+        fields.append(("notify_when", "completed"))
+
+document = "\n# " + title + "\n\n" + body
+with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+    handle.write(document)
+    path = handle.name
+cmd = [sys.executable, os.environ["SOLAR_STATE_PY"], "task", "create", "--status", dest, "--body-file", path]
+for key, value in fields:
+    cmd.extend(["--field", f"{key}={value}"])
+try:
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+finally:
+    Path(path).unlink(missing_ok=True)
+if proc.returncode != 0:
+    detail = (proc.stderr or proc.stdout or "task create failed").strip()
+    print(detail, file=sys.stderr)
+    sys.exit(proc.returncode)
+created = json.loads(proc.stdout)
+task_id = created["id"]
+parent = os.environ.get("SOLAR_CREATE_PARENT") or ""
+key = os.environ.get("SOLAR_CREATE_KEY") or ""
+if parent:
+    # The child already carries parent_task_id. The link row needs the parent
+    # to be a row; a child published on its own still stands.
+    state = os.environ["SOLAR_STATE_PY"]
+    known = subprocess.run(
+        [sys.executable, state, "task", "status", parent],
+        text=True, capture_output=True,
+    )
+    if known.returncode == 0:
+        link = [sys.executable, state, "task", "link", parent, task_id]
+        if key:
+            link.extend(["--key", key])
+        linked = subprocess.run(link, text=True, capture_output=True)
+        if linked.returncode != 0:
+            detail = (linked.stderr or linked.stdout or "task link failed").strip()
+            print(detail, file=sys.stderr)
+            sys.exit(linked.returncode)
+print(f"Task created: {task_id}")
+print(f"ID: {task_id}")
+PY

@@ -1,51 +1,44 @@
 #!/bin/bash
 
-# Plan a task (move from draft to planned)
+# draft -> planned, and append the planning template to the body once.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
 
-TASK_ID="$1"
+TASK_ID="${1:-}"
 
-if [ -z "$TASK_ID" ]; then
-    echo "Usage: $0 <task_id>"
+if [[ -z "$TASK_ID" ]]; then
+    echo "Usage: $0 <task_id>" >&2
     exit 1
 fi
 
-TASK_FILE=$(find_task "$TASK_ID")
+state task transition "$TASK_ID" planned --from draft >/dev/null
 
-if [ -z "$TASK_FILE" ]; then
-    echo "Error: Task $TASK_ID not found."
-    exit 1
-fi
+export SOLAR_PLAN_ID="$TASK_ID"
+export SOLAR_STATE_PY
+python3 - <<'PY'
+import json, os, subprocess, sys
+show = subprocess.run(
+    [sys.executable, os.environ["SOLAR_STATE_PY"], "task", "get", os.environ["SOLAR_PLAN_ID"]],
+    text=True, capture_output=True)
+if show.returncode != 0:
+    sys.stderr.write(show.stderr or show.stdout)
+    sys.exit(show.returncode)
+body = json.loads(show.stdout).get("body") or ""
+if "# Implementation Plan" in body:
+    sys.exit(0)
+extra = (
+    "\n# Implementation Plan\n\n"
+    "- [ ] Technical Design\n"
+    "- [ ] Dependencies\n"
+    "- [ ] Verification Steps\n"
+)
+proc = subprocess.run(
+    [sys.executable, os.environ["SOLAR_STATE_PY"], "task", "write-body", os.environ["SOLAR_PLAN_ID"]],
+    input=body + extra, text=True, capture_output=True)
+if proc.returncode != 0:
+    sys.stderr.write(proc.stderr or proc.stdout)
+    sys.exit(proc.returncode)
+PY
 
-STATUS=$(get_status "$TASK_FILE")
-
-if [ "$STATUS" != "draft" ]; then
-    echo "Error: Task must be in 'draft' state to plan. Current state: $STATUS"
-    exit 1
-fi
-
-ensure_dirs
-
-NEW_FILE="${DIR_PLANNED}/$(basename "$TASK_FILE")"
-mv "$TASK_FILE" "$NEW_FILE"
-
-# Update status in frontmatter
-sed -i '' 's/^status: draft/status: planned/' "$NEW_FILE"
-
-# Append planning template if not exists
-if ! grep -q "# Implementation Plan" "$NEW_FILE"; then
-    cat >> "$NEW_FILE" <<EOF
-
-# Implementation Plan
-
-- [ ] Technical Design
-- [ ] Dependencies
-- [ ] Verification Steps
-
-EOF
-fi
-
-echo "Task $TASK_ID moved to PLANNED."
-echo "File: $NEW_FILE"
+echo "Task $TASK_ID moved to planned."

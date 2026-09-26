@@ -1,0 +1,334 @@
+"""Console rows. They come from the views in state.sqlite, not from index.sqlite."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+_PATHS_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-paths" / "scripts"
+_STATE_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-state" / "scripts"
+if str(_PATHS_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_PATHS_SCRIPTS))
+if str(_STATE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_STATE_SCRIPTS))
+
+import solar_runtime  # noqa: E402
+import solar_state  # noqa: E402
+
+FRESH_SECONDS = 120
+STALE_SECONDS = 86400
+TASK_STATES = ('drafts', 'queued', 'active', 'error', 'completed', 'cancelled')
+PAGE_SIZE = 40
+_AUDIT_INDEX = {}
+
+
+def runtime_dir(*parts):
+    """Framework machine state. Never inside the workspace."""
+    return solar_runtime.runtime_dir(*parts)
+
+
+def display_path(path, workspace):
+    """Workspace-relative when it is inside the workspace, absolute otherwise."""
+    try:
+        return str(Path(path).relative_to(workspace))
+    except ValueError:
+        return str(path)
+
+
+def iso(timestamp=None):
+    return datetime.fromtimestamp(time.time() if timestamp is None else timestamp, timezone.utc).isoformat()
+
+
+def epoch(value):
+    try:
+        if isinstance(value, (float, int)) or str(value).isdigit():
+            return float(value)
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def fields(text):
+    """Parse the scalar frontmatter contract used by the task executor."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != '---':
+        raise ValueError('Missing task frontmatter')
+    data = {}
+    for line in lines[1:]:
+        if line.strip() == '---':
+            return data
+        key, sep, value = line.partition(':')
+        if sep and key and not key[0].isspace():
+            data[key.strip()] = value.strip().strip('"').strip("'")
+    raise ValueError('Unclosed task frontmatter')
+
+
+def issue(component, cause_code, detail='', path='', state='warning', observed_at=None):
+    return dict(component=component, cause_code=cause_code, cause=detail or cause_code,
+                detail=detail, path=str(path), state=state, observed_at=observed_at)
+
+
+def result_summary(text, data):
+    for heading in ('Execution Error', 'Error', 'Result', 'Resultado'):
+        match = re.search(r'^## '+heading+r'\s*\n(.*?)(?=^## |\Z)', text, re.M | re.S)
+        if match:
+            return ' '.join(match.group(1).split())[:500]
+    return str(data.get('summary') or data.get('description') or '')[:500]
+
+
+def artifacts(text, data):
+    """Expose only paths explicitly recorded as outputs, never guessed artifacts."""
+    result = []
+    for key in ('artifact', 'artifact_path', 'output_file', 'output_path', 'artifacts'):
+        if data.get(key):
+            result.append(data[key])
+    for section in re.findall(r'^## (?:Result|Resultado|Artifacts|Artefactos)\s*\n(.*?)(?=^## |\Z)', text, re.M | re.S):
+        result.extend(re.findall(r'\[[^\]]+\]\(([^)]+)\)', section))
+    # The execution log's Result may contain nested headings. Only explicit
+    # output statements count as produced artifacts, not arbitrary source paths.
+    for line in text.splitlines():
+        if re.search(r'(guardad[oa] en|saved (?:to|at)|output(?: file)?|artefact[os]*|artifact[ s]*)', line, re.I):
+            result.extend(re.findall(r'`((?:sun/|planets/|/)[^`]+)`', line))
+    return list(dict.fromkeys(result))
+
+
+_STATUS_FOLDER = {
+    'draft': 'drafts', 'queued': 'queued', 'active': 'active',
+    'error': 'error', 'completed': 'completed', 'cancelled': 'cancelled',
+}
+
+
+def read_tasks(workspace):
+    """Tasks whose status the console shows. Planned and archived stay out.
+
+    A runtime that is not sqlite is a problem, not a reason to scan files.
+    """
+    jobs, problems = [], []
+    try:
+        with solar_state.session() as store:
+            tasks = store.task_list()
+    except solar_state.StateError as exc:
+        return [], [issue('tasks', 'state_unavailable', str(exc), solar_state.db_path(), 'problems')]
+    db = solar_state.db_path()
+    for task in tasks:
+        state = _STATUS_FOLDER.get(task['status'])
+        if state is None:
+            continue
+        data = {key: solar_state.value_of(rest) for key, rest in task['frontmatter']}
+        created = task.get('created') or data.get('created')
+        updated = task.get('updated') or created
+        log_text = ''
+        log_path = task.get('log_path')
+        if log_path:
+            log = Path(log_path)
+            try:
+                log_text = log.read_text(encoding='utf-8')
+                log_id = re.search(r'^- task_id: (.+)$', log_text, re.M)
+                if log_id and log_id.group(1) != task['id']:
+                    log_text = ''
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                problems.append(issue('task log', 'record_unreadable', str(exc), log))
+        used = re.search(r'^- provider_used: (.+)$', log_text, re.M)
+        provider = data.get('provider_used') or (used.group(1) if used else None)
+        body = task.get('body') or ''
+        created_epoch = epoch(created)
+        jobs.append(dict(
+            id=task['id'], title=task.get('title') or data.get('title') or task['id'],
+            state=state, source='task',
+            summary=result_summary(log_text, data) or result_summary(body, data),
+            timestamp=updated, created_at=created,
+            provider=provider, provider_requested=data.get('provider') or task.get('provider'),
+            origin=data.get('origin_channel') or task.get('origin_channel'),
+            origin_thread_id=data.get('origin_thread_id') or task.get('origin_thread_id'),
+            artifacts=artifacts(body + '\n' + log_text, data),
+            file=display_path(db, workspace),
+            recurring=str(data.get('recurring') or '').lower() == 'true',
+            recurring_run_count=data.get('recurring_run_count'),
+            recurring_last_run=data.get('recurring_last_run'),
+            stale=state == 'drafts' and created_epoch is not None and time.time() - created_epoch > STALE_SECONDS,
+            log_path=str(log_path) if log_path else None,
+        ))
+    jobs.sort(key=lambda row: epoch(row['timestamp']) or 0, reverse=True)
+    return jobs, problems
+
+
+def _audit_lines_from_tail(path, wanted):
+    """Read only as far back as needed to assemble the requested page."""
+    with path.open('rb') as stream:
+        end = stream.seek(0, 2)
+        buffer = b''
+        rows = []
+        ids = set()
+        while end > 0 and len(ids) < wanted:
+            size = min(65536, end)
+            end -= size
+            stream.seek(end)
+            buffer = stream.read(size) + buffer
+            parts = buffer.splitlines()
+            if end and parts:
+                buffer = parts.pop(0)
+            else:
+                buffer = b''
+            for raw in reversed(parts):
+                rows.append(raw.decode('utf-8', errors='replace'))
+                try:
+                    rid = json.loads(raw).get('router_id')
+                    if rid:
+                        ids.add(rid)
+                except (ValueError, AttributeError):
+                    pass
+        return list(reversed(rows))
+
+
+def audit_counts(path=None):
+    """Count start and failed-end rows. Invalid lines cannot sit in the base."""
+    del path
+    try:
+        with solar_state.session() as store:
+            rows = store.audit_rows()
+    except solar_state.StateError:
+        return dict(total=0, errors=0, invalid=0)
+    total = errors = 0
+    for row in rows:
+        if row.get('event') == 'start':
+            total += 1
+        elif row.get('event') == 'end' and row.get('status') in ('error', 'failed'):
+            errors += 1
+    return dict(total=total, errors=errors, invalid=0)
+
+
+def read_router(workspace, limit=PAGE_SIZE, offset=0, state=None):
+    if state:
+        wanted = offset + limit
+        window = max(wanted * 2, PAGE_SIZE)
+        while True:
+            candidates, problems = read_router(workspace, window, 0)
+            matches = [row for row in candidates if (
+                'completed' if row['state'] == 'success' else
+                'error' if row['state'] == 'failed' else row['state']) == state]
+            if len(matches) >= wanted or len(candidates) < window:
+                return matches[offset:wanted], problems
+            window *= 2
+    records, problems = {}, []
+    db = solar_state.db_path()
+    try:
+        with solar_state.session() as store:
+            lines = store.audit_lines()
+    except solar_state.StateError as exc:
+        return [], [issue('router audit', 'state_unavailable', str(exc), db, 'problems')]
+    for number, line in enumerate(lines, 1):
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict) or not row.get('router_id'):
+                raise ValueError('Missing router_id')
+            item = records.setdefault(row['router_id'], {})
+            item.update(row)
+            if row.get('event') == 'start':
+                item['started_at'] = row.get('ts')
+            elif row.get('event') == 'end':
+                item['ended_at'] = row.get('ts')
+        except ValueError as exc:
+            problems.append(issue('router audit', 'record_invalid', f'Tail record {number}: {exc}', db))
+    runs = []
+    for rid, data in records.items():
+        ended = bool(data.get('ended_at'))
+        metadata = data.get('metadata') if isinstance(data.get('metadata'), dict) else {}
+        stamp = data.get('ended_at') or data.get('started_at')
+        age = time.time()-(epoch(stamp) or 0)
+        result = data.get('result') if isinstance(data.get('result'), dict) else {}
+        summary = str(data.get('error') or data.get('intention') or data.get('decision_kind') or '')
+        timeout = re.search(r'timed out after ([0-9.]+) seconds', summary)
+        if timeout:
+            summary = 'Execution timed out after ' + timeout.group(1) + ' seconds'
+        runs.append(dict(
+            id=rid, title=data.get('request_id') or rid, source='router',
+            state=data.get('status', 'unknown') if ended else ('active' if age <= FRESH_SECONDS else 'unverified'),
+            summary=summary[:500],
+            timestamp=stamp, provider=data.get('provider'), user_id=data.get('user_id'),
+            origin=data.get('channel') or metadata.get('origin_channel'),
+            artifacts=result.get('artifacts') if isinstance(result.get('artifacts'), list) else [],
+            history_turns=data.get('history_turns'), summary_used=data.get('summary_used'),
+            duration_ms=data.get('duration_ms'), stale=not ended and age > FRESH_SECONDS,
+            file=display_path(db, workspace),
+        ))
+    runs.sort(key=lambda row: epoch(row['timestamp']) or 0, reverse=True)
+    return runs[offset:offset + limit], problems
+
+
+def snapshot(workspace):
+    started = time.time()
+    tasks, task_problems = read_tasks(workspace)
+    runs, router_problems = read_router(workspace)
+    audit = audit_counts()
+    problems = task_problems + router_problems
+    components = []
+    gateway = runtime_dir('gateway') / 'env.fail'
+    try:
+        raw = gateway.read_text(encoding='utf-8')
+        data = dict(line.split('=', 1) for line in raw.splitlines() if '=' in line)
+        failed = epoch(data.get('failed_at'))
+        components.append(dict(component='gateway', state='problems', cause_code='gateway_failure',
+            cause=data.get('reason') or 'Recorded gateway failure', detail=data.get('reason') or '', observed_at=iso(failed) if failed else None,
+            attempts=data.get('attempts'), exhausted=data.get('exhausted') == '1',
+            next_retry_at=iso(epoch(data['next_retry_at'])) if epoch(data.get('next_retry_at')) else None,
+            stale=failed is None or started-failed > STALE_SECONDS, path=display_path(gateway, workspace)))
+    except FileNotFoundError:
+        components.append(issue('gateway', 'gateway_unverified', 'No recent gateway probe', state='unverified'))
+    except (OSError, ValueError) as exc:
+        problems.append(issue('gateway record', 'record_invalid', str(exc), gateway))
+    db = solar_state.db_path()
+    try:
+        with solar_state.session() as store:
+            data = store.continuity_get()
+        if not isinstance(data, dict):
+            components.append(issue('continuity', 'continuity_unverified', 'No continuity record', state='unverified'))
+        else:
+            updated = epoch(data.get('updated_at'))
+            stale = updated is None or started-updated > STALE_SECONDS
+            components.append(dict(component='continuity', state='stale' if stale else 'observed', cause_code='continuity_state',
+                cause=str(data.get('active_task') or 'No active intention'), detail='', observed_at=data.get('updated_at'),
+                stale=stale, path=display_path(db, workspace)))
+    except solar_state.StateError as exc:
+        problems.append(issue('continuity', 'state_unavailable', str(exc), db, 'problems'))
+    storage_ok = not any(row['state'] == 'problems' for row in problems)
+    try:
+        with solar_state.session() as store:
+            counted = store.console_task_counts()
+    except solar_state.StateError:
+        counted = {}
+    task_states = {state: int((counted.get(state) or {}).get('n') or 0) for state in TASK_STATES}
+    components.insert(0, dict(component='storage', state='healthy' if storage_ok else 'problems',
+        cause_code='storage_readable' if storage_ok else 'storage_unreadable',
+        cause='Task files and router audit are readable' if storage_ok else 'Canonical storage is not readable', detail='',
+        observed_at=iso(), path=str(runtime_dir())))
+    components.extend(problems)
+    status = 'problems' if any(c['state']=='problems' for c in components) else 'unverified' if any(c['state']=='unverified' for c in components) else 'healthy'
+    checked = time.time()
+    return dict(workspace=str(workspace), solar_root=os.environ.get('SOLAR_ROOT', str(Path(__file__).resolve().parents[4])),
+        checked_at=iso(checked), fresh_until=iso(checked+FRESH_SECONDS),
+        health=dict(status=status, storage_ok=storage_ok, checked_at=iso(checked), fresh_until=iso(checked+FRESH_SECONDS), components=components),
+        tasks=tasks[:PAGE_SIZE], executions=runs,
+        activity=sorted(tasks+runs, key=lambda row: epoch(row['timestamp']) or 0, reverse=True)[:PAGE_SIZE],
+        counts=dict(tasks=sum(task_states.values()), executions=audit['total'],
+                    errors=task_states.get('error', 0) + audit['errors'],
+                    recurring=sum(int((row or {}).get('recurring') or 0) for row in counted.values()),
+                    task_states=task_states),
+        working=sum(row['state']=='active' for row in tasks+runs),
+    )
+
+
+def activity_page(workspace, source='', state='', offset=0, limit=PAGE_SIZE):
+    tasks, _ = read_tasks(workspace)
+    if state:
+        tasks = [row for row in tasks if row['state'] == state]
+    runs, _ = read_router(workspace, limit=offset + limit + 1, state=state or None)
+    items = tasks if source == 'task' else runs if source == 'router' else tasks + runs
+    items.sort(key=lambda row: epoch(row['timestamp']) or 0, reverse=True)
+    return dict(items=items[offset:offset + limit], offset=offset, limit=limit,
+                has_more=len(items) > offset + limit)

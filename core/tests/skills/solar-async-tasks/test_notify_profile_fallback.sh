@@ -74,7 +74,20 @@ export TELEGRAM_ALLOWED_CHAT_IDS="777"
 unset TELEGRAM_CHAT_ID
 : >"$SOLAR_WORKSPACE/notify.log"
 
-bash "$NOTIFY" "$TASK_FILE"
+python3 - <<PY
+import sys
+sys.path.insert(0, "$CORE_ROOT/skills/solar-state/scripts")
+import solar_state
+with solar_state.cutover() as cut:
+    cut.upgrade_schema()
+    cut.set_format("sqlite")
+with open("$TASK_FILE", encoding="utf-8") as handle:
+    text = handle.read()
+with solar_state.session() as store:
+    store.task_import(text, status="completed", source_name="profile-fallback")
+PY
+
+bash "$NOTIFY" "profile-fallback"
 
 if grep -q 'chat=777' "$SOLAR_WORKSPACE/notify.log"; then
   pass "notify falls back to telegram_chat_id in sun/preferences/profile.md"
@@ -84,7 +97,7 @@ else
   sed 's/^/    /' "$SOLAR_WORKSPACE/notify.log" >&2
 fi
 
-if grep -q 'notify_delivered: true' "$TASK_FILE"; then
+if python3 "$CORE_ROOT/skills/solar-state/scripts/solar_state.py" task show profile-fallback | grep -q 'notify_delivered: true'; then
   pass "task is marked notify_delivered"
 else
   fail "task is marked notify_delivered"

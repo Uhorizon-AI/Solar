@@ -6,7 +6,7 @@
 |---|---|---|
 | Ephemeral turns | `<runtime root>/router/conversations/*.jsonl` | Raw chat per conversation_id |
 | Rolling channel summary | `…/*-summary.txt` | Compact per-conversation continuity |
-| Canonical intention | `<runtime root>/continuity/active.json` | Cross-channel shared intention |
+| Canonical intention | continuity row in `state.sqlite` | Cross-channel shared intention |
 | Machine tasks | `<runtime root>/async-tasks/` | Executable deferred work |
 | Human attention | `sun/daily-log/`, planet `operations/` | Blockers / commitments |
 | Stable memory | `sun/MEMORY.md` | Operational learnings only (not a task board) |
@@ -36,7 +36,7 @@ No secrets. No full message dumps. Promote only durable decisions to `sun/MEMORY
 2. Last explicit instruction wins over incompatible prior context.
 3. Classify new messages as replace / extend / query before acting.
 4. Before creating task/event/message/artifact: check exists / in progress / closed / same goal.
-5. Router injects `active.json` into prompts when present and lightly syncs `active_task` from `<solar_summary>`.
+5. Router injects the continuity row into prompts and lightly syncs `active_task` from `<solar_summary>`.
 
 ## IDE / agent updates
 

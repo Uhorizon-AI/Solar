@@ -32,7 +32,6 @@ import math
 from contextlib import contextmanager
 import json
 import os
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -43,9 +42,12 @@ _PATHS_SCRIPTS = _SKILLS / "solar-paths" / "scripts"
 if str(_PATHS_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_PATHS_SCRIPTS))
 
-import solar_runtime  # noqa: E402
+_STATE_SCRIPTS = _SKILLS / "solar-state" / "scripts"
+if str(_STATE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_STATE_SCRIPTS))
 
-DELEGATION_CTL = _SKILLS / "solar-router" / "scripts" / "delegation_ctl.py"
+import solar_runtime  # noqa: E402
+import mandates  # noqa: E402
 
 A0, A2, A3, A4 = "A0", "A2", "A3", "A4"
 
@@ -103,26 +105,13 @@ def _consume_approval(approval_id: str, record: dict) -> None:
 
 
 def check_mandate(name: str, action: str, automated: bool = False) -> dict:
-    """Ask the universal control point. Its answer, not ours, decides A3."""
+    """Ask solar-state. Its answer, not ours, decides A3."""
     if not name:
         return dict(ok=False, errors=["no mandate named"])
-    cmd = [sys.executable, str(DELEGATION_CTL), "check", name, "--action", action]
-    if automated:
-        cmd.append("--automated")
-    # Run it from the workspace it is answering about: the path resolver fails
-    # closed when an exported workspace disagrees with the one it discovers from
-    # the current directory.
-    cwd = os.environ.get("SOLAR_WORKSPACE") or None
-    if cwd and not Path(cwd).is_dir():
-        cwd = None
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=cwd)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return dict(ok=False, errors=[f"delegation_ctl unavailable: {exc}"])
-    try:
-        return json.loads(proc.stdout or proc.stderr or "{}")
-    except ValueError:
-        return dict(ok=False, errors=[(proc.stderr or proc.stdout or "no answer").strip()[:300]])
+        return mandates.check_mandate(name, action, automated=automated)
+    except Exception as exc:  # noqa: BLE001 - the gate fails closed
+        return dict(ok=False, errors=[f"mandate check unavailable: {exc}"])
 
 
 def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:

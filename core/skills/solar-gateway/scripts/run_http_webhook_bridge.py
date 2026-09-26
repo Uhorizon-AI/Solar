@@ -229,40 +229,20 @@ def n8n_poll_disabled_body(request_id: Optional[str] = None) -> Dict[str, Any]:
     return body
 
 
-def async_task_root() -> Path:
-    """Same queue as task_lib.sh: SOLAR_TASK_ROOT, else the framework runtime.
-
-    There is no fallback to sun/runtime/async-tasks.
-    """
-    override = os.getenv("SOLAR_TASK_ROOT", "").strip()
-    if override:
-        return Path(override).expanduser()
-    return solar_runtime.runtime_dir("async-tasks")
-
-
 def find_task_for_origin_request(origin_request_id: str) -> Optional[str]:
-    """Return task_id if a task already correlates to this origin_request_id."""
+    """Return task_id if a task already correlates to this origin_request_id.
+
+    Refuses when the runtime format is not sqlite.
+    """
     rid = str(origin_request_id or "").strip()
     if not rid:
         return None
-    root = async_task_root()
-    needle = f'origin_request_id: "{rid}"'
-    needle_plain = f"origin_request_id: {rid}"
-    for sub in ("queued", "active", "completed", "drafts", "planned", "error"):
-        folder = root / sub
-        if not folder.is_dir():
-            continue
-        for path in folder.glob("*.md"):
-            try:
-                text = path.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            if needle not in text and needle_plain not in text:
-                continue
-            for line in text.splitlines():
-                if line.startswith("id:"):
-                    return line.split(":", 1)[1].strip().strip('"')
-    return None
+    scripts = Path(__file__).resolve().parents[2] / "solar-state" / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import solar_state
+    with solar_state.session() as store:
+        return store.task_find_origin(rid)
 
 
 # ---------------------------------------------------------------------------

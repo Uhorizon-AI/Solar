@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from queue_mirror import env_for, mirror, seed, task_id_of
+
 SCRIPTS = Path(__file__).resolve().parents[3] / "skills/solar-async-tasks/scripts"
 EXECUTE = SCRIPTS / "execute_active.py"
 
@@ -54,16 +56,18 @@ def write_parent(root, extra=""):
 def run_executor(task, root, reply, tmp_path, marker=None):
     router = tmp_path / "router_stub.py"
     router.write_text(ROUTER_STUB, encoding="utf-8")
-    env = {**os.environ, "SOLAR_TASK_ROOT": str(root), "STUB_REPLY": reply}
+    seed(root)
+    env = env_for(root, {**os.environ, "STUB_REPLY": reply})
     if marker:
         env["STUB_MARKER"] = str(marker)
     else:
         env.pop("STUB_MARKER", None)
-    return subprocess.run(
-        [sys.executable, str(EXECUTE), str(task), str(router),
-         "parent-0001-aaaa", "Parent"],
+    proc = subprocess.run(
+        [sys.executable, str(EXECUTE), task_id_of(task), str(router)],
         capture_output=True, text=True, env=env, timeout=120,
     )
+    mirror(root)
+    return proc
 
 
 def block(children):
@@ -271,9 +275,7 @@ def test_a_child_that_already_exists_is_not_created_twice(tmp_path):
 
 def _finished_child(root, folder, name, task_id, key, status, log_body):
     path = root / folder / f"{name}.md"
-    extra = ""
-    if status == "completed":
-        extra = f'result_path: "{root / "logs" / (name + ".log")}"\n'
+    extra = f'result_path: "{root / "logs" / (name + ".log")}"\n'
     path.write_text(
         f'---\nid: "{task_id}"\ntitle: "{name}"\nstatus: {status}\n'
         f'subtask_key: "{key}"\nparent_task_id: "parent-0001-aaaa"\n{extra}---\n\n# {name}\n',
@@ -336,10 +338,34 @@ def test_a_task_without_a_block_still_finishes_as_before(tmp_path):
 
 # --- the shell side of the contract ---------------------------------------
 
+def _ensure_framework(skills):
+    """The copied scripts resolve solar-state next to themselves."""
+    base = SCRIPTS.parent.parent
+    for name in ("solar-state", "solar-paths"):
+        dest = skills / name
+        if not dest.exists():
+            shutil.copytree(
+                base / name, dest,
+                ignore=shutil.ignore_patterns("__pycache__", ".venv", "*.pyc"),
+            )
+
+
+def run_bash(script, root, extra=None, args=("--once",), timeout=120):
+    seed(root)
+    env = env_for(root, {**os.environ, **(extra or {})})
+    proc = subprocess.run(
+        ["bash", str(script), *args],
+        capture_output=True, text=True, timeout=timeout, env=env,
+    )
+    mirror(root)
+    return proc
+
+
 def _worker_tree(tmp_path, executor_body):
     """A copy of the scripts with a stub executor, to test the wrapper itself."""
     skills = tmp_path / "skills"
     shutil.copytree(SCRIPTS, skills / "solar-async-tasks" / "scripts")
+    _ensure_framework(skills)
     router = skills / "solar-router" / "scripts"
     router.mkdir(parents=True)
     (router / "run_router.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
@@ -353,10 +379,7 @@ def test_exit_20_re_queues_the_parent_instead_of_completing_it(tmp_path):
     write_parent(root, extra='subtask_ids: "k1=child-1,k2=child-2"\n')
     wrapper = _worker_tree(tmp_path, "#!/usr/bin/env python3\nimport sys\nsys.exit(20)\n")
 
-    proc = subprocess.run(
-        ["bash", str(wrapper), "--once"], capture_output=True, text=True, timeout=60,
-        env={**os.environ, "SOLAR_TASK_ROOT": str(root), "SOLAR_WORKSPACE": str(tmp_path)},
-    )
+    proc = run_bash(wrapper, root, {"SOLAR_WORKSPACE": str(tmp_path)}, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert not (root / "completed" / "parent.md").exists()
     parked = root / "queued" / "parent.md"
@@ -371,10 +394,7 @@ def test_exit_20_with_an_empty_manifest_is_an_error_not_a_completion(tmp_path):
     write_parent(root)
     wrapper = _worker_tree(tmp_path, "#!/usr/bin/env python3\nimport sys\nsys.exit(20)\n")
 
-    proc = subprocess.run(
-        ["bash", str(wrapper), "--once"], capture_output=True, text=True, timeout=60,
-        env={**os.environ, "SOLAR_TASK_ROOT": str(root), "SOLAR_WORKSPACE": str(tmp_path)},
-    )
+    proc = run_bash(wrapper, root, {"SOLAR_WORKSPACE": str(tmp_path)}, timeout=60)
     assert proc.returncode == 1
     assert "empty manifest" in proc.stdout + proc.stderr
     assert not (root / "completed" / "parent.md").exists()
@@ -386,10 +406,7 @@ def test_exit_0_still_completes_the_task(tmp_path):
     write_parent(root)
     wrapper = _worker_tree(tmp_path, "#!/usr/bin/env python3\n")
 
-    proc = subprocess.run(
-        ["bash", str(wrapper), "--once"], capture_output=True, text=True, timeout=60,
-        env={**os.environ, "SOLAR_TASK_ROOT": str(root), "SOLAR_WORKSPACE": str(tmp_path)},
-    )
+    proc = run_bash(wrapper, root, {"SOLAR_WORKSPACE": str(tmp_path)}, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert (root / "completed" / "parent.md").exists()
 
@@ -422,6 +439,7 @@ def test_a_request_with_subtasks_completes_end_to_end(tmp_path):
     shutil.copytree(SCRIPTS, skills / "solar-async-tasks" / "scripts")
     shutil.copytree(SCRIPTS.parent.parent / "solar-router" / "scripts",
                     skills / "solar-router" / "scripts", dirs_exist_ok=True)
+    _ensure_framework(skills)
     (skills / "solar-router" / "scripts" / "run_router.py").write_text(
         ROUTER_E2E, encoding="utf-8")
 
@@ -443,14 +461,16 @@ def test_a_request_with_subtasks_completes_end_to_end(tmp_path):
         encoding="utf-8",
     )
 
-    env = {**os.environ, "SOLAR_TASK_ROOT": str(root), "SOLAR_WORKSPACE": str(tmp_path),
-           "SOLAR_ROOT": str(install), "TELEGRAM_CHAT_ID": "456",
-           "TELEGRAM_ALLOWED_CHAT_IDS": "456", "TELEGRAM_BOT_TOKEN": "fake"}
+    env = env_for(root, {**os.environ, "SOLAR_WORKSPACE": str(tmp_path),
+                          "SOLAR_ROOT": str(install), "TELEGRAM_CHAT_ID": "456",
+                          "TELEGRAM_ALLOWED_CHAT_IDS": "456", "TELEGRAM_BOT_TOKEN": "fake"})
+    seed(root)
     worker = skills / "solar-async-tasks" / "scripts" / "run_worker.sh"
 
     for _ in range(8):
         subprocess.run(["bash", str(worker), "--once"], capture_output=True, text=True,
                        env=env, timeout=120)
+        mirror(root)
         if (root / "completed" / "parent.md").exists():
             break
 
@@ -488,6 +508,7 @@ def _scripts_tree(tmp_path):
     shutil.copytree(SCRIPTS, skills / "solar-async-tasks" / "scripts")
     shutil.copytree(SCRIPTS.parent.parent / "solar-router" / "scripts",
                     skills / "solar-router" / "scripts", dirs_exist_ok=True)
+    _ensure_framework(skills)
     return skills / "solar-async-tasks" / "scripts"
 
 
@@ -500,22 +521,19 @@ def test_the_object_reaches_the_child_in_its_prompt(tmp_path):
     ]), tmp_path).returncode == 20
 
     child = children_files(root)[0]
-    # The child is picked up from queued/ like any other task.
-    active_child = root / "active" / child.name
-    child.rename(active_child)
-    active_child.write_text(
-        active_child.read_text(encoding="utf-8").replace("status: queued", "status: active"),
-        encoding="utf-8",
-    )
+    child_id = task_id_of(child)
+    sys.path.insert(0, str(SCRIPTS.parent.parent / "solar-state" / "scripts"))
+    import solar_state
+    with solar_state.session() as store:
+        store.task_claim(child_id, worker="test")
 
     router = tmp_path / "router_recorder.py"
     router.write_text(ROUTER_RECORDER, encoding="utf-8")
     prompt_file = tmp_path / "prompt.txt"
     proc = subprocess.run(
-        [sys.executable, str(EXECUTE), str(active_child), str(router),
-         "child-1", "Uno"],
+        [sys.executable, str(EXECUTE), child_id, str(router)],
         capture_output=True, text=True, timeout=120,
-        env={**os.environ, "SOLAR_TASK_ROOT": str(root), "PROMPT_FILE": str(prompt_file)},
+        env=env_for(root, {**os.environ, "PROMPT_FILE": str(prompt_file)}),
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
@@ -543,47 +561,39 @@ def test_the_childs_identity_is_written_with_the_file_not_after_it(tmp_path):
 
 
 def test_a_crash_right_after_publishing_a_child_does_not_duplicate_it(tmp_path):
-    """The window Codex found: create.sh publishes, then the worker dies."""
-    scripts = _scripts_tree(tmp_path)
-    (scripts.parent.parent / "solar-router" / "scripts" / "run_router.py").write_text(
-        ROUTER_STUB, encoding="utf-8")
-    real = scripts / "create_real.sh"
-    (scripts / "create.sh").rename(real)
-    (scripts / "create.sh").write_text(
-        '#!/bin/bash\n'
-        'bash "$(dirname "$0")/create_real.sh" "$@"\n'
-        'rc=$?\n'
-        # The child is now published in queued/ and runnable. Die here.
-        'if [[ -n "${CRASH_AFTER_CREATE:-}" ]]; then kill -9 $PPID; fi\n'
-        'exit $rc\n',
-        encoding="utf-8",
-    )
-    executor = scripts / "execute_active.py"
-    router = tmp_path / "router_stub.py"
-    router.write_text(ROUTER_STUB, encoding="utf-8")
+    """The child exists, with its key, before the manifest records the id.
 
+    The key is written in the same insert as the row, so a retry finds the
+    child instead of publishing a second one.
+    """
     root = make_root(tmp_path)
     task = write_parent(root)
-    declaration = block([
+    seed(root)
+    sys.path.insert(0, str(SCRIPTS))
+    import execute_active as ea
+
+    declared = [
         {"title": "Uno", "body": "Revisa A"},
         {"title": "Dos", "body": "Revisa B"},
-    ])
-    base = {**os.environ, "SOLAR_TASK_ROOT": str(root), "STUB_REPLY": declaration,
-            "SOLAR_WORKSPACE": str(tmp_path)}
-    argv = [sys.executable, str(executor), str(task), str(router), "parent-0001-aaaa", "Parent"]
+    ]
+    parent_id = "parent-0001-aaaa"
+    ea.record_subtask_plan(root, parent_id, declared)
+    keys = [
+        ea.subtask_key(parent_id, index, child["title"], child["body"])
+        for index, child in enumerate(declared, 1)
+    ]
+    ea.write_subtask_manifest(parent_id, [(keys[0], ""), (keys[1], "")])
+    child_id, error = ea.create_child_task(root, parent_id, parent_id, declared[0], keys[0])
+    assert error is None, error
+    assert child_id
+    mirror(root)
 
-    crashed = subprocess.run(argv, capture_output=True, text=True, timeout=120,
-                             env={**base, "CRASH_AFTER_CREATE": "1"})
-    assert crashed.returncode != 0
     orphans = children_files(root)
     assert len(orphans) == 1
-    # It carries its key already: this is what makes it reconcilable.
     assert "subtask_key:" in orphans[0].read_text(encoding="utf-8")
-    # And the parent never got to record its id: without the key on the file,
-    # the retry would have no way to tell this child from one it must create.
     assert manifest(task)[0].endswith("=")
 
-    resumed = subprocess.run(argv, capture_output=True, text=True, timeout=120, env=base)
+    resumed = run_executor(task, root, "done", tmp_path)
     assert resumed.returncode == 20, resumed.stdout + resumed.stderr
     created = children_files(root)
     assert len(created) == 2, [f.name for f in created]
@@ -603,11 +613,14 @@ def read_title(path):
 # --- create.sh's own contract for the two identity flags -------------------
 
 def _create(root, *args, tmp_path=None):
-    return subprocess.run(
+    proc = subprocess.run(
         ["bash", str(SCRIPTS / "create.sh"), *args],
         capture_output=True, text=True, timeout=60,
-        env={**os.environ, "SOLAR_TASK_ROOT": str(root)},
+        env=env_for(root),
     )
+    if proc.returncode == 0:
+        mirror(root)
+    return proc
 
 
 def test_create_writes_the_child_identity_into_the_published_file(tmp_path):
@@ -736,11 +749,10 @@ def test_the_shell_re_queues_a_parent_that_was_never_parked(tmp_path):
     )
     write_parent(root, extra='subtask_ids: "k1=child-1"\n')
 
-    proc = subprocess.run(
-        ["bash", str(scripts / "execute_active.sh"), "--once"],
-        capture_output=True, text=True, timeout=120,
-        env={**os.environ, "SOLAR_TASK_ROOT": str(root), "SOLAR_WORKSPACE": str(tmp_path),
-             "STUB_MARKER": str(marker), "STUB_REPLY": "no deberia llamarse"},
+    proc = run_bash(
+        scripts / "execute_active.sh", root,
+        {"SOLAR_WORKSPACE": str(tmp_path), "STUB_MARKER": str(marker),
+         "STUB_REPLY": "no deberia llamarse"},
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert not marker.exists()

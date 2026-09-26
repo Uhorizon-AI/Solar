@@ -1,119 +1,39 @@
 #!/bin/bash
 
-# List all tasks
+# List tasks from solar-state. No frontmatter is parsed here.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
 
-ensure_dirs
+export SOLAR_STATE_PY
+python3 - <<'PY'
+import json, os, subprocess, sys
 
-echo "=== DRAFTS ==="
-for f in "$DIR_DRAFTS"/*.md; do
-    [ -e "$f" ] || continue
-    ID=$(extract_meta "$f" "id")
-    TITLE=$(extract_meta "$f" "title")
-    echo "[$ID] $TITLE"
-done
-
-echo ""
-echo "=== PLANNED ==="
-for f in "$DIR_PLANNED"/*.md; do
-    [ -e "$f" ] || continue
-    ID=$(extract_meta "$f" "id")
-    TITLE=$(extract_meta "$f" "title")
-    STIME=$(extract_meta "$f" "scheduled_time")
-    SDAYS=$(extract_meta "$f" "scheduled_weekdays")
-    if [[ -n "$STIME" || -n "$SDAYS" ]]; then
-        SCHED="$STIME"
-        [[ -n "$SDAYS" ]] && SCHED="${SCHED:+$SCHED }$(weekdays_display "$SDAYS")"
-        echo "[$ID] $TITLE @ $SCHED"
-    else
-        echo "[$ID] $TITLE"
-    fi
-done
-
-echo ""
-echo "=== QUEUED ==="
-# Order by priority (high > normal > low), then scheduled_time (09:00 before 09:30), then created asc (FIFO)
-find "$DIR_QUEUED" -name "*.md" -print 2>/dev/null | while read -r f; do
-    [[ -e "$f" ]] || continue
-    prio="$(extract_meta "$f" "priority")"
-    prio_val=0
-    [[ "$prio" == "high" ]] && prio_val=2
-    [[ "$prio" == "normal" ]] && prio_val=1
-    [[ "$prio" == "low" ]] && prio_val=0
-    sched_min="$(scheduled_minutes "$f")"
-    ts="$(created_epoch "$f")"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$prio_val" "$sched_min" "$ts" "$prio" "$f"
-done | sort -t$'\t' -k1,1nr -k2,2n -k3,3n | while IFS=$'\t' read -r _ _ _ prio f; do
-    [ -e "$f" ] || continue
-    ID=$(extract_meta "$f" "id")
-    TITLE=$(extract_meta "$f" "title")
-    STIME=$(extract_meta "$f" "scheduled_time")
-    SDAYS=$(extract_meta "$f" "scheduled_weekdays")
-    RECURRING=$(extract_meta "$f" "recurring")
-    CLEANUP=$(extract_meta "$f" "cleanup_required")
-    RESOURCES=$(extract_meta "$f" "resources")
-    BLOCKED_BY=$(extract_meta "$f" "blocked_by_task_ids")
-
-    # Build schedule string
-    SCHED=""
-    if [[ -n "$STIME" || -n "$SDAYS" ]]; then
-        SCHED="$STIME"
-        [[ -n "$SDAYS" ]] && SCHED="${SCHED:+$SCHED }$(weekdays_display "$SDAYS")"
-        SCHED=" @ $SCHED"
-    fi
-
-    # Build tags
-    TAGS=""
-    [[ "$RECURRING" == "true" ]] && TAGS="${TAGS}🔁 "
-    [[ "$CLEANUP" == "true" ]] && TAGS="${TAGS}🧹($RESOURCES) "
-    [[ -n "$BLOCKED_BY" ]] && TAGS="${TAGS}⛓️($BLOCKED_BY) "
-
-    echo "[$ID] ($prio) $TITLE$SCHED $TAGS"
-done
-
-echo ""
-echo "=== ACTIVE ==="
-for f in "$DIR_ACTIVE"/*.md; do
-    [ -e "$f" ] || continue
-    ID=$(extract_meta "$f" "id")
-    TITLE=$(extract_meta "$f" "title")
-    echo "[$ID] $TITLE"
-done
-
-echo ""
-echo "=== COMPLETED (Last 5) ==="
-ls -t "$DIR_COMPLETED"/*.md 2>/dev/null | head -n 5 | while read f; do
-    ID=$(extract_meta "$f" "id")
-    TITLE=$(extract_meta "$f" "title")
-    RECURRING=$(extract_meta "$f" "recurring")
-    [[ "$RECURRING" == "true" ]] && TITLE="$TITLE 🔁"
-    echo "[$ID] $TITLE"
-done
-
-echo ""
-echo "=== ERROR ==="
-for f in "$DIR_ERROR"/*.md; do
-    [ -e "$f" ] || continue
-    ID=$(extract_meta "$f" "id")
-    TITLE=$(extract_meta "$f" "title")
-    ERROR_TIME=$(extract_meta "$f" "cleanup_error_time")
-    # Execution errors have time in body (## Execution Error - time: ...), not in frontmatter
-    # Use last occurrence so requeue+refail shows most recent error time
-    if [[ -z "$ERROR_TIME" ]]; then
-        ERROR_TIME=$(grep "^- time:" "$f" 2>/dev/null | tail -n1 | sed 's/^- time: //' | tr -d ' ')
-    fi
-    echo "[$ID] ❌ $TITLE (error at: ${ERROR_TIME:-see file})"
-    echo "    → Detail: $f"
-done
-
-echo ""
-echo "=== ARCHIVE (Last 5) ==="
-ls -t "$DIR_ARCHIVE"/*.md 2>/dev/null | head -n 5 | while read f; do
-    ID=$(extract_meta "$f" "id")
-    TITLE=$(extract_meta "$f" "title")
-    RUN_COUNT=$(extract_meta "$f" "recurring_run_count")
-    [[ -n "$RUN_COUNT" ]] && TITLE="$TITLE (ran $RUN_COUNT times)"
-    echo "[$ID] $TITLE"
-done
+order = ("draft", "planned", "queued", "active", "completed", "error", "cancelled", "archived")
+labels = {"draft": "DRAFTS", "planned": "PLANNED", "queued": "QUEUED", "active": "ACTIVE",
+          "completed": "COMPLETED", "error": "ERROR", "cancelled": "CANCELLED", "archived": "ARCHIVE"}
+state = os.environ["SOLAR_STATE_PY"]
+for status in order:
+    proc = subprocess.run([sys.executable, state, "task", "list", "--status", status],
+                          text=True, capture_output=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr or proc.stdout)
+        sys.exit(proc.returncode)
+    rows = json.loads(proc.stdout or "[]")
+    print(f"=== {labels[status]} ===")
+    for row in rows:
+        fields = row.get("fields") or {}
+        extra = ""
+        if status == "queued":
+            when = fields.get("scheduled_time") or ""
+            days = fields.get("scheduled_weekdays") or ""
+            if when or days:
+                extra = " @ " + " ".join(part for part in (when, days) if part)
+            if str(fields.get("recurring")).lower() == "true":
+                extra += " (recurring)"
+            blocked = fields.get("blocked_by_task_ids") or ""
+            if blocked:
+                extra += f" [blocked: {blocked}]"
+        print(f"[{row['id']}] {row.get('title') or ''}{extra}")
+    print()
+PY

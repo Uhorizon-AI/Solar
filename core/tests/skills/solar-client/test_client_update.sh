@@ -374,45 +374,108 @@ solar_client_restart_running_services "$TMP/install-c" >/dev/null 2>&1
 assert_ok "detect: nothing restarted for an install with no services" test ! -s "$SVC_LOG"
 unset SOLAR_CLIENT_PS_OUTPUT_FILE SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
 
-# --- integration: the restart follows the NEW version's client_lib.sh ---
-# The updater starts from the old install and loaded the old client_lib.sh.
-# After checkout it must reload the new one before restarting services.
+# --- first update from the published updater, which never calls the cutover ---
+# v1 is HEAD's client_update.sh: it reloads the new client_lib and restarts.
+# The new restart migrates before it starts anything.
 WS_UP="$TMP/ws-up"
 INSTALL_UP="$WS_UP/solar"
 UP_LIB="$INSTALL_UP/core/skills/solar-client/scripts/client_lib.sh"
+UP_UPDATE="$INSTALL_UP/core/skills/solar-client/scripts/client_update.sh"
+REPO_ROOT="$(cd "$CORE_ROOT/.." && pwd)"
 mkdir -p "$WS_UP/sun" "$WS_UP/.solar" "$INSTALL_UP/core/skills"
 printf '%s\n' '{"layout":"solar-client-v1.2","core_version":"v0.0.1","core_commit":"unknown","core_source":"global"}' >"$WS_UP/.solar/settings.json"
 cp -R "$CORE_ROOT/skills/solar-client" "$INSTALL_UP/core/skills/"
-# client_lib.sh resolves paths through solar-paths: the fake install needs the base too.
 cp -R "$CORE_ROOT/skills/solar-paths" "$INSTALL_UP/core/skills/"
 rm -rf "$INSTALL_UP/core/skills/solar-client/scripts/__pycache__"
 rm -rf "$INSTALL_UP/core/skills/solar-paths/scripts/__pycache__"
-cp "$UP_LIB" "$TMP/client_lib.base"
-RESTART_MARK="$TMP/restart-version"
-{ cat "$TMP/client_lib.base"; printf '\nsolar_client_restart_running_services() { echo old >"%s"; }\n' "$RESTART_MARK"; } >"$UP_LIB"
+git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_update.sh >"$UP_UPDATE"
+git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_lib.sh >"$UP_LIB"
+assert_ok "published updater does not call the cutover" \
+  bash -c '! grep -q solar_client_state_cutover "$1"' _ "$UP_UPDATE"
 git -C "$INSTALL_UP" init -q
 git -C "$INSTALL_UP" config user.email "test@test"
 git -C "$INSTALL_UP" config user.name "Test"
 git -C "$INSTALL_UP" add -A && git -C "$INSTALL_UP" commit -q -m "v1" && git -C "$INSTALL_UP" tag v0.0.1
-{ cat "$TMP/client_lib.base"; printf '\nsolar_client_restart_running_services() { echo new >"%s"; }\n' "$RESTART_MARK"; } >"$UP_LIB"
+cp "$UPDATE_SCRIPT" "$UP_UPDATE"
+cp "$CORE_ROOT/skills/solar-client/scripts/client_lib.sh" "$UP_LIB"
 git -C "$INSTALL_UP" add -A && git -C "$INSTALL_UP" commit -q -m "v2" && git -C "$INSTALL_UP" tag v0.0.2
 git -C "$INSTALL_UP" checkout -q v0.0.1
+PUBLISHED_MARK="$TMP/published-cutover.txt"
+PUBLISHED_CUT="$TMP/published-cutover.py"
+PUBLISHED_LAUNCH="$TMP/published-launchctl.sh"
+cat >"$PUBLISHED_CUT" <<EOF
+#!/usr/bin/env python3
+import pathlib, sys
+pathlib.Path("$PUBLISHED_MARK").write_text(" ".join(sys.argv[1:]))
+raise SystemExit(0)
+EOF
+printf '#!/usr/bin/env bash\nexit 1\n' >"$PUBLISHED_LAUNCH"
+chmod +x "$PUBLISHED_CUT" "$PUBLISHED_LAUNCH"
 set +e
-up_out="$(SOLAR_ROOT="$INSTALL_UP" SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
-  bash "$INSTALL_UP/core/skills/solar-client/scripts/client_update.sh" \
-  --workspace "$WS_UP" --ref v0.0.2 --yes 2>&1)"
+up_out="$(SOLAR_ROOT="$INSTALL_UP" \
+  SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
+  SOLAR_CLIENT_CUTOVER_SCRIPT="$PUBLISHED_CUT" \
+  SOLAR_CLIENT_CUTOVER_ROOT="$TMP/runtime-copy" \
+  SOLAR_CLIENT_LAUNCHCTL="$PUBLISHED_LAUNCH" \
+  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none \
+  bash "$UP_UPDATE" --workspace "$WS_UP" --ref v0.0.2 --yes 2>&1)"
 up_ec=$?
 set -e
-assert_ok "update from the old install exits 0" test "$up_ec" -eq 0
+assert_ok "update from the published updater exits 0" test "$up_ec" -eq 0
 assert_ok "update moved the install to the new version" \
   test "$(git -C "$INSTALL_UP" rev-parse HEAD)" = "$(git -C "$INSTALL_UP" rev-parse v0.0.2)"
-assert_ok "restart ran the new version's client_lib.sh" \
-  test "$(cat "$RESTART_MARK" 2>/dev/null)" = "new"
+assert_ok "published updater migrated through the new restart" \
+  grep -qx "migrate --root $TMP/runtime-copy" "$PUBLISHED_MARK"
 [[ "$up_ec" -eq 0 ]] || echo "$up_out" >&2
+unset SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_CUTOVER_ROOT SOLAR_CLIENT_LAUNCHCTL
+unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_CUTOVER_DONE
 
 usage_out="$(bash "$UPDATE_SCRIPT" -h 2>&1)"
 assert_ok "usage lists --no-restart" grep -q -- '--no-restart' <<<"$usage_out"
 assert_ok "usage lists --restart" grep -q -- '  --restart ' <<<"$usage_out"
+
+# --- state cutover: stop, migrate, start; a failed migrate does not start ---
+CUT_LOG="$TMP/cutover.log"
+FAKE_CUT="$TMP/cutover.py"
+FAKE_LAUNCH="$TMP/launchctl.sh"
+FAKE_GSTOP="$TMP/gateway-stop.sh"
+cat >"$FAKE_CUT" <<EOF
+#!/usr/bin/env python3
+import pathlib, sys
+pathlib.Path("$CUT_LOG").write_text(" ".join(sys.argv[1:]))
+raise SystemExit(0)
+EOF
+printf '#!/usr/bin/env bash\necho "launchctl $*" >>"%s"\n[[ "$1" == print ]] && exit 0\nexit 0\n' "$SVC_LOG" >"$FAKE_LAUNCH"
+printf '#!/usr/bin/env bash\necho gateway-stop >>"%s"\n' "$SVC_LOG" >"$FAKE_GSTOP"
+chmod +x "$FAKE_CUT" "$FAKE_LAUNCH" "$FAKE_GSTOP"
+: >"$SVC_LOG"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host"
+export SOLAR_CLIENT_CUTOVER_SCRIPT="$FAKE_CUT"
+export SOLAR_CLIENT_CUTOVER_ROOT="$TMP/runtime-copy"
+export SOLAR_CLIENT_LAUNCHCTL="$FAKE_LAUNCH"
+export SOLAR_CLIENT_GATEWAY_STOP_SCRIPT="$FAKE_GSTOP"
+export SOLAR_CLIENT_HOST_STOP_SCRIPT="$FAKE_HOST_STOP"
+export SOLAR_CLIENT_HOST_START_SCRIPT="$FAKE_HOST_START"
+export SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT="$FAKE_SVC_SETUP"
+cut_out="$(solar_client_state_cutover "$MOCK_INSTALL_ROOT" auto 2>&1)"
+assert_ok "cutover migrates the given root" grep -qx "migrate --root $TMP/runtime-copy" "$CUT_LOG"
+assert_ok "cutover stops before it migrates" grep -q 'stopping console' <<<"$cut_out"
+order="$(grep -nE 'host-stop|gateway-stop|host-start|gateway --restart|launchctl bootout|launchctl bootstrap' "$SVC_LOG" | tr '\n' ' ')"
+assert_ok "cutover order is stop then start" bash -c '[[ "$1" == *host-stop* && "$1" == *host-start* ]]' _ "$order"
+stop_line="$(grep -n 'host-stop' "$SVC_LOG" | head -1 | cut -d: -f1)"
+start_line="$(grep -n 'host-start' "$SVC_LOG" | head -1 | cut -d: -f1)"
+assert_ok "console starts only after it stopped" test "$stop_line" -lt "$start_line"
+: >"$SVC_LOG"
+printf '#!/usr/bin/env python3\nimport sys\nraise SystemExit(1)\n' >"$FAKE_CUT"
+set +e
+solar_client_state_cutover "$MOCK_INSTALL_ROOT" auto >/dev/null 2>&1
+fail_ec=$?
+set -e
+assert_ok "a failed migration returns non-zero" test "$fail_ec" -ne 0
+assert_ok "a failed migration does not start the console" bash -c '! grep -q host-start "$1"' _ "$SVC_LOG"
+unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_CUTOVER_ROOT
+unset SOLAR_CLIENT_LAUNCHCTL SOLAR_CLIENT_GATEWAY_STOP_SCRIPT
+unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

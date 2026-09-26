@@ -430,43 +430,50 @@ class TestGatewayTaskBodyConsent(unittest.TestCase):
 
 
 class TestAsyncTaskRoot(unittest.TestCase):
-    """The router reads the same queue task_lib.sh writes (framework runtime)."""
+    """The router reads the status column. The folder is not the queue."""
 
-    def _write_task(self, root, sub, task_id, status):
-        folder = pathlib.Path(root) / sub
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / "slugged-title.md").write_text(
-            f'---\nid: "{task_id}"\nstatus: {status}\n---\n', encoding="utf-8"
-        )
+    def _ready(self, tmp):
+        os.environ.pop("SOLAR_TASK_ROOT", None)
+        with router.solar_state.cutover(pathlib.Path(tmp)) as cut:
+            cut.upgrade_schema()
+            cut.set_format("sqlite")
 
-    def test_default_root_is_framework_runtime(self):
+    def test_status_comes_from_the_runtime(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
             "os.environ", {"SOLAR_RUNTIME_ROOT": tmp}
         ):
-            os.environ.pop("SOLAR_TASK_ROOT", None)
-            self.assertEqual(
-                router.async_task_root().resolve(),
-                (pathlib.Path(tmp) / "async-tasks").resolve(),
-            )
-            self._write_task(pathlib.Path(tmp) / "async-tasks", "queued", "t-1", "queued")
-            self.assertTrue(router.task_runtime_is_queued("t-1"))
-
-    def test_task_root_override(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.dict(
-            "os.environ", {"SOLAR_TASK_ROOT": tmp}
-        ):
-            self._write_task(tmp, "active", "t-2", "active")
-            self.assertTrue(router.task_runtime_is_queued("t-2"))
+            self._ready(tmp)
+            with router.solar_state.session() as store:
+                queued = store.task_create([("title", '"T"')], status="queued")
+            self.assertTrue(router.task_runtime_is_queued(queued))
             self.assertFalse(router.task_runtime_is_queued("missing"))
+
+    def test_active_counts_as_in_flight_and_a_draft_does_not(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"SOLAR_RUNTIME_ROOT": tmp}
+        ):
+            self._ready(tmp)
+            with router.solar_state.session() as store:
+                active = store.task_create([("title", '"A"')], status="queued")
+                store.task_claim(active, "test")
+                draft = store.task_create([("title", '"D"')], status="draft")
+            self.assertTrue(router.task_runtime_is_queued(active))
+            self.assertFalse(router.task_runtime_is_queued(draft))
 
     @patch.dict("os.environ", {"SOLAR_SYSTEM_FEATURES": "async-tasks"})
     def test_queued_task_gets_canonical_ack(self):
         """Regression: a task queued in the runtime must not answer 'couldn't queue'."""
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
-            "os.environ", {"SOLAR_TASK_ROOT": tmp}
+            "os.environ", {"SOLAR_RUNTIME_ROOT": tmp},
         ):
+            self._ready(tmp)
+
             def fake_create(*_a, **_k):
-                self._write_task(tmp, "queued", "task-real-1", "queued")
+                with router.solar_state.session() as store:
+                    store.task_import(
+                        '---\nid: "task-real-1"\nstatus: queued\n---\n',
+                        status="queued",
+                    )
                 return ("task-real-1", None)
 
             raw = (
@@ -502,90 +509,72 @@ class TestGatewayAsyncReply(unittest.TestCase):
 
 
 class TestCreateAsyncDraftNotify(unittest.TestCase):
-    @patch("router.subprocess.run")
-    @patch("router._resolve_under_home")
-    def test_notify_failure_returns_warning(self, mock_resolve, mock_run):
-        create_script = MagicMock()
-        create_script.is_file.return_value = True
-        notify_script = MagicMock()
-        notify_script.is_file.return_value = True
-        mock_resolve.side_effect = lambda rel: (
-            create_script if "create.sh" in rel else notify_script
-        )
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout="ID: task-99\n", stderr=""),
-            Mock(returncode=1, stdout="", stderr="boom"),
-        ]
-        task_id, warning = router.create_async_draft(
-            "write report",
-            "ack",
-            "req",
-            channel="telegram",
-            queue=False,
-            notify=True,
-        )
-        self.assertEqual(task_id, "task-99")
+    def _ready(self, tmp):
+        with router.solar_state.cutover(pathlib.Path(tmp)) as cut:
+            cut.upgrade_schema()
+            cut.set_format("sqlite")
+
+    def test_notify_failure_returns_warning(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"SOLAR_RUNTIME_ROOT": tmp}
+        ):
+            self._ready(tmp)
+            real = router.solar_state.Session.task_set
+
+            def boom(store, task_id, key, value):
+                if key == "notify_when":
+                    raise router.solar_state.StateError("boom")
+                return real(store, task_id, key, value)
+
+            with patch.object(router.solar_state.Session, "task_set", boom):
+                task_id, warning = router.create_async_draft(
+                    "write report", "ack", "req",
+                    channel="telegram", queue=False, notify=True,
+                )
+        self.assertIsNotNone(task_id)
         self.assertEqual(warning, "notify_failed")
-        self.assertEqual(mock_run.call_count, 2)
 
-    @patch("router.subprocess.run")
-    @patch("router._resolve_under_home")
-    def test_notify_script_missing_returns_warning(self, mock_resolve, mock_run):
-        create_script = MagicMock()
-        create_script.is_file.return_value = True
-        notify_script = MagicMock()
-        notify_script.is_file.return_value = False
-        mock_resolve.side_effect = lambda rel: (
-            create_script if "create.sh" in rel else notify_script
-        )
-        mock_run.return_value = Mock(
-            returncode=0, stdout="ID: task-88\n", stderr=""
-        )
-        task_id, warning = router.create_async_draft(
-            "write report",
-            "ack",
-            "req",
-            channel="telegram",
-            queue=False,
-            notify=True,
-        )
-        self.assertEqual(task_id, "task-88")
-        self.assertEqual(warning, "notify_script_missing")
-        self.assertEqual(mock_run.call_count, 1)
+    def test_unset_runtime_creates_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"SOLAR_RUNTIME_ROOT": tmp}
+        ):
+            task_id, warning = router.create_async_draft(
+                "write report", "ack", "req",
+                channel="telegram", queue=False, notify=True,
+            )
+        self.assertIsNone(task_id)
+        self.assertIsNone(warning)
 
-    @patch("router.subprocess.run")
-    @patch("router._resolve_under_home")
-    def test_queued_task_carries_scope_and_delivery_flag(self, mock_resolve, mock_run):
-        """create.sh only writes keys it knows: the scope has to be handed over."""
-        script = MagicMock()
-        script.is_file.return_value = True
-        mock_resolve.return_value = script
-        mock_run.return_value = Mock(returncode=0, stdout="ID: task-77\n", stderr="")
-        router.create_async_draft(
-            "update the plan",
-            "ack",
-            "req",
-            channel="telegram",
-            queue=True,
-            notify=False,
-            origin_channel="telegram",
-            origin_chat_id="456",
-            origin_request_id="telegram:456:9",
-            scope={
-                "object": "update docs/audit.md",
-                "scope": "read planets/solar",
-                "effect": "edit docs/audit.md",
-            },
+    def test_queued_task_carries_scope_and_delivery_flag(self):
+        """The scope lands on the row, with the delivery flag."""
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"SOLAR_RUNTIME_ROOT": tmp}
+        ):
+            self._ready(tmp)
+            task_id, warning = router.create_async_draft(
+                "update the plan", "ack", "req",
+                channel="telegram", queue=True, notify=False,
+                origin_channel="telegram", origin_chat_id="456",
+                origin_request_id="telegram:456:9",
+                scope={
+                    "object": "update docs/audit.md",
+                    "scope": "read planets/solar",
+                    "effect": "edit docs/audit.md",
+                },
+            )
+            self.assertIsNone(warning)
+            with router.solar_state.session() as store:
+                task = store.task_get(task_id)
+        self.assertEqual(task["object"], "update docs/audit.md")
+        self.assertEqual(task["scope"], "read planets/solar")
+        self.assertEqual(task["effect"], "edit docs/audit.md")
+        self.assertEqual(task["origin_chat_id"], "456")
+        self.assertEqual(
+            router.solar_state.value_of(
+                next(rest for key, rest in task["frontmatter"] if key == "delivery_expected")
+            ),
+            "true",
         )
-        cmd = mock_run.call_args[0][0]
-        meta = json.loads(cmd[cmd.index("--metadata") + 1])
-        self.assertEqual(meta["object"], "update docs/audit.md")
-        self.assertEqual(meta["scope"], "read planets/solar")
-        self.assertEqual(meta["effect"], "edit docs/audit.md")
-        # Flag and instruction leave together, or a rollback would report every
-        # task as missing its delivery.
-        self.assertIs(meta["delivery_expected"], True)
-        self.assertEqual(meta["origin_chat_id"], "456")
 
 
 # ---------------------------------------------------------------------------
@@ -1044,42 +1033,31 @@ class TestN8nOriginAndQueueGuards(unittest.TestCase):
         self.assertEqual(kwargs.get("origin_chat_id"), "99")
         self.assertEqual(kwargs.get("origin_request_id"), "tg:1")
 
-    @patch("router.subprocess.run")
-    @patch("router._resolve_under_home")
-    def test_create_async_draft_passes_origin_flags(self, mock_resolve, mock_run):
-        create_script = MagicMock()
-        create_script.is_file.return_value = True
-        notify_script = MagicMock()
-        notify_script.is_file.return_value = True
-        mock_resolve.side_effect = lambda rel: (
-            create_script if "create.sh" in rel else notify_script
-        )
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout="ID: origin-1\n", stderr=""),
-            Mock(returncode=0, stdout="", stderr=""),
-        ]
-        task_id, warning = router.create_async_draft(
-            "write report",
-            "- object: o\n- scope: s\n- effect: e",
-            "tg:1",
-            channel="n8n",
-            queue=True,
-            notify=True,
-            origin_channel="telegram",
-            origin_chat_id="99",
-            origin_request_id="tg:1",
-        )
-        self.assertEqual(task_id, "origin-1")
-        self.assertIsNone(warning)
-        cmd = mock_run.call_args_list[0][0][0]
-        self.assertIn("--metadata", cmd)
-        meta_idx = cmd.index("--metadata")
-        meta = json.loads(cmd[meta_idx + 1])
-        self.assertEqual(meta.get("origin_channel"), "telegram")
-        self.assertEqual(meta.get("origin_chat_id"), "99")
-        self.assertEqual(meta.get("origin_request_id"), "tg:1")
-        title_idx = cmd.index("write report")
-        self.assertLess(meta_idx, title_idx)
+    def test_create_async_draft_passes_origin_flags(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"SOLAR_RUNTIME_ROOT": tmp}
+        ):
+            with router.solar_state.cutover(pathlib.Path(tmp)) as cut:
+                cut.upgrade_schema()
+                cut.set_format("sqlite")
+            task_id, warning = router.create_async_draft(
+                "write report",
+                "- object: o\n- scope: s\n- effect: e",
+                "tg:1",
+                channel="n8n",
+                queue=True,
+                notify=True,
+                origin_channel="telegram",
+                origin_chat_id="99",
+                origin_request_id="tg:1",
+            )
+            self.assertIsNone(warning)
+            with router.solar_state.session() as store:
+                task = store.task_get(task_id)
+        self.assertEqual(task["origin_channel"], "telegram")
+        self.assertEqual(task["origin_chat_id"], "99")
+        self.assertEqual(task["origin_request_id"], "tg:1")
+        self.assertEqual(task["notify_when"], "completed")
 
 
 if __name__ == "__main__":

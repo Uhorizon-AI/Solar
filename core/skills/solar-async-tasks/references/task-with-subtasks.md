@@ -60,7 +60,7 @@ Rules, all of them hard:
 | Depth | One. A task that already has `parent_task_id` cannot declare children: its block is ignored |
 | Second batch | A parent that already has `subtask_ids` cannot declare again: the block is ignored |
 
-A malformed block, an unknown provider, a key that is not allowed or more than five children creates **nothing** and sends the task to `error/` with the reason named. Half a batch is never created.
+A malformed block, an unknown provider, a key that is not allowed or more than five children creates **nothing** and sets the status to `error` with the reason named. Half a batch is never created.
 
 **Critical rules:**
 - Do not write anything into the task queue

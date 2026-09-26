@@ -24,8 +24,19 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 export SOLAR_WORKSPACE="$TMP/ws"
-export SOLAR_TASK_ROOT="$SOLAR_WORKSPACE/sun/runtime/async-tasks"
-mkdir -p "$SOLAR_WORKSPACE/sun/runtime/async-tasks"
+export SOLAR_RUNTIME_ROOT="$SOLAR_WORKSPACE/sun/runtime"
+export SOLAR_TASK_ROOT="$SOLAR_RUNTIME_ROOT/async-tasks"
+mkdir -p "$SOLAR_TASK_ROOT"
+python3 - <<PY
+import sys
+sys.path.insert(0, "$CORE_ROOT/skills/solar-state/scripts")
+import solar_state
+with solar_state.cutover() as cut:
+    cut.upgrade_schema()
+    cut.set_format("sqlite")
+PY
+STATE="$CORE_ROOT/skills/solar-state/scripts/solar_state.py"
+show() { python3 "$STATE" task show "$1"; }
 
 # A root that carries the real secret loader and a stub sender, so the test
 # exercises the real lookup without a real send.
@@ -62,10 +73,11 @@ OUT="$(bash "$CREATE" --queued --scheduled-time now \
   --metadata '{"origin_channel":"telegram","origin_chat_id":"111","origin_request_id":"tg:1"}' \
   "Task with notify" "Do the thing")"
 ID="$(printf '%s' "$OUT" | awk '/^ID:/{print $2}')"
-FILE="$(find_task "$ID")"
+FILE="$TMP/show-$ID.md"
 
 : >"$SOLAR_WORKSPACE/notify.log"
-bash "$NOTIFY" "$FILE"
+bash "$NOTIFY" "$ID"
+show "$ID" >"$FILE"
 
 if grep -q 'token=token-from-the-process' "$SOLAR_WORKSPACE/notify.log"; then
   pass "notify hands the sender the token from the process store"
@@ -88,7 +100,7 @@ OUT2="$(bash "$CREATE" --queued --scheduled-time now \
   --metadata '{"origin_channel":"telegram","origin_chat_id":"111","origin_request_id":"tg:2"}' \
   "Task without store" "Do the other thing")"
 ID2="$(printf '%s' "$OUT2" | awk '/^ID:/{print $2}')"
-FILE2="$(find_task "$ID2")"
+FILE2="$TMP/show-$ID2.md"
 
 cat >"$FAKE_ROOT/core/skills/solar-telegram/scripts/send_telegram.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -99,7 +111,8 @@ STUB
 chmod +x "$FAKE_ROOT/core/skills/solar-telegram/scripts/send_telegram.sh"
 
 : >"$SOLAR_WORKSPACE/notify.log"
-SOLAR_SECRETS_FILE="$TMP/absent.env" bash "$NOTIFY" "$FILE2" >/dev/null 2>&1 || true
+SOLAR_SECRETS_FILE="$TMP/absent.env" bash "$NOTIFY" "$ID2" >/dev/null 2>&1 || true
+show "$ID2" >"$FILE2"
 if grep -q 'notify_status: failed' "$FILE2" && [[ ! -s "$SOLAR_WORKSPACE/notify.log" ]]; then
   pass "no store means no send, and the task says so"
 else

@@ -1,10 +1,8 @@
 #!/bin/bash
 
-# Activate a specific task by ID with deterministic transitions.
-# Flow:
-# - draft   -> planned -> queued (auto)
-# - planned -> queued (auto)
-# - queued  -> active  (manual activation: bypass recurring/schedule gates)
+# Activate one task by id.
+# draft or planned becomes queued through task approve (no priority rewrite),
+# then that id is claimed. Schedule and recurring gates are not applied.
 
 set -euo pipefail
 
@@ -13,55 +11,36 @@ source "$SCRIPT_DIR/task_lib.sh"
 
 TASK_ID="${1:-}"
 
-usage() {
+if [[ -z "$TASK_ID" ]]; then
     echo "Usage: $0 <task_id>" >&2
     echo "  Activates one specific task deterministically by ID." >&2
-    echo "  If task is draft/planned, it is auto-moved to queued first." >&2
     exit 1
-}
-
-if [[ -z "$TASK_ID" ]]; then
-    usage
 fi
 
 if [[ $# -gt 1 ]]; then
-    echo "Error: activate.sh only accepts <task_id>. Priority comes from task frontmatter." >&2
+    echo "Error: activate.sh only accepts <task_id>. Priority stays as stored." >&2
     exit 1
 fi
 
-ensure_dirs
-
-TASK_FILE="$(find_task "$TASK_ID")"
-if [[ -z "$TASK_FILE" ]]; then
+STATUS="$(task_status_of "$TASK_ID" 2>/dev/null || true)"
+if [[ -z "$STATUS" ]]; then
     echo "Error: Task $TASK_ID not found." >&2
     exit 1
 fi
 
-STATUS="$(get_status "$TASK_FILE")"
-
 case "$STATUS" in
-    draft)
-        "$SCRIPT_DIR/plan.sh" "$TASK_ID" >/dev/null
-        TASK_FILE="$(find_task "$TASK_ID")"
-        APPROVE_PRIORITY="$(extract_meta "$TASK_FILE" "priority")"
-        [[ -z "$APPROVE_PRIORITY" ]] && APPROVE_PRIORITY="normal"
-        "$SCRIPT_DIR/approve.sh" "$TASK_ID" "$APPROVE_PRIORITY" >/dev/null
-        ;;
-    planned)
-        APPROVE_PRIORITY="$(extract_meta "$TASK_FILE" "priority")"
-        [[ -z "$APPROVE_PRIORITY" ]] && APPROVE_PRIORITY="normal"
-        "$SCRIPT_DIR/approve.sh" "$TASK_ID" "$APPROVE_PRIORITY" >/dev/null
+    draft|planned)
+        state task approve "$TASK_ID" >/dev/null
         ;;
     queued)
         ;;
     active)
-        TITLE="$(extract_meta "$TASK_FILE" "title")"
+        TITLE="$(task_field "$TASK_ID" "title")"
         echo "ℹ️  Task already active: [$TASK_ID] $TITLE"
-        echo "File: $TASK_FILE"
         exit 0
         ;;
     error)
-        echo "Error: Task is in error/. Requeue it first:" >&2
+        echo "Error: Task is in error. Requeue it first:" >&2
         echo "  bash core/skills/solar-async-tasks/scripts/requeue_from_error.sh $TASK_ID" >&2
         exit 1
         ;;
@@ -75,40 +54,30 @@ case "$STATUS" in
         ;;
 esac
 
-TASK_FILE="$(find_task "$TASK_ID")"
-STATUS="$(get_status "$TASK_FILE")"
-if [[ "$STATUS" != "queued" ]]; then
-    echo "Error: Expected queued state before activation. Current: $STATUS" >&2
-    exit 1
-fi
-
-TITLE="$(extract_meta "$TASK_FILE" "title")"
-
-cleanup_required="$(extract_meta "$TASK_FILE" "cleanup_required")"
-if [[ "$cleanup_required" == "true" ]]; then
-    resources="$(extract_meta "$TASK_FILE" "resources")"
-
+TITLE="$(task_field "$TASK_ID" "title")"
+export_file="$(task_export_tmp "$TASK_ID")"
+if [[ "$(task_field "$TASK_ID" "cleanup_required")" == "true" ]]; then
+    resources="$(task_field "$TASK_ID" "resources")"
     for resource in $(parse_resources "$resources"); do
-        hook="$SOLAR_TASK_ROOT/hooks/${resource}/pre_start.sh"
+        hook="$HOOKS_DIR/${resource}/pre_start.sh"
         if [[ -x "$hook" ]]; then
             echo "Running pre-start hook for: $resource"
-            if ! "$hook" "$TASK_FILE"; then
+            if ! "$hook" "$export_file"; then
+                rm -f "$export_file"
                 echo "Error: pre-start hook blocked activation (resource busy): $TASK_ID" >&2
                 exit 1
             fi
         fi
     done
 fi
+rm -f "$export_file"
 
-if [[ "$(extract_meta "$TASK_FILE" "recurring")" == "true" ]]; then
-    set_meta "$TASK_FILE" "recurring_last_run" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [[ "$(task_field "$TASK_ID" "recurring")" == "true" ]]; then
+    state task set "$TASK_ID" recurring_last_run "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
 fi
 
-NEW_FILE="$DIR_ACTIVE/$(basename "$TASK_FILE")"
-mv "$TASK_FILE" "$NEW_FILE"
-sed -i.bak 's/^status:.*/status: active/' "$NEW_FILE"
-sed -i.bak '/^blocked_by_task_ids:/d' "$NEW_FILE"
-rm -f "${NEW_FILE}.bak"
+WORKER="activate-$$"
+state task claim "$TASK_ID" --worker "$WORKER" >/dev/null
+state task unset "$TASK_ID" blocked_by_task_ids >/dev/null
 
 echo "✅ Activated task: [$TASK_ID] $TITLE"
-echo "File: $NEW_FILE"

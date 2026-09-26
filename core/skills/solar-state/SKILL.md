@@ -14,13 +14,13 @@ description: >
 is there**, and is the only thing that reads or writes the state more than one
 component uses.
 
-**Status: foundation and cutover.** The base, its API, its guards and the
-cutover (`migrate`, `rollback`, `rehearse`) exist and are tested. No component
-uses them yet and no runtime has been moved: the checks in every entry point,
-the move of each reader and writer, the MCP verbs, and wiring the cutover into
-`solar client update` / `sync` are later steps. Until then every runtime is on
-`STATE_FORMAT=files` (or unset), this skill refuses to open it, and `migrate` /
-`rollback` refuse unless `SOLAR_STATE_ALLOW_CUTOVER=1`.
+**Status: task readers and writers use this API.** The base, its guards and
+the cutover (`migrate`, `rollback`, `rehearse`) exist and are tested. Tasks are
+read and written only through this skill; a runtime whose format is not
+`sqlite` is refused. Audit, continuity, mandate events and the console index
+are still on their files. No runtime has been moved, and `migrate` / `rollback`
+are not wired into `solar client update` or `sync`: they refuse unless
+`SOLAR_STATE_ALLOW_CUTOVER=1`.
 
 ## Required MCP
 

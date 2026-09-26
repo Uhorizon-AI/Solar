@@ -54,6 +54,11 @@ def isolated_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(router, "RUNTIME_ROOT", runtime / "router")
     monkeypatch.setattr(router, "SOLAR_WORKSPACE", workspace)
 
+    import solar_state
+    with solar_state.cutover(runtime) as cut:
+        cut.upgrade_schema()
+        cut.set_format("sqlite")
+
     yield SimpleRuntime(root=runtime, workspace=workspace)
 
     # A test that repoints a runtime home at the real store is the failure this

@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+export CORE_ROOT
 CREATE="$CORE_ROOT/skills/solar-async-tasks/scripts/create.sh"
 NOTIFY="$CORE_ROOT/skills/solar-async-tasks/scripts/notify_if_configured.sh"
 TASK_LIB="$CORE_ROOT/skills/solar-async-tasks/scripts/task_lib.sh"
@@ -17,9 +18,20 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 export SOLAR_WORKSPACE="$TMP/ws"
-export SOLAR_TASK_ROOT="$SOLAR_WORKSPACE/sun/runtime/async-tasks"
+export SOLAR_RUNTIME_ROOT="$SOLAR_WORKSPACE/sun/runtime"
+export SOLAR_TASK_ROOT="$SOLAR_RUNTIME_ROOT/async-tasks"
 export SOLAR_ROOT="$SOLAR_WORKSPACE"
-mkdir -p "$SOLAR_WORKSPACE/sun/runtime/async-tasks" "$SOLAR_WORKSPACE/core/skills/solar-telegram/scripts"
+mkdir -p "$SOLAR_TASK_ROOT" "$SOLAR_WORKSPACE/core/skills/solar-telegram/scripts"
+python3 - <<PY
+import sys
+sys.path.insert(0, "$CORE_ROOT/skills/solar-state/scripts")
+import solar_state
+with solar_state.cutover() as cut:
+    cut.upgrade_schema()
+    cut.set_format("sqlite")
+PY
+STATE="$CORE_ROOT/skills/solar-state/scripts/solar_state.py"
+show() { python3 "$STATE" task show "$1"; }
 # shellcheck source=/dev/null
 source "$TASK_LIB"
 ensure_dirs
@@ -28,7 +40,8 @@ OUT="$(bash "$CREATE" --queued --scheduled-time now \
   --metadata '{"origin_channel":"telegram","origin_chat_id":"456","origin_request_id":"tg:1"}' \
   "Origin Task" "Do the thing")"
 ID="$(printf '%s' "$OUT" | awk '/^ID:/{print $2}')"
-FILE="$(find_task "$ID")"
+FILE="$TMP/show-$ID.md"
+show "$ID" >"$FILE"
 if [[ -n "$FILE" ]] && grep -q 'origin_chat_id: "456"' "$FILE" \
   && grep -q 'origin_request_id: "tg:1"' "$FILE" \
   && grep -q 'origin_channel: "telegram"' "$FILE" \
@@ -44,7 +57,8 @@ OUT_NESTED="$(bash "$CREATE" --queued --scheduled-time now \
   --metadata '{"origin":{"channel":"telegram","chat_id":"789","request_id":"tg:2"}}' \
   "Nested Origin" "Do the nested thing")"
 ID_NESTED="$(printf '%s' "$OUT_NESTED" | awk '/^ID:/{print $2}')"
-FILE_NESTED="$(find_task "$ID_NESTED")"
+FILE_NESTED="$TMP/show-$ID_NESTED.md"
+show "$ID_NESTED" >"$FILE_NESTED"
 if [[ -n "$FILE_NESTED" ]] && grep -q 'origin_chat_id: "789"' "$FILE_NESTED" \
   && grep -q 'origin_request_id: "tg:2"' "$FILE_NESTED" \
   && grep -q 'origin_channel: "telegram"' "$FILE_NESTED" \
@@ -59,7 +73,8 @@ fi
 OUT_CHILD="$(bash "$CREATE" --queued --scheduled-time now \
   "Child Task" "No origin")"
 ID_CHILD="$(printf '%s' "$OUT_CHILD" | awk '/^ID:/{print $2}')"
-FILE_CHILD="$(find_task "$ID_CHILD")"
+FILE_CHILD="$TMP/show-$ID_CHILD.md"
+show "$ID_CHILD" >"$FILE_CHILD"
 if [[ -n "$FILE_CHILD" ]] && ! grep -q 'notify_when:' "$FILE_CHILD" \
   && ! grep -q 'origin_chat_id:' "$FILE_CHILD"; then
   pass "create.sh --queued without --metadata has no notify_when"
@@ -91,7 +106,8 @@ export TELEGRAM_BOT_TOKEN="t"
 export TELEGRAM_CHAT_ID="111"
 export TELEGRAM_ALLOWED_CHAT_IDS="456,789"
 : >"$SOLAR_WORKSPACE/notify.log"
-bash "$NOTIFY" "$FILE"
+bash "$NOTIFY" "$ID"
+show "$ID" >"$FILE"
 if grep -q 'chat=456' "$SOLAR_WORKSPACE/notify.log" \
   && grep -q 'Task completed' "$SOLAR_WORKSPACE/notify.log" \
   && grep -q 'notify_delivered: true' "$FILE"; then
@@ -103,16 +119,18 @@ else
 fi
 
 : >"$SOLAR_WORKSPACE/notify.log"
-bash "$NOTIFY" "$FILE"
+bash "$NOTIFY" "$ID"
 if [[ ! -s "$SOLAR_WORKSPACE/notify.log" ]]; then
   pass "notify does not re-send after notify_delivered"
 else
   fail "notify does not re-send after notify_delivered"
 fi
 
-UNAUTHORIZED="$DIR_COMPLETED/unauth.md"
-cat >"$UNAUTHORIZED" <<'EOF'
----
+python3 - <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["CORE_ROOT"] + "/skills/solar-state/scripts")
+import solar_state
+text = """---
 id: "unauth-1"
 title: "Nope"
 status: completed
@@ -120,9 +138,12 @@ notify_when: completed
 origin_chat_id: "999"
 ---
 # Nope
-EOF
+"""
+with solar_state.session() as store:
+    store.task_import(text, status="completed", source_name="unauth")
+PY
 : >"$SOLAR_WORKSPACE/notify.log"
-bash "$NOTIFY" "$UNAUTHORIZED"
+bash "$NOTIFY" "unauth-1"
 if [[ ! -s "$SOLAR_WORKSPACE/notify.log" ]]; then
   pass "notify skips chat not on allowlist"
 else
@@ -130,7 +151,7 @@ else
 fi
 
 : >"$SOLAR_WORKSPACE/notify.log"
-bash "$NOTIFY" "$FILE_CHILD"
+bash "$NOTIFY" "$ID_CHILD"
 if [[ ! -s "$SOLAR_WORKSPACE/notify.log" ]]; then
   pass "notify skips child without notify_when"
 else

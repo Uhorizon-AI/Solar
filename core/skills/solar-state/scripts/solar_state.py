@@ -77,6 +77,10 @@ TRANSITIONS = (
     ("cancelled", "archived"),
 )
 CREATE_STATUSES = ("draft", "planned", "queued")
+# A dependency in one of these is finished. The folder used to say the same.
+TERMINAL_STATUSES = frozenset({"completed", "archived", "error", "cancelled"})
+SCHEDULE_MARGIN_MIN = 15
+_PRIORITY_RANK = {"high": 2, "normal": 1, "low": 0}
 
 # Frontmatter keys projected to columns: the ones transitions and queries use.
 COLUMN_KEYS = (
@@ -170,6 +174,29 @@ MIGRATIONS: tuple[str, ...] = (
         id INTEGER PRIMARY KEY CHECK (id = 1)
     );
     """,
+    # v4: the console projection lives in the base
+    """
+    CREATE VIEW console_tasks AS
+    SELECT id,
+           CASE status WHEN 'draft' THEN 'drafts' ELSE status END AS state,
+           title, created AS created_at, COALESCE(updated, created) AS timestamp,
+           provider, origin_channel AS origin, origin_thread_id,
+           recurring, log_path
+    FROM tasks
+    WHERE status IN ('draft', 'queued', 'active', 'error', 'completed', 'cancelled');
+    CREATE VIEW console_task_counts AS
+    SELECT state, COUNT(*) AS n, COALESCE(SUM(recurring), 0) AS recurring
+    FROM console_tasks GROUP BY state;
+    CREATE VIEW console_audit AS
+    SELECT seq, ts, event, router_id,
+           json_extract(row, '$.status') AS status,
+           json_extract(row, '$.provider') AS provider,
+           json_extract(row, '$.request_id') AS request_id,
+           json_extract(row, '$.user_id') AS user_id,
+           json_extract(row, '$.duration_ms') AS duration_ms,
+           json_extract(row, '$.channel') AS channel
+    FROM audit;
+    """,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -224,6 +251,16 @@ def _now() -> str:
 
 def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+def _unique_sibling(path: Path, label: str) -> Path:
+    stamp = _stamp()
+    candidate = path.with_name(f"{path.name}.{label}-{stamp}")
+    n = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}.{label}-{stamp}-{n}")
+        n += 1
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +513,122 @@ def _set_pair(pairs: list[list[str]], key: str, rest: str) -> None:
     pairs.append([key, rest])
 
 
+def _drop_pair(pairs: list[list[str]], key: str) -> None:
+    pairs[:] = [pair for pair in pairs if pair[0] != key]
+
+
+def _field(pairs: list[list[str]], key: str) -> Optional[str]:
+    return value_of(_get_pair(pairs, key))
+
+
+def _csv(value: Optional[str]) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _epoch(text: str) -> float:
+    """UTC instant of an ISO-8601 stamp. Unparseable stamps count as the epoch."""
+    raw = text.strip()
+    if raw.endswith(("Z", "z")):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _clock_minutes(stamp: str) -> Optional[int]:
+    parts = stamp.split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[0]) * 60 + int(parts[1])
+    except ValueError:
+        return None
+
+
+def scheduled_now(scheduled_time: Optional[str], weekdays: Optional[str],
+                  now: datetime) -> bool:
+    """Whether a task may start at `now`. Same window the queue used on files.
+
+    No schedule means always. `scheduled_time: now` means always. A weekday
+    list uses ISO days (Monday is 1). A clock time is ready within fifteen
+    minutes, wrapping midnight.
+    """
+    moment = (scheduled_time or "").strip()
+    days = (weekdays or "").strip()
+    if not moment and not days:
+        return True
+    if moment == "now":
+        return True
+    if days:
+        allowed = {part.strip() for part in days.split(",") if part.strip()}
+        if str(now.isoweekday()) not in allowed:
+            return False
+    if not moment:
+        return True
+    scheduled = _clock_minutes(moment)
+    if scheduled is None:
+        return False
+    current = now.hour * 60 + now.minute
+    diff = current - scheduled
+    if diff > 720:
+        diff -= 1440
+    elif diff < -720:
+        diff += 1440
+    return -SCHEDULE_MARGIN_MIN <= diff <= SCHEDULE_MARGIN_MIN
+
+
+def _recurring_ready(pairs: list[list[str]], now_epoch: float) -> bool:
+    if str(_field(pairs, "recurring") or "").lower() != "true":
+        return True
+    last = _field(pairs, "recurring_last_run")
+    if not last:
+        return True
+    try:
+        interval = int(_field(pairs, "recurring_min_interval") or "86400")
+    except ValueError:
+        interval = 86400
+    return now_epoch - _epoch(last) >= interval
+
+
+def _blocked(conn: sqlite3.Connection, pairs: list[list[str]]) -> bool:
+    """True when a named dependency is still running. A missing id is finished."""
+    for dep in _csv(_field(pairs, "blocked_by_task_ids")):
+        row = conn.execute("SELECT status FROM tasks WHERE id = ?", (dep,)).fetchone()
+        if row is not None and row[0] not in TERMINAL_STATUSES:
+            return True
+    return False
+
+
+def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optional[str],
+          *, rewrite_body: Optional[Callable[[str], str]] = None,
+          fields: Optional[dict] = None, drop: Iterable[str] = (),
+          extra: Optional[dict] = None) -> str:
+    """One allowed transition. The caller already holds the transaction."""
+    row = conn.execute("SELECT status, frontmatter, body FROM tasks WHERE id = ?",
+                       (task_id,)).fetchone()
+    if row is None:
+        raise TransitionRefused(f"no task {task_id}")
+    current = row["status"]
+    if not conn.execute("SELECT 1 FROM transitions WHERE from_status = ? AND to_status = ?",
+                        (current, to_status)).fetchone():
+        raise TransitionRefused(f"{current} -> {to_status} is not an allowed transition")
+    pairs = json.loads(row["frontmatter"])
+    body = rewrite_body(row["body"]) if rewrite_body is not None else row["body"]
+    for key in drop:
+        _drop_pair(pairs, key)
+    for key, value in (fields or {}).items():
+        _check_field(key, str(value))
+        _set_pair(pairs, key, f" {value}" if value != "" else "")
+    _set_pair(pairs, "status", f" {to_status}")
+    _write_task(conn, task_id, to_status, pairs, body, insert=False, extra=extra)
+    conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
+                 "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, to_status, actor))
+    return current
+
+
 def _projection(pairs: list[list[str]]) -> dict[str, Any]:
     cols: dict[str, Any] = {key: value_of(_get_pair(pairs, key)) for key in COLUMN_KEYS}
     cols["recurring"] = 1 if str(cols["recurring"] or "").lower() == "true" else 0
@@ -634,23 +787,14 @@ class Session:
         allowed_from = ({expected_from} if isinstance(expected_from, str)
                         else set(expected_from) if expected_from else None)
         with _transaction(self.conn) as conn:
-            row = conn.execute("SELECT status, frontmatter, body FROM tasks WHERE id = ?",
-                               (task_id,)).fetchone()
+            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if row is None:
                 raise TransitionRefused(f"no task {task_id}")
             current = row["status"]
             if allowed_from is not None and current not in allowed_from:
                 raise TransitionRefused(f"{task_id} is {current}, not {'/'.join(sorted(allowed_from))}")
-            if not conn.execute("SELECT 1 FROM transitions WHERE from_status = ? AND to_status = ?",
-                                (current, to_status)).fetchone():
-                raise TransitionRefused(f"{current} -> {to_status} is not an allowed transition")
-            pairs = json.loads(row["frontmatter"])
-            body = rewrite_body(row["body"]) if rewrite_body is not None else row["body"]
-            _set_pair(pairs, "status", f" {to_status}")
-            _write_task(conn, task_id, to_status, pairs, body, insert=False, extra=columns)
-            conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
-                         "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, to_status, actor))
-        return current
+            return _move(conn, task_id, to_status, actor, rewrite_body=rewrite_body,
+                         extra=columns or None)
 
     def _unchanged_scope(self, task_id: str, before: tuple) -> None:
         row = self.conn.execute(
@@ -745,6 +889,199 @@ class Session:
         except TransitionRefused:
             return False
         return True
+
+    def task_status(self, task_id: str) -> Optional[str]:
+        """The status column. It replaced the directory the task file used to sit in."""
+        row = self.conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return row[0] if row else None
+
+    def task_field(self, task_id: str, key: str) -> Optional[str]:
+        task = self.task_get(task_id)
+        if task is None:
+            raise StateError(f"no task {task_id}")
+        return _field(task["frontmatter"], key)
+
+    def task_find_origin(self, origin_request_id: str) -> Optional[str]:
+        row = self.conn.execute(
+            "SELECT id FROM tasks WHERE origin_request_id = ? ORDER BY created, id LIMIT 1",
+            (origin_request_id,)).fetchone()
+        return row[0] if row else None
+
+    def task_find_subtask_key(self, key: str) -> Optional[str]:
+        """The child whose frontmatter `subtask_key` is `key`, if one exists."""
+        for task in self.task_list():
+            if _field(task["frontmatter"], "subtask_key") == key:
+                return task["id"]
+        return None
+
+    def task_unset(self, task_id: str, key: str) -> None:
+        if key in ("status", "id"):
+            raise StateError(f"{key} is not removed directly")
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter, body FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise StateError(f"no task {task_id}")
+            pairs = json.loads(row["frontmatter"])
+            _drop_pair(pairs, key)
+            _write_task(conn, task_id, row["status"], pairs, row["body"], insert=False)
+
+    def task_set_body(self, task_id: str, body: str) -> None:
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise StateError(f"no task {task_id}")
+            _write_task(conn, task_id, row["status"], json.loads(row["frontmatter"]),
+                        body, insert=False)
+
+    def task_record(self, task_id: str, *, pid: Optional[int] = None,
+                    log_path: Optional[str] = None) -> None:
+        """Remember the worker pid or the log path. Neither is a status change."""
+        extra = {}
+        if pid is not None:
+            extra["pid"] = pid
+        if log_path is not None:
+            extra["log_path"] = log_path
+        if not extra:
+            return
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter, body FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise StateError(f"no task {task_id}")
+            _write_task(conn, task_id, row["status"], json.loads(row["frontmatter"]),
+                        row["body"], insert=False, extra=extra)
+
+    def task_claim_next(self, worker: str, *, exclude: Iterable[str] = (),
+                        now: Optional[datetime] = None) -> Optional[dict]:
+        """Claim the next queued task that is ready, in one transaction.
+
+        Order is priority (high, then normal, then low), then `created`, then id.
+        A queued task with a cancellation request is cancelled and skipped. A
+        task waiting on another, a recurring task still inside its interval, or
+        one outside its schedule window is left queued. `exclude` skips ids the
+        caller already tried (a hook blocked them and they were released).
+        Returns the claimed task, or None when nothing is ready. Hooks are not
+        run here.
+        """
+        moment = now or datetime.now()
+        now_epoch = moment.timestamp()
+        skipped = set(exclude)
+        claimed: Optional[str] = None
+        with _transaction(self.conn) as conn:
+            rows = list(conn.execute(
+                "SELECT id, priority, created, frontmatter FROM tasks WHERE status = 'queued'"))
+            rows.sort(key=lambda row: (
+                -_PRIORITY_RANK.get(row["priority"] or "", 0), row["created"] or "", row["id"]))
+            for row in rows:
+                task_id = row["id"]
+                if conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?",
+                                (task_id,)).fetchone():
+                    _move(conn, task_id, "cancelled", "claim-next")
+                    continue
+                if task_id in skipped:
+                    continue
+                pairs = json.loads(row["frontmatter"])
+                if _blocked(conn, pairs):
+                    continue
+                if not _recurring_ready(pairs, now_epoch):
+                    continue
+                if not scheduled_now(_field(pairs, "scheduled_time"),
+                                     _field(pairs, "scheduled_weekdays"), moment):
+                    continue
+                _move(conn, task_id, "active", worker,
+                      extra={"claimed_by": worker, "claimed_at": _now()})
+                claimed = task_id
+                break
+        return self.task_get(claimed) if claimed else None
+
+    def task_release(self, task_id: str, worker: str) -> None:
+        """Give back a task this worker just claimed, when a hook blocked it."""
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, claimed_by FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            if row["status"] != "active" or row["claimed_by"] != worker:
+                raise TransitionRefused(
+                    f"{task_id} is not claimed by {worker}")
+            _move(conn, task_id, "queued", worker,
+                  extra={"claimed_by": None, "claimed_at": None})
+
+    def task_complete(self, task_id: str, *, actor: Optional[str] = None,
+                      cancelled: bool = False) -> str:
+        """Finish an active task. Returns the status it landed in.
+
+        A cancellation becomes `cancelled`. Otherwise the task is `completed`
+        and, when it is recurring, either archived (the run cap is reached) or
+        queued again for the next run. The whole sequence is one transaction.
+        Resource hooks run before this, in the caller: a hook that fails should
+        `task_fail` instead.
+        """
+        who = actor or ("cancel" if cancelled else "complete")
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            if row["status"] != "active":
+                raise TransitionRefused(f"{task_id} is {row['status']}, not active")
+            if cancelled:
+                _move(conn, task_id, "cancelled", who)
+                return "cancelled"
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            _move(conn, task_id, "completed", who, fields={"completed_at": stamp})
+            pairs = json.loads(conn.execute(
+                "SELECT frontmatter FROM tasks WHERE id = ?", (task_id,)).fetchone()[0])
+            if str(_field(pairs, "recurring") or "").lower() != "true":
+                return "completed"
+            try:
+                count = int(_field(pairs, "recurring_run_count") or "0") + 1
+            except ValueError:
+                count = 1
+            try:
+                cap = int(_field(pairs, "recurring_max_runs") or "0")
+            except ValueError:
+                cap = 0
+            fields = {"recurring_run_count": str(count)}
+            if cap > 0 and count >= cap:
+                _move(conn, task_id, "archived", who, fields=fields)
+                return "archived"
+            _move(conn, task_id, "queued", who, fields=fields)
+            return "queued"
+
+    def task_fail(self, task_id: str, suffix: str, *, actor: Optional[str] = None,
+                  fields: Optional[dict] = None) -> None:
+        """Move a task to error and append `suffix` to its body, together."""
+        def rewrite(body: str) -> str:
+            text = body.rstrip("\n")
+            extra = suffix.strip("\n")
+            return (text + "\n\n" + extra + "\n") if extra else body
+
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            _move(conn, task_id, "error", actor or "fail", rewrite_body=rewrite, fields=fields)
+
+    def task_await(self, task_id: str, child_ids: Iterable[str]) -> None:
+        """Park an active parent until the named children are terminal."""
+        seen: list[str] = []
+        for child in child_ids:
+            if child and child not in seen:
+                seen.append(child)
+        if not seen:
+            raise StateError("awaiting subtasks needs at least one child id")
+        quoted = json.dumps(",".join(seen), ensure_ascii=False)
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            if row["status"] != "active":
+                raise TransitionRefused(f"{task_id} is {row['status']}, not active")
+            _move(conn, task_id, "queued", "await",
+                  fields={"blocked_by_task_ids": quoted})
 
     def task_link(self, parent_id: str, child_id: str, subtask_key: Optional[str] = None) -> None:
         with _transaction(self.conn) as conn:
@@ -854,6 +1191,40 @@ class Session:
                          "updated_at = excluded.updated_at", (text, _now()))
         return data
 
+    def continuity_adopt_legacy(self, workspace: Path) -> str:
+        """Copy a pre-v0.25.7 record from sun/runtime into this row, once.
+
+        The newer side wins. The legacy file is renamed to a unique backup.
+        Returns "none", "adopted" or "kept". OSError means try again next time.
+        """
+        legacy = Path(workspace) / "sun" / "runtime" / "continuity" / "active.json"
+        if not legacy.is_file():
+            return "none"
+        if not os.access(legacy.parent, os.W_OK):
+            raise OSError(f"cannot adopt continuity from {legacy}")
+        try:
+            text = legacy.read_text(encoding="utf-8")
+            data = json.loads(text)
+            # The winner may rename the file between the read and this stat.
+            # The file disappearing is the expected race, not a disk error.
+            mtime = legacy.stat().st_mtime
+        except FileNotFoundError:
+            return "none"
+        except json.JSONDecodeError as exc:
+            raise OSError(f"continuity legacy is not json: {exc}") from exc
+        if not isinstance(data, dict):
+            raise OSError("continuity legacy is not an object")
+        row = self.conn.execute("SELECT updated_at FROM continuity WHERE id = 1").fetchone()
+        adopt = row is None or mtime > _epoch(row[0] or "")
+        if adopt:
+            self.continuity_import_text(text if text.endswith("\n") else text + "\n")
+        backup = _unique_sibling(legacy, "migrated")
+        try:
+            legacy.rename(backup)
+        except FileNotFoundError:
+            return "none"
+        return "adopted" if adopt else "kept"
+
     # -- mandate events ----------------------------------------------------
 
     def delegation_event_append(self, mandate: str, stream: str, row: dict) -> int:
@@ -893,6 +1264,22 @@ class Session:
             "SELECT row FROM delegation_events WHERE mandate = ? AND stream = ? ORDER BY seq",
             (mandate, stream))]
 
+    def delegation_decide_append(self, mandate: str, stream: str, decide):
+        """One transaction: `decide(events)` returns a row to append, or a list of errors."""
+        with _transaction(self.conn) as conn:
+            events = [json.loads(r[0]) for r in conn.execute(
+                "SELECT row FROM delegation_events WHERE mandate = ? AND stream = ? ORDER BY seq",
+                (mandate, stream))]
+            outcome = decide(events)
+            if isinstance(outcome, list):
+                return outcome
+            line = json.dumps(outcome, ensure_ascii=False)
+            _register_stream(conn, mandate, stream)
+            conn.execute("INSERT INTO delegation_events (mandate, stream, ts, row) "
+                         "VALUES (?, ?, ?, ?)",
+                         (mandate, stream, outcome.get("ts"), line))
+            return outcome
+
     # -- overview ----------------------------------------------------------
 
     def counts(self) -> dict:
@@ -903,6 +1290,12 @@ class Session:
             delegation_events=self.conn.execute("SELECT COUNT(*) FROM delegation_events").fetchone()[0],
             continuity=bool(self.conn.execute("SELECT 1 FROM continuity").fetchone()),
         )
+
+    def console_task_counts(self) -> dict:
+        """Counts the console shows, from the console_task_counts view."""
+        rows = self.conn.execute(
+            "SELECT state, n, recurring FROM console_task_counts").fetchall()
+        return {state: {"n": n, "recurring": recurring} for state, n, recurring in rows}
 
 
 def _open_ready(base: Path, auto_backup: bool) -> Session:
@@ -1103,6 +1496,37 @@ def _cli(argv: list[str]) -> int:
     claim = task.add_parser("claim")
     claim.add_argument("id")
     claim.add_argument("--worker", required=True)
+    nxt = task.add_parser("claim-next")
+    nxt.add_argument("--worker", required=True)
+    nxt.add_argument("--exclude", default="", help="comma-separated ids to skip")
+    release = task.add_parser("release")
+    release.add_argument("id")
+    release.add_argument("--worker", required=True)
+    done = task.add_parser("complete")
+    done.add_argument("id")
+    done.add_argument("--cancelled", action="store_true")
+    fail = task.add_parser("fail")
+    fail.add_argument("id")
+    fail.add_argument("--suffix", default="")
+    fail.add_argument("--field", action="append", default=[], metavar="KEY=VALUE")
+    waiting = task.add_parser("await")
+    waiting.add_argument("id")
+    waiting.add_argument("--child", action="append", default=[])
+    task.add_parser("status").add_argument("id")
+    field = task.add_parser("field")
+    field.add_argument("id")
+    field.add_argument("key")
+    unset = task.add_parser("unset")
+    unset.add_argument("id")
+    unset.add_argument("key")
+    task.add_parser("write-body", help="replace the body with stdin").add_argument("id")
+    origin = task.add_parser("find-origin")
+    origin.add_argument("origin_request_id")
+    link = task.add_parser("link")
+    link.add_argument("parent")
+    link.add_argument("child")
+    link.add_argument("--key", default=None)
+    task.add_parser("counts")
     for name in ("approve", "cancel", "requeue"):
         task.add_parser(name).add_argument("id")
 
@@ -1144,8 +1568,12 @@ def _cli(argv: list[str]) -> int:
                 elif args.cmd == "show":
                     sys.stdout.write(s.task_export(args.id))
                 elif args.cmd == "list":
-                    _print([{k: t[k] for k in ("id", "status", "title", "priority", "created")}
-                            for t in s.task_list(args.status)])
+                    _print([{
+                        "id": t["id"], "status": t["status"], "title": t["title"],
+                        "priority": t["priority"], "created": t["created"],
+                        "scheduled_time": t["scheduled_time"], "recurring": bool(t["recurring"]),
+                        "fields": {key: value_of(rest) for key, rest in t["frontmatter"]},
+                    } for t in s.task_list(args.status)])
                 elif args.cmd == "set":
                     s.task_set(args.id, args.key, args.value)
                     _print(dict(id=args.id, key=args.key))
@@ -1156,6 +1584,50 @@ def _cli(argv: list[str]) -> int:
                     won = s.task_claim(args.id, args.worker)
                     _print(dict(id=args.id, claimed=won))
                     return 0 if won else 3
+                elif args.cmd == "claim-next":
+                    excluded = [part for part in args.exclude.split(",") if part]
+                    task = s.task_claim_next(args.worker, exclude=excluded)
+                    _print(dict(id=task["id"] if task else None,
+                                title=task["title"] if task else None,
+                                claimed=task is not None))
+                elif args.cmd == "release":
+                    s.task_release(args.id, args.worker)
+                    _print(dict(id=args.id, status="queued"))
+                elif args.cmd == "complete":
+                    landed = s.task_complete(args.id, cancelled=args.cancelled)
+                    _print(dict(id=args.id, status=landed))
+                elif args.cmd == "fail":
+                    fields = []
+                    for item in args.field:
+                        key, sep, value = item.partition("=")
+                        if not sep:
+                            parser.error(f"--field expects KEY=VALUE, got {item!r}")
+                        fields.append((key, value))
+                    s.task_fail(args.id, args.suffix, fields=dict(fields))
+                    _print(dict(id=args.id, status="error"))
+                elif args.cmd == "await":
+                    s.task_await(args.id, args.child)
+                    _print(dict(id=args.id, status="queued"))
+                elif args.cmd == "status":
+                    status = s.task_status(args.id)
+                    if status is None:
+                        raise StateError(f"no task {args.id}")
+                    _print(dict(id=args.id, status=status))
+                elif args.cmd == "field":
+                    _print(dict(id=args.id, key=args.key, value=s.task_field(args.id, args.key)))
+                elif args.cmd == "unset":
+                    s.task_unset(args.id, args.key)
+                    _print(dict(id=args.id, key=args.key))
+                elif args.cmd == "write-body":
+                    s.task_set_body(args.id, sys.stdin.read())
+                    _print(dict(id=args.id))
+                elif args.cmd == "find-origin":
+                    _print(dict(id=s.task_find_origin(args.origin_request_id)))
+                elif args.cmd == "link":
+                    s.task_link(args.parent, args.child, args.key)
+                    _print(dict(parent=args.parent, child=args.child))
+                elif args.cmd == "counts":
+                    _print(s.counts()["tasks"])
                 elif args.cmd == "approve":
                     came = s.task_approve(args.id)
                     _print(dict(id=args.id, from_status=came, to_status="queued"))

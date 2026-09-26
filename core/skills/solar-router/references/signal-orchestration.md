@@ -50,9 +50,9 @@ or clear `pending`).
 
 ## Where state lives
 
-Federated, per `references/continuity.md`: machine work in
-`<runtime root>/async-tasks/`, human attention in `sun/daily-log/`, canonical intention
-in `<runtime root>/continuity/active.json`, mandates in `sun/delegations/`.
+Federated, per `references/continuity.md`: machine work in `state.sqlite`,
+human attention in `sun/daily-log/`, canonical intention in the continuity row,
+mandates as YAML in `sun/delegations/` opened only by `solar-state`.
 
 Continuity never duplicates the queue: if the next move is machine work, reference the
 task instead of restating it in `pending`.

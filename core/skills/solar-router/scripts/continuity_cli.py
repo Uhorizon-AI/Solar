@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI for <runtime root>/continuity/active.json."""
+"""CLI for the continuity row in solar-state."""
 
 from __future__ import annotations
 
@@ -12,17 +12,18 @@ from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parent
 _CLIENT = _SCRIPTS.parent.parent / "solar-paths" / "scripts"
+_STATE = _SCRIPTS.parent.parent / "solar-state" / "scripts"
 if str(_CLIENT) not in sys.path:
     sys.path.insert(0, str(_CLIENT))
+if str(_STATE) not in sys.path:
+    sys.path.insert(0, str(_STATE))
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-import solar_runtime  # noqa: E402
-import continuity_store  # noqa: E402
+import solar_state  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
 SOLAR_WORKSPACE, _ = resolve_solar_paths()
-ACTIVE = solar_runtime.runtime_dir("continuity") / "active.json"
 
 
 def utc_now() -> str:
@@ -44,20 +45,19 @@ def empty() -> dict:
 
 
 def _adopt_legacy() -> None:
-    # Before any read or write: a `set` on the stale runtime copy would otherwise
-    # make it look newer than the live legacy record and lose it.
-    continuity_store.adopt_legacy(
-        SOLAR_WORKSPACE, ACTIVE,
-        on_error=lambda exc: print(f"continuity adoption failed: {exc}", file=sys.stderr))
+    try:
+        with solar_state.session() as store:
+            store.continuity_adopt_legacy(SOLAR_WORKSPACE)
+    except OSError as exc:
+        print(f"continuity adoption failed: {exc}", file=sys.stderr)
 
 
 def load() -> dict:
     _adopt_legacy()
-    if not ACTIVE.exists():
-        return empty()
     try:
-        data = json.loads(ACTIVE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        with solar_state.session() as store:
+            data = store.continuity_get()
+    except solar_state.StateError:
         return empty()
     return data if isinstance(data, dict) else empty()
 
@@ -65,8 +65,8 @@ def load() -> dict:
 def save(data: dict) -> None:
     _adopt_legacy()
     data["updated_at"] = utc_now()
-    ACTIVE.parent.mkdir(parents=True, exist_ok=True)
-    ACTIVE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with solar_state.session() as store:
+        store.continuity_update(lambda _current: data)
 
 
 def cmd_status(_: argparse.Namespace) -> int:

@@ -13,6 +13,7 @@ EXECUTE = SCRIPTS / "execute_active.py"
 sys.path.insert(0, str(SCRIPTS))
 
 import execute_active as ea  # noqa: E402
+from queue_mirror import env_for, mirror, runtime_of, seed  # noqa: E402
 
 
 def _workspace_with_script(tmp_path: Path, body: str = "#!/bin/bash\nexit 0\n") -> tuple[Path, Path]:
@@ -49,15 +50,19 @@ def _write_task(
 
 
 def _run_executor(task_file: Path, workspace: Path, task_id: str = "local-1") -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
+    root = task_file.parent.parent
+    seed(root)
+    env = env_for(root)
     env["SOLAR_WORKSPACE"] = str(workspace)
-    return subprocess.run(
-        [sys.executable, str(EXECUTE), str(task_file), "/nonexistent/router.py", task_id, "Local Task"],
+    proc = subprocess.run(
+        [sys.executable, str(EXECUTE), task_id, "/nonexistent/router.py"],
         capture_output=True,
         text=True,
         env=env,
         check=False,
     )
+    mirror(root)
+    return proc
 
 
 def test_parse_local_timeout_ok():
@@ -189,7 +194,7 @@ def test_success_records_result_path_to_the_log(tmp_path: Path):
     rel = script.relative_to(workspace).as_posix()
     task = _write_task(task_root, local_command=f"bash {rel}")
     assert _run_executor(task, workspace).returncode == 0
-    log = (task_root / "logs" / "local-task.log").resolve()
+    log = (runtime_of(task_root) / "task-logs" / "local-1.log").resolve()
     assert f'result_path: "{log}"' in task.read_text(encoding="utf-8")
     assert "## Result" in log.read_text(encoding="utf-8")
 
@@ -234,12 +239,7 @@ def test_result_path_is_absolute(tmp_path: Path):
     task_root = tmp_path / "sun" / "runtime" / "async-tasks"
     rel = script.relative_to(workspace).as_posix()
     task = _write_task(task_root, local_command=f"bash {rel}")
-    proc = subprocess.run(
-        [sys.executable, str(EXECUTE), str(task.relative_to(tmp_path)), "/nonexistent/router.py",
-         "local-1", "Local Task"],
-        capture_output=True, text=True, cwd=tmp_path,
-        env={**os.environ, "SOLAR_WORKSPACE": str(workspace)}, check=False,
-    )
+    proc = _run_executor(task, workspace)
     assert proc.returncode == 0, proc.stderr
     recorded = [line for line in task.read_text(encoding="utf-8").splitlines()
                 if line.startswith("result_path:")][0]

@@ -35,6 +35,7 @@ def solar_env(tmp_path, monkeypatch):
 
     env = {
         "SOLAR_APP_DATA": str(app_data),
+        "SOLAR_RUNTIME_ROOT": str(app_data / "Solar" / "runtime"),
         "SOLAR_WORKSPACE": str(workspace),
         "SOLAR_ROOT": str(_CORE.parent),
         "SOLAR_DELEGATIONS_DIR": str(workspace / "sun" / "delegations"),
@@ -46,6 +47,11 @@ def solar_env(tmp_path, monkeypatch):
     import mcp_gate
     import importlib
     importlib.reload(mcp_gate)
+
+    import solar_state
+    with solar_state.cutover(app_data / "Solar" / "runtime") as cut:
+        cut.upgrade_schema()
+        cut.set_format("sqlite")
 
     return Env(tmp_path=tmp_path, app_data=app_data, workspace=workspace,
                runtime=app_data / "Solar" / "runtime", env={**os.environ, **env})

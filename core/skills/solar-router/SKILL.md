@@ -29,12 +29,12 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 - Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `SOLAR_WORKSPACE` when relative.
 - Codex default command includes `-C <repo-root>` and `--add-dir ~/.codex`.
 - Persist conversation turns in runtime dir (JSONL) and inject continuity into each prompt: rolling `*-summary.txt` from `<solar_summary>` plus recent turns (`SOLAR_ROUTER_CONTEXT_TURNS`).
-- Also inject cross-channel canonical intention from `<runtime root>/continuity/active.json` when present. See `references/continuity.md`.
-- Own the A3 mandate controller (`scripts/delegation_ctl.py`) for `sun/delegations/`: any caller gates mutating routines through `check` and fails closed. See `references/a3-mandates.md`. Unrelated to JIT agent/skill delegation.
+- Inject the cross-channel intention from the continuity row in `state.sqlite`. See `references/continuity.md`.
+- Own the A3 mandate CLI (`scripts/delegation_ctl.py`). The YAML in `sun/delegations/` is opened by `solar-state`. Any caller gates mutating routines through `check` and fails closed. See `references/a3-mandates.md`. Unrelated to JIT agent/skill delegation.
 - Answer "where are we" on demand with `scripts/work_status.sh` (intention, machine queue, today's blockers, mandates). Read-only, no cadence: periodic briefings are recurring async tasks. Behaviour layer in `references/signal-orchestration.md`.
 - Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output. On telegram/n8n/app, `async_draft_created` queues work + `notify_when: completed` and returns a short ACK.
 - Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
-- Write audit log (`<runtime root>/router/audit.jsonl`) with `start`/`end` events per execution for traceability (including failed early-exit paths).
+- Append `start`/`end` audit rows through `solar-state` for each execution (including failed early-exit paths).
 
 ## Internal architecture
 
@@ -212,7 +212,7 @@ EOF
 ## Runtime files
 
 - `<runtime root>/router/conversations/<user_id>.jsonl` — conversation history per user (for context continuity).
-- `<runtime root>/router/audit.jsonl` — audit log with one `start`/`end` record pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`.
+- Router audit rows in `state.sqlite` — one `start`/`end` pair per execution. Fields: `router_id` (internal UUID), `request_id` (caller ref), `user_id`, `metadata`, `provider`, `status`, `jit_generated`, `duration_ms`.
 
 ## References
 
