@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-router, solar-client): `--stale-count` no longer prints 0 when `session()` refuses. The reason goes to stderr and the command exits non-zero; `solar status` shows `unknown (state refused: <reason>)`. `solar status --json` reads that reason from the environment, so a quote or backslash in it does not break the JSON. The status host fixture claims its runtime and writes audit rows through solar-state when the runtime is sqlite.
+
 ## [0.28.1] - 2026-09-26
 
 ### Fixed

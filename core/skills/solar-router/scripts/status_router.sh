@@ -53,9 +53,9 @@ ends = set()
 try:
     with solar_state.session() as store:
         loaded = store.audit_rows()
-except solar_state.StateError:
-    print("0")
-    raise SystemExit(0)
+except solar_state.StateError as exc:
+    print(exc, file=sys.stderr)
+    raise SystemExit(1)
 for row in loaded:
     rid = row.get("router_id", "")
     if row.get("event") == "start":

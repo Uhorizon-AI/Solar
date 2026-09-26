@@ -122,13 +122,30 @@ else
   system_detail="check_orchestrator.sh missing"
 fi
 
-# router — WARN only for recent orphans (default last 24h); historical noise ignored
+# router — WARN only for recent orphans (default last 24h); historical noise ignored.
+# A refused session is not zero orphans.
 if [[ -f "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" ]]; then
-  stale_n=0
-  stale_n="$(bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" --stale-count 2>/dev/null || echo 0)"
-  stale_all=0
-  stale_all="$(bash "$(solar_core_dir)/skills/solar-router/scripts/status_router.sh" --stale-count-all 2>/dev/null || echo 0)"
-  if [[ "${stale_n:-0}" -gt 0 ]]; then
+  router_script="$(solar_core_dir)/skills/solar-router/scripts/status_router.sh"
+  stale_n=""
+  stale_all=""
+  stale_reason=""
+  router_known=true
+  stale_err="$(mktemp)"
+  if ! stale_n="$(bash "$router_script" --stale-count 2>"$stale_err")"; then
+    router_known=false
+    stale_reason="$(head -n 1 "$stale_err" || true)"
+  fi
+  if ! stale_all="$(bash "$router_script" --stale-count-all 2>"$stale_err")"; then
+    router_known=false
+    if [[ -z "$stale_reason" ]]; then
+      stale_reason="$(head -n 1 "$stale_err" || true)"
+    fi
+  fi
+  rm -f "$stale_err"
+  if [[ "$router_known" != true ]]; then
+    router_state="WARN"
+    router_detail="unknown (state refused: ${stale_reason})"
+  elif [[ "${stale_n:-0}" -gt 0 ]]; then
     router_state="WARN"
     router_detail="${stale_n} stale in-flight (<24h)"
   elif [[ "${stale_all:-0}" -gt 0 ]]; then
@@ -207,23 +224,37 @@ else
 fi
 
 if [[ "$JSON" == true ]]; then
-  python3 - <<PY
-import json
+  SOLAR_WORKSPACE="$SOLAR_WORKSPACE" \
+  SOLAR_ROOT="$SOLAR_ROOT" \
+  SOLAR_ROOT_KIND="$solar_root_kind" \
+  HOST_STATE="$host_state" \
+  HOST_DETAIL="$host_detail" \
+  WORKSPACE_STATE="$workspace_state" \
+  WORKSPACE_DETAIL="$workspace_detail" \
+  SYSTEM_STATE="$system_state" \
+  SYSTEM_DETAIL="$system_detail" \
+  ROUTER_STATE="$router_state" \
+  ROUTER_DETAIL="$router_detail" \
+  BROWSER_STATE="$browser_state" \
+  CLIENT_STATE="$client_state" \
+  CLIENT_DETAIL="$client_detail" \
+  python3 - <<'PY'
+import json, os
 print(json.dumps({
-  "SOLAR_WORKSPACE": "$SOLAR_WORKSPACE",
-  "SOLAR_ROOT": "$SOLAR_ROOT",
-  "SOLAR_ROOT_KIND": "$solar_root_kind",
-  "host": "$host_state",
-  "host_detail": "$host_detail",
-  "workspace": "$workspace_state",
-  "workspace_detail": "$workspace_detail",
-  "system": "$system_state",
-  "system_detail": "$system_detail",
-  "router": "$router_state",
-  "router_detail": "$router_detail",
-  "browser": "$browser_state",
-  "client": "$client_state",
-  "client_detail": "$client_detail",
+  "SOLAR_WORKSPACE": os.environ["SOLAR_WORKSPACE"],
+  "SOLAR_ROOT": os.environ["SOLAR_ROOT"],
+  "SOLAR_ROOT_KIND": os.environ["SOLAR_ROOT_KIND"],
+  "host": os.environ["HOST_STATE"],
+  "host_detail": os.environ["HOST_DETAIL"],
+  "workspace": os.environ["WORKSPACE_STATE"],
+  "workspace_detail": os.environ["WORKSPACE_DETAIL"],
+  "system": os.environ["SYSTEM_STATE"],
+  "system_detail": os.environ["SYSTEM_DETAIL"],
+  "router": os.environ["ROUTER_STATE"],
+  "router_detail": os.environ["ROUTER_DETAIL"],
+  "browser": os.environ["BROWSER_STATE"],
+  "client": os.environ["CLIENT_STATE"],
+  "client_detail": os.environ["CLIENT_DETAIL"],
 }, indent=2))
 PY
   exit 0
