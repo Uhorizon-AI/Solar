@@ -20,6 +20,18 @@ Manage the relationship between **SOLAR_WORKSPACE** and **SOLAR_ROOT**:
 
 Workspace content health (`sun/`, `planets/`) is **`solar-workspace`** — use `solar workspace doctor`.
 
+## IDE sync
+
+| Client | Destination | How |
+|--------|-------------|-----|
+| Codex | `.codex/skills` | symlink |
+| Claude | `.claude/{skills,agents,commands}` | symlink |
+| Cursor | `.cursor/{skills,agents,commands}` | copy |
+| Gemini | `.gemini/skills`, `.gemini/commands` | symlink; commands become toml |
+| Antigravity | `.agents/skills` | copy, skills only |
+
+Antigravity does not receive commands, workflows or rules. Solar records the names it copies in `.agents/skills/.solar-managed` and removes only those when they leave the index. Codex reads repo skills from `.agents/skills`. It reads `$CODEX_HOME/skills` (`~/.codex/skills` when that variable is unset), so the workspace `.codex/skills` is a second copy only when `CODEX_HOME` points at that directory.
+
 ## Required MCP
 
 None

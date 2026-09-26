@@ -8,13 +8,14 @@
 # - .codex/skills
 # - .claude/{skills,agents,commands}
 # - .cursor/{skills,agents,commands}
+# - .agents/skills  (Antigravity: copies, skills only)
 #
 # Naming:
 # - core/ resources: unprefixed (e.g. solar-router, solar-telegram)
 # - planets/* resources: always prefixed <planet-name>:<resource-name> (e.g. uhorizon:lead-scoring)
 #
 # Usage:
-#   bash core/scripts/sync-clients.sh [--codex-only|--claude-only|--cursor-only|--gemini-only|--vscode-only]
+#   bash core/scripts/sync-clients.sh [--codex-only|--claude-only|--cursor-only|--gemini-only|--vscode-only|--antigravity-only]
 
 set -euo pipefail
 
@@ -50,6 +51,17 @@ CURSOR_SKILLS="$CURSOR_DIR/skills"
 CURSOR_AGENTS="$CURSOR_DIR/agents"
 CURSOR_COMMANDS="$CURSOR_DIR/commands"
 
+# Antigravity sandbox refuses to execute a file whose real path is outside the
+# workspace, so skills are copies under .agents/skills, not symlinks.
+# That directory is shared. Solar records the names it wrote in
+# .agents/skills/.solar-managed and deletes only those when they leave the index.
+# Codex reads repo skills from .agents/skills. Its other skills directory is
+# $CODEX_HOME/skills, which is ~/.codex/skills when CODEX_HOME is unset, not the
+# workspace .codex this script writes. Those two copies meet only if CODEX_HOME
+# points at the workspace .codex. Codex publishing below is unchanged.
+AGY_DIR="$ROOT_DIR/.agents"
+AGY_SKILLS="$AGY_DIR/skills"
+
 GEMINI_DIR="$ROOT_DIR/.gemini"
 GEMINI_SETTINGS="$GEMINI_DIR/settings.json"
 GEMINI_SKILLS="$GEMINI_DIR/skills"
@@ -60,6 +72,7 @@ SYNC_CLAUDE=false
 SYNC_CURSOR=false
 SYNC_GEMINI=false
 SYNC_VSCODE=false
+SYNC_ANTIGRAVITY=false
 
 # Temp directory for tracking
 TEMP_DIR="$(mktemp -d)"
@@ -76,8 +89,9 @@ for arg in "$@"; do
     --cursor-only) SYNC_CURSOR=true ;;
     --gemini-only) SYNC_GEMINI=true ;;
     --vscode-only) SYNC_VSCODE=true ;;
+    --antigravity-only) SYNC_ANTIGRAVITY=true ;;
     -h|--help)
-      echo "Usage: $0 [--codex-only|--claude-only|--cursor-only|--gemini-only|--vscode-only]"
+      echo "Usage: $0 [--codex-only|--claude-only|--cursor-only|--gemini-only|--vscode-only|--antigravity-only]"
       exit 0
       ;;
     *)
@@ -87,12 +101,13 @@ for arg in "$@"; do
   esac
 done
 
-if ! $SYNC_CODEX && ! $SYNC_CLAUDE && ! $SYNC_CURSOR && ! $SYNC_GEMINI && ! $SYNC_VSCODE; then
+if ! $SYNC_CODEX && ! $SYNC_CLAUDE && ! $SYNC_CURSOR && ! $SYNC_GEMINI && ! $SYNC_VSCODE && ! $SYNC_ANTIGRAVITY; then
   SYNC_CODEX=true
   SYNC_CLAUDE=true
   SYNC_CURSOR=true
   SYNC_GEMINI=true
   SYNC_VSCODE=true
+  SYNC_ANTIGRAVITY=true
 fi
 
 log_section() {
@@ -159,7 +174,7 @@ prune_target_dir_to_index() {
   shopt -s nullglob dotglob
   for item in "$target_dir"/*; do
     # Include dangling symlinks: [ -e ] is false when the target was removed
-    # (e.g. planet deleted) but the IDE link remains under .claude/.cursor/.codex.
+    # (e.g. planet deleted) but the IDE entry remains under .claude/.cursor/.codex.
     [ -e "$item" ] || [ -L "$item" ] || continue
     local name
     name="$(basename "$item")"
@@ -235,7 +250,7 @@ get_source() {
 }
 
 # A skill can be kept out of every client, core included. Two ways, both checked
-# on the *index*, so one decision reaches Codex, Claude, Cursor and Gemini alike:
+# on the *index*, so one decision reaches Codex, Claude, Cursor, Gemini and Antigravity alike:
 #
 #   1. the skill itself declares `sync: false` in its SKILL.md frontmatter — the
 #      property travels with the skill and survives a settings edit. This is how
@@ -669,6 +684,117 @@ print(len(repos) if isinstance(repos, list) else 0)
   echo
 }
 
+# Antigravity takes the frontmatter `name`, not the directory name. Two skills
+# in different planets can both be `commit`. Report that and leave the names.
+warn_antigravity_shared_names() {
+  [ -f "$SKILLS_INDEX" ] || return 0
+  local report
+  report="$(awk -F'|' '
+    function fm_name(path,   line, n, val) {
+      while ((getline line < path) > 0) {
+        n++
+        if (n == 1 && line != "---") { close(path); return "" }
+        if (n > 1 && line == "---") { close(path); return "" }
+        if (n > 1 && line ~ /^name:[[:space:]]*/) {
+          val = line
+          sub(/^name:[[:space:]]*/, "", val)
+          gsub(/^"|"$/, "", val)
+          if (substr(val, 1, 1) == sprintf("%c", 39)) val = substr(val, 2)
+          if (substr(val, length(val), 1) == sprintf("%c", 39)) val = substr(val, 1, length(val) - 1)
+          gsub(/[[:space:]]+$/, "", val)
+          close(path)
+          return val
+        }
+      }
+      close(path)
+      return ""
+    }
+    {
+      indexed = $1
+      source = $2
+      name = fm_name(source "/SKILL.md")
+      if (name == "") next
+      if (index(indexed, ":") > 0) {
+        planet = substr(indexed, 1, index(indexed, ":") - 1)
+      } else {
+        planet = "core"
+      }
+      key = name SUBSEP planet
+      if (!(key in seen)) {
+        seen[key] = 1
+        planet_n[name]++
+      }
+      listed[name] = listed[name] (listed[name] ? ", " : "") indexed
+    }
+    END {
+      for (name in planet_n)
+        if (planet_n[name] > 1)
+          print name "\t" listed[name]
+    }
+  ' "$SKILLS_INDEX")"
+  [ -n "$report" ] || return 0
+  local fm listed
+  while IFS=$'\t' read -r fm listed; do
+    [ -n "$fm" ] || continue
+    log_warn "Antigravity reads frontmatter name '${fm}' from more than one planet: ${listed}. Names are left unchanged."
+  done <<<"$report"
+}
+
+# .agents/skills is not a Solar folder. Prune names this script published
+# (one per line in .solar-managed) that are no longer in the index.
+sync_antigravity_skills() {
+  local index_file="$1"
+  local target_dir="$2"
+  local managed="$target_dir/.solar-managed"
+  local name source removed count published
+
+  ensure_dir "$target_dir"
+  removed=0
+  if [ -f "$managed" ]; then
+    while IFS= read -r name || [ -n "$name" ]; do
+      name="${name%%$'\r'}"
+      [ -n "$name" ] || continue
+      [[ "$name" == *"/"* || "$name" == "." || "$name" == ".." || "$name" == ".solar-managed" ]] && continue
+      if ! index_has_name "$index_file" "$name"; then
+        rm -rf "$target_dir/$name"
+        removed=$((removed + 1))
+      fi
+    done < "$managed"
+  fi
+  if [ "$removed" -gt 0 ]; then
+    log_ok "Pruned $removed stale Solar skills from $target_dir"
+  fi
+
+  count=0
+  published="$TEMP_DIR/agy-published.txt"
+  : > "$published"
+  if [ -f "$index_file" ]; then
+    while IFS='|' read -r name source; do
+      [ -n "$name" ] || continue
+      # A folder the user already had is not ours to replace, even when the
+      # catalog uses the same name.
+      if [[ -e "$target_dir/$name" || -L "$target_dir/$name" ]] \
+        && { [ ! -f "$managed" ] || ! grep -Fxq -- "$name" "$managed"; }; then
+        log_warn "Antigravity already has '${name}'; left unchanged and not recorded."
+        continue
+      fi
+      rm -rf "$target_dir/$name"
+      cp -R "$source" "$target_dir/$name"
+      printf '%s\n' "$name" >> "$published"
+      count=$((count + 1))
+    done < "$index_file"
+  fi
+  cp "$published" "$managed"
+  log_tree_end "📦 Skills" "${GREEN}✓${NC} $count (copy)"
+}
+
+sync_antigravity() {
+  log_section "🔄 Antigravity (.agents)"
+  warn_antigravity_shared_names
+  sync_antigravity_skills "$SKILLS_INDEX" "$AGY_SKILLS"
+  echo
+}
+
 # Main execution
 discover_resources
 
@@ -678,5 +804,6 @@ $SYNC_GEMINI && sync_gemini
 
 $SYNC_VSCODE && sync_vscode
 $SYNC_CURSOR && sync_cursor
+$SYNC_ANTIGRAVITY && sync_antigravity
 
 echo -e "${GREEN}✅ Sync complete.${NC}"
