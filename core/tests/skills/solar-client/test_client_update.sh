@@ -374,9 +374,9 @@ solar_client_restart_running_services "$TMP/install-c" >/dev/null 2>&1
 assert_ok "detect: nothing restarted for an install with no services" test ! -s "$SVC_LOG"
 unset SOLAR_CLIENT_PS_OUTPUT_FILE SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
 
-# --- first update from the published updater, which never calls the cutover ---
+# --- first update from the published updater, which calls the cutover ---
 # v1 is HEAD's client_update.sh: it reloads the new client_lib and restarts.
-# The new restart migrates before it starts anything.
+# The new cutover migrates before it starts anything.
 WS_UP="$TMP/ws-up"
 INSTALL_UP="$WS_UP/solar"
 UP_LIB="$INSTALL_UP/core/skills/solar-client/scripts/client_lib.sh"
@@ -390,15 +390,22 @@ rm -rf "$INSTALL_UP/core/skills/solar-client/scripts/__pycache__"
 rm -rf "$INSTALL_UP/core/skills/solar-paths/scripts/__pycache__"
 git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_update.sh >"$UP_UPDATE"
 git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_lib.sh >"$UP_LIB"
-assert_ok "published updater does not call the cutover" \
-  bash -c '! grep -q solar_client_state_cutover "$1"' _ "$UP_UPDATE"
+assert_ok "published updater calls the cutover" \
+  bash -c 'grep -q solar_client_state_cutover "$1"' _ "$UP_UPDATE"
 git -C "$INSTALL_UP" init -q
 git -C "$INSTALL_UP" config user.email "test@test"
 git -C "$INSTALL_UP" config user.name "Test"
 git -C "$INSTALL_UP" add -A && git -C "$INSTALL_UP" commit -q -m "v1" && git -C "$INSTALL_UP" tag v0.0.1
 cp "$UPDATE_SCRIPT" "$UP_UPDATE"
 cp "$CORE_ROOT/skills/solar-client/scripts/client_lib.sh" "$UP_LIB"
-git -C "$INSTALL_UP" add -A && git -C "$INSTALL_UP" commit -q -m "v2" && git -C "$INSTALL_UP" tag v0.0.2
+git -C "$INSTALL_UP" add -A
+# The published scripts already call the cutover, so this copy can be empty.
+if git -C "$INSTALL_UP" diff --cached --quiet; then
+  git -C "$INSTALL_UP" commit -q --allow-empty -m "v2"
+else
+  git -C "$INSTALL_UP" commit -q -m "v2"
+fi
+git -C "$INSTALL_UP" tag v0.0.2
 git -C "$INSTALL_UP" checkout -q v0.0.1
 PUBLISHED_MARK="$TMP/published-cutover.txt"
 PUBLISHED_CUT="$TMP/published-cutover.py"

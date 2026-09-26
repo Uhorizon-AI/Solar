@@ -14,13 +14,11 @@ description: >
 is there**, and is the only thing that reads or writes the state more than one
 component uses.
 
-**Status: task readers and writers use this API.** The base, its guards and
-the cutover (`migrate`, `rollback`, `rehearse`) exist and are tested. Tasks are
-read and written only through this skill; a runtime whose format is not
-`sqlite` is refused. Audit, continuity, mandate events and the console index
-are still on their files. No runtime has been moved, and `migrate` / `rollback`
-are not wired into `solar client update` or `sync`: they refuse unless
-`SOLAR_STATE_ALLOW_CUTOVER=1`.
+**Status: the shared runtime is one sqlite base.** Tasks, the router audit,
+cross-channel continuity and A3 mandate events are read and written only
+through this skill. A runtime whose format is not `sqlite` is refused.
+`solar client update` and `solar client sync` call `migrate`; `rollback` is
+the way back.
 
 ## Required MCP
 
