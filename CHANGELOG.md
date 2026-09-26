@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.28.3] - 2026-09-27
+
 ### Removed
 - remove(solar-app): `app_index.py` and `index.sqlite`. The console and `solar://index` read counts from the views in `state.sqlite`. An `index.sqlite` left in an existing runtime can be deleted by hand.
 
