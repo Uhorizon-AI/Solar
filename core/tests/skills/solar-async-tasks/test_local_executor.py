@@ -51,9 +51,8 @@ def _write_task(
 
 def _run_executor(task_file: Path, workspace: Path, task_id: str = "local-1") -> subprocess.CompletedProcess[str]:
     root = task_file.parent.parent
+    env = env_for(root, {**os.environ, "SOLAR_WORKSPACE": str(workspace)})
     seed(root)
-    env = env_for(root)
-    env["SOLAR_WORKSPACE"] = str(workspace)
     proc = subprocess.run(
         [sys.executable, str(EXECUTE), task_id, "/nonexistent/router.py"],
         capture_output=True,

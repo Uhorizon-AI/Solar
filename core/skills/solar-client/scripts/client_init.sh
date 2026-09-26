@@ -82,6 +82,11 @@ if ! solar_client_settings_exists "$WORKSPACE"; then
   solar_client_write_settings_v12 "$WORKSPACE" "$INSTALL_ROOT"
 fi
 
+if ! solar_client_claim_workspace "$WORKSPACE" false "$INSTALL_ROOT" >/dev/null; then
+  echo "ERROR: this runtime refused workspace $WORKSPACE." >&2
+  exit 1
+fi
+
 if [[ ! -f "$WORKSPACE/sun/preferences/profile.md" ]]; then
   cat > "$WORKSPACE/sun/preferences/profile.md" <<'EOF'
 # User Profile

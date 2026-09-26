@@ -154,6 +154,11 @@ if [[ "$CHECK_ONLY" == true ]]; then
   exit 0
 fi
 
+if ! solar_client_claim_workspace "$SOLAR_WORKSPACE" false "$INSTALL_ROOT" >/dev/null; then
+  echo "ERROR: this runtime refused workspace $SOLAR_WORKSPACE. Install, settings and services were left unchanged." >&2
+  exit 1
+fi
+
 read -r cur_ver cur_commit < <(solar_client_git_identity "$INSTALL_ROOT")
 use_git=false
 if [[ "$USE_BUNDLE" != true ]] && [[ -d "$INSTALL_ROOT/.git" ]]; then

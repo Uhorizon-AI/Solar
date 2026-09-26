@@ -18,7 +18,8 @@ component uses.
 cross-channel continuity and A3 mandate events are read and written only
 through this skill. A runtime whose format is not `sqlite` is refused.
 `solar client update` and `solar client sync` call `migrate`; `rollback` is
-the way back.
+the way back. The base belongs to one workspace (`workspace-owner.json`).
+`session` reads that workspace's id from `$SOLAR_WORKSPACE/.solar/settings.json`.
 
 ## Required MCP
 

@@ -52,6 +52,11 @@ def _load_bridge(
     if str(state_scripts) not in sys.path:
         sys.path.insert(0, str(state_scripts))
     import solar_state
+    support = BRIDGE_PATH.parents[3] / "tests" / "support"
+    if str(support) not in sys.path:
+        sys.path.insert(0, str(support))
+    from runtime_owner import claim_test_owner
+    claim_test_owner(runtime, run_dir / "workspace", monkeypatch=monkeypatch)
     with solar_state.cutover(runtime) as cut:
         cut.upgrade_schema()
         cut.set_format("sqlite")
@@ -63,20 +68,24 @@ def _load_bridge(
         monkeypatch.delenv("SOLAR_N8N_DEFAULT_ASYNC", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
-    if "websockets" not in sys.modules:
-        try:
-            import websockets  # noqa: F401
-        except ModuleNotFoundError:
-            ws_mod = types.ModuleType("websockets")
-            ws_client = types.ModuleType("websockets.client")
+    # A sibling test may already have installed a server-only stub. The bridge
+    # imports websockets.client at load time, so the client submodule has to
+    # exist whichever file ran first.
+    try:
+        from websockets.client import connect  # noqa: F401
+    except Exception:
+        ws_mod = sys.modules.get("websockets") or types.ModuleType("websockets")
+        if getattr(ws_mod, "__path__", None) is None:
+            ws_mod.__path__ = []  # type: ignore[attr-defined]
+        ws_client = sys.modules.get("websockets.client") or types.ModuleType("websockets.client")
 
-            async def _connect(*_a, **_k):  # pragma: no cover
-                raise RuntimeError("websockets stub: connect unused in auth tests")
+        async def _connect(*_a, **_k):  # pragma: no cover
+            raise RuntimeError("websockets stub: connect unused in auth tests")
 
-            ws_client.connect = _connect  # type: ignore[attr-defined]
-            ws_mod.client = ws_client  # type: ignore[attr-defined]
-            sys.modules["websockets"] = ws_mod
-            sys.modules["websockets.client"] = ws_client
+        ws_client.connect = _connect  # type: ignore[attr-defined]
+        ws_mod.client = ws_client  # type: ignore[attr-defined]
+        sys.modules["websockets"] = ws_mod
+        sys.modules["websockets.client"] = ws_client
 
     spec = importlib.util.spec_from_file_location("run_http_webhook_bridge", BRIDGE_PATH)
     assert spec and spec.loader
@@ -690,13 +699,18 @@ def test_post_n8n_untyped_legacy_mismatch_rejected(monkeypatch, tmp_path):
         server.server_close()
 
 
-def _seed_origin(runtime, task_id, origin):
+def _seed_origin(runtime, task_id, origin, monkeypatch):
     import sys
     scripts = Path(__file__).resolve().parents[3] / "skills" / "solar-state" / "scripts"
     if str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
     import solar_state
     runtime.mkdir(parents=True, exist_ok=True)
+    support = Path(__file__).resolve().parents[3] / "tests" / "support"
+    if str(support) not in sys.path:
+        sys.path.insert(0, str(support))
+    from runtime_owner import claim_test_owner
+    claim_test_owner(runtime, runtime.parent / "workspace", monkeypatch=monkeypatch)
     with solar_state.cutover(runtime) as cut:
         cut.upgrade_schema()
         cut.set_format("sqlite")
@@ -712,7 +726,7 @@ def test_find_task_for_origin_request_reads_framework_runtime(monkeypatch, tmp_p
     runtime = tmp_path / "runtime"
     monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(runtime))
     monkeypatch.delenv("SOLAR_TASK_ROOT", raising=False)
-    _seed_origin(runtime, "task-9", "telegram:456:77")
+    _seed_origin(runtime, "task-9", "telegram:456:77", monkeypatch)
     assert mod.find_task_for_origin_request("telegram:456:77") == "task-9"
     assert mod.find_task_for_origin_request("telegram:456:78") is None
 
@@ -728,6 +742,6 @@ def test_find_task_for_origin_request_ignores_a_task_folder(monkeypatch, tmp_pat
     (root / "active" / "x.md").write_text(
         '---\nid: "task-10"\norigin_request_id: "telegram:456:80"\n---\n', encoding="utf-8"
     )
-    _seed_origin(runtime, "task-11", "telegram:456:81")
+    _seed_origin(runtime, "task-11", "telegram:456:81", monkeypatch)
     assert mod.find_task_for_origin_request("telegram:456:80") is None
     assert mod.find_task_for_origin_request("telegram:456:81") == "task-11"

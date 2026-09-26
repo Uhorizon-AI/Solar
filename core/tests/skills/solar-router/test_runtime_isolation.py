@@ -107,8 +107,8 @@ class TestEnvironmentRedirect(unittest.TestCase):
             self.assertNotIn("Application Support/Solar/runtime", value)
             self.assertFalse(value.endswith("/Solar/sun/runtime"))
 
-    def test_workspace_redirect_is_in_process_not_exported(self):
-        """Exporting it would break every test that shells out (fail-closed resolver)."""
+    def test_workspace_is_exported_for_session(self):
+        """session() reads SOLAR_WORKSPACE from the environment, not a module attribute."""
         self.assertEqual(Path(router.SOLAR_WORKSPACE), self.runtime.workspace)
-        self.assertNotEqual(os.environ.get("SOLAR_WORKSPACE", ""),
-                            str(self.runtime.workspace))
+        self.assertEqual(os.environ.get("SOLAR_WORKSPACE", ""),
+                         str(self.runtime.workspace))

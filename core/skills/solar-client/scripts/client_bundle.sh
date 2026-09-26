@@ -38,7 +38,7 @@ solar_resolve_paths --quiet
 WORKSPACE="$SOLAR_WORKSPACE"
 CORE_SRC="$(solar_global_core_dir 2>/dev/null || true)"
 if [[ -z "$CORE_SRC" || ! -d "$CORE_SRC/skills" ]]; then
-  echo "ERROR: global Solar framework core/ not found — set SOLAR_ROOT or run from primary machine" >&2
+  echo "ERROR: global Solar framework core/ not found — set SOLAR_ROOT to this machine's install" >&2
   exit 1
 fi
 BUNDLE_DIR="$(solar_client_bundle_dir "$WORKSPACE")"
@@ -91,4 +91,4 @@ solar_client_write_manifest_portable "$WORKSPACE" "$BUNDLE_HASH" "$CAPS"
 echo "OK: workspace bundle created at $BUNDLE_DIR"
 echo "  files=$FILE_COUNT skills=$SKILL_COUNT size=${SIZE_MB}MB checksum=${BUNDLE_HASH:0:16}..."
 echo "  core_source=workspace-snapshot (portable)"
-echo "Next: solar client sync  (IDE targets; optional on secondary machines)"
+echo "Next: solar client sync  (IDE targets on this machine)"

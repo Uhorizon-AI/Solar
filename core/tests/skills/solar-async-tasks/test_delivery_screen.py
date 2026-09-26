@@ -216,8 +216,8 @@ def _completed(root: Path, extra: str, body: str) -> Path:
 
 def _notify(task: Path, env) -> subprocess.CompletedProcess:
     root = task.parent.parent
-    seed(root)
     merged = env_for(root, env)
+    seed(root)
     return subprocess.run(
         ["bash", str(SCRIPTS / "notify_if_configured.sh"), task_id_of(task)],
         env=merged, text=True, capture_output=True, timeout=30,

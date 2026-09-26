@@ -20,8 +20,10 @@ import pytest
 # core/tests/skills/solar-router/conftest.py -> parents[3] == core/
 _CORE = Path(__file__).resolve().parents[3]
 _ROUTER_SCRIPTS = _CORE / "skills" / "solar-router" / "scripts"
-if str(_ROUTER_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_ROUTER_SCRIPTS))
+_SUPPORT = _CORE / "tests" / "support"
+for _path in (_ROUTER_SCRIPTS, _SUPPORT):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 # Imported here, before any test redirects the environment: `router` resolves
 # the workspace at import time through `resolve_solar_paths`, which refuses an
@@ -37,11 +39,11 @@ def isolated_runtime(tmp_path, monkeypatch):
     (runtime / "router").mkdir(parents=True)
     (workspace / "sun" / "runtime").mkdir(parents=True)
 
-    # Subprocesses read the environment; the in-process module read it once, at
-    # import. SOLAR_WORKSPACE is deliberately NOT exported: `resolve_solar_paths`
-    # fails closed when an exported workspace disagrees with the discovered one,
-    # which would break every test that shells out. The module attribute carries
-    # the redirect instead.
+    # session() reads SOLAR_WORKSPACE from the environment on every call. The
+    # temp workspace has sun/ and settings, and cwd moves there so a subprocess
+    # that resolves paths discovers the same tree.
+    (workspace / ".solar").mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(workspace)
     for name, value in {
         "SOLAR_APP_DATA": str(tmp_path / "app-data"),
         "SOLAR_RUNTIME_ROOT": str(runtime),
@@ -53,6 +55,10 @@ def isolated_runtime(tmp_path, monkeypatch):
 
     monkeypatch.setattr(router, "RUNTIME_ROOT", runtime / "router")
     monkeypatch.setattr(router, "SOLAR_WORKSPACE", workspace)
+
+    from runtime_owner import claim_test_owner
+    monkeypatch.setenv("SOLAR_WORKSPACE", str(workspace))
+    claim_test_owner(runtime, workspace, monkeypatch=monkeypatch)
 
     import solar_state
     with solar_state.cutover(runtime) as cut:

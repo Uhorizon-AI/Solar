@@ -18,6 +18,9 @@ for _skill in ("solar-mcp", "solar-app", "solar-paths", "solar-client", "solar-s
     _scripts = _CORE / "skills" / _skill / "scripts"
     if str(_scripts) not in sys.path:
         sys.path.insert(0, str(_scripts))
+_SUPPORT = _CORE / "tests" / "support"
+if str(_SUPPORT) not in sys.path:
+    sys.path.insert(0, str(_SUPPORT))
 
 
 @pytest.fixture
@@ -47,6 +50,10 @@ def solar_env(tmp_path, monkeypatch):
     import mcp_gate
     import importlib
     importlib.reload(mcp_gate)
+
+    from runtime_owner import claim_test_owner
+    claim_test_owner(app_data / "Solar" / "runtime", workspace, monkeypatch=monkeypatch)
+    monkeypatch.chdir(workspace)
 
     import solar_state
     with solar_state.cutover(app_data / "Solar" / "runtime") as cut:

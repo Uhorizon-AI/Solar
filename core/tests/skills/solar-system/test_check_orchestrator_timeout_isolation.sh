@@ -19,7 +19,7 @@ mkdir -p "$TMP/workspace/.solar" "$TMP/home/Library/LaunchAgents" "$TMP/bin" \
   "$SOLAR_APP_DATA/Solar/runtime/async-tasks/queued"
 
 cat >"$TMP/workspace/.solar/settings.json" <<'EOF'
-{"layout":"solar-client-v1.2","core_source":"global","requires_global_client":true}
+{"layout":"solar-client-v1.2","core_source":"global","requires_global_client":true,"workspace_id":"orch-test"}
 EOF
 cat >"$TMP/workspace/.env" <<'EOF'
 SOLAR_SYSTEM_FEATURES=async-tasks,host
@@ -33,6 +33,7 @@ mkdir -p "$FIXTURE_ROOT/core/skills/solar-app/scripts"
 # Real code, because that is what the test measures.
 ln -s "$ROOT/core/skills/solar-async-tasks" "$FIXTURE_ROOT/core/skills/solar-async-tasks"
 ln -s "$ROOT/core/skills/solar-client" "$FIXTURE_ROOT/core/skills/solar-client"
+ln -s "$ROOT/core/skills/solar-state" "$FIXTURE_ROOT/core/skills/solar-state"
 ln -s "$ROOT/core/skills/solar-system" "$FIXTURE_ROOT/core/skills/solar-system"
 
 # Stubbed probe: no sockets, no host_lib, no ports. Leaves a marker so the test
@@ -48,6 +49,10 @@ EOF
 chmod +x "$FIXTURE_ROOT/core/skills/solar-app/scripts/check_host.sh"
 
 CHECK="$FIXTURE_ROOT/core/skills/solar-system/scripts/check_orchestrator.sh"
+export SOLAR_RUNTIME_ROOT="$SOLAR_APP_DATA/Solar/runtime"
+export SOLAR_WORKSPACE="$TMP/workspace"
+python3 "$ROOT/core/skills/solar-state/scripts/solar_state.py" \
+  owner claim --workspace "$SOLAR_WORKSPACE" --id orch-test >/dev/null
 
 for stub in launchctl pgrep curl; do
   printf '#!/usr/bin/env bash\nexit %s\n' "$([[ $stub == pgrep ]] && echo 1 || echo 0)" >"$TMP/bin/$stub"
@@ -61,6 +66,7 @@ output="$(
   PATH="$TMP/bin:/usr/bin:/bin" \
   SOLAR_ROOT="$FIXTURE_ROOT" \
   SOLAR_WORKSPACE="$TMP/workspace" \
+  SOLAR_RUNTIME_ROOT="$SOLAR_RUNTIME_ROOT" \
   SOLAR_APP_BASE_URL="stub://console.invalid" \
   bash "$CHECK" 2>&1
 )"
@@ -83,8 +89,8 @@ if grep -qE "127\.0\.0\.1:(9000|9434)|:9000|:9434" <<<"$output"; then
   fail "the run referenced a live local console port"
 fi
 
-if ! grep -q "queue_dir:   present" <<<"$output"; then
-  fail "the queue did not resolve to the temporary runtime root"
+if ! grep -q "queue:       unset (solar-state)" <<<"$output"; then
+  fail "the queue did not resolve through solar-state"
 fi
 
 if grep -q "$TMP/workspace/sun" <<<"$output"; then

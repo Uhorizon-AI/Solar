@@ -49,8 +49,17 @@ PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = dict(name="solar-mcp", version="0.1.0")
 
 
+class WorkspaceUnresolved(RuntimeError):
+    """No workspace was discovered. Verbs stop here and touch no runtime."""
+
+
 def workspace() -> Path:
-    return Path(os.environ.get("SOLAR_WORKSPACE") or Path.cwd())
+    from solar_paths import resolve_solar_paths
+    try:
+        found, _install = resolve_solar_paths()
+    except Exception as exc:
+        raise WorkspaceUnresolved(f"no Solar workspace resolved: {exc}") from None
+    return found
 
 
 def action_skills() -> dict:
@@ -183,7 +192,9 @@ def _read_index() -> dict:
     import solar_state
     try:
         snap = runtime_views.snapshot(workspace())
-    except Exception as exc:  # noqa: BLE001
+    except WorkspaceUnresolved:
+        raise
+    except Exception as exc:  # noqa: BLE001 — a stale index is data, not an MCP failure
         return dict(available=False, source="state", reason=str(exc))
     return dict(available=True, source="state", path=str(solar_state.db_path()),
                 counts=snap["counts"], counters=snap["counts"])
@@ -381,6 +392,10 @@ HANDLERS = {
 
 def call_tool(name: str, arguments: dict) -> tuple[dict, bool]:
     """Gate first, then act. There is no path to a handler that skips this."""
+    try:
+        workspace()
+    except WorkspaceUnresolved as exc:
+        return dict(error=str(exc)[:500]), True
     registry = dict(TOOLS)
     registry["_action_skills"] = action_skills()
     with mcp_gate.execution_lock(name, registry):
@@ -431,8 +446,12 @@ def handle(message: dict, confirm=None) -> dict | None:
             known = ", ".join(READERS)
             return _error(request_id, -32602,
                           f"Unknown resource: {uri}. Known: {known}")
+        try:
+            body = reader()
+        except WorkspaceUnresolved as exc:
+            return _error(request_id, -32000, str(exc))
         result = dict(contents=[dict(uri=uri, mimeType="application/json",
-                                     text=json.dumps(reader(), indent=2, sort_keys=True, default=str))])
+                                     text=json.dumps(body, indent=2, sort_keys=True, default=str))])
     elif method == "tools/list":
         result = dict(tools=[dict(name=name, description=spec["description"],
                                   inputSchema=spec["inputSchema"])

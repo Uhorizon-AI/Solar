@@ -434,6 +434,8 @@ class TestAsyncTaskRoot(unittest.TestCase):
 
     def _ready(self, tmp):
         os.environ.pop("SOLAR_TASK_ROOT", None)
+        from runtime_owner import bound_env, claim_test_owner
+        claim_test_owner(pathlib.Path(tmp), pathlib.Path(os.environ["SOLAR_WORKSPACE"]), monkeypatch=bound_env(self))
         with router.solar_state.cutover(pathlib.Path(tmp)) as cut:
             cut.upgrade_schema()
             cut.set_format("sqlite")
@@ -510,6 +512,8 @@ class TestGatewayAsyncReply(unittest.TestCase):
 
 class TestCreateAsyncDraftNotify(unittest.TestCase):
     def _ready(self, tmp):
+        from runtime_owner import bound_env, claim_test_owner
+        claim_test_owner(pathlib.Path(tmp), pathlib.Path(os.environ["SOLAR_WORKSPACE"]), monkeypatch=bound_env(self))
         with router.solar_state.cutover(pathlib.Path(tmp)) as cut:
             cut.upgrade_schema()
             cut.set_format("sqlite")
@@ -1037,6 +1041,8 @@ class TestN8nOriginAndQueueGuards(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
             "os.environ", {"SOLAR_RUNTIME_ROOT": tmp}
         ):
+            from runtime_owner import bound_env, claim_test_owner
+            claim_test_owner(pathlib.Path(tmp), pathlib.Path(os.environ["SOLAR_WORKSPACE"]), monkeypatch=bound_env(self))
             with router.solar_state.cutover(pathlib.Path(tmp)) as cut:
                 cut.upgrade_schema()
                 cut.set_format("sqlite")

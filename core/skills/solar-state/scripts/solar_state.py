@@ -57,6 +57,8 @@ FORMAT_FILES = "files"
 DB_NAME = "state.sqlite"
 LOCK_NAME = "state.lock"
 FORMAT_NAME = "STATE_FORMAT"
+OWNER_NAME = "workspace-owner.json"
+CUTOVER_MARKER = "state-cutover.json"
 BACKUP_DIR = "state-backups"
 DAILY_KEEP = 7
 DAILY_MAX_AGE_SEC = 24 * 3600
@@ -288,6 +290,149 @@ def _flock(root: Path, exclusive: bool, timeout: float) -> Iterator[None]:
         yield
     finally:
         handle.close()  # closing releases the flock
+
+
+# ---------------------------------------------------------------------------
+# Workspace owner. The path is not the identity. claim_owner never opens
+# .solar/settings.json: Solar Client persists the id there.
+# ---------------------------------------------------------------------------
+
+def owner_path(root=None) -> Path:
+    return _root(root) / OWNER_NAME
+
+
+def _path_exists(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return Path(text).exists()
+
+
+def _same_path(left: str, right: str) -> bool:
+    if not str(left or "").strip() or not str(right or "").strip():
+        return False
+    try:
+        return solar_runtime.canonical(left) == solar_runtime.canonical(right)
+    except OSError:
+        return False
+
+
+def _read_owner_file(root: Path) -> Optional[dict]:
+    path = root / OWNER_NAME
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StateUnavailable(f"workspace owner file is unreadable: {exc}") from None
+    if not isinstance(data, dict) or not str(data.get("workspace_id") or "").strip():
+        raise StateUnavailable(f"workspace owner file has no workspace_id: {path}")
+    return data
+
+
+def _write_owner_file(root: Path, workspace_id: str, path: str) -> None:
+    payload = {
+        "workspace_id": workspace_id,
+        "path": path,
+        "claimed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    root.mkdir(parents=True, exist_ok=True)
+    dest = root / OWNER_NAME
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, dest)
+
+
+def _owner_refusal(owner_id: str, owner_path_s: str) -> StateUnavailable:
+    return StateUnavailable(
+        f"this runtime belongs to workspace {owner_id} at {owner_path_s}")
+
+
+def claim_owner(workspace, workspace_id: Optional[str] = None, *, rebind: bool = False,
+                root=None, timeout: float = DEFAULT_LOCK_TIMEOUT) -> dict:
+    """Create or adopt the owner file. Does not read or write settings.json."""
+    base = _root(root)
+    caller = str(solar_runtime.canonical(workspace))
+    supplied = str(workspace_id or "").strip() or None
+    with _flock(base, exclusive=True, timeout=timeout):
+        current = _read_owner_file(base)
+        if current is None:
+            new_id = supplied or str(uuid.uuid4())
+            _write_owner_file(base, new_id, caller)
+            return dict(action="created", workspace_id=new_id, path=caller)
+        owner_id = str(current["workspace_id"])
+        owner_path_s = str(current.get("path") or "")
+        if supplied and supplied != owner_id:
+            raise _owner_refusal(owner_id, owner_path_s)
+        if _same_path(owner_path_s, caller):
+            return dict(action="unchanged", workspace_id=owner_id, path=owner_path_s)
+        if not _path_exists(owner_path_s):
+            if supplied != owner_id:
+                raise StateUnavailable(
+                    "the recorded workspace path is gone; pass its workspace_id to rebind")
+            _write_owner_file(base, owner_id, caller)
+            return dict(action="rebound", workspace_id=owner_id, path=caller,
+                        previous_path=owner_path_s)
+        if rebind and supplied == owner_id:
+            _write_owner_file(base, owner_id, caller)
+            return dict(action="rebound", workspace_id=owner_id, path=caller,
+                        previous_path=owner_path_s)
+        raise StateUnavailable(
+            f"this runtime belongs to {owner_path_s}; {caller} is a copy, not a move")
+
+
+def owner_record(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT) -> Optional[dict]:
+    """The owner file as stored, without checking the caller. Repair reads this."""
+    base = _root(root)
+    with _flock(base, exclusive=False, timeout=timeout):
+        current = _read_owner_file(base)
+        return dict(current) if current else None
+
+
+def replace_owner_id(workspace_id: str, root=None,
+                     timeout: float = DEFAULT_LOCK_TIMEOUT) -> dict:
+    """Point the owner file at another id. Only claim-runtime --keep settings."""
+    new_id = str(workspace_id or "").strip()
+    if not new_id:
+        raise StateUnavailable("replace_owner_id requires a workspace_id")
+    base = _root(root)
+    with _flock(base, exclusive=True, timeout=timeout):
+        current = _read_owner_file(base)
+        if current is None:
+            raise StateUnavailable("this runtime has no workspace owner")
+        path = str(current.get("path") or "")
+        _write_owner_file(base, new_id, path)
+        return dict(action="id-replaced", workspace_id=new_id, path=path)
+
+
+def _caller_workspace() -> tuple[str, str]:
+    raw = os.environ.get("SOLAR_WORKSPACE", "").strip()
+    if not raw:
+        raise StateUnavailable(
+            "SOLAR_WORKSPACE is not set; this runtime will not serve an unknown workspace")
+    workspace = solar_runtime.canonical(raw)
+    settings = workspace / ".solar" / "settings.json"
+    try:
+        data = json.loads(settings.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StateUnavailable(f"cannot read workspace_id from {settings}: {exc}") from None
+    if not isinstance(data, dict):
+        raise StateUnavailable(f"cannot read workspace_id from {settings}")
+    workspace_id = str(data.get("workspace_id") or "").strip()
+    if not workspace_id:
+        raise StateUnavailable(f"no workspace_id in {settings}")
+    return workspace_id, str(workspace)
+
+
+def _require_owner(base: Path) -> None:
+    caller_id, caller_path = _caller_workspace()
+    current = _read_owner_file(base)
+    if current is None:
+        raise StateUnavailable("this runtime has no workspace owner")
+    owner_id = str(current["workspace_id"])
+    owner_path_s = str(current.get("path") or "")
+    if caller_id != owner_id or not _same_path(owner_path_s, caller_path):
+        raise _owner_refusal(owner_id, owner_path_s)
 
 
 # ---------------------------------------------------------------------------
@@ -1324,6 +1469,7 @@ def session(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT,
     """The door for every read and write. Holds the shared lock throughout."""
     base = _root(root)
     with _flock(base, exclusive=False, timeout=timeout):
+        _require_owner(base)
         fmt = read_format(base)
         if fmt != FORMAT_SQLITE:
             raise StateUnavailable(
@@ -1349,6 +1495,7 @@ def operate(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT,
     """
     base = _root(root)
     with _flock(base, exclusive=False, timeout=timeout):
+        _require_owner(base)
         fmt = read_format(base)
         if fmt not in (None, FORMAT_FILES, FORMAT_SQLITE):
             raise StateUnavailable(
@@ -1381,13 +1528,18 @@ def describe(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT) -> dict:
                     info["ready"] = True
             finally:
                 conn.close()
-        if not info["ready"]:
-            if info["format"] != FORMAT_SQLITE:
-                info["reason"] = f"format is {info['format'] or 'unset'}, not sqlite"
-            elif info["schema"] is None:
-                info["reason"] = "the base is missing"
-            else:
-                info["reason"] = f"schema v{info['schema']}, this code speaks v{SCHEMA_VERSION}"
+        if info["ready"]:
+            try:
+                _require_owner(base)
+            except StateUnavailable as exc:
+                info["ready"] = False
+                info["reason"] = str(exc)
+        elif info["format"] != FORMAT_SQLITE:
+            info["reason"] = f"format is {info['format'] or 'unset'}, not sqlite"
+        elif info["schema"] is None:
+            info["reason"] = "the base is missing"
+        else:
+            info["reason"] = f"schema v{info['schema']}, this code speaks v{SCHEMA_VERSION}"
         return info
 
 
@@ -1453,6 +1605,7 @@ def _statements(script: str) -> list[str]:
 def cutover(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT) -> Iterator[Cutover]:
     base = _root(root)
     with _flock(base, exclusive=True, timeout=timeout):
+        _require_owner(base)
         yield Cutover(base)
 
 
@@ -1471,6 +1624,14 @@ def _cli(argv: list[str]) -> int:
 
     status = sub.add_parser("status", help="format, schema and counts, under the shared lock")
     status.add_argument("--timeout", type=float, default=DEFAULT_LOCK_TIMEOUT)
+    owner = sub.add_parser("owner").add_subparsers(dest="cmd", required=True)
+    owner_claim = owner.add_parser("claim")
+    owner_claim.add_argument("--workspace", required=True)
+    owner_claim.add_argument("--id", default=None)
+    owner_claim.add_argument("--rebind", action="store_true")
+    owner.add_parser("show")
+    owner_replace = owner.add_parser("replace-id")
+    owner_replace.add_argument("--id", required=True)
     backup = sub.add_parser("backup", help="take a copy now")
     backup.add_argument("--kind", default="daily", choices=("daily", "manual"))
 
@@ -1545,6 +1706,14 @@ def _cli(argv: list[str]) -> int:
     try:
         if args.area == "status":
             _print(describe(root, timeout=args.timeout))
+            return 0
+        if args.area == "owner":
+            if args.cmd == "claim":
+                _print(claim_owner(args.workspace, args.id, rebind=args.rebind, root=root))
+            elif args.cmd == "show":
+                _print(owner_record(root))
+            elif args.cmd == "replace-id":
+                _print(replace_owner_id(args.id, root=root))
             return 0
         with session(root) as s:
             if args.area == "backup":

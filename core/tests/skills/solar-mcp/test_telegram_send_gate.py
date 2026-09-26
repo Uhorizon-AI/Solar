@@ -44,8 +44,11 @@ def stubbed_send(solar_env, monkeypatch, tmp_path):
         "TELEGRAM_CHAT_ID=4242\nTELEGRAM_PARSE_MODE=Markdown\n", encoding="utf-8")
 
     recorded = tmp_path / "sent.json"
+    real_run = subprocess.run
 
     def fake_run(cmd, **kwargs):
+        if not any("send_telegram.sh" in str(part) for part in cmd):
+            return real_run(cmd, **kwargs)
         recorded.write_text(json.dumps(dict(
             cmd=[str(part) for part in cmd],
             token=kwargs.get("env", {}).get("TELEGRAM_BOT_TOKEN"),

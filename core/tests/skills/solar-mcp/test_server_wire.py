@@ -26,6 +26,23 @@ def payload(answer: dict) -> dict:
     return json.loads(answer["result"]["content"][0]["text"])
 
 
+def test_an_unresolved_workspace_refuses_without_touching_a_runtime(tmp_path):
+    import os
+    outside = tmp_path / "outside"
+    runtime = tmp_path / "runtime"
+    outside.mkdir()
+    env = os.environ.copy()
+    env.pop("SOLAR_WORKSPACE", None)
+    env["SOLAR_RUNTIME_ROOT"] = str(runtime)
+    with mcp_probe.Client(env=env, cwd=str(outside)) as probe:
+        read = probe.request("resources/read", dict(uri="solar://tasks"))
+        called = probe.call_tool("solar_task_status", {})
+    assert read["error"]["code"] == -32000
+    assert "workspace" in read["error"]["message"]
+    assert called["result"]["isError"] is True
+    assert not runtime.exists()
+
+
 def test_initialize_announces_the_server(solar_env):
     with client(solar_env) as probe:
         answer = probe.request("ping")

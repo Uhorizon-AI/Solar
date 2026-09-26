@@ -35,7 +35,9 @@ def test_fresh_base_has_schema_and_transitions(ready):
         assert moves == set(solar_state.TRANSITIONS)
 
 
-def test_base_is_recreated_identically_and_touches_nothing_outside(root, tmp_path):
+def test_base_is_recreated_identically_and_touches_nothing_outside(root, tmp_path, monkeypatch):
+    from runtime_owner import claim_test_owner
+    claim_test_owner(root, tmp_path / "workspace", monkeypatch=monkeypatch)
     outside_before = _tree(tmp_path) - {str(p.relative_to(tmp_path)) for p in root.rglob("*")}
     with cutover(root) as cut:
         cut.upgrade_schema()
@@ -60,7 +62,9 @@ def test_only_solar_paths_is_imported():
 
 # --- guards ------------------------------------------------------------------
 
-def test_refuses_without_the_sqlite_format(root):
+def test_refuses_without_the_sqlite_format(root, tmp_path, monkeypatch):
+    from runtime_owner import claim_test_owner
+    claim_test_owner(root, tmp_path / "workspace", monkeypatch=monkeypatch)
     with cutover(root) as cut:
         cut.upgrade_schema()
     with pytest.raises(StateUnavailable, match="unset"):
@@ -531,9 +535,11 @@ def test_transitions_only_set_allowed_columns(ready):
     assert (task["pid"], task["log_path"]) == (123, "logs/t.log")
 
 
-def test_status_reads_under_the_shared_lock_and_says_why(root):
+def test_status_reads_under_the_shared_lock_and_says_why(root, monkeypatch):
     info = solar_state.describe(root)
     assert info["ready"] is False and "unset" in info["reason"]
+    from runtime_owner import claim_test_owner
+    claim_test_owner(root, root.parent / "workspace", monkeypatch=monkeypatch)
     with cutover(root) as cut:
         cut.upgrade_schema()
         with pytest.raises(StateBusy):
@@ -639,7 +645,9 @@ def test_accepted_forms_render_identically(text):
 
 # --- schema v2 on top of a published v1 --------------------------------------
 
-def test_a_v1_base_is_refused_then_upgraded_to_v2_without_losing_data(root):
+def test_a_v1_base_is_refused_then_upgraded_to_v2_without_losing_data(root, tmp_path, monkeypatch):
+    from runtime_owner import claim_test_owner
+    claim_test_owner(root, tmp_path / "workspace", monkeypatch=monkeypatch)
     conn = solar_state._connect(solar_state.db_path(root))
     conn.execute("BEGIN IMMEDIATE")
     for statement in solar_state._statements(solar_state.MIGRATIONS[0]):

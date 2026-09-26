@@ -110,6 +110,10 @@ def test_concurrent_adoptions_have_one_winner(tmp_path, monkeypatch):
     runtime.mkdir()
     monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(runtime))
     import solar_state
+    from runtime_owner import claim_test_owner
+    claim_test_owner(runtime, workspace, monkeypatch=monkeypatch)
+    (workspace / "sun").mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(workspace)
     with solar_state.cutover(runtime) as cut:
         cut.upgrade_schema()
         cut.set_format("sqlite")

@@ -213,6 +213,11 @@ done
 
 solar_resolve_paths --quiet
 
+if ! solar_client_claim_workspace "$SOLAR_WORKSPACE" false "$SOLAR_ROOT" >/dev/null; then
+  echo "ERROR: this runtime refused workspace $SOLAR_WORKSPACE. Nothing was written and no service was stopped." >&2
+  exit 1
+fi
+
 if [[ "$PORTABLE" == true ]]; then
   bash "$SCRIPT_DIR/client_bundle.sh" create
 fi

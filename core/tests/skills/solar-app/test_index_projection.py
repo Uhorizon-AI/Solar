@@ -26,6 +26,12 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setenv("SOLAR_APP_DATA", str(app_data))
     monkeypatch.delenv("SOLAR_RUNTIME_ROOT", raising=False)
 
+    support = _CORE / "tests" / "support"
+    if str(support) not in sys.path:
+        sys.path.insert(0, str(support))
+    from runtime_owner import claim_test_owner
+    (workspace / "sun").mkdir(parents=True, exist_ok=True)
+    claim_test_owner(runtime, workspace, monkeypatch=monkeypatch)
     import solar_state
     with solar_state.cutover(runtime) as cut:
         cut.upgrade_schema()

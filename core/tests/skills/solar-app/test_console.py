@@ -41,6 +41,11 @@ class ConsoleTests(unittest.TestCase):
         self.audit = runtime / 'router/audit.jsonl'
         self.audit.write_text('')
         import solar_state
+        support = Path(__file__).resolve().parents[3] / "tests" / "support"
+        if str(support) not in sys.path:
+            sys.path.insert(0, str(support))
+        from runtime_owner import bound_env, claim_test_owner
+        claim_test_owner(runtime, self.ws, monkeypatch=bound_env(self))
         with solar_state.cutover(runtime) as cut:
             cut.upgrade_schema()
             cut.set_format('sqlite')

@@ -27,20 +27,21 @@ solar paths          # resolvable paths for @ references
 solar client doctor  # integrity checks
 ```
 
-## OneDrive / multi-machine sync (required)
+## Una instalación, un workspace (required)
 
+- One install serves one workspace. Each machine runs its own `solar client update` on its own `SOLAR_ROOT`.
 - **`.solar/settings.json`** may live in a synced folder; do not edit it manually on multiple machines at once.
-- **Default mode (`core_source: global`)** — secondary machines need `SOLAR_ROOT` on the same machine or network path; run `solar client update --check` then `solar client sync` only.
-- **Portable mode (`core_source: workspace-snapshot`)** — opt-in via `solar client bundle create` on the **primary** machine after `solar client update`; secondary machines open the synced folder and run `solar client doctor` (no global install required).
-- If settings have merge conflicts or invalid JSON, run `solar client update --repair` from the primary machine.
+- **Global mode (`core_source: global`)** — the framework install is that machine's `SOLAR_ROOT`. Run `solar client update` there, then `solar client sync`.
+- **Portable mode (`core_source: workspace-snapshot`)** — the install travels inside the workspace (`.solar/bundle/`), via `solar client bundle create` after `solar client update`. It is not a second machine.
+- If settings have merge conflicts or invalid JSON, run `solar client update --repair`.
 - Do not sync `.env` via cloud without encryption.
 
 ## Runtime source (`core_source`)
 
 | Mode | Settings | Requires `SOLAR_ROOT` | When to use |
 |------|----------|----------------------|-------------|
-| **global** (default) | `core_source: global` | Yes | Dev machine with framework install |
-| **portable** (opt-in) | `core_source: workspace-snapshot` | No (uses `.solar/bundle/`) | OneDrive/USB secondary machines |
+| **global** (default) | `core_source: global` | Yes | A machine with its own framework install |
+| **portable** (opt-in) | `core_source: workspace-snapshot` | No (uses `.solar/bundle/`) | An install that travels inside the workspace |
 
 Do not edit `.solar/settings.json` by hand to switch modes — use `solar client bundle create` or `solar client sync` (global).
 

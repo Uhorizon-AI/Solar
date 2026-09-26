@@ -168,10 +168,15 @@ assert_ok "fixture core marker is OLD before update" grep -qx 'OLD' "$INSTALL_MI
 cat >"$WS_MIG/.env" <<'EOF'
 SOLAR_ROUTER_PROVIDER_PRIORITY=gemini,codex
 EOF
+mkdir -p "$WS_MIG/.solar" "$TMP/mig-runtime"
+printf '%s\n' '{"layout":"solar-client-v1.2","core_version":"v0.0.1","core_commit":"unknown","core_source":"global","workspace_id":"mig-workspace"}' \
+  >"$WS_MIG/.solar/settings.json"
 # Directory not writable → atomic .env rewrite fails; update must abort pre-apply
 chmod a-w "$WS_MIG"
 set +e
-mig_out="$(bash "$UPDATE_SCRIPT" --workspace "$WS_MIG" --yes 2>&1)"
+mig_out="$(SOLAR_RUNTIME_ROOT="$TMP/mig-runtime" \
+  SOLAR_CLIENT_STATE_PY="$CORE_ROOT/skills/solar-state/scripts/solar_state.py" \
+  bash "$UPDATE_SCRIPT" --workspace "$WS_MIG" --yes 2>&1)"
 mig_ec=$?
 set -e
 chmod u+w "$WS_MIG" 2>/dev/null || true
@@ -420,6 +425,8 @@ printf '#!/usr/bin/env bash\nexit 1\n' >"$PUBLISHED_LAUNCH"
 chmod +x "$PUBLISHED_CUT" "$PUBLISHED_LAUNCH"
 set +e
 up_out="$(SOLAR_ROOT="$INSTALL_UP" \
+  SOLAR_RUNTIME_ROOT="$TMP/published-runtime" \
+  SOLAR_CLIENT_STATE_PY="$CORE_ROOT/skills/solar-state/scripts/solar_state.py" \
   SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
   SOLAR_CLIENT_CUTOVER_SCRIPT="$PUBLISHED_CUT" \
   SOLAR_CLIENT_CUTOVER_ROOT="$TMP/runtime-copy" \
@@ -436,6 +443,76 @@ assert_ok "published updater migrated through the new restart" \
 [[ "$up_ec" -eq 0 ]] || echo "$up_out" >&2
 unset SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_CUTOVER_ROOT SOLAR_CLIENT_LAUNCHCTL
 unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_CUTOVER_DONE
+
+# --- old updater, incompatible owner: new code lands, claim refuses before any stop ---
+# v1 has no claim before the install. After checkout it reloads the new lib, and
+# that cutover claims before it stops anything. A foreign owner must leave the
+# owner file and the runtime as they were.
+WS_BAD="$TMP/ws-bad-owner"
+INSTALL_BAD="$WS_BAD/solar"
+BAD_RT="$TMP/bad-owner-runtime"
+BAD_LIB="$INSTALL_BAD/core/skills/solar-client/scripts/client_lib.sh"
+BAD_UPDATE="$INSTALL_BAD/core/skills/solar-client/scripts/client_update.sh"
+BAD_STOP_LOG="$TMP/bad-owner-stop.log"
+BAD_MIGRATE="$TMP/bad-owner-migrate.txt"
+mkdir -p "$WS_BAD/sun" "$WS_BAD/.solar" "$INSTALL_BAD/core/skills" "$BAD_RT"
+printf '%s\n' '{"layout":"solar-client-v1.2","core_version":"v0.0.1","core_commit":"unknown","core_source":"global","workspace_id":"settings-id"}' \
+  >"$WS_BAD/.solar/settings.json"
+WS_BAD="$(cd "$WS_BAD" && pwd -P)"
+python3 - <<PY
+import json
+from pathlib import Path
+Path("$BAD_RT/workspace-owner.json").write_text(json.dumps({
+    "workspace_id": "owner-id", "path": "$WS_BAD", "claimed_at": "t"}) + "\n")
+Path("$BAD_RT/sentinel").write_text("untouched\n")
+PY
+cp -R "$CORE_ROOT/skills/solar-client" "$INSTALL_BAD/core/skills/"
+cp -R "$CORE_ROOT/skills/solar-paths" "$INSTALL_BAD/core/skills/"
+rm -rf "$INSTALL_BAD/core/skills/solar-client/scripts/__pycache__"
+rm -rf "$INSTALL_BAD/core/skills/solar-paths/scripts/__pycache__"
+git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_update.sh >"$BAD_UPDATE"
+git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_lib.sh >"$BAD_LIB"
+git -C "$INSTALL_BAD" init -q
+git -C "$INSTALL_BAD" config user.email "test@test"
+git -C "$INSTALL_BAD" config user.name "Test"
+git -C "$INSTALL_BAD" add -A && git -C "$INSTALL_BAD" commit -q -m "v1" && git -C "$INSTALL_BAD" tag v0.0.1
+cp "$UPDATE_SCRIPT" "$BAD_UPDATE"
+cp "$CORE_ROOT/skills/solar-client/scripts/client_lib.sh" "$BAD_LIB"
+git -C "$INSTALL_BAD" add -A && git -C "$INSTALL_BAD" commit -q -m "v2" && git -C "$INSTALL_BAD" tag v0.0.2
+git -C "$INSTALL_BAD" checkout -q v0.0.1
+BAD_OWNER_BEFORE="$(cat "$BAD_RT/workspace-owner.json")"
+printf '#!/usr/bin/env bash\necho "$*" >>"%s"\nexit 0\n' "$BAD_STOP_LOG" >"$TMP/bad-owner-stop.sh"
+printf '#!/usr/bin/env python3\nimport pathlib, sys\npathlib.Path("%s").write_text(" ".join(sys.argv[1:]))\nraise SystemExit(0)\n' \
+  "$BAD_MIGRATE" >"$TMP/bad-owner-cutover.py"
+chmod +x "$TMP/bad-owner-stop.sh" "$TMP/bad-owner-cutover.py"
+: >"$BAD_STOP_LOG"
+set +e
+bad_out="$(SOLAR_ROOT="$INSTALL_BAD" \
+  SOLAR_RUNTIME_ROOT="$BAD_RT" \
+  SOLAR_CLIENT_STATE_PY="$CORE_ROOT/skills/solar-state/scripts/solar_state.py" \
+  SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
+  SOLAR_CLIENT_CUTOVER_SCRIPT="$TMP/bad-owner-cutover.py" \
+  SOLAR_CLIENT_HOST_STOP_SCRIPT="$TMP/bad-owner-stop.sh" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/bad-owner-stop.sh" \
+  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=host \
+  bash "$BAD_UPDATE" --workspace "$WS_BAD" --ref v0.0.2 --yes 2>&1)"
+bad_ec=$?
+set -e
+assert_ok "incompatible owner: update exits non-zero" test "$bad_ec" -ne 0
+assert_ok "incompatible owner: the new code is installed" \
+  test "$(git -C "$INSTALL_BAD" rev-parse HEAD)" = "$(git -C "$INSTALL_BAD" rev-parse v0.0.2)"
+assert_ok "incompatible owner: claim refuses before stopping" grep -q 'not stopped' <<<"$bad_out"
+assert_ok "incompatible owner: stop was not called" test ! -s "$BAD_STOP_LOG"
+assert_ok "incompatible owner: migrate did not run" test ! -f "$BAD_MIGRATE"
+assert_ok "incompatible owner: owner file is unchanged" \
+  bash -c 'test "$(cat "$1")" = "$2"' _ "$BAD_RT/workspace-owner.json" "$BAD_OWNER_BEFORE"
+assert_ok "incompatible owner: settings id is unchanged" \
+  grep -q 'settings-id' "$WS_BAD/.solar/settings.json"
+assert_ok "incompatible owner: runtime was not migrated" \
+  bash -c 'test -f "$1/sentinel" && test ! -f "$1/state.sqlite" && test ! -f "$1/STATE_FORMAT" && test ! -f "$1/state-cutover.json"' _ "$BAD_RT"
+[[ "$bad_ec" -ne 0 ]] || echo "$bad_out" >&2
+unset SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_LAUNCHCTL
+unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_STATE_PY SOLAR_RUNTIME_ROOT
 
 usage_out="$(bash "$UPDATE_SCRIPT" -h 2>&1)"
 assert_ok "usage lists --no-restart" grep -q -- '--no-restart' <<<"$usage_out"
@@ -455,6 +532,12 @@ EOF
 printf '#!/usr/bin/env bash\necho "launchctl $*" >>"%s"\n[[ "$1" == print ]] && exit 0\nexit 0\n' "$SVC_LOG" >"$FAKE_LAUNCH"
 printf '#!/usr/bin/env bash\necho gateway-stop >>"%s"\n' "$SVC_LOG" >"$FAKE_GSTOP"
 chmod +x "$FAKE_CUT" "$FAKE_LAUNCH" "$FAKE_GSTOP"
+export SOLAR_RUNTIME_ROOT="$TMP/cutover-runtime"
+export SOLAR_WORKSPACE="$TMP/cutover-ws"
+export SOLAR_CLIENT_STATE_PY="$CORE_ROOT/skills/solar-state/scripts/solar_state.py"
+mkdir -p "$SOLAR_WORKSPACE/.solar" "$SOLAR_RUNTIME_ROOT"
+printf '%s\n' '{"layout":"solar-client-v1.2","core_version":"v0.0.1","core_commit":"unknown","core_source":"global"}' \
+  >"$SOLAR_WORKSPACE/.solar/settings.json"
 : >"$SVC_LOG"
 export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host"
 export SOLAR_CLIENT_CUTOVER_SCRIPT="$FAKE_CUT"
@@ -483,6 +566,114 @@ assert_ok "a failed migration does not start the console" bash -c '! grep -q hos
 unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_CUTOVER_ROOT
 unset SOLAR_CLIENT_LAUNCHCTL SOLAR_CLIENT_GATEWAY_STOP_SCRIPT
 unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
+
+# --- cutover marker: same identity skips, a new one does not, failure writes nothing ---
+MARK_RT="$TMP/marker-runtime"
+MARK_WS="$TMP/marker-ws"
+MARK_INSTALL="$TMP/marker-install"
+mkdir -p "$MARK_RT" "$MARK_WS/sun" "$MARK_WS/.solar" "$MARK_INSTALL/core"
+printf '%s\n' 'core' >"$MARK_INSTALL/core/AGENTS.md"
+git -C "$MARK_INSTALL" init -q
+git -C "$MARK_INSTALL" config user.email "test@test"
+git -C "$MARK_INSTALL" config user.name "Test"
+git -C "$MARK_INSTALL" add -A && git -C "$MARK_INSTALL" commit -q -m "one"
+MARK_COMMIT="$(git -C "$MARK_INSTALL" rev-parse HEAD)"
+printf '%s\n' "{\"layout\":\"solar-client-v1.2\",\"core_source\":\"global\",\"core_commit\":\"$MARK_COMMIT\",\"workspace_id\":\"marker-ws\"}" \
+  >"$MARK_WS/.solar/settings.json"
+printf '%s\n' sqlite >"$MARK_RT/STATE_FORMAT"
+export SOLAR_RUNTIME_ROOT="$MARK_RT"
+export SOLAR_WORKSPACE="$MARK_WS"
+export SOLAR_CLIENT_STATE_PY="$CORE_ROOT/skills/solar-state/scripts/solar_state.py"
+MARK_LOG="$TMP/marker-cutover.log"
+MARK_SVC="$TMP/marker-svc.log"
+cat >"$TMP/marker-cutover.py" <<EOF
+#!/usr/bin/env python3
+import pathlib, sys
+pathlib.Path("$MARK_LOG").write_text(" ".join(sys.argv[1:]))
+raise SystemExit(0)
+EOF
+printf '#!/usr/bin/env bash\necho "$*" >>"%s"\nexit 0\n' "$MARK_SVC" >"$TMP/marker-launch.sh"
+chmod +x "$TMP/marker-cutover.py" "$TMP/marker-launch.sh"
+export SOLAR_CLIENT_CUTOVER_SCRIPT="$TMP/marker-cutover.py"
+export SOLAR_CLIENT_LAUNCHCTL="$TMP/marker-launch.sh"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none
+: >"$MARK_SVC"
+solar_client_state_cutover "$MARK_INSTALL" auto >/dev/null
+assert_ok "first cutover writes the marker" \
+  bash -c 'grep -q "$1" "$2"' _ "$MARK_COMMIT" "$MARK_RT/state-cutover.json"
+assert_ok "first cutover migrated" grep -q migrate "$MARK_LOG"
+: >"$MARK_LOG"
+: >"$MARK_SVC"
+skip_out="$(solar_client_state_cutover "$MARK_INSTALL" auto 2>&1)"
+assert_ok "same identity does not migrate again" test ! -s "$MARK_LOG"
+assert_ok "same identity does not stop services" test ! -s "$MARK_SVC"
+assert_ok "same identity says it is not stopping" grep -q 'not stopping' <<<"$skip_out"
+printf '%s\n' 'two' >"$MARK_INSTALL/core/AGENTS.md"
+git -C "$MARK_INSTALL" add -A && git -C "$MARK_INSTALL" commit -q -m "two"
+: >"$MARK_SVC"
+solar_client_state_cutover "$MARK_INSTALL" auto >/dev/null
+assert_ok "a new commit migrates again" grep -q migrate "$MARK_LOG"
+printf '#!/usr/bin/env python3\nimport sys\nraise SystemExit(1)\n' >"$TMP/marker-cutover.py"
+rm -f "$MARK_RT/state-cutover.json"
+: >"$MARK_SVC"
+set +e
+solar_client_state_cutover "$MARK_INSTALL" auto >/dev/null 2>&1
+mark_fail=$?
+set -e
+assert_ok "a failed migrate returns non-zero" test "$mark_fail" -ne 0
+assert_ok "a failed migrate leaves no marker" test ! -f "$MARK_RT/state-cutover.json"
+python3 - <<PY
+import json
+from pathlib import Path
+Path("$MARK_RT/workspace-owner.json").write_text(json.dumps({
+    "workspace_id": "someone-else", "path": "$MARK_WS", "claimed_at": "t"}) + "\n")
+PY
+: >"$MARK_SVC"
+set +e
+solar_client_state_cutover "$MARK_INSTALL" auto >/dev/null 2>&1
+refused=$?
+set -e
+assert_ok "a refused claim returns non-zero" test "$refused" -ne 0
+assert_ok "a refused claim does not stop services" test ! -s "$MARK_SVC"
+
+# Portable identity is the bundle checksum, not core_commit.
+PORT_RT="$TMP/portable-runtime"
+mkdir -p "$PORT_RT"
+printf '%s\n' sqlite >"$PORT_RT/STATE_FORMAT"
+printf '%s\n' '{"layout":"solar-client-v1.2","core_source":"workspace-snapshot","core_commit":"stale","bundle_checksum":"chk-1","workspace_id":"marker-ws"}' \
+  >"$MARK_WS/.solar/settings.json"
+export SOLAR_RUNTIME_ROOT="$PORT_RT"
+python3 "$SOLAR_CLIENT_STATE_PY" owner claim --workspace "$MARK_WS" --id marker-ws >/dev/null
+python3 - <<PY
+import json
+from pathlib import Path
+Path("$PORT_RT/state-cutover.json").write_text(json.dumps({"identity": "chk-1", "format": "sqlite"}) + "\n")
+PY
+: >"$MARK_LOG"
+port_out="$(solar_client_state_cutover "$MARK_INSTALL" auto 2>&1)"
+assert_ok "the same bundle checksum does not cut over" test ! -s "$MARK_LOG"
+assert_ok "the same bundle checksum does not stop" grep -q 'not stopping' <<<"$port_out"
+printf '%s\n' '{"layout":"solar-client-v1.2","core_source":"workspace-snapshot","core_commit":"stale","bundle_checksum":"chk-2","workspace_id":"marker-ws"}' \
+  >"$MARK_WS/.solar/settings.json"
+cat >"$TMP/marker-cutover.py" <<EOF
+#!/usr/bin/env python3
+import pathlib, sys
+pathlib.Path("$MARK_LOG").write_text(" ".join(sys.argv[1:]))
+raise SystemExit(0)
+EOF
+chmod +x "$TMP/marker-cutover.py"
+: >"$MARK_LOG"
+solar_client_state_cutover "$MARK_INSTALL" auto >/dev/null
+assert_ok "a changed bundle checksum cuts over" grep -q migrate "$MARK_LOG"
+printf '%s\n' '{"layout":"solar-client-v1.2","core_source":"workspace-snapshot","core_commit":"stale","workspace_id":"marker-ws"}' \
+  >"$MARK_WS/.solar/settings.json"
+rm -f "$PORT_RT/state-cutover.json"
+: >"$MARK_LOG"
+solar_client_state_cutover "$MARK_INSTALL" auto >/dev/null
+assert_ok "a missing bundle checksum still cuts over" grep -q migrate "$MARK_LOG"
+
+unset SOLAR_RUNTIME_ROOT SOLAR_WORKSPACE SOLAR_CLIENT_STATE_PY SOLAR_CLIENT_CUTOVER_SCRIPT
+unset SOLAR_CLIENT_LAUNCHCTL SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

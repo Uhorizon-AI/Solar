@@ -351,8 +351,8 @@ def _ensure_framework(skills):
 
 
 def run_bash(script, root, extra=None, args=("--once",), timeout=120):
-    seed(root)
     env = env_for(root, {**os.environ, **(extra or {})})
+    seed(root)
     proc = subprocess.run(
         ["bash", str(script), *args],
         capture_output=True, text=True, timeout=timeout, env=env,

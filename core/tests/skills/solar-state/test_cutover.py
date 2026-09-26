@@ -58,6 +58,8 @@ def runtime(tmp_path, monkeypatch):
     _write(root / "delegations" / "quiet-mandate" / "events.jsonl", "")   # exists, empty
     monkeypatch.setenv(cut.ALLOW_ENV, "1")
     monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(root))
+    from runtime_owner import claim_test_owner
+    claim_test_owner(root, tmp_path / "workspace", monkeypatch=monkeypatch)
     return root
 
 
@@ -643,3 +645,11 @@ def test_a_corrupt_rollback_marker_refuses(runtime):
     _write(runtime / cut.ROLLBACK_MARKER, "{oops")
     with pytest.raises(cut.CutoverRefused, match="rollback marker is unreadable"):
         cut.rollback(runtime, lister=quiet)
+
+
+def test_a_finished_rollback_deletes_the_cutover_marker(tmp_path):
+    base = tmp_path / "runtime"
+    base.mkdir()
+    (base / st.CUTOVER_MARKER).write_text('{"identity": "x"}\n', encoding="utf-8")
+    cut._finish_rollback(base)
+    assert not (base / st.CUTOVER_MARKER).exists()

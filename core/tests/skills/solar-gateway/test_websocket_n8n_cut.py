@@ -27,20 +27,20 @@ def _load_ws(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("SOLAR_N8N_SYNC_TIMEOUT_SEC", "1")
     monkeypatch.delenv("SOLAR_WORKSPACE", raising=False)
 
-    if "websockets" not in sys.modules:
-        try:
-            import websockets  # noqa: F401
-        except ModuleNotFoundError:
-            ws_mod = types.ModuleType("websockets")
-            ws_server = types.ModuleType("websockets.server")
+    try:
+        from websockets.server import serve  # noqa: F401
+    except Exception:
+        ws_mod = sys.modules.get("websockets") or types.ModuleType("websockets")
+        ws_mod.__path__ = []  # type: ignore[attr-defined]
+        ws_server = types.ModuleType("websockets.server")
 
-            async def _serve(*_a, **_k):  # pragma: no cover
-                raise RuntimeError("websockets stub")
+        async def _serve(*_a, **_k):  # pragma: no cover
+            raise RuntimeError("websockets stub")
 
-            ws_server.serve = _serve  # type: ignore[attr-defined]
-            ws_mod.server = ws_server  # type: ignore[attr-defined]
-            sys.modules["websockets"] = ws_mod
-            sys.modules["websockets.server"] = ws_server
+        ws_server.serve = _serve  # type: ignore[attr-defined]
+        ws_mod.server = ws_server  # type: ignore[attr-defined]
+        sys.modules["websockets"] = ws_mod
+        sys.modules["websockets.server"] = ws_server
 
     spec = importlib.util.spec_from_file_location("run_websocket_bridge", WS_PATH)
     assert spec and spec.loader

@@ -301,6 +301,9 @@ def _build_base(root: Path, c: Census, work: Path) -> tuple[Path, list[str], lis
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
+    owner = root / st.OWNER_NAME
+    if owner.is_file():
+        shutil.copy2(owner, work / st.OWNER_NAME)
     with st.cutover(work) as cut:
         cut.upgrade_schema()
         session = cut.session()
@@ -679,6 +682,7 @@ def _finish_rollback(base: Path) -> None:
     shutil.rmtree(base / ROLLBACK_STAGING, ignore_errors=True)
     _marker(base).unlink(missing_ok=True)
     (base / ROLLBACK_MARKER).unlink(missing_ok=True)
+    (base / st.CUTOVER_MARKER).unlink(missing_ok=True)
 
 
 def rollback(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,

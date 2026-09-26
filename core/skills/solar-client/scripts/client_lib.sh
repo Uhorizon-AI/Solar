@@ -5,6 +5,8 @@ set -euo pipefail
 _CLIENT_LIB_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../solar-paths/scripts/resolve_solar_paths.sh
 source "$_CLIENT_LIB_SCRIPT_DIR/../../solar-paths/scripts/resolve_solar_paths.sh"
+# shellcheck source=../../solar-paths/scripts/solar_runtime_paths.sh
+source "$_CLIENT_LIB_SCRIPT_DIR/../../solar-paths/scripts/solar_runtime_paths.sh"
 
 solar_client_install_root() {
   _resolve_global_root
@@ -1354,6 +1356,139 @@ solar_client_running_services() {
   fi
 }
 
+# solar_state.py of this install. Tests point SOLAR_CLIENT_STATE_PY at a temp copy.
+solar_client_state_py() {
+  local install_root="$1"
+  printf '%s\n' "${SOLAR_CLIENT_STATE_PY:-${install_root}/core/skills/solar-state/scripts/solar_state.py}"
+}
+
+solar_client_settings_workspace_id() {
+  local workspace="$1"
+  local path
+  path="$(solar_client_settings_path "$workspace")"
+  [[ -f "$path" ]] || return 0
+  solar_client_manifest_field "$path" workspace_id
+}
+
+# One key, merged into the existing settings file. Not part of the managed set.
+solar_client_settings_set_workspace_id() {
+  local workspace="$1"
+  local workspace_id="$2"
+  local write_path read_path
+  write_path="$(solar_client_settings_write_path "$workspace")"
+  read_path="$(solar_client_settings_path "$workspace")"
+  mkdir -p "$workspace/.solar"
+  python3 - <<'PY' "$write_path" "$read_path" "$workspace_id"
+import json, os, sys, tempfile
+write_path, read_path, workspace_id = sys.argv[1:4]
+data = {}
+if os.path.isfile(read_path):
+    with open(read_path, encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    if isinstance(loaded, dict):
+        data = loaded
+data["workspace_id"] = workspace_id
+os.makedirs(os.path.dirname(write_path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, write_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+PY
+}
+
+# Claim the runtime for this workspace. Persists a missing settings id after
+# a claim that created one. A refused claim writes nothing in settings.
+# Args: workspace [rebind true|false] [install_root]
+solar_client_claim_workspace() {
+  local workspace="$1"
+  local rebind="${2:-false}"
+  local install_root="${3:-}"
+  local state_py settings_id claim_json returned_id
+  if [[ -z "$install_root" ]]; then
+    install_root="$(solar_client_install_root)"
+  fi
+  state_py="$(solar_client_state_py "$install_root")"
+  settings_id="$(solar_client_settings_workspace_id "$workspace")"
+  local -a args=(owner claim --workspace "$workspace")
+  if [[ -n "$settings_id" ]]; then
+    args+=(--id "$settings_id")
+  fi
+  if [[ "$rebind" == "true" || "$rebind" == "1" ]]; then
+    args+=(--rebind)
+  fi
+  if ! claim_json="$(python3 "$state_py" "${args[@]}" 2>&1)"; then
+    printf '%s\n' "$claim_json" >&2
+    return 1
+  fi
+  returned_id="$(printf '%s' "$claim_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("workspace_id",""))')"
+  if [[ -z "$settings_id" && -n "$returned_id" ]]; then
+    solar_client_settings_set_workspace_id "$workspace" "$returned_id"
+  fi
+  printf '%s\n' "$claim_json"
+}
+
+# Global installs identify a cutover by the commit. Portable installs identify
+# it by bundle_checksum. Empty means the shortcut must not apply.
+solar_client_cutover_identity() {
+  local workspace="$1"
+  local install_root="$2"
+  local settings source checksum commit
+  settings="$(solar_client_settings_path "$workspace")"
+  source="$(solar_client_manifest_core_source "$settings")"
+  if [[ "$source" == "workspace-snapshot" ]]; then
+    checksum="$(solar_client_manifest_field "$settings" bundle_checksum)"
+    printf '%s\n' "$checksum"
+    return 0
+  fi
+  read -r _ commit < <(solar_client_git_identity "$install_root")
+  if [[ -z "$commit" || "$commit" == "unknown" ]]; then
+    printf '\n'
+    return 0
+  fi
+  printf '%s\n' "$commit"
+}
+
+solar_client_cutover_marker_matches() {
+  local runtime="$1"
+  local identity="$2"
+  [[ -n "$identity" ]] || return 1
+  [[ -f "$runtime/state-cutover.json" ]] || return 1
+  python3 - <<'PY' "$runtime/state-cutover.json" "$runtime/STATE_FORMAT" "$identity"
+import json, sys
+marker, fmt_path, identity = sys.argv[1:4]
+try:
+    data = json.load(open(marker, encoding="utf-8"))
+    fmt = open(fmt_path, encoding="utf-8").read().strip()
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(data, dict) and data.get("identity") == identity and fmt == "sqlite" else 1)
+PY
+}
+
+solar_client_write_cutover_marker() {
+  local runtime="$1"
+  local identity="$2"
+  [[ -n "$identity" ]] || return 0
+  python3 - <<'PY' "$runtime/state-cutover.json" "$identity"
+import json, os, sys
+dest, identity = sys.argv[1:3]
+payload = {"identity": identity, "format": "sqlite"}
+tmp = dest + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh)
+    fh.write("\n")
+os.replace(tmp, dest)
+PY
+}
+
 # Stop what Solar starts, migrate the runtime, then start what was running.
 # A failed migration leaves those services stopped. restart_mode "never" migrates
 # and does not start them. Args: install_root [restart_mode].
@@ -1372,6 +1507,22 @@ solar_client_state_cutover() {
   start_script="${SOLAR_CLIENT_HOST_START_SCRIPT:-${install_root}/core/skills/solar-app/scripts/start_host.sh}"
   setup_script="${SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT:-${install_root}/core/skills/solar-gateway/scripts/setup_transport_gateway.sh}"
   launchagent_label="${SOLAR_SYSTEM_LAUNCHD_LABEL:-com.solar.system}"
+  local workspace runtime identity
+  workspace="${SOLAR_WORKSPACE:-}"
+  if [[ -z "$workspace" ]]; then
+    echo "ERROR: SOLAR_WORKSPACE is not set; refusing state cutover" >&2
+    return 1
+  fi
+  if ! solar_client_claim_workspace "$workspace" false "$install_root" >/dev/null; then
+    echo "ERROR: workspace claim refused. Services were not stopped." >&2
+    return 1
+  fi
+  runtime="$(solar_runtime_root)"
+  identity="$(solar_client_cutover_identity "$workspace" "$install_root")"
+  if solar_client_cutover_marker_matches "$runtime" "$identity"; then
+    echo "State: cutover already applied for this install; not stopping services"
+    return 0
+  fi
 
   while IFS= read -r service; do
     [[ -n "$service" ]] && services+="$service "
@@ -1410,6 +1561,7 @@ solar_client_state_cutover() {
   fi
   if [[ "$restart_mode" == "never" ]]; then
     echo "State: migrated. Services left stopped (--no-restart)."
+    solar_client_write_cutover_marker "$runtime" "$identity"
     return 0
   fi
 
@@ -1431,6 +1583,9 @@ solar_client_state_cutover() {
     echo "State: starting console"
     bash "$start_script" || failed=1
   fi
+  if [[ "$failed" -eq 0 ]]; then
+    solar_client_write_cutover_marker "$runtime" "$identity"
+  fi
   return "$failed"
 }
 
@@ -1440,10 +1595,9 @@ solar_client_state_cutover() {
 # Test hooks: SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT, SOLAR_CLIENT_HOST_STOP_SCRIPT,
 # SOLAR_CLIENT_HOST_START_SCRIPT.
 #
-# The published updater does not call solar_client_state_cutover. It reloads this
-# file and then calls this function. The first jump therefore migrates here,
-# before any new process starts. A later caller in the same shell sees
-# SOLAR_CLIENT_CUTOVER_DONE and only restarts.
+# The published updater calls solar_client_state_cutover after it reloads this
+# file. That call migrates before any new process starts. A later caller in the
+# same shell sees SOLAR_CLIENT_CUTOVER_DONE and only restarts.
 solar_client_restart_running_services() {
   local install_root="$1"
   local setup_script stop_script start_script services service failed=0

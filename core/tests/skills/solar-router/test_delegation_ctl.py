@@ -131,6 +131,8 @@ class DelegationCtlTestCase(unittest.TestCase):
         self._saved = {key: os.environ.get(key) for key in self._env}
         os.environ.update(self._env)
         import solar_state
+        from runtime_owner import bound_env, claim_test_owner
+        claim_test_owner(self.runtime, Path(os.environ["SOLAR_WORKSPACE"]), monkeypatch=bound_env(self))
         with solar_state.cutover(self.runtime) as cut:
             cut.upgrade_schema()
             cut.set_format("sqlite")

@@ -309,7 +309,7 @@ _resolve_set_paths() {
           export SOLAR_ROOT="$(_resolve_abs "$ws/.solar/bundle")"
         else
           echo "ERROR: core_source=workspace-snapshot but bundle is missing or invalid" >&2
-          echo "HINT: run solar client bundle create on the primary machine" >&2
+          echo "HINT: run solar client bundle create on the machine that owns the global install" >&2
           return 1
         fi
       else

@@ -6,6 +6,7 @@ they created.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -16,6 +17,8 @@ if str(_STATE) not in sys.path:
     sys.path.insert(0, str(_STATE))
 
 import solar_state  # noqa: E402
+
+_ENV = None
 
 FOLDERS = {
     "draft": "drafts", "planned": "planned", "queued": "queued", "active": "active",
@@ -30,10 +33,49 @@ def runtime_of(task_root: Path) -> Path:
     return task_root
 
 
-def prepare(task_root: Path) -> Path:
+def _owner_workspace(runtime: Path, raw: str) -> Path:
+    """The workspace this test named, when it lives with the temp runtime.
+
+    A SOLAR_WORKSPACE inherited from the machine is not a test fixture.
+    """
+    if raw:
+        candidate = Path(raw).expanduser().resolve()
+        try:
+            runtime.resolve().relative_to(candidate)
+            return candidate
+        except ValueError:
+            pass
+        try:
+            candidate.relative_to(runtime.parent.resolve())
+            return candidate
+        except ValueError:
+            pass
+    return runtime.parent / "owner-workspace"
+
+
+def bind_test_env(monkeypatch) -> None:
+    """The async-tasks fixture hands over the monkeypatch that cleans the env."""
+    global _ENV
+    _ENV = monkeypatch
+
+
+def prepare(task_root: Path, workspace: Path | None = None) -> Path:
     runtime = runtime_of(task_root)
     runtime.mkdir(parents=True, exist_ok=True)
     os.environ["SOLAR_RUNTIME_ROOT"] = str(runtime)
+    support = _CORE / "tests" / "support"
+    if str(support) not in sys.path:
+        sys.path.insert(0, str(support))
+    from runtime_owner import claim_test_owner
+    chosen = workspace or (runtime.parent / "owner-workspace")
+    owner_file = runtime / "workspace-owner.json"
+    if workspace is None and owner_file.is_file():
+        recorded = json.loads(owner_file.read_text(encoding="utf-8")).get("path")
+        if recorded:
+            chosen = Path(recorded)
+    if _ENV is None:
+        raise RuntimeError("prepare() needs the async-tasks fixture to bind a monkeypatch")
+    claim_test_owner(runtime, chosen, monkeypatch=_ENV)
     marker = solar_state.format_path(runtime)
     if marker.is_file() and marker.read_text(encoding="utf-8").strip() == solar_state.FORMAT_SQLITE:
         if solar_state.db_path(runtime).is_file():
@@ -101,8 +143,11 @@ def mirror(task_root: Path) -> None:
 
 
 def env_for(task_root: Path, base: dict | None = None) -> dict:
-    runtime = prepare(task_root)
-    env = dict(base or os.environ)
-    env["SOLAR_RUNTIME_ROOT"] = str(runtime)
-    env["SOLAR_TASK_ROOT"] = str(task_root)
-    return env
+    incoming = dict(base or os.environ)
+    runtime = runtime_of(task_root)
+    workspace = _owner_workspace(runtime, incoming.get("SOLAR_WORKSPACE", ""))
+    prepare(task_root, workspace)
+    incoming["SOLAR_RUNTIME_ROOT"] = str(runtime)
+    incoming["SOLAR_TASK_ROOT"] = str(task_root)
+    incoming["SOLAR_WORKSPACE"] = str(workspace)
+    return incoming
