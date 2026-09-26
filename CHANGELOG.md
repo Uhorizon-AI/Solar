@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-client): `solar_client_git_dirty` returned success on a clean tree, and the clean branch of `solar client update` printed "uncommitted changes". The function is `solar_client_git_clean`. A clean git install reports the rollback checkout; a tree with uncommitted changes reports those changes.
+
 ## [0.28.0] - 2026-09-26
 
 ### Fixed
@@ -20,7 +23,7 @@ The format is based on Keep a Changelog.
 ### Upgrade
 A workspace already on `core_source: workspace-snapshot`, whose global install is still v0.26.x or v0.27.0, cannot take this fix with `solar client update`. `~/.local/bin/solar` runs that install, whose updater still resolves `SOLAR_ROOT` to `.solar/bundle`, and `solar client bundle remove` is not in that install yet. The global install must have no local changes (`git -C ~/.local/share/solar status --short` empty): git checkout refuses when local changes conflict, and carries them over when they don't; start from a clean tree. Check the fix out in the global install, regenerate the bundle, then update:
 
-    git -C ~/.local/share/solar fetch --tags && git -C ~/.local/share/solar checkout v0.27.1
+    git -C ~/.local/share/solar fetch --tags && git -C ~/.local/share/solar checkout v0.28.0
     solar client bundle create
     solar client update
 

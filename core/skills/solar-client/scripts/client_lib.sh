@@ -737,7 +737,7 @@ solar_client_backup_install_core() {
   echo "$(solar_client_backups_dir "$root" "$workspace")/$label"
 }
 
-solar_client_git_dirty() {
+solar_client_git_clean() {
   local root="$1"
   git -C "$root" diff --quiet 2>/dev/null && git -C "$root" diff --cached --quiet 2>/dev/null
 }
@@ -781,7 +781,7 @@ solar_client_apply_git_update() {
     return 1
   fi
 
-  if ! solar_client_git_dirty "$root"; then
+  if ! solar_client_git_clean "$root"; then
     echo "WARN: SOLAR_ROOT has uncommitted changes"
     if [[ "$yes" != true ]]; then
       echo "ERROR: re-run with --yes to update anyway" >&2

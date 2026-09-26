@@ -1162,6 +1162,58 @@ assert_ok "update after the checkout does not bootout launchctl" test ! -s "$TRA
 [[ "$trap_new_ec" -eq 0 ]] || echo "$trap_new_out" >&2
 fi
 
+# --- a clean git install reports rollback; a dirty one reports uncommitted changes ---
+# Runs under the shell_runtime_guard sourced above.
+MSG_WS="$TMP/msg-ws"
+MSG_INSTALL="$TMP/msg-install"
+MSG_RT="$TMP/msg-runtime"
+mkdir -p "$MSG_WS/sun" "$MSG_WS/.solar" "$MSG_RT" \
+  "$MSG_INSTALL/core/skills/solar-client/scripts"
+printf '%s\n' '#!/usr/bin/env bash' 'echo solar' \
+  >"$MSG_INSTALL/core/skills/solar-client/scripts/solar"
+chmod +x "$MSG_INSTALL/core/skills/solar-client/scripts/solar"
+printf '%s\n' '{"layout":"solar-client-v1.2","scope":"workspace","core_source":"global","core_version":"v0","requires_global_client":true}' \
+  >"$MSG_WS/.solar/settings.json"
+printf '%s\n' 'clean' >"$MSG_INSTALL/README"
+git -C "$MSG_INSTALL" init -q
+git -C "$MSG_INSTALL" config user.email "test@test"
+git -C "$MSG_INSTALL" config user.name "Test"
+git -C "$MSG_INSTALL" add -A && git -C "$MSG_INSTALL" commit -q -m "init"
+git -C "$MSG_INSTALL" tag v0.0.1
+set +e
+clean_msg="$(
+  unset SOLAR_WORKSPACE SOLAR_CORE_SOURCE SOLAR_GLOBAL_ROOT SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE
+  unset SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_CUTOVER_ROOT
+  SOLAR_ROOT="$MSG_INSTALL" \
+  SOLAR_RUNTIME_ROOT="$MSG_RT" \
+  SOLAR_CLIENT_STATE_PY="$CORE_ROOT/skills/solar-state/scripts/solar_state.py" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/guard-bin/launchctl" \
+  SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
+  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none \
+  bash "$UPDATE_SCRIPT" --workspace "$MSG_WS" --ref v0.0.1 --yes 2>&1
+)"
+set -e
+assert_ok "clean git install reports the rollback checkout" grep -q 'rollback: git -C' <<<"$clean_msg"
+assert_ok "clean git install does not report uncommitted changes" \
+  bash -c '! grep -q "uncommitted changes" <<<"$1"' _ "$clean_msg"
+printf '%s\n' 'dirty' >>"$MSG_INSTALL/README"
+set +e
+dirty_msg="$(
+  unset SOLAR_WORKSPACE SOLAR_CORE_SOURCE SOLAR_GLOBAL_ROOT SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE
+  unset SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_CUTOVER_ROOT
+  SOLAR_ROOT="$MSG_INSTALL" \
+  SOLAR_RUNTIME_ROOT="$MSG_RT" \
+  SOLAR_CLIENT_STATE_PY="$CORE_ROOT/skills/solar-state/scripts/solar_state.py" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/guard-bin/launchctl" \
+  SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
+  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none \
+  bash "$UPDATE_SCRIPT" --workspace "$MSG_WS" --ref v0.0.1 --yes 2>&1
+)"
+set -e
+assert_ok "dirty git install reports uncommitted changes" grep -q 'uncommitted changes' <<<"$dirty_msg"
+assert_ok "dirty git install does not report the rollback checkout" \
+  bash -c '! grep -q "rollback: git -C" <<<"$1"' _ "$dirty_msg"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

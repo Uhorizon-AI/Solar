@@ -105,7 +105,7 @@ fi
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
   echo "INFO: existing install at $INSTALL_DIR — updating to $REF"
-  if ! solar_client_git_dirty "$INSTALL_DIR"; then
+  if ! solar_client_git_clean "$INSTALL_DIR"; then
     if has_only_managed_cli_mode_repair "$INSTALL_DIR"; then
       echo "INFO: existing mode-only CLI repair is safe to refresh"
     else

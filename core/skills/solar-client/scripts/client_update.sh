@@ -219,7 +219,7 @@ if [[ "$use_git" == true ]]; then
     echo "OK: backup at $backup_path"
     DID_BACKUP=true
   else
-    if solar_client_git_dirty "$INSTALL_ROOT"; then
+    if ! solar_client_git_clean "$INSTALL_ROOT"; then
       echo "SKIP: git install — no rsync snapshot (uncommitted changes; commit/stash or --backup)"
     else
       echo "SKIP: git install — no rsync snapshot (rollback: git -C \"$INSTALL_ROOT\" checkout <tag>)"
