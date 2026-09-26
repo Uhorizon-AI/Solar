@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-09-26
+
 ### Fixed
 - fix(solar-client): `solar_client_git_dirty` returned success on a clean tree, and the clean branch of `solar client update` printed "uncommitted changes". The function is `solar_client_git_clean`. A clean git install reports the rollback checkout; a tree with uncommitted changes reports those changes.
 
