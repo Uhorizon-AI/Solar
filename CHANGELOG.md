@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-26
+
 ### Fixed
 - fix(solar-state): the published status and its test still described the world from before v0.26.0. `SKILL.md` said the audit, continuity and mandate events were on files and that `migrate` / `rollback` were not called from `solar client update` or `sync`. `test_client_update.sh` asserted the published updater never calls `solar_client_state_cutover`. Both were already false: that updater reloads the new `client_lib.sh` and the cutover runs before anything starts. The status and the test now say so. No runtime is migrated for this correction.
 
