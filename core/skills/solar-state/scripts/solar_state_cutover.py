@@ -354,7 +354,18 @@ def _move_old_files(root: Path, stamp: str) -> list[str]:
         src = tasks / part
         if src.exists():
             holder.mkdir(exist_ok=True)
-            os.replace(src, holder / part)
+            dest = holder / part
+            if dest.exists():
+                # A resumed migration moved this part already; old code (a
+                # stale process, `ensure_dirs`) recreated the empty folder
+                # since. `_catch_up` already imported anything new inside it,
+                # so merge file by file instead of a directory-level replace,
+                # which raises ENOTEMPTY on a non-empty destination.
+                for entry in src.iterdir():
+                    os.replace(entry, dest / entry.name)
+                src.rmdir()
+            else:
+                os.replace(src, dest)
             moved.append(f"async-tasks/{part}")
     singles = [root / "router" / "audit.jsonl", root / "continuity" / "active.json"]
     delegations = root / "delegations"
@@ -792,6 +803,33 @@ def rollback(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
                     audit=len(lines), backup=str(backup))
 
 
+def _summary(cmd: str, result: dict) -> Optional[str]:
+    """One readable line for a terminal. `rehearse`'s output is unchanged: a
+    test parses its stdout as JSON, and it is meant for scripting, not a human
+    watching an update run."""
+    if cmd == "migrate":
+        if result.get("already"):
+            moved = result.get("moved") or []
+            added = sum(v for v in (result.get("caught_up") or {}).values() if isinstance(v, int))
+            if not moved and not added:
+                return "Already migrated. Nothing new to bring in."
+            return (f"Already migrated. Caught up {added} new record(s); "
+                    f"put away {len(moved)} leftover part(s).")
+        counts = result.get("tasks") or {}
+        total = sum(counts.values())
+        by_status = ", ".join(f"{k}={v}" for k, v in counts.items() if v) or "none"
+        return (f"Migrated {total} task(s) ({by_status}), {result.get('logs', 0)} log(s), "
+                f"{result.get('audit', 0)} audit line(s). Backup: {result.get('backup')}")
+    if cmd == "rollback":
+        if result.get("already"):
+            return "Rollback already finished; the format is back to files."
+        counts = result.get("tasks") or {}
+        total = sum(counts.values()) if isinstance(counts, dict) else counts
+        return (f"Rolled back {total} task(s), {result.get('logs', 0)} log(s), "
+                f"{result.get('audit', 0)} audit line(s). Backup: {result.get('backup')}")
+    return None
+
+
 def _cli(argv: list[str]) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="solar_state_cutover.py",
@@ -815,6 +853,9 @@ def _cli(argv: list[str]) -> int:
         print(json.dumps(dict(error=type(exc).__name__, detail=str(exc)), ensure_ascii=False),
               file=sys.stderr)
         return 2
+    summary = _summary(args.cmd, result)
+    if summary:
+        print(summary)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("ok", True) else 2
 

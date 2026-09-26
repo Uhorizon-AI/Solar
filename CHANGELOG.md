@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-state): a resumed migration no longer crashes on a part `ensure_dirs` (or a stale process) recreated empty after it was already moved aside. `_move_old_files` did a directory-level `os.replace` unconditionally, which raises `ENOTEMPTY` the moment the holder already has that part's content from an earlier, completed move — hit for real on 2026-09-26 running `solar client update` against a runtime whose migration had already finished. It now merges file by file into the existing holder when one is found, so a leftover empty folder is dropped and a genuinely new file old code wrote into it still reaches the base.
+- fix(solar-state): `migrate` and `rollback`, run from a terminal, printed only a raw JSON blob. They now print one readable summary line first ("Migrated 7 task(s) (…), backup: …", "Already migrated. Nothing new to bring in.") with the JSON kept below it for scripting. `rehearse`'s output is unchanged: a test parses its stdout as JSON.
+
 ## [0.26.0] - 2026-09-26
 
 ### Added

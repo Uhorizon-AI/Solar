@@ -269,6 +269,22 @@ def test_cli(runtime, monkeypatch):
     assert refused.returncode == 2 and "disabled" in refused.stderr
 
 
+def test_cli_migrate_prints_a_readable_line_before_the_json(runtime):
+    done = subprocess.run([sys.executable, str(_SCRIPT), "--root", str(runtime), "migrate"],
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    first_line, _, rest = done.stdout.partition("\n")
+    assert first_line.startswith("Migrated 7 task(s)")
+    assert json.loads(rest)["already"] is False
+
+    again = subprocess.run([sys.executable, str(_SCRIPT), "--root", str(runtime), "migrate"],
+                           capture_output=True, text=True, timeout=60)
+    assert again.returncode == 0, again.stderr
+    first_line, _, rest = again.stdout.partition("\n")
+    assert first_line == "Already migrated. Nothing new to bring in."
+    assert json.loads(rest)["already"] is True
+
+
 def test_rehearsal_leaves_no_scratch_behind(runtime, monkeypatch, tmp_path):
     scratch_root = tmp_path / "tmp"
     scratch_root.mkdir()
@@ -318,6 +334,40 @@ def test_a_resumed_migration_brings_in_what_old_code_wrote_meanwhile(runtime):
         assert s.task_get("late1")["log_path"] == "task-logs/late.log"
         assert s.audit_lines()[-1] == '{"event": "late", "ts": "t3"}'
     assert not (runtime / "async-tasks" / "queued").exists()
+
+
+def test_a_completed_migration_tolerates_a_part_recreated_empty_afterward(runtime):
+    """`ensure_dirs` (or a stale process) can rebuild an empty `async-tasks/<part>`
+    after a migration already moved it aside. A resume must not try a directory-
+    level replace onto the holder it already filled — reproduces the ENOTEMPTY
+    crash seen against a live runtime on 2026-09-26."""
+    cut.migrate(runtime, lister=quiet)
+    holder = next(runtime.glob("async-tasks.migrated-*"))
+    assert (holder / "queued").is_file() is False and (holder / "queued").is_dir()
+    (runtime / "async-tasks" / "queued").mkdir(parents=True)   # recreated, empty
+
+    result = cut.migrate(runtime, lister=quiet)
+
+    assert result["already"] is True
+    assert not (runtime / "async-tasks" / "queued").exists()
+    assert [p.name for p in (holder / "queued").iterdir()] == ["queued-one.md"]
+
+
+def test_a_recreated_part_merges_new_files_instead_of_failing(runtime):
+    """The recreated folder is not always empty: old code can also drop a new
+    file into it before the resume runs. That file must reach the holder, not
+    be lost to the same ENOTEMPTY failure."""
+    cut.migrate(runtime, lister=quiet)
+    holder = next(runtime.glob("async-tasks.migrated-*"))
+    _write(runtime / "async-tasks" / "error" / "second.md", _task("e2", "error"))
+
+    result = cut.migrate(runtime, lister=quiet)
+
+    assert result["already"] is True
+    assert not (runtime / "async-tasks" / "error").exists()
+    assert {p.name for p in (holder / "error").iterdir()} == {"broken.md", "second.md"}
+    with st.session(runtime, auto_backup=False) as s:
+        assert s.task_get("e2")["status"] == "error"
 
 
 def test_a_resumed_migration_refuses_a_rewritten_audit(runtime):
