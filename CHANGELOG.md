@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-09-27
+
 ### Added
 - feat(solar-client): `sync-clients.sh` publishes skills to Antigravity as copies under `.agents/skills` (`--antigravity-only`, included by default). Commands, workflows and rules are not published. A shared frontmatter `name` across planets is reported and left unchanged. Solar records the names it published in `.agents/skills/.solar-managed` and prunes only those. A folder that already exists and is not in that list is left in place and reported. Codex reads repo skills from `.agents/skills` and reads `$CODEX_HOME/skills` (`~/.codex/skills` when unset), so the workspace `.codex/skills` is a second copy only when `CODEX_HOME` points at that directory. Codex publishing is unchanged.
 
