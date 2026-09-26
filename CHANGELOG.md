@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-09-26
+
 ### Fixed
 - fix(solar-client): a shell test that runs `init`, `sync` or `update` no longer uses the machine runtime or the system `launchctl`. The harness guard asks `solar-paths` for the runtime (`solar_runtime.py runtime`) with `SOLAR_RUNTIME_ROOT` and `SOLAR_APP_DATA` unset, and aborts when the test would use that path or when `launchctl` is not a test double.
 - fix(solar-client): the portable bundle now follows skill imports that are built from path pieces (`parents[2] / "solar-state" / "scripts"`, `_SKILLS / "solar-x" / "scripts"`). `solar-state` is included with every skill that imports it, and a skill in the bundle cannot import a skill that was left out.
