@@ -6,6 +6,22 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-client): a shell test that runs `init`, `sync` or `update` no longer uses the machine runtime or the system `launchctl`. The harness guard asks `solar-paths` for the runtime (`solar_runtime.py runtime`) with `SOLAR_RUNTIME_ROOT` and `SOLAR_APP_DATA` unset, and aborts when the test would use that path or when `launchctl` is not a test double.
+- fix(solar-client): the portable bundle now follows skill imports that are built from path pieces (`parents[2] / "solar-state" / "scripts"`, `_SKILLS / "solar-x" / "scripts"`). `solar-state` is included with every skill that imports it, and a skill in the bundle cannot import a skill that was left out.
+- fix(solar-client): `solar_client_state_cutover` checks that the cutover script exists and that `solar-state` is complete in the active install before it stops the LaunchAgent, the console or the gateway. A miss exits with an error and stops nothing.
+- fix(solar-client): in portable mode, `solar client update` updates the global install and regenerates `.solar/bundle`. It no longer treats the bundle as the install. If no global install exists it says so and exits before it changes anything. A global install without `.git` is updated with `--bundle` (`mode=bundle-core`), the same contract as a non-portable install; the snapshot is not that install. Services keep running from the global install; the LaunchAgent plist `SOLAR_ROOT` stays that path, so a bundle snapshot is not a binding mismatch.
+- fix(solar-client): in portable mode, `solar client sync` claims the runtime and runs the state cutover against the global install. `.solar/bundle` only publishes the IDE links. Stop and start scripts are that install's, so a console or gateway started there is seen before the migration. `solar client sync --portable` re-resolves paths after `bundle create`, so a transition from `core_source: global` publishes those links from the new bundle.
+- feat(solar-client): `solar client bundle remove` returns the workspace to `core_source: global` through the canonical settings writer, republishes the IDE links with the global install's `sync-clients.sh`, and then moves `.solar/bundle` aside. If the links cannot be rebuilt, the bundle stays and the command says to run `solar client sync`.
+- fix(solar-client): `solar client bundle remove` leaves portable mode when `.solar/bundle` is missing or invalid. It resolves the workspace with `solar_resolve_paths --skip-snapshot-check`, so the missing-bundle refusal is the only check skipped. `SOLAR_WORKSPACE` stays exported, and a `SOLAR_ROOT` that still points at `.solar/bundle` is not accepted as the global install.
+
+### Upgrade
+A workspace already on `core_source: workspace-snapshot`, whose global install is still v0.26.x or v0.27.0, cannot take this fix with `solar client update`. `~/.local/bin/solar` runs that install, whose updater still resolves `SOLAR_ROOT` to `.solar/bundle`, and `solar client bundle remove` is not in that install yet. The global install must have no local changes (`git -C ~/.local/share/solar status --short` empty): git checkout refuses when local changes conflict, and carries them over when they don't; start from a clean tree. Check the fix out in the global install, regenerate the bundle, then update:
+
+    git -C ~/.local/share/solar fetch --tags && git -C ~/.local/share/solar checkout v0.27.1
+    solar client bundle create
+    solar client update
+
 ## [0.27.0] - 2026-09-26
 
 ### Fixed

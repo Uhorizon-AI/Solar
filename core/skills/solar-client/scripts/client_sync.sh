@@ -213,13 +213,31 @@ done
 
 solar_resolve_paths --quiet
 
-if ! solar_client_claim_workspace "$SOLAR_WORKSPACE" false "$SOLAR_ROOT" >/dev/null; then
+# In portable mode the bundle is only the IDE snapshot. Claim and the state
+# cutover use the global install, the same tree the console and the gateway
+# were started from. Publishing the IDE links stays on solar_core_dir (the bundle).
+_settings="$(solar_client_settings_path "$SOLAR_WORKSPACE")"
+SYNC_INSTALL_ROOT="$SOLAR_ROOT"
+if [[ -f "$_settings" && "$(solar_client_manifest_core_source "$_settings")" == "workspace-snapshot" ]]; then
+  if ! SYNC_INSTALL_ROOT="$(solar_client_portable_update_root)"; then
+    echo "ERROR: portable mode claims and migrates the global install, and none was found. Nothing was written and no service was stopped." >&2
+    exit 1
+  fi
+fi
+
+if ! solar_client_claim_workspace "$SOLAR_WORKSPACE" false "$SYNC_INSTALL_ROOT" >/dev/null; then
   echo "ERROR: this runtime refused workspace $SOLAR_WORKSPACE. Nothing was written and no service was stopped." >&2
   exit 1
 fi
 
 if [[ "$PORTABLE" == true ]]; then
   bash "$SCRIPT_DIR/client_bundle.sh" create
+  # create is a child. This shell still has the pre-create SOLAR_ROOT and
+  # SOLAR_CORE_SOURCE, so solar_core_dir would keep publishing from the global
+  # install after settings already say workspace-snapshot. Re-resolve so the
+  # publish below runs the bundle's sync-clients.sh. Claim and the cutover
+  # stay on SYNC_INSTALL_ROOT, captured before this transition.
+  solar_resolve_paths --quiet
 fi
 
 if [[ ${#SYNC_ARGS[@]} -gt 0 ]]; then
@@ -236,7 +254,7 @@ else
   solar_client_touch_manifest_synced "$SOLAR_WORKSPACE"
 fi
 
-if ! solar_client_state_cutover "${SOLAR_ROOT}" auto; then
+if ! solar_client_state_cutover "$SYNC_INSTALL_ROOT" auto; then
   echo "ERROR: state migration failed after sync. Stopped services were not started." >&2
   exit 1
 fi

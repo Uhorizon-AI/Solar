@@ -21,6 +21,16 @@ SKILL_REF = re.compile(
     r"core/skills/([a-zA-Z0-9_-]+)/)",
     re.I,
 )
+# Imports assembled from path pieces, not a single skills/<name>/ token:
+#   parents[2] / "solar-state" / "scripts"
+#   _SKILLS / "solar-telegram" / "scripts"
+#   parents[2] / "solar-router/scripts"
+#   "$SCRIPT_DIR/../../solar-state/scripts"
+PY_SKILL_SEGMENT = re.compile(
+    r"""[\"']([A-Za-z0-9_-]+)[\"']\s*/\s*[\"'](?:scripts|SKILL\.md)[\"']"""
+)
+PY_SKILL_SLASH = re.compile(r"""[\"']([A-Za-z0-9_-]+)/scripts[\"']""")
+SHELL_SKILL_CLIMB = re.compile(r"""(?:\.\./)+([A-Za-z0-9_-]+)/scripts""")
 SCRIPT_REF = re.compile(
     r"(?:bash\s+|source\s+)(?:[^\s'\"]*?core/skills/[^/]+/scripts/[^\s'\"]+|"
     r"[^\s'\"]*?skills/[^/]+/scripts/[^\s'\"]+)",
@@ -72,6 +82,10 @@ def refs_from_text(text: str, skill_dir: Path, core: Path) -> tuple[set[str], se
         for g in m.groups():
             if g:
                 deps_skills.add(g)
+    for pattern in (PY_SKILL_SEGMENT, PY_SKILL_SLASH, SHELL_SKILL_CLIMB):
+        for m in pattern.finditer(text):
+            if m.group(1):
+                deps_skills.add(m.group(1))
     for m in SCRIPT_REF.finditer(text):
         token = m.group(0).split()[-1]
         if not token:

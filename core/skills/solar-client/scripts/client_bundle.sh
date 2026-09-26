@@ -7,35 +7,60 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/client_lib.sh"
 
 CHECK_ONLY=false
-VERIFY_ONLY=false
 
 usage() {
   cat <<'EOF'
 Usage:
   solar client bundle create [--check]
   solar client bundle verify
+  solar client bundle remove
 
-Creates .solar/bundle/ with allowlisted core runtime for machines without SOLAR_ROOT.
-Updates manifest to core_source=workspace-snapshot.
+create writes .solar/bundle/ with the allowlisted core runtime so IDEs read the
+snapshot instead of the global install. Settings become core_source=workspace-snapshot.
+The LaunchAgent and solar client update keep using the global install.
+
+remove returns settings to core_source=global through the canonical settings
+writer, republishes IDE links from the global install, and moves .solar/bundle
+aside when that directory exists. A missing or invalid snapshot does not block
+this. It refuses before either step when no global install exists. If the
+links cannot be rebuilt, the bundle stays and the command tells you to run
+solar client sync.
 
 Options:
-  --check   Dry-run: report size and skill count without writing
+  --check   Dry-run: report size and skill count without writing (create only)
   --verify  Validate existing bundle (alias of focused doctor checks)
 EOF
 }
 
+ACTION=create
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    create) shift; continue ;;
-    verify) VERIFY_ONLY=true; shift; continue ;;
+    create) ACTION=create; shift ;;
+    verify) ACTION=verify; shift ;;
+    remove) ACTION=remove; shift ;;
     --check) CHECK_ONLY=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
+if [[ "$ACTION" == "remove" && "$CHECK_ONLY" == true ]]; then
+  echo "ERROR: bundle remove does not take --check" >&2
+  exit 2
+fi
+
+if [[ "$ACTION" == "remove" ]]; then
+  # Same shell as the resolver, so SOLAR_WORKSPACE stays exported. A SOLAR_ROOT
+  # that still points at .solar/bundle is then excluded when locating the global
+  # install. --skip-snapshot-check only skips the missing-bundle refusal.
+  solar_resolve_paths --quiet --skip-snapshot-check
+  solar_client_leave_portable "$SOLAR_WORKSPACE"
+  exit $?
+fi
+
 solar_resolve_paths --quiet
 WORKSPACE="$SOLAR_WORKSPACE"
+
 CORE_SRC="$(solar_global_core_dir 2>/dev/null || true)"
 if [[ -z "$CORE_SRC" || ! -d "$CORE_SRC/skills" ]]; then
   echo "ERROR: global Solar framework core/ not found — set SOLAR_ROOT to this machine's install" >&2
@@ -43,7 +68,7 @@ if [[ -z "$CORE_SRC" || ! -d "$CORE_SRC/skills" ]]; then
 fi
 BUNDLE_DIR="$(solar_client_bundle_dir "$WORKSPACE")"
 
-if [[ "$VERIFY_ONLY" == true ]]; then
+if [[ "$ACTION" == "verify" ]]; then
   if solar_client_bundle_validate "$WORKSPACE" true; then
     echo "OK: workspace bundle valid"
     exit 0

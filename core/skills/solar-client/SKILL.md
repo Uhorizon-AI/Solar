@@ -99,10 +99,10 @@ bash -n core/skills/solar-client/scripts/solar_paths.sh
 
 ## Workspace modes (`core_source`)
 
-| Mode | Enter | `client doctor` |
-|------|-------|-----------------|
-| **global** | `solar client init` | OK without `.solar/bundle/` |
-| **workspace-snapshot** | `solar client bundle create` | OK without global `SOLAR_ROOT` |
+| Mode | Enter | Leave | `client doctor` |
+|------|-------|-------|-----------------|
+| **global** | `solar client init` | — | OK without `.solar/bundle/` |
+| **workspace-snapshot** | `solar client bundle create` | `solar client bundle remove` | OK without global `SOLAR_ROOT` for IDE reads. `update`, `sync` and the LaunchAgent use the global install; the bundle only publishes IDE links |
 
 ## Install
 

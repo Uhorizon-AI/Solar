@@ -155,6 +155,20 @@ assert_ok "uninstall preserves wrapper when validation fails" test -f "$GUARD_BI
 # Pin SOLAR_WORKSPACE to the fixture: maintainer shells (and create-release
 # --publish) export the live tree, and resolve_solar_paths then conflicts
 # with cwd discovery after init (sync/doctor exit 1; init still uses pwd).
+# shellcheck source=../../../../tests/support/shell_runtime_guard.sh
+source "$CORE_ROOT/tests/support/shell_runtime_guard.sh"
+mkdir -p "$TMP/guard-bin" "$TMP/app-data/Solar/runtime"
+cat >"$TMP/guard-bin/launchctl" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$TMP/guard-bin/launchctl"
+export PATH="$TMP/guard-bin:${PATH}"
+export SOLAR_APP_DATA="$TMP/app-data"
+export SOLAR_RUNTIME_ROOT="$TMP/app-data/Solar/runtime"
+export SOLAR_CLIENT_LAUNCHCTL="$TMP/guard-bin/launchctl"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none
+solar_test_guard
 export SOLAR_ROOT="$INSTALL_DIR"
 export SOLAR_WORKSPACE="$(cd "$WS" && pwd -P)"
 cd "$WS"

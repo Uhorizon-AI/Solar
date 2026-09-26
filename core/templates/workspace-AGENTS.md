@@ -6,7 +6,7 @@ This file governs the **workspace** opened as `SOLAR_WORKSPACE`. Framework code 
 
 ## `.solar/` is read-only (required)
 
-Do **not** edit files under `<SOLAR_WORKSPACE>/.solar/`. Only Solar Client (`solar client init`, `solar client update`, `solar client sync`) modifies that tree. Extend behavior in `sun/`, `planets/`, or propose changes upstream to the Solar framework repository.
+Do **not** edit files under `<SOLAR_WORKSPACE>/.solar/`. Only Solar Client (`solar client init`, `solar client update`, `solar client sync`, `solar client bundle create`, `solar client bundle remove`) modifies that tree. Extend behavior in `sun/`, `planets/`, or propose changes upstream to the Solar framework repository.
 
 ## Architecture (required)
 
@@ -32,7 +32,7 @@ solar client doctor  # integrity checks
 - One install serves one workspace. Each machine runs its own `solar client update` on its own `SOLAR_ROOT`.
 - **`.solar/settings.json`** may live in a synced folder; do not edit it manually on multiple machines at once.
 - **Global mode (`core_source: global`)** — the framework install is that machine's `SOLAR_ROOT`. Run `solar client update` there, then `solar client sync`.
-- **Portable mode (`core_source: workspace-snapshot`)** — the install travels inside the workspace (`.solar/bundle/`), via `solar client bundle create` after `solar client update`. It is not a second machine.
+- **Portable mode (`core_source: workspace-snapshot`)** — `.solar/bundle/` is the snapshot IDEs read, so skill links do not point at the global install. It is not a second machine and it is not the install `solar client update` writes. `solar client update` updates the global install and then regenerates the bundle. A global install without a git checkout is updated with `--bundle`. `solar client sync` claims the runtime and migrates it against that same global install; the bundle only publishes the IDE links. The LaunchAgent, the console and the gateway keep running from the global install; the plist `SOLAR_ROOT` is that global path. Leave this mode with `solar client bundle remove`.
 - If settings have merge conflicts or invalid JSON, run `solar client update --repair`.
 - Do not sync `.env` via cloud without encryption.
 
@@ -41,9 +41,9 @@ solar client doctor  # integrity checks
 | Mode | Settings | Requires `SOLAR_ROOT` | When to use |
 |------|----------|----------------------|-------------|
 | **global** (default) | `core_source: global` | Yes | A machine with its own framework install |
-| **portable** (opt-in) | `core_source: workspace-snapshot` | No (uses `.solar/bundle/`) | An install that travels inside the workspace |
+| **portable** (opt-in) | `core_source: workspace-snapshot` | IDEs read `.solar/bundle/`. `update`, `sync` and the LaunchAgent use the global install | When IDE links must not point at the global install |
 
-Do not edit `.solar/settings.json` by hand to switch modes — use `solar client bundle create` or `solar client sync` (global).
+Do not edit `.solar/settings.json` by hand to switch modes — use `solar client bundle create` or `solar client bundle remove`.
 
 ## Version control (optional)
 

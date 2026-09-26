@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 # resolve_solar_paths.sh — Solar workspace + install root resolution.
-# Source and call: solar_resolve_paths [--workspace <path>] [--quiet] [--export] [--relaxed]
-# Exports: SOLAR_WORKSPACE, SOLAR_ROOT (runtime root; may be .solar/bundle in portable mode)
-#          SOLAR_GLOBAL_ROOT (framework git install when discoverable; optional in portable-only)
+# Source and call: solar_resolve_paths [--workspace <path>] [--quiet] [--export] [--relaxed] [--skip-snapshot-check]
+# Exports: SOLAR_WORKSPACE, SOLAR_ROOT (runtime root; .solar/bundle in portable mode)
+#          SOLAR_GLOBAL_ROOT (framework git install when discoverable)
+# Portable mode: .solar/bundle is the snapshot IDEs read. solar client update,
+# solar client sync (claim and state cutover) and the LaunchAgent keep using
+# the global install, not the bundle.
 set -euo pipefail
 
 _RESOLVE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _RESOLVE_QUIET=false
 _RESOLVE_EXPORT=false
 _RESOLVE_RELAXED=false
+_RESOLVE_SKIP_SNAPSHOT=false
 _RESOLVE_FORCE_WORKSPACE=""
 
 _resolve_usage() {
   cat <<'EOF'
 Usage (source this file):
   source resolve_solar_paths.sh
-  solar_resolve_paths [--workspace <path>] [--quiet] [--export] [--relaxed]
+  solar_resolve_paths [--workspace <path>] [--quiet] [--export] [--relaxed] [--skip-snapshot-check]
 
 Exports on success:
   SOLAR_WORKSPACE      Active agent (sun/, planets/, .env, .solar/settings.json)
@@ -64,6 +68,20 @@ _resolve_is_workspace_bundle_root() {
 }
 
 solar_global_install_root() {
+  # Test pin. Empty means "no global install" and does not fall through to $HOME.
+  if [[ -n "${SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE+x}" ]]; then
+    if [[ -z "${SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE}" ]]; then
+      return 1
+    fi
+    local pinned
+    pinned="$(_resolve_abs "$SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE")"
+    if _resolve_validate_root "$pinned"; then
+      printf '%s' "$pinned"
+      return 0
+    fi
+    echo "ERROR: SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE is not a Solar install: $pinned" >&2
+    return 1
+  fi
   if [[ -n "${SOLAR_GLOBAL_ROOT:-}" ]]; then
     printf '%s' "$SOLAR_GLOBAL_ROOT"
     return 0
@@ -307,6 +325,13 @@ _resolve_set_paths() {
       if [[ "$SOLAR_CORE_SOURCE" == "workspace-snapshot" ]]; then
         if _resolve_bundle_valid "$ws"; then
           export SOLAR_ROOT="$(_resolve_abs "$ws/.solar/bundle")"
+        elif [[ "$_RESOLVE_SKIP_SNAPSHOT" == true ]]; then
+          # bundle remove must still find the workspace when the snapshot is
+          # missing or corrupt. SOLAR_ROOT stays the global install; the
+          # caller decides what to do with the snapshot.
+          SOLAR_ROOT="${SOLAR_GLOBAL_ROOT:-}"
+          SOLAR_ROOT="${SOLAR_ROOT:-$(_resolve_global_root)}"
+          export SOLAR_ROOT
         else
           echo "ERROR: core_source=workspace-snapshot but bundle is missing or invalid" >&2
           echo "HINT: run solar client bundle create on the machine that owns the global install" >&2
@@ -353,6 +378,7 @@ solar_resolve_paths() {
   local discovery=""
   local exported=""
   local resolved=""
+  _RESOLVE_SKIP_SNAPSHOT=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -365,6 +391,7 @@ solar_resolve_paths() {
       --quiet) _RESOLVE_QUIET=true; shift ;;
       --export) _RESOLVE_EXPORT=true; _RESOLVE_QUIET=true; shift ;;
       --relaxed) _RESOLVE_RELAXED=true; shift ;;
+      --skip-snapshot-check) _RESOLVE_SKIP_SNAPSHOT=true; shift ;;
       -h|--help) _resolve_usage; return 0 ;;
       *) _resolve_fail "unknown option: $1"; return 1 ;;
     esac

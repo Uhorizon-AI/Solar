@@ -192,7 +192,40 @@ def test_bundle_contains_mcp():
     import client_bundle_build as bundle
     core = Path(mcp_cli.__file__).resolve().parents[3]
     selected, _ = bundle.expand_allowlist(bundle.discover_skills(core, Path('/nonexistent')), core)
-    assert {'solar-mcp', 'solar-telegram', 'solar-client', 'solar-app', 'solar-router', 'solar-async-tasks'} <= selected.keys()
+    assert {'solar-mcp', 'solar-telegram', 'solar-client', 'solar-app', 'solar-router', 'solar-async-tasks', 'solar-state'} <= selected.keys()
+    missing = []
+    all_skills = bundle.discover_skills(core, Path('/nonexistent'))
+    for name, skill_dir in selected.items():
+        texts = []
+        skill_md = skill_dir / 'SKILL.md'
+        if skill_md.is_file():
+            texts.append(skill_md.read_text(encoding='utf-8', errors='replace'))
+        scripts = skill_dir / 'scripts'
+        if scripts.is_dir():
+            for sf in scripts.rglob('*'):
+                if sf.is_file() and sf.suffix in {'.sh', '.py', '.md'}:
+                    texts.append(sf.read_text(encoding='utf-8', errors='replace'))
+        for text in texts:
+            deps, _ = bundle.refs_from_text(text, skill_dir, core)
+            for dep in deps:
+                if dep in all_skills and dep not in selected:
+                    missing.append(f'{name} -> {dep}')
+    assert missing == []
+
+
+def test_constructed_skill_paths_are_imports():
+    import client_bundle_build as bundle
+    core = Path(mcp_cli.__file__).resolve().parents[3]
+    skill = core / 'skills' / 'solar-app'
+    samples = {
+        'Path(__file__).resolve().parents[2] / "solar-state" / "scripts"': 'solar-state',
+        '_SKILLS / "solar-telegram" / "scripts"': 'solar-telegram',
+        'Path(__file__).resolve().parents[2] / "solar-router/scripts"': 'solar-router',
+        'cd "$SCRIPT_DIR/../../solar-state/scripts"': 'solar-state',
+    }
+    for sample, want in samples.items():
+        deps, _ = bundle.refs_from_text(sample, skill, core)
+        assert want in deps, sample
 
 
 def test_dispatcher_handshake(solar_env):

@@ -370,6 +370,9 @@ if os.path.isfile(read_path):
 
 data = dict(existing)
 data.update(managed)
+# Global mode is not a snapshot. Drop the portable keys this writer does not own.
+for key in ("bundle_path", "bundle_checksum", "snapshot_at", "snapshot_outdated"):
+    data.pop(key, None)
 
 os.makedirs(os.path.dirname(write_path), exist_ok=True)
 fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
@@ -876,6 +879,86 @@ PY
 
 solar_client_manifest_core_source() {
   solar_client_manifest_field "$1" "core_source"
+}
+
+# Global install for a portable workspace. The bundle is never that install.
+# SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE (including empty) skips discovery.
+solar_client_portable_update_root() {
+  local workspace="${SOLAR_WORKSPACE:-}"
+  local root="" candidate
+  if [[ -n "${SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE+x}" ]]; then
+    if [[ -z "${SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE}" ]]; then
+      return 1
+    fi
+    root="$(_resolve_abs "$SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE")"
+    if _resolve_validate_root "$root" \
+      && { [[ -z "$workspace" ]] || ! _resolve_is_workspace_bundle_root "$root" "$workspace"; }; then
+      printf '%s\n' "$root"
+      return 0
+    fi
+    return 1
+  fi
+  local -a candidates=()
+  [[ -n "${SOLAR_GLOBAL_ROOT:-}" ]] && candidates+=("$SOLAR_GLOBAL_ROOT")
+  [[ -n "${SOLAR_ROOT:-}" ]] && candidates+=("$SOLAR_ROOT")
+  candidates+=("${HOME}/.local/share/solar" "${HOME}/Solar/solar")
+  candidates+=("$(_resolve_abs "$_CLIENT_LIB_SCRIPT_DIR/../../../..")")
+  for candidate in "${candidates[@]}"; do
+    [[ -n "$candidate" && -d "$candidate" ]] || continue
+    root="$(_resolve_abs "$candidate")"
+    if [[ -n "$workspace" ]] && _resolve_is_workspace_bundle_root "$root" "$workspace"; then
+      continue
+    fi
+    if _resolve_validate_root "$root"; then
+      printf '%s\n' "$root"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Back to core_source=global. Settings go through the canonical writer.
+# IDE links are republished from the global install before the bundle moves.
+# The bundle directory is moved aside, not deleted. Nothing is touched when
+# the global install cannot be resolved. If the links cannot be rebuilt, the
+# bundle stays and the caller is told to run solar client sync.
+solar_client_leave_portable() {
+  local workspace="$1"
+  local global_root bundle stamp dest
+  if ! global_root="$(solar_client_portable_update_root)"; then
+    echo "ERROR: leaving portable mode needs the global install, and none was found. Nothing was changed." >&2
+    return 1
+  fi
+  solar_client_write_settings_v12 "$workspace" "$global_root"
+  # Settings now say global. Republish IDE links before the bundle moves,
+  # so .claude/, .gemini/ and .codex/ stop pointing at .solar/bundle.
+  local sync_script="$global_root/core/skills/solar-client/scripts/sync-clients.sh"
+  if [[ ! -f "$sync_script" ]]; then
+    echo "ERROR: settings are global, but IDE links could not be rebuilt. The bundle was left in place. Run: solar client sync" >&2
+    return 1
+  fi
+  if ! (
+    cd "$workspace"
+    SOLAR_WORKSPACE="$workspace" \
+      SOLAR_ROOT="$global_root" \
+      SOLAR_CORE_SOURCE=global \
+      SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE="$global_root" \
+      bash "$sync_script"
+  ); then
+    echo "ERROR: settings are global, but IDE links could not be rebuilt. The bundle was left in place. Run: solar client sync" >&2
+    return 1
+  fi
+  bundle="$(solar_client_bundle_dir "$workspace")"
+  if [[ -d "$bundle" ]]; then
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    dest="${bundle}.removed-${stamp}"
+    if [[ -e "$dest" ]]; then
+      dest="${dest}-$$"
+    fi
+    mv "$bundle" "$dest"
+    echo "Moved bundle aside to $dest"
+  fi
+  echo "OK: core_source=global ($global_root)"
 }
 
 solar_client_bundle_dir() {
@@ -1489,6 +1572,29 @@ os.replace(tmp, dest)
 PY
 }
 
+# The cutover script and solar-state must be present before anything stops.
+# Hooks (SOLAR_CLIENT_CUTOVER_SCRIPT, SOLAR_CLIENT_STATE_PY) stand in for the
+# install copies in tests. Without hooks, the skill directory itself must be
+# complete. A miss returns before claim and before any stop.
+solar_client_cutover_preflight() {
+  local install_root="$1"
+  local cutover_py state_py skill
+  cutover_py="${SOLAR_CLIENT_CUTOVER_SCRIPT:-${install_root}/core/skills/solar-state/scripts/solar_state_cutover.py}"
+  state_py="${SOLAR_CLIENT_STATE_PY:-${install_root}/core/skills/solar-state/scripts/solar_state.py}"
+  if [[ ! -f "$cutover_py" || ! -f "$state_py" ]]; then
+    echo "ERROR: solar-state is not complete in $install_root (cutover script or solar_state.py is missing). Services were not stopped." >&2
+    return 1
+  fi
+  if [[ -z "${SOLAR_CLIENT_CUTOVER_SCRIPT:-}" && -z "${SOLAR_CLIENT_STATE_PY:-}" ]]; then
+    skill="${install_root}/core/skills/solar-state"
+    if [[ ! -f "$skill/SKILL.md" || ! -f "$skill/scripts/solar_state.py" || ! -f "$skill/scripts/solar_state_cutover.py" ]]; then
+      echo "ERROR: solar-state is not complete in $install_root. Services were not stopped." >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # Stop what Solar starts, migrate the runtime, then start what was running.
 # A failed migration leaves those services stopped. restart_mode "never" migrates
 # and does not start them. Args: install_root [restart_mode].
@@ -1511,6 +1617,9 @@ solar_client_state_cutover() {
   workspace="${SOLAR_WORKSPACE:-}"
   if [[ -z "$workspace" ]]; then
     echo "ERROR: SOLAR_WORKSPACE is not set; refusing state cutover" >&2
+    return 1
+  fi
+  if ! solar_client_cutover_preflight "$install_root"; then
     return 1
   fi
   if ! solar_client_claim_workspace "$workspace" false "$install_root" >/dev/null; then

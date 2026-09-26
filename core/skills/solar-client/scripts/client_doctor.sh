@@ -89,7 +89,7 @@ if [[ -f "$MANIFEST" ]]; then
       warn "settings requires_global_client=false but core_source=global (drift)"
     fi
     if [[ "$bundle_present" == true ]]; then
-      warn ".solar/bundle/ exists but settings still global — run: solar client bundle create or remove bundle"
+      warn ".solar/bundle/ exists but settings still global — run: solar client bundle remove"
     fi
   elif [[ "$core_source" == "workspace-snapshot" ]]; then
     ok "settings core_source=workspace-snapshot (portable)"

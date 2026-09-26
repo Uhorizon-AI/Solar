@@ -24,7 +24,15 @@ Usage:
   solar client update [options]
 
 Updates the global Solar Client install (SOLAR_ROOT). Does not modify SOLAR_WORKSPACE
-sun/ or planets/. New updaters atomically migrate SOLAR_ROUTER_PROVIDER_PRIORITY /
+sun/ or planets/. In portable mode (core_source workspace-snapshot) the bundle
+under .solar/bundle is the snapshot IDEs read; this command updates the global
+install and then regenerates that bundle. The LaunchAgent keeps running from
+the global install, so its plist SOLAR_ROOT stays that path. If no global
+install exists, update refuses before it changes anything. A global install
+without a git checkout is updated with --bundle (bundle-core), the same
+contract as a non-portable install. A .git directory is required only when
+the update checks out a ref.
+New updaters atomically migrate SOLAR_ROUTER_PROVIDER_PRIORITY /
 SOLAR_AI_PROVIDER_PRIORITY in the workspace .env (gemini→agy) before apply.
 The first router run after a legacy updater performs the same one-time migration.
 --repair only touches .solar/settings.json (migrates legacy manifest.json).
@@ -128,8 +136,20 @@ _resolve_args=()
 _resolve_args+=(--quiet)
 solar_resolve_paths "${_resolve_args[@]}"
 
-INSTALL_ROOT="$SOLAR_ROOT"
-BUNDLE_SCRIPT="$(solar_core_dir)/skills/solar-client/scripts/package_solar_bundle.sh"
+PORTABLE_UPDATE=false
+_settings_now="$(solar_client_settings_path "$SOLAR_WORKSPACE")"
+if [[ -f "$_settings_now" ]] && [[ "$(solar_client_manifest_core_source "$_settings_now")" == "workspace-snapshot" ]]; then
+  if ! INSTALL_ROOT="$(solar_client_portable_update_root)"; then
+    echo "ERROR: portable mode updates the global install, and none was found. Nothing was changed." >&2
+    exit 1
+  fi
+  # .git is required only by the git checkout below. Without it, --bundle
+  # (and an install that has no .git) updates this global via bundle-core.
+  # The snapshot is not the install either way.
+  PORTABLE_UPDATE=true
+else
+  INSTALL_ROOT="$SOLAR_ROOT"
+fi
 
 if [[ "$REPAIR_ONLY" == true ]]; then
   if ! solar_client_settings_exists "$SOLAR_WORKSPACE" && [[ ! -d "$SOLAR_WORKSPACE/.solar" ]]; then
@@ -208,6 +228,7 @@ if [[ "$use_git" == true ]]; then
   fi
   solar_client_apply_git_update "$INSTALL_ROOT" "$TARGET_TAG" "$AUTO_YES"
 else
+  BUNDLE_SCRIPT="$INSTALL_ROOT/core/skills/solar-client/scripts/package_solar_bundle.sh"
   if [[ ! -f "$BUNDLE_SCRIPT" ]]; then
     echo "ERROR: bundle script not found: $BUNDLE_SCRIPT" >&2
     exit 1
@@ -256,6 +277,23 @@ if [[ "$use_git" != true || "$cur_ver $cur_commit" != "$new_ver $new_commit" ]];
 fi
 echo ""
 export SOLAR_CLIENT_CUTOVER_DONE=1
+if [[ "$PORTABLE_UPDATE" == true ]]; then
+  echo "Regenerating the workspace bundle from the global install"
+  _bundle_script="$INSTALL_ROOT/core/skills/solar-client/scripts/client_bundle.sh"
+  if [[ ! -f "$_bundle_script" ]]; then
+    echo "ERROR: bundle script missing in the global install ($INSTALL_ROOT). Services were not stopped." >&2
+    exit 1
+  fi
+  if ! (
+    cd "$SOLAR_WORKSPACE"
+    SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE="$INSTALL_ROOT" \
+      SOLAR_ROOT="$INSTALL_ROOT" \
+      bash "$_bundle_script" create
+  ); then
+    echo "ERROR: the global install was updated, but the workspace bundle was not regenerated. Services were not stopped." >&2
+    exit 1
+  fi
+fi
 if ! solar_client_state_cutover "$INSTALL_ROOT" "$RESTART_SERVICES"; then
   restart_failed=1
 fi
