@@ -6,6 +6,15 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-state): the published status and its test still described the world from before v0.26.0. `SKILL.md` said the audit, continuity and mandate events were on files and that `migrate` / `rollback` were not called from `solar client update` or `sync`. `test_client_update.sh` asserted the published updater never calls `solar_client_state_cutover`. Both were already false: that updater reloads the new `client_lib.sh` and the cutover runs before anything starts. The status and the test now say so. No runtime is migrated for this correction.
+
+### Added
+- feat(solar-client, solar-state): one install belongs to one workspace. The runtime's identity is a `workspace_id` stored in `workspace-owner.json` and in `.solar/settings.json`; the path is not the identity. `claim_owner` is the only writer of the owner file. `session`, `operate` and `cutover` read the caller's id from `$SOLAR_WORKSPACE/.solar/settings.json` and refuse a missing or different owner; `describe` reports that as not ready. `init`, `update` and `sync` claim before any other write. A claim that refuses leaves the install, settings and services untouched. The updater that is installing this code cannot claim before it writes; the new cutover claims before it stops anything, and a refused claim does not stop services. `solar client claim-runtime --rebind` moves the recorded path when the id matches. `solar client claim-runtime --repair` is the only repair when the two ids differ: without `--keep` it prints both and writes nothing; `--keep owner` or `--keep settings` keeps the named side. `--keep` without a value, or without `--repair`, exits 2.
+- feat(solar-mcp): `workspace()` resolves the workspace with `resolve_solar_paths`. Started outside a workspace, verbs refuse and no runtime is created.
+- feat(solar-client): `state-cutover.json` records the install identity and `sqlite`. The same identity does not stop, migrate or restart. A global install's identity is the commit of `SOLAR_ROOT`; a portable install's is `bundle_checksum`. A missing checksum, or a commit of `unknown`, does not skip the cutover. `rollback` deletes the marker.
+- change(docs): the OneDrive / multi-machine section is now "Una instalación, un workspace". Portable mode is an install that travels inside the workspace, not a second machine.
+
 ## [0.26.1] - 2026-09-26
 
 ### Fixed
