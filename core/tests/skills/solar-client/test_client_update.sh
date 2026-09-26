@@ -387,14 +387,21 @@ INSTALL_UP="$WS_UP/solar"
 UP_LIB="$INSTALL_UP/core/skills/solar-client/scripts/client_lib.sh"
 UP_UPDATE="$INSTALL_UP/core/skills/solar-client/scripts/client_update.sh"
 REPO_ROOT="$(cd "$CORE_ROOT/.." && pwd)"
+# The updater these transition cases simulate: the last release without the
+# owner gate. A fixed tag, not HEAD, so the cases mean the same after commit.
+PREVIOUS_UPDATER_REF="v0.26.1"
+git -C "$REPO_ROOT" rev-parse -q --verify "${PREVIOUS_UPDATER_REF}^{commit}" >/dev/null || {
+  echo "FATAL: tag $PREVIOUS_UPDATER_REF not found (fetch tags: git fetch --tags)" >&2
+  exit 1
+}
 mkdir -p "$WS_UP/sun" "$WS_UP/.solar" "$INSTALL_UP/core/skills"
 printf '%s\n' '{"layout":"solar-client-v1.2","core_version":"v0.0.1","core_commit":"unknown","core_source":"global"}' >"$WS_UP/.solar/settings.json"
 cp -R "$CORE_ROOT/skills/solar-client" "$INSTALL_UP/core/skills/"
 cp -R "$CORE_ROOT/skills/solar-paths" "$INSTALL_UP/core/skills/"
 rm -rf "$INSTALL_UP/core/skills/solar-client/scripts/__pycache__"
 rm -rf "$INSTALL_UP/core/skills/solar-paths/scripts/__pycache__"
-git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_update.sh >"$UP_UPDATE"
-git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_lib.sh >"$UP_LIB"
+git -C "$REPO_ROOT" show "${PREVIOUS_UPDATER_REF}:core/skills/solar-client/scripts/client_update.sh" >"$UP_UPDATE"
+git -C "$REPO_ROOT" show "${PREVIOUS_UPDATER_REF}:core/skills/solar-client/scripts/client_lib.sh" >"$UP_LIB"
 assert_ok "published updater calls the cutover" \
   bash -c 'grep -q solar_client_state_cutover "$1"' _ "$UP_UPDATE"
 git -C "$INSTALL_UP" init -q
@@ -470,8 +477,8 @@ cp -R "$CORE_ROOT/skills/solar-client" "$INSTALL_BAD/core/skills/"
 cp -R "$CORE_ROOT/skills/solar-paths" "$INSTALL_BAD/core/skills/"
 rm -rf "$INSTALL_BAD/core/skills/solar-client/scripts/__pycache__"
 rm -rf "$INSTALL_BAD/core/skills/solar-paths/scripts/__pycache__"
-git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_update.sh >"$BAD_UPDATE"
-git -C "$REPO_ROOT" show HEAD:core/skills/solar-client/scripts/client_lib.sh >"$BAD_LIB"
+git -C "$REPO_ROOT" show "${PREVIOUS_UPDATER_REF}:core/skills/solar-client/scripts/client_update.sh" >"$BAD_UPDATE"
+git -C "$REPO_ROOT" show "${PREVIOUS_UPDATER_REF}:core/skills/solar-client/scripts/client_lib.sh" >"$BAD_LIB"
 git -C "$INSTALL_BAD" init -q
 git -C "$INSTALL_BAD" config user.email "test@test"
 git -C "$INSTALL_BAD" config user.name "Test"
