@@ -82,6 +82,21 @@ class ConsoleTests(unittest.TestCase):
         self.assertWorkspaceUntouched()
         self.assertTrue(next(t for t in data['tasks'] if t['state']=='drafts')['stale'])
 
+    def test_snapshot_counts_cover_queue_drafts_and_a_new_task(self):
+        self.task('queued', task_id='queued-one')
+        self.task('drafts', 'recurring: true\n', task_id='draft-recurring')
+        before = app_solar.snapshot(self.ws)
+        self.assertEqual(before['counts']['tasks'], 2)
+        self.assertEqual(before['counts']['task_states']['queued'], 1)
+        self.assertEqual(before['counts']['task_states']['drafts'], 1)
+        self.assertEqual(before['counts']['recurring'], 1)
+        self.task('queued', task_id='queued-two')
+        after = app_solar.snapshot(self.ws)
+        self.assertEqual(after['counts']['tasks'], 3)
+        self.assertEqual(after['counts']['task_states']['queued'], 2)
+        self.assertEqual(after['counts']['task_states']['drafts'], 1)
+        self.assertEqual(after['counts']['recurring'], 1)
+
     def test_recurring_count_origin_and_outputs(self):
         self.task('queued', 'recurring: true\nrecurring_run_count: 830\norigin_channel: telegram\n', '## Result\nDone [report](sun/report.md)')
         task = app_solar.read_tasks(self.ws)[0][0]

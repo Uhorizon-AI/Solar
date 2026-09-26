@@ -156,8 +156,8 @@ RESOURCES = [
     dict(uri="solar://tasks", name="Async task queue",
          description="Every task file, by state, with its recurrence.",
          mimeType="application/json"),
-    dict(uri="solar://index", name="SQLite projection",
-         description="Counters of the derived index and which sources went stale.",
+    dict(uri="solar://index", name="State counts",
+         description="Counts from the views in state.sqlite.",
          mimeType="application/json"),
     dict(uri="solar://delegations", name="A3 mandates",
          description="Written mandates: mode, validity and allowed actions.",
@@ -194,10 +194,10 @@ def _read_index() -> dict:
         snap = runtime_views.snapshot(workspace())
     except WorkspaceUnresolved:
         raise
-    except Exception as exc:  # noqa: BLE001 — a stale index is data, not an MCP failure
+    except Exception as exc:  # noqa: BLE001 — an unreadable state is data, not an MCP failure
         return dict(available=False, source="state", reason=str(exc))
     return dict(available=True, source="state", path=str(solar_state.db_path()),
-                counts=snap["counts"], counters=snap["counts"])
+                counts=snap["counts"])
 
 
 def _read_delegations() -> dict:

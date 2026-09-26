@@ -64,7 +64,7 @@ conversational authority from caller-supplied fields. See
 |---|---|
 | `solar://health` | Storage, gateway and continuity, as the console sees them |
 | `solar://tasks` | Tasks in `state.sqlite`, by state, with recurrence |
-| `solar://index` | Counts from the `console_task_counts` view |
+| `solar://index` | Counts from the views in `state.sqlite` |
 | `solar://delegations` | Written A3 mandates: mode and validity |
 | `solar://gate` | What this server allowed and refused |
 

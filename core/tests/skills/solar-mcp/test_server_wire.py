@@ -63,9 +63,17 @@ def test_resources_are_open(solar_env):
         assert {row["uri"] for row in listed} >= {
             "solar://health", "solar://tasks", "solar://index",
             "solar://delegations", "solar://gate"}
+        index = next(row for row in listed if row["uri"] == "solar://index")
+        assert index["name"] == "State counts"
+        assert "derived" not in index["description"].lower()
+        assert "stale" not in index["description"].lower()
         read = probe.request("resources/read", dict(uri="solar://tasks"))
         body = json.loads(read["result"]["contents"][0]["text"])
         assert "tasks" in body and "count" in body
+        index_body = json.loads(probe.request(
+            "resources/read", dict(uri="solar://index"))["result"]["contents"][0]["text"])
+        assert "counts" in index_body
+        assert "counters" not in index_body
 
 
 def test_unknown_resource_is_an_error(solar_env):
