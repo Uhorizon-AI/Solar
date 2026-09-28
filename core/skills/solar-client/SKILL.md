@@ -24,13 +24,13 @@ Workspace content health (`sun/`, `planets/`) is **`solar-workspace`** — use `
 
 | Client | Destination | How |
 |--------|-------------|-----|
-| Codex | `.codex/skills` | symlink |
+| Codex | `.agents/skills` | copy, skills only, shared with Antigravity |
 | Claude | `.claude/{skills,agents,commands}` | symlink |
 | Cursor | `.cursor/{skills,agents,commands}` | copy |
 | Gemini | `.gemini/skills`, `.gemini/commands` | symlink; commands become toml |
 | Antigravity | `.agents/skills` | copy, skills only |
 
-Antigravity does not receive commands, workflows or rules. Solar records the names it copies in `.agents/skills/.solar-managed` and removes only those when they leave the index. Codex reads repo skills from `.agents/skills`. It reads `$CODEX_HOME/skills` (`~/.codex/skills` when that variable is unset), so the workspace `.codex/skills` is a second copy only when `CODEX_HOME` points at that directory.
+Antigravity and Codex do not receive commands, workflows or rules. Solar records the names it copies in `.agents/skills/.solar-managed` and removes only those when they leave the index. `--codex-only` publishes those same copies. Sync does not write `.codex/skills`. Symlinks already there that point at `core/skills` of `SOLAR_ROOT` (including the portable bundle) or at `planets/*/skills` in this workspace are removed; other files and links stay. An empty `.codex/skills` is removed. `.codex/` stays when it still holds something else. A `CODEX_HOME` that points at another directory is not written and not deleted.
 
 ## Required MCP
 

@@ -5,10 +5,10 @@
 # - core/skills/, core/agents/, core/commands/
 # - planets/* → any */skills/*/SKILL.md under planets/*; planets/*/agents/, planets/*/commands/
 # Targets:
-# - .codex/skills
 # - .claude/{skills,agents,commands}
 # - .cursor/{skills,agents,commands}
-# - .agents/skills  (Antigravity: copies, skills only)
+# - .agents/skills  (Antigravity and Codex: copies, skills only)
+# Codex does not get a second copy under .codex/skills.
 #
 # Naming:
 # - core/ resources: unprefixed (e.g. solar-router, solar-telegram)
@@ -38,9 +38,6 @@ SRC_AGENTS="$(solar_core_dir)/agents"
 SRC_COMMANDS="$(solar_core_dir)/commands"
 PLANETS_DIR="$ROOT_DIR/planets"
 
-CODEX_DIR="${CODEX_HOME:-$ROOT_DIR/.codex}"
-CODEX_SKILLS="$CODEX_DIR/skills"
-
 CLAUDE_DIR="$ROOT_DIR/.claude"
 CLAUDE_SKILLS="$CLAUDE_DIR/skills"
 CLAUDE_AGENTS="$CLAUDE_DIR/agents"
@@ -53,12 +50,14 @@ CURSOR_COMMANDS="$CURSOR_DIR/commands"
 
 # Antigravity sandbox refuses to execute a file whose real path is outside the
 # workspace, so skills are copies under .agents/skills, not symlinks.
-# That directory is shared. Solar records the names it wrote in
-# .agents/skills/.solar-managed and deletes only those when they leave the index.
-# Codex reads repo skills from .agents/skills. Its other skills directory is
-# $CODEX_HOME/skills, which is ~/.codex/skills when CODEX_HOME is unset, not the
-# workspace .codex this script writes. Those two copies meet only if CODEX_HOME
-# points at the workspace .codex. Codex publishing below is unchanged.
+# That directory is shared with Codex: Codex reads it from the workspace.
+# The v0.29.0 note was wrong. With CODEX_HOME unset, Codex open on this
+# workspace also reads .codex/skills, so a symlink there is a second copy.
+# Sync does not write .codex/skills. It removes only symlinks that point at
+# Solar index sources (core/skills of SOLAR_ROOT, the portable bundle's
+# core/skills, or planets/*/skills in this workspace). Other files and links
+# stay. If CODEX_HOME points at another directory, that directory is not
+# written and not deleted.
 AGY_DIR="$ROOT_DIR/.agents"
 AGY_SKILLS="$AGY_DIR/skills"
 
@@ -481,9 +480,129 @@ sync_resources_as_copy() {
   fi
 }
 
+# 0 when the symlink target is a Solar skill source this sync may remove.
+# Dangling links are matched on the path text; live links also on realpath.
+codex_link_is_solar_source() {
+  local target="$1"
+  python3 - "$target" "$(solar_core_dir)/skills" "$ROOT_DIR" <<'PY'
+import os, sys
+
+target, core_skills, root = sys.argv[1:]
+
+def forms(path):
+    path = os.path.normpath(path)
+    found = {path}
+    if os.path.exists(path):
+        found.add(os.path.realpath(path))
+        return found
+    head = path
+    tail = []
+    while head and head != os.sep and not os.path.exists(head):
+        head, name = os.path.split(head)
+        tail.append(name)
+    if head and os.path.exists(head):
+        rebuilt = os.path.realpath(head)
+        for name in reversed(tail):
+            rebuilt = os.path.join(rebuilt, name)
+        found.add(os.path.normpath(rebuilt))
+    return found
+
+def within(path, parent):
+    return path == parent or path.startswith(parent + os.sep)
+
+target_forms = forms(target)
+roots = []
+roots.extend(forms(core_skills))
+roots.extend(forms(os.path.join(root, ".solar", "bundle", "core", "skills")))
+for form in target_forms:
+    for parent in roots:
+        if within(form, parent):
+            sys.exit(0)
+planets_forms = forms(os.path.join(root, "planets"))
+for form in target_forms:
+    for planets in planets_forms:
+        if not within(form, planets):
+            continue
+        rel = form[len(planets) + 1:]
+        parts = rel.split(os.sep)
+        if "skills" in parts and parts.index("skills") >= 1:
+            sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# Workspace .codex/skills only. A CODEX_HOME that is some other directory is
+# left alone, including when the workspace skills dir would overlap it.
+prune_workspace_codex_solar_links() {
+  local skills_dir="$ROOT_DIR/.codex/skills"
+  # -d and the glob follow a symlink. A .codex or .codex/skills that points
+  # outside the workspace would be edited, and rmdir would hit the target.
+  if [[ -L "$ROOT_DIR/.codex" ]]; then
+    log_warn "$ROOT_DIR/.codex is a symlink; leaving it untouched"
+    return 0
+  fi
+  if [[ -L "$skills_dir" ]]; then
+    log_warn "$skills_dir is a symlink; leaving it untouched"
+    return 0
+  fi
+  if [[ -n "${CODEX_HOME:-}" ]]; then
+    local home_real ws_real skills_real
+    home_real="$(python3 -c 'import os,sys; p=sys.argv[1]; print(os.path.realpath(p) if os.path.exists(p) else os.path.normpath(p))' "$CODEX_HOME")"
+    if [[ -e "$ROOT_DIR/.codex" ]]; then
+      ws_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ROOT_DIR/.codex")"
+    else
+      ws_real="$(python3 -c 'import os,sys; print(os.path.normpath(sys.argv[1]))' "$ROOT_DIR/.codex")"
+    fi
+    if [[ "$home_real" != "$ws_real" ]]; then
+      if [[ -e "$skills_dir" ]]; then
+        skills_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$skills_dir")"
+      else
+        skills_real="$(python3 -c 'import os,sys; print(os.path.normpath(sys.argv[1]))' "$skills_dir")"
+      fi
+      if python3 -c 'import os,sys; a,b=sys.argv[1:]; a,b=os.path.normpath(a),os.path.normpath(b); sys.exit(0 if a==b or a.startswith(b+os.sep) or b.startswith(a+os.sep) else 1)' "$skills_real" "$home_real"; then
+        log_ok "CODEX_HOME points elsewhere; leaving $CODEX_HOME untouched"
+        return 0
+      fi
+    fi
+  fi
+
+  [[ -d "$skills_dir" ]] || return 0
+
+  local item raw target removed
+  removed=0
+  shopt -s nullglob dotglob
+  for item in "$skills_dir"/*; do
+    [[ -L "$item" ]] || continue
+    raw="$(readlink "$item")"
+    if [[ "$raw" != /* ]]; then
+      raw="$(dirname "$item")/$raw"
+    fi
+    target="$(python3 -c 'import os,sys; print(os.path.normpath(sys.argv[1]))' "$raw")"
+    if codex_link_is_solar_source "$target"; then
+      rm "$item"
+      removed=$((removed + 1))
+    fi
+  done
+  local leftover=("$skills_dir"/*)
+  shopt -u dotglob nullglob
+  if [[ ${#leftover[@]} -eq 0 ]]; then
+    rmdir "$skills_dir"
+    log_ok "Removed empty $skills_dir"
+  elif [[ "$removed" -gt 0 ]]; then
+    log_ok "Removed $removed Solar symlinks from $skills_dir"
+  fi
+}
+
 sync_codex() {
-  log_section "🔄 Codex (.codex)"
-  sync_resources_as_symlink "$SKILLS_INDEX" "$CODEX_SKILLS" "📦 Skills" "end"
+  log_section "🔄 Codex (.agents)"
+  prune_workspace_codex_solar_links
+  # Same copies Antigravity publishes. Skip when that pass will run too.
+  if $SYNC_ANTIGRAVITY; then
+    log_tree_end "📦 Skills" "${GREEN}✓${NC} shared with Antigravity (.agents/skills)"
+  else
+    warn_antigravity_shared_names
+    sync_antigravity_skills "$SKILLS_INDEX" "$AGY_SKILLS"
+  fi
   echo
 }
 

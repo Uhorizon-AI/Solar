@@ -141,7 +141,7 @@ from pathlib import Path
 install = os.path.realpath(sys.argv[1])
 dangling = []
 relinked = False
-for folder in (".claude", ".gemini", ".codex"):
+for folder in (".claude", ".gemini"):
     root = Path(folder)
     if not root.is_dir():
         dangling.append(f"missing {folder}")
@@ -160,6 +160,14 @@ for folder in (".claude", ".gemini", ".codex"):
             continue
         if os.path.realpath(link).startswith(install + os.sep):
             relinked = True
+codex = Path(".codex")
+if codex.is_dir():
+    for link in codex.rglob("*"):
+        if link.is_symlink():
+            dangling.append(f"{link} still published for Codex ({os.readlink(link)})")
+copy = Path(".agents/skills/solar-state")
+if not copy.is_dir() or copy.is_symlink():
+    dangling.append("Codex copy of solar-state is missing under .agents/skills")
 if not relinked:
     dangling.append("no IDE link points at the global install")
 if dangling:
@@ -189,7 +197,7 @@ from pathlib import Path
 ws, install = map(os.path.realpath, sys.argv[1:3])
 dangling = []
 relinked = False
-for folder in (".claude", ".gemini", ".codex"):
+for folder in (".claude", ".gemini"):
     root = Path(ws) / folder
     links = [p for p in root.rglob("*") if p.is_symlink()]
     if not links:
@@ -205,6 +213,14 @@ for folder in (".claude", ".gemini", ".codex"):
             continue
         if os.path.realpath(link).startswith(install + os.sep):
             relinked = True
+codex = Path(ws) / ".codex"
+if codex.is_dir():
+    for link in codex.rglob("*"):
+        if link.is_symlink():
+            dangling.append(f"{link} still published for Codex ({os.readlink(link)})")
+copy = Path(ws) / ".agents" / "skills" / "solar-state"
+if not copy.is_dir() or copy.is_symlink():
+    dangling.append("Codex copy of solar-state is missing under .agents/skills")
 if not relinked:
     dangling.append("no IDE link points at the global install")
 if dangling:
@@ -289,7 +305,7 @@ from pathlib import Path
 ws = Path(sys.argv[1])
 dangling = []
 seen = 0
-for folder in (".claude", ".gemini", ".codex"):
+for folder in (".claude", ".gemini"):
     root = ws / folder
     if not root.is_dir():
         continue
@@ -300,6 +316,13 @@ for folder in (".claude", ".gemini", ".codex"):
         raw = os.readlink(link)
         if ".solar/bundle" in raw or not link.exists():
             dangling.append(f"{link} -> {raw}")
+codex = ws / ".codex"
+if codex.is_dir():
+    for link in codex.rglob("*"):
+        if link.is_symlink():
+            raw = os.readlink(link)
+            if ".solar/bundle" in raw or not link.exists():
+                dangling.append(f"{link} -> {raw}")
 if seen == 0:
     dangling.append("no IDE links")
 if dangling:

@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-client): Codex no longer gets a second skill tree under `.codex/skills`. The v0.29.0 note was wrong: with `CODEX_HOME` unset, Codex open on the workspace reads `.codex/skills` as well as `.agents/skills`. Sync publishes Codex through the `.agents/skills` copies, shared with Antigravity. `--codex-only` publishes those copies. Solar symlinks already in the workspace `.codex/skills` are removed; a `CODEX_HOME` that points elsewhere is left untouched.
+
 ## [0.29.1] - 2026-09-28
 
 ### Fixed

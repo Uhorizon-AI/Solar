@@ -967,9 +967,10 @@ assert_ok "sync --portable from global switches settings to the snapshot" \
 assert_ok "sync --portable from global links Claude at the bundle" \
   python3 -c 'import os,sys; t=os.path.realpath(sys.argv[1]); b=os.path.realpath(sys.argv[2]); g=os.path.realpath(sys.argv[3]); raise SystemExit(0 if t.startswith(b+os.sep) and not t.startswith(g+os.sep) else 1)' \
   "$ENTER_WS/.claude/skills/solar-client" "$ENTER_WS/.solar/bundle" "$ENTER_GLOBAL"
-assert_ok "sync --portable from global links Codex at the bundle" \
-  python3 -c 'import os,sys; t=os.path.realpath(sys.argv[1]); b=os.path.realpath(sys.argv[2]); g=os.path.realpath(sys.argv[3]); raise SystemExit(0 if t.startswith(b+os.sep) and not t.startswith(g+os.sep) else 1)' \
-  "$ENTER_WS/.codex/skills/solar-client" "$ENTER_WS/.solar/bundle" "$ENTER_GLOBAL"
+assert_ok "sync --portable does not publish a Codex symlink under .codex/skills" \
+  bash -c '[[ ! -e "$1" && ! -L "$1" ]]' _ "$ENTER_WS/.codex/skills/solar-client"
+assert_ok "sync --portable publishes Codex as a copy under .agents/skills" \
+  test -f "$ENTER_WS/.agents/skills/solar-client/SKILL.md"
 assert_ok "sync --portable from global links Gemini at the bundle" \
   python3 -c 'import os,sys; t=os.path.realpath(sys.argv[1]); b=os.path.realpath(sys.argv[2]); g=os.path.realpath(sys.argv[3]); raise SystemExit(0 if t.startswith(b+os.sep) and not t.startswith(g+os.sep) else 1)' \
   "$ENTER_WS/.gemini/skills/solar-client" "$ENTER_WS/.solar/bundle" "$ENTER_GLOBAL"

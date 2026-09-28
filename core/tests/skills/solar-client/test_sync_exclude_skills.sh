@@ -50,6 +50,20 @@ assert_eq() {
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# shellcheck source=../../support/shell_runtime_guard.sh
+source "$SCRIPT_DIR/../../support/shell_runtime_guard.sh"
+mkdir -p "$TMP/guard-bin" "$TMP/guard-runtime"
+cat >"$TMP/guard-bin/launchctl" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$TMP/guard-bin/launchctl"
+export PATH="$TMP/guard-bin:${PATH}"
+unset SOLAR_APP_DATA
+export SOLAR_RUNTIME_ROOT="$TMP/guard-runtime"
+export SOLAR_CLIENT_LAUNCHCTL="$TMP/guard-bin/launchctl"
+solar_test_guard
+
 WS="$TMP/workspace"
 mkdir -p "$WS/sun" "$WS/.solar" \
   "$WS/planets/demo/skills/kept" "$WS/planets/demo/skills/dropped"
