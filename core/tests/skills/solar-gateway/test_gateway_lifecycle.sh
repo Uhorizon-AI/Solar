@@ -96,12 +96,34 @@ SOLAR_WS_PORT=18765
 SOLAR_HTTP_PORT=18787
 SOLAR_GATEWAY_RUN_DIR="$TMP/run"
 write_env "codex,claude"
-mkdir -p "$TMP/run"
+mkdir -p "$TMP/run" "$TMP/guard-bin" "$TMP/runtime/gateway"
+cat >"$TMP/guard-bin/launchctl" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+cat >"$TMP/guard-bin/cloudflared" <<'EOF'
+#!/usr/bin/env bash
+# Test double. Stays up and never opens a tunnel.
+sleep 300
+EOF
+chmod +x "$TMP/guard-bin/launchctl" "$TMP/guard-bin/cloudflared"
+export PATH="$TMP/guard-bin:${PATH}"
+unset SOLAR_APP_DATA
+export SOLAR_RUNTIME_ROOT="$TMP/runtime"
+export SOLAR_GATEWAY_RUNTIME_DIR="$TMP/runtime/gateway"
+export SOLAR_CLIENT_LAUNCHCTL="$TMP/guard-bin/launchctl"
+# shellcheck source=../../../support/shell_runtime_guard.sh
+source "$CORE_ROOT/tests/support/shell_runtime_guard.sh"
+solar_test_guard
 
 export SOLAR_WORKSPACE="$WS"
 export SOLAR_ROOT="$(cd "$CORE_ROOT/.." && pwd)"
 export GATEWAY_BACKOFF_BASE_SEC=1
 export GATEWAY_BACKOFF_CAP_SEC=4
+# Installation secrets stay out of this test. The store wins over .env, so a
+# real token would make "no token" and secret-rotation cases depend on this machine.
+export SOLAR_SECRETS_FILE="$TMP/secrets-absent.env"
+unset TELEGRAM_BOT_TOKEN SOLAR_N8N_WEBHOOK_SECRET || true
 
 # shellcheck source=/dev/null
 source "$LIB"
@@ -749,6 +771,266 @@ else
 fi
 kill "$CONN_PID" 2>/dev/null || true
 wait "$CONN_PID" 2>/dev/null || true
+
+# --- tunnel_recovery_failed does not hard-stop; preflight failures still do ---
+rm -f "$(gateway_fail_path)"
+_n=1
+while (( _n <= 5 )); do
+  gateway_write_env_fail "tunnel_recovery_failed"
+  _n=$((_n + 1))
+done
+_ex="$(grep -E '^exhausted=' "$(gateway_fail_path)" | tail -n1 | cut -d= -f2-)"
+_next="$(grep -E '^next_retry_at=' "$(gateway_fail_path)" | tail -n1 | cut -d= -f2-)"
+_now="$(date +%s)"
+if [[ "$_ex" == "0" && "$_next" -le $((_now + GATEWAY_BACKOFF_CAP_SEC + 2)) && "$_next" -lt $((_now + 86400)) ]]; then
+  pass "five tunnel_recovery_failed do not exhaust or schedule a year"
+else
+  fail "five tunnel_recovery_failed do not exhaust or schedule a year (exhausted=$_ex next=$_next now=$_now)"
+fi
+rm -f "$(gateway_fail_path)"
+_n=1
+while (( _n <= 5 )); do
+  gateway_write_env_fail "preflight_failed_down"
+  _n=$((_n + 1))
+done
+if gateway_fail_exhausted; then
+  pass "five preflight failures still exhaust"
+else
+  fail "five preflight failures still exhaust"
+fi
+_next="$(grep -E '^next_retry_at=' "$(gateway_fail_path)" | tail -n1 | cut -d= -f2-)"
+_now="$(date +%s)"
+if (( _next > _now + 86400 * 300 )); then
+  pass "preflight hard-stop is about a year out"
+else
+  fail "preflight hard-stop is about a year out (next=$_next now=$_now)"
+fi
+rm -f "$(gateway_fail_path)"
+
+# --- exhausted tunnel_recovery_failed is retried; a live cloudflared is not killed ---
+PARTIAL_HTTP="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+export SOLAR_HTTP_PORT="$PARTIAL_HTTP"
+export SOLAR_WS_PORT=18765
+export SOLAR_TUNNEL_MODE=named
+export SOLAR_CLOUDFLARED_HOSTNAME=127.0.0.1
+export SOLAR_CLOUDFLARED_TUNNEL_NAME=lifecycle-test
+export SOLAR_CLOUDFLARED_CONFIG="$TMP/lifecycle-tunnel.yml"
+touch "$TMP/lifecycle-tunnel.yml"
+write_env "codex,claude"
+{
+  echo "SOLAR_TUNNEL_MODE=named"
+  echo "SOLAR_CLOUDFLARED_HOSTNAME=127.0.0.1"
+  echo "SOLAR_CLOUDFLARED_TUNNEL_NAME=lifecycle-test"
+  echo "SOLAR_CLOUDFLARED_CONFIG=$TMP/lifecycle-tunnel.yml"
+  echo "SOLAR_HTTP_PORT=$PARTIAL_HTTP"
+} >>"$WS/.env"
+rebind
+gateway_write_stamp
+cat >"$TMP/guard-bin/run_http_webhook_bridge" <<'PY'
+#!/usr/bin/env python3
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+port = int(sys.argv[1])
+
+class Health(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{"bridge": "solar-transport-gateway"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        return
+
+HTTPServer(("127.0.0.1", port), Health).serve_forever()
+PY
+cat >"$TMP/guard-bin/run_websocket_bridge" <<'EOF'
+#!/usr/bin/env bash
+sleep 300
+EOF
+chmod +x "$TMP/guard-bin/run_http_webhook_bridge" "$TMP/guard-bin/run_websocket_bridge"
+"$TMP/guard-bin/run_http_webhook_bridge" "$PARTIAL_HTTP" >/dev/null 2>&1 &
+PARTIAL_HTTP_PID=$!
+echo "$PARTIAL_HTTP_PID" >"$TMP/run/http.pid"
+"$TMP/guard-bin/run_websocket_bridge" >/dev/null 2>&1 &
+PARTIAL_WS_PID=$!
+echo "$PARTIAL_WS_PID" >"$TMP/run/ws.pid"
+"$TMP/guard-bin/cloudflared" tunnel --config "$TMP/lifecycle-tunnel.yml" run lifecycle-test >/dev/null 2>&1 &
+PARTIAL_CF_PID=$!
+disown "$PARTIAL_CF_PID" 2>/dev/null || true
+echo "$PARTIAL_CF_PID" >"$TMP/run/cloudflared.pid"
+: >"$TMP/run/cloudflared.log"
+sleep 0.3
+_ready=0
+_i=0
+while (( _i < 10 )); do
+  if curl -fsS --max-time 1 "http://127.0.0.1:${PARTIAL_HTTP}/health" 2>/dev/null | grep -q 'solar-transport-gateway'; then
+    _ready=1
+    break
+  fi
+  _i=$((_i + 1))
+  sleep 0.2
+done
+if [[ "$_ready" != 1 ]]; then
+  fail "partial fixture local health is up"
+else
+  pass "partial fixture local health is up"
+fi
+set +e
+CHECK_OUT="$(bash "$CORE_ROOT/skills/solar-gateway/scripts/check_transport_gateway.sh" 2>&1)"
+CHECK_CODE=$?
+set -e
+if [[ "$CHECK_CODE" -ne 2 ]]; then
+  fail "partial fixture is check code 2 (got $CHECK_CODE)"
+  printf '%s\n' "$CHECK_OUT" | sed 's/^/  /' >&2
+else
+  pass "partial fixture is check code 2"
+fi
+_fp="$(gateway_compute_fingerprint)"
+_now="$(date +%s)"
+cat >"$(gateway_fail_path)" <<EOF
+fingerprint=${_fp}
+failed_at=${_now}
+attempts=5
+next_retry_at=$((_now + 86400 * 365))
+exhausted=1
+reason=tunnel_recovery_failed
+EOF
+rm -f "$(gateway_tunnel_started_path)"
+if [[ "$CHECK_CODE" -eq 2 ]]; then
+  set +e
+  PARTIAL_OUT="$(bash "$ENSURE" 2>&1)"
+  PARTIAL_CODE=$?
+  set -e
+  if [[ "$PARTIAL_CODE" -eq 0 ]] \
+    && printf '%s' "$PARTIAL_OUT" | grep -q 'tunnel_recovery_failed' \
+    && printf '%s' "$PARTIAL_OUT" | grep -q 'Retrying' \
+    && printf '%s' "$PARTIAL_OUT" | grep -q 'leaving it to reconnect' \
+    && ! printf '%s' "$PARTIAL_OUT" | grep -q 'fail cap reached' \
+    && ! printf '%s' "$PARTIAL_OUT" | grep -q 'remove '; then
+    pass "exhausted tunnel_recovery_failed retries and does not ask to delete env.fail"
+  else
+    fail "exhausted tunnel_recovery_failed retries and does not ask to delete env.fail (code=$PARTIAL_CODE)"
+    printf '%s\n' "$PARTIAL_OUT" | sed 's/^/  /' >&2
+  fi
+  if kill -0 "$PARTIAL_CF_PID" 2>/dev/null; then
+    pass "live cloudflared without a connector is not killed on the first pass"
+  else
+    fail "live cloudflared without a connector is not killed on the first pass"
+  fi
+else
+  fail "exhausted tunnel_recovery_failed retries and does not ask to delete env.fail (check was not partial)"
+  fail "live cloudflared without a connector is not killed on the first pass"
+fi
+
+# A long healthy stretch of the same pid must start the grace clock again.
+# Age the mark first: without the healthy-pass reset, the next partial would
+# treat the grace as already spent and kill this process.
+READY_PID=""
+RESTARTED_CF_PID=""
+export SOLAR_CLOUDFLARED_BIN="$TMP/guard-bin/cloudflared"
+if [[ "$CHECK_CODE" -eq 2 ]] && kill -0 "$PARTIAL_CF_PID" 2>/dev/null; then
+  _grace="${GATEWAY_TUNNEL_RESTART_GRACE_SEC:-300}"
+  printf '%s\n' "$(( $(date +%s) - _grace - 30 ))" >"$(gateway_tunnel_started_path)"
+  READY_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+  python3 - "$READY_PORT" <<'PY' >/dev/null 2>&1 &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+port = int(sys.argv[1])
+
+class Ready(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/ready":
+            body = b'{"status":200,"readyConnections":1}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        return
+
+HTTPServer(("127.0.0.1", port), Ready).serve_forever()
+PY
+  READY_PID=$!
+  printf 'INF Starting metrics server on 127.0.0.1:%s/metrics\n' "$READY_PORT" >"$TMP/run/cloudflared.log"
+  sleep 0.3
+  set +e
+  HEALTHY_OUT="$(bash "$ENSURE" 2>&1)"
+  HEALTHY_CODE=$?
+  set -e
+  if [[ "$HEALTHY_CODE" -eq 0 ]] \
+    && printf '%s' "$HEALTHY_OUT" | grep -q 'healthy' \
+    && [[ ! -f "$(gateway_tunnel_started_path)" ]] \
+    && kill -0 "$PARTIAL_CF_PID" 2>/dev/null; then
+    pass "healthy pass clears tunnel grace and leaves the same cloudflared"
+  else
+    fail "healthy pass clears tunnel grace and leaves the same cloudflared (code=$HEALTHY_CODE)"
+    printf '%s\n' "$HEALTHY_OUT" | sed 's/^/  /' >&2
+  fi
+  kill "$READY_PID" 2>/dev/null || true
+  wait "$READY_PID" 2>/dev/null || true
+  READY_PID=""
+  : >"$TMP/run/cloudflared.log"
+  set +e
+  AGAIN_OUT="$(bash "$ENSURE" 2>&1)"
+  AGAIN_CODE=$?
+  set -e
+  _again_started="$(tr -d '[:space:]' <"$(gateway_tunnel_started_path)" 2>/dev/null || true)"
+  _again_now="$(date +%s)"
+  if [[ "$AGAIN_CODE" -eq 0 ]] \
+    && printf '%s' "$AGAIN_OUT" | grep -q 'leaving it to reconnect' \
+    && kill -0 "$PARTIAL_CF_PID" 2>/dev/null \
+    && [[ "$(cat "$TMP/run/cloudflared.pid" 2>/dev/null || true)" == "$PARTIAL_CF_PID" ]] \
+    && [[ "$_again_started" =~ ^[0-9]+$ ]] \
+    && (( _again_now - _again_started < _grace )); then
+    pass "second partial on the same cloudflared pid respects grace"
+  else
+    fail "second partial on the same cloudflared pid respects grace (code=$AGAIN_CODE pid_file=$(cat "$TMP/run/cloudflared.pid" 2>/dev/null || true))"
+    printf '%s\n' "$AGAIN_OUT" | sed 's/^/  /' >&2
+  fi
+
+  # Grace already spent: ensure restarts this stand-in, not the machine tunnel.
+  printf '%s\n' "$(( $(date +%s) - _grace - 30 ))" >"$(gateway_tunnel_started_path)"
+  set +e
+  EXPIRED_OUT="$(bash "$ENSURE" 2>&1)"
+  EXPIRED_CODE=$?
+  set -e
+  RESTARTED_CF_PID="$(cat "$TMP/run/cloudflared.pid" 2>/dev/null || true)"
+  _expired_started="$(tr -d '[:space:]' <"$(gateway_tunnel_started_path)" 2>/dev/null || true)"
+  _expired_now="$(date +%s)"
+  if [[ "$EXPIRED_CODE" -eq 0 ]] \
+    && printf '%s' "$EXPIRED_OUT" | grep -q 'Restarting tunnel' \
+    && printf '%s' "$EXPIRED_OUT" | grep -q 'Tunnel recovery started' \
+    && ! printf '%s' "$EXPIRED_OUT" | grep -q 'leaving it to reconnect' \
+    && [[ -n "$RESTARTED_CF_PID" && "$RESTARTED_CF_PID" != "$PARTIAL_CF_PID" ]] \
+    && kill -0 "$RESTARTED_CF_PID" 2>/dev/null \
+    && ! kill -0 "$PARTIAL_CF_PID" 2>/dev/null \
+    && [[ "$_expired_started" =~ ^[0-9]+$ ]] \
+    && (( _expired_now - _expired_started < 30 )); then
+    pass "expired tunnel grace replaces cloudflared and refreshes the mark"
+  else
+    fail "expired tunnel grace replaces cloudflared and refreshes the mark (code=$EXPIRED_CODE old=$PARTIAL_CF_PID new=${RESTARTED_CF_PID:-} started=${_expired_started:-})"
+    printf '%s\n' "$EXPIRED_OUT" | sed 's/^/  /' >&2
+  fi
+else
+  fail "healthy pass clears tunnel grace and leaves the same cloudflared (no partial fixture)"
+  fail "second partial on the same cloudflared pid respects grace (no partial fixture)"
+  fail "expired tunnel grace replaces cloudflared and refreshes the mark (no partial fixture)"
+fi
+kill "$PARTIAL_CF_PID" "$RESTARTED_CF_PID" "$READY_PID" "$PARTIAL_WS_PID" "$PARTIAL_HTTP_PID" 2>/dev/null || true
+wait "$PARTIAL_CF_PID" "$RESTARTED_CF_PID" "$READY_PID" "$PARTIAL_WS_PID" "$PARTIAL_HTTP_PID" 2>/dev/null || true
+rm -f "$(gateway_fail_path)"
+write_env "codex,claude"
+rebind
 
 echo ""
 echo "Results: PASS=$PASS FAIL=$FAIL"

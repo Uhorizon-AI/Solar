@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-gateway): a tunnel outage no longer hard-stops retries for a year. `tunnel_recovery_failed` stays on the backoff cap and does not count toward `GATEWAY_FAIL_ATTEMPTS_CAP`. An older `env.fail` already exhausted with that reason is retried when preflight passes, without deleting the file by hand. While `cloudflared` is still running, ensure leaves it to reconnect for `GATEWAY_TUNNEL_RESTART_GRACE_SEC` instead of killing it on every pass.
+
 ## [0.29.0] - 2026-09-27
 
 ### Added

@@ -23,7 +23,14 @@ if ! gateway_acquire_lock; then
 fi
 gateway_install_lock_trap
 
-# 2. Backoff / hard-stop for same failed fingerprint.
+# 2. A previous tunnel hard-stop is not a configuration failure. When preflight
+#    passes, drop it and continue instead of asking for env.fail to be deleted.
+if gateway_fail_is_tunnel && gateway_fail_marker_exhausted && gateway_preflight; then
+  echo "↻ Tunnel hard-stop lifted (reason=tunnel_recovery_failed, preflight ok). Retrying."
+  rm -f "$(gateway_fail_path)"
+fi
+
+# 3. Backoff / hard-stop for same failed fingerprint.
 if gateway_backoff_active; then
   if gateway_fail_exhausted; then
     attempts="$(grep -E '^attempts=' "$(gateway_fail_path)" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
@@ -41,7 +48,7 @@ run_setup_restart() {
   SOLAR_GATEWAY_LOCK_HELD=1 $setup_cmd --restart
 }
 
-# 3. Drift first (prevails over partial).
+# 4. Drift first (prevails over partial).
 if gateway_has_drift; then
   echo "⚠️  Env drift detected (stamp mismatch or missing stamp with live bridges)."
   if ! gateway_preflight; then
@@ -54,7 +61,7 @@ if gateway_has_drift; then
   exit $?
 fi
 
-# 4. No drift → check health.
+# 5. No drift → check health.
 set +e
 check_out="$($check_cmd 2>&1)"
 check_code=$?
@@ -66,6 +73,12 @@ fi
 
 case "$check_code" in
   0)
+    # This outage is over. Drop the grace clock so the next one — even on the
+    # same cloudflared pid — gets a fresh GATEWAY_TUNNEL_RESTART_GRACE_SEC.
+    started_mark="$(gateway_tunnel_started_path)"
+    if [[ -f "$started_mark" ]]; then
+      rm -f "$started_mark"
+    fi
     echo "✅ Transport gateway healthy. No action needed."
     exit 0
     ;;
@@ -79,11 +92,17 @@ case "$check_code" in
     run_setup_restart
     ;;
   2)
-    echo "⚠️  Transport gateway partial state (no drift). Restarting tunnel only..."
+    echo "⚠️  Transport gateway partial state (no drift). Tunnel connector is down."
     mkdir -p "$run_dir"
+    if gateway_tunnel_restart_deferred; then
+      echo "⏸️  cloudflared is still running; leaving it to reconnect (grace ${GATEWAY_TUNNEL_RESTART_GRACE_SEC:-300}s)."
+      exit 0
+    fi
+    echo "Restarting tunnel..."
     $stop_cmd --tunnel-only || true
     nohup $start_tunnel_cmd >"$run_dir/cloudflared.log" 2>&1 &
     echo $! >"$run_dir/cloudflared.pid"
+    date +%s >"$(gateway_tunnel_started_path)"
     sleep 1
     if ! kill -0 "$(cat "$run_dir/cloudflared.pid")" 2>/dev/null; then
       echo "❌ Tunnel recovery failed to start cloudflared process." >&2

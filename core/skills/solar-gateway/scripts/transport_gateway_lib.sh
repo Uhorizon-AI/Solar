@@ -7,11 +7,16 @@ _TGW_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _RESOLVE_SCRIPT="$_TGW_LIB_DIR/../../solar-paths/scripts/resolve_solar_paths.sh"
 
 # Backoff: 30s, 60s, 120s, ... capped at 15 minutes.
-# After GATEWAY_FAIL_ATTEMPTS_CAP failures with the same fingerprint, stop retrying
-# until the fingerprint changes (hard stop — not just spaced forever).
+# After GATEWAY_FAIL_ATTEMPTS_CAP configuration failures with the same
+# fingerprint, stop retrying until the fingerprint changes (hard stop — not
+# just spaced forever). A tunnel outage (reason=tunnel_recovery_failed) uses
+# the backoff cap only and never that hard stop.
+# A live cloudflared whose connector is down is left alone for this long
+# (about five LaunchAgent passes) before ensure restarts it.
 GATEWAY_BACKOFF_BASE_SEC="${GATEWAY_BACKOFF_BASE_SEC:-30}"
 GATEWAY_BACKOFF_CAP_SEC="${GATEWAY_BACKOFF_CAP_SEC:-900}"
 GATEWAY_FAIL_ATTEMPTS_CAP="${GATEWAY_FAIL_ATTEMPTS_CAP:-5}"
+GATEWAY_TUNNEL_RESTART_GRACE_SEC="${GATEWAY_TUNNEL_RESTART_GRACE_SEC:-300}"
 
 transport_gateway_bind_workspace() {
   if [[ -n "${_TGW_BOUND:-}" ]]; then
@@ -633,11 +638,83 @@ EOF
   rm -f "$(gateway_fail_path)"
 }
 
+gateway_fail_reason() {
+  local fail_path reason
+  fail_path="$(gateway_fail_path)"
+  [[ -f "$fail_path" ]] || return 1
+  reason="$(grep -E '^reason=' "$fail_path" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+  printf '%s' "$reason"
+}
+
+gateway_fail_is_tunnel() {
+  [[ "$(gateway_fail_reason 2>/dev/null || true)" == "tunnel_recovery_failed" ]]
+}
+
+# Same fingerprint and the file says the configuration hard-stop (or the
+# attempt count already reached it). Ignores reason.
+gateway_fail_marker_exhausted() {
+  local fail_path fp fail_fp attempts exhausted
+  fail_path="$(gateway_fail_path)"
+  if [[ ! -f "$fail_path" ]]; then
+    return 1
+  fi
+  fp="$(gateway_compute_fingerprint)"
+  fail_fp="$(grep -E '^fingerprint=' "$fail_path" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+  if [[ "$fail_fp" != "$fp" ]]; then
+    return 1
+  fi
+  exhausted="$(grep -E '^exhausted=' "$fail_path" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+  if [[ "$exhausted" == "1" ]]; then
+    return 0
+  fi
+  attempts="$(grep -E '^attempts=' "$fail_path" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+  if [[ -n "$attempts" ]] && (( attempts >= GATEWAY_FAIL_ATTEMPTS_CAP )); then
+    return 0
+  fi
+  return 1
+}
+
+gateway_tunnel_started_path() {
+  printf '%s/tunnel_started_at' "$(gateway_runtime_dir)"
+}
+
+# 0 when cloudflared.pid is a live process whose command line is cloudflared.
+gateway_tunnel_pid_alive() {
+  local pid_file pid cmdline
+  pid_file="$(gateway_run_dir)/cloudflared.pid"
+  [[ -f "$pid_file" ]] || return 1
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null || return 1
+  cmdline="$(gateway_pid_cmdline "$pid" || true)"
+  [[ "$cmdline" == *cloudflared* ]]
+}
+
+# 0 when a live cloudflared should be left alone so it can reconnect.
+# The first time we see it, the grace clock starts now.
+gateway_tunnel_restart_deferred() {
+  local started now grace path
+  gateway_tunnel_pid_alive || return 1
+  grace="${GATEWAY_TUNNEL_RESTART_GRACE_SEC:-300}"
+  path="$(gateway_tunnel_started_path)"
+  gateway_ensure_runtime_dir
+  now="$(date +%s)"
+  if [[ ! -f "$path" ]]; then
+    printf '%s\n' "$now" >"$path"
+    return 0
+  fi
+  started="$(tr -d '[:space:]' <"$path" 2>/dev/null || true)"
+  [[ "$started" =~ ^[0-9]+$ ]] || started=0
+  if (( now - started < grace )); then
+    return 0
+  fi
+  return 1
+}
+
 gateway_write_env_fail() {
   local reason="${1:-preflight_or_setup_failed}"
   transport_gateway_bind_workspace
   gateway_ensure_runtime_dir
-  local fail_path fp now attempts next_delay next_at last_fp last_attempts shift_amt exhausted
+  local fail_path fp now attempts next_delay next_at last_fp last_attempts shift_amt exhausted tunnel
   fail_path="$(gateway_fail_path)"
   fp="$(gateway_compute_fingerprint)"
   now="$(date +%s)"
@@ -649,8 +726,13 @@ gateway_write_env_fail() {
       attempts=$((last_attempts + 1))
     fi
   fi
+  tunnel=0
+  if [[ "$reason" == "tunnel_recovery_failed" ]]; then
+    tunnel=1
+  fi
   exhausted=0
-  if (( attempts >= GATEWAY_FAIL_ATTEMPTS_CAP )); then
+  # Tunnel outages never take the configuration hard-stop (one year).
+  if [[ "$tunnel" == 0 ]] && (( attempts >= GATEWAY_FAIL_ATTEMPTS_CAP )); then
     exhausted=1
     # Far-future retry marker; ensure stops until fingerprint changes.
     next_at=$((now + 86400 * 365))
@@ -678,25 +760,12 @@ EOF
 }
 
 gateway_fail_exhausted() {
-  local fail_path fp fail_fp attempts exhausted
-  fail_path="$(gateway_fail_path)"
-  if [[ ! -f "$fail_path" ]]; then
+  # A recorded tunnel outage is not a configuration hard-stop, including an
+  # older env.fail that already has exhausted=1 and a one-year next_retry_at.
+  if gateway_fail_is_tunnel; then
     return 1
   fi
-  fp="$(gateway_compute_fingerprint)"
-  fail_fp="$(grep -E '^fingerprint=' "$fail_path" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
-  if [[ "$fail_fp" != "$fp" ]]; then
-    return 1
-  fi
-  exhausted="$(grep -E '^exhausted=' "$fail_path" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
-  if [[ "$exhausted" == "1" ]]; then
-    return 0
-  fi
-  attempts="$(grep -E '^attempts=' "$fail_path" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
-  if [[ -n "$attempts" ]] && (( attempts >= GATEWAY_FAIL_ATTEMPTS_CAP )); then
-    return 0
-  fi
-  return 1
+  gateway_fail_marker_exhausted
 }
 
 gateway_backoff_active() {

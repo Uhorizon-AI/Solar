@@ -6,7 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/transport_gateway_lib.sh"
 transport_gateway_bind_workspace
 
-if ! command -v cloudflared >/dev/null 2>&1; then
+# Tests point this at a stand-in. Unset, the command on PATH is used.
+cloudflared_bin="${SOLAR_CLOUDFLARED_BIN:-cloudflared}"
+if ! command -v "$cloudflared_bin" >/dev/null 2>&1; then
   echo "Missing dependency: cloudflared"
   exit 1
 fi
@@ -20,7 +22,7 @@ if [[ "$tunnel_mode" == "named" ]]; then
     echo "Run: bash $(transport_gateway_script configure_named_tunnel.sh)"
     exit 1
   fi
-  exec cloudflared tunnel --config "$tunnel_config" run "$tunnel_name"
+  exec "$cloudflared_bin" tunnel --config "$tunnel_config" run "$tunnel_name"
 fi
 
-exec cloudflared tunnel --url "http://${SOLAR_HTTP_HOST:-127.0.0.1}:${SOLAR_HTTP_PORT:-8787}"
+exec "$cloudflared_bin" tunnel --url "http://${SOLAR_HTTP_HOST:-127.0.0.1}:${SOLAR_HTTP_PORT:-8787}"
