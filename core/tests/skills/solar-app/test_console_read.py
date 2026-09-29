@@ -39,6 +39,13 @@ def test_verdict_cases():
     healthy = _state(_stamp(40))
     assert healthy["verdict"] == "calm"
     assert healthy["label"] == "calm"
+    assert [item["id"] for item in healthy["checks"]] == [
+        "database", "port", "system", "router", "launchagent", "gateway",
+    ]
+    assert {item["id"]: item["state"] for item in healthy["checks"]} == {
+        "database": "ok", "port": "ok", "system": "ok", "router": "ok",
+        "launchagent": "ok", "gateway": "ok",
+    }
     assert healthy["gateway"]["local_health"] is True
     assert healthy["gateway"]["processes_alive"] is True
     local_down = _state(_stamp(40, local_health=False))
@@ -60,15 +67,35 @@ def test_verdict_cases():
     quiet_processes = _state(_stamp(40, connector=False, processes={"ws": False, "http": False, "tunnel": False}))
     assert quiet_processes["verdict"] == "fault"
     assert "gateway" in quiet_processes["reasons"]
-    assert _state(_stamp(40), db=False)["verdict"] == "fault"
-    assert "database" in _state(_stamp(40), db=False)["reasons"]
+    refused = _state(_stamp(40), db=False)
+    assert refused["verdict"] == "fault"
+    assert "database" in refused["reasons"]
+    assert {item["id"]: item["state"] for item in refused["checks"]}["database"] == "fault"
+    assert {item["id"]: item["state"] for item in refused["checks"]}["router"] == "fault"
     assert "port" in _state(_stamp(40), port=True)["reasons"]
+    assert {item["id"]: item["state"] for item in _state(_stamp(40), port=True)["checks"]}["port"] == "fault"
     failed = _state(_stamp(40, features={"async-tasks": "failed", "transport-gateway": "ok"}))
     assert failed["verdict"] == "fault"
     assert "system" in failed["reasons"]
+    assert {item["id"]: item["state"] for item in failed["checks"]}["system"] == "fault"
     missing_gateway = _stamp(40)
     missing_gateway["gateway"] = None
-    assert _state(missing_gateway)["verdict"] == "unverified"
+    missing = _state(missing_gateway)
+    assert missing["verdict"] == "unverified"
+    assert {item["id"]: item["state"] for item in missing["checks"]}["gateway"] == "unverified"
+    blank = _state(None)
+    blank_checks = {item["id"]: item["state"] for item in blank["checks"]}
+    assert blank_checks["launchagent"] == "unverified"
+    assert blank_checks["gateway"] == "unverified"
+    assert blank_checks["system"] == "unverified"
+    assert blank_checks["router"] == "ok"
+    stale_checks = {item["id"]: item["state"] for item in stale["checks"]}
+    assert stale_checks["launchagent"] == "fault"
+    assert stale_checks["gateway"] == "unverified"
+    assert stale_checks["system"] == "unverified"
+    stale_failed = _state(_stamp(420, features={"async-tasks": "failed", "transport-gateway": "ok"}))
+    assert {item["id"]: item["state"] for item in stale_failed["checks"]}["system"] == "fault"
+    assert {item["id"]: item["state"] for item in stale_failed["checks"]}["launchagent"] == "fault"
 
 
 def test_loopback_host():

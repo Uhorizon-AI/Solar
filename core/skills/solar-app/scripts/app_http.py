@@ -18,6 +18,15 @@ def get(handler, path, qs, workspace):
         mime = "text/javascript" if asset.endswith(".js") else "text/css" if asset.endswith(".css") else "text/html"
         handler._send((ASSETS / asset).read_bytes(), content_type=mime + "; charset=utf-8")
         return
+    fonts = {
+        "/assets/fonts/inter.woff2": ("fonts/inter.woff2", "font/woff2"),
+        "/assets/fonts/montserrat.woff2": ("fonts/montserrat.woff2", "font/woff2"),
+        "/assets/fonts/OFL.txt": ("fonts/OFL.txt", "text/plain; charset=utf-8"),
+    }
+    if path in fonts:
+        name, mime = fonts[path]
+        handler._send((ASSETS / name).read_bytes(), content_type=mime)
+        return
     if path == "/health":
         handler._send_json({"service": "solar-console", "status": "available", "process_ok": True,
                             "workspace": str(workspace)})

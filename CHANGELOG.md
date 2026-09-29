@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-app): `/api/console/health` states the database, port 9000, system, router, LaunchAgent, and gateway. The console renders those states. A stale pass leaves system unverified unless that stamp recorded a feature failure. Changing the task filter keeps the detail on a visible task. Entrada externa uses the health read from the current visit. An unreadable continuity time stays on the screen as missing data.
+
+### Added
+- feat(solar-app): the console at `/app` is the eight-question view. It is HTML, CSS and JS with no build step. Inter and Montserrat ship under `assets/fonts/` with the SIL Open Font License and are served by `app_http.py`. Each screen reads `/api/console/*`. A 503 with `refused` shows the reason. The verdict comes from `/api/console/health`. The summary reloads every 30 seconds; the other screens reload when opened. Times use Europe/Madrid. The page does not mutate Solar, and it does not call the older `/api/app/*` routes.
+
 ## [0.30.0] - 2026-09-29
 
 ### Added

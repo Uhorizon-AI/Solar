@@ -225,9 +225,49 @@ def verdict(*, stamp, db_readable: bool, port_foreign: bool, now=None) -> dict:
         "label": _LABELS[state],
         "reasons": reasons,
         "unverified": unverified,
+        "checks": _checks(
+            stamp=stamp,
+            db_readable=db_readable,
+            port_foreign=port_foreign,
+            launchagent=launchagent,
+            gateway=gateway,
+        ),
         "launchagent": launchagent,
         "gateway": gateway,
     }
+
+
+def _checks(*, stamp, db_readable: bool, port_foreign: bool, launchagent: dict, gateway: dict) -> list[dict]:
+    """Explicit state for each design check. The page renders this and does not decide it."""
+    features = stamp.get("features") if isinstance(stamp, dict) and isinstance(stamp.get("features"), dict) else {}
+    if any(value == "failed" for value in features.values()):
+        system = "fault"
+    elif launchagent.get("state") == "observed":
+        system = "ok"
+    else:
+        system = "unverified"
+    launch = launchagent.get("state")
+    if launch == "stale":
+        launch_state = "fault"
+    elif launch == "unverified":
+        launch_state = "unverified"
+    else:
+        launch_state = "ok"
+    gateway_state = gateway.get("state")
+    if gateway_state == "healthy":
+        gateway_check = "ok"
+    elif gateway_state == "problems":
+        gateway_check = "fault"
+    else:
+        gateway_check = "unverified"
+    return [
+        {"id": "database", "state": "ok" if db_readable else "fault"},
+        {"id": "port", "state": "fault" if port_foreign else "ok"},
+        {"id": "system", "state": system},
+        {"id": "router", "state": "fault" if not db_readable else "ok"},
+        {"id": "launchagent", "state": launch_state},
+        {"id": "gateway", "state": gateway_check},
+    ]
 
 
 def port_taken_by_other(port: int = 9000) -> bool:

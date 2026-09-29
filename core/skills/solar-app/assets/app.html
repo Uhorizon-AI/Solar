@@ -1,7 +1,37 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Solar · Status and logs</title><link rel="stylesheet" href="/app.css"></head>
-<body><aside class="sidebar"><a class="brand" href="/app"><span class="sun">✳</span> Solar</a><nav class="sections" aria-label="Sections"><button data-view="system" class="selected">Status and logs</button><button data-view="activityView">Activity</button></nav><p class="label">READ-ONLY CONSOLE</p><footer><span id="connection">Unverified</span><small id="workspace"></small><small id="root"></small><small id="checked"></small></footer></aside>
-<main><header><div><span class="eyebrow">THIS MAC</span><h1 id="title">Status and logs</h1></div><span id="working"></span></header><div id="notice" role="status" aria-live="polite"></div>
-<section id="system" class="view"><h2>Solar status</h2><div id="health">Unverified</div><div id="counts"></div><h2>System activity</h2><div id="events"></div><h2>Execution logs</h2><p class="muted">Provider and context actually recorded by the router. Injected history helps review possible interference; on its own it does not prove contamination.</p><div id="logs"></div></section>
-<section id="activityView" class="view" hidden><div class="filters"><label>Source <select id="source"><option value="">All</option><option value="task">Tasks</option><option value="router">Router</option></select></label><label>State <select id="state"><option value="">All</option><option value="error">Failed</option><option value="drafts">Drafts</option><option value="active">Working</option><option value="queued">Queued</option><option value="completed">Completed</option><option value="unverified">Unverified</option></select></label><label>Order <select id="order"><option value="time">Newest first</option><option value="state">By state and date</option></select></label></div><div id="allActivity"></div></section></main>
-<aside class="inspector"><div class="inspector-head"><h2>Activity</h2></div><div id="activity"><p class="muted">Reading tasks and executions…</p></div></aside><script src="/app.js"></script></body></html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Consola local de Solar</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="app t-dark" id="app">
+  <nav class="side" aria-label="Preguntas de la consola">
+    <div class="brand">
+      <span class="sglyph" aria-hidden="true">S</span>
+      <div class="bt"><div class="h3" style="font-weight:800;font-size:16px">Solar</div><div class="note">consola · solo lectura</div></div>
+    </div>
+    <div class="navlist" id="nav"></div>
+    <div class="foot" style="padding:12px 16px;border-top:1px solid var(--line)">
+      <div class="mono" id="host"></div>
+      <div class="note" id="updated">Actualizado —</div>
+      <div class="note">Horas de Madrid</div>
+    </div>
+  </nav>
+  <main class="main">
+    <header class="top">
+      <div style="flex:1;min-width:0">
+        <h1 class="ttl" id="title">Resumen</h1>
+        <div class="muted" id="question" style="font-size:12.5px"></div>
+      </div>
+      <span class="tag">Solo lectura</span>
+      <button class="btn" id="theme" type="button">Claro</button>
+    </header>
+    <div class="body" id="health"></div>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -33,7 +33,19 @@ Health requires a fresh source read. Task failures describe the task, not the
 health of Solar. A router start without a recent end is not proof of a live
 process. History turns and summaries are traceability, not a contamination detector.
 A missing gateway probe is unverified, not healthy. Recorded failures retain their
-date. The browser marks readings older than 120 seconds as unverified.
+date.
+
+The page at `/app` is the eight-question console. It is HTML, CSS and JS with no
+build step and no request to another host. Inter and Montserrat (SIL Open Font
+License) are served from `/assets/fonts/`. Each screen reads one `/api/console/*`
+route. Entrada also reads `/api/console/health` for the gateway state already
+decided there. A 503 with `refused` is shown with its reason. The verdict, its
+reasons and the unverified checks come from `/api/console/health`; the page does
+not apply the rule again. The summary screen reloads every 30 seconds. The other
+screens reload when opened. Times use Europe/Madrid. Nothing on the page mutates
+Solar. The requester column and screen stay empty until part 2. Older
+`/api/app/*`, `/api/async/jobs` and `/api/runtime/health` routes still answer;
+the page does not call them.
 
 ## Console data
 
@@ -44,10 +56,15 @@ outside the database (owner, cutover, pass stamp, daily backups, IDE trees,
 gateway stamp, mandate YAML, MCP gate audit) are read through solar-paths.
 These routes create no runtime file.
 
-`verdict` is `calm`, `fault`, or `unverified`. A fresh pass stamp is healthy
-only when local `/health`, the connector, and the ws, http, and tunnel
-processes are all up. A stamp older than five minutes is a fault. No stamp
-leaves the pass and the gateway unverified. Quiet time is not a fault by itself.
+`verdict` is `calm`, `fault`, or `unverified`. `verdict.checks` states
+`database`, `port`, `system`, `router`, `launchagent`, and `gateway` as
+`ok`, `fault`, or `unverified`. The page renders that list. A fresh pass stamp
+is healthy only when local `/health`, the connector, and the ws, http, and
+tunnel processes are all up. A stamp older than five minutes is a fault. No stamp leaves the pass and
+the gateway unverified. The system result stays unverified until a fresh
+pass, unless that stamp recorded a feature failure. The
+router is a fault when the state refuses, and quiet time is not a fault by
+itself.
 The host refuses to bind when `SOLAR_APP_HOST` is not a loopback address.
 
 ## Validation commands
