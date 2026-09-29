@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-09-29
+
 ### Added
 - feat(solar-state, solar-app, solar-system): the console can read the installation without creating runtime files. `read_session()` takes a shared lock on the existing `state.lock`, refuses when the lock, owner, format or schema is missing, and does not take the daily backup. Queries cover every task status, per-task history, subtasks and execution aggregates. Reconciled durations stay out of every average, and rows with no provider stay out of the provider buckets. Eight read-only routes answer the console questions, including mandate mode from the YAML. A fresh pass stamp is healthy only when local health, the connector, and the ws, http, and tunnel processes are all up; otherwise it is a fault. The host refuses to bind when `SOLAR_APP_HOST` is not loopback. Each LaunchAgent pass writes `runtime/system/pass-stamp.json` with the time, the result of each feature, and local gateway facts.
 
