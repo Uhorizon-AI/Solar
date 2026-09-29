@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-09-29
+
 ### Fixed
 - fix(solar-app): `/api/console/health` states the database, port 9000, system, router, LaunchAgent, and gateway. The console renders those states. A stale pass leaves system unverified unless that stamp recorded a feature failure. Changing the task filter keeps the detail on a visible task. Entrada externa uses the health read from the current visit. An unreadable continuity time stays on the screen as missing data.
 
