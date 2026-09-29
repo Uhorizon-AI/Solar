@@ -204,12 +204,14 @@
     var known = cache[id];
     if (!known) box.innerHTML = '<div class="note">Leyendo…</div>';
     else if (id === "entrada" && !known.refused) box.innerHTML = renderIngress(known.data, null);
+    else if (id === "solicitante" && !known.refused) box.innerHTML = renderRequester(known.data, null);
     else paint(id, known);
     var jobs = [load(screenOf(id)[3])];
     if (id === "entrada") jobs.push(load("/api/console/health"));
+    if (id === "solicitante") jobs.push(load("/api/console/executions"));
     Promise.all(jobs).then(function (parts) {
       var payload = parts[0];
-      var health = id === "entrada" ? (parts[1] || { refused: "sin respuesta" }) : null;
+      var extra = (id === "entrada" || id === "solicitante") ? (parts[1] || { refused: "sin respuesta" }) : null;
       if (ui.screen !== id) {
         cache[id] = payload;
         return;
@@ -217,7 +219,9 @@
       cache[id] = payload;
       if (id === "resumen" && payload.data) healthStamp = new Date().toISOString();
       if (id === "entrada") {
-        box.innerHTML = payload.refused ? refusedBox(payload.refused) : renderIngress(payload.data, health);
+        box.innerHTML = payload.refused ? refusedBox(payload.refused) : renderIngress(payload.data, extra);
+      } else if (id === "solicitante") {
+        box.innerHTML = payload.refused ? refusedBox(payload.refused) : renderRequester(payload.data, extra);
       } else paint(id, payload);
       paintChrome();
     });
@@ -661,7 +665,14 @@
       '<div class="k">Estado</div><div>' + tunnel + "</div></div></div></div>";
   }
 
-  function renderRequester(data) {
+  function userIdNote(executions) {
+    if (!executions) return "sin dato";
+    if (executions.refused) return executions.refused;
+    var count = executions.data && executions.data.user_id_values;
+    if (count == null) return "sin dato";
+    return nf(count) + " identificadores de usuario en el registro, sin traducir a personas.";
+  }
+  function renderRequester(data, executions) {
     var rows = [
       ["tasks", "Tareas", "tareas"],
       ["executions", "Ejecuciones", "ejecuciones"],
@@ -673,7 +684,7 @@
         ' →</button><div class="note">' + (item.recorded ? esc(item.label) : GAP) + "</div></div></div>";
     }).join("");
     return '<div class="card" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span class="gap">' + GAP +
-      "</span></div>" +
+      '</span><span class="note">' + esc(userIdNote(executions)) + "</span></div>" +
       '<div class="card" style="padding:0;overflow:hidden"><div class="row hd" style="grid-template-columns:220px 110px minmax(0,1fr)"><div>Dónde aparece</div><div>Registros</div><div>Ir</div></div>' +
       rows + "</div>";
   }

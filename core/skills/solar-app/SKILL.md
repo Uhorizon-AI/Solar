@@ -54,7 +54,10 @@ Eight read-only routes under `/api/console/`: `health`, `tasks`, `executions`,
 answers them. Database rows come from `read_session()` in solar-state. Files
 outside the database (owner, cutover, pass stamp, daily backups, IDE trees,
 gateway stamp, mandate YAML, MCP gate audit) are read through solar-paths.
-These routes create no runtime file.
+These routes create no runtime file. Execution channel and `user_id` come
+from the audit start with the same `router_id`. An end with no start is
+channel `other`. The requester screen shows how many distinct `user_id`
+values that is, and does not present them as people.
 
 `verdict` is `calm`, `fault`, or `unverified`. `verdict.checks` states
 `database`, `port`, `system`, `router`, `launchagent`, and `gateway` as

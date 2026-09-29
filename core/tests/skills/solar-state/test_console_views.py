@@ -166,3 +166,36 @@ def test_ides_ingress_and_channel_summaries(ready):
         "first_line": "first line only",
     }]
     assert len(summaries) == 1
+
+
+def test_execution_channel_and_user_id_come_from_the_start(ready):
+    with st.session(ready, auto_backup=False) as store:
+        store.audit_append({
+            "ts": "2026-09-01T00:00:00Z", "event": "start", "router_id": "r1",
+            "channel": "telegram", "user_id": "one",
+        })
+        store.audit_append({
+            "ts": "2026-09-01T00:01:00Z", "event": "end", "router_id": "r1",
+            "status": "success", "provider": "claude", "duration_ms": 10,
+            "channel": "voice", "user_id": "ignored",
+        })
+        store.audit_append({
+            "ts": "2026-09-01T00:02:00Z", "event": "start", "router_id": "r2",
+            "channel": "n8n", "user_id": "two",
+        })
+        store.audit_append({
+            "ts": "2026-09-01T00:03:00Z", "event": "end", "router_id": "r2",
+            "status": "success",
+        })
+        store.audit_append({
+            "ts": "2026-09-01T00:04:00Z", "event": "end", "router_id": "orphan",
+            "status": "failed", "channel": "telegram", "user_id": "three",
+        })
+    with st.read_session(ready) as store:
+        runs = runtime_views.console_executions(store)
+    channels = {row["channel"]: row["n"] for row in runs["channels"]}
+    assert channels == {"telegram": 1, "n8n": 1, "other": 1}
+    assert runs["user_id_values"] == 3
+    recent = {row["ts"]: row["channel"] for row in runs["recent"]}
+    assert recent["2026-09-01T00:01:00Z"] == "telegram"
+    assert recent["2026-09-01T00:04:00Z"] == "other"

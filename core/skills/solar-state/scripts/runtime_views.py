@@ -383,24 +383,57 @@ def console_tasks(store):
                 transitions=[list(pair) for pair in solar_state.TRANSITIONS])
 
 
+def _audit_body(raw):
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError:
+        body = {}
+    return body if isinstance(body, dict) else {}
+
+
+def _router_key(column, body):
+    key = column if column else body.get("router_id")
+    text = str(key).strip() if key not in (None, "") else ""
+    return text or None
+
+
+def _execution_identity(start, end):
+    """Channel and user_id are on the start. An end with no start is channel other.
+
+    user_id falls back to the end only when that start row does not exist.
+    """
+    if start is None:
+        return "other", end.get("user_id")
+    channel = str(start.get("channel") or "").strip() or "other"
+    return channel, start.get("user_id")
+
+
 def console_executions(store):
     """End events, grouped. Reconciled durations stay out of every average.
 
     A row with no provider is not a provider bucket: failed ones are the
     failures from before a provider was chosen, and reconciled ones are counted
     beside them. A failed row that already names a provider stays in that
-    provider's count and average.
+    provider's count and average. Channel and user_id are read from the start
+    row with the same router_id.
     """
+    starts = {}
+    for router_id, raw in store.conn.execute(
+            "SELECT router_id, row FROM audit WHERE event = 'start' ORDER BY seq").fetchall():
+        body = _audit_body(raw)
+        key = _router_key(router_id, body)
+        if key and key not in starts:
+            starts[key] = body
     ends = []
-    for ts, raw in store.conn.execute(
-            "SELECT ts, row FROM audit WHERE event = 'end' ORDER BY seq").fetchall():
-        try:
-            body = json.loads(raw)
-        except json.JSONDecodeError:
-            body = {}
-        if not isinstance(body, dict):
-            body = {}
-        ends.append(dict(body, ts=ts or body.get('ts')))
+    for ts, router_id, raw in store.conn.execute(
+            "SELECT ts, router_id, row FROM audit WHERE event = 'end' ORDER BY seq").fetchall():
+        body = _audit_body(raw)
+        body["ts"] = ts or body.get("ts")
+        key = _router_key(router_id, body)
+        channel, user_id = _execution_identity(starts.get(key) if key else None, body)
+        body["channel"] = channel
+        body["user_id"] = user_id
+        ends.append(body)
     providers = {}
     no_provider_failed = {'n': 0, 'duration_ms': 0, 'duration_n': 0}
     reconciled_n = 0
@@ -412,7 +445,7 @@ def console_executions(store):
         status = str(body.get('status') or '')
         by_status[status] = by_status.get(status, 0) + 1
         provider = str(body.get('provider') or '').strip()
-        channel = str(body.get('channel') or '').strip() or 'other'
+        channel = body.get("channel") or "other"
         channels[channel] = channels.get(channel, 0) + 1
         day = str(body.get('ts') or '')[:10]
         if len(day) == 10:
