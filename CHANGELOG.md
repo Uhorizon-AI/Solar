@@ -6,10 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-state, solar-app): execution channels and distinct `user_id` values come from the audit start matched by `router_id`. An end with no start counts as channel `other`; its `user_id` is used only then. The requester screen shows that count and does not treat the values as people.
+
 ## [0.31.0] - 2026-09-29
 
 ### Fixed
-- fix(solar-state, solar-app): execution channels and distinct `user_id` values come from the audit start matched by `router_id`. An end with no start counts as channel `other`; its `user_id` is used only then. The requester screen shows that count and does not treat the values as people.
 - fix(solar-app): `/api/console/health` states the database, port 9000, system, router, LaunchAgent, and gateway. The console renders those states. A stale pass leaves system unverified unless that stamp recorded a feature failure. Changing the task filter keeps the detail on a visible task. Entrada externa uses the health read from the current visit. An unreadable continuity time stays on the screen as missing data.
 
 ### Added
