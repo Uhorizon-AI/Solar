@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-09-29
+
 ### Fixed
 - fix(solar-state, solar-app): execution channels and distinct `user_id` values come from the audit start matched by `router_id`. An end with no start counts as channel `other`; its `user_id` is used only then. The requester screen shows that count and does not treat the values as people.
 
