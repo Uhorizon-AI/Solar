@@ -2,6 +2,7 @@
 """Solar Host — read-only local console on :9000."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import sys
@@ -17,8 +18,9 @@ import host_client_actions as client_actions  # noqa: E402
 import host_registry as reg  # noqa: E402
 import host_workspace_context as ctx  # noqa: E402
 
-HOST = os.environ.get("SOLAR_APP_HOST", "127.0.0.1")
 PORT = 9000
+
+
 def _active_workspace() -> Path:
     path = reg.get_active_path()
     if not path:
@@ -66,7 +68,26 @@ class HostHandler(BaseHTTPRequestHandler):
     do_PATCH = do_POST
 
 
+def loopback_host(host: str) -> bool:
+    """True for localhost and the loopback ranges. 0.0.0.0 is not loopback."""
+    name = (host or "").strip().strip("[]")
+    if name.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
 def main() -> int:
+    host = os.environ.get("SOLAR_APP_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    if not loopback_host(host):
+        print(
+            f"ERROR: SOLAR_APP_HOST={host} is not a loopback address. "
+            "The console stays on this machine.",
+            file=sys.stderr,
+        )
+        return 1
     active = reg.get_active_path()
     if not active:
         seed = os.environ.get("SOLAR_WORKSPACE", "").strip()
@@ -94,8 +115,8 @@ def main() -> int:
         return 1
     ws = _active_workspace()
 
-    server = ThreadingHTTPServer((HOST, PORT), HostHandler)
-    print(f"Solar Host listening on http://{HOST}:{PORT} (workspace={ws})")
+    server = ThreadingHTTPServer((host, PORT), HostHandler)
+    print(f"Solar Host listening on http://{host}:{PORT} (workspace={ws})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -99,25 +99,38 @@ fi
 echo "Solar system tick started. Features: $FEATURES"
 
 failures=0
+stamp_args=()
+probe_gateway=0
+note_feature() {
+  stamp_args+=(--feature "$1=$2")
+}
 
 if has_feature "async-tasks"; then
   echo "▶ Running feature: async-tasks"
   if ! bash "$(solar_system_skill_script solar-async-tasks ensure_async_tasks.sh)"; then
     echo "❌ async-tasks feature failed." >&2
     failures=$((failures + 1))
+    note_feature async-tasks failed
+  else
+    note_feature async-tasks ok
   fi
 fi
 
 if has_feature "transport-gateway"; then
   echo "▶ Running feature: transport-gateway"
+  probe_gateway=1
   if ! bash "$(solar_system_skill_script solar-gateway ensure_transport_gateway.sh)"; then
     echo "❌ transport-gateway feature failed." >&2
     failures=$((failures + 1))
+    note_feature transport-gateway failed
+  else
+    note_feature transport-gateway ok
   fi
 fi
 
 if has_feature "interface"; then
   echo "⚠️  Feature token 'interface' is deprecated — use 'host' (Solar App on :9000)."
+  note_feature interface deprecated
 fi
 
 if has_feature "host"; then
@@ -125,15 +138,36 @@ if has_feature "host"; then
   if ! bash "$(solar_system_skill_script solar-app ensure_host.sh)"; then
     echo "❌ host feature failed." >&2
     failures=$((failures + 1))
+    note_feature host failed
+  else
+    note_feature host ok
   fi
 fi
 
 for token in $(echo "$FEATURES" | tr ',' ' '); do
   case "$token" in
-    async-tasks|transport-gateway|host) ;;
-    *) echo "⚠️  Unknown feature token ignored: $token" ;;
+    async-tasks|transport-gateway|host|interface) ;;
+    *)
+      echo "⚠️  Unknown feature token ignored: $token"
+      note_feature "$token" ignored
+      ;;
   esac
 done
+
+if [[ "$probe_gateway" -eq 1 ]]; then
+  stamp_args+=(--probe-gateway)
+fi
+if [[ ${#stamp_args[@]} -eq 0 ]]; then
+  stamp_ok=0
+  bash "$SCRIPT_DIR/write_pass_stamp.sh" || stamp_ok=1
+else
+  stamp_ok=0
+  bash "$SCRIPT_DIR/write_pass_stamp.sh" "${stamp_args[@]}" || stamp_ok=1
+fi
+if [[ "$stamp_ok" -ne 0 ]]; then
+  echo "❌ Pass stamp failed." >&2
+  failures=$((failures + 1))
+fi
 
 if [[ "$failures" -gt 0 ]]; then
   echo "❌ Solar system tick finished with $failures failure(s)." >&2

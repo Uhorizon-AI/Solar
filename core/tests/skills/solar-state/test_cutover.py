@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -653,3 +655,110 @@ def test_a_finished_rollback_deletes_the_cutover_marker(tmp_path):
     (base / st.CUTOVER_MARKER).write_text('{"identity": "x"}\n', encoding="utf-8")
     cut._finish_rollback(base)
     assert not (base / st.CUTOVER_MARKER).exists()
+
+
+def _inventory(root: Path) -> dict:
+    found = {}
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            found[rel] = ("symlink", os.readlink(path))
+        elif path.is_dir():
+            found[rel] = ("dir",)
+        elif path.is_file():
+            found[rel] = ("file", hashlib.sha256(path.read_bytes()).hexdigest())
+    return found
+
+
+def _console():
+    scripts = Path(st.__file__).resolve().parents[2] / "solar-app" / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import console_data
+    return console_data
+
+
+def test_a_console_read_creates_nothing(runtime, monkeypatch):
+    cut.migrate(runtime, lister=quiet)
+    console = _console()
+    monkeypatch.setattr(console, "port_taken_by_other", lambda port=9000: False)
+    before = _inventory(runtime)
+    workspace = Path(os.environ["SOLAR_WORKSPACE"])
+    import runtime_views
+    with st.read_session(runtime) as store:
+        runtime_views.console_tasks(store)
+        runtime_views.console_executions(store)
+        runtime_views.console_continuity(store)
+        runtime_views.console_mandate_events(store)
+        runtime_views.console_last_activity(store)
+    console.health(workspace)
+    console.tasks(workspace)
+    console.executions(workspace)
+    console.continuity(workspace)
+    console.mandates(workspace)
+    console.ides(workspace)
+    console.ingress(workspace)
+    console.requester(workspace)
+    assert _inventory(runtime) == before
+    assert not (runtime / st.BACKUP_DIR).exists()
+
+
+def test_a_read_does_not_proceed_during_a_cutover(runtime):
+    cut.migrate(runtime, lister=quiet)
+    started = threading.Event()
+    release = threading.Event()
+
+    def hold():
+        with st.cutover(runtime):
+            started.set()
+            assert release.wait(5)
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    assert started.wait(2)
+    before = _inventory(runtime)
+    with pytest.raises(st.StateBusy):
+        with st.read_session(runtime, timeout=0.2) as store:
+            raise AssertionError(store.console_task_counts())
+    assert _inventory(runtime) == before
+    release.set()
+    thread.join(5)
+    assert not thread.is_alive()
+
+
+def test_a_missing_lock_is_refused_without_creating_it(root):
+    with pytest.raises(st.StateUnavailable, match="state.lock"):
+        with st.read_session(root, timeout=0.2):
+            pass
+    assert _inventory(root) == {}
+
+
+def test_a_missing_owner_format_or_schema_is_refused_without_new_files(ready):
+    owner = ready / st.OWNER_NAME
+    saved_owner = owner.read_bytes()
+    owner.unlink()
+    before = _inventory(ready)
+    with pytest.raises(st.StateUnavailable, match="owner"):
+        with st.read_session(ready, timeout=0.2):
+            pass
+    assert _inventory(ready) == before
+    owner.write_bytes(saved_owner)
+
+    fmt = ready / st.FORMAT_NAME
+    saved_fmt = fmt.read_bytes()
+    fmt.unlink()
+    before = _inventory(ready)
+    with pytest.raises(st.StateUnavailable, match="format"):
+        with st.read_session(ready, timeout=0.2):
+            pass
+    assert _inventory(ready) == before
+    fmt.write_bytes(saved_fmt)
+
+    with st.session(ready, auto_backup=False) as store:
+        store.conn.execute("PRAGMA user_version=0")
+        store.conn.commit()
+    before = _inventory(ready)
+    with pytest.raises(st.StateUnavailable, match="schema"):
+        with st.read_session(ready, timeout=0.2):
+            pass
+    assert _inventory(ready) == before

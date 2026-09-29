@@ -1,6 +1,8 @@
 """Read-only routes for the existing status, activity and execution log views."""
 from pathlib import Path
 import app_solar
+import console_data
+import solar_state
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
@@ -25,6 +27,22 @@ def get(handler, path, qs, workspace):
         offset = max(0, int(value('offset', '0')))
         limit = min(100, max(1, int(value('limit', '40'))))
         handler._send_json(app_solar.activity_page(Path(workspace), value('source'), value('state'), offset, limit))
+        return
+    console = {
+        "/api/console/health": console_data.health,
+        "/api/console/tasks": console_data.tasks,
+        "/api/console/executions": console_data.executions,
+        "/api/console/continuity": console_data.continuity,
+        "/api/console/mandates": console_data.mandates,
+        "/api/console/ides": console_data.ides,
+        "/api/console/ingress": console_data.ingress,
+        "/api/console/requester": console_data.requester,
+    }
+    if path in console:
+        try:
+            handler._send_json(console[path](Path(workspace)))
+        except solar_state.StateError as exc:
+            handler._send_json({"error": str(exc), "refused": True}, 503)
         return
     if path in ("/api/app/bootstrap", "/api/app/logs", "/api/async/jobs", "/api/runtime/health"):
         data = app_solar.snapshot(Path(workspace))

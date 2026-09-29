@@ -37,6 +37,8 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 bash -n core/skills/solar-system/scripts/run_orchestrator.sh
 bash -n core/skills/solar-system/scripts/install_launchagent_macos.sh
 bash -n core/skills/solar-system/scripts/check_orchestrator.sh
+bash -n core/skills/solar-system/scripts/write_pass_stamp.sh
+bash core/tests/skills/solar-system/test_pass_stamp.sh
 
 # LaunchAgent SOLAR_ROOT binding unit tests
 bash core/tests/skills/solar-system/test_plist_root_binding.sh
@@ -97,6 +99,12 @@ After `solar client update` or relocating the global install, re-run `install_la
    - async tasks: `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` (the script first checks whether async-tasks is already supervised by solar-system, then falls back to the local worker only when needed)
    - transport gateway: `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
    - host: `core/skills/solar-app/scripts/ensure_host.sh`
+5. writes `<runtime root>/system/pass-stamp.json` through `write_pass_stamp.sh`:
+   the time, each feature result (`ok`, `failed`, `deprecated`, `ignored`), and,
+   when `transport-gateway` ran, whether the ws, http, and tunnel processes are
+   alive, whether local `/health` answered, and whether the connector is ready.
+   The probe curls only loopback. The file is replaced atomically. A tick with
+   no features, or one that does not get the lock, does not write a stamp.
 
 ## Design notes
 

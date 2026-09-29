@@ -58,7 +58,15 @@ with solar_state.session() as state:
                                 body="# Review the plan\n", status="queued")
     if state.task_claim(task_id, worker="worker-1"):
         ...
+
+with solar_state.read_session() as state:
+    state.task_get(task_id)   # shared lock, no daily backup, creates nothing
 ```
+
+`read_session()` opens the existing `state.lock` shared and holds it for the
+whole read. It does not create the lock, the database, or the daily backup.
+It refuses when the lock, the owner, the format, or the schema is missing.
+Writers keep using `session()`.
 
 Bringing existing state in, verbatim (for the cutover):
 

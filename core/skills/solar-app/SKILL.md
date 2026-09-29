@@ -35,6 +35,21 @@ process. History turns and summaries are traceability, not a contamination detec
 A missing gateway probe is unverified, not healthy. Recorded failures retain their
 date. The browser marks readings older than 120 seconds as unverified.
 
+## Console data
+
+Eight read-only routes under `/api/console/`: `health`, `tasks`, `executions`,
+`continuity`, `mandates`, `ides`, `ingress`, `requester`. `console_data.py`
+answers them. Database rows come from `read_session()` in solar-state. Files
+outside the database (owner, cutover, pass stamp, daily backups, IDE trees,
+gateway stamp, mandate YAML, MCP gate audit) are read through solar-paths.
+These routes create no runtime file.
+
+`verdict` is `calm`, `fault`, or `unverified`. A fresh pass stamp is healthy
+only when local `/health`, the connector, and the ws, http, and tunnel
+processes are all up. A stamp older than five minutes is a fault. No stamp
+leaves the pass and the gateway unverified. Quiet time is not a fault by itself.
+The host refuses to bind when `SOLAR_APP_HOST` is not a loopback address.
+
 ## Validation commands
 
 ```bash

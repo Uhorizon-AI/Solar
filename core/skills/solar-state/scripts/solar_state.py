@@ -269,27 +269,89 @@ def _unique_sibling(path: Path, label: str) -> Path:
 # Lock
 # ---------------------------------------------------------------------------
 
+def _lock_wait(handle, exclusive: bool, timeout: float) -> None:
+    if fcntl is None:
+        return
+    mode = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(handle.fileno(), mode)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                kind = "exclusive" if exclusive else "shared"
+                raise StateBusy(f"{kind} state lock not granted in {timeout:g}s "
+                                "(a cutover may be running)") from None
+            time.sleep(0.02)
+
+
 @contextmanager
 def _flock(root: Path, exclusive: bool, timeout: float) -> Iterator[None]:
     root.mkdir(parents=True, exist_ok=True)
     handle = open(root / LOCK_NAME, "a+", encoding="utf-8")
     try:
-        if fcntl is not None:
-            mode = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
-            deadline = time.monotonic() + timeout
-            while True:
-                try:
-                    fcntl.flock(handle.fileno(), mode)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        kind = "exclusive" if exclusive else "shared"
-                        raise StateBusy(f"{kind} state lock not granted in {timeout:g}s "
-                                        "(a cutover may be running)") from None
-                    time.sleep(0.02)
+        _lock_wait(handle, exclusive, timeout)
         yield
     finally:
         handle.close()  # closing releases the flock
+
+
+@contextmanager
+def _flock_existing(root: Path, timeout: float) -> Iterator[None]:
+    """Shared lock on the state.lock that is already there. Never creates it."""
+    lock = root / LOCK_NAME
+    if not lock.is_file():
+        raise StateUnavailable("state.lock is missing")
+    try:
+        handle = open(lock, "r", encoding="utf-8")
+    except OSError as exc:
+        raise StateUnavailable(f"state.lock is missing ({exc})") from None
+    try:
+        _lock_wait(handle, exclusive=False, timeout=timeout)
+        yield
+    finally:
+        handle.close()
+
+
+def _connect_readonly(path: Path) -> sqlite3.Connection:
+    """Read the base without creating a journal, a wal, or a backup.
+
+    A checkpointed base has no wal file. Opening that with immutable=1 does
+    not create one. When a writer has left a wal, the read uses it and does
+    not add a new file. The shared state.lock is what keeps a cutover out.
+
+    A writer that already holds the shared lock can create the wal after this
+    existence check and before SQLite opens the file. The read then keeps an
+    immutable contract on a file that is no longer immutable. That window is
+    accepted: SQLite returns an error or a stale snapshot and does not write
+    the base. The next read sees the wal and opens it read-only. A cutover
+    cannot start while this lock is held.
+    """
+    wal = path.with_name(path.name + "-wal")
+    shm = path.with_name(path.name + "-shm")
+    flag = "mode=ro" if wal.exists() or shm.exists() else "mode=ro&immutable=1"
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?{flag}", uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only=ON")
+    return conn
+
+
+def _open_readonly(base: Path) -> Session:
+    path = db_path(base)
+    if not path.is_file():
+        raise StateUnavailable(f"{path} is missing although the format says sqlite")
+    conn = _connect_readonly(path)
+    try:
+        version = _schema_version(conn)
+        if version != SCHEMA_VERSION:
+            raise StateUnavailable(
+                f"state schema v{version}, this code speaks v{SCHEMA_VERSION}: "
+                "the schema migration has not run")
+        return Session(conn, base)
+    except Exception:
+        conn.close()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -1461,6 +1523,29 @@ def _open_ready(base: Path, auto_backup: bool) -> Session:
     except Exception:
         conn.close()
         raise
+
+
+@contextmanager
+def read_session(root=None, timeout: float = DEFAULT_LOCK_TIMEOUT) -> Iterator[Session]:
+    """A read that creates nothing.
+
+    Opens the existing state.lock shared and holds it until the caller is done.
+    Refuses when the lock, the owner, the format, or the schema is missing.
+    Does not take the daily backup.
+    """
+    base = _root(root)
+    with _flock_existing(base, timeout):
+        _require_owner(base)
+        fmt = read_format(base)
+        if fmt != FORMAT_SQLITE:
+            raise StateUnavailable(
+                f"runtime state format is {fmt or 'unset'}, not sqlite: "
+                "this runtime has not been migrated to solar-state")
+        store = _open_readonly(base)
+        try:
+            yield store
+        finally:
+            store.conn.close()
 
 
 @contextmanager

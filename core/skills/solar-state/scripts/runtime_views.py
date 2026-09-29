@@ -305,7 +305,7 @@ def snapshot(workspace):
     task_states = {state: int((counted.get(state) or {}).get('n') or 0) for state in TASK_STATES}
     components.insert(0, dict(component='storage', state='healthy' if storage_ok else 'problems',
         cause_code='storage_readable' if storage_ok else 'storage_unreadable',
-        cause='Task files and router audit are readable' if storage_ok else 'Canonical storage is not readable', detail='',
+        cause='Tasks and the router audit are readable' if storage_ok else 'The state is not readable', detail='',
         observed_at=iso(), path=str(runtime_dir())))
     components.extend(problems)
     status = 'problems' if any(c['state']=='problems' for c in components) else 'unverified' if any(c['state']=='unverified' for c in components) else 'healthy'
@@ -332,3 +332,166 @@ def activity_page(workspace, source='', state='', offset=0, limit=PAGE_SIZE):
     items.sort(key=lambda row: epoch(row['timestamp']) or 0, reverse=True)
     return dict(items=items[offset:offset + limit], offset=offset, limit=limit,
                 has_more=len(items) > offset + limit)
+
+
+def _duration(value):
+    if value is None or value == '':
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _average(total, count):
+    if not count:
+        return None
+    return round(total / count)
+
+
+def console_tasks(store):
+    """Every task, including archived and planned, plus history and subtasks.
+
+    Reads the tables. Does not touch the v4 views.
+    """
+    tasks = []
+    by_status = {}
+    rows = store.conn.execute(
+        "SELECT id, status, title, provider, origin_channel, created, updated, "
+        "completed_at, recurring, parent_task_id FROM tasks ORDER BY updated DESC, id"
+    ).fetchall()
+    for row in rows:
+        item = dict(
+            id=row['id'], status=row['status'], title=row['title'], provider=row['provider'],
+            channel=row['origin_channel'], created_at=row['created'], updated_at=row['updated'],
+            completed_at=row['completed_at'], recurring=bool(row['recurring']),
+            parent_id=row['parent_task_id'],
+        )
+        tasks.append(item)
+        bucket = by_status.setdefault(item['status'], {'n': 0, 'recurring': 0})
+        bucket['n'] += 1
+        if item['recurring']:
+            bucket['recurring'] += 1
+    links = [dict(row) for row in store.conn.execute(
+        "SELECT parent_id, child_id, subtask_key FROM task_links ORDER BY parent_id, subtask_key")]
+    plans = [dict(parent_id=row['parent_id'], plan=row['plan']) for row in store.conn.execute(
+        "SELECT parent_id, plan FROM subtask_plans ORDER BY parent_id")]
+    history = [dict(row) for row in store.conn.execute(
+        "SELECT task_id, ts, from_status, to_status, actor FROM task_events ORDER BY ts, seq")]
+    return dict(tasks=tasks, by_status=by_status, links=links, plans=plans, history=history,
+                statuses=list(solar_state.STATUSES),
+                transitions=[list(pair) for pair in solar_state.TRANSITIONS])
+
+
+def console_executions(store):
+    """End events, grouped. Reconciled durations stay out of every average.
+
+    A row with no provider is not a provider bucket: failed ones are the
+    failures from before a provider was chosen, and reconciled ones are counted
+    beside them. A failed row that already names a provider stays in that
+    provider's count and average.
+    """
+    ends = []
+    for ts, raw in store.conn.execute(
+            "SELECT ts, row FROM audit WHERE event = 'end' ORDER BY seq").fetchall():
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        ends.append(dict(body, ts=ts or body.get('ts')))
+    providers = {}
+    no_provider_failed = {'n': 0, 'duration_ms': 0, 'duration_n': 0}
+    reconciled_n = 0
+    by_status = {}
+    channels = {}
+    days = {}
+    user_ids = set()
+    for body in ends:
+        status = str(body.get('status') or '')
+        by_status[status] = by_status.get(status, 0) + 1
+        provider = str(body.get('provider') or '').strip()
+        channel = str(body.get('channel') or '').strip() or 'other'
+        channels[channel] = channels.get(channel, 0) + 1
+        day = str(body.get('ts') or '')[:10]
+        if len(day) == 10:
+            days[day] = days.get(day, 0) + 1
+        user_id = body.get('user_id')
+        if user_id not in (None, ''):
+            user_ids.add(str(user_id))
+        duration = _duration(body.get('duration_ms'))
+        if status == 'reconciled':
+            reconciled_n += 1
+            continue
+        if not provider:
+            if status == 'failed':
+                no_provider_failed['n'] += 1
+                if duration is not None:
+                    no_provider_failed['duration_ms'] += duration
+                    no_provider_failed['duration_n'] += 1
+            continue
+        bucket = providers.setdefault(provider, {'n': 0, 'duration_ms': 0, 'duration_n': 0})
+        bucket['n'] += 1
+        if duration is not None:
+            bucket['duration_ms'] += duration
+            bucket['duration_n'] += 1
+    provider_rows = [
+        {'provider': name, 'n': bucket['n'],
+         'avg_duration_ms': _average(bucket['duration_ms'], bucket['duration_n'])}
+        for name, bucket in sorted(providers.items())
+    ]
+    recent = [
+        {'ts': body.get('ts'), 'status': body.get('status'), 'provider': body.get('provider') or None,
+         'channel': body.get('channel'), 'duration_ms': _duration(body.get('duration_ms'))}
+        for body in ends[-20:]
+    ]
+    return dict(
+        total=len(ends),
+        by_status=by_status,
+        no_provider=dict(
+            failed=no_provider_failed['n'],
+            failed_avg_duration_ms=_average(no_provider_failed['duration_ms'], no_provider_failed['duration_n']),
+            reconciled=reconciled_n,
+        ),
+        providers=provider_rows,
+        channels=[{'channel': name, 'n': n} for name, n in sorted(channels.items())],
+        days=[{'day': day, 'n': n} for day, n in sorted(days.items())],
+        first=ends[0]['ts'] if ends else None,
+        last=ends[-1]['ts'] if ends else None,
+        user_id_values=len(user_ids),
+        recent=recent,
+    )
+
+
+def console_continuity(store):
+    data = store.continuity_get()
+    return data if isinstance(data, dict) else None
+
+
+def console_mandate_events(store):
+    """Counts per mandate. The mode is not in this table."""
+    out = {}
+    rows = store.conn.execute(
+        "SELECT mandate, ts, stream FROM delegation_events ORDER BY ts, seq"
+    ).fetchall()
+    for row in rows:
+        item = out.setdefault(row['mandate'], {'events': 0, 'shadow': 0, 'first': None, 'last': None})
+        item['events'] += 1
+        if row['stream'] == 'shadow':
+            item['shadow'] += 1
+        if item['first'] is None:
+            item['first'] = row['ts']
+        item['last'] = row['ts']
+    return out
+
+
+def console_last_activity(store):
+    def latest(sql):
+        row = store.conn.execute(sql).fetchone()
+        return row[0] if row and row[0] else None
+    return dict(
+        router=latest("SELECT MAX(ts) FROM audit"),
+        tasks=latest("SELECT MAX(ts) FROM task_events"),
+        mandates=latest("SELECT MAX(ts) FROM delegation_events"),
+    )
