@@ -51,10 +51,11 @@ body{margin:0}
 .vbox.v-ok{border-color:var(--ok);background:var(--okbg)}
 .vbox.v-bad{border-color:var(--err);background:var(--errbg)}
 .vglyph{width:60px;height:60px;flex:none;display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700;border:3px solid;border-radius:50%}
-.v-unk .vglyph,.v-unk .vword{color:var(--info)}.v-unk .vglyph{border-style:dashed}
-.v-ok .vglyph,.v-ok .vword{color:var(--ok)}
-.v-bad .vglyph,.v-bad .vword{color:var(--err)}.v-bad .vglyph{border-radius:8px}
+.v-unk .vglyph,.v-unk .vword,.v-unk .vtitle{color:var(--info)}.v-unk .vglyph{border-style:dashed}
+.v-ok .vglyph,.v-ok .vword,.v-ok .vtitle{color:var(--ok)}
+.v-bad .vglyph,.v-bad .vword,.v-bad .vtitle{color:var(--err)}.v-bad .vglyph{border-radius:8px}
 .vword{font-family:'Montserrat',sans-serif;font-size:34px;font-weight:800;letter-spacing:.01em;line-height:1}
+.vtitle{font-family:'Montserrat',sans-serif;font-size:22px;font-weight:750;line-height:1.3}
 .chip{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:6px;padding:0 10px;min-height:36px;font:inherit;font-size:12.5px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .chip.on{border-color:var(--brand);background:var(--sel);font-weight:600}
 .bar{height:10px;background:var(--panel2);border:1px solid var(--line);border-radius:3px;overflow:hidden;display:flex}
@@ -110,5 +111,6 @@ body{margin:0}
   .row .opt{display:none}
   .vbox{padding:14px}
   .vword{font-size:26px}
+  .vtitle{font-size:18px}
   .day .v,.dlabels{display:none}
 }

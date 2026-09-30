@@ -68,6 +68,10 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertIn("Europe/Madrid", js)
         self.assertIn("30000", js)
         self.assertIn("refused", js)
+        copy = js + "\n" + html
+        self.assertNotIn("Mandatos A3", copy)
+        for token in ("A0", "A1", "A2", "A3", "A4"):
+            self.assertIsNone(re.search(rf"\b{token}\b", copy), token)
 
     def test_app_serves_the_console_and_its_fonts(self):
         with patch.object(host_server, "_active_workspace", return_value=ASSETS):
@@ -136,8 +140,10 @@ const health = {
     gateway: { state: "healthy", connector_ready: true, local_health: true, processes_alive: true, processes: {} },
   },
   version: "v0", mode: "global", owner: null, cutover: null, backups: [],
-  stamp: { features: {} }, last_activity: {}, continuity_at: null,
+  stamp: { features: { "async-tasks": "ok" } }, last_activity: {}, continuity_at: null,
   continuity_age_seconds: null, database: null,
+  language: "en",
+  attention: "All working · 7 tasks in error · 15 drafts · no activity for 4 days",
 };
 const tasks = {
   tasks: [
@@ -180,6 +186,7 @@ function boot(routes) {
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
   return {
+    document: sandbox.document,
     els,
     click(attrs) {
       const target = {
@@ -207,16 +214,23 @@ async function settled() {
   let page = boot(Object.assign({}, calm));
   await settled();
   const summary = page.els.health.innerHTML;
-  ["Base", "Puerto 9000", "System", "Router", "LaunchAgent", "Gateway"].forEach((name) => {
+  ["Database", "Port 9000", "System", "Router", "LaunchAgent", "Gateway"].forEach((name) => {
     if (!summary.includes("✓ " + name)) throw new Error("calm summary omits " + name);
   });
-  if (page.els.title.textContent !== "Resumen") throw new Error("opened on " + page.els.title.textContent);
+  if (!summary.includes(health.attention)) throw new Error("summary did not show the attention line");
+  if (!summary.includes("The last thing Solar was holding when you spoke to it through Telegram, n8n, or a task.")) {
+    throw new Error("summary continuity card has no explanation");
+  }
+  if (summary.includes("async-tasks")) throw new Error("feature id stayed visible");
+  if (!summary.includes("Background tasks ok")) throw new Error("feature was not named");
+  if (page.els.title.textContent !== "Summary") throw new Error("opened on " + page.els.title.textContent);
+  if (page.document.title !== "Solar local console") throw new Error("browser title stayed " + page.document.title);
 
   page = boot(Object.assign({ "/api/console/tasks": { body: tasks } }, calm));
   await settled();
   page.click({ "data-screen": "tareas" });
   await settled();
-  if (page.els.title.textContent !== "Tareas") throw new Error("nav did not open tasks");
+  if (page.els.title.textContent !== "Tasks") throw new Error("nav did not open tasks");
   if (!page.els.health.innerHTML.includes("Broken")) throw new Error("attention filter hid the error");
   if (page.els.health.innerHTML.includes("Finished")) throw new Error("attention filter showed a completed task");
   page.click({ "data-filter": "completed" });
@@ -241,8 +255,8 @@ async function settled() {
   page.click({ "data-screen": "tareas" });
   await settled();
   const denied = page.els.health.innerHTML;
-  if (!denied.includes("state lock missing") || !denied.includes("La ruta se negó")) throw new Error("503 did not show the refusal");
-  if (denied.includes("Mostrando")) throw new Error("503 rendered an empty task list");
+  if (!denied.includes("state lock missing") || !denied.includes("The route refused")) throw new Error("503 did not show the refusal");
+  if (denied.includes("Showing")) throw new Error("503 rendered an empty task list");
 
   const live = {
     "/api/console/health": { body: health },
@@ -255,7 +269,7 @@ async function settled() {
   await settled();
   const entry = page.els.health.innerHTML;
   if (!entry.includes("health refused now")) throw new Error("entrada hid the current health refusal");
-  if (entry.includes("Conector listo")) throw new Error("entrada reused a stale gateway");
+  if (entry.includes("Connector ready")) throw new Error("entrada reused a stale gateway");
 
   page = boot(Object.assign({
     "/api/console/continuity": { body: { at: "not-a-date", active: "sigue aqui", channels: [], summaries: [] } },
@@ -264,7 +278,62 @@ async function settled() {
   page.click({ "data-screen": "continuidad" });
   await settled();
   const continuity = page.els.health.innerHTML;
-  if (!continuity.includes("sigue aqui") || !continuity.includes("sin dato")) throw new Error("invalid continuity date broke the screen");
+  if (!continuity.includes("sigue aqui") || !continuity.includes("no data")) throw new Error("invalid continuity date broke the screen");
+  if (!continuity.includes("The last thing Solar was holding when you spoke to it through Telegram, n8n, or a task.")) {
+    throw new Error("continuity screen has no explanation");
+  }
+  if (!continuity.includes("Saved text, not a message from this console.")) {
+    throw new Error("active intention is not marked as saved text");
+  }
+
+  const mandates = {
+    defined: [
+      { name: "live-one", file: "live-one.yaml", mode: "active", revoked_at: null },
+      { name: "old-one", file: "old-one.yaml", mode: "revoked", revoked_at: "2026-09-01T00:00:00Z" },
+      { name: "trial-one", file: "trial-one.yaml", mode: "shadow", revoked_at: null },
+      { name: "paused-one", file: "paused-one.yaml", mode: "paused", revoked_at: null },
+      { name: "dated-one", file: "dated-one.yaml", mode: "active", revoked_at: "2026-09-01T00:00:00Z" },
+    ],
+    active: 1,
+    events: {},
+    gate: {
+      total: 1,
+      allowed: 0,
+      last: [{ ts: "2026-09-01T00:00:00Z", tool: "solar_task_approve", allowed: false, code: "a3_refused" }],
+    },
+  };
+  page = boot(Object.assign({ "/api/console/mandates": { body: mandates } }, calm));
+  await settled();
+  page.click({ "data-screen": "autonomia" });
+  await settled();
+  const autonomy = page.els.health.innerHTML;
+  if (!autonomy.includes("Delegations")) throw new Error("delegations section missing");
+  if (autonomy.includes("Mandatos A3") || /\bA[0-4]\b/.test(autonomy)) throw new Error("authority code on the page");
+  if (!autonomy.includes("1 active")) throw new Error("revoked delegation counted as active");
+  if (autonomy.includes("2 active")) throw new Error("active count included a revoked delegation");
+  if (!autonomy.includes("Trial (no real effects)")) throw new Error("shadow mode was not named");
+  if (!autonomy.includes("Paused")) throw new Error("paused mode was not named");
+  if (!autonomy.includes('class="row dim"')) throw new Error("revoked row is not dimmed");
+  const revokedAt = autonomy.indexOf("old-one");
+  const revokedRow = autonomy.slice(autonomy.lastIndexOf("<div", revokedAt), autonomy.indexOf("trial-one"));
+  if (!revokedRow.includes("Revoked on")) throw new Error("revoked row has no revocation date");
+  if (revokedRow.includes(">Active<") || revokedRow.includes(" Active")) throw new Error("revoked row looks active");
+  const datedAt = autonomy.indexOf("dated-one");
+  const datedRow = autonomy.slice(autonomy.lastIndexOf('<div class="row', datedAt), datedAt + 500);
+  if (!datedRow.includes("dim")) throw new Error("revoked_at with mode active is not dimmed");
+  if (!datedRow.includes("Revoked")) throw new Error("revoked_at row is not labeled revoked");
+  if (datedRow.includes("Active")) throw new Error("revoked_at row still looks active");
+  if (autonomy.includes("a3_refused")) throw new Error("gate code stayed visible");
+  if (!autonomy.includes("Approving a task is outside a delegation")) throw new Error("gate reason was not named");
+
+  const spanishHealth = Object.assign({}, health, { language: "es" });
+  page = boot({ "/api/console/health": { body: spanishHealth } });
+  await settled();
+  if (page.els.title.textContent !== "Resumen") throw new Error("spanish setting left the title in English");
+  if (page.document.title !== "Consola local de Solar") throw new Error("browser title stayed " + page.document.title);
+  if (!page.els.health.innerHTML.includes("Lo último que Solar tenía entre manos cuando le hablaste por Telegram, n8n o una tarea.")) {
+    throw new Error("spanish setting left the continuity card in English");
+  }
   console.log(JSON.stringify({ ok: true }));
 })().catch((error) => {
   console.error(error && error.stack || error);

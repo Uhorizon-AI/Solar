@@ -1,33 +1,33 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Consola local de Solar</title>
+<title>Solar local console</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <div class="app t-dark" id="app">
-  <nav class="side" aria-label="Preguntas de la consola">
+  <nav class="side" id="sidenav" aria-label="Console questions">
     <div class="brand">
       <span class="sglyph" aria-hidden="true">S</span>
-      <div class="bt"><div class="h3" style="font-weight:800;font-size:16px">Solar</div><div class="note">consola · solo lectura</div></div>
+      <div class="bt"><div class="h3" style="font-weight:800;font-size:16px">Solar</div><div class="note" id="brand-note">console · read only</div></div>
     </div>
     <div class="navlist" id="nav"></div>
     <div class="foot" style="padding:12px 16px;border-top:1px solid var(--line)">
       <div class="mono" id="host"></div>
-      <div class="note" id="updated">Actualizado —</div>
-      <div class="note">Horas de Madrid</div>
+      <div class="note" id="updated">Updated —</div>
+      <div class="note" id="tz-note">Madrid time</div>
     </div>
   </nav>
   <main class="main">
     <header class="top">
       <div style="flex:1;min-width:0">
-        <h1 class="ttl" id="title">Resumen</h1>
+        <h1 class="ttl" id="title">Summary</h1>
         <div class="muted" id="question" style="font-size:12.5px"></div>
       </div>
-      <span class="tag">Solo lectura</span>
-      <button class="btn" id="theme" type="button">Claro</button>
+      <span class="tag" id="readonly-tag">Read only</span>
+      <button class="btn" id="theme" type="button">Light</button>
     </header>
     <div class="body" id="health"></div>
   </main>

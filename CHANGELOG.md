@@ -6,6 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(solar-app): `/api/console/health` adds `attention`. Calm lists only non-zero counts. A fault or a missing check names the cause. The page shows that sentence.
+- feat(solar-app): console copy is English unless `.solar/settings.json` sets `"language"` to `es`. Health returns that `language`. The page follows it, including the browser title. A missing key stays English.
+
+### Changed
+- The console names continuity and delegations in plain language. A file with `revoked_at` is revoked: dimmed, dated, and not counted as active. Detail: `docs/tasks/2026-09-29-console-attention.md`.
+
 ## [0.31.1] - 2026-09-29
 
 ### Fixed

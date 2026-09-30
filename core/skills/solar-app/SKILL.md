@@ -41,11 +41,20 @@ License) are served from `/assets/fonts/`. Each screen reads one `/api/console/*
 route. Entrada also reads `/api/console/health` for the gateway state already
 decided there. A 503 with `refused` is shown with its reason. The verdict, its
 reasons and the unverified checks come from `/api/console/health`; the page does
-not apply the rule again. The summary screen reloads every 30 seconds. The other
-screens reload when opened. Times use Europe/Madrid. Nothing on the page mutates
-Solar. The requester column and screen stay empty until part 2. Older
-`/api/app/*`, `/api/async/jobs` and `/api/runtime/health` routes still answer;
-the page does not call them.
+not apply the rule again. `attention` on that route is the summary headline.
+Copy is English unless `.solar/settings.json` sets `"language"` to `es`
+(also `es-ES` or `spanish`). Set that key with `solar client language set es`.
+Do not edit `.solar/settings.json` by hand. A workspace with no `language`
+key stays English. Health returns that `language`. Calm starts with "All
+working" ("Todo funciona" in Spanish) and adds only non-zero counts: tasks
+in error, drafts, and whole days since the newest router, task, or mandate
+activity. A fault names the cause. Unverified names the checks that have no
+data. The page prints that sentence and does not compose it. The summary
+screen reloads every 30 seconds. The other screens reload when opened.
+Times use Europe/Madrid.
+Nothing on the page mutates Solar. The requester column and screen stay empty
+until part 2. Older `/api/app/*`, `/api/async/jobs` and `/api/runtime/health`
+routes still answer; the page does not call them.
 
 ## Console data
 
@@ -69,6 +78,18 @@ pass, unless that stamp recorded a feature failure. The
 router is a fault when the state refuses, and quiet time is not a fault by
 itself.
 The host refuses to bind when `SOLAR_APP_HOST` is not a loopback address.
+
+The continuity screen and its card on the summary explain that the record is
+what Solar last held from Telegram, n8n, or a task, and that it does not move
+when work happens in the IDE. The active intention is labeled as stored text.
+The continuity payload is unchanged.
+
+Delegation modes are labeled Active, Trial (no real effects), Paused, and
+Revoked. With `"language": "es"` those labels are Activa, En prueba (sin
+efectos reales), Pausada, and Revocada. A filled `revoked_at` marks the
+file revoked even when `mode` still says active. That file stays in the
+list, dimmed, with the date, and is left out of `active`. Visible copy uses
+those names. It does not show authority codes.
 
 ## Validation commands
 
