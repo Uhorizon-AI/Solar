@@ -74,6 +74,11 @@ assert_eq "cli alias spanish" "$(bash "$lang_script")" "es"
 solar_client_write_settings_v12 "$WS" "$ROOT"
 assert_eq "update keeps language" "$(solar_client_read_language "$WS")" "es"
 
+missing="$TMP/no-such-console_language.py"
+err="$(SOLAR_CONSOLE_LANGUAGE_PY="$missing" solar_client_read_language "$WS" 2>&1 || true)"
+assert_eq "missing table names the path" "$(printf '%s' "$err" | grep -c "$missing")" "1"
+assert_eq "missing table names the skill file" "$(printf '%s' "$err" | grep -c 'scripts/console_language.py')" "1"
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [[ "$FAIL" -eq 0 ]]

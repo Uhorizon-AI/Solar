@@ -11,6 +11,9 @@ The format is based on Keep a Changelog.
 - feat(solar-app): console copy is English unless `.solar/settings.json` sets `"language"` to `es`. Health returns that `language`. The page follows it, including the browser title. A missing key stays English.
 - feat(solar-client): `solar client language set es` writes that key. `solar client update` keeps it. Accepted aliases live in `console_language.py`.
 
+### Fixed
+- fix(solar-client): `solar client language` reads `scripts/console_language.py` from the solar-client skill. If that file is missing, the error names the path.
+
 ### Changed
 - The console names continuity and delegations in plain language. A file with `revoked_at` is revoked: dimmed, dated, and not counted as active. Detail: `docs/tasks/2026-09-29-console-attention.md`.
 

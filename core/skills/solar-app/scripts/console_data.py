@@ -1,6 +1,7 @@
 """Read-only answers for the console. Nothing here creates a runtime file."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from datetime import datetime, timezone
@@ -9,11 +10,21 @@ from pathlib import Path
 _APP = Path(__file__).resolve().parent
 _STATE = _APP.parent.parent / "solar-state" / "scripts"
 _PATHS = _APP.parent.parent / "solar-paths" / "scripts"
-for _path in (_APP, _STATE, _PATHS):
+_LANGUAGE_PY = _APP.parent.parent / "solar-client" / "scripts" / "console_language.py"
+for _path in (_STATE, _PATHS):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-import console_language as language_tokens  # noqa: E402
+if not _LANGUAGE_PY.is_file():
+    raise ImportError(
+        "console language table is missing: "
+        f"{_LANGUAGE_PY}. It ships inside the solar-client skill "
+        "(scripts/console_language.py)."
+    )
+_spec = importlib.util.spec_from_file_location("console_language", _LANGUAGE_PY)
+language_tokens = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(language_tokens)
+
 import mandates as mandate_lib  # noqa: E402
 import runtime_views  # noqa: E402
 import solar_runtime  # noqa: E402

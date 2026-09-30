@@ -315,16 +315,24 @@ if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write
 PY
 }
 
-# Alias table lives in solar-app/scripts/console_language.py.
-_CONSOLE_LANGUAGE_PY="$_CLIENT_LIB_SCRIPT_DIR/../../solar-app/scripts/console_language.py"
+# The alias table ships next to this file, inside the solar-client skill.
+solar_client_console_language_py() {
+  local helper="${SOLAR_CONSOLE_LANGUAGE_PY:-$_CLIENT_LIB_SCRIPT_DIR/console_language.py}"
+  if [[ ! -f "$helper" ]]; then
+    printf 'ERROR: console language table is missing: %s. It ships inside the solar-client skill (scripts/console_language.py).\n' "$helper" >&2
+    return 1
+  fi
+  printf '%s\n' "$helper"
+}
 
 # Effective console language: en when the key is missing or not Spanish.
 solar_client_read_language() {
   local workspace="$1"
-  local path
+  local path helper
+  helper="$(solar_client_console_language_py)" || return 1
   path="$(solar_client_settings_path "$workspace")"
   [[ -f "$path" ]] || { printf '%s\n' "en"; return 0; }
-  python3 - <<'PY' "$path" "$_CONSOLE_LANGUAGE_PY"
+  python3 - <<'PY' "$path" "$helper"
 import importlib.util, json, sys
 path, helper = sys.argv[1], sys.argv[2]
 try:
@@ -348,10 +356,11 @@ PY
 solar_client_write_language() {
   local workspace="$1"
   local requested="${2:-}"
-  local write_path read_path language
+  local write_path read_path language helper
+  helper="$(solar_client_console_language_py)" || return 1
   write_path="$(solar_client_settings_write_path "$workspace")"
   read_path="$(solar_client_settings_path "$workspace")"
-  language="$(python3 "$_CONSOLE_LANGUAGE_PY" canonical "$requested")"
+  language="$(python3 "$helper" canonical "$requested")"
   mkdir -p "$workspace/.solar"
   python3 - <<'PY' "$write_path" "$read_path" "$language"
 import json, os, sys, tempfile

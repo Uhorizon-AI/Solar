@@ -6,8 +6,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _APP = Path(__file__).resolve().parents[3] / "skills" / "solar-app" / "scripts"
-if str(_APP) not in sys.path:
-    sys.path.insert(0, str(_APP))
+_CLIENT = Path(__file__).resolve().parents[3] / "skills" / "solar-client" / "scripts"
+for _path in (_APP, _CLIENT):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 import console_data  # noqa: E402
 import console_language as language_tokens  # noqa: E402

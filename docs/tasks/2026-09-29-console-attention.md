@@ -20,7 +20,7 @@ Make the Solar console say what needs attention, in plain language, without the 
 - [x] Continuity screen and summary card explain the record; the active intention is labeled as stored text; continuity data is unchanged
 - [x] Delegation modes are named; a revoked row is dimmed, shows `revoked_at`, and is not in `active`
 - [x] Console copy does not contain authority codes A0–A4 or "Mandatos A3"
-- [x] Console copy is English when `language` is missing. `"language": "es"` (also `es-ES` or `spanish`) selects Spanish. Health returns that `language`. The page follows it, including the browser title. Those aliases live in `console_language.py`
+- [x] Console copy is English when `language` is missing. `"language": "es"` (also `es-ES` or `spanish`) selects Spanish. Health returns that `language`. The page follows it, including the browser title. Those aliases live in `core/skills/solar-client/scripts/console_language.py`
 - [x] `solar client language set es` writes `language` in `.solar/settings.json`. `solar client update` keeps the key. A missing key stays English
 - [x] solar-app, solar-state, and solar-client checks pass
 
@@ -52,7 +52,7 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 
 - Validation:
   - `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state -q` -> pass (200)
-  - `bash core/tests/skills/solar-client/test_client_language.sh` -> passed=10 failed=0
+  - `bash core/tests/skills/solar-client/test_client_language.sh` -> passed=12 failed=0
   - `core/tests/skills/solar-client/test_*.sh` -> exit 0
   - `package_skill.py` for `solar-app` and `solar-client` -> packaged
 - Files changed: listed in Scope
