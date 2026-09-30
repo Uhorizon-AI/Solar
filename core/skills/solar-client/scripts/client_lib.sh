@@ -315,6 +315,89 @@ if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write
 PY
 }
 
+# Alias table lives in solar-app/scripts/console_language.py.
+_CONSOLE_LANGUAGE_PY="$_CLIENT_LIB_SCRIPT_DIR/../../solar-app/scripts/console_language.py"
+
+# Effective console language: en when the key is missing or not Spanish.
+solar_client_read_language() {
+  local workspace="$1"
+  local path
+  path="$(solar_client_settings_path "$workspace")"
+  [[ -f "$path" ]] || { printf '%s\n' "en"; return 0; }
+  python3 - <<'PY' "$path" "$_CONSOLE_LANGUAGE_PY"
+import importlib.util, json, sys
+path, helper = sys.argv[1], sys.argv[2]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception as exc:
+    sys.stderr.write(f"ERROR: invalid Solar workspace settings: {path}: {exc}\n")
+    sys.exit(1)
+if not isinstance(data, dict):
+    sys.stderr.write(f"ERROR: Solar workspace settings must be a JSON object: {path}\n")
+    sys.exit(1)
+spec = importlib.util.spec_from_file_location("console_language", helper)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.effective_language(data.get("language")))
+PY
+}
+
+# Write canonical "en" or "es" into .solar/settings.json. Other keys stay.
+# Accepted aliases are defined in console_language.py.
+solar_client_write_language() {
+  local workspace="$1"
+  local requested="${2:-}"
+  local write_path read_path language
+  write_path="$(solar_client_settings_write_path "$workspace")"
+  read_path="$(solar_client_settings_path "$workspace")"
+  language="$(python3 "$_CONSOLE_LANGUAGE_PY" canonical "$requested")"
+  mkdir -p "$workspace/.solar"
+  python3 - <<'PY' "$write_path" "$read_path" "$language"
+import json, os, sys, tempfile
+
+write_path, read_path, language = sys.argv[1:4]
+if language not in {"en", "es"}:
+    sys.stderr.write("ERROR: language must be en or es\n")
+    sys.exit(2)
+
+data = {}
+if os.path.isfile(read_path):
+    try:
+        with open(read_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:
+        sys.stderr.write(f"ERROR: invalid Solar workspace settings: {read_path}: {exc}\n")
+        sys.exit(1)
+    if not isinstance(data, dict):
+        sys.stderr.write(f"ERROR: Solar workspace settings must be a JSON object: {read_path}\n")
+        sys.exit(1)
+
+data["language"] = language
+data["scope"] = data.get("scope") or "workspace"
+data["layout"] = data.get("layout") or "solar-client-v1.2"
+
+os.makedirs(os.path.dirname(write_path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=os.path.dirname(write_path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, write_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+
+legacy = os.path.join(os.path.dirname(write_path), "manifest.json")
+if os.path.isfile(legacy) and os.path.realpath(legacy) != os.path.realpath(write_path):
+    os.unlink(legacy)
+print(language)
+PY
+}
+
 # Writes .solar/settings.json (layout solar-client-v1.2). Prefer this name over the legacy alias.
 solar_client_write_settings_v12() {
   local workspace="$1"

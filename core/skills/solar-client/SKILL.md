@@ -48,6 +48,7 @@ bash core/tests/skills/solar-paths/test_resolve_solar_paths.sh
 bash core/tests/skills/solar-paths/test_solar_paths_py.sh
 bash core/tests/skills/solar-client/test_sync_clients_prune.sh
 bash core/tests/skills/solar-client/test_sync_exclude.sh
+bash core/tests/skills/solar-client/test_client_language.sh
 bash core/tests/skills/solar-client/test_install_solar_client.sh
 bash core/tests/skills/solar-client/test_update_notice.sh
 bash core/skills/solar-client/scripts/smoke-solar-client.sh "$PWD"
@@ -71,6 +72,8 @@ solar client sync exclude list
 solar client sync exclude add <planet>
 solar client sync exclude remove <planet>
 solar client bundle create|verify
+solar client language
+solar client language set en|es
 solar client doctor [--strict]
 solar client self-update
 solar setup                # onboarding facade
@@ -81,6 +84,11 @@ solar mcp                  # stdio MCP server (IDE child)
 solar mcp print|install|uninstall # user-level registration; install supports --dry-run
 solar app …                # delegates to solar-app
 ```
+
+`solar client language` prints the console language. It prints `en` when
+`.solar/settings.json` has no `language` key. `solar client language set es`
+writes `"language": "es"` there. That is how the console selects Spanish.
+Do not edit that file by hand. `solar client update` keeps the key.
 
 `solar client update` invokes `migrate_workspace_env_agy.py` internally when a
 workspace still lists the retired `gemini` provider; do not run the helper as a

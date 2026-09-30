@@ -17,7 +17,7 @@ Usage:
 Subcommands:
   setup                    Onboarding
   uninstall                Remove the local installation
-  client init|sync|doctor|upgrade|update|bundle|self-update
+  client init|sync|doctor|upgrade|update|bundle|self-update|language
   update                   Alias for: solar client update
   workspace doctor         Workspace content health
   app start|stop|status|open   Read-only console on :9000
@@ -89,12 +89,16 @@ case "${1:-}" in
         shift
         exec bash "$CLIENT_SCRIPTS/client_self_update.sh" "$@"
         ;;
+      language)
+        shift
+        exec bash "$CLIENT_SCRIPTS/client_language.sh" "$@"
+        ;;
       claim-runtime)
         shift
         exec bash "$CLIENT_SCRIPTS/client_claim_runtime.sh" "$@"
         ;;
       "")
-        echo "Usage: solar client {init|sync|doctor|upgrade|update|bundle|self-update|claim-runtime}" >&2
+        echo "Usage: solar client {init|sync|doctor|upgrade|update|bundle|self-update|language|claim-runtime}" >&2
         exit 2
         ;;
       *)
