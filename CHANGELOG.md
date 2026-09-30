@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-09-30
+
 ### Added
 - feat(solar-app): `/api/console/health` adds `attention`. Calm lists only non-zero counts. A fault or a missing check names the cause. The page shows that sentence.
 - feat(solar-app): console copy is English unless `.solar/settings.json` sets `"language"` to `es`. Health returns that `language`. The page follows it, including the browser title. A missing key stays English.
