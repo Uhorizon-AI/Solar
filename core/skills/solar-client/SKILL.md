@@ -32,6 +32,22 @@ Workspace content health (`sun/`, `planets/`) is **`solar-workspace`** — use `
 
 Antigravity and Codex do not receive commands, workflows or rules. Solar records the names it copies in `.agents/skills/.solar-managed` and removes only those when they leave the index. `--codex-only` publishes those same copies. Sync does not write `.codex/skills`. Symlinks already there that point at `core/skills` of `SOLAR_ROOT` (including the portable bundle) or at `planets/*/skills` in this workspace are removed; other files and links stay. An empty `.codex/skills` is removed. `.codex/` stays when it still holds something else. A `CODEX_HOME` that points at another directory is not written and not deleted.
 
+## Reduced publication (opt-in)
+
+Native remains the default. `solar client sync profile set discovery --codex-only --dry-run`
+previews the essential catalog and checks the registered Codex Solar MCP before
+any settings or published copies change. `set discovery --codex-only` saves settings through the canonical atomic
+Client writer; run `solar client sync --codex-only` to publish. Mandatory essentials are
+`solar-mcp`, `solar-client`, `solar-paths`; add task-specific essentials explicitly.
+Search/Describe still sees eligible unpublished skills. Only managed copies are
+pruned; personal resources remain. Revert with `profile set native` and sync.
+
+This changes the shared `.agents` surface. Antigravity MCP registration is
+unsupported: discovery requires the Codex-only choice, warns against using
+Antigravity on this workspace, and refuses syncs that include Antigravity.
+Other IDE catalogs remain full. Profile changes currently require global mode.
+Details and byte-preview limits: [references/discovery-profile.md](references/discovery-profile.md).
+
 ## Required MCP
 
 None
@@ -67,6 +83,10 @@ solar client update [options]
 # --check is read-only (incompatible with --reinstall-launchagent; never restarts services,
 #   so --restart / --no-restart do not apply to it)
 solar client upgrade [--check|--restructure]
+solar client sync profile show
+solar client sync profile set discovery --codex-only --dry-run
+solar client sync profile set discovery --codex-only [--essential planet:skill]
+solar client sync profile set native
 solar client sync [--portable]
 solar client sync exclude list
 solar client sync exclude add <planet>
