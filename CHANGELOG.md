@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-07
+
 ### Added
 - Shared eligible skill inventory, bounded MCP capability Search/Describe and
   opt-in Client-managed discovery publication for the shared `.agents` surface.
