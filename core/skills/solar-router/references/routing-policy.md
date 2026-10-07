@@ -134,7 +134,7 @@ changes still require explicit approval.
 
 **metadata field rules:**
 - `agent`: existing agent from `planets/<planet>/agents/` or `core/agents/`. Set to `null` to generate JIT role inline.
-- `skills`: `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; unprefixed `skill` resolves to `planets/<metadata.planet>/skills/<skill>/SKILL.md` first (if `metadata.planet` is set), then falls back to `core/skills/<skill>/SKILL.md`. Only the frontmatter `description` is injected — never the full file.
+- `skills`: compatibility metadata; descriptions are not resolved or injected by `resolve_jit_context()`. The provider harness discovers skills.
 - `planet`: planet that owns this task's domain. Used for agent and skill lookup.
 - `provider` (top-level): `claude` for reasoning/writing, `codex` for code, `agy` for Antigravity research, `ollama` for local execution. `ollama` always targets the local model named `solar`. Omit to use priority order.
 
@@ -215,8 +215,8 @@ Run `bash core/skills/solar-router/scripts/onboard_router_env.sh` to migrate aut
 When `metadata` is present, the router executes `resolve_jit_context(metadata)` before building the prompt:
 
 1. **Agent resolution**: look up `planets/<planet>/agents/<agent>.md` → fallback to `core/agents/<agent>.md` → if not found, generate role inline (no extra LLM call).
-2. **Skill resolution**: for each skill in `metadata.skills`, resolve path and extract frontmatter `description` only. Unknown skills emit a warning and are skipped.
-3. **Prompt injection**: resolved agent role and skill catalog (name + description) are injected as `## Agent Role` and `## Available Skills` sections in the prompt.
+2. **Responsibility recovery**: when `metadata.agent` and `metadata.responsibility` are set, read that checkpoint via `solar-state`. With `metadata.planet`, the identity is `planet:agent`. No checkpoint is loaded for an omitted or different responsibility.
+3. **Prompt context**: reference the agent file or inject its ephemeral role, then include a found checkpoint as operational data. Revalidate sources, permissions and partial effects before continuing. `metadata.skills` does not inject a catalog.
 
 **Anti-recursion rule:** subprocess calls from AI clients MUST always use `mode: direct_only` to prevent infinite delegation loops.
 
