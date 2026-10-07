@@ -135,7 +135,7 @@ changes still require explicit approval.
 **metadata field rules:**
 - `agent`: existing agent from `planets/<planet>/agents/` or `core/agents/`. Set to `null` to generate JIT role inline.
 - `skills`: compatibility metadata; descriptions are not resolved or injected by `resolve_jit_context()`. The provider harness discovers skills.
-- `planet`: planet that owns this task's domain. Used for agent and skill lookup.
+- `planet`: planet that owns this task's domain. Used for agent lookup and checkpoint identity.
 - `provider` (top-level): `claude` for reasoning/writing, `codex` for code, `agy` for Antigravity research, `ollama` for local execution. `ollama` always targets the local model named `solar`. Omit to use priority order.
 
 ## Secure Invocation Protocol (Required)

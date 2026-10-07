@@ -6,6 +6,14 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Added
+- Deferred responsibility-checkpoint APIs in shared SQLite schema v5, exact-call
+  gated MCP Get/Put, explicit router recovery and async identity forwarding.
+  Stale updates refuse; legacy file rollback refuses if checkpoints exist.
+  This independent draft is not part of capability discovery or its rollout.
+
 ## [0.32.0] - 2026-09-30
 
 ### Added
