@@ -49,6 +49,9 @@ STATUS_FOLDER = {status: folder for folder, status in FOLDERS.items()}
 # What moves into async-tasks.migrated-<stamp>/. tmp/, hooks/ and anything
 # unknown stay where they are: they are not task state.
 TASK_PARTS = (*FOLDERS, "handles", "subtasks", "cancellation", "logs")
+# Finder metadata is not the old format. It must not reopen a finished move,
+# and it must not be copied into the aside tree.
+FOREIGN_METADATA = frozenset({".DS_Store"})
 LOGS_DIR = "task-logs"
 STREAMS = ("events", "shadow")
 # Command lines that mean "old Solar code is still running": a script of the
@@ -355,20 +358,35 @@ def _move_old_files(root: Path, stamp: str) -> list[str]:
     holder = root / f"async-tasks.migrated-{stamp}"
     for part in TASK_PARTS:
         src = tasks / part
-        if src.exists():
-            holder.mkdir(exist_ok=True)
-            dest = holder / part
-            if dest.exists():
-                # A resumed migration moved this part already; old code (a
-                # stale process, `ensure_dirs`) recreated the empty folder
-                # since. `_catch_up` already imported anything new inside it,
-                # so merge file by file instead of a directory-level replace,
-                # which raises ENOTEMPTY on a non-empty destination.
-                for entry in src.iterdir():
-                    os.replace(entry, dest / entry.name)
+        if not src.exists():
+            continue
+        dest = holder / part
+        if dest.exists():
+            # A resumed migration moved this part already; old code (a
+            # stale process, `ensure_dirs`) recreated the empty folder
+            # since. `_catch_up` already imported anything new inside it,
+            # so merge file by file instead of a directory-level replace,
+            # which raises ENOTEMPTY on a non-empty destination.
+            # Foreign metadata stays put: it is not a source, and copying
+            # it would plant a file in the aside tree.
+            took = False
+            for entry in list(src.iterdir()):
+                if entry.name in FOREIGN_METADATA:
+                    continue
+                os.replace(entry, dest / entry.name)
+                took = True
+            if not any(src.iterdir()):
                 src.rmdir()
-            else:
-                os.replace(src, dest)
+                took = True
+            if took:
+                moved.append(f"async-tasks/{part}")
+        elif any(entry.name not in FOREIGN_METADATA for entry in src.iterdir()):
+            holder.mkdir(exist_ok=True)
+            os.replace(src, dest)
+            moved.append(f"async-tasks/{part}")
+        elif not any(src.iterdir()):
+            holder.mkdir(exist_ok=True)
+            os.replace(src, dest)
             moved.append(f"async-tasks/{part}")
     singles = [root / "router" / "audit.jsonl", root / "continuity" / "active.json"]
     delegations = root / "delegations"
@@ -594,6 +612,127 @@ def _catch_up(session: st.Session, base: Path, c: Census, stamp: str) -> dict:
     return added
 
 
+def _marker_data(base: Path) -> dict:
+    return json.loads(_marker(base).read_text(encoding="utf-8"))
+
+
+def _write_marker(path: Path, text: str) -> None:
+    """Replace the marker. A crash before the replace leaves the previous one."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _record_move(base: Path, stamp: str) -> None:
+    """The move finished. Written only after `_move_old_files` returns.
+
+    A marker that exists before this line is not that evidence: the format
+    flips first, and the files are still in place until the move runs.
+    """
+    path = _marker(base)
+    text = json.dumps({"stamp": stamp, "moved": True})
+    if path.is_file() and path.read_text(encoding="utf-8") == text:
+        return
+    _write_marker(path, text)
+
+
+def _format_sources(root: Path) -> list[str]:
+    """Old-format files under `root`, relative to it.
+
+    `tmp/`, `hooks/` and foreign metadata are not sources. This reads the
+    tree, not the base: a later status change in SQLite is not this list.
+    """
+    rels = []
+    tasks = root / "async-tasks"
+    for part in TASK_PARTS:
+        src = tasks / part
+        if src.is_file() and src.name not in FOREIGN_METADATA:
+            rels.append(f"async-tasks/{part}")
+        elif src.is_dir():
+            for path in sorted(src.rglob("*")):
+                if path.is_file() and path.name not in FOREIGN_METADATA:
+                    rels.append(path.relative_to(root).as_posix())
+    singles = [root / "router" / "audit.jsonl", root / "continuity" / "active.json"]
+    delegations = root / "delegations"
+    if delegations.is_dir():
+        singles += [mandate / f"{stream}.jsonl"
+                    for mandate in delegations.iterdir() if mandate.is_dir()
+                    for stream in STREAMS]
+    for path in singles:
+        if path.is_file():
+            rels.append(path.relative_to(root).as_posix())
+    return rels
+
+
+def _source_is_aside(base: Path, rel: str, stamp: str) -> bool:
+    if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+        return False
+    if rel.startswith("async-tasks/"):
+        aside = base / f"async-tasks.migrated-{stamp}" / rel[len("async-tasks/"):]
+    else:
+        aside = _aside(base / rel, stamp)
+    return aside.is_file()
+
+
+def _original_sources(base: Path, stamp: str) -> Optional[list[str]]:
+    """The files this move had to set aside, from the record or the pre-state copy.
+
+    None when neither exists: one aside name is not a substitute for the list.
+    """
+    data = _marker_data(base)
+    sources = data.get("sources")
+    if isinstance(sources, list) and all(isinstance(rel, str) for rel in sources):
+        return sources
+    backup = base / f"pre-state-{stamp}"
+    if not backup.is_dir():
+        return None
+    return _format_sources(backup)
+
+
+def _move_finished(base: Path, stamp: str) -> bool:
+    """True when every original source is aside, not when any one of them is."""
+    data = _marker_data(base)
+    if data.get("moved") is True:
+        return True
+    sources = _original_sources(base, stamp)
+    if sources is None:
+        return False
+    return all(_source_is_aside(base, rel, stamp) for rel in sources)
+
+
+def _has_format_file(path: Path) -> bool:
+    """A file of the old format. `.DS_Store` and an empty directory are not."""
+    if path.is_file():
+        return path.name not in FOREIGN_METADATA
+    if not path.is_dir():
+        return False
+    return any(child.is_file() and child.name not in FOREIGN_METADATA
+               for child in path.rglob("*"))
+
+
+def _legacy_files_in_place(base: Path) -> bool:
+    """True when a file of the old runtime is still where readers used to find it.
+
+    An empty directory does not count. Something else can recreate one after
+    the move, and it holds nothing to import. `task-logs/`, `tmp/`, `hooks/`
+    and foreign metadata are not the old format.
+    """
+    tasks = base / "async-tasks"
+    for part in TASK_PARTS:
+        if _has_format_file(tasks / part):
+            return True
+    singles = [base / "router" / "audit.jsonl", base / "continuity" / "active.json"]
+    delegations = base / "delegations"
+    if delegations.is_dir():
+        singles += [mandate / f"{stream}.jsonl"
+                    for mandate in delegations.iterdir() if mandate.is_dir()
+                    for stream in STREAMS]
+    return any(path.is_file() for path in singles)
+
+
 def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
             lister: Callable[[], list[tuple[int, str]]] = list_processes,
             _fail_at: Optional[str] = None) -> dict:
@@ -604,15 +743,33 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
 
     with st.cutover(base, timeout=wait) as cut:
         if st.read_format(base) == st.FORMAT_SQLITE:
-            # A migration that already changed the format: finish it, never blindly.
+            # The format already changed. Finish an interrupted move, or leave
+            # a finished one alone. The base is not a photo of migration day.
             stamp = _check_migrated_base(base)
             _wait_until_quiet(base, wait, lister)
+            # No live file is not proof the move finished, and neither is one
+            # file already aside. `moved` is the record. Without it, every
+            # original source — the list in the marker, or the pre-state copy
+            # for an older marker — has to be aside. That list is not the
+            # current base.
+            if _move_finished(base, stamp) and not _legacy_files_in_place(base):
+                # The base has been the source of truth since the move. A
+                # status that has changed in it, or a log written only under
+                # task-logs/, is not a missing source. Returning is what lets
+                # the caller record the new install. Empty directories
+                # recreated in the old places are still put away.
+                moved = _move_old_files(base, stamp)
+                _record_move(base, stamp)
+                return dict(already=True, moved=moved,
+                            caught_up={"tasks": 0, "logs": 0, "audit": 0,
+                                       "mandate_events": 0, "warnings": []})
             session = cut.session()
             try:
                 added = _catch_up(session, base, census(base), stamp)
             finally:
                 session.conn.close()
             moved = _move_old_files(base, stamp)
+            _record_move(base, stamp)
             return dict(already=True, moved=moved, caught_up=added)
 
         _wait_until_quiet(base, wait, lister)
@@ -646,10 +803,11 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
         shutil.rmtree(work, ignore_errors=True)
         fail("after-place")
 
-        _marker(base).write_text(json.dumps({"stamp": stamp}), encoding="utf-8")
+        _write_marker(_marker(base), json.dumps({"stamp": stamp, "sources": _format_sources(base)}))
         cut.set_format(st.FORMAT_SQLITE)
         fail("after-format")
         moved = _move_old_files(base, stamp)
+        _record_move(base, stamp)
         return dict(already=False, stamp=stamp, tasks=c.counts(), logs=len(c.logs),
                     audit=len(c.audit), mandate_events=sum(map(len, c.events.values())),
                     backup=str(backup), moved=moved, warnings=warnings)

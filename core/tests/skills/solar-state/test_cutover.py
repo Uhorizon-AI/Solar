@@ -374,6 +374,158 @@ def test_a_recreated_part_merges_new_files_instead_of_failing(runtime):
         assert s.task_get("e2")["status"] == "error"
 
 
+def _without_sqlite_sidecars(tree: dict) -> dict:
+    return {rel: kind for rel, kind in tree.items()
+            if not rel.endswith(("-wal", "-shm"))}
+
+
+def test_a_finished_migration_leaves_later_base_changes_alone(runtime):
+    """The fixture runtime, never the machine one. Files already set aside stay there."""
+    cut.migrate(runtime, lister=quiet)
+    holder = next(runtime.glob("async-tasks.migrated-*"))
+    with st.session(runtime, auto_backup=False) as s:
+        assert s.task_transition("q1", "error", expected_from="queued") == "queued"
+        s.task_record("q1", log_path="task-logs/q1.log")
+    _write(runtime / "task-logs" / "q1.log", "born after the migration\n")
+    before = _without_sqlite_sidecars(_inventory(runtime))
+    aside_before = _inventory(holder)
+
+    result = cut.migrate(runtime, lister=quiet)
+
+    assert result["already"] is True
+    assert result["moved"] == []
+    assert result["caught_up"] == {"tasks": 0, "logs": 0, "audit": 0,
+                                   "mandate_events": 0, "warnings": []}
+    assert _without_sqlite_sidecars(_inventory(runtime)) == before
+    assert _inventory(holder) == aside_before
+    assert not (runtime / "async-tasks" / "error").exists()
+    assert not (runtime / "async-tasks" / "logs").exists()
+    assert (runtime / "task-logs" / "q1.log").read_text() == "born after the migration\n"
+    with st.session(runtime, auto_backup=False) as s:
+        assert s.task_get("q1")["status"] == "error"
+        assert s.task_get("q1")["log_path"] == "task-logs/q1.log"
+
+
+def test_an_interrupted_migration_still_refuses_a_real_file_change(runtime):
+    _resume_setup(runtime)
+    live = runtime / "async-tasks" / "completed" / "parent-task.md"
+    assert live.is_file()
+    _write(live, _task("p1", "completed", title="Rewritten"))
+    with pytest.raises(cut.CutoverRefused, match="decide by hand") as caught:
+        cut.migrate(runtime, lister=quiet)
+    assert "parent-task.md changed after the migration" in str(caught.value)
+    assert not list(runtime.glob("async-tasks.migrated-*"))
+    assert live.is_file()
+    assert "Rewritten" in live.read_text(encoding="utf-8")
+
+
+def test_a_source_deleted_before_the_move_is_still_refused(tmp_path, monkeypatch):
+    """Only an audit file, killed before the move, then the file is deleted.
+
+    Nothing live remains, and nothing was set aside. That is not a finished
+    migration: the resume still refuses the missing source.
+    """
+    root = tmp_path / "runtime"
+    _write(root / "router" / "audit.jsonl", "".join(f"{line}\n" for line in AUDIT))
+    monkeypatch.setenv(cut.ALLOW_ENV, "1")
+    monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(root))
+    from runtime_owner import claim_test_owner
+    claim_test_owner(root, tmp_path / "workspace", monkeypatch=monkeypatch)
+    with pytest.raises(RuntimeError):
+        cut.migrate(root, lister=quiet, _fail_at="after-format")
+    (root / "router" / "audit.jsonl").unlink()
+    marker = json.loads((root / cut.MARKER_NAME).read_text())
+    assert marker.get("moved") is not True
+    assert not cut._legacy_files_in_place(root)
+    with pytest.raises(cut.CutoverRefused, match="router/audit.jsonl is neither in place nor set aside"):
+        cut.migrate(root, lister=quiet)
+    assert not list(root.glob("**/*migrated-*"))
+
+
+def test_one_aside_file_is_not_a_finished_move(tmp_path, monkeypatch):
+    """Killed before the move, then only the audit is set aside and continuity is deleted.
+
+    The original list still names continuity. That is not a finished move,
+    and the check does not read the current base.
+    """
+    root = tmp_path / "runtime"
+    _write(root / "router" / "audit.jsonl", "".join(f"{line}\n" for line in AUDIT))
+    _write(root / "continuity" / "active.json", CONTINUITY)
+    monkeypatch.setenv(cut.ALLOW_ENV, "1")
+    monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(root))
+    from runtime_owner import claim_test_owner
+    claim_test_owner(root, tmp_path / "workspace", monkeypatch=monkeypatch)
+    with pytest.raises(RuntimeError):
+        cut.migrate(root, lister=quiet, _fail_at="after-format")
+    stamp = json.loads((root / cut.MARKER_NAME).read_text())["stamp"]
+    audit = root / "router" / "audit.jsonl"
+    audit.rename(audit.with_name(f"audit.jsonl.migrated-{stamp}"))
+    (root / "continuity" / "active.json").unlink()
+    assert not cut._legacy_files_in_place(root)
+    assert cut._move_finished(root, stamp) is False
+    with pytest.raises(cut.CutoverRefused, match="continuity/active.json is neither in place nor set aside"):
+        cut.migrate(root, lister=quiet)
+    assert json.loads((root / cut.MARKER_NAME).read_text()).get("moved") is not True
+
+
+def test_an_interrupted_marker_write_keeps_the_previous_marker(runtime, monkeypatch):
+    cut.migrate(runtime, lister=quiet)
+    marker = runtime / cut.MARKER_NAME
+    previous = marker.read_text(encoding="utf-8")
+    stamp = json.loads(previous)["stamp"]
+
+    def killed_replace(*_args, **_kwargs):
+        raise OSError("killed during replace")
+
+    monkeypatch.setattr(cut.os, "replace", killed_replace)
+    with pytest.raises(OSError, match="killed during replace"):
+        cut._write_marker(marker, json.dumps({"stamp": stamp, "moved": True, "broken": True}))
+    assert marker.read_text(encoding="utf-8") == previous
+    assert not list(marker.parent.glob(".state-migration.json.*.tmp"))
+    assert cut._check_migrated_base(runtime) == stamp
+
+
+def test_an_older_marker_still_settles_when_the_aside_names_exist(runtime):
+    """A migration that finished before `moved` was recorded. The aside names
+    are the evidence. The base may already have drifted."""
+    cut.migrate(runtime, lister=quiet)
+    marker_path = runtime / cut.MARKER_NAME
+    stamp = json.loads(marker_path.read_text())["stamp"]
+    marker_path.write_text(json.dumps({"stamp": stamp}), encoding="utf-8")
+    holder = next(runtime.glob("async-tasks.migrated-*"))
+    aside_before = _inventory(holder)
+    with st.session(runtime, auto_backup=False) as s:
+        assert s.task_transition("q1", "error", expected_from="queued") == "queued"
+    result = cut.migrate(runtime, lister=quiet)
+    assert result["already"] is True
+    assert result["moved"] == []
+    assert _inventory(holder) == aside_before
+    assert json.loads(marker_path.read_text()) == {"stamp": stamp, "moved": True}
+    with st.session(runtime, auto_backup=False) as s:
+        assert s.task_get("q1")["status"] == "error"
+
+
+def test_foreign_metadata_does_not_reopen_catch_up(runtime):
+    cut.migrate(runtime, lister=quiet)
+    holder = next(runtime.glob("async-tasks.migrated-*"))
+    with st.session(runtime, auto_backup=False) as s:
+        assert s.task_transition("q1", "error", expected_from="queued") == "queued"
+    queued = runtime / "async-tasks" / "queued"
+    queued.mkdir()
+    (queued / ".DS_Store").write_bytes(b"\x00\x00")
+    aside_before = _inventory(holder)
+    result = cut.migrate(runtime, lister=quiet)
+    assert result["already"] is True
+    assert result["moved"] == []
+    assert result["caught_up"] == {"tasks": 0, "logs": 0, "audit": 0,
+                                   "mandate_events": 0, "warnings": []}
+    assert _inventory(holder) == aside_before
+    assert not (holder / "queued" / ".DS_Store").exists()
+    assert (queued / ".DS_Store").is_file()
+    with st.session(runtime, auto_backup=False) as s:
+        assert s.task_get("q1")["status"] == "error"
+
+
 def test_a_resumed_migration_refuses_a_rewritten_audit(runtime):
     with pytest.raises(RuntimeError):
         cut.migrate(runtime, lister=quiet, _fail_at="after-format")
