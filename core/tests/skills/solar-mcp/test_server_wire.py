@@ -88,7 +88,8 @@ def test_tools_are_listed(solar_env):
         names = {row["name"] for row in probe.request("tools/list")["result"]["tools"]}
         assert names == {"solar_task_status", "solar_task_create",
                          "solar_task_approve", "solar_task_cancel", "solar_task_requeue",
-                         "solar_telegram_send", "solar_action_run"}
+                         "solar_telegram_send", "solar_action_run",
+                         "solar_capability_search", "solar_capability_describe"}
 
 
 def test_reading_a_verb_needs_no_approval(solar_env):

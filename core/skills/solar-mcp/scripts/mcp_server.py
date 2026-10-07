@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import mcp_gate  # noqa: E402
 import runtime_views  # noqa: E402
+import capability_registry  # noqa: E402
 from mcp_gate import A0, A2, A3  # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -76,6 +77,16 @@ def action_skills() -> dict:
 
 
 TOOLS = {
+    "solar_capability_search": dict(
+        authority=A0, description="Find eligible instruction skills without loading the full catalog. Read-only; grants no authority.",
+        inputSchema=dict(type="object", properties=dict(
+            query=dict(type="string"), limit=dict(type="integer"),
+            preferred_namespace=dict(type="string")), required=["query"], additionalProperties=False)),
+    "solar_capability_describe": dict(
+        authority=A0, description="Read one eligible skill or its registered Markdown reference. Supply the search revision; instructions are not executed.",
+        inputSchema=dict(type="object", properties=dict(
+            id=dict(type="string"), revision=dict(type="string"), reference=dict(type="string")),
+            required=["id"], additionalProperties=False)),
     "solar_task_status": dict(
         authority=A0,
         description="Read the state of the async task queue. Read-only.",
@@ -380,6 +391,8 @@ def _do_action_run(arguments: dict) -> dict:
 
 
 HANDLERS = {
+    "solar_capability_search": lambda args: capability_registry.search(**args),
+    "solar_capability_describe": lambda args: capability_registry.describe(**args),
     "solar_task_status": _do_task_status,
     "solar_task_create": _do_task_create,
     "solar_task_approve": _do_task_approve,
@@ -390,8 +403,25 @@ HANDLERS = {
 }
 
 
+def _valid_value(value, schema: dict) -> bool:
+    types = {"string": str, "boolean": bool, "integer": int, "object": dict, "array": list}
+    if type(value) is not types.get(schema.get("type")):
+        return False
+    if "enum" in schema and value not in schema["enum"]:
+        return False
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        return (all(key in value for key in schema.get("required", []))
+                and all(key in properties and _valid_value(v, properties[key]) for key, v in value.items()))
+    if isinstance(value, list):
+        return all(_valid_value(v, schema["items"]) for v in value)
+    return True
+
+
 def call_tool(name: str, arguments: dict) -> tuple[dict, bool]:
     """Gate first, then act. There is no path to a handler that skips this."""
+    if name in ("solar_capability_search", "solar_capability_describe") and not _valid_value(arguments, TOOLS[name]["inputSchema"]):
+        return dict(error="Invalid tool arguments"), True
     try:
         workspace()
     except WorkspaceUnresolved as exc:
@@ -463,7 +493,7 @@ def handle(message: dict, confirm=None) -> dict | None:
             # Only the transport callback receives client UI responses. No tool
             # parameter or caller-supplied approved flag can grant authority.
             schema = TOOLS[name]["inputSchema"]
-            properties = schema["properties"]
+            properties = schema.get("properties", {})
             types = {"string": str, "boolean": bool}
             valid = (all(key in arguments for key in schema.get("required", []))
                      and all(key in properties and type(value) is types.get(properties[key].get("type"))

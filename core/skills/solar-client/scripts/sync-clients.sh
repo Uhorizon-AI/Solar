@@ -258,82 +258,14 @@ get_source() {
 #      per-skill counterpart of `sync_exclude_planets`.
 #
 # `sync_exclude_planets` cannot express either: core is not a planet.
-skill_declares_no_sync() {
-  local skill_md="$1"
-  [ -f "$skill_md" ] || return 1
-  # `exit` inside a rule still runs END, so the verdict is carried in a flag
-  # instead of in the exit code of the rule.
-  awk '
-    BEGIN { found = 0 }
-    NR == 1 && $0 != "---" { exit }
-    NR > 1 && $0 == "---" { exit }
-    NR > 1 && $0 ~ /^sync:[[:space:]]*false[[:space:]]*$/ { found = 1; exit }
-    END { exit (found ? 0 : 1) }
-  ' "$skill_md"
-}
-
-skill_is_excluded() {
-  local indexed_name="$1"
-  local skill_md="$2"
-  if printf '%s\n' "${_SYNC_EXCLUDE_SKILLS:-}" | grep -Fxq -- "$indexed_name"; then
-    return 0
-  fi
-  skill_declares_no_sync "$skill_md"
-}
-
-# Discover planet skills via find */skills/*/SKILL.md (supports nested structures)
-discover_planet_skills() {
-  local planet_dir="$1"
-  local planet_name="$2"
-  while IFS= read -r skill_md; do
-    local skill_dir
-    skill_dir="$(dirname "$skill_md")"
-    local name
-    name="$(basename "$skill_dir")"
-    local prefixed_name="$planet_name:$name"
-    if skill_is_excluded "$prefixed_name" "$skill_md"; then
-      log_ok "Skipping excluded skill: $prefixed_name"
-      continue
-    fi
-    if is_duplicate "$SKILLS_INDEX" "$prefixed_name"; then
-      log_warn "Duplicate skill $prefixed_name, skipping (first match wins)"
-      continue
-    fi
-    add_to_index "$SKILLS_INDEX" "$prefixed_name" "$skill_dir"
-  done < <(find "$planet_dir" -path "*/skills/*/SKILL.md" -type f 2>/dev/null | LC_ALL=C sort)
-}
-
 # Discover all resources from core/ and planets/*/
 discover_resources() {
   log_section "🔍 Discovering resources..."
 
-  # Per-skill exclusions are read before anything is indexed: they apply to core
-  # skills too, which no planet-level setting can reach.
-  local _skill_exclude_raw
-  if ! _skill_exclude_raw="$(solar_client_read_sync_exclude_skills "$ROOT_DIR")"; then
-    echo "ERROR: cannot read per-skill sync exclusions; run solar client update --repair" >&2
-    return 1
-  fi
-  _SYNC_EXCLUDE_SKILLS=""
-  while IFS= read -r _ex; do
-    [[ -n "$_ex" ]] || continue
-    _SYNC_EXCLUDE_SKILLS="${_SYNC_EXCLUDE_SKILLS}"$'\n'"${_ex}"
-  done <<<"$_skill_exclude_raw"
-
-  # Discover core skills
-  if [ -d "$SRC_SKILLS" ]; then
-    for item in "$SRC_SKILLS"/*; do
-      [ -d "$item" ] || continue
-      [ -f "$item/SKILL.md" ] || continue
-      local name
-      name="$(basename "$item")"
-      if skill_is_excluded "$name" "$item/SKILL.md"; then
-        log_ok "Skipping excluded skill: $name"
-        continue
-      fi
-      add_to_index "$SKILLS_INDEX" "$name" "$item"
-    done
-  fi
+  # One scanner supplies native publication and MCP discovery. A failed scan
+  # aborts before any managed client resource is removed.
+  python3 "$(dirname "${BASH_SOURCE[0]}")/skill_inventory.py" \
+    --workspace "$ROOT_DIR" --core "$(solar_core_dir)" > "$SKILLS_INDEX"
 
   # Discover core agents
   if [ -d "$SRC_AGENTS" ]; then
@@ -381,8 +313,7 @@ discover_resources() {
         continue
       fi
 
-      # Planet skills (any */skills/*/SKILL.md under planet, always prefixed)
-      discover_planet_skills "$planet_dir" "$planet_name"
+      # Skill entries already come from the shared inventory above.
 
       # Planet agents (always prefixed)
       if [ -d "$planet_dir/agents" ]; then
@@ -601,7 +532,7 @@ sync_codex() {
     log_tree_end "📦 Skills" "${GREEN}✓${NC} shared with Antigravity (.agents/skills)"
   else
     warn_antigravity_shared_names
-    sync_antigravity_skills "$SKILLS_INDEX" "$AGY_SKILLS"
+    sync_antigravity_skills "$AGENTS_PROFILE_INDEX" "$AGY_SKILLS"
   fi
   echo
 }
@@ -910,12 +841,25 @@ sync_antigravity_skills() {
 sync_antigravity() {
   log_section "🔄 Antigravity (.agents)"
   warn_antigravity_shared_names
-  sync_antigravity_skills "$SKILLS_INDEX" "$AGY_SKILLS"
+  sync_antigravity_skills "$AGENTS_PROFILE_INDEX" "$AGY_SKILLS"
   echo
 }
 
 # Main execution
 discover_resources
+
+# Validate the profile and registered MCP before pruning any client surface.
+# This profile affects only .agents, shared by Codex and Antigravity.
+AGENTS_PROFILE_INDEX="$TEMP_DIR/agents-profile-skills.txt"
+if $SYNC_CODEX || $SYNC_ANTIGRAVITY; then
+  if $SYNC_ANTIGRAVITY; then
+    python3 "$(dirname "${BASH_SOURCE[0]}")/client_profile.py" \
+      --workspace "$ROOT_DIR" --core "$(solar_core_dir)" index --include-antigravity > "$AGENTS_PROFILE_INDEX"
+  else
+    python3 "$(dirname "${BASH_SOURCE[0]}")/client_profile.py" \
+      --workspace "$ROOT_DIR" --core "$(solar_core_dir)" index > "$AGENTS_PROFILE_INDEX"
+  fi
+fi
 
 $SYNC_CLAUDE && sync_claude
 $SYNC_CODEX && sync_codex

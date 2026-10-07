@@ -145,8 +145,8 @@ bash core/skills/solar-router/scripts/reconcile_router_audit.sh
 - `mode`: defaults to `auto`. `direct_only` always returns `direct_reply`. `async_only` requires `async-tasks` feature enabled.
 - `channel`: used by `DecisionEngine` for semantic routing in `mode=auto`.
 - `metadata.agent`: existing agent name from planet's `agents/`, or `null` for JIT role generation.
-- `metadata.skills`: skill name format — `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; unprefixed `skill` resolves to `planets/<metadata.planet>/skills/<skill>/SKILL.md` first (if `metadata.planet` is set), then falls back to `core/skills/<skill>/SKILL.md`. Only description is injected (on-demand).
-- `metadata.planet`: planet that owns the task domain. Used for agent/skill lookup.
+- `metadata.skills`: compatibility metadata only; `resolve_jit_context()` does not resolve or inject these descriptions. The provider harness discovers instruction skills.
+- `metadata.planet`: planet that owns the task domain. Used for agent lookup.
 
 ## Secure Invocation Protocol (Required)
 

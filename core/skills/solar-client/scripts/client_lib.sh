@@ -412,6 +412,7 @@ solar_client_write_settings_v12() {
   local workspace="$1"
   local client_root="$2"
   local preserve_synced="${3:-}"
+  local profile_json="${4:-}"
   local version commit synced_at write_path read_path
   read -r version commit < <(solar_client_git_identity "$client_root")
   synced_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -434,10 +435,10 @@ PY
     fi
   fi
   mkdir -p "$workspace/.solar"
-  python3 - <<PY "$write_path" "$read_path" "$version" "$commit" "$synced_at"
+  python3 - <<PY "$write_path" "$read_path" "$version" "$commit" "$synced_at" "$profile_json"
 import json, os, sys, tempfile
 
-write_path, read_path, version, commit, synced_at = sys.argv[1:6]
+write_path, read_path, version, commit, synced_at, profile_json = sys.argv[1:7]
 managed = {
     "scope": "workspace",
     "layout": "solar-client-v1.2",
@@ -462,6 +463,11 @@ if os.path.isfile(read_path):
 
 data = dict(existing)
 data.update(managed)
+if profile_json:
+    profile = json.loads(profile_json)
+    if not isinstance(profile, dict):
+        raise ValueError("Invalid Client profile")
+    data["agents_skill_profile"] = profile
 # Global mode is not a snapshot. Drop the portable keys this writer does not own.
 for key in ("bundle_path", "bundle_checksum", "snapshot_at", "snapshot_outdated"):
     data.pop(key, None)

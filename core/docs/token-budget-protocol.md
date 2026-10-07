@@ -1,16 +1,20 @@
 # Token Budget Protocol
 
-**Version:** 1.0  
+**Version:** 1.1
 **Scope:** Solar framework — all AI clients (Claude, Cursor, Codex, Gemini)  
-**Purpose:** Reduce per-session context overhead by 50–60% without losing operational capability.
+**Purpose:** Keep per-session context overhead small without losing operational capability. Targets below require per-harness validation.
 
 ---
 
 ## The Problem
 
-Solar's first-run protocol currently loads the same set of files in every session regardless of task type. In a typical planet work session this produces ~25,000–35,000 tokens of governance overhead before the AI does anything useful. At scale this is the largest controllable cost in the system.
+Unconditional loading of governance, native capability catalogs and reference
+material can produce substantial overhead. The session levels below guide
+selective loading; they do not prove what every harness actually injects.
+Measure the client before attributing its usage to Solar. There is no measured
+cross-harness saving percentage established by this protocol.
 
-Files loaded unconditionally today:
+Illustrative historical file estimates, not a current unconditional load list:
 
 | File | Tokens (est.) |
 |------|---------------|
@@ -21,7 +25,26 @@ Files loaded unconditionally today:
 | Planet AGENTS.md (active planet) | ~2,000–3,000 |
 | **Subtotal** | **~9,600–10,600** |
 
-Skills add another 1,500–6,000 tokens each when invoked.
+Selected skills and references add task-dependent context. Their complete
+bodies are not automatically loaded merely because Client sync published the
+packages. Names, descriptions and paths in the native catalog have a separate
+initial cost that grows with the number of advertised entries.
+
+## Progressive discovery
+
+The [small-door design](capability-discovery-design.md) documents the shared
+inventory, MCP Search/Describe and opt-in reduced native profile. Full native
+publication remains the default; rollout requires review and harness measurements.
+Adding discovery while retaining the full advertised catalog does not remove
+its initial context cost. Sharing an MCP server process can reduce local memory
+overhead; it does not itself reduce model input tokens.
+
+Compare identical tasks in fresh full/reduced sessions. Record catalog bytes,
+selected instructions, input/cached/output tokens when exposed, tool calls,
+latency and completion quality. Router `prompt_chars` measures only the prompt
+Solar builds, not everything the harness injects or subsequently reads. Caching
+can reduce billed input without removing context occupancy. Treat missing
+measurements as unavailable, not zero.
 
 ---
 
@@ -103,7 +126,9 @@ If the level changes mid-session (user pivots from light question to planet work
 
 ## Prompt Caching Strategy
 
-Files that rarely change should be treated as cacheable to activate Claude's 90% discount on cached input tokens:
+Keep stable content reusable where a provider/harness supports prompt caching.
+Pricing and cache behavior are provider-specific; measure cached input rather
+than assuming a fixed discount or automatic activation:
 
 | File | Cache status | Reason |
 |------|-------------|---------|
@@ -114,7 +139,8 @@ Files that rarely change should be treated as cacheable to activate Claude's 90%
 | Planet AGENTS.md | Semi-static | Changes per sprint/project |
 | Skills (SKILL.md) | Cacheable | Changes rarely |
 
-**Implementation note:** Claude's prompt caching activates automatically for content that appears consistently at the start of conversations. Keeping CLAUDE.md (root AGENTS.md) stable and below 3,000 tokens maximizes cache hit rate.
+**Implementation note:** a stable prefix may help cache reuse. This protocol
+does not configure provider caching or guarantee a cache hit.
 
 ---
 
@@ -142,13 +168,20 @@ To avoid loading full skill documents when only the trigger is needed, all SKILL
 <!-- END DETAIL -->
 ```
 
-The AI loads only the HEADER section during routing/detection. The DETAIL section is read only when the skill is actually invoked. This reduces skill overhead from 1,500–6,000 tokens to 200–400 tokens per skill during routing.
+This is an authoring convention, not an implemented selective parser.
+Client sync publishes the package; the harness controls what it loads. Keep
+frontmatter descriptions concise and move long detail to references. Do not
+claim that HEADER/DETAIL comments enforce a token reduction.
 
 ---
 
-## Token Estimation in sync-clients.sh
+## Context reporting
 
-When `--report-size` flag is passed, `sync-clients.sh` should output:
+The historical report below is an illustrative format with invented figures, not an available
+`sync-clients.sh --report-size` interface or a tokenizer measurement. Use the
+existing `core/skills/solar-skill-creator/scripts/context-report.sh` for
+directional file-size inspection. Actual token accounting requires the client
+or provider usage metrics:
 
 ```
 Token budget report (estimated @ 12.7 chars/token):
@@ -172,4 +205,6 @@ Token budget report (estimated @ 12.7 chars/token):
 
 This protocol is owned by `core/`. Changes require updating both this document and the first-run block in root AGENTS.md (via CLAUDE.md). The token targets are guidelines, not hard limits.
 
-**Review trigger:** Run `sync-clients.sh --report-size` after any significant addition to core/ or a planet AGENTS.md. If the L2 baseline exceeds 8,000 tokens, compress before merging.
+**Review trigger:** inspect context size after a significant addition to core or
+planet governance. If a measured L2 baseline exceeds its target, reduce unrelated
+context while preserving required rules; document the harness and measurement.

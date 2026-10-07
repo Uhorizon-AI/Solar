@@ -59,6 +59,22 @@ sets the ceiling, and Solar does not control its roadmap.
 exposed as a tool is gated for every client that calls it, regardless of which
 harness the person happens to be using.
 
+### The small door and progressive discovery
+
+The [small-door delivery](../core/docs/capability-discovery-design.md) adds
+read-only Search/Describe and an opt-in Client profile that reduces the shared
+`.agents` catalog. Full native publication remains the default. Antigravity destinations are
+refused in discovery mode because its MCP registration is unsupported.
+
+Discovery retrieves instructions; it does not execute them, grant authority or
+extend the gate to shell, browser or other native harness routes. Task
+mutation handlers write through solar-state; Telegram send and
+registered-action handlers have their own effects outside that database.
+No per-planet settings tree or physical database per agent is introduced.
+Initial catalog bytes can shrink, but total token savings and latency remain
+unmeasured until fresh-session comparison. Shared HTTP and Code Mode remain
+separate work.
+
 ## Verbs are gated, nouns are not
 
 A harness keeps its own file tools. If context lives in a directory the harness

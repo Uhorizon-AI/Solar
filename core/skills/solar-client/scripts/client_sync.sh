@@ -8,6 +8,8 @@ usage_sync() {
   cat <<'EOF'
 Usage:
   solar client sync [--portable] [sync-clients options]
+  solar client sync profile show
+  solar client sync profile set native|discovery [--essential ID] [--codex-only] [--dry-run]
   solar client sync exclude list
   solar client sync exclude add <planet>
   solar client sync exclude remove <planet>
@@ -26,6 +28,13 @@ A skill that declares "sync: false" in its own SKILL.md is excluded without
 any entry here.
 EOF
 }
+
+if [[ "${1:-}" == "profile" ]]; then
+  shift
+  solar_resolve_paths --quiet
+  exec python3 "$SCRIPT_DIR/client_profile.py" --workspace "$SOLAR_WORKSPACE" \
+    --core "$(solar_core_dir)" "$@"
+fi
 
 # Intercept exclude BEFORE the catch-all that forwards args to sync-clients.sh.
 if [[ "${1:-}" == "exclude" ]]; then
@@ -241,9 +250,15 @@ if [[ "$PORTABLE" == true ]]; then
 fi
 
 if [[ ${#SYNC_ARGS[@]} -gt 0 ]]; then
-  bash "$(solar_core_dir)/skills/solar-client/scripts/sync-clients.sh" "${SYNC_ARGS[@]}"
+  if ! bash "$(solar_core_dir)/skills/solar-client/scripts/sync-clients.sh" "${SYNC_ARGS[@]}"; then
+    echo "ERROR: Client publication failed; sync did not complete." >&2
+    exit 1
+  fi
 else
-  bash "$(solar_core_dir)/skills/solar-client/scripts/sync-clients.sh"
+  if ! bash "$(solar_core_dir)/skills/solar-client/scripts/sync-clients.sh"; then
+    echo "ERROR: Client publication failed; sync did not complete." >&2
+    exit 1
+  fi
 fi
 
 _settings="$(solar_client_settings_path "$SOLAR_WORKSPACE")"

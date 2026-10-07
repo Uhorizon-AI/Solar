@@ -37,6 +37,18 @@ solar mcp uninstall
 
 Client destinations, recovery and validation: [references/clients.md](references/clients.md).
 
+## On-demand capabilities
+
+When a native skill name is absent, call `solar_capability_search` with the
+user's objective or an exact `planet:skill` ID, then `solar_capability_describe`
+with that ID and revision. Read applicable workspace and planet governance
+before using the instructions. Load listed references individually when needed;
+Describe does not execute scripts, grant authority or verify dependencies.
+Search spans eligible namespaces; a preferred namespace is a ranking hint.
+Exclusions apply to both tools. Oversized units refuse without truncation.
+
+Limits and lifecycle: [references/discovery.md](references/discovery.md).
+
 ## Approval workflow
 
 1. Prepare the exact action, scope and destination. For Telegram include an explicit
@@ -72,6 +84,8 @@ conversational authority from caller-supplied fields. See
 
 | Tool | Authority | Passes when |
 |---|---|---|
+| `solar_capability_search` | A0 | Find eligible instruction IDs and revisions, at most ten results |
+| `solar_capability_describe` | A0 | Read one eligible skill or its registered Markdown reference; stale revisions refuse |
 | `solar_task_status` | A0 | Always. Reading is not gated. |
 | `solar_task_create` | A2 | Native client confirmation or an existing exact-call approval. Stores a draft through `solar-state` and refuses when the format is not `sqlite` |
 | `solar_task_approve` | A2 | Same approval. Moves a draft, or a task already planned, to the queue. Refuses an A3 mandate. Does not change object, scope or effect |
