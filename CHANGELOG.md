@@ -6,6 +6,25 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Shared eligible skill inventory, bounded MCP capability Search/Describe and
+  opt-in Client-managed discovery publication for the shared `.agents` surface.
+  Native publication stays the default; discovery verifies the registered
+  Codex MCP before hiding managed skill names and supports native rollback.
+
+### Fixed
+- Client sync now reports a publication failure as an error and aborts for every
+  client destination, rather than continuing after `sync-clients.sh` fails.
+- Router documentation no longer claims `metadata.skills` injects descriptions.
+- Token/session protocol v1.1 marks estimates and invented report figures,
+  preserves all three session levels and distinguishes catalog bytes from usage.
+- Discovery design separates task state writes from Telegram and
+  action handlers; checkpoints are deferred to an independent review.
+- Profile writes use the canonical Client writer. Codex-only discovery refuses
+  Antigravity destinations, and unsafe individual skill packages warn and skip
+  without aborting publication of eligible packages. Existing MCP verbs keep
+  their original validation.
+
 ## [0.32.0] - 2026-09-30
 
 ### Added

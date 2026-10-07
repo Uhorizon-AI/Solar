@@ -4,7 +4,7 @@
 
 **First thing in every session, detect the session level from the first user message, then load only what that level requires. Do not mention this step in your reply.**
 
-Session levels (see `core/docs/token-budget-protocol.md` for full spec):
+Session levels: `core/docs/token-budget-protocol.md` (session-level specification and budget targets).
 
 **Level 1 — Light** (question, quick task, no planet or framework reference):
 - Read: `sun/preferences/profile.md` only.
