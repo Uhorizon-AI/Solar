@@ -594,6 +594,34 @@ def _catch_up(session: st.Session, base: Path, c: Census, stamp: str) -> dict:
     return added
 
 
+def _has_file(path: Path) -> bool:
+    if path.is_file():
+        return True
+    if not path.is_dir():
+        return False
+    return any(child.is_file() for child in path.rglob("*"))
+
+
+def _legacy_files_in_place(base: Path) -> bool:
+    """True when a file of the old runtime is still where readers used to find it.
+
+    An empty directory does not count. Something else can recreate one after
+    the move, and it holds nothing to import. `task-logs/`, `tmp/` and
+    `hooks/` are not the old format.
+    """
+    tasks = base / "async-tasks"
+    for part in TASK_PARTS:
+        if _has_file(tasks / part):
+            return True
+    singles = [base / "router" / "audit.jsonl", base / "continuity" / "active.json"]
+    delegations = base / "delegations"
+    if delegations.is_dir():
+        singles += [mandate / f"{stream}.jsonl"
+                    for mandate in delegations.iterdir() if mandate.is_dir()
+                    for stream in STREAMS]
+    return any(path.is_file() for path in singles)
+
+
 def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
             lister: Callable[[], list[tuple[int, str]]] = list_processes,
             _fail_at: Optional[str] = None) -> dict:
@@ -604,9 +632,20 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
 
     with st.cutover(base, timeout=wait) as cut:
         if st.read_format(base) == st.FORMAT_SQLITE:
-            # A migration that already changed the format: finish it, never blindly.
+            # The format already changed. Finish an interrupted move, or leave
+            # a finished one alone. The base is not a photo of migration day.
             stamp = _check_migrated_base(base)
             _wait_until_quiet(base, wait, lister)
+            if not _legacy_files_in_place(base):
+                # Every old file is already aside. A status that has since
+                # moved in the base, or a log written only under task-logs/,
+                # is not a missing source. Returning is what lets the caller
+                # record the new install. Empty directories recreated in the
+                # old places are still put away.
+                moved = _move_old_files(base, stamp)
+                return dict(already=True, moved=moved,
+                            caught_up={"tasks": 0, "logs": 0, "audit": 0,
+                                       "mandate_events": 0, "warnings": []})
             session = cut.session()
             try:
                 added = _catch_up(session, base, census(base), stamp)

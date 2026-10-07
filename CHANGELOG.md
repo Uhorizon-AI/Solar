@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(solar-state): a finished migration is no longer resumed as if the files were still the source of truth. When `STATE_FORMAT` is already `sqlite` and no old-format file remains in place, `migrate` returns already and does not run catch-up. A task whose status has since changed in the base, and a log that exists only under `task-logs/`, no longer refuse the cutover, so `solar client update` can record the new install. An interrupted migration, with old files still in place, still refuses a real change in a file.
+
 ## [0.33.0] - 2026-10-07
 
 ### Added

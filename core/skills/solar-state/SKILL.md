@@ -129,14 +129,19 @@ SOLAR_STATE_ALLOW_CUTOVER=1 python3 scripts/solar_state_cutover.py rollback
   stay. The audit, continuity and mandate streams are renamed
   `*.migrated-<stamp>`. The originals are also copied to `pre-state-<stamp>/`.
   Killed at any step, running it again completes it. A run that finds
-  `STATE_FORMAT=sqlite` checks the marker, the base and its schema first, waits
-  for running code, and brings in what old code wrote to the files meanwhile
-  (new tasks with their children, a child that arrives later for a parent that
-  already named it, logs, a clean tail of audit or mandate lines)
-  before moving them. Anything else — a task, log or subtask plan that changed,
-  a shortened or rewritten audit or mandate stream, a different continuity, or a
-  source that is neither still in place nor already under `*.migrated-<stamp>` —
-  is refused, and nothing is moved aside.
+  `STATE_FORMAT=sqlite` checks the marker, the base and its schema first. When
+  no old-format file is still in its original place, the previous migration
+  already finished and the base is the source of truth: the run returns
+  already, without comparing those files, so the caller can record the new
+  install. Empty directories recreated in the old places are still put away.
+  While an old-format file is still in place, it waits for running code and
+  brings in what old code wrote meanwhile (new tasks with their children, a
+  child that arrives later for a parent that already named it, logs, a clean
+  tail of audit or mandate lines) before moving them. Anything else — a task,
+  log or subtask plan that changed, a shortened or rewritten audit or mandate
+  stream, a different continuity, or a source that is neither still in place
+  nor already under `*.migrated-<stamp>` — is refused, and nothing is moved
+  aside.
 - **Rollback.** Writes every task back under its original file name, restores
   logs, subtask plans, cancellations, audit (an empty file comes back empty),
   continuity and mandate streams (an empty stream comes back empty). Everything is written to a staging folder

@@ -374,6 +374,51 @@ def test_a_recreated_part_merges_new_files_instead_of_failing(runtime):
         assert s.task_get("e2")["status"] == "error"
 
 
+def _without_sqlite_sidecars(tree: dict) -> dict:
+    return {rel: kind for rel, kind in tree.items()
+            if not rel.endswith(("-wal", "-shm"))}
+
+
+def test_a_finished_migration_leaves_later_base_changes_alone(runtime):
+    """The fixture runtime, never the machine one. Files already set aside stay there."""
+    cut.migrate(runtime, lister=quiet)
+    holder = next(runtime.glob("async-tasks.migrated-*"))
+    with st.session(runtime, auto_backup=False) as s:
+        assert s.task_transition("q1", "error", expected_from="queued") == "queued"
+        s.task_record("q1", log_path="task-logs/q1.log")
+    _write(runtime / "task-logs" / "q1.log", "born after the migration\n")
+    before = _without_sqlite_sidecars(_inventory(runtime))
+    aside_before = _inventory(holder)
+
+    result = cut.migrate(runtime, lister=quiet)
+
+    assert result["already"] is True
+    assert result["moved"] == []
+    assert result["caught_up"] == {"tasks": 0, "logs": 0, "audit": 0,
+                                   "mandate_events": 0, "warnings": []}
+    assert _without_sqlite_sidecars(_inventory(runtime)) == before
+    assert _inventory(holder) == aside_before
+    assert not (runtime / "async-tasks" / "error").exists()
+    assert not (runtime / "async-tasks" / "logs").exists()
+    assert (runtime / "task-logs" / "q1.log").read_text() == "born after the migration\n"
+    with st.session(runtime, auto_backup=False) as s:
+        assert s.task_get("q1")["status"] == "error"
+        assert s.task_get("q1")["log_path"] == "task-logs/q1.log"
+
+
+def test_an_interrupted_migration_still_refuses_a_real_file_change(runtime):
+    _resume_setup(runtime)
+    live = runtime / "async-tasks" / "completed" / "parent-task.md"
+    assert live.is_file()
+    _write(live, _task("p1", "completed", title="Rewritten"))
+    with pytest.raises(cut.CutoverRefused, match="decide by hand") as caught:
+        cut.migrate(runtime, lister=quiet)
+    assert "parent-task.md changed after the migration" in str(caught.value)
+    assert not list(runtime.glob("async-tasks.migrated-*"))
+    assert live.is_file()
+    assert "Rewritten" in live.read_text(encoding="utf-8")
+
+
 def test_a_resumed_migration_refuses_a_rewritten_audit(runtime):
     with pytest.raises(RuntimeError):
         cut.migrate(runtime, lister=quiet, _fail_at="after-format")
