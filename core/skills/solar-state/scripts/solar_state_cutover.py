@@ -708,6 +708,9 @@ def rollback(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
 
     with st.cutover(base, timeout=wait) as cut:
         session = cut.session()
+        if session.agent_checkpoint_count():
+            session.conn.close()
+            raise CutoverRefused("Cannot roll back to files while agent checkpoints exist; keep the SQLite backup and runtime")
         try:
             active = lambda: [r[0] for r in session.conn.execute(  # noqa: E731
                 "SELECT id FROM tasks WHERE status = 'active'")]

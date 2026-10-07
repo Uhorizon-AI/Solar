@@ -33,6 +33,7 @@ None
 | `transitions` | Every allowed status move. A move not in the table fails |
 | `task_links`, `task_events` | Parent–child relations; every status change, with who made it |
 | `audit` | The router audit, one JSON line per row, verbatim |
+| `agent_checkpoints` | Bounded operational state keyed by agent and responsibility; optimistic versions prevent stale writes |
 | `continuity` | The cross-channel intention, one JSON document |
 | `delegation_events`, `delegation_streams` | The `events` and `shadow` streams of each A3 mandate; a stream exists even when empty |
 | `subtask_plans` | The children a parent declared, JSON verbatim |
@@ -41,6 +42,14 @@ None
 Not here, on purpose: the mandates themselves (YAML that Louis writes in
 `sun/delegations/`), execution logs (files; a task keeps the path), and state
 only one component reads (router conversations, `gateway/`, `host/`, `mcp/`).
+
+Checkpoint APIs: `Session.agent_checkpoint_get(agent, responsibility)` and
+`agent_checkpoint_put(agent, responsibility, data, expected_version)`. Version
+0 creates; read the current version before updating. Save status, summary, next
+step and optional task/artifact references, never secrets or permissions. MCP
+exposes these as A0 Get and A2 Put. This is shared operational state, not model
+training or a separate database per agent. Legacy file rollback refuses while
+checkpoints exist because that format cannot preserve them.
 
 ## How to use it
 

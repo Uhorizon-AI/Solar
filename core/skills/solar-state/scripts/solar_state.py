@@ -199,6 +199,17 @@ MIGRATIONS: tuple[str, ...] = (
            json_extract(row, '$.channel') AS channel
     FROM audit;
     """,
+    # v5: operational checkpoints keyed by agent and responsibility, not chat.
+    """
+    CREATE TABLE agent_checkpoints (
+        agent TEXT NOT NULL,
+        responsibility TEXT NOT NULL,
+        data TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (agent, responsibility)
+    );
+    """,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -1370,6 +1381,54 @@ class Session:
         return [json.loads(r[0]) for r in reversed(self.conn.execute(sql, args).fetchall())]
 
     # -- continuity --------------------------------------------------------
+
+    @staticmethod
+    def _checkpoint_key(agent: str, responsibility: str) -> None:
+        for value in (agent, responsibility):
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?", value) or len(value) > 128:
+                raise StateError("Invalid agent/responsibility identity")
+
+    def agent_checkpoint_get(self, agent: str, responsibility: str) -> Optional[dict]:
+        self._checkpoint_key(agent, responsibility)
+        row = self.conn.execute("SELECT data, version, updated_at FROM agent_checkpoints "
+                                "WHERE agent=? AND responsibility=?", (agent, responsibility)).fetchone()
+        return dict(agent=agent, responsibility=responsibility, data=json.loads(row[0]),
+                    version=row[1], updated_at=row[2]) if row else None
+
+    def agent_checkpoint_put(self, agent: str, responsibility: str, data: dict,
+                             expected_version: int) -> dict:
+        """Bounded explicit state. Version 0 creates; stale updates never overwrite."""
+        self._checkpoint_key(agent, responsibility)
+        allowed = {"status", "summary", "next_step", "task_id", "artifact_refs"}
+        if not isinstance(data, dict) or set(data) - allowed or not {"status", "summary", "next_step"} <= data.keys():
+            raise StateError("Invalid checkpoint fields")
+        if data["status"] not in ("active", "waiting", "blocked", "completed"):
+            raise StateError("Invalid checkpoint status")
+        for key in ("summary", "next_step", "task_id"):
+            if key in data and (not isinstance(data[key], str) or len(data[key]) > 2000):
+                raise StateError("Invalid checkpoint text")
+        refs = data.get("artifact_refs", [])
+        if not isinstance(refs, list) or len(refs) > 20 or any(not isinstance(v, str) or len(v) > 512 for v in refs):
+            raise StateError("Invalid checkpoint references")
+        if type(expected_version) is not int or expected_version < 0:
+            raise StateError("Invalid checkpoint version")
+        text = json.dumps(data, ensure_ascii=False)
+        if len(text.encode()) > 8192:
+            raise StateError("Checkpoint exceeds 8 KiB")
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT version FROM agent_checkpoints WHERE agent=? AND responsibility=?",
+                               (agent, responsibility)).fetchone()
+            current = row[0] if row else 0
+            if current != expected_version:
+                raise StateError("Checkpoint version conflict; read current state before retrying")
+            conn.execute("INSERT INTO agent_checkpoints VALUES (?, ?, ?, ?, ?) "
+                         "ON CONFLICT(agent, responsibility) DO UPDATE SET data=excluded.data, "
+                         "version=excluded.version, updated_at=excluded.updated_at",
+                         (agent, responsibility, text, current + 1, _now()))
+        return self.agent_checkpoint_get(agent, responsibility)
+
+    def agent_checkpoint_count(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM agent_checkpoints").fetchone()[0]
 
     def continuity_get(self) -> Optional[dict]:
         row = self.conn.execute("SELECT data FROM continuity WHERE id = 1").fetchone()
