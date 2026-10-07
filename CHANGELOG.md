@@ -8,6 +8,7 @@ The format is based on Keep a Changelog.
 
 ### Changed
 - Capability search descriptions are at most 120 characters, cut on a word boundary, with an ellipsis only when the text is cut. A limit above 10 is applied as 10 and reported with `limit_capped`, instead of refusing the call.
+- Capability describe returns a heading outline for units larger than 4 KiB. Governance sections, matched by a case-insensitive title substring (`authority`, `gate`, `governance`, `safety`, `never`, `approval`), are copied in full. `section` reads one exact heading and `full` returns the complete unit. Units of 4 KiB or less still return the complete text.
 
 ## [0.33.1] - 2026-10-07
 

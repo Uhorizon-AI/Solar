@@ -182,3 +182,128 @@ def test_preference_is_not_scope_and_sync_false_is_hidden(solar_env):
     assert [entry["id"] for entry in result["results"]] == ["example:transversal"]
     with pytest.raises(ValueError):
         registry.describe("example:hidden")
+
+
+def _write_skill(env, name, text):
+    folder = env.workspace / "planets/example/skills" / name
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(text)
+    return folder
+
+
+def _wide_skill(env):
+    filler = ("This is ordinary body text for the outline fixture. " * 50) + "\n\n"
+    text = (
+        "---\nname: wide\ndescription: wide synthetic skill\n---\n\n"
+        "# Wide\n\nPreamble is not a section.\n\n"
+        "## Purpose\n\n" + filler +
+        "## Steps\n\nParent steps.\n\n"
+        "### Prepare\n\nPrepare the fixture.\n\n"
+        "### Run\n\nRun the fixture.\n\n"
+        "## Approval gate\n\nUNIQUE_GATE_MARKER do not skip this gate.\n\n"
+        "## Never rewrite\n\nLeave the original words in place.\n\n"
+        "## Notes\n\n" + filler +
+        "```\n## Approval gate\nUNIQUE_FAKE_GATE\n```\n"
+        "UNIQUE_BODY_MARKER stays in the notes section.\n"
+    )
+    folder = _write_skill(env, "wide", text)
+    (folder / "references").mkdir()
+    (folder / "references/detail.md").write_text("Detailed fixture")
+    assert len(text.encode()) > 4096
+    return text
+
+
+def test_small_skill_is_returned_whole(solar_env):
+    folder = fixture_skill(solar_env, "tiny", "tiny skill")
+    text = (folder / "SKILL.md").read_text()
+    assert len(text.encode()) <= 4096
+    described = registry.describe("example:tiny")
+    assert described["instructions"] == text
+    assert "outline" not in described
+    assert described == registry.describe("example:tiny", full=True)
+    revision = described["revision"]
+    (folder / "SKILL.md").write_text(text + "Changed\n")
+    with pytest.raises(ValueError, match="revision"):
+        registry.describe("example:tiny", revision, section="Purpose")
+
+
+def test_outline_boundary_is_four_kibibytes(solar_env):
+    def sized(name, size):
+        head = f"---\nname: {name}\ndescription: sized\n---\n\n## Purpose\n\n"
+        body = head + ("x" * (size - len(head.encode())))
+        assert len(body.encode()) == size
+        _write_skill(solar_env, name, body)
+        return body
+
+    at_limit = sized("atlimit", 4096)
+    sized("overlimit", 4097)
+    assert registry.describe("example:atlimit")["instructions"] == at_limit
+    outlined = registry.describe("example:overlimit")
+    assert outlined["outline"] is True
+    assert "instructions" not in outlined
+    assert outlined["sections"][0]["title"] == "Purpose"
+
+
+def test_large_skill_outline_sections_and_full_body(solar_env):
+    source = _wide_skill(solar_env)
+    outlined = registry.describe("example:wide")
+    assert outlined["outline"] is True
+    assert outlined["id"] == "example:wide"
+    assert outlined["description"] == "wide synthetic skill"
+    assert outlined["revision"]
+    assert outlined["references"] == ["references/detail.md"]
+    assert "instructions" not in outlined
+    titles = [(item["level"], item["title"]) for item in outlined["sections"]]
+    assert titles == [
+        (2, "Purpose"), (2, "Steps"), (3, "Prepare"), (3, "Run"),
+        (2, "Approval gate"), (2, "Never rewrite"), (2, "Notes"),
+    ]
+    assert [item["title"] for item in outlined["governance_sections"]] == [
+        "Approval gate", "Never rewrite"]
+    dumped = json.dumps(outlined)
+    assert "UNIQUE_GATE_MARKER" in dumped
+    assert "Leave the original words in place." in dumped
+    assert "UNIQUE_BODY_MARKER" not in dumped
+    assert "UNIQUE_FAKE_GATE" not in dumped
+
+    notes = registry.describe("example:wide", section="Notes")
+    assert notes["instructions"].startswith("## Notes\n")
+    assert "UNIQUE_BODY_MARKER" in notes["instructions"]
+    assert "UNIQUE_GATE_MARKER" not in notes["instructions"]
+    assert notes["instructions"] in source
+    listed = next(item for item in outlined["sections"] if item["title"] == "Notes")
+    assert listed["bytes"] == len(notes["instructions"].encode())
+    gate = next(item for item in outlined["governance_sections"] if item["title"] == "Approval gate")
+    assert gate["text"] == registry.describe("example:wide", section="Approval gate")["instructions"]
+    assert gate["text"] in source
+    assert gate["bytes"] == len(gate["text"].encode())
+
+    with pytest.raises(ValueError, match="Unknown section") as missing:
+        registry.describe("example:wide", section="Nope")
+    assert "Purpose" in str(missing.value) and "Approval gate" in str(missing.value)
+
+    full = registry.describe("example:wide", full=True)
+    assert full["instructions"] == source
+    assert "outline" not in full
+    assert set(full) == {
+        "dependency_availability", "governance", "id", "instructions", "namespace",
+        "references", "revision", "type", "unit_revision"}
+    reference = registry.describe("example:wide", reference="references/detail.md")
+    assert reference["instructions"] == "Detailed fixture"
+    assert "outline" not in reference
+
+    with pytest.raises(ValueError, match="does not accept a path"):
+        registry.describe("example:wide", section="../Secret")
+    with pytest.raises(ValueError, match="does not accept a path"):
+        registry.describe("example:wide", section="references/detail.md")
+    with pytest.raises(ValueError, match="does not accept a path"):
+        registry.describe("example:wide", reference="../../secret.md")
+    with pytest.raises(ValueError, match="cannot be combined"):
+        registry.describe("example:wide", section="Notes", full=True)
+    with pytest.raises(ValueError, match="boolean"):
+        registry.describe("example:wide", full="yes")
+
+    outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
+    full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
+    # Large-fixture response JSON: heading outline versus the complete body.
+    assert (outline_bytes, full_bytes) == (1414, 6120)

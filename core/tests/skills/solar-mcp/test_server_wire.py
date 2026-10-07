@@ -92,6 +92,39 @@ def test_tools_are_listed(solar_env):
                          "solar_capability_search", "solar_capability_describe"}
 
 
+_SEVEN_TOOLS = {
+    "solar_task_status": (set(), {"task_id", "state"}),
+    "solar_task_create": ({"title"}, {"title", "description", "queued", "approval_id"}),
+    "solar_task_approve": ({"task_id"}, {"task_id", "approval_id"}),
+    "solar_task_cancel": ({"task_id"}, {"task_id", "approval_id"}),
+    "solar_task_requeue": ({"task_id"}, {"task_id", "approval_id"}),
+    "solar_telegram_send": ({"text"}, {"text", "chat_id", "parse_mode", "approval_id"}),
+    "solar_action_run": ({"skill", "action"}, {"skill", "action", "mandate", "automated"}),
+}
+
+
+def test_describe_schema_adds_section_without_changing_the_seven_tools(solar_env):
+    with client(solar_env) as probe:
+        listed = {row["name"]: row for row in probe.request("tools/list")["result"]["tools"]}
+        refused = probe.call_tool("solar_capability_describe",
+                                  {"id": "example:missing", "section": "Purpose", "full": True})
+    for name, (required, properties) in _SEVEN_TOOLS.items():
+        schema = listed[name]["inputSchema"]
+        assert set(schema.get("required", [])) == required
+        assert set(schema["properties"]) == properties
+        assert schema["additionalProperties"] is False
+    describe = listed["solar_capability_describe"]["inputSchema"]
+    assert set(describe["properties"]) == {"id", "revision", "reference", "section", "full"}
+    assert describe["properties"]["section"]["type"] == "string"
+    assert describe["properties"]["full"]["type"] == "boolean"
+    assert describe["required"] == ["id"]
+    assert describe["additionalProperties"] is False
+    message = refused["result"]["content"][0]["text"]
+    assert refused["result"]["isError"] is True
+    assert "Invalid tool arguments" not in message
+    assert "cannot be combined" in message
+
+
 def test_reading_a_verb_needs_no_approval(solar_env):
     with client(solar_env) as probe:
         answer = probe.call_tool("solar_task_status", {})

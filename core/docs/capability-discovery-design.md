@@ -11,8 +11,10 @@
    preserves the existing duplicate-name convention. `sync: false`, planet
    exclusions and skill exclusions apply to both Search and Describe.
 2. MCP Search returns bounded descriptions and source hashes. Describe reads
-   one selected complete instruction unit or a registered Markdown reference.
-   These tools find instructions; they do not execute them or mint authority.
+   one selected instruction unit or a registered Markdown reference. A unit
+   over 4 KiB returns a heading outline with governance sections in full;
+   `section` and `full` read original text. These tools find instructions;
+   they do not execute them or mint authority.
 3. Client's opt-in `discovery` profile publishes three mandatory essentials to
    `.agents/skills`: `solar-mcp`, `solar-client`, `solar-paths`, plus explicitly
    selected essentials. Eligible unpublished packages remain discoverable.
@@ -56,7 +58,7 @@ original argument validation; discovery validates its own two contracts only.
 | Surface | Contract |
 |---|---|
 | Search | Non-empty query, at most 512 characters; integer limit of at least 1 (default 5); values above 10 are applied as 10 and the response sets limit_capped; descriptions at most 120 characters, cut on a word boundary; exact IDs supported; namespace preference affects ranking only; result JSON bounded below 8 KiB |
-| Describe | Known eligible ID, optional expected main revision, optional allowlisted `references/*.md` key; unit source at most 60,000 bytes and result JSON at most 64 KiB; oversized units refuse without truncating instructions |
+| Describe | Known eligible ID, optional expected main revision, optional allowlisted `references/*.md` key, optional exact section title, optional full; units of 4 KiB or less and full=true return the complete text; larger units return a heading outline with governance sections copied in full; section and reference do not accept paths; unit source at most 60,000 bytes and result JSON at most 64 KiB; oversized units and oversized governance text refuse instead of being cut |
 | Visibility | Both tools derive eligibility from the workspace bound by the server; excluded IDs cannot be described directly |
 | Paths | Canonical roots, traversal refusal and symlink containment checked on reads; search returns no absolute source paths |
 | Dependencies | Availability is reported as unknown; retrieving a package does not establish readiness |

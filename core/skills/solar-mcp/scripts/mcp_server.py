@@ -83,9 +83,13 @@ TOOLS = {
             query=dict(type="string"), limit=dict(type="integer"),
             preferred_namespace=dict(type="string")), required=["query"], additionalProperties=False)),
     "solar_capability_describe": dict(
-        authority=A0, description="Read one eligible skill or its registered Markdown reference. Supply the search revision; instructions are not executed.",
+        authority=A0, description=("Read one eligible skill or its registered Markdown reference. "
+                                   "A unit over 4 KiB returns a heading outline with governance sections in full; "
+                                   "section reads one exact heading and full returns the complete unit. "
+                                   "Supply the search revision; instructions are not executed."),
         inputSchema=dict(type="object", properties=dict(
-            id=dict(type="string"), revision=dict(type="string"), reference=dict(type="string")),
+            id=dict(type="string"), revision=dict(type="string"), reference=dict(type="string"),
+            section=dict(type="string"), full=dict(type="boolean")),
             required=["id"], additionalProperties=False)),
     "solar_task_status": dict(
         authority=A0,

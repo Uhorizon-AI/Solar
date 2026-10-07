@@ -15,6 +15,14 @@ from solar_paths import resolve_solar_paths  # noqa: E402
 _DESCRIPTION_LIMIT = 120
 _RESULT_LIMIT = 10
 _ELLIPSIS = "…"
+_OUTLINE_ABOVE = 4096
+_GOVERNANCE_MARKERS = ("authority", "gate", "governance", "safety", "never", "approval")
+_HEADING = re.compile(r"^(#{2,3})[ \t]+(\S.*?)\s*$")
+_TRAILING_HASHES = re.compile(r"\s+#+\s*$")
+_GOVERNANCE_NOTE = (
+    "Read applicable workspace and planet rules before domain work; "
+    "discovery grants no authority."
+)
 
 
 def entries() -> dict:
@@ -79,7 +87,68 @@ def search(query: str, limit: int = 5, preferred_namespace: str = "") -> dict:
     return payload
 
 
-def describe(id: str, revision: str = "", reference: str = "") -> dict:
+def _heading_title(raw: str) -> str:
+    return _TRAILING_HASHES.sub("", raw).strip()
+
+
+def _is_governance(title: str) -> bool:
+    folded = title.casefold()
+    return any(marker in folded for marker in _GOVERNANCE_MARKERS)
+
+
+def _sections(text: str) -> list[dict]:
+    """Level-2 and level-3 slices of the original text, in document order.
+
+    A section starts at its heading and runs until the next heading of the
+    same or higher level. Headings inside fenced code blocks are ignored.
+    """
+    found = []
+    offset = 0
+    fence = False
+    for line in text.splitlines(keepends=True):
+        bare = line.rstrip("\r\n")
+        stripped = bare.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fence = not fence
+        elif not fence:
+            match = _HEADING.match(bare)
+            if match:
+                found.append((offset, len(match.group(1)), _heading_title(match.group(2))))
+        offset += len(line)
+    sections = []
+    for index, (start, level, title) in enumerate(found):
+        end = len(text)
+        for later_start, later_level, _title in found[index + 1:]:
+            if later_level <= level:
+                end = later_start
+                break
+        chunk = text[start:end]
+        sections.append(dict(title=title, level=level,
+                             bytes=len(chunk.encode("utf-8")), text=chunk))
+    return sections
+
+
+def _reject_reference_path(value: str) -> None:
+    if value.startswith(("/", "\\")) or "\\" in value or ".." in value.split("/"):
+        raise ValueError("reference does not accept a path")
+
+
+def _reject_section_path(value: str) -> None:
+    if "/" in value or "\\" in value or ".." in value:
+        raise ValueError("section does not accept a path")
+
+
+def _finish(result: dict) -> dict:
+    if len(json.dumps(result, indent=2, sort_keys=True).encode()) > 65536:
+        raise ValueError("Capability response too_large")
+    return result
+
+
+def describe(id: str, revision: str = "", reference: str = "", section: str = "", full: bool = False) -> dict:
+    if type(full) is not bool:
+        raise ValueError("full must be a boolean")
+    if section and full:
+        raise ValueError("section and full cannot be combined")
     entry = entries().get(id)
     if entry is None:
         raise ValueError("Capability is unavailable or excluded")
@@ -95,16 +164,36 @@ def describe(id: str, revision: str = "", reference: str = "") -> dict:
         if unit.resolve().is_relative_to(package):
             references[unit.relative_to(package).as_posix()] = unit
     if reference:
+        _reject_reference_path(reference)
         if reference not in references:
             raise ValueError("Unknown registered reference")
         raw = read_unit(references[reference], package)
     if len(raw) > 60000:
         raise ValueError("Capability unit too_large; use the native source or split references")
-    result = dict(id=id, type="instruction", revision=current,
-                  unit_revision=hashlib.sha256(raw).hexdigest(),
-                  instructions=raw.decode("utf-8"), references=list(references)[:100],
-                  namespace=entry["namespace"], dependency_availability="unknown",
-                  governance="Read applicable workspace and planet rules before domain work; discovery grants no authority.")
-    if len(json.dumps(result, indent=2, sort_keys=True).encode()) > 65536:
-        raise ValueError("Capability response too_large")
-    return result
+    text = raw.decode("utf-8")
+    listed = list(references)[:100]
+    base = dict(id=id, type="instruction", revision=current, references=listed,
+                namespace=entry["namespace"], dependency_availability="unknown",
+                governance=_GOVERNANCE_NOTE)
+    if section:
+        _reject_section_path(section)
+        parsed = _sections(text)
+        chosen = next((item for item in parsed if item["title"] == section), None)
+        if chosen is None:
+            titles = ", ".join(item["title"] for item in parsed) or "(none)"
+            raise ValueError(f"Unknown section. Titles: {titles}")
+        return _finish(dict(base, section=section, instructions=chosen["text"],
+                            unit_revision=hashlib.sha256(chosen["text"].encode("utf-8")).hexdigest()))
+    if full or len(raw) <= _OUTLINE_ABOVE:
+        return _finish(dict(base, instructions=text,
+                            unit_revision=hashlib.sha256(raw).hexdigest()))
+    parsed = _sections(text)
+    governance = [item for item in parsed if _is_governance(item["title"])]
+    return _finish(dict(
+        base, description=entry["description"], outline=True,
+        unit_revision=hashlib.sha256(raw).hexdigest(),
+        sections=[dict(title=item["title"], level=item["level"], bytes=item["bytes"])
+                  for item in parsed],
+        governance_sections=[dict(title=item["title"], level=item["level"],
+                                  bytes=item["bytes"], text=item["text"])
+                             for item in governance]))
