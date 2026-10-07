@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-10-07
+
 ### Fixed
 - A finished file migration is no longer resumed as if those files were still the source of truth. `migrate` records that the move finished. When that record is present — or, for an older marker, every original source in `pre-state-<stamp>/` is already aside — and no old-format file remains in place, it returns already and does not run catch-up. One file set aside is not that record. A task whose status has since changed in the base, and a log that exists only under `task-logs/`, no longer refuse the cutover, so `solar client update` can record the new install. A source deleted before it was set aside is still refused. `.DS_Store` is not an old-format file and does not reopen catch-up. The migration marker is replaced from a temporary file, so a crash during the write leaves the previous marker readable. An interrupted migration, with old files still in place, still refuses a real change in a file.
 
