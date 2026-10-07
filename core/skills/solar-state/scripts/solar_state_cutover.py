@@ -616,6 +616,16 @@ def _marker_data(base: Path) -> dict:
     return json.loads(_marker(base).read_text(encoding="utf-8"))
 
 
+def _write_marker(path: Path, text: str) -> None:
+    """Replace the marker. A crash before the replace leaves the previous one."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def _record_move(base: Path, stamp: str) -> None:
     """The move finished. Written only after `_move_old_files` returns.
 
@@ -626,32 +636,71 @@ def _record_move(base: Path, stamp: str) -> None:
     text = json.dumps({"stamp": stamp, "moved": True})
     if path.is_file() and path.read_text(encoding="utf-8") == text:
         return
-    path.write_text(text, encoding="utf-8")
+    _write_marker(path, text)
 
 
-def _aside_for_stamp(base: Path, stamp: str) -> bool:
-    """True when this stamp already left aside names behind.
+def _format_sources(root: Path) -> list[str]:
+    """Old-format files under `root`, relative to it.
 
-    Markers written before `moved` had no other record. The aside names are
-    that record. A source that was deleted instead never received one.
+    `tmp/`, `hooks/` and foreign metadata are not sources. This reads the
+    tree, not the base: a later status change in SQLite is not this list.
     """
-    if (base / f"async-tasks.migrated-{stamp}").exists():
-        return True
-    singles = [base / "router" / f"audit.jsonl.migrated-{stamp}",
-               base / "continuity" / f"active.json.migrated-{stamp}"]
-    delegations = base / "delegations"
+    rels = []
+    tasks = root / "async-tasks"
+    for part in TASK_PARTS:
+        src = tasks / part
+        if src.is_file() and src.name not in FOREIGN_METADATA:
+            rels.append(f"async-tasks/{part}")
+        elif src.is_dir():
+            for path in sorted(src.rglob("*")):
+                if path.is_file() and path.name not in FOREIGN_METADATA:
+                    rels.append(path.relative_to(root).as_posix())
+    singles = [root / "router" / "audit.jsonl", root / "continuity" / "active.json"]
+    delegations = root / "delegations"
     if delegations.is_dir():
-        singles += [mandate / f"{stream}.jsonl.migrated-{stamp}"
+        singles += [mandate / f"{stream}.jsonl"
                     for mandate in delegations.iterdir() if mandate.is_dir()
                     for stream in STREAMS]
-    return any(path.is_file() for path in singles)
+    for path in singles:
+        if path.is_file():
+            rels.append(path.relative_to(root).as_posix())
+    return rels
+
+
+def _source_is_aside(base: Path, rel: str, stamp: str) -> bool:
+    if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+        return False
+    if rel.startswith("async-tasks/"):
+        aside = base / f"async-tasks.migrated-{stamp}" / rel[len("async-tasks/"):]
+    else:
+        aside = _aside(base / rel, stamp)
+    return aside.is_file()
+
+
+def _original_sources(base: Path, stamp: str) -> Optional[list[str]]:
+    """The files this move had to set aside, from the record or the pre-state copy.
+
+    None when neither exists: one aside name is not a substitute for the list.
+    """
+    data = _marker_data(base)
+    sources = data.get("sources")
+    if isinstance(sources, list) and all(isinstance(rel, str) for rel in sources):
+        return sources
+    backup = base / f"pre-state-{stamp}"
+    if not backup.is_dir():
+        return None
+    return _format_sources(backup)
 
 
 def _move_finished(base: Path, stamp: str) -> bool:
+    """True when every original source is aside, not when any one of them is."""
     data = _marker_data(base)
     if data.get("moved") is True:
         return True
-    return _aside_for_stamp(base, stamp)
+    sources = _original_sources(base, stamp)
+    if sources is None:
+        return False
+    return all(_source_is_aside(base, rel, stamp) for rel in sources)
 
 
 def _has_format_file(path: Path) -> bool:
@@ -698,10 +747,11 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
             # a finished one alone. The base is not a photo of migration day.
             stamp = _check_migrated_base(base)
             _wait_until_quiet(base, wait, lister)
-            # No live file is not proof the move finished. A source deleted
-            # before it was set aside must still be refused. `moved` in the
-            # marker is the record; an older marker is finished only when this
-            # stamp already left its aside names.
+            # No live file is not proof the move finished, and neither is one
+            # file already aside. `moved` is the record. Without it, every
+            # original source — the list in the marker, or the pre-state copy
+            # for an older marker — has to be aside. That list is not the
+            # current base.
             if _move_finished(base, stamp) and not _legacy_files_in_place(base):
                 # The base has been the source of truth since the move. A
                 # status that has changed in it, or a log written only under
@@ -753,7 +803,7 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
         shutil.rmtree(work, ignore_errors=True)
         fail("after-place")
 
-        _marker(base).write_text(json.dumps({"stamp": stamp}), encoding="utf-8")
+        _write_marker(_marker(base), json.dumps({"stamp": stamp, "sources": _format_sources(base)}))
         cut.set_format(st.FORMAT_SQLITE)
         fail("after-format")
         moved = _move_old_files(base, stamp)

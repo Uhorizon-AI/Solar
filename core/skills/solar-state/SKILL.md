@@ -131,9 +131,13 @@ SOLAR_STATE_ALLOW_CUTOVER=1 python3 scripts/solar_state_cutover.py rollback
   Killed at any step, running it again completes it. A run that finds
   `STATE_FORMAT=sqlite` checks the marker, the base and its schema first.
   The move is finished only once `state-migration.json` records `moved`, or,
-  for a marker written before that field, once this stamp has left its aside
-  names. Absence of the live file is not that record: a source deleted before
-  it was set aside is still refused. When the move is finished and no
+  without that field, once every original source is aside. That list is the
+  one recorded in the marker, or, for an older marker, the files in
+  `pre-state-<stamp>/`. One aside name is not enough, and the list is not
+  read from the current base. Absence of the live file is not that record:
+  a source deleted before it was set aside is still refused. The marker is
+  replaced from a temporary file, so a crash during the write leaves the
+  previous marker in place. When the move is finished and no
   old-format file is still in its original place, the base is the source of
   truth: the run returns already, without comparing those files, so the caller
   can record the new install. Empty directories recreated in the old places

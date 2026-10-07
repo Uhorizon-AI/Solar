@@ -51,7 +51,8 @@ bash core/tests/skills/solar-client/test_shell_runtime_guard.sh
 
 ## Implementation notes (optional)
 
-- A finished move is `moved: true` in `state-migration.json`, written only after the files are aside. A marker from before that field is finished when this stamp already left its aside names. No live file, by itself, is not that record.
+- A finished move is `moved: true` in `state-migration.json`, written only after the files are aside. Without that field, every original source must be aside: the list recorded in the marker, or the files in `pre-state-<stamp>/` for an older marker. One aside name is not enough. That list is not the current base.
+- The marker is replaced from a temporary file. A crash before the replace leaves the previous marker readable.
 - Empty directories recreated afterwards are still put away. `.DS_Store` is not an old-format file and is not copied into the aside tree.
 - `task-logs/`, `tmp/` and `hooks/` are not the old format.
 - The client writes `state-cutover.json` only after `migrate` exits 0. Returning `already` is what lets that write happen. This change does not write that install marker.
@@ -63,7 +64,7 @@ A real old-format file recreated in an old folder (for example a task markdown u
 ## Completion evidence (optional)
 
 - Validation:
-  - `uv run --project core/tests pytest core/tests/skills/solar-state core/tests/skills/solar-client -q` -> 181 passed
+  - `uv run --project core/tests pytest core/tests/skills/solar-state core/tests/skills/solar-client -q` -> 183 passed
   - `core/tests/skills/solar-client/test_*.sh` -> exit 0 on the first commit; those scripts were not changed in the review fixes
 - Files changed:
   - `core/skills/solar-state/scripts/solar_state_cutover.py`
@@ -72,6 +73,6 @@ A real old-format file recreated in an old folder (for example a task markdown u
   - `CHANGELOG.md`
   - `docs/tasks/2026-10-07-settled-cutover.md`
 - Notes:
-  - A finished move is recorded in `state-migration.json`. An older marker still settles when the aside names for its stamp exist. A source deleted before that move is still refused.
+  - A finished move is recorded in `state-migration.json`. An older marker settles only when every source in `pre-state-<stamp>/` is aside. One aside file is not enough. The marker is replaced atomically.
   - `.DS_Store` does not reopen catch-up and is not copied into the aside tree.
   - No `solar client update`, no `solar client sync`, no release, no push. The machine runtime was not used.

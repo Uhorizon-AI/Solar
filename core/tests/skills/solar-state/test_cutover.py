@@ -442,6 +442,49 @@ def test_a_source_deleted_before_the_move_is_still_refused(tmp_path, monkeypatch
     assert not list(root.glob("**/*migrated-*"))
 
 
+def test_one_aside_file_is_not_a_finished_move(tmp_path, monkeypatch):
+    """Killed before the move, then only the audit is set aside and continuity is deleted.
+
+    The original list still names continuity. That is not a finished move,
+    and the check does not read the current base.
+    """
+    root = tmp_path / "runtime"
+    _write(root / "router" / "audit.jsonl", "".join(f"{line}\n" for line in AUDIT))
+    _write(root / "continuity" / "active.json", CONTINUITY)
+    monkeypatch.setenv(cut.ALLOW_ENV, "1")
+    monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(root))
+    from runtime_owner import claim_test_owner
+    claim_test_owner(root, tmp_path / "workspace", monkeypatch=monkeypatch)
+    with pytest.raises(RuntimeError):
+        cut.migrate(root, lister=quiet, _fail_at="after-format")
+    stamp = json.loads((root / cut.MARKER_NAME).read_text())["stamp"]
+    audit = root / "router" / "audit.jsonl"
+    audit.rename(audit.with_name(f"audit.jsonl.migrated-{stamp}"))
+    (root / "continuity" / "active.json").unlink()
+    assert not cut._legacy_files_in_place(root)
+    assert cut._move_finished(root, stamp) is False
+    with pytest.raises(cut.CutoverRefused, match="continuity/active.json is neither in place nor set aside"):
+        cut.migrate(root, lister=quiet)
+    assert json.loads((root / cut.MARKER_NAME).read_text()).get("moved") is not True
+
+
+def test_an_interrupted_marker_write_keeps_the_previous_marker(runtime, monkeypatch):
+    cut.migrate(runtime, lister=quiet)
+    marker = runtime / cut.MARKER_NAME
+    previous = marker.read_text(encoding="utf-8")
+    stamp = json.loads(previous)["stamp"]
+
+    def killed_replace(*_args, **_kwargs):
+        raise OSError("killed during replace")
+
+    monkeypatch.setattr(cut.os, "replace", killed_replace)
+    with pytest.raises(OSError, match="killed during replace"):
+        cut._write_marker(marker, json.dumps({"stamp": stamp, "moved": True, "broken": True}))
+    assert marker.read_text(encoding="utf-8") == previous
+    assert not list(marker.parent.glob(".state-migration.json.*.tmp"))
+    assert cut._check_migrated_base(runtime) == stamp
+
+
 def test_an_older_marker_still_settles_when_the_aside_names_exist(runtime):
     """A migration that finished before `moved` was recorded. The aside names
     are the evidence. The base may already have drifted."""
