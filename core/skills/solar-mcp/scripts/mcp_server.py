@@ -76,6 +76,21 @@ def action_skills() -> dict:
 
 
 TOOLS = {
+    "solar_agent_checkpoint_get": dict(
+        authority=A0, description="Read bounded operational state for one agent and responsibility in this workspace. Memory grants no authority.",
+        inputSchema=dict(type="object", properties=dict(agent=dict(type="string"), responsibility=dict(type="string")),
+                         required=["agent", "responsibility"], additionalProperties=False)),
+    "solar_agent_checkpoint_put": dict(
+        authority=A2, description="Save one agent responsibility checkpoint with optimistic version checking. Needs exact-call approval; omit approval_id. No task activation.",
+        inputSchema=dict(type="object", properties=dict(
+            agent=dict(type="string"), responsibility=dict(type="string"),
+            expected_version=dict(type="integer"), checkpoint=dict(type="object", properties=dict(
+                status=dict(type="string", enum=["active", "waiting", "blocked", "completed"]),
+                summary=dict(type="string"), next_step=dict(type="string"),
+                task_id=dict(type="string"), artifact_refs=dict(type="array", items=dict(type="string"))),
+                required=["status", "summary", "next_step"], additionalProperties=False),
+            approval_id=dict(type="string")),
+            required=["agent", "responsibility", "expected_version", "checkpoint"], additionalProperties=False)),
     "solar_task_status": dict(
         authority=A0,
         description="Read the state of the async task queue. Read-only.",
@@ -380,6 +395,8 @@ def _do_action_run(arguments: dict) -> dict:
 
 
 HANDLERS = {
+    "solar_agent_checkpoint_get": lambda args: _checkpoint_get(args),
+    "solar_agent_checkpoint_put": lambda args: _checkpoint_put(args),
     "solar_task_status": _do_task_status,
     "solar_task_create": _do_task_create,
     "solar_task_approve": _do_task_approve,
@@ -390,8 +407,38 @@ HANDLERS = {
 }
 
 
+def _checkpoint_get(arguments: dict) -> dict:
+    import solar_state
+    with solar_state.read_session() as store:
+        return dict(checkpoint=store.agent_checkpoint_get(arguments["agent"], arguments["responsibility"]))
+
+
+def _checkpoint_put(arguments: dict) -> dict:
+    import solar_state
+    with solar_state.session() as store:
+        return store.agent_checkpoint_put(arguments["agent"], arguments["responsibility"],
+                                          arguments["checkpoint"], arguments["expected_version"])
+
+
+def _valid_value(value, schema: dict) -> bool:
+    types = {"string": str, "boolean": bool, "integer": int, "object": dict, "array": list}
+    if type(value) is not types.get(schema.get("type")):
+        return False
+    if "enum" in schema and value not in schema["enum"]:
+        return False
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        return (all(key in value for key in schema.get("required", []))
+                and all(key in properties and _valid_value(v, properties[key]) for key, v in value.items()))
+    if isinstance(value, list):
+        return all(_valid_value(v, schema["items"]) for v in value)
+    return True
+
+
 def call_tool(name: str, arguments: dict) -> tuple[dict, bool]:
     """Gate first, then act. There is no path to a handler that skips this."""
+    if name in ("solar_agent_checkpoint_get", "solar_agent_checkpoint_put") and not _valid_value(arguments, TOOLS[name]["inputSchema"]):
+        return dict(error="Invalid tool arguments"), True
     try:
         workspace()
     except WorkspaceUnresolved as exc:
@@ -465,9 +512,12 @@ def handle(message: dict, confirm=None) -> dict | None:
             schema = TOOLS[name]["inputSchema"]
             properties = schema["properties"]
             types = {"string": str, "boolean": bool}
-            valid = (all(key in arguments for key in schema.get("required", []))
-                     and all(key in properties and type(value) is types.get(properties[key].get("type"))
-                             for key, value in arguments.items()))
+            if name == "solar_agent_checkpoint_put":
+                valid = _valid_value(arguments, schema)
+            else:
+                valid = (all(key in arguments for key in schema.get("required", []))
+                         and all(key in properties and type(value) is types.get(properties[key].get("type"))
+                                 for key, value in arguments.items()))
             if not valid:
                 return _error(request_id, -32602, "Invalid tool arguments")
             if name == "solar_telegram_send" and not arguments.get("chat_id"):

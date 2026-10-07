@@ -209,3 +209,8 @@ solar client sync
 Request cancellation with `solar_task_cancel`. An active task stays active until the worker stops it.
 The executor confirms `cancelled` only after process-group termination and cleanup.
 Voice OS D9 may queue explicit, bounded local preparation through the Host; the original request supplies authority, not the acknowledgement.
+
+For responsibility recovery, task frontmatter may set `agent`, `planet` and
+`responsibility`. `execute_active.py` forwards those fields to the router;
+checkpoint persistence is explicit through the gated MCP Put tool, not an
+automatic consequence of dispatch.

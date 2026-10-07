@@ -136,7 +136,8 @@ bash core/skills/solar-router/scripts/reconcile_router_audit.sh
   "metadata": {
     "agent": "agent-name|null",
     "skills": ["planet:skill-name", "core-skill-name"],
-    "planet": "planet-name|null"
+    "planet": "planet-name|null",
+    "responsibility": "responsibility-name|null"
   }
 }
 ```
@@ -145,8 +146,8 @@ bash core/skills/solar-router/scripts/reconcile_router_audit.sh
 - `mode`: defaults to `auto`. `direct_only` always returns `direct_reply`. `async_only` requires `async-tasks` feature enabled.
 - `channel`: used by `DecisionEngine` for semantic routing in `mode=auto`.
 - `metadata.agent`: existing agent name from planet's `agents/`, or `null` for JIT role generation.
-- `metadata.skills`: skill name format — `planet:skill` resolves to `planets/<planet>/skills/<skill>/SKILL.md`; unprefixed `skill` resolves to `planets/<metadata.planet>/skills/<skill>/SKILL.md` first (if `metadata.planet` is set), then falls back to `core/skills/<skill>/SKILL.md`. Only description is injected (on-demand).
-- `metadata.planet`: planet that owns the task domain. Used for agent/skill lookup.
+- `metadata.skills`: compatibility metadata only; `resolve_jit_context()` does not resolve or inject these descriptions. The provider harness discovers instruction skills.
+- `metadata.planet`: planet that owns the task domain. Used for agent lookup and checkpoint identity.
 
 ## Secure Invocation Protocol (Required)
 
@@ -221,3 +222,8 @@ EOF
 ## Managed execution
 
 `managed_process.py` is an internal helper used by app and async executors to bound and cancel router process groups; it is not a separate provider entrypoint.
+
+Responsibility recovery: supply `metadata.agent` and `metadata.responsibility`,
+plus `metadata.planet` for planet agents. The router reads only that checkpoint
+through `solar-state`; it never infers identity from a conversation or writes a
+checkpoint automatically. See [references/routing-policy.md](references/routing-policy.md).

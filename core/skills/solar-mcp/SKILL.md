@@ -37,6 +37,14 @@ solar mcp uninstall
 
 Client destinations, recovery and validation: [references/clients.md](references/clients.md).
 
+## Responsibility checkpoints (deferred review)
+
+Get takes `agent` and `responsibility`. Put adds `expected_version` (0 creates)
+and bounded `checkpoint` data: status, summary, next_step, optional task_id and
+artifact_refs. Read before updating; stale versions refuse. These records are
+operational data, not permissions or model training. Details and deployment
+prerequisites: [references/checkpoints.md](references/checkpoints.md).
+
 ## Approval workflow
 
 1. Prepare the exact action, scope and destination. For Telegram include an explicit
@@ -72,6 +80,8 @@ conversational authority from caller-supplied fields. See
 
 | Tool | Authority | Passes when |
 |---|---|---|
+| `solar_agent_checkpoint_get` | A0 | Read explicit agent/responsibility state |
+| `solar_agent_checkpoint_put` | A2 | Exact-call approval and matching expected version; never activates work |
 | `solar_task_status` | A0 | Always. Reading is not gated. |
 | `solar_task_create` | A2 | Native client confirmation or an existing exact-call approval. Stores a draft through `solar-state` and refuses when the format is not `sqlite` |
 | `solar_task_approve` | A2 | Same approval. Moves a draft, or a task already planned, to the queue. Refuses an A3 mandate. Does not change object, scope or effect |

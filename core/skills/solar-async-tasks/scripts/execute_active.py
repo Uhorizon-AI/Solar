@@ -227,6 +227,9 @@ def call_router(
         "channel": "async-task",
         "mode": "direct_only",
     }
+    metadata = {key: _field(task_id, key) for key in ("agent", "planet", "responsibility")}
+    if any(metadata.values()):
+        payload["metadata"] = {key: value for key, value in metadata.items() if value}
     if provider:
         payload["provider"] = provider
 
