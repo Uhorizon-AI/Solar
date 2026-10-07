@@ -19,7 +19,9 @@ Stop `migrate` from treating a finished sqlite runtime as a snapshot of migratio
 - [x] That return still succeeds, so the client can record the new install marker
 - [x] Full resume, including refusal of a real file change, stays when old files are still in place
 - [x] Fixture tests cover the settled drift case and the interrupted refusal; they never use the machine runtime and never write into an aside directory
-- [x] `CHANGELOG.md` has an Unreleased Fixed entry
+- [x] `CHANGELOG.md` has an Unreleased Fixed entry, in the same prose style as the 0.33.0 notes
+- [x] A source deleted before the move is still refused, even when no live file remains
+- [x] `.DS_Store` does not reopen catch-up and is not copied into the aside tree
 
 ## Checks to run
 
@@ -49,15 +51,20 @@ bash core/tests/skills/solar-client/test_shell_runtime_guard.sh
 
 ## Implementation notes (optional)
 
-- A finished migration is "no old-format file still at its live path". Empty directories recreated afterwards are not files: they are still put away, and they do not reopen catch-up.
+- A finished move is `moved: true` in `state-migration.json`, written only after the files are aside. A marker from before that field is finished when this stamp already left its aside names. No live file, by itself, is not that record.
+- Empty directories recreated afterwards are still put away. `.DS_Store` is not an old-format file and is not copied into the aside tree.
 - `task-logs/`, `tmp/` and `hooks/` are not the old format.
-- The client writes `state-cutover.json` only after `migrate` exits 0. Returning `already` is what lets that write happen. This change does not write the marker itself.
+- The client writes `state-cutover.json` only after `migrate` exits 0. Returning `already` is what lets that write happen. This change does not write that install marker.
+
+## Follow-up
+
+A real old-format file recreated in an old folder (for example a task markdown under `queued/`) still takes the full resume. That resume still treats the base as a photo of migration day, so a later status change can be refused again. Empty directories are put away, and `.DS_Store` is ignored. A later change should bring that recreated file in without the photo.
 
 ## Completion evidence (optional)
 
 - Validation:
-  - `uv run --project core/tests pytest core/tests/skills/solar-state core/tests/skills/solar-client -q` -> 178 passed
-  - `core/tests/skills/solar-client/test_*.sh` -> exit 0
+  - `uv run --project core/tests pytest core/tests/skills/solar-state core/tests/skills/solar-client -q` -> 181 passed
+  - `core/tests/skills/solar-client/test_*.sh` -> exit 0 on the first commit; those scripts were not changed in the review fixes
 - Files changed:
   - `core/skills/solar-state/scripts/solar_state_cutover.py`
   - `core/skills/solar-state/SKILL.md`
@@ -65,6 +72,6 @@ bash core/tests/skills/solar-client/test_shell_runtime_guard.sh
   - `CHANGELOG.md`
   - `docs/tasks/2026-10-07-settled-cutover.md`
 - Notes:
-  - A finished migration returns `already` with an empty catch-up. The client writes `state-cutover.json` only after that command exits 0.
-  - Empty directories recreated in the old places are still put away. A file that appears there again still takes the full resume.
+  - A finished move is recorded in `state-migration.json`. An older marker still settles when the aside names for its stamp exist. A source deleted before that move is still refused.
+  - `.DS_Store` does not reopen catch-up and is not copied into the aside tree.
   - No `solar client update`, no `solar client sync`, no release, no push. The machine runtime was not used.
