@@ -55,7 +55,7 @@ original argument validation; discovery validates its own two contracts only.
 
 | Surface | Contract |
 |---|---|
-| Search | Non-empty query, at most 512 characters; strict integer limit 1–10; exact IDs supported; namespace preference affects ranking only; result JSON bounded below 8 KiB |
+| Search | Non-empty query, at most 512 characters; integer limit of at least 1 (default 5); values above 10 are applied as 10 and the response sets limit_capped; descriptions at most 120 characters, cut on a word boundary; exact IDs supported; namespace preference affects ranking only; result JSON bounded below 8 KiB |
 | Describe | Known eligible ID, optional expected main revision, optional allowlisted `references/*.md` key; unit source at most 60,000 bytes and result JSON at most 64 KiB; oversized units refuse without truncating instructions |
 | Visibility | Both tools derive eligibility from the workspace bound by the server; excluded IDs cannot be described directly |
 | Paths | Canonical roots, traversal refusal and symlink containment checked on reads; search returns no absolute source paths |

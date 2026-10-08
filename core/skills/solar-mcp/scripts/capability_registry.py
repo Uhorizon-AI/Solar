@@ -12,6 +12,10 @@ sys.path.insert(0, str(_SKILLS / "solar-client/scripts"))
 from skill_inventory import inventory, read_unit  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
+_DESCRIPTION_LIMIT = 120
+_RESULT_LIMIT = 10
+_ELLIPSIS = "…"
+
 
 def entries() -> dict:
     workspace, install = resolve_solar_paths()
@@ -19,11 +23,31 @@ def entries() -> dict:
     return inventory(workspace, install / "core")
 
 
+def clip_description(text: str, limit: int = _DESCRIPTION_LIMIT) -> str:
+    """Keep text that fits. Otherwise cut on a word boundary and mark the cut.
+
+    The ellipsis counts toward ``limit``. A token with no whitespace inside
+    that budget is cut so the ellipsis still fits.
+    """
+    if len(text) <= limit:
+        return text
+    room = limit - len(_ELLIPSIS)
+    window = text[:room]
+    if room < len(text) and not text[room].isspace():
+        boundary = max((index for index, char in enumerate(window) if char.isspace()), default=-1)
+        if boundary > 0:
+            window = window[:boundary]
+    return window.rstrip() + _ELLIPSIS
+
+
 def search(query: str, limit: int = 5, preferred_namespace: str = "") -> dict:
     if not isinstance(query, str) or not query.strip() or len(query) > 512:
         raise ValueError("query must contain 1 to 512 characters")
-    if type(limit) is not int or not 1 <= limit <= 10:
-        raise ValueError("limit must be an integer from 1 to 10")
+    if type(limit) is not int or limit < 1:
+        raise ValueError("limit must be an integer of at least 1")
+    limit_capped = limit > _RESULT_LIMIT
+    if limit_capped:
+        limit = _RESULT_LIMIT
     terms = set(re.findall(r"\w+", query.casefold()))
     ranked = []
     for key, entry in entries().items():
@@ -40,13 +64,19 @@ def search(query: str, limit: int = 5, preferred_namespace: str = "") -> dict:
         if len(results) == limit:
             break
         candidate = dict(id=key, type="instruction", namespace=entry["namespace"],
-                         description=entry["description"][:400], revision=entry["revision"],
+                         description=clip_description(entry["description"]), revision=entry["revision"],
                          matches=matched[:10], dependency_availability="unknown")
-        if len(json.dumps(dict(results=results + [candidate]), indent=2, sort_keys=True).encode()) > 7900:
+        measured = dict(results=results + [candidate])
+        if limit_capped:
+            measured["limit_capped"] = True
+        if len(json.dumps(measured, indent=2, sort_keys=True).encode()) > 7900:
             truncated = True
             break
         results.append(candidate)
-    return dict(results=results, truncated=truncated)
+    payload = dict(results=results, truncated=truncated)
+    if limit_capped:
+        payload["limit_capped"] = True
+    return payload
 
 
 def describe(id: str, revision: str = "", reference: str = "") -> dict:
