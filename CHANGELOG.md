@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-08
+
 ### Fixed
 - Capability describe keeps a heading that follows a fenced block. The block is indented by at most three spaces and closes only on the same character repeated at least as many times as it opened. Four spaces, a tab, a shorter run, the other fence character, or backticks inside a paragraph no longer hide a later section.
 
