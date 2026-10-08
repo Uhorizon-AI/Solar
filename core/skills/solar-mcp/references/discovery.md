@@ -19,8 +19,12 @@ a path: `..`, a backslash, or an absolute path is refused, and `section` also
 refuses `/`. `section` together with `full=true` is refused.
 
 A selected unit of 4 KiB (4096 bytes) or less returns the complete text, as
-does `full=true`. A larger unit returns an outline instead of the body: id,
-the skill description, the skill-file revision, every column-0 level-2 and
+does `full=true`. A larger unit returns an outline instead of the body, unless
+that outline's response JSON is at least 85% of the complete-body response
+JSON. Both sizes are the UTF-8 length of the JSON object with `indent=2` and
+`sort_keys=True`, the same encoding as the 64 KiB limit. At or above 85%,
+Describe returns the complete body, as it does for a small unit. The outline
+contains the id, the skill description, the skill-file revision, every column-0 level-2 and
 level-3 heading with its level and UTF-8 byte size, the registered reference
 keys, and the preamble. The preamble is the original text after the frontmatter
 and before the first level-2 heading, including a level-1 heading when one is

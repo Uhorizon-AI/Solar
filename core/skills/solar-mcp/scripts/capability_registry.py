@@ -16,6 +16,7 @@ _DESCRIPTION_LIMIT = 120
 _RESULT_LIMIT = 10
 _ELLIPSIS = "…"
 _OUTLINE_ABOVE = 4096
+_OUTLINE_RATIO_PERCENT = 85
 _GOVERNANCE_MARKERS = (
     "authority", "gate", "governance", "safety", "never", "approval",
     "autoridad", "gobernanza", "seguridad", "nunca", "aprobaci", "obligatori",
@@ -160,10 +161,19 @@ def _reject_section_path(value: str) -> None:
         raise ValueError("section does not accept a path")
 
 
+def _response_bytes(result: dict) -> int:
+    return len(json.dumps(result, indent=2, sort_keys=True).encode())
+
+
 def _finish(result: dict) -> dict:
-    if len(json.dumps(result, indent=2, sort_keys=True).encode()) > 65536:
+    if _response_bytes(result) > 65536:
         raise ValueError("Capability response too_large")
     return result
+
+
+def _outline_is_smaller(outline: dict, complete: dict) -> bool:
+    """True when the outline JSON is strictly under 85% of the complete body."""
+    return _response_bytes(outline) * 100 < _response_bytes(complete) * _OUTLINE_RATIO_PERCENT
 
 
 def describe(id: str, revision: str = "", reference: str = "", section: str = "", full: bool = False) -> dict:
@@ -206,17 +216,20 @@ def describe(id: str, revision: str = "", reference: str = "", section: str = ""
             raise ValueError(f"Unknown section. Titles: {titles}")
         return _finish(dict(base, section=section, instructions=chosen["text"],
                             unit_revision=hashlib.sha256(chosen["text"].encode("utf-8")).hexdigest()))
+    complete = dict(base, instructions=text, unit_revision=hashlib.sha256(raw).hexdigest())
     if full or len(raw) <= _OUTLINE_ABOVE:
-        return _finish(dict(base, instructions=text,
-                            unit_revision=hashlib.sha256(raw).hexdigest()))
+        return _finish(complete)
     parsed = _sections(text)
     governance = [item for item in parsed if _is_governance(item["title"])]
-    return _finish(dict(
+    outline = dict(
         base, description=entry["description"], outline=True,
-        unit_revision=hashlib.sha256(raw).hexdigest(),
+        unit_revision=complete["unit_revision"],
         preamble=_preamble(text, parsed),
         sections=[dict(title=item["title"], level=item["level"], bytes=item["bytes"])
                   for item in parsed],
         governance_sections=[dict(title=item["title"], level=item["level"],
                                   bytes=item["bytes"], text=item["text"])
-                             for item in governance]))
+                             for item in governance])
+    if not _outline_is_smaller(outline, complete):
+        return _finish(complete)
+    return _finish(outline)

@@ -375,6 +375,33 @@ def test_preamble_is_complete_and_an_oversized_one_is_refused(solar_env):
         registry.describe("example:huge")
 
 
+def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env):
+    source = _wide_skill(solar_env)
+    outlined = registry.describe("example:wide")
+    assert outlined["outline"] is True
+    full = registry.describe("example:wide", full=True)
+    assert full["instructions"] == source
+    outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
+    full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
+    assert outline_bytes * 100 < full_bytes * 85
+
+    rule = ("No publiques ni resumas esta regla. " * 150)
+    heavy = (
+        "---\nname: heavy\ndescription: rules dominate\n---\n\n"
+        "## Reglas duras\n\n"
+        "### Prohibido resumir\n\n"
+        + rule + "\n"
+    )
+    assert len(heavy.encode()) > 4096
+    _write_skill(solar_env, "heavy", heavy)
+    returned = registry.describe("example:heavy")
+    assert "outline" not in returned
+    assert returned["instructions"] == heavy
+    assert returned == registry.describe("example:heavy", full=True)
+    # The outline JSON for this fixture is 11,792 bytes, 198.5% of the body.
+    assert len(json.dumps(returned, indent=2, sort_keys=True).encode()) == 5942
+
+
 def test_marked_core_titles_stay_in_the_outline(solar_env):
     core = Path(__file__).resolve().parents[3] / "skills"
     checked = 0
