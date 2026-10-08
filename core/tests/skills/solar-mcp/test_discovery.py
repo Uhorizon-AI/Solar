@@ -265,6 +265,11 @@ def test_large_skill_outline_sections_and_full_body(solar_env):
     assert "Leave the original words in place." in dumped
     assert "UNIQUE_BODY_MARKER" not in dumped
     assert "UNIQUE_FAKE_GATE" not in dumped
+    close = source.index("\n---\n", 4) + len("\n---\n")
+    expected_preamble = source[close:source.index("## Purpose")]
+    assert outlined["preamble"] == expected_preamble
+    assert "Preamble is not a section." in outlined["preamble"]
+    assert "## Purpose" not in outlined["preamble"]
 
     notes = registry.describe("example:wide", section="Notes")
     assert notes["instructions"].startswith("## Notes\n")
@@ -306,4 +311,94 @@ def test_large_skill_outline_sections_and_full_body(solar_env):
     outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
     full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
     # Large-fixture response JSON: heading outline versus the complete body.
-    assert (outline_bytes, full_bytes) == (1414, 6120)
+    assert (outline_bytes, full_bytes) == (1474, 6120)
+
+
+def test_spanish_rule_titles_stay_in_the_outline(solar_env):
+    filler = ("Texto ordinario que el esquema no debe copiar. " * 90) + "\n\n"
+    text = (
+        "---\nname: voz\ndescription: skill de voz en español\n---\n\n"
+        "Lee esto antes de cualquier sección.\n\n"
+        "## Dependencia obligatoria · la voz\n\n"
+        "Hay que usar la voz canónica. No la reescribas.\n\n"
+        "## Reglas duras\n\n"
+        "No inventes cifras. No publiques.\n\n"
+        "## Notas sueltas\n\n" + filler +
+        "MARCADOR_NOTAS_ORDINARIAS queda fuera del esquema.\n"
+    )
+    assert len(text.encode()) > 4096
+    _write_skill(solar_env, "voz", text)
+    outlined = registry.describe("example:voz")
+    governed = outlined["governance_sections"]
+    assert [item["title"] for item in governed] == [
+        "Dependencia obligatoria · la voz", "Reglas duras"]
+    voice = governed[0]["text"]
+    rules = governed[1]["text"]
+    assert voice == registry.describe("example:voz", section="Dependencia obligatoria · la voz")["instructions"]
+    assert rules == registry.describe("example:voz", section="Reglas duras")["instructions"]
+    assert voice in text and rules in text
+    assert "Hay que usar la voz canónica. No la reescribas." in voice
+    assert "No inventes cifras. No publiques." in rules
+    assert "MARCADOR_NOTAS_ORDINARIAS" not in json.dumps(outlined)
+    assert outlined["preamble"] == "\nLee esto antes de cualquier sección.\n\n"
+    full = registry.describe("example:voz", full=True)
+    assert full["instructions"] == text
+    outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
+    full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
+    # Spanish-fixture response JSON: heading outline versus the complete body.
+    assert (outline_bytes, full_bytes) == (1247, 5013)
+
+
+def test_preamble_is_complete_and_an_oversized_one_is_refused(solar_env):
+    text = (
+        "---\nname: lead\ndescription: preamble fixture\n---\n\n"
+        "# Antes del cuerpo\n\n"
+        "PREAMBULO_COMPLETO debe salir entero.\n\n"
+        "## Purpose\n\n" + ("ordinary section body. " * 200) + "\n"
+    )
+    assert len(text.encode()) > 4096
+    _write_skill(solar_env, "lead", text)
+    outlined = registry.describe("example:lead")
+    assert outlined["preamble"] == "\n# Antes del cuerpo\n\nPREAMBULO_COMPLETO debe salir entero.\n\n"
+    assert outlined["preamble"] in text
+    assert "## Purpose" not in outlined["preamble"]
+
+    quotes = '"' * 40000
+    huge = (
+        "---\nname: huge\ndescription: huge preamble\n---\n"
+        + quotes
+        + "\n## Notes\n\nshort\n"
+    )
+    assert 4096 < len(huge.encode()) <= 60000
+    _write_skill(solar_env, "huge", huge)
+    with pytest.raises(ValueError, match="response too_large"):
+        registry.describe("example:huge")
+
+
+def test_marked_core_titles_stay_in_the_outline(solar_env):
+    core = Path(__file__).resolve().parents[3] / "skills"
+    checked = 0
+    for skill in sorted(core.glob("*/SKILL.md")):
+        raw = skill.read_bytes()
+        if len(raw) <= 4096:
+            continue
+        try:
+            outlined = registry.describe(skill.parent.name)
+        except ValueError as exc:
+            if "unavailable" in str(exc) or "excluded" in str(exc):
+                continue
+            raise
+        if not outlined.get("outline"):
+            continue
+        checked += 1
+        marked = [item["title"] for item in outlined["sections"] if registry._is_governance(item["title"])]
+        governed = [item["title"] for item in outlined["governance_sections"]]
+        assert marked == governed
+        source = raw.decode("utf-8")
+        for item in outlined["governance_sections"]:
+            assert item["text"] in source
+            assert item["bytes"] == len(item["text"].encode())
+        preamble = outlined["preamble"]
+        assert preamble in source
+        assert "\n## " not in ("\n" + preamble)
+    assert checked > 0

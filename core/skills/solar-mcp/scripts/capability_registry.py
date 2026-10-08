@@ -16,7 +16,11 @@ _DESCRIPTION_LIMIT = 120
 _RESULT_LIMIT = 10
 _ELLIPSIS = "…"
 _OUTLINE_ABOVE = 4096
-_GOVERNANCE_MARKERS = ("authority", "gate", "governance", "safety", "never", "approval")
+_GOVERNANCE_MARKERS = (
+    "authority", "gate", "governance", "safety", "never", "approval",
+    "autoridad", "gobernanza", "seguridad", "nunca", "aprobaci", "obligatori",
+    "prohib", "regla", "límite", "limite", "dependencia", "antes de",
+)
 _HEADING = re.compile(r"^(#{2,3})[ \t]+(\S.*?)\s*$")
 _TRAILING_HASHES = re.compile(r"\s+#+\s*$")
 _GOVERNANCE_NOTE = (
@@ -123,9 +127,27 @@ def _sections(text: str) -> list[dict]:
                 end = later_start
                 break
         chunk = text[start:end]
-        sections.append(dict(title=title, level=level,
+        sections.append(dict(title=title, level=level, start=start,
                              bytes=len(chunk.encode("utf-8")), text=chunk))
     return sections
+
+
+def _preamble(text: str, sections: list[dict]) -> str:
+    """Original text after the frontmatter and before the first level-2 heading.
+
+    The slice is not trimmed. A unit with no level-2 heading yields the whole
+    body. Missing frontmatter starts the slice at the beginning of the unit.
+    """
+    start = 0
+    if text.startswith("---\n"):
+        end = text.find("\n---", 4)
+        if end >= 0:
+            line_end = text.find("\n", end + 1)
+            start = len(text) if line_end < 0 else line_end + 1
+    first_h2 = next((item["start"] for item in sections if item["level"] == 2), None)
+    if first_h2 is None or first_h2 < start:
+        return text[start:]
+    return text[start:first_h2]
 
 
 def _reject_reference_path(value: str) -> None:
@@ -192,6 +214,7 @@ def describe(id: str, revision: str = "", reference: str = "", section: str = ""
     return _finish(dict(
         base, description=entry["description"], outline=True,
         unit_revision=hashlib.sha256(raw).hexdigest(),
+        preamble=_preamble(text, parsed),
         sections=[dict(title=item["title"], level=item["level"], bytes=item["bytes"])
                   for item in parsed],
         governance_sections=[dict(title=item["title"], level=item["level"],

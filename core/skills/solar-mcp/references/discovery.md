@@ -21,12 +21,21 @@ refuses `/`. `section` together with `full=true` is refused.
 A selected unit of 4 KiB (4096 bytes) or less returns the complete text, as
 does `full=true`. A larger unit returns an outline instead of the body: id,
 the skill description, the skill-file revision, every column-0 level-2 and
-level-3 heading with its level and UTF-8 byte size, and the registered
-reference keys. The outline also copies governance sections in full. A heading
-is governance when its title contains, without regard to case, any of
-`authority`, `gate`, `governance`, `safety`, `never`, or `approval`. The match
-is a substring, so a title such as `Aggregate` counts because it contains
-`gate`. Each matching heading is its own original slice: a level-2 slice runs
+level-3 heading with its level and UTF-8 byte size, the registered reference
+keys, and the preamble. The preamble is the original text after the frontmatter
+and before the first level-2 heading, including a level-1 heading when one is
+there. It is copied whole. A unit with no frontmatter takes the preamble from
+the start of the file. A unit with no level-2 heading uses the whole body as
+the preamble.
+
+The outline also copies governance sections in full. A heading is governance
+when its title contains any of these substrings, without regard to case:
+`authority`, `gate`, `governance`, `safety`, `never`, `approval`, `autoridad`,
+`gobernanza`, `seguridad`, `nunca`, `aprobaci`, `obligatori`, `prohib`,
+`regla`, `límite`, `limite`, `dependencia`, `antes de`. Accents are not folded,
+so `límite` and `limite` are both listed. A title such as `Aggregate` counts
+because it contains `gate`, and `Reglas duras` counts because it contains
+`regla`. Each matching heading is its own original slice: a level-2 slice runs
 until the next level-2 heading and includes its level-3 children, and a
 matching child is included again on its own. Nothing is summarized or
 rewritten. Headings inside fenced code blocks are not sections. When two
@@ -36,7 +45,8 @@ an error that lists the titles. `revision` remains the skill-file hash;
 `section` is set.
 
 Source units above 60,000 bytes or result JSON above 64 KiB refuse. A
-governance section is never cut to fit: the response is refused instead.
+governance section and the preamble are never cut to fit: the response is
+refused instead.
 Do not treat retrieval as execution, authority, dependency verification or
 multiuser RBAC.
 
