@@ -39,35 +39,56 @@ sessions on the same tasks before rollout. The maintainer sets and accepts
 baseline-derived latency/cost targets independently of implementation.
 
 
-## Baseline and required fresh-session experiment
+## Experiment record: the reduced profile did not lower session cost
+
+**Outcome (2026-10-09): closed.** The reduced profile stays an opt-in option,
+not enabled, with `native` as the default. It is not extended to other clients.
+The experiment was run and it did not show a saving; this section records it so
+the same path is not repeated without a new hypothesis.
 
 Read-only baseline on 2026-10-07: **160 eligible packages, 68,386 UTF-8 bytes**
-(ID plus full description, approximately 427 per package). An in-memory preview
-of three mandatory essentials gives **823 bytes**; it neither activates the
-profile nor verifies the real harness. At four bytes/token the full catalog is
-roughly 17,000 tokens, an illustrative conversion rather than tokenizer data.
+(ID plus full description, approximately 427 per package); three mandatory
+essentials give **823 bytes**. At four bytes/token the full list would be
+roughly 17,000 tokens. That conversion overstated the saving: the harness does
+not announce full descriptions.
 
-| Measurement | Full fresh Codex session | Reduced fresh Codex session |
-|---|---|---|
-| Eligible inventory bytes | 68,386 (source measurement) | 68,386 (same sources) |
-| Initial publication preview bytes | 68,386 | 823 (three essentials) |
-| Actual initial harness catalog/tokens | unknown | unknown |
-| Input / cached / output tokens | unknown | unknown |
-| Calls / latency / billed cost | unknown | unknown |
-| Selection success / task completion | unknown | unknown |
+Measured in fresh Codex sessions from the session log (`token_count` events),
+same task set, same folder (`~/Solar`), reduced profile against full catalog:
 
-The framework maintainer fixes the task set and latency/cost acceptance targets
-before comparison. In an isolated workspace and installed candidate, register
-its Solar MCP and publish native, then start a genuinely fresh Codex session.
-Use one exact-ID task, one natural-language discovery task and one transversal
-task requiring a reference and deterministic local work. Record the requested
-artifact and completion outcome, initial catalog, selected reads, calls, elapsed
-time and available provider metrics without recording private content. Close
-the session; use Client's dry-run then Codex-only discovery publication and a
-fresh session on the same tasks, model, instructions and essentials. Restore
-native after the comparison and verify normal invocation in another session.
-Keep cold/warm cache conditions comparable and record any unavailable metric
-as unknown. Tool schemas, prompts, selected bodies and extra calls must count
-in the comparison. Do not infer billed savings from byte reduction alone.
+| Round | Change under test | Total input | Uncached input |
+|---|---|---|---|
+| 1 | Discovery profile (search and describe as first built) | +24 % | +33 % |
+| 2 | Same, five tasks | -14 % | -28 % |
+| 3 | Shorter search results, describe outline (0.34.0) | -10 % | +13 % |
+| 4 | Describe discourages `full=true` (0.34.1) | **+20 %** | **+68 %** |
+| Mean | | about +5 % | about +22 % |
 
-This experiment has not been run; passing isolated tests does not complete it.
+One session per mode and round, one model, one client, no billing comparison.
+
+What held in every round: the reduced catalog saves about **4,200 tokens per
+request** (about 12 % of the first request: 35,065 against 30,879 in round 4).
+
+What the follow-up changes achieved: round 4 had `full=true` on 0 of 6
+`describe` calls, against 3 of 3 before; the model used the outline. The change
+worked as designed and did not change the result.
+
+**Why.** Without the names in the catalog the model takes more steps to find and
+read each skill (16 requests against 13 in round 4), and every request resends
+the whole context. That cost exceeds the catalog saving. Shorter `search` and
+`describe` outputs reduced bytes per call, not the number of steps.
+
+**What stays useful.** Inside a planet (its own git repository) Codex does not
+see Solar skills in its catalog, with or without the profile; the MCP search is
+the only way to find them, across all planets.
+
+**To reopen it**, start from a hypothesis about the number of steps, not the
+size of the catalog, and measure this way:
+
+- Read tokens and tool calls from the session log. The model's own report of its
+  calls was wrong in several rounds.
+- Check the working folder in the log before interpreting a pair. One round ran
+  inside a planet by mistake, so both sessions had the same visible catalog.
+- Repeat each mode several times. The total changed sign between rounds.
+- Judge the total of the session, not the catalog bytes. Keep cold and warm
+  cache conditions comparable and count tool schemas, prompts, selected reads
+  and extra calls.

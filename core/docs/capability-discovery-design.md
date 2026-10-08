@@ -119,10 +119,11 @@ of ID plus description (427 bytes/package); three mandatory essentials total
 activation or MCP/harness validation. At an illustrative four bytes/token the
 full list would be roughly 17,000 tokens; this is arithmetic, not tokenizer data.
 
-Fresh full/reduced Codex sessions on identical tasks remain pending: initial
-harness-injected catalog, input/cached/output tokens, tool calls, latency, cost
-and completion quality are **unknown**. The comparison procedure and recording
-matrix live in the [profile reference](../skills/solar-client/references/discovery-profile.md).
+Fresh full/reduced Codex sessions on identical tasks were run in four rounds
+and the reduced profile did not lower session cost (mean total input about +5 %,
+uncached about +22 %), although the catalog saves about 4,200 tokens per request.
+The record, the reason and how to measure a future attempt are in the
+[profile reference](../skills/solar-client/references/discovery-profile.md).
 These byte totals omit schemas, formatting, prompts and selected reads.
 
 ## Review and rollout criteria
