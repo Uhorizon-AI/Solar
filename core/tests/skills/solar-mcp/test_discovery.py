@@ -182,3 +182,295 @@ def test_preference_is_not_scope_and_sync_false_is_hidden(solar_env):
     assert [entry["id"] for entry in result["results"]] == ["example:transversal"]
     with pytest.raises(ValueError):
         registry.describe("example:hidden")
+
+
+def _write_skill(env, name, text):
+    folder = env.workspace / "planets/example/skills" / name
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(text)
+    return folder
+
+
+def _wide_skill(env):
+    filler = ("This is ordinary body text for the outline fixture. " * 50) + "\n\n"
+    text = (
+        "---\nname: wide\ndescription: wide synthetic skill\n---\n\n"
+        "# Wide\n\nPreamble is not a section.\n\n"
+        "## Purpose\n\n" + filler +
+        "## Steps\n\nParent steps.\n\n"
+        "### Prepare\n\nPrepare the fixture.\n\n"
+        "### Run\n\nRun the fixture.\n\n"
+        "## Approval gate\n\nUNIQUE_GATE_MARKER do not skip this gate.\n\n"
+        "## Never rewrite\n\nLeave the original words in place.\n\n"
+        "## Notes\n\n" + filler +
+        "```\n## Approval gate\nUNIQUE_FAKE_GATE\n```\n"
+        "UNIQUE_BODY_MARKER stays in the notes section.\n"
+    )
+    folder = _write_skill(env, "wide", text)
+    (folder / "references").mkdir()
+    (folder / "references/detail.md").write_text("Detailed fixture")
+    assert len(text.encode()) > 4096
+    return text
+
+
+def test_small_skill_is_returned_whole(solar_env):
+    folder = fixture_skill(solar_env, "tiny", "tiny skill")
+    text = (folder / "SKILL.md").read_text()
+    assert len(text.encode()) <= 4096
+    described = registry.describe("example:tiny")
+    assert described["instructions"] == text
+    assert "outline" not in described
+    assert described == registry.describe("example:tiny", full=True)
+    revision = described["revision"]
+    (folder / "SKILL.md").write_text(text + "Changed\n")
+    with pytest.raises(ValueError, match="revision"):
+        registry.describe("example:tiny", revision, section="Purpose")
+
+
+def test_outline_boundary_is_four_kibibytes(solar_env):
+    def sized(name, size):
+        head = f"---\nname: {name}\ndescription: sized\n---\n\n## Purpose\n\n"
+        body = head + ("x" * (size - len(head.encode())))
+        assert len(body.encode()) == size
+        _write_skill(solar_env, name, body)
+        return body
+
+    at_limit = sized("atlimit", 4096)
+    sized("overlimit", 4097)
+    assert registry.describe("example:atlimit")["instructions"] == at_limit
+    outlined = registry.describe("example:overlimit")
+    assert outlined["outline"] is True
+    assert "instructions" not in outlined
+    assert outlined["sections"][0]["title"] == "Purpose"
+
+
+def test_large_skill_outline_sections_and_full_body(solar_env):
+    source = _wide_skill(solar_env)
+    outlined = registry.describe("example:wide")
+    assert outlined["outline"] is True
+    assert outlined["id"] == "example:wide"
+    assert outlined["description"] == "wide synthetic skill"
+    assert outlined["revision"]
+    assert outlined["references"] == ["references/detail.md"]
+    assert "instructions" not in outlined
+    titles = [(item["level"], item["title"]) for item in outlined["sections"]]
+    assert titles == [
+        (2, "Purpose"), (2, "Steps"), (3, "Prepare"), (3, "Run"),
+        (2, "Approval gate"), (2, "Never rewrite"), (2, "Notes"),
+    ]
+    assert [item["title"] for item in outlined["governance_sections"]] == [
+        "Approval gate", "Never rewrite"]
+    dumped = json.dumps(outlined)
+    assert "UNIQUE_GATE_MARKER" in dumped
+    assert "Leave the original words in place." in dumped
+    assert "UNIQUE_BODY_MARKER" not in dumped
+    assert "UNIQUE_FAKE_GATE" not in dumped
+    close = source.index("\n---\n", 4) + len("\n---\n")
+    expected_preamble = source[close:source.index("## Purpose")]
+    assert outlined["preamble"] == expected_preamble
+    assert "Preamble is not a section." in outlined["preamble"]
+    assert "## Purpose" not in outlined["preamble"]
+
+    notes = registry.describe("example:wide", section="Notes")
+    assert notes["instructions"].startswith("## Notes\n")
+    assert "UNIQUE_BODY_MARKER" in notes["instructions"]
+    assert "UNIQUE_GATE_MARKER" not in notes["instructions"]
+    assert notes["instructions"] in source
+    listed = next(item for item in outlined["sections"] if item["title"] == "Notes")
+    assert listed["bytes"] == len(notes["instructions"].encode())
+    gate = next(item for item in outlined["governance_sections"] if item["title"] == "Approval gate")
+    assert gate["text"] == registry.describe("example:wide", section="Approval gate")["instructions"]
+    assert gate["text"] in source
+    assert gate["bytes"] == len(gate["text"].encode())
+
+    with pytest.raises(ValueError, match="Unknown section") as missing:
+        registry.describe("example:wide", section="Nope")
+    assert "Purpose" in str(missing.value) and "Approval gate" in str(missing.value)
+
+    full = registry.describe("example:wide", full=True)
+    assert full["instructions"] == source
+    assert "outline" not in full
+    assert set(full) == {
+        "dependency_availability", "governance", "id", "instructions", "namespace",
+        "references", "revision", "type", "unit_revision"}
+    reference = registry.describe("example:wide", reference="references/detail.md")
+    assert reference["instructions"] == "Detailed fixture"
+    assert "outline" not in reference
+
+    with pytest.raises(ValueError, match="does not accept a path"):
+        registry.describe("example:wide", section="../Secret")
+    with pytest.raises(ValueError, match="does not accept a path"):
+        registry.describe("example:wide", section="references/detail.md")
+    with pytest.raises(ValueError, match="does not accept a path"):
+        registry.describe("example:wide", reference="../../secret.md")
+    with pytest.raises(ValueError, match="cannot be combined"):
+        registry.describe("example:wide", section="Notes", full=True)
+    with pytest.raises(ValueError, match="boolean"):
+        registry.describe("example:wide", full="yes")
+
+    outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
+    full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
+    # Large-fixture response JSON: heading outline versus the complete body.
+    assert (outline_bytes, full_bytes) == (1474, 6120)
+
+
+def test_spanish_rule_titles_stay_in_the_outline(solar_env):
+    filler = ("Texto ordinario que el esquema no debe copiar. " * 90) + "\n\n"
+    text = (
+        "---\nname: voz\ndescription: skill de voz en español\n---\n\n"
+        "Lee esto antes de cualquier sección.\n\n"
+        "## Dependencia obligatoria · la voz\n\n"
+        "Hay que usar la voz canónica. No la reescribas.\n\n"
+        "## Reglas duras\n\n"
+        "No inventes cifras. No publiques.\n\n"
+        "## Notas sueltas\n\n" + filler +
+        "MARCADOR_NOTAS_ORDINARIAS queda fuera del esquema.\n"
+    )
+    assert len(text.encode()) > 4096
+    _write_skill(solar_env, "voz", text)
+    outlined = registry.describe("example:voz")
+    governed = outlined["governance_sections"]
+    assert [item["title"] for item in governed] == [
+        "Dependencia obligatoria · la voz", "Reglas duras"]
+    voice = governed[0]["text"]
+    rules = governed[1]["text"]
+    assert voice == registry.describe("example:voz", section="Dependencia obligatoria · la voz")["instructions"]
+    assert rules == registry.describe("example:voz", section="Reglas duras")["instructions"]
+    assert voice in text and rules in text
+    assert "Hay que usar la voz canónica. No la reescribas." in voice
+    assert "No inventes cifras. No publiques." in rules
+    assert "MARCADOR_NOTAS_ORDINARIAS" not in json.dumps(outlined)
+    assert outlined["preamble"] == "\nLee esto antes de cualquier sección.\n\n"
+    full = registry.describe("example:voz", full=True)
+    assert full["instructions"] == text
+    outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
+    full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
+    # Spanish-fixture response JSON: heading outline versus the complete body.
+    assert (outline_bytes, full_bytes) == (1247, 5013)
+
+
+def test_preamble_is_complete_and_an_oversized_one_is_refused(solar_env):
+    text = (
+        "---\nname: lead\ndescription: preamble fixture\n---\n\n"
+        "# Antes del cuerpo\n\n"
+        "PREAMBULO_COMPLETO debe salir entero.\n\n"
+        "## Purpose\n\n" + ("ordinary section body. " * 200) + "\n"
+    )
+    assert len(text.encode()) > 4096
+    _write_skill(solar_env, "lead", text)
+    outlined = registry.describe("example:lead")
+    assert outlined["preamble"] == "\n# Antes del cuerpo\n\nPREAMBULO_COMPLETO debe salir entero.\n\n"
+    assert outlined["preamble"] in text
+    assert "## Purpose" not in outlined["preamble"]
+
+    quotes = '"' * 40000
+    huge = (
+        "---\nname: huge\ndescription: huge preamble\n---\n"
+        + quotes
+        + "\n## Notes\n\nshort\n"
+    )
+    assert 4096 < len(huge.encode()) <= 60000
+    _write_skill(solar_env, "huge", huge)
+    with pytest.raises(ValueError, match="response too_large"):
+        registry.describe("example:huge")
+
+
+def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env):
+    source = _wide_skill(solar_env)
+    outlined = registry.describe("example:wide")
+    assert outlined["outline"] is True
+    full = registry.describe("example:wide", full=True)
+    assert full["instructions"] == source
+    outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
+    full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
+    assert outline_bytes * 100 < full_bytes * 85
+
+    rule = ("No publiques ni resumas esta regla. " * 150)
+    heavy = (
+        "---\nname: heavy\ndescription: rules dominate\n---\n\n"
+        "## Reglas duras\n\n"
+        "### Prohibido resumir\n\n"
+        + rule + "\n"
+    )
+    assert len(heavy.encode()) > 4096
+    _write_skill(solar_env, "heavy", heavy)
+    returned = registry.describe("example:heavy")
+    assert "outline" not in returned
+    assert returned["instructions"] == heavy
+    assert returned == registry.describe("example:heavy", full=True)
+    # The outline JSON for this fixture is 11,792 bytes, 198.5% of the body.
+    assert len(json.dumps(returned, indent=2, sort_keys=True).encode()) == 5942
+
+
+def _safety_after_fence(env, name, middle):
+    filler = ("Ordinary body that the outline should omit. " * 100) + "\n\n"
+    text = (
+        "---\n"
+        f"name: {name}\n"
+        "description: fence fixture\n"
+        "---\n\n"
+        "## Notes\n\n" + filler + middle +
+        "## Safety\n\n"
+        "SAFETY_RULE must stay visible.\n"
+    )
+    assert len(text.encode()) > 4096
+    _write_skill(env, name, text)
+    outlined = registry.describe(f"example:{name}")
+    assert outlined["outline"] is True
+    assert "Safety" in [item["title"] for item in outlined["sections"]]
+    assert "Not safety" not in [item["title"] for item in outlined["sections"]]
+    governed = [item["title"] for item in outlined["governance_sections"]]
+    assert "Safety" in governed
+    safety = registry.describe(f"example:{name}", section="Safety")
+    assert safety["instructions"].startswith("## Safety\n")
+    assert "SAFETY_RULE must stay visible." in safety["instructions"]
+
+
+def test_fence_length_and_mixed_markers_keep_a_later_safety_section(solar_env):
+    _safety_after_fence(
+        solar_env, "fourback",
+        "````\n```\n## Not safety\n`````\n")
+    _safety_after_fence(
+        solar_env, "mixedtick",
+        "```\n~~~\n## Not safety\n```\n")
+    _safety_after_fence(
+        solar_env, "mixedtilde",
+        "~~~\n```\n## Not safety\n~~~\n")
+    _safety_after_fence(
+        solar_env, "inlinebt",
+        "Use ```inline``` backticks and a `## Safety` mention in the paragraph.\n")
+    _safety_after_fence(
+        solar_env, "indentfour",
+        "    ```\n    indented example without a closer\n")
+    _safety_after_fence(
+        solar_env, "indentthree",
+        "   ```\n## Not safety\n   ```\n")
+
+
+def test_marked_core_titles_stay_in_the_outline(solar_env):
+    core = Path(__file__).resolve().parents[3] / "skills"
+    checked = 0
+    for skill in sorted(core.glob("*/SKILL.md")):
+        raw = skill.read_bytes()
+        if len(raw) <= 4096:
+            continue
+        try:
+            outlined = registry.describe(skill.parent.name)
+        except ValueError as exc:
+            if "unavailable" in str(exc) or "excluded" in str(exc):
+                continue
+            raise
+        if not outlined.get("outline"):
+            continue
+        checked += 1
+        marked = [item["title"] for item in outlined["sections"] if registry._is_governance(item["title"])]
+        governed = [item["title"] for item in outlined["governance_sections"]]
+        assert marked == governed
+        source = raw.decode("utf-8")
+        for item in outlined["governance_sections"]:
+            assert item["text"] in source
+            assert item["bytes"] == len(item["text"].encode())
+        preamble = outlined["preamble"]
+        assert preamble in source
+        assert "\n## " not in ("\n" + preamble)
+    assert checked > 0
