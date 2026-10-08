@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.34.2] - 2026-10-09
+
 ### Documentation
 - Record the capability-discovery experiment: four fresh Codex rounds showed that the reduced profile saves about 4,200 tokens per request but does not lower session cost (mean total input about +5 %, uncached about +22 %). The profile stays opt-in and not enabled; the profile reference lists the evidence, the cause and how to measure a future attempt. No runtime change.
 
