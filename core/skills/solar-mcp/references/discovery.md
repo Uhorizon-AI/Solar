@@ -42,7 +42,11 @@ because it contains `gate`, and `Reglas duras` counts because it contains
 `regla`. Each matching heading is its own original slice: a level-2 slice runs
 until the next level-2 heading and includes its level-3 children, and a
 matching child is included again on its own. Nothing is summarized or
-rewritten. Headings inside fenced code blocks are not sections. When two
+rewritten. Headings inside fenced code blocks are not sections. A fence
+is indented by at most three spaces and closes only on the same character
+repeated at least as many times as the opening line, with nothing else on
+that line. Four spaces, a tab, a shorter run, the other character, or
+backticks inside a paragraph do not open or close it. When two
 headings share a title, `section` returns the first. A missing title raises
 an error that lists the titles. `revision` remains the skill-file hash;
 `unit_revision` hashes the selected unit, or the returned section when

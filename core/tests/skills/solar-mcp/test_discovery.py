@@ -402,6 +402,51 @@ def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env):
     assert len(json.dumps(returned, indent=2, sort_keys=True).encode()) == 5942
 
 
+def _safety_after_fence(env, name, middle):
+    filler = ("Ordinary body that the outline should omit. " * 100) + "\n\n"
+    text = (
+        "---\n"
+        f"name: {name}\n"
+        "description: fence fixture\n"
+        "---\n\n"
+        "## Notes\n\n" + filler + middle +
+        "## Safety\n\n"
+        "SAFETY_RULE must stay visible.\n"
+    )
+    assert len(text.encode()) > 4096
+    _write_skill(env, name, text)
+    outlined = registry.describe(f"example:{name}")
+    assert outlined["outline"] is True
+    assert "Safety" in [item["title"] for item in outlined["sections"]]
+    assert "Not safety" not in [item["title"] for item in outlined["sections"]]
+    governed = [item["title"] for item in outlined["governance_sections"]]
+    assert "Safety" in governed
+    safety = registry.describe(f"example:{name}", section="Safety")
+    assert safety["instructions"].startswith("## Safety\n")
+    assert "SAFETY_RULE must stay visible." in safety["instructions"]
+
+
+def test_fence_length_and_mixed_markers_keep_a_later_safety_section(solar_env):
+    _safety_after_fence(
+        solar_env, "fourback",
+        "````\n```\n## Not safety\n`````\n")
+    _safety_after_fence(
+        solar_env, "mixedtick",
+        "```\n~~~\n## Not safety\n```\n")
+    _safety_after_fence(
+        solar_env, "mixedtilde",
+        "~~~\n```\n## Not safety\n~~~\n")
+    _safety_after_fence(
+        solar_env, "inlinebt",
+        "Use ```inline``` backticks and a `## Safety` mention in the paragraph.\n")
+    _safety_after_fence(
+        solar_env, "indentfour",
+        "    ```\n    indented example without a closer\n")
+    _safety_after_fence(
+        solar_env, "indentthree",
+        "   ```\n## Not safety\n   ```\n")
+
+
 def test_marked_core_titles_stay_in_the_outline(solar_env):
     core = Path(__file__).resolve().parents[3] / "skills"
     checked = 0

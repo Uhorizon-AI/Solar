@@ -21,7 +21,7 @@ Stop capability describe from returning a whole large skill by default, while ke
 - [x] Governance is a case-insensitive substring of the heading. The markers are `authority`, `gate`, `governance`, `safety`, `never`, `approval`, `autoridad`, `gobernanza`, `seguridad`, `nunca`, `aprobaci`, `obligatori`, `prohib`, `regla`, `límite`, `limite`, `dependencia`, and `antes de`. Text is an original slice, never a summary. Gates are not dropped to save space
 - [x] The preamble, from after the frontmatter through the character before the first level-2 heading, is copied whole into the outline. A response that does not fit in 64 KiB is refused
 - [x] `section` and `reference` do not accept paths. Revision and containment checks stay in place
-- [x] Tests cover a large outline, a present and a missing section, `full=true`, governance text, a small skill, Spanish rule titles, a complete preamble, a refused oversized preamble, every marked title in `core/` skills larger than 4 KiB, an outline kept when it is under 85% of the body, an outline replaced by the body when it is larger, and the outline-versus-body byte comparison. The seven existing tool wire tests stay green
+- [x] Tests cover a large outline, a present and a missing section, `full=true`, governance text, a small skill, Spanish rule titles, a complete preamble, a refused oversized preamble, every marked title in `core/` skills larger than 4 KiB, an outline kept when it is under 85% of the body, an outline replaced by the body when it is larger, a later `## Safety` after a longer fence, mixed fence characters, inline backticks, and a four-space indented code line, and the outline-versus-body byte comparison. The seven existing tool wire tests stay green
 - [x] `CHANGELOG.md` records the change under Unreleased
 
 ## Checks to run
@@ -40,7 +40,7 @@ uv run --project core/tests pytest core/tests/skills/solar-client -q
 ## Implementation notes (optional)
 
 - 4 KiB means 4096 bytes of the selected unit (the skill, or the reference when one is selected).
-- A section runs from its heading through the character before the next heading of the same or higher level. Only column-0 ATX headings of level 2 and 3 count, and headings inside fenced code blocks do not.
+- A section runs from its heading through the character before the next heading of the same or higher level. Only column-0 ATX headings of level 2 and 3 count, and headings inside fenced code blocks do not. A fence is indented by at most three spaces and closes only on the same character repeated at least as many times as the opening line. Four spaces, a tab, a shorter run, the other character, or backticks inside a paragraph do not open or close it.
 - A level-2 slice includes its level-3 children. Each matching governance heading is included as its own slice, so a matching parent can repeat a matching child.
 - The first exact title wins when two headings share a name. `section` together with `full=true` is refused.
 - `revision` stays the skill-file hash. `unit_revision` hashes the selected unit, or the returned section when `section` is set.
@@ -51,8 +51,8 @@ uv run --project core/tests pytest core/tests/skills/solar-client -q
 ## Completion evidence (optional)
 
 - Validation:
-  - `uv run --project core/tests pytest core/tests/skills/solar-mcp -q` -> 118 passed
-  - `uv run --project core/tests pytest core/tests/skills/solar-client -q` -> 9 passed
+  - `uv run --project core/tests pytest core/tests/skills/solar-mcp -q` -> 119 passed
+  - `uv run --project core/tests pytest core/tests/skills/solar-client -q` -> 9 passed, re-run where `ps` is allowed. The four `PermissionError` failures do not reproduce there.
 - Files changed:
   - `core/skills/solar-mcp/scripts/capability_registry.py`
   - `core/skills/solar-mcp/scripts/mcp_server.py`

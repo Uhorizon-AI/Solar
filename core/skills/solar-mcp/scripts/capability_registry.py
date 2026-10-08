@@ -101,24 +101,55 @@ def _is_governance(title: str) -> bool:
     return any(marker in folded for marker in _GOVERNANCE_MARKERS)
 
 
+def _fence_mark(bare: str):
+    """Return the fence character, its length, and the rest of the line.
+
+    A fence is a line of at least three backticks or tildes, indented by at
+    most three spaces. Four spaces, or a tab, is an indented code line.
+    """
+    indent = len(bare) - len(bare.lstrip(" "))
+    if indent > 3 or bare[indent:indent + 1] == "\t":
+        return None
+    stripped = bare[indent:]
+    if stripped[:1] not in ("`", "~"):
+        return None
+    char = stripped[0]
+    length = 0
+    for item in stripped:
+        if item != char:
+            break
+        length += 1
+    if length < 3:
+        return None
+    return char, length, stripped[length:]
+
+
 def _sections(text: str) -> list[dict]:
     """Level-2 and level-3 slices of the original text, in document order.
 
     A section starts at its heading and runs until the next heading of the
     same or higher level. Headings inside fenced code blocks are ignored.
+    A fence is indented by at most three spaces and closes only on the same
+    character, repeated at least as many times as the opening line, with
+    nothing else on that line.
     """
     found = []
     offset = 0
-    fence = False
+    fence = None
     for line in text.splitlines(keepends=True):
         bare = line.rstrip("\r\n")
-        stripped = bare.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            fence = not fence
-        elif not fence:
-            match = _HEADING.match(bare)
-            if match:
-                found.append((offset, len(match.group(1)), _heading_title(match.group(2))))
+        mark = _fence_mark(bare)
+        if fence is None:
+            # A backtick run whose remainder contains a backtick is inline code,
+            # not an opening fence.
+            if mark is not None and not (mark[0] == "`" and "`" in mark[2]):
+                fence = (mark[0], mark[1])
+            else:
+                match = _HEADING.match(bare)
+                if match:
+                    found.append((offset, len(match.group(1)), _heading_title(match.group(2))))
+        elif mark is not None and mark[0] == fence[0] and mark[1] >= fence[1] and not mark[2].strip():
+            fence = None
         offset += len(line)
     sections = []
     for index, (start, level, title) in enumerate(found):
