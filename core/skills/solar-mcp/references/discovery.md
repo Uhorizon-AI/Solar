@@ -32,6 +32,12 @@ there. It is copied whole. A unit with no frontmatter takes the preamble from
 the start of the file. A unit with no level-2 heading uses the whole body as
 the preamble.
 
+The outline response includes `usage`, a fixed hint: read only the sections
+you need with `section=<title>`, and use `full=true` only if the outline is
+not enough. This hint is 103 characters. Complete-body responses and
+single-section responses omit `usage`. The field is part of the outline JSON,
+so it counts in the 85% comparison.
+
 The outline also copies governance sections in full. A heading is governance
 when its title contains any of these substrings, without regard to case:
 `authority`, `gate`, `governance`, `safety`, `never`, `approval`, `autoridad`,

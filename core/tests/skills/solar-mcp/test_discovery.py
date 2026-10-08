@@ -220,6 +220,7 @@ def test_small_skill_is_returned_whole(solar_env):
     described = registry.describe("example:tiny")
     assert described["instructions"] == text
     assert "outline" not in described
+    assert "usage" not in described
     assert described == registry.describe("example:tiny", full=True)
     revision = described["revision"]
     (folder / "SKILL.md").write_text(text + "Changed\n")
@@ -270,8 +271,11 @@ def test_large_skill_outline_sections_and_full_body(solar_env):
     assert outlined["preamble"] == expected_preamble
     assert "Preamble is not a section." in outlined["preamble"]
     assert "## Purpose" not in outlined["preamble"]
+    assert outlined["usage"] == registry._OUTLINE_USAGE
+    assert len(outlined["usage"]) <= 200
 
     notes = registry.describe("example:wide", section="Notes")
+    assert "usage" not in notes
     assert notes["instructions"].startswith("## Notes\n")
     assert "UNIQUE_BODY_MARKER" in notes["instructions"]
     assert "UNIQUE_GATE_MARKER" not in notes["instructions"]
@@ -290,12 +294,14 @@ def test_large_skill_outline_sections_and_full_body(solar_env):
     full = registry.describe("example:wide", full=True)
     assert full["instructions"] == source
     assert "outline" not in full
+    assert "usage" not in full
     assert set(full) == {
         "dependency_availability", "governance", "id", "instructions", "namespace",
         "references", "revision", "type", "unit_revision"}
     reference = registry.describe("example:wide", reference="references/detail.md")
     assert reference["instructions"] == "Detailed fixture"
     assert "outline" not in reference
+    assert "usage" not in reference
 
     with pytest.raises(ValueError, match="does not accept a path"):
         registry.describe("example:wide", section="../Secret")
@@ -310,8 +316,8 @@ def test_large_skill_outline_sections_and_full_body(solar_env):
 
     outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
     full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
-    # Large-fixture response JSON: heading outline versus the complete body.
-    assert (outline_bytes, full_bytes) == (1474, 6120)
+    # Large-fixture response JSON: heading outline (usage included) versus the complete body.
+    assert (outline_bytes, full_bytes) == (1592, 6120)
 
 
 def test_spanish_rule_titles_stay_in_the_outline(solar_env):
@@ -345,8 +351,8 @@ def test_spanish_rule_titles_stay_in_the_outline(solar_env):
     assert full["instructions"] == text
     outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
     full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
-    # Spanish-fixture response JSON: heading outline versus the complete body.
-    assert (outline_bytes, full_bytes) == (1247, 5013)
+    # Spanish-fixture response JSON: heading outline (usage included) versus the complete body.
+    assert (outline_bytes, full_bytes) == (1365, 5013)
 
 
 def test_preamble_is_complete_and_an_oversized_one_is_refused(solar_env):
@@ -375,7 +381,7 @@ def test_preamble_is_complete_and_an_oversized_one_is_refused(solar_env):
         registry.describe("example:huge")
 
 
-def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env):
+def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env, monkeypatch):
     source = _wide_skill(solar_env)
     outlined = registry.describe("example:wide")
     assert outlined["outline"] is True
@@ -383,6 +389,10 @@ def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env):
     assert full["instructions"] == source
     outline_bytes = len(json.dumps(outlined, indent=2, sort_keys=True).encode())
     full_bytes = len(json.dumps(full, indent=2, sort_keys=True).encode())
+    assert "usage" in outlined and "usage" not in full
+    without_usage = dict(outlined)
+    without_usage.pop("usage")
+    assert outline_bytes > len(json.dumps(without_usage, indent=2, sort_keys=True).encode())
     assert outline_bytes * 100 < full_bytes * 85
 
     rule = ("No publiques ni resumas esta regla. " * 150)
@@ -396,10 +406,52 @@ def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env):
     _write_skill(solar_env, "heavy", heavy)
     returned = registry.describe("example:heavy")
     assert "outline" not in returned
+    assert "usage" not in returned
     assert returned["instructions"] == heavy
     assert returned == registry.describe("example:heavy", full=True)
-    # The outline JSON for this fixture is 11,792 bytes, 198.5% of the body.
+    # The outline JSON for this fixture, including usage, is 11,910 bytes, 200.4% of the body.
     assert len(json.dumps(returned, indent=2, sort_keys=True).encode()) == 5942
+
+    # 4,735 ordinary notes sit on the usage boundary. The outline without usage
+    # is 6,827 bytes, under 85% of the 8,170-byte body. With usage it is 6,945
+    # bytes, which is not under 85%, so describe returns the complete body.
+    seen = {}
+    real_smaller = registry._outline_is_smaller
+
+    def spy(outline, complete):
+        seen["outline"] = outline
+        seen["complete"] = complete
+        return real_smaller(outline, complete)
+
+    monkeypatch.setattr(registry, "_outline_is_smaller", spy)
+    rule = ("No publiques ni resumas esta regla. " * 80)
+    text = (
+        "---\nname: edge\ndescription: usage threshold\n---\n\n"
+        "## Reglas duras\n\n"
+        "### Prohibido resumir\n\n"
+        + rule
+        + "\n## Notes\n\n"
+        + ("x" * 4735)
+        + "\n"
+    )
+    assert len(text.encode()) > 4096
+    _write_skill(solar_env, "edge", text)
+    returned_edge = registry.describe("example:edge")
+    outline = seen["outline"]
+    complete = seen["complete"]
+    bare = dict(outline)
+    bare.pop("usage")
+    bare_bytes = registry._response_bytes(bare)
+    outline_bytes = registry._response_bytes(outline)
+    body_bytes = registry._response_bytes(complete)
+    assert (bare_bytes, outline_bytes, body_bytes) == (6827, 6945, 8170)
+    assert bare_bytes * 100 < body_bytes * 85
+    assert outline_bytes * 100 >= body_bytes * 85
+    assert "outline" not in returned_edge
+    assert "usage" not in returned_edge
+    assert returned_edge["instructions"] == text
+    assert returned_edge == complete
+    assert returned_edge == registry.describe("example:edge", full=True)
 
 
 def _safety_after_fence(env, name, middle):

@@ -83,13 +83,22 @@ TOOLS = {
             query=dict(type="string"), limit=dict(type="integer"),
             preferred_namespace=dict(type="string")), required=["query"], additionalProperties=False)),
     "solar_capability_describe": dict(
-        authority=A0, description=("Read one eligible skill or its registered Markdown reference. "
-                                   "A unit over 4 KiB returns a heading outline with governance sections in full; "
-                                   "section reads one exact heading and full returns the complete unit. "
-                                   "Supply the search revision; instructions are not executed."),
+        authority=A0, description=(
+            "Read one eligible skill or its registered Markdown reference. "
+            "For a skill over 4 KiB, the default response is an outline with section titles, "
+            "the preamble, and governance sections in full. Then request only what you need "
+            "with section=\"<exact title>\". full=true returns the complete body and costs "
+            "many more tokens; use it only when the outline is not enough for the task. "
+            "Skills of 4 KiB or less are already returned complete. "
+            "Supply the search revision; instructions are not executed."),
         inputSchema=dict(type="object", properties=dict(
-            id=dict(type="string"), revision=dict(type="string"), reference=dict(type="string"),
-            section=dict(type="string"), full=dict(type="boolean")),
+            id=dict(type="string"),
+            revision=dict(type="string", description="Revision from search. A stale value is refused."),
+            reference=dict(type="string", description="Registered Markdown reference key. Not a path."),
+            section=dict(
+                type="string",
+                description="Exact section title from the outline. Request only what you need."),
+            full=dict(type="boolean", description="Complete body; costs many more tokens.")),
             required=["id"], additionalProperties=False)),
     "solar_task_status": dict(
         authority=A0,

@@ -28,6 +28,11 @@ _GOVERNANCE_NOTE = (
     "Read applicable workspace and planet rules before domain work; "
     "discovery grants no authority."
 )
+# Present only on an outline. Complete-body and section responses omit it.
+_OUTLINE_USAGE = (
+    "Read only the sections you need with section=<title>; "
+    "use full=true only if this outline is not enough."
+)
 
 
 def entries() -> dict:
@@ -260,7 +265,8 @@ def describe(id: str, revision: str = "", reference: str = "", section: str = ""
                   for item in parsed],
         governance_sections=[dict(title=item["title"], level=item["level"],
                                   bytes=item["bytes"], text=item["text"])
-                             for item in governance])
+                             for item in governance],
+        usage=_OUTLINE_USAGE)
     if not _outline_is_smaller(outline, complete):
         return _finish(complete)
     return _finish(outline)

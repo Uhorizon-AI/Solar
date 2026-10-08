@@ -115,10 +115,17 @@ def test_describe_schema_adds_section_without_changing_the_seven_tools(solar_env
         assert schema["additionalProperties"] is False
     describe = listed["solar_capability_describe"]["inputSchema"]
     assert set(describe["properties"]) == {"id", "revision", "reference", "section", "full"}
+    assert describe["properties"]["id"]["type"] == "string"
+    assert describe["properties"]["revision"]["type"] == "string"
+    assert describe["properties"]["reference"]["type"] == "string"
     assert describe["properties"]["section"]["type"] == "string"
     assert describe["properties"]["full"]["type"] == "boolean"
     assert describe["required"] == ["id"]
     assert describe["additionalProperties"] is False
+    text = listed["solar_capability_describe"]["description"]
+    assert "section=" in text and "full=true" in text
+    for name in ("section", "full", "reference", "revision"):
+        assert describe["properties"][name]["description"]
     message = refused["result"]["content"][0]["text"]
     assert refused["result"]["isError"] is True
     assert "Invalid tool arguments" not in message
