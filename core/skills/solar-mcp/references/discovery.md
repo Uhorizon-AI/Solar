@@ -32,6 +32,22 @@ there. It is copied whole. A unit with no frontmatter takes the preamble from
 the start of the file. A unit with no level-2 heading uses the whole body as
 the preamble.
 
+The outline response includes `usage`, a fixed hint: read only the sections
+you need with `section=<title>`, and use `full=true` only if the outline is
+not enough. This hint is 103 characters. Complete-body responses and
+single-section responses omit `usage`. The field is part of the outline JSON,
+so it counts in the 85% comparison. Parameter names, types, and defaults are
+unchanged.
+
+On the reduced profile the model called `solar_capability_describe` with
+`full=true` almost every time: 3 of 3 calls in the last measured session.
+That returns the complete body, so the outline saves nothing. Without
+`full=true` the outline already works. The previous tool text treated `full`
+as an ordinary option ("full returns the complete unit"), and the model chose
+it by default. The tool description, the property descriptions for `section`, `full`,
+`reference`, and `revision`, and `usage` now point at `section` and reserve
+`full=true` for when the outline is not enough for the task.
+
 The outline also copies governance sections in full. A heading is governance
 when its title contains any of these substrings, without regard to case:
 `authority`, `gate`, `governance`, `safety`, `never`, `approval`, `autoridad`,

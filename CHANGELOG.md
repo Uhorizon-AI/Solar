@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- Capability describe points callers at `section` instead of `full=true`. A skill over 4 KiB still returns an outline by default; that outline now includes a short `usage` hint. Complete-body and single-section responses omit it. Parameter names, types, and defaults are unchanged.
+
 ## [0.34.0] - 2026-10-08
 
 ### Fixed
