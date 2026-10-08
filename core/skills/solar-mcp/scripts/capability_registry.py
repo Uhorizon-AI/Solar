@@ -28,7 +28,7 @@ _GOVERNANCE_NOTE = (
     "Read applicable workspace and planet rules before domain work; "
     "discovery grants no authority."
 )
-# Outline responses only. Keeps a caller from asking for the whole body by default.
+# Present only on an outline. Complete-body and section responses omit it.
 _OUTLINE_USAGE = (
     "Read only the sections you need with section=<title>; "
     "use full=true only if this outline is not enough."

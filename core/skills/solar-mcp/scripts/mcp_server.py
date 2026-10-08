@@ -95,8 +95,10 @@ TOOLS = {
             id=dict(type="string"),
             revision=dict(type="string", description="Revision from search. A stale value is refused."),
             reference=dict(type="string", description="Registered Markdown reference key. Not a path."),
-            section=dict(type="string", description="Exact section title from the outline. Request only what you need."),
-            full=dict(type="boolean", description="Complete body. Costs many more tokens; use only when the outline is not enough.")),
+            section=dict(
+                type="string",
+                description="Exact section title from the outline. Request only what you need."),
+            full=dict(type="boolean", description="Complete body; costs many more tokens.")),
             required=["id"], additionalProperties=False)),
     "solar_task_status": dict(
         authority=A0,

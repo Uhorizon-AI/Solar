@@ -381,7 +381,7 @@ def test_preamble_is_complete_and_an_oversized_one_is_refused(solar_env):
         registry.describe("example:huge")
 
 
-def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env):
+def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env, monkeypatch):
     source = _wide_skill(solar_env)
     outlined = registry.describe("example:wide")
     assert outlined["outline"] is True
@@ -411,6 +411,47 @@ def test_outline_is_kept_only_when_under_85_percent_of_the_body(solar_env):
     assert returned == registry.describe("example:heavy", full=True)
     # The outline JSON for this fixture, including usage, is 11,910 bytes, 200.4% of the body.
     assert len(json.dumps(returned, indent=2, sort_keys=True).encode()) == 5942
+
+    # 4,735 ordinary notes sit on the usage boundary. The outline without usage
+    # is 6,827 bytes, under 85% of the 8,170-byte body. With usage it is 6,945
+    # bytes, which is not under 85%, so describe returns the complete body.
+    seen = {}
+    real_smaller = registry._outline_is_smaller
+
+    def spy(outline, complete):
+        seen["outline"] = outline
+        seen["complete"] = complete
+        return real_smaller(outline, complete)
+
+    monkeypatch.setattr(registry, "_outline_is_smaller", spy)
+    rule = ("No publiques ni resumas esta regla. " * 80)
+    text = (
+        "---\nname: edge\ndescription: usage threshold\n---\n\n"
+        "## Reglas duras\n\n"
+        "### Prohibido resumir\n\n"
+        + rule
+        + "\n## Notes\n\n"
+        + ("x" * 4735)
+        + "\n"
+    )
+    assert len(text.encode()) > 4096
+    _write_skill(solar_env, "edge", text)
+    returned_edge = registry.describe("example:edge")
+    outline = seen["outline"]
+    complete = seen["complete"]
+    bare = dict(outline)
+    bare.pop("usage")
+    bare_bytes = registry._response_bytes(bare)
+    outline_bytes = registry._response_bytes(outline)
+    body_bytes = registry._response_bytes(complete)
+    assert (bare_bytes, outline_bytes, body_bytes) == (6827, 6945, 8170)
+    assert bare_bytes * 100 < body_bytes * 85
+    assert outline_bytes * 100 >= body_bytes * 85
+    assert "outline" not in returned_edge
+    assert "usage" not in returned_edge
+    assert returned_edge["instructions"] == text
+    assert returned_edge == complete
+    assert returned_edge == registry.describe("example:edge", full=True)
 
 
 def _safety_after_fence(env, name, middle):
