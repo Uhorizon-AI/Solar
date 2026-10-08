@@ -7,7 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
-- Capability describe outline responses include a short `usage` hint. Complete-body and single-section responses omit it. Parameter names, types, and defaults are unchanged. The 85% threshold includes `usage`, so an outline that was just under that line can now return the complete body.
+- Capability describe outline responses include a short `usage` hint. Complete-body and single-section responses omit it. The tool description and the property descriptions point at `section` instead of treating `full=true` as the ordinary way to read a skill. Parameter names, types, and defaults are unchanged. The 85% threshold includes `usage`, so an outline that was just under that line can now return the complete body.
 
 ## [0.34.0] - 2026-10-08
 

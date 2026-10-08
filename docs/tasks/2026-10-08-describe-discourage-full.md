@@ -6,7 +6,7 @@
 
 ## Objective
 
-Parameter names, types, and defaults stay unchanged. The 85% threshold includes `usage`, so an outline that was just under that line can now return the complete body.
+Stop the model from treating `full=true` as the ordinary way to read a skill. Parameter names, types, and defaults stay unchanged. The 85% threshold includes `usage`, so an outline that was just under that line can now return the complete body.
 
 ## Scope
 
