@@ -117,8 +117,8 @@ if [ "$CODE_REPO" = true ]; then
 else
   NEXT_STEP=2
 fi
-echo "  $NEXT_STEP. (Optional) Create MEMORY.md for domain learnings when patterns emerge:"
-echo "       cp core/templates/planet-MEMORY.md planets/$PLANET_NAME/MEMORY.md"
+echo "  $NEXT_STEP. (Optional) Use solar-agent to create MEMORY.md with the first approved cross-agent learning."
+echo "       Do not create an empty memory file; follow solar-agent learning limits and record format."
 echo "  $((NEXT_STEP + 1)). (Optional) Create skills/agents/commands folders as needed:"
 echo "       mkdir -p planets/$PLANET_NAME/skills/my-skill"
 echo "       echo '# My Skill' > planets/$PLANET_NAME/skills/my-skill/SKILL.md"

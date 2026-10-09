@@ -1,3 +1,12 @@
+---
+name: <agent-name>
+description: <Family of work, maintained result and when to invoke this agent.>
+---
+
+<!-- Refer to skills without summarizing their rules. Keep temporary state out
+of the contract. Use no persona or rhetoric. Give each agent one recognizable
+family of work. Resolve all placeholders before publishing. -->
+
 # <agent-name>
 
 ## Role and maintained result
@@ -39,6 +48,8 @@ uncertain effect before verifying the existing result.>
 
 ## Lessons
 
-Read only relevant approved rules in `planets/<planet>/agents/lecciones/<agent-name>/<slug>.md`.
-Propose new lessons in the conversation; persist only exact approved rules with
-approval date and an authorized destination. Memory never grants authority.
+Apply `solar-agent` for learning and memory; consult the planet's optional `MEMORY.md` when relevant.
+Keep approved lessons below, using the limits and dated format in that skill's learning reference.
+Memory never grants authority; pending proposals stay in the conversation.
+
+<!-- Add approved entries only: - YYYY-MM-DD: <One-sentence approved rule.> -->
