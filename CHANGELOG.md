@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-09
+
 ### Added
 - Explicit agent continuity CLI: identity-scoped reads, bounded portable exports and verified restore without carrying permissions or activating tasks.
 - Opt-in planet execution facts: initialization references an existing approval, with evidence references, idempotent event keys and backup/restore, leaving shared machine-state storage unchanged. The workspace AGENTS template now scopes the planet-local `.solar/` fact destination.
