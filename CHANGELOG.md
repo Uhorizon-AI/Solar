@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- `solar-agent` v1: canonical agent contracts across clients, reusable templates and human-approved file-based lessons. Runtime continuity and execution databases remain outside this documentation-only skill.
+
 ## [0.35.0] - 2026-10-09
 
 ### Added
