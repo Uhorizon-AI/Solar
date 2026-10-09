@@ -3,16 +3,17 @@ name: solar-agent
 description: >
   Define, load, or improve a Solar agent and its approved file-based lessons.
   Use when creating an agent contract, invoking an existing agent in any client,
-  or proposing and applying a lesson without changing runtime memory.
+  proposing and applying lessons, or explicitly reading, transporting and
+  restoring continuity and minimal execution facts through Solar's CLI.
 ---
 
 # Solar Agent
 
 ## Purpose
 
-One canonical agent contract across clients, with relevant approved lessons.
-This v1 handles text and templates only; it does not create agents automatically,
-run background work, implement continuity, or create a database.
+Load one canonical agent contract and its approved lessons across clients;
+continuity and execution facts require explicit operations, so loading an agent
+never initializes memory or activates work.
 
 ## Required MCP
 
@@ -44,6 +45,25 @@ None
    Report the result, sources, changed files, pending decisions and next step;
    distinguish a draft, an attempted effect and a verified result.
 
+## Runtime memory and authority
+
+Use [runtime memory](references/runtime-memory.md) for command details and
+approval boundaries. `scripts/agent_memory.py` dispatches continuity and facts;
+`scripts/fact_store.py` owns the separate portable fact database. No script may
+depend on the CLI module for shared helpers: `scripts/_memory_common.py` owns
+identity, path, hashing and locking helpers. No script may
+open shared `state.sqlite` directly: continuity goes through `solar-state`.
+
+```bash
+solar agent --workspace "$SOLAR_WORKSPACE" continuity show --planet <planet> --agent <agent> --responsibility <responsibility> --task-id <task-id>
+solar agent --workspace "$SOLAR_WORKSPACE" continuity restore --planet <planet> --agent <agent>
+```
+
+These reads do not authorize a retry. Export, restore with `--apply`, facts init,
+append, backup and backup restore need authority for their exact local effect.
+CLI authority comes from the calling workflow's mandate, not from an identity
+argument. A future MCP adapter must apply the MCP gate before mutations.
+
 ## Client loading
 
 Claude and Cursor receive agent definitions through Client sync. Codex,
@@ -65,13 +85,15 @@ An agent must not require another planet by path or name to function. Explicit
 cross-planet work uses a declared interface and a separately scoped request.
 Core assets use placeholders; never copy a user's plan or evidence into them.
 
-The workspace-root `.solar/` remains Client-owned. A future planet-local
-`.solar/` is reserved for phase 2 execution memory and must not be created by
-v1. Future memory is one SQLite database per planet, partitioned by agent and
-accessed through Solar MCP/CLI once justified by observed volume. Continuity
-belongs to `solar-state`; v1 neither writes session files nor exports/imports
-checkpoints. Existing continuity is evidence only: verify its sources and
-current authority before resuming or retrying an effect.
+The workspace-root `.solar/` remains Client-owned. A planet-local `.solar/` is
+reserved for explicitly initialized execution facts after an observed need is
+approved and applicable governance allows that path. One fact SQLite database
+per planet is partitioned by agent and responsibility, accessed through Solar's
+CLI, and excluded from Git. Machine runtimes stay outside the planet.
+Continuity belongs to `solar-state`; export produces a bounded portable copy
+without moving the planet. Restore reads and validates that copy before any
+explicit incorporation. Existing continuity is evidence only: verify sources
+and current authority before resuming or retrying an effect.
 
 ## Validation
 
@@ -90,3 +112,9 @@ For a generated contract, check all template fields are resolved, sources stay
 inside the owning planet or declared framework interfaces, and limits and
 success criteria are concrete. For a lesson, verify exact approved text,
 approval date and location; reject secrets, copied records and session logs.
+
+Run runtime tests in temporary workspace/runtime fixtures:
+
+```bash
+uv run --project core/tests pytest core/tests/skills/solar-agent core/tests/skills/solar-state core/tests/skills/solar-mcp -q
+```
