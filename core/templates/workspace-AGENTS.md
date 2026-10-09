@@ -8,6 +8,8 @@ This file governs the **workspace** opened as `SOLAR_WORKSPACE`. Framework code 
 
 Do **not** edit files under `<SOLAR_WORKSPACE>/.solar/`. Only Solar Client (`solar client init`, `solar client update`, `solar client sync`, `solar client bundle create`, `solar client bundle remove`) modifies that tree. Extend behavior in `sun/`, `planets/`, or propose changes upstream to the Solar framework repository.
 
+`planets/<planet>/.solar/` is a separate destination for portable agent execution facts, not Client settings or machine runtime. Create or modify it only through Solar's explicit memory workflow with an approved observed need and scoped authority; exclude it from the planet's Git repository.
+
 ## Architecture (required)
 
 Three layers: this file (workspace root) → `planets/<name>/AGENTS.md` (domain) → skills and runtime under `sun/`. More specific layers override general ones.

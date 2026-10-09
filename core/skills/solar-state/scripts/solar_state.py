@@ -1375,6 +1375,34 @@ class Session:
         row = self.conn.execute("SELECT data FROM continuity WHERE id = 1").fetchone()
         return json.loads(row[0]) if row else None
 
+    def agent_continuity(self, planet: str, agent: str, responsibility: str,
+                         task_id: str) -> dict:
+        """Read one recorded task checkpoint, never choose a task implicitly."""
+        task = self.task_get(task_id)
+        if task is None:
+            raise ValueError("continuity task not found")
+        fields = {key: value_of(value) for key, value in task["frontmatter"]}
+        for key, expected in (("planet", planet), ("agent", agent),
+                              ("responsibility", responsibility)):
+            if fields.get(key) != expected:
+                raise ValueError(f"continuity {key} does not match requested identity")
+        owner = _read_owner_file(self.root)
+        if owner is None:
+            raise ValueError("runtime owner missing")
+        if fields.get("workspace_id") != owner["workspace_id"]:
+            raise ValueError("continuity workspace does not match runtime owner")
+        raw = fields.get("continuity_checkpoint")
+        try:
+            checkpoint = json.loads(raw)
+        except (TypeError, ValueError):
+            raise ValueError("continuity checkpoint must be a JSON object") from None
+        if not isinstance(checkpoint, dict):
+            raise ValueError("continuity checkpoint must be a JSON object")
+        return {"workspace_id": fields["workspace_id"], "planet": planet,
+                "agent": agent, "responsibility": responsibility,
+                "task_id": task_id, "agent_contract": fields.get("agent_contract"),
+                "continuity_checkpoint": checkpoint}
+
     def continuity_text(self) -> Optional[str]:
         row = self.conn.execute("SELECT data FROM continuity WHERE id = 1").fetchone()
         return row[0] if row else None

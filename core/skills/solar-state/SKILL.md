@@ -68,6 +68,12 @@ whole read. It does not create the lock, the database, or the daily backup.
 It refuses when the lock, the owner, the format, or the schema is missing.
 Writers keep using `session()`.
 
+`agent_continuity(planet, agent, responsibility, task_id)` reads an explicitly
+selected task checkpoint, refusing mismatched identity or workspace ownership.
+It does not select a newest task, confirm a previous effect or authorize retry.
+Portable continuity is incorporated through `continuity_update` in the existing
+document's `portable_agents` map; no extra shared schema or task activation.
+
 Bringing existing state in, verbatim (for the cutover):
 
 ```python
