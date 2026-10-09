@@ -25,7 +25,7 @@ planets/<planet-name>/
 ├── CLAUDE.md -> AGENTS.md   # Symlink for Claude AI
 ├── GEMINI.md -> AGENTS.md   # Symlink for Gemini AI
 ├── README.md          # Optional: planet overview
-├── MEMORY.md          # Optional: planet-specific memory (AI-agnostic, max 100 lines)
+├── MEMORY.md          # Optional: approved cross-agent learning (limits in solar-agent learning reference)
 ├── agents/            # Optional: custom agent definitions
 │   ├── agent-1.md
 │   └── agent-2.md
@@ -40,6 +40,12 @@ planets/<planet-name>/
         ├── SKILL.md
         └── ...
 ```
+
+Planet memory is versioned and optional: create it only with the first approved
+cross-agent learning, never empty. Use one line per dated approved record, as in
+[the memory template](planet-MEMORY.md), subject to the limits in
+[solar-agent learning](../skills/solar-agent/references/lessons.md). It does not read or reference workspace
+content; existing planet memory files are not reformatted automatically.
 
 ## Creating New Resources
 

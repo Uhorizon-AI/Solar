@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- Agent learning now lives in dated contract lessons (up to 10), optional shared planet memory (up to 20 records and 100 lines, whichever is reached first), or reusable skills, with validated promotion and a legacy migration policy. Aligned core governance and planet creation guidance with the canonical learning policy; updated agent and memory templates, app loading requirements, and guidance for client sync and renewing exported continuity after contract changes.
+
 ## [0.37.0] - 2026-10-09
 
 ### Added
