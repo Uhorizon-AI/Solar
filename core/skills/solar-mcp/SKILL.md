@@ -86,7 +86,7 @@ conversational authority from caller-supplied fields. See
 |---|---|---|
 | `solar_capability_search` | A0 | Find eligible instruction IDs and revisions, at most ten results |
 | `solar_capability_describe` | A0 | Read one eligible skill or its registered Markdown reference; stale revisions refuse |
-| `solar_task_status` | A0 | Always. Reading is not gated. |
+| `solar_task_status` | A0 | Read-only. With `task_id`, also returns stored identity and `continuity_checkpoint` when present. Checkpoint, verified result, next check, wait and decision (with source and validity) remain inside that object, without flattened duplicates. Without `task_id`, the queue summary is unchanged. Refuses if the stored checkpoint is not a JSON object. Recorded evidence does not authorize a retry; results still need verification. |
 | `solar_task_create` | A2 | Native client confirmation or an existing exact-call approval. Stores a draft through `solar-state` and refuses when the format is not `sqlite` |
 | `solar_task_approve` | A2 | Same approval. Moves a draft, or a task already planned, to the queue. Refuses an A3 mandate. Does not change object, scope or effect |
 | `solar_task_cancel` | A2 | Same approval. Cancels a queued task, or records the request for an active one. Does not change object, scope or effect |

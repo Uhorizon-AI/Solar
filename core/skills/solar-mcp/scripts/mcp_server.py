@@ -102,9 +102,15 @@ TOOLS = {
             required=["id"], additionalProperties=False)),
     "solar_task_status": dict(
         authority=A0,
-        description="Read the state of the async task queue. Read-only.",
+        description=("Read-only. Without task_id, returns the unchanged queue summary. "
+                     "With task_id, also returns stored identity and continuity_checkpoint "
+                     "when present. Result, next check, wait and decision stay inside that "
+                     "object. Refuses if the stored checkpoint is not a JSON object. "
+                     "Recorded evidence does not authorize a retry."),
         inputSchema=dict(type="object", properties=dict(
-            task_id=dict(type="string", description="Optional: one task by id or file stem."),
+            task_id=dict(type="string", description=(
+                "Optional: one task by id or file stem, including stored identity and "
+                "continuity_checkpoint when present.")),
             state=dict(type="string", description="Optional: drafts|queued|active|error|completed."),
         ), additionalProperties=False),
     ),
@@ -280,6 +286,31 @@ def _do_task_status(arguments: dict) -> dict:
     if task_id:
         rows = [row for row in rows if row["id"] == task_id
                 or Path(row["file"]).stem == task_id]
+        import solar_state
+
+        with solar_state.read_session() as store:
+            for row in rows:
+                task = store.task_get(row["id"])
+                if task is None:
+                    raise ValueError("task disappeared while reading its detail")
+                fields = {key: solar_state.value_of(value)
+                          for key, value in task["frontmatter"]}
+                for key in ("workspace_id", "agent", "planet", "responsibility",
+                            "agent_contract"):
+                    if key in fields:
+                        row[key] = fields[key]
+                if "continuity_checkpoint" in fields:
+                    raw_checkpoint = fields["continuity_checkpoint"]
+                    if raw_checkpoint is None:
+                        raise ValueError("continuity_checkpoint must be a JSON object")
+                    try:
+                        checkpoint = json.loads(raw_checkpoint)
+                    except (TypeError, json.JSONDecodeError):
+                        raise ValueError("continuity_checkpoint must be a JSON object") from None
+                    if not isinstance(checkpoint, dict):
+                        raise ValueError("continuity_checkpoint must be a JSON object")
+                    # Recorded evidence, not a new verification or retry authority.
+                    row["continuity_checkpoint"] = checkpoint
     return dict(count=len(rows), tasks=rows)
 
 

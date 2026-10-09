@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- MCP task status with a task ID reads stored agent/responsibility identity and continuity checkpoint details through solar-state. Queue listings remain summaries; reading recorded evidence does not verify an effect or authorize a retry.
+
 ## [0.34.2] - 2026-10-09
 
 ### Documentation
