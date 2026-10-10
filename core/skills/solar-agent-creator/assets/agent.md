@@ -48,8 +48,6 @@ uncertain effect before verifying the existing result.>
 
 ## Lessons
 
-Apply `solar-agent-creator` for learning and memory; consult the planet's optional `MEMORY.md` when relevant.
-Keep approved lessons below, using the limits and dated format in that skill's learning reference.
-Memory never grants authority; pending proposals stay in the conversation.
+Approved lessons for this agent live below: at most 10, each one sentence with its approval date. The agent proposes them in the conversation and only what the responsible person approves is saved. Consult the planet's optional `MEMORY.md` when relevant. Memory never grants authority.
 
 <!-- Add approved entries only: - YYYY-MM-DD: <One-sentence approved rule.> -->
