@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.38.2] - 2026-10-10
+### Fixed
+- fix: remove the authoring skill dependency from the agent template
+
+
 ## [0.38.1] - 2026-10-10
 
 ### Changed
