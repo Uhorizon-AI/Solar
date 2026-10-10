@@ -126,6 +126,50 @@ assert_missing "prunes dangling command symlink" "$WS/.claude/commands/gone:dead
 # Core skill from SOLAR_ROOT should still be linked after prune.
 assert_present "keeps indexed core skill" "$WS/.claude/skills/solar-client"
 
+# Simulate a resource rename, including real managed copies and unrelated data.
+mkdir -p "$WS/planets/rename-fixture/skills/draft-tool" "$WS/.agents/skills/local-notes"
+cat >"$WS/planets/rename-fixture/skills/draft-tool/SKILL.md" <<'EOF'
+---
+name: draft-tool
+description: synthetic resource used to test renaming
+---
+EOF
+printf '%s\n' 'user-owned content' >"$WS/.agents/skills/local-notes/notes.txt"
+cp "$WS/.agents/skills/local-notes/notes.txt" "$TMP/expected-notes.txt"
+(
+  cd "$WS"
+  SOLAR_ROOT="$SOLAR_INSTALL" bash "$SYNC_SCRIPT" --claude-only --cursor-only --codex-only >/dev/null
+)
+for surface in .claude .cursor .agents; do
+  assert_present "publishes original resource ($surface)" "$WS/$surface/skills/rename-fixture:draft-tool"
+done
+mv "$WS/planets/rename-fixture/skills/draft-tool" "$WS/planets/rename-fixture/skills/final-tool"
+sed 's/name: draft-tool/name: final-tool/' \
+  "$WS/planets/rename-fixture/skills/final-tool/SKILL.md" >"$TMP/renamed-skill.md"
+mv "$TMP/renamed-skill.md" "$WS/planets/rename-fixture/skills/final-tool/SKILL.md"
+(
+  cd "$WS"
+  SOLAR_ROOT="$SOLAR_INSTALL" bash "$SYNC_SCRIPT" --claude-only --cursor-only --codex-only >/dev/null
+)
+for surface in .claude .cursor .agents; do
+  assert_missing "removes original resource after rename ($surface)" "$WS/$surface/skills/rename-fixture:draft-tool"
+  assert_present "publishes renamed resource ($surface)" "$WS/$surface/skills/rename-fixture:final-tool"
+  assert_ok "renamed content matches source ($surface)" cmp \
+    "$WS/planets/rename-fixture/skills/final-tool/SKILL.md" \
+    "$WS/$surface/skills/rename-fixture:final-tool/SKILL.md"
+done
+assert_ok "preserves unrelated shared resource bytes" cmp \
+  "$TMP/expected-notes.txt" "$WS/.agents/skills/local-notes/notes.txt"
+assert_ok "records renamed resource ownership" grep -Fxq \
+  'rename-fixture:final-tool' "$WS/.agents/skills/.solar-managed"
+if grep -Fxq 'rename-fixture:draft-tool' "$WS/.agents/skills/.solar-managed"; then
+  echo "FAIL: obsolete ownership survives rename" >&2
+  FAIL=$((FAIL + 1))
+else
+  echo "PASS: obsolete ownership removed after rename"
+  PASS=$((PASS + 1))
+fi
+
 echo ""
 echo "Summary: PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

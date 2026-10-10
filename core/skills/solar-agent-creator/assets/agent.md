@@ -48,7 +48,7 @@ uncertain effect before verifying the existing result.>
 
 ## Lessons
 
-Apply `solar-agent` for learning and memory; consult the planet's optional `MEMORY.md` when relevant.
+Apply `solar-agent-creator` for learning and memory; consult the planet's optional `MEMORY.md` when relevant.
 Keep approved lessons below, using the limits and dated format in that skill's learning reference.
 Memory never grants authority; pending proposals stay in the conversation.
 

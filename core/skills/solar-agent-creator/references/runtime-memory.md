@@ -7,7 +7,7 @@ Resolve a workspace with Client settings, an owning planet and its canonical
 Read operations need authorized context; mutations require a mandate naming
 the local object, destination and effect. Never turn a signal into a write.
 The entry is `solar agent --workspace <workspace> ...`; the script entry is
-`python3 core/skills/solar-agent/scripts/agent_memory.py --workspace <workspace> ...`.
+`python3 core/skills/solar-agent-creator/scripts/agent_memory.py --workspace <workspace> ...`.
 Arguments selecting another planet are an explicit scope choice, not a default.
 No MCP mutation tool is added in this release; clients use Solar's CLI.
 

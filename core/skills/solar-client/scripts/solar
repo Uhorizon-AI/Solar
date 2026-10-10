@@ -54,7 +54,7 @@ APP_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-app/scripts" && pwd)"
 case "${1:-}" in
   agent)
     shift
-    exec "${SOLAR_MCP_PYTHON:-python3}" "$SCRIPT_DIR/../../solar-agent/scripts/agent_memory.py" "$@"
+    exec "${SOLAR_MCP_PYTHON:-python3}" "$SCRIPT_DIR/../../solar-agent-creator/scripts/agent_memory.py" "$@"
     ;;
   setup)
     shift
