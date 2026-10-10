@@ -38,7 +38,7 @@ Everything in `core/` must be in English. Planet-specific files and skills may u
 
 Solar uses AI-agnostic filesystem memory accessible by any AI client.
 - `sun/MEMORY.md` (required, max 200 lines): global operational learnings and cross-planet patterns.
-- `planets/<name>/MEMORY.md` (optional): approved operational learnings shared by agents of that planet. Follow the limits and dated one-line record format in [solar-agent learning](skills/solar-agent/references/lessons.md); create only with the first approved learning, never empty.
+- `planets/<name>/MEMORY.md` (optional): approved operational learnings shared by agents of that planet. Follow the limits and dated one-line record format in [solar-agent-creator learning](skills/solar-agent-creator/references/lessons.md); create only with the first approved learning, never empty.
 - MEMORY.md is for **operational learnings only** — not configuration, not identity data. Identity data belongs exclusively in `sun/preferences/profile.md`.
 - `sun/MEMORY.md` uses free-form structure. All memory holds only stable, confirmed patterns. Eliminate outdated info. Prioritize "what to do" over "what happened".
 - Update when discovering recurring patterns, fixing repeatable mistakes, or making architectural decisions.

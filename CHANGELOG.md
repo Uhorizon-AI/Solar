@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- Rename the agent authoring skill to `solar-agent-creator` and focus its workflow on creating and improving contracts, approved learning, memory and continuity. Keep the `solar agent` CLI interface unchanged.
+
 ## [0.38.0] - 2026-10-10
 
 ### Changed
