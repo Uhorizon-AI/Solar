@@ -189,3 +189,36 @@ def test_unsafe_skills_warn_without_breaking_eligible_sync(workspace):
     assert (workspace / ".agents/skills/demo:analysis/SKILL.md").exists()
     assert not (workspace / ".agents/skills/demo:escape").exists()
     assert "demo:escape" not in inventory(workspace, CORE)
+
+
+def _fake_catalog(ws, names, tmp_path):
+    """Point the registered Solar MCP at a stub that lists exactly these tools."""
+    server = tmp_path / "fake_mcp.py"
+    server.write_text(
+        "import json, sys\n"
+        "for line in sys.stdin:\n"
+        "    msg = json.loads(line)\n"
+        "    if msg.get('id') == 1:\n"
+        "        print(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': {}}), flush=True)\n"
+        "    elif msg.get('id') == 2:\n"
+        f"        tools = [{{'name': n}} for n in {list(names)!r}]\n"
+        "        print(json.dumps({'jsonrpc': '2.0', 'id': 2, 'result': {'tools': tools}}), flush=True)\n")
+    path = Path(os.environ["CODEX_HOME"], "config.toml")
+    text = path.read_text().replace(str(CORE / "skills/solar-mcp/scripts/mcp_server.py"), str(server))
+    path.write_text(text)
+
+
+@pytest.mark.parametrize("names,accepted", [
+    (["solar_search", "solar_docs", "solar_execute"], True),
+    (["solar_capability_search", "solar_capability_describe", "solar_task_status"], True),   # transition window
+    (["solar_search"], False),
+    (["solar_execute"], False),
+    ([], False),
+])
+def test_discovery_verification_accepts_the_new_catalog_and_the_transitional_one(workspace, tmp_path, names, accepted):
+    _fake_catalog(workspace, names, tmp_path)
+    if accepted:
+        cp.verify_mcp(workspace)
+    else:
+        with pytest.raises(ValueError, match="does not provide discovery"):
+            cp.verify_mcp(workspace)

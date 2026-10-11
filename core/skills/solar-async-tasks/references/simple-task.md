@@ -43,7 +43,7 @@ already approved. Do not request extra approval just to write that artifact.
 Still request explicit approval for external sends, deletions, credentials,
 irreversible actions, or changes outside the task body scope.
 
-> **When to add `## Result`:** Only include a `## Result` section in the task body if this task has **no defined output path** above (i.e. the response text itself is the deliverable, not a file). If the body already specifies where to write the artifact, skip `## Result` — the artifact is the output. Never use `## Result` on recurring tasks; it would accumulate across runs. Read the task with `solar_task_status`. Do not search the runtime for a markdown file.
+> **When to add `## Result`:** Only include a `## Result` section in the task body if this task has **no defined output path** above (i.e. the response text itself is the deliverable, not a file). If the body already specifies where to write the artifact, skip `## Result` — the artifact is the output. Never use `## Result` on recurring tasks; it would accumulate across runs. Read the task with `solar_search` (`scope=tasks`, `task_id`, `view`). Do not search the runtime for a markdown file.
 
 ## Minimal frontmatter
 

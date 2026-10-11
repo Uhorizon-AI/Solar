@@ -6,6 +6,14 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- MCP: the public catalog is now exactly three tools. `solar_search` finds capabilities, documents, operations, resources and tasks and reads one task (detail, instructions, config, status, result, error, history). `solar_docs` reads skills, framework documents (`core-doc:`) and operation contracts (`operation:`), whole or by section. `solar_execute` runs one registered operation with a closed per-operation schema, authority and approval. The nine previous tool names answer with a non-executing `tool_renamed` error for two minor releases (recorded in the gate audit), and Client discovery verification accepts either catalog meanwhile. Mapping and policy: `core/docs/mcp-tool-migration.md`. Resources are unchanged.
+- MCP: approvals bind the operation name and exact arguments. `telegram.send` always needs an explicit `chat_id`; `task.create` always stores a draft (`queued` and `description` became `task.approve` and `instructions`); `action.run` takes its mandate from the registration (none registered: refused; a different caller-supplied one: refused). Cancel and requeue require `expected_row_version`. The operator approval CLI grants only registered A2 operations with valid arguments. Every decision gets a `trace_id` and an outcome row in the gate audit.
+
+### Added
+- Task management through MCP: `task.update`, `task.schedule` and `task.archive`, and `task.create` with `revises_task_id` for a draft revision of an approved task. Editing and scheduling never queue; only `task.approve` does, for the exact stored version (`expected_row_version`). Approved, active and finished tasks keep their instructions. Archiving keeps the row, body and events; a queued recurrence is cancelled and archived in one step.
+- solar-state: optimistic `row_version` checks, `task_update`, `task_archive`, an approval digest recorded on approve, and `scheduled_timezone` (IANA) so weekly schedules keep their local hour across daylight-saving changes.
+
 ## [0.38.2] - 2026-10-10
 ### Fixed
 - fix: remove the authoring skill dependency from the agent template

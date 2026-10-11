@@ -22,17 +22,17 @@ def test_search_describe_and_registered_reference_over_wire(solar_env):
     (folder / "references").mkdir()
     (folder / "references/detail.md").write_text("Detailed fixture")
     with mcp_probe.Client(env=solar_env.env, cwd=str(solar_env.workspace)) as client:
-        found = body(client.call_tool("solar_capability_search", {"query": "example:demo"}))["result"]
+        found = body(client.call_tool("solar_search", {"scope": "capabilities", "query": "example:demo"}))["result"]
         assert len(json.dumps(found).encode()) < 8192
         entry = found["results"][0]
         assert entry["id"] == "example:demo"
         assert "path" not in entry
         args = dict(id=entry["id"], revision=entry["revision"])
-        described = body(client.call_tool("solar_capability_describe", args))["result"]
+        described = body(client.call_tool("solar_docs", args))["result"]
         assert "Complete instructions" in described["instructions"]
-        ref = body(client.call_tool("solar_capability_describe", dict(args, reference="references/detail.md")))["result"]
+        ref = body(client.call_tool("solar_docs", dict(args, reference="references/detail.md")))["result"]
         assert ref["instructions"] == "Detailed fixture"
-        invalid = client.call_tool("solar_capability_describe", dict(args, reference="../../secret.md"))
+        invalid = client.call_tool("solar_docs", dict(args, reference="../../secret.md"))
         assert invalid["result"]["isError"]
 
 

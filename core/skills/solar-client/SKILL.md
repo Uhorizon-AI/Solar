@@ -39,7 +39,7 @@ previews the essential catalog and checks the registered Codex Solar MCP before
 any settings or published copies change. `set discovery --codex-only` saves settings through the canonical atomic
 Client writer; run `solar client sync --codex-only` to publish. Mandatory essentials are
 `solar-mcp`, `solar-client`, `solar-paths`; add task-specific essentials explicitly.
-Search/Describe still sees eligible unpublished skills. Only managed copies are
+`solar_search` and `solar_docs` still see eligible unpublished skills. Only managed copies are
 pruned; personal resources remain. Revert with `profile set native` and sync.
 
 This changes the shared `.agents` surface. Antigravity MCP registration is

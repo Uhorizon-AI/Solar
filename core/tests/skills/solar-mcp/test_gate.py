@@ -1,157 +1,145 @@
-"""The gate refuses on its own, in the handler, whatever the caller says."""
-from __future__ import annotations
-
+"""The gate decides per operation. No approval, no mandate, no exception."""
 import json
-import time
 
+import mcp_approve
 import mcp_gate
 import mcp_server
-from mcp_gate import A0, A2, A3
+import operations
 
 
-def registry(action_skills=None):
-    reg = dict(mcp_server.TOOLS)
+def registry(action_skills=None, **overrides):
+    reg = {name: op.gate_spec() for name, op in operations.OPERATIONS.items()}
+    reg.update(overrides)
     reg["_action_skills"] = action_skills or {}
     return reg
 
 
-def test_unknown_tool_is_refused(solar_env):
-    verdict = mcp_gate.preflight("rm_minus_rf", {}, registry())
+def test_unknown_operation_is_refused(solar_env):
+    verdict = mcp_gate.preflight("task.delete", {}, registry())
     assert not verdict.allowed
     assert verdict.code == "unknown_tool"
 
 
 def test_reading_is_not_gated(solar_env):
-    verdict = mcp_gate.preflight("solar_task_status", {}, registry())
-    assert verdict.allowed and verdict.authority == A0
+    verdict = mcp_gate.preflight("solar_search", {"scope": "tasks"}, {"solar_search": mcp_server.READ_SPEC})
+    assert verdict.allowed
+    assert verdict.code == "read_allowed"
 
 
 def test_approve_under_a_mandate_is_refused(solar_env):
-    verdict = mcp_gate.preflight(
-        "solar_task_approve", {"task_id": "t1", "mandate": "nightly"}, registry())
+    verdict = mcp_gate.preflight("task.approve", {"task_id": "t1", "mandate": "nightly"}, registry())
     assert not verdict.allowed
     assert verdict.code == "a3_refused"
-    assert verdict.authority == A2
 
 
-def test_approve_cancel_and_requeue_need_approval(solar_env):
-    for name in ("solar_task_approve", "solar_task_cancel", "solar_task_requeue"):
+def test_every_task_mutation_needs_approval(solar_env):
+    for name in ("task.create", "task.update", "task.schedule", "task.approve",
+                 "task.cancel", "task.requeue", "task.archive"):
         verdict = mcp_gate.preflight(name, {"task_id": "t1"}, registry())
-        assert not verdict.allowed
-        assert verdict.code == "approval_required"
-        assert verdict.authority == A2
-
-
-def test_mutation_without_approval_is_refused(solar_env):
-    verdict = mcp_gate.preflight("solar_task_create", {"title": "X"}, registry())
-    assert not verdict.allowed
-    assert verdict.code == "approval_required"
-    assert verdict.authority == A2
+        assert not verdict.allowed, name
+        assert verdict.code == "approval_required", name
 
 
 def test_a_client_cannot_invent_an_approval(solar_env):
-    verdict = mcp_gate.preflight(
-        "solar_task_create", {"title": "X", "approval_id": "deadbeef"}, registry())
-    assert not verdict.allowed
+    verdict = mcp_gate.preflight("task.create", {"title": "X", "approval_id": "deadbeef"}, registry())
     assert verdict.code == "approval_unknown"
 
 
 def test_a_true_looking_flag_does_not_help(solar_env):
-    """No caller-supplied field short-circuits the gate."""
-    for forged in ({"approved": True}, {"authority": "A2"}, {"gate": "pass"},
-                   {"approval_id": ""}):
-        arguments = {"title": "X", **forged}
-        verdict = mcp_gate.preflight("solar_task_create", arguments, registry())
-        assert not verdict.allowed, forged
+    for forged in ({"approved": True}, {"approval": "yes"}, {"authority": "A2"}, {"force": 1}):
+        verdict = mcp_gate.preflight("task.create", {"title": "X", **forged}, registry())
+        assert not verdict.allowed
 
 
 def test_approval_is_bound_to_the_exact_call(solar_env, monkeypatch):
-    import mcp_approve
-    granted = mcp_approve.grant("solar_task_create", {"title": "One"}, 900, "test")
-    # Same approval, different arguments: refused.
-    verdict = mcp_gate.preflight(
-        "solar_task_create", {"title": "Other", "approval_id": granted["approval_id"]}, registry())
-    assert not verdict.allowed
-    assert verdict.code == "approval_scope_mismatch"
-    # The call it was granted for: allowed.
-    verdict = mcp_gate.preflight(
-        "solar_task_create", {"title": "One", "approval_id": granted["approval_id"]}, registry())
-    assert verdict.allowed and verdict.code == "approval_ok"
+    granted = mcp_approve.grant("task.create", {"title": "One", "instructions": "a"}, 900, "test")
+    other = mcp_gate.preflight(
+        "task.create", {"title": "Other", "instructions": "a", "approval_id": granted["approval_id"]}, registry())
+    assert other.code == "approval_scope_mismatch"
+    same = mcp_gate.preflight(
+        "task.create", {"title": "One", "instructions": "a", "approval_id": granted["approval_id"]}, registry())
+    assert same.allowed
 
 
 def test_approval_expires(solar_env):
-    import mcp_approve
-    granted = mcp_approve.grant("solar_task_create", {"title": "One"}, -1, "already old")
+    granted = mcp_approve.grant("task.create", {"title": "One"}, -1, "already old")
     verdict = mcp_gate.preflight(
-        "solar_task_create", {"title": "One", "approval_id": granted["approval_id"]}, registry())
-    assert not verdict.allowed
+        "task.create", {"title": "One", "approval_id": granted["approval_id"]}, registry())
     assert verdict.code == "approval_expired"
 
 
 def test_approval_burns_on_use(solar_env):
-    import mcp_approve
-    granted = mcp_approve.grant("solar_task_create", {"title": "One"}, 900, "test")
+    granted = mcp_approve.grant("task.create", {"title": "One"}, 900, "test")
     arguments = {"title": "One", "approval_id": granted["approval_id"]}
-    assert mcp_gate.preflight("solar_task_create", arguments, registry()).allowed
-    mcp_gate.consume("solar_task_create", arguments, registry())
-    second = mcp_gate.preflight("solar_task_create", arguments, registry())
-    assert not second.allowed
-    assert second.code == "approval_consumed"
+    assert mcp_gate.preflight("task.create", arguments, registry()).allowed
+    mcp_gate.consume("task.create", arguments, registry())
+    assert mcp_gate.preflight("task.create", arguments, registry()).code == "approval_consumed"
 
 
 def test_action_needs_a_registered_skill(solar_env):
-    verdict = mcp_gate.preflight(
-        "solar_action_run", {"skill": "calendar-sync", "action": "run"}, registry())
-    assert not verdict.allowed
+    verdict = mcp_gate.preflight("action.run", {"skill": "calendar-sync", "action": "run"}, registry())
     assert verdict.code == "skill_not_registered"
 
 
 def test_registered_skill_still_needs_a_live_mandate(solar_env):
-    reg = registry({"fixture-skill": {"actions": ["status"], "mandate": "ghost-mandate",
-                                      "command": ["true"]}})
+    reg = registry({"fixture-skill": dict(actions=["status"], mandate="ghost", command=["true"])})
     verdict = mcp_gate.preflight(
-        "solar_action_run", {"skill": "fixture-skill", "action": "status",
-                             "mandate": "ghost-mandate"}, reg)
-    assert not verdict.allowed
+        "action.run", {"skill": "fixture-skill", "action": "status", "mandate": "ghost"}, reg)
     assert verdict.code == "mandate_denied"
-    assert verdict.authority == A3
 
 
 def test_action_outside_the_allowed_list_is_refused(solar_env):
-    reg = registry({"fixture-skill": {"actions": ["status"], "mandate": "m", "command": ["true"]}})
+    reg = registry({"fixture-skill": dict(actions=["status"], mandate="m", command=["true"])})
     verdict = mcp_gate.preflight(
-        "solar_action_run", {"skill": "fixture-skill", "action": "run", "mandate": "m"}, reg)
-    assert not verdict.allowed
+        "action.run", {"skill": "fixture-skill", "action": "run", "mandate": "m"}, reg)
     assert verdict.code == "action_not_allowed"
 
 
 def test_live_mandate_lets_the_action_through(solar_env):
     solar_env.write_mandate("fixture-mandate", actions=("status",))
-    reg = registry({"fixture-skill": {"actions": ["status"], "mandate": "fixture-mandate",
-                                      "command": ["true"]}})
+    reg = registry({"fixture-skill": dict(actions=["status"], mandate="fixture-mandate", command=["true"])})
     verdict = mcp_gate.preflight(
-        "solar_action_run", {"skill": "fixture-skill", "action": "status",
-                             "mandate": "fixture-mandate"}, reg)
-    assert verdict.allowed, verdict.as_dict()
+        "action.run", {"skill": "fixture-skill", "action": "status", "mandate": "fixture-mandate"}, reg)
+    assert verdict.allowed
     assert verdict.code == "mandate_ok"
 
 
-def test_expired_mandate_is_refused(solar_env):
-    solar_env.write_mandate("stale-mandate", expires="2020-01-01", actions=("status",))
-    reg = registry({"fixture-skill": {"actions": ["status"], "mandate": "stale-mandate",
-                                      "command": ["true"]}})
+def test_a_caller_cannot_swap_the_registered_mandate(solar_env):
+    """A live mandate for another purpose must not unlock this skill."""
+    solar_env.write_mandate("fixture-mandate", actions=("status",))
+    solar_env.write_mandate("other-mandate", actions=("status",))
+    reg = registry({"fixture-skill": dict(actions=["status"], mandate="fixture-mandate", command=["true"])})
     verdict = mcp_gate.preflight(
-        "solar_action_run", {"skill": "fixture-skill", "action": "status",
-                             "mandate": "stale-mandate"}, reg)
+        "action.run", {"skill": "fixture-skill", "action": "status", "mandate": "other-mandate"}, reg)
     assert not verdict.allowed
+    assert verdict.code == "mandate_mismatch"
+
+
+def test_expired_mandate_is_refused(solar_env):
+    solar_env.write_mandate("old-mandate", expires="2020-01-01", actions=("status",))
+    reg = registry({"fixture-skill": dict(actions=["status"], mandate="old-mandate", command=["true"])})
+    verdict = mcp_gate.preflight(
+        "action.run", {"skill": "fixture-skill", "action": "status", "mandate": "old-mandate"}, reg)
     assert verdict.code == "mandate_denied"
 
 
-def test_every_decision_is_recorded(solar_env):
-    verdict = mcp_gate.preflight("solar_task_create", {"title": "X"}, registry())
-    mcp_gate.record(verdict, {"title": "X"})
-    rows = [json.loads(line) for line in
-            solar_env.gate_audit.read_text(encoding="utf-8").splitlines()]
-    assert rows[-1]["tool"] == "solar_task_create"
-    assert rows[-1]["allowed"] is False
-    assert rows[-1]["code"] == "approval_required"
+def test_every_decision_is_recorded_with_its_outcome(solar_env):
+    body, error = mcp_server.call_tool(
+        "solar_execute", dict(operation="task.create", arguments=dict(title="X", instructions="y")))
+    assert error
+    rows = [json.loads(line) for line in solar_env.gate_audit.read_text().splitlines()]
+    last = rows[-1]
+    assert last["kind"] == "decision" and last["tool"] == "task.create"
+    assert last["via"] == "solar_execute" and last["allowed"] is False
+    assert last["trace_id"] == body["trace_id"]
+    assert "approval_id" not in last["arguments"]
+
+
+def test_an_allowed_call_leaves_decision_and_outcome_under_one_trace(solar_env):
+    from mcp_helpers import execute
+    body, error = execute("task.create", dict(title="Traced", instructions="y"))
+    assert not error
+    rows = [json.loads(line) for line in solar_env.gate_audit.read_text().splitlines()]
+    mine = [r for r in rows if r.get("trace_id") == body["trace_id"]]
+    assert [r["kind"] for r in mine] == ["decision", "outcome"]
+    assert mine[1]["ok"] is True and mine[1]["tool"] == "task.create"

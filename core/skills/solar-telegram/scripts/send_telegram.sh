@@ -63,8 +63,8 @@ unset _PRESERVE_PARSE_MODE _PRESERVE_DISABLE_PREVIEW _PRESERVE_CHAT_ID _PRESERVE
 if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
   echo "Missing required key: TELEGRAM_BOT_TOKEN"
   echo "It is an installation secret held by the Solar process, not by the"
-  echo "workspace. To send from an agent, use the gated MCP tool"
-  echo "solar_telegram_send, which needs an approval Louis grants out of band."
+  echo "workspace. To send from an agent, use the gated MCP operation"
+  echo "telegram.send (through solar_execute), which needs an approval granted out of band."
   exit 1
 fi
 

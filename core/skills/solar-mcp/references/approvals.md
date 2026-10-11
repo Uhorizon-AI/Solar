@@ -21,11 +21,12 @@ binding exists in this transport yet. A future host adapter must provide verifie
 exact-scope authority before suppressing the local confirmation. Never treat an
 agent-provided transcript, note or `approved` flag as that adapter.
 
-Approvals bind tool, exact arguments and resolved workspace, expire, and are
+Approvals bind the operation name, exact arguments (a task's `expected_row_version` included) and resolved workspace, expire, and are
 reserved under a process-shared lock before side effects. A failed execution may
 already have caused effects: it consumes the approval too. Inspect state before
-retrying. Legacy approvals without the workspace-bound hash must be reapproved.
-Telegram confirmation requires an explicit destination, so changing the default
+retrying. Legacy approvals without the workspace-bound hash, and approvals that name a previous tool, must be reapproved.
+The operator CLI grants only registered A2 operations with valid arguments; anything else exits with status 2.
+Telegram confirmation requires an explicit destination (`chat_id` is required by the schema), so changing the default
 chat cannot redirect a confirmed call.
 
 ## Operator recovery (not an agent self-approval route)
@@ -33,7 +34,7 @@ chat cannot redirect a confirmed call.
 The trusted operator may still manage out-of-band approvals:
 
 ```bash
-python3 core/skills/solar-mcp/scripts/mcp_approve.py grant solar_task_create --args '{"title":"Review report"}'
+python3 core/skills/solar-mcp/scripts/mcp_approve.py grant task.create --args '{"title":"Review report","instructions":"..."}'
 python3 core/skills/solar-mcp/scripts/mcp_approve.py list
 python3 core/skills/solar-mcp/scripts/mcp_approve.py revoke APPROVAL_ID
 ```

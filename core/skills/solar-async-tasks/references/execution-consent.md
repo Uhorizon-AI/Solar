@@ -18,7 +18,8 @@ A2 for the **declared** body and artifacts; sensitive acts remain A2 formal.
 ## Prepare ≠ queue
 
 - Creating or planning a draft is **A1/preparation**, not execution authority.
-- Moving to the queue via `solar_task_approve` (or gateway auto-queue of a scoped draft) is the A2 boundary for the declared body. An A3 mandate cannot do it.
+- Moving to the queue via `task.approve` (or gateway auto-queue of a scoped draft) is the A2 boundary for the declared body. An A3 mandate cannot do it.
+- Editing (`task.update`), scheduling (`task.schedule`) and preparing a revision (`task.create` with `revises_task_id`) are preparation: none of them queues a task, and a change after approval invalidates it. `task.approve` binds the exact stored version (`expected_row_version`).
 - On IDE / non-gateway channels: do not activate/queue without explicit confirmation when the user only asked to prepare.
 - On Telegram/n8n: `async_draft_created` may auto-queue only when the draft states object, scope, and effect. That ACK is **not** authority for external sends inside the run.
 

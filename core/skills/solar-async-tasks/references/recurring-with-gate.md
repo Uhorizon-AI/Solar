@@ -106,7 +106,8 @@ priority: normal
 recurring: true
 recurring_min_interval: 86400    # minimum seconds between runs (86400 = 1 day)
 recurring_max_runs: 0            # 0 = unlimited
-scheduled_time: "09:00"          # ±15 min window in host local time
+scheduled_time: "09:00"          # ±15 min window, read in scheduled_timezone
+scheduled_timezone: "Europe/Madrid"  # IANA zone; keeps the local hour across clock changes
 scheduled_weekdays: "1,2,3,4,5" # ISO: 1=Mon … 7=Sun
 ---
 ```
@@ -114,5 +115,5 @@ scheduled_weekdays: "1,2,3,4,5" # ISO: 1=Mon … 7=Sun
 ## Notes
 
 - The gate is independent of `recurring_min_interval` — both must be satisfied for a run to produce an artifact
-- Do not use the gate as an emergency pause. Cancel the task with `solar_task_cancel`. There is no verb that moves it to `planned`, and the agent does not move a file or set `scheduled_time` through the shell.
+- Do not use the gate as an emergency pause. Cancel the task with `task.cancel`, or retire the recurrence with `task.archive`. There is no operation that moves it to `planned`, and the agent does not move a file or set `scheduled_time` through the shell.
 - If the task also uses subtasks (see `task-with-subtasks.md`), the gate must only be closed in the synthesis execution (execution 2), never in the child-creation execution (execution 1)

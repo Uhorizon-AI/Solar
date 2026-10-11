@@ -6,18 +6,24 @@ Operational details for scheduling, recurrence, resource cleanup, notifications,
 
 Tasks can run only at a specific time and on specific weekdays.
 
-There is no MCP verb for `scheduled_time` or `scheduled_weekdays`. The agent stops. It does not set them through the shell.
+`task.schedule` sets the schedule of a draft or planned task. It never queues the task, and it
+refuses a task that is already approved: prepare a revision instead (`task.create` with
+`revises_task_id`). The agent does not set schedule fields through the shell.
 
 Frontmatter:
 
 ```yaml
 scheduled_time: "10:00"              # HH:MM or HH:MM:SS
 scheduled_weekdays: "1,2,3,4,5"      # ISO 1=Monday ... 7=Sunday
+scheduled_timezone: "Europe/Madrid"  # IANA zone; required by task.schedule
 ```
 
 Behavior:
 
-- A +/- 15 minute window applies around `scheduled_time`.
+- A +/- 15 minute window applies around `scheduled_time`, read in `scheduled_timezone` (weekday
+  included), so the local hour holds across daylight-saving changes. An unknown zone never
+  matches. Without a zone, host local time applies (tasks created before `scheduled_timezone`).
+- A local time that does not exist on a spring-forward day (for example 02:30) is skipped that day.
 - Tasks without schedule fields are always eligible.
 - The worker only picks eligible queued tasks.
 
@@ -25,7 +31,10 @@ Behavior:
 
 Use recurring tasks for periodic execution, such as daily searches or weekly reports.
 
-There is no MCP verb for `recurring` or its interval fields. The agent stops. It does not set them through the shell.
+`task.schedule` also sets `recurring`, `recurring_max_runs` and `recurring_min_interval` on a draft or
+planned task. With a schedule, it derives the interval from the shortest gap between occurrences
+minus two hours and refuses a longer one: a one-hour-shorter week would otherwise skip a run.
+`task.archive` retires a recurrence without deleting its history.
 
 Frontmatter:
 
@@ -93,7 +102,7 @@ When a long-running user request should notify on completion:
 
 1. Offer to create an async task.
 2. Confirm title, objective, and priority.
-3. Create the task with `solar_task_create` and approve it with `solar_task_approve`.
+3. Create the task with `task.create` and approve it with `task.approve` (both through `solar_execute`).
 4. Set `notify_when: completed` on that task. Origin metadata does this for a gateway parent.
 
 On completion the runtime notifies when `notify_when: completed` is set and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
@@ -158,7 +167,7 @@ A task in `error` is terminal until an operator acts.
 To run a failed task again:
 
 1. Fix the underlying cause: provider auth, env, binary, prompt, hook, or resource.
-2. Requeue the task with `solar_task_requeue`. It moves `error` back to the queue and leaves object, scope and effect as they are.
+2. Requeue the task with `task.requeue`. It moves `error` back to the queue and leaves object, scope and effect as they are.
 
 The task will run on the next eligible worker cycle.
 

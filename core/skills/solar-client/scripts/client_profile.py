@@ -62,7 +62,9 @@ def verify_mcp(workspace: Path) -> None:
         answer = json.loads(line)
         if answer.get("id") == 2:
             names = {t["name"] for t in answer.get("result", {}).get("tools", [])}
-    if proc.returncode or not {"solar_capability_search", "solar_capability_describe"} <= names:
+    # The previous catalog is accepted while clients migrate (see solar-mcp migration reference).
+    discovery = ({"solar_search", "solar_docs"}, {"solar_capability_search", "solar_capability_describe"})
+    if proc.returncode or not any(required <= names for required in discovery):
         raise ValueError("Registered MCP does not provide discovery; native resources remain available")
 
 

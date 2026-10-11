@@ -1,5 +1,10 @@
 # Capability discovery
 
+The two discovery tools are `solar_search` (`scope=capabilities`, below) and `solar_docs`.
+The same bounded reader also serves `core-doc:<name>` (Markdown files directly under
+`core/docs/`; no symlinks, no subfolders, no paths) and `operation:<name>` contracts, which
+are returned complete.
+
 Search accepts `query`, `limit` (an integer of at least 1, default 5), and
 optional `preferred_namespace`. A limit above 10 is applied as 10 and the
 response includes `limit_capped: true`. A limit below 1 or a non-integer is
@@ -12,7 +17,7 @@ Results contain ID, namespace, instruction type, that description, match
 terms, source hash and unknown dependency availability. Result JSON is bounded
 below 8 KiB. `truncated` means the byte cap dropped a further hit.
 
-Describe accepts `id`, optional `revision` from Search, optional `reference`
+`solar_docs` accepts `id`, optional `revision` from Search, optional `reference`
 selected from the registered Markdown keys, optional `section` (the exact
 heading title), and optional `full`. `section` and `reference` do not accept
 a path: `..`, a backslash, or an absolute path is refused, and `section` also
@@ -23,7 +28,7 @@ does `full=true`. A larger unit returns an outline instead of the body, unless
 that outline's response JSON is at least 85% of the complete-body response
 JSON. Both sizes are the UTF-8 length of the JSON object with `indent=2` and
 `sort_keys=True`, the same encoding as the 64 KiB limit. At or above 85%,
-Describe returns the complete body, as it does for a small unit. The outline
+`solar_docs` returns the complete body, as it does for a small unit. The outline
 contains the id, the skill description, the skill-file revision, every column-0 level-2 and
 level-3 heading with its level and UTF-8 byte size, the registered reference
 keys, and the preamble. The preamble is the original text after the frontmatter

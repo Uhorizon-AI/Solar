@@ -1,12 +1,21 @@
-"""Solar MCP server: context as resources, verbs as tools behind a gate.
+"""Solar MCP server: three public tools over a gated operation registry.
 
-    resources  read-only projections of what Solar already knows. Open.
-    tools      verbs. Every call goes through `mcp_gate.preflight` first, and a
-               refusal is produced by this handler, not by the caller's manners.
+    solar_search   find capabilities, documents, operations, resources and tasks,
+                   and read one task (detail, instructions, config, status,
+                   result, error, history). Read-only.
+    solar_docs     read documentation, contracts, requirements and references,
+                   whole or by section. Read-only.
+    solar_execute  run one registered operation (see operations.py). Each
+                   operation has its own closed schema, authority and approval.
 
-The task verbs write only through solar-state. A runtime whose format is not
-sqlite is refused: there is no file-queue path. Approve is one move, draft
-or planned to queued, and it does not rewrite priority.
+Resources stay open and unchanged: `resources/list` and `resources/read` are
+projections of what Solar already knows.
+
+Every `solar_execute` call goes through `mcp_gate.preflight` for the *operation*
+first, and a refusal is produced by this handler, not by the caller's manners.
+Task operations write only through solar-state; a runtime whose format is not
+sqlite is refused. Nothing here edits, schedules or archives a task into the
+queue: only `task.approve` queues, and only for the exact stored task it names.
 
 Speaks JSON-RPC 2.0 over stdio (MCP): `initialize`, `resources/list`,
 `resources/read`, `tools/list`, `tools/call`, `ping`.
@@ -15,169 +24,112 @@ Speaks JSON-RPC 2.0 over stdio (MCP): `initialize`, `resources/list`,
 
 The installation credentials Solar sends with no longer live in the workspace:
 `solar_secrets` holds them in a 0600 file outside every tree an IDE indexes, and
-`solar_telegram_send` is the route an agent has to Telegram. That closes the
+`telegram.send` is the route an agent has to Telegram. That closes the
 mediated path, not the machine — a process running as the user can still read
 that file, and a browser session already logged in is not covered at all.
 """
 from __future__ import annotations
 
-import datetime
 import json
-import os
-import subprocess
-from collections import deque
 import queue
+import re
+import sys
 import threading
 import time
 import uuid
-import sys
+from collections import deque
 from pathlib import Path
 
 _SKILLS = Path(__file__).resolve().parents[2]
-for _extra in ("solar-paths/scripts", "solar-state/scripts"):
-    _path = _SKILLS / _extra
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import mcp_context  # noqa: E402  (also puts solar-paths and solar-state on sys.path)
 import mcp_gate  # noqa: E402
 import runtime_views  # noqa: E402
 import capability_registry  # noqa: E402
-from mcp_gate import A0, A2, A3  # noqa: E402
+import docs_registry  # noqa: E402
+import op_schema  # noqa: E402
+import operations  # noqa: E402
+import task_views  # noqa: E402
+from mcp_context import OperationError, WorkspaceUnresolved, action_skills, workspace  # noqa: E402
+from mcp_gate import A0, A2  # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
-SERVER_INFO = dict(name="solar-mcp", version="0.1.0")
+SERVER_INFO = dict(name="solar-mcp", version="0.2.0")
 
-
-class WorkspaceUnresolved(RuntimeError):
-    """No workspace was discovered. Verbs stop here and touch no runtime."""
-
-
-def workspace() -> Path:
-    from solar_paths import resolve_solar_paths
-    try:
-        found, _install = resolve_solar_paths()
-    except Exception as exc:
-        raise WorkspaceUnresolved(f"no Solar workspace resolved: {exc}") from None
-    return found
-
-
-def action_skills() -> dict:
-    """Which action skills are reachable as verbs. Empty until Louis fills it.
-
-    Instruction skills never appear here: they stay native to the harness.
-    """
-    path = mcp_gate.gate_root() / "action-skills.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
+_SCOPES = ["capabilities", "docs", "operations", "resources", "tasks"]
+_VIEWS = list(task_views._VIEWS)
+_ID = {"type": "string", "minLength": 1, "maxLength": 200}
 
 TOOLS = {
-    "solar_capability_search": dict(
-        authority=A0, description="Find eligible instruction skills without loading the full catalog. Read-only; grants no authority.",
+    "solar_search": dict(
+        description=(
+            "Find things and read task state. Read-only; grants no authority. "
+            "scope=capabilities: instruction skills (query, limit, preferred_namespace). "
+            "scope=docs: framework documents. "
+            "scope=operations: what solar_execute can run, with authority and summary. "
+            "scope=resources: the open solar:// resources (uri reads one). "
+            "scope=tasks: list/filter tasks (query, state, limit), or one task with task_id and "
+            "view=detail|instructions|config|status|result|error|history (default detail). "
+            "Task reads return row_version, which mutating operations require."),
         inputSchema=dict(type="object", properties=dict(
-            query=dict(type="string"), limit=dict(type="integer"),
-            preferred_namespace=dict(type="string")), required=["query"], additionalProperties=False)),
-    "solar_capability_describe": dict(
-        authority=A0, description=(
-            "Read one eligible skill or its registered Markdown reference. "
-            "For a skill over 4 KiB, the default response is an outline with section titles, "
-            "the preamble, and governance sections in full. Then request only what you need "
-            "with section=\"<exact title>\". full=true returns the complete body and costs "
-            "many more tokens; use it only when the outline is not enough for the task. "
-            "Skills of 4 KiB or less are already returned complete. "
-            "Supply the search revision; instructions are not executed."),
+            scope=dict(type="string", enum=_SCOPES),
+            query=dict(type="string", maxLength=512),
+            limit=dict(type="integer", minimum=1, maximum=50),
+            preferred_namespace=dict(type="string", maxLength=80),
+            state=dict(type="string", maxLength=20, description="Task status filter."),
+            task_id=_ID,
+            view=dict(type="string", enum=_VIEWS),
+            section=dict(type="string", maxLength=200, description="Exact section title (view=instructions)."),
+            uri=dict(type="string", maxLength=100)),
+            required=["scope"], additionalProperties=False)),
+    "solar_docs": dict(
+        description=(
+            "Read documentation, contracts, requirements and references. Read-only; instructions "
+            "are not executed. id is a skill ID (optionally with a registered reference), "
+            "core-doc:<name> (find with solar_search scope=docs) or operation:<name> (the contract "
+            "of a solar_execute operation). Large units return an outline: request only what you "
+            "need with section=\"<exact title>\"; full=true costs many more tokens. "
+            "Supply the revision from search; a stale one is refused."),
         inputSchema=dict(type="object", properties=dict(
-            id=dict(type="string"),
-            revision=dict(type="string", description="Revision from search. A stale value is refused."),
-            reference=dict(type="string", description="Registered Markdown reference key. Not a path."),
-            section=dict(
-                type="string",
-                description="Exact section title from the outline. Request only what you need."),
+            id=_ID,
+            revision=dict(type="string", maxLength=100, description="Revision from search. A stale value is refused."),
+            reference=dict(type="string", maxLength=200, description="Registered Markdown reference key. Not a path."),
+            section=dict(type="string", maxLength=200, description="Exact section title from the outline."),
             full=dict(type="boolean", description="Complete body; costs many more tokens.")),
             required=["id"], additionalProperties=False)),
-    "solar_task_status": dict(
-        authority=A0,
-        description=("Read-only. Without task_id, returns the unchanged queue summary. "
-                     "With task_id, also returns stored identity and continuity_checkpoint "
-                     "when present. Result, next check, wait and decision stay inside that "
-                     "object. Refuses if the stored checkpoint is not a JSON object. "
-                     "Recorded evidence does not authorize a retry."),
+    "solar_execute": dict(
+        description=(
+            "Run one registered operation: task.create, task.update, task.schedule, task.approve, "
+            "task.cancel, task.requeue, task.archive, telegram.send, action.run. Each has its own "
+            "strict arguments, authority and approval; see solar_docs id=operation:<name>. "
+            "Mutations ask the user for native confirmation of this exact operation and arguments: "
+            "omit approval_id. Editing or scheduling never queues a task; only task.approve does."),
         inputSchema=dict(type="object", properties=dict(
-            task_id=dict(type="string", description=(
-                "Optional: one task by id or file stem, including stored identity and "
-                "continuity_checkpoint when present.")),
-            state=dict(type="string", description="Optional: drafts|queued|active|error|completed."),
-        ), additionalProperties=False),
-    ),
-    "solar_task_create": dict(
-        authority=A2,
-        description=("Create an async task file. Mutates the queue, so it needs an "
-                     "exact-call approval. The runtime asks through the client UI when supported; omit approval_id."),
-        inputSchema=dict(type="object", properties=dict(
-            title=dict(type="string"),
-            description=dict(type="string"),
-            queued=dict(type="boolean", description="Queue it directly instead of drafts/."),
-            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
-        ), required=["title"], additionalProperties=False),
-    ),
-    "solar_task_approve": dict(
-        authority=A2,
-        description=("Move a draft, or a task that is already planned, to the queue. "
-                     "A2 only: an A3 mandate cannot activate work. Does not change "
-                     "the task's object, scope or effect."),
-        inputSchema=dict(type="object", properties=dict(
-            task_id=dict(type="string"),
-            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
-        ), required=["task_id"], additionalProperties=False),
-    ),
-    "solar_task_cancel": dict(
-        authority=A2,
-        description=("Request cancellation of one task. Does not change its object, scope or effect."),
-        inputSchema=dict(type="object", properties=dict(
-            task_id=dict(type="string"),
-            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
-        ), required=["task_id"], additionalProperties=False),
-    ),
-    "solar_task_requeue": dict(
-        authority=A2,
-        description=("Move a task from error back to the queue. Does not change its object, scope or effect."),
-        inputSchema=dict(type="object", properties=dict(
-            task_id=dict(type="string"),
-            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
-        ), required=["task_id"], additionalProperties=False),
-    ),
-    "solar_telegram_send": dict(
-        authority=A2,
-        external_communication=True,
-        description=("Send one Telegram message as the Solar runtime. This is the only "
-                     "route an agent has to Telegram: the bot token is an installation "
-                     "secret the server holds, not a key in the workspace. Sending outside "
-                     "the machine is never implicit, so it needs an approval granted "
-                     "through the client confirmation UI or a trusted operator, bound to this exact text."),
-        inputSchema=dict(type="object", properties=dict(
-            text=dict(type="string", description="The message, exactly as it will be sent."),
-            chat_id=dict(type="string", description="Optional: an allowlisted chat. Defaults to TELEGRAM_CHAT_ID."),
-            parse_mode=dict(type="string", description="Optional: Markdown (default) or HTML."),
-            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit."),
-        ), required=["text"], additionalProperties=False),
-    ),
-    "solar_action_run": dict(
-        authority=A3,
-        description=("Run one registered action of one registered action skill, under a "
-                     "live A3 mandate. Instruction skills are not reachable here."),
-        inputSchema=dict(type="object", properties=dict(
-            skill=dict(type="string"),
-            action=dict(type="string"),
-            mandate=dict(type="string", description="Mandate to execute under."),
-            automated=dict(type="boolean", description="Unattended run: cadence is enforced too."),
-        ), required=["skill", "action"], additionalProperties=False),
-    ),
+            operation=dict(type="string", enum=list(operations.OPERATIONS)),
+            arguments=dict(type="object", description="Exactly the arguments of that operation."),
+            approval_id=dict(type="string", description="Internal: set by the runtime after confirmation; omit.")),
+            required=["operation", "arguments"], additionalProperties=False)),
 }
+
+# Read tools pass the same gate as operations; their authority is A0.
+READ_SPEC = dict(authority=A0, description="read-only")
+
+# Clients that cached the previous catalog get a loud, non-executing answer for
+# a bounded transition (see core/docs/mcp-tool-migration.md), never a silent success
+# and never a second public catalog.
+LEGACY_TOOLS = {
+    "solar_capability_search": ("solar_search", dict(scope="capabilities")),
+    "solar_capability_describe": ("solar_docs", {}),
+    "solar_task_status": ("solar_search", dict(scope="tasks")),
+    "solar_task_create": ("solar_execute", dict(operation="task.create")),
+    "solar_task_approve": ("solar_execute", dict(operation="task.approve")),
+    "solar_task_cancel": ("solar_execute", dict(operation="task.cancel")),
+    "solar_task_requeue": ("solar_execute", dict(operation="task.requeue")),
+    "solar_telegram_send": ("solar_execute", dict(operation="telegram.send")),
+    "solar_action_run": ("solar_execute", dict(operation="action.run")),
+}
+MIGRATION_DOC = "core-doc:mcp-tool-migration"
 
 RESOURCES = [
     dict(uri="solar://health", name="Solar health",
@@ -273,217 +225,170 @@ READERS = {
 
 
 # --------------------------------------------------------------------------
-# tools
+# solar_search / solar_docs
 # --------------------------------------------------------------------------
 
-def _do_task_status(arguments: dict) -> dict:
-    data = _read_tasks()
-    task_id = arguments.get("task_id")
-    state = arguments.get("state")
-    rows = data["tasks"]
-    if state:
-        rows = [row for row in rows if row["state"] == state]
-    if task_id:
-        rows = [row for row in rows if row["id"] == task_id
-                or Path(row["file"]).stem == task_id]
-        import solar_state
-
-        with solar_state.read_session() as store:
-            for row in rows:
-                task = store.task_get(row["id"])
-                if task is None:
-                    raise ValueError("task disappeared while reading its detail")
-                fields = {key: solar_state.value_of(value)
-                          for key, value in task["frontmatter"]}
-                for key in ("workspace_id", "agent", "planet", "responsibility",
-                            "agent_contract"):
-                    if key in fields:
-                        row[key] = fields[key]
-                if "continuity_checkpoint" in fields:
-                    raw_checkpoint = fields["continuity_checkpoint"]
-                    if raw_checkpoint is None:
-                        raise ValueError("continuity_checkpoint must be a JSON object")
-                    try:
-                        checkpoint = json.loads(raw_checkpoint)
-                    except (TypeError, json.JSONDecodeError):
-                        raise ValueError("continuity_checkpoint must be a JSON object") from None
-                    if not isinstance(checkpoint, dict):
-                        raise ValueError("continuity_checkpoint must be a JSON object")
-                    # Recorded evidence, not a new verification or retry authority.
-                    row["continuity_checkpoint"] = checkpoint
-    return dict(count=len(rows), tasks=rows)
-
-
-def _do_task_create(arguments: dict) -> dict:
-    import solar_state
-
-    title = str(arguments["title"])
-    description = str(arguments.get("description") or "")
-    queued = bool(arguments.get("queued"))
-    created = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-    fields = [
-        ("title", json.dumps(title, ensure_ascii=False)),
-        ("created", json.dumps(created, ensure_ascii=False)),
-        ("priority", "normal"),
-    ]
-    if queued:
-        fields.append(("scheduled_time", json.dumps("now")))
-        fields.append(("recurring", "false"))
-    body = f"\n# {title}\n\n{description}\n" if description else f"\n# {title}\n\n"
-    with solar_state.session() as store:
-        task_id = store.task_create(fields, body, status="queued" if queued else "draft")
-    return dict(created=True, id=task_id)
-
-
-def _refuse_a3(arguments: dict) -> None:
-    if "mandate" in arguments or arguments.get("authority") == A3:
-        raise RuntimeError(
-            "solar_task_approve refuses an A3 mandate: activating work is never implicit")
-
-
-def _do_task_approve(arguments: dict) -> dict:
-    import solar_state
-
-    _refuse_a3(arguments)
-    task_id = str(arguments["task_id"])
-    with solar_state.session() as store:
-        came = store.task_approve(task_id)
-    return dict(approved=True, id=task_id, from_status=came, to_status="queued")
-
-
-def _do_task_cancel(arguments: dict) -> dict:
-    import solar_state
-
-    task_id = str(arguments["task_id"])
-    with solar_state.session() as store:
-        return store.task_cancel(task_id)
-
-
-def _do_task_requeue(arguments: dict) -> dict:
-    import solar_state
-
-    task_id = str(arguments["task_id"])
-    with solar_state.session() as store:
-        came = store.task_requeue(task_id)
-    return dict(requeued=True, id=task_id, from_status=came, to_status="queued")
-
-
-def _telegram_chat_allowed(chat_id: str, env: dict) -> bool:
-    """Same allowlist rule the task notifier uses: a named chat, or the default."""
-    allowed = (env.get("TELEGRAM_ALLOWED_CHAT_IDS") or "").strip()
-    if allowed:
-        return chat_id in {part.strip() for part in allowed.split(",") if part.strip()}
-    return bool(chat_id) and chat_id == (env.get("TELEGRAM_CHAT_ID") or "").strip()
-
-
-def _do_telegram_send(arguments: dict) -> dict:
-    """Send as the Solar runtime. Reached only with an approval: see the gate.
-
-    The token never touches the workspace. It is read here, from the installation
-    secret store, and handed to `send_telegram.sh` through the environment — that
-    script refuses to look it up on its own, so this is the mediated route.
-    """
-    import solar_secrets
-
-    env = dict(os.environ)
-    # Visible configuration still lives in the workspace, and the sender only
-    # ever reads the TELEGRAM_* half of it; nothing else from `.env` is carried
-    # into the subprocess.
-    env.update({key: value
-                for key, value in solar_secrets.parse_env_file(workspace() / ".env").items()
-                if key.startswith("TELEGRAM_")})
-    # The secret comes from the store, through the loader that allows only the
-    # installation's own names. A stray key in that file reaches nothing.
-    solar_secrets.load_into_environ(env)
-
-    token = (env.get("TELEGRAM_BOT_TOKEN") or "").strip()
-    if not token:
-        raise RuntimeError(
-            "No TELEGRAM_BOT_TOKEN in the installation secret store "
-            f"({solar_secrets.secrets_file()}). The server sends with the process "
-            "credentials or it does not send.")
-
-    chat_id = str(arguments.get("chat_id") or env.get("TELEGRAM_CHAT_ID") or "").strip()
-    if not _telegram_chat_allowed(chat_id, env):
-        raise RuntimeError(f"chat_id {chat_id or '(none)'} is not an allowlisted chat")
-
-    env["TELEGRAM_BOT_TOKEN"] = token
-    env["TELEGRAM_CHAT_ID"] = chat_id
-    if arguments.get("parse_mode"):
-        env["TELEGRAM_PARSE_MODE"] = str(arguments["parse_mode"])
-
-    script = _SKILLS / "solar-telegram" / "scripts" / "send_telegram.sh"
-    proc = subprocess.run(["bash", str(script), str(arguments["text"])],
-                          capture_output=True, text=True, timeout=60,
-                          cwd=str(workspace()), env=env)
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "send failed").strip()[:500])
-    return dict(sent=True, chat_id=chat_id, output=(proc.stdout or "").strip()[:500])
-
-
-def _do_action_run(arguments: dict) -> dict:
-    entry = action_skills().get(arguments["skill"], {})
-    command = list(entry.get("command") or [])
-    if not command:
-        raise RuntimeError(f"{arguments['skill']} has no command registered")
-    proc = subprocess.run(command + [str(arguments["action"])],
-                          capture_output=True, text=True, timeout=600,
-                          cwd=str(workspace()))
-    return dict(exit_code=proc.returncode,
-                stdout=(proc.stdout or "").strip()[:2000],
-                stderr=(proc.stderr or "").strip()[:1000])
-
-
-HANDLERS = {
-    "solar_capability_search": lambda args: capability_registry.search(**args),
-    "solar_capability_describe": lambda args: capability_registry.describe(**args),
-    "solar_task_status": _do_task_status,
-    "solar_task_create": _do_task_create,
-    "solar_task_approve": _do_task_approve,
-    "solar_task_cancel": _do_task_cancel,
-    "solar_task_requeue": _do_task_requeue,
-    "solar_telegram_send": _do_telegram_send,
-    "solar_action_run": _do_action_run,
+_SEARCH_KEYS = {
+    "capabilities": {"scope", "query", "limit", "preferred_namespace"},
+    "docs": {"scope", "query", "limit"},
+    "operations": {"scope", "query", "limit"},
+    "resources": {"scope", "uri"},
+    "tasks": {"scope", "query", "limit", "state", "task_id", "view", "section"},
 }
+_TASK_LIST_KEYS = {"query", "limit", "state"}
+_TASK_ONE_KEYS = {"task_id", "view", "section"}
 
 
-def _valid_value(value, schema: dict) -> bool:
-    types = {"string": str, "boolean": bool, "integer": int, "object": dict, "array": list}
-    if type(value) is not types.get(schema.get("type")):
-        return False
-    if "enum" in schema and value not in schema["enum"]:
-        return False
-    if isinstance(value, dict):
-        properties = schema.get("properties", {})
-        return (all(key in value for key in schema.get("required", []))
-                and all(key in properties and _valid_value(v, properties[key]) for key, v in value.items()))
-    if isinstance(value, list):
-        return all(_valid_value(v, schema["items"]) for v in value)
-    return True
+def _search_problem(arguments: dict) -> str | None:
+    """Per-scope closure: a scope accepts only the keys it uses."""
+    scope = arguments["scope"]
+    extra = set(arguments) - _SEARCH_KEYS[scope]
+    if extra:
+        return f"arguments.{sorted(extra)[0]}: not accepted with scope={scope}"
+    if scope == "capabilities" and "query" not in arguments:
+        return "arguments.query: required with scope=capabilities"
+    if scope == "tasks":
+        if "task_id" in arguments and set(arguments) & _TASK_LIST_KEYS:
+            return "arguments: task_id reads one task; query, limit and state list tasks"
+        if "task_id" not in arguments and set(arguments) & {"view", "section"}:
+            return "arguments: view and section need task_id"
+    return None
+
+
+def _do_search(arguments: dict) -> dict:
+    scope = arguments["scope"]
+    if scope == "capabilities":
+        return capability_registry.search(arguments["query"], arguments.get("limit", 5),
+                                          arguments.get("preferred_namespace", ""))
+    if scope == "docs":
+        return docs_registry.search_docs(arguments.get("query", ""), arguments.get("limit", 10))
+    if scope == "operations":
+        terms = set(re.findall(r"\w+", arguments.get("query", "").casefold()))
+        rows = [dict(name=op.name, authority=op.authority, summary=op.summary,
+                     external_communication=op.external_communication)
+                for op in operations.OPERATIONS.values()
+                if not terms or terms & set(re.findall(
+                    r"\w+", f"{op.name} {op.summary}".casefold()))]
+        return dict(operations=rows[:arguments.get("limit", 50)],
+                    contract="solar_docs id=operation:<name>",
+                    call="solar_execute operation=<name> arguments={...}")
+    if scope == "resources":
+        uri = arguments.get("uri")
+        if not uri:
+            return dict(resources=RESOURCES)
+        reader = READERS.get(uri)
+        if reader is None:
+            raise OperationError("unknown_resource",
+                                 f"Unknown resource: {uri}. Known: {', '.join(READERS)}")
+        return dict(uri=uri, contents=reader())
+    if "task_id" in arguments:
+        return task_views.view_task(arguments["task_id"], arguments.get("view", "detail"),
+                                    arguments.get("section", ""))
+    return task_views.find_tasks(arguments.get("query", ""), arguments.get("state", ""),
+                                 arguments.get("limit", 10))
+
+
+def _do_docs(arguments: dict) -> dict:
+    try:
+        return docs_registry.read(**arguments)
+    except ValueError as exc:
+        raise OperationError("docs_refused", str(exc)) from None
+
+
+READ_HANDLERS = {"solar_search": _do_search, "solar_docs": _do_docs}
+
+
+# --------------------------------------------------------------------------
+# dispatch
+# --------------------------------------------------------------------------
+
+def resolve_execute(arguments: dict):
+    """Validate a solar_execute call: (operation, inner arguments, problem)."""
+    # The envelope is closed; the nested `arguments` object is validated against
+    # the operation's own schema below, never against a generic one.
+    schema = TOOLS["solar_execute"]["inputSchema"]
+    shell = dict(schema, required=[k for k in schema["required"] if k != "arguments"],
+                 properties={k: v for k, v in schema["properties"].items() if k != "arguments"})
+    problem = op_schema.check({k: v for k, v in arguments.items() if k != "arguments"}, shell, "arguments")
+    if not problem and not isinstance(arguments.get("arguments"), dict):
+        problem = "arguments.arguments: expected object"
+    if problem:
+        return None, {}, problem
+    op = operations.OPERATIONS[arguments["operation"]]
+    inner = arguments["arguments"]
+    problem = op_schema.check(inner, op.schema, f"arguments.{op.name}")
+    return (None, {}, problem) if problem else (op, inner, None)
+
+
+def _legacy_answer(name: str) -> dict:
+    tool, template = LEGACY_TOOLS[name]
+    return dict(
+        error=(f"{name} no longer exists. Use {tool}"
+               + (f" with operation={template['operation']}" if "operation" in template else "")
+               + ". This answer is a transition notice: nothing was executed."),
+        code="tool_renamed", legacy_tool=name,
+        replacement=dict(tool=tool, **{k: v for k, v in template.items()}),
+        migration=dict(tool="solar_docs", arguments=dict(id=MIGRATION_DOC)),
+        executed=False)
 
 
 def call_tool(name: str, arguments: dict) -> tuple[dict, bool]:
     """Gate first, then act. There is no path to a handler that skips this."""
-    if name in ("solar_capability_search", "solar_capability_describe") and not _valid_value(arguments, TOOLS[name]["inputSchema"]):
-        return dict(error="Invalid tool arguments"), True
+    arguments = arguments if isinstance(arguments, dict) else {}
+    trace = uuid.uuid4().hex[:12]
+    if name in LEGACY_TOOLS:
+        verdict = mcp_gate.Verdict(False, "tool_renamed",
+                                   f"{name} was replaced by {LEGACY_TOOLS[name][0]}", A0, name)
+        mcp_gate.record(verdict, arguments, trace, via=name)
+        return dict(_legacy_answer(name), trace_id=trace, verdict=verdict.as_dict()), True
+    if name not in TOOLS:
+        verdict = mcp_gate.preflight(name, arguments, {})
+        mcp_gate.record(verdict, arguments, trace, via=name)
+        return dict(refused=verdict.as_dict(), trace_id=trace), True
     try:
         workspace()
     except WorkspaceUnresolved as exc:
-        return dict(error=str(exc)[:500]), True
-    registry = dict(TOOLS)
-    registry["_action_skills"] = action_skills()
-    with mcp_gate.execution_lock(name, registry):
-        verdict = mcp_gate.preflight(name, arguments, registry)
-        mcp_gate.record(verdict, arguments)
+        return dict(error=str(exc)[:500], code="workspace_unresolved", trace_id=trace), True
+
+    if name == "solar_execute":
+        op, inner, problem = resolve_execute(arguments)
+        if problem:
+            return dict(error=f"Invalid tool arguments: {problem}", code="invalid_arguments",
+                        trace_id=trace), True
+        gate_name, gate_args = op.name, dict(inner)
+        if arguments.get("approval_id"):
+            gate_args["approval_id"] = arguments["approval_id"]
+        registry = {op.name: op.gate_spec(), "_action_skills": action_skills()}
+    else:
+        problem = op_schema.check(arguments, TOOLS[name]["inputSchema"], "arguments")
+        if not problem and name == "solar_search":
+            problem = _search_problem(arguments)
+        if problem:
+            return dict(error=f"Invalid tool arguments: {problem}", code="invalid_arguments",
+                        trace_id=trace), True
+        op, gate_name, gate_args = None, name, arguments
+        registry = {name: READ_SPEC}
+
+    with mcp_gate.execution_lock(gate_name, registry):
+        verdict = mcp_gate.preflight(gate_name, gate_args, registry)
+        mcp_gate.record(verdict, gate_args, trace, via=name)
         if not verdict.allowed:
-            return dict(refused=verdict.as_dict()), True
+            return dict(refused=verdict.as_dict(), operation=gate_name, trace_id=trace), True
         # Reserve before side effects: an uncertain failure must not be replayed.
-        mcp_gate.consume(name, arguments, registry)
+        mcp_gate.consume(gate_name, gate_args, registry)
+    handler = operations.HANDLERS[op.name] if op else READ_HANDLERS[name]
     try:
-        result = HANDLERS[name](arguments or {})
-    except Exception as exc:
-        return dict(error=str(exc)[:500], verdict=verdict.as_dict()), True
-    return dict(result=result, verdict=verdict.as_dict()), False
+        result = handler(dict(inner) if op else dict(arguments))
+    except Exception as exc:  # noqa: BLE001 - every failure leaves an outcome row
+        code = operations.error_code(exc)
+        mcp_gate.record_outcome(gate_name, trace, False, code, str(exc))
+        return dict(error=str(exc)[:500], code=code, operation=gate_name, trace_id=trace,
+                    verdict=verdict.as_dict()), True
+    mcp_gate.record_outcome(gate_name, trace, True, "ok")
+    payload = dict(result=result, verdict=verdict.as_dict(), trace_id=trace)
+    if op:
+        payload["operation"] = op.name
+    return payload, False
 
 
 # --------------------------------------------------------------------------
@@ -502,11 +407,14 @@ def handle(message: dict, confirm=None) -> dict | None:
     if method == "initialize":
         result = dict(protocolVersion=PROTOCOL_VERSION, serverInfo=SERVER_INFO,
                       capabilities=dict(resources=dict(listChanged=False), tools=dict(listChanged=False)),
-                      instructions=("Resources are open context. Tools are gated verbs: the "
-                                    "handler validates authority and mandate and refuses on its "
-                                    "own. Omit approval_id to request native client confirmation. Never "
-                                    "ask users to manage IDs or self-grant through shell. Clients without "
-                                    "elicitation need a trusted host/operator approval path."))
+                      instructions=("Three tools. solar_search finds capabilities, documents, operations, "
+                                    "resources and tasks, and reads one task. solar_docs reads documentation "
+                                    "and contracts by section. solar_execute runs one registered operation: "
+                                    "the handler validates its strict arguments, authority and mandate and "
+                                    "refuses on its own. Omit approval_id to request native client "
+                                    "confirmation of that exact call. Never ask users to manage IDs or "
+                                    "self-grant through shell. Editing or scheduling a task never queues "
+                                    "it. Clients without elicitation need a trusted host/operator approval path."))
     elif method in ("notifications/initialized", "notifications/cancelled"):
         return None
     elif method == "ping":
@@ -533,23 +441,22 @@ def handle(message: dict, confirm=None) -> dict | None:
     elif method == "tools/call":
         name = params.get("name", "")
         arguments = dict(params.get("arguments") or {})
-        if confirm and TOOLS.get(name, {}).get("authority") == A2 and not arguments.get("approval_id"):
+        if confirm and name == "solar_execute" and not arguments.get("approval_id"):
             # Only the transport callback receives client UI responses. No tool
             # parameter or caller-supplied approved flag can grant authority.
-            schema = TOOLS[name]["inputSchema"]
-            properties = schema.get("properties", {})
-            types = {"string": str, "boolean": bool}
-            valid = (all(key in arguments for key in schema.get("required", []))
-                     and all(key in properties and type(value) is types.get(properties[key].get("type"))
-                             for key, value in arguments.items()))
-            if not valid:
-                return _error(request_id, -32602, "Invalid tool arguments")
-            if name == "solar_telegram_send" and not arguments.get("chat_id"):
-                return _error(request_id, -32602, "Supply the exact chat_id before confirming a send")
-            if confirm(name, arguments, request_id):
-                import mcp_approve
-                granted = mcp_approve.grant(name, arguments, 120, "client elicitation: explicit confirmation")
-                arguments["approval_id"] = granted["approval_id"]
+            op, inner, problem = resolve_execute(arguments)
+            if problem:
+                return _error(request_id, -32602, f"Invalid tool arguments: {problem}")
+            if op.authority == A2:
+                if op.pre_confirm:
+                    try:
+                        op.pre_confirm(inner)
+                    except OperationError as exc:
+                        return _error(request_id, -32602, str(exc))
+                if confirm(op.name, inner, request_id):
+                    import mcp_approve
+                    granted = mcp_approve.grant(op.name, inner, 120, "client elicitation: explicit confirmation")
+                    arguments["approval_id"] = granted["approval_id"]
         payload, is_error = call_tool(name, arguments)
         result = dict(content=_text(payload), isError=is_error)
     elif method == "shutdown":
@@ -610,11 +517,20 @@ def serve(stdin=None, stdout=None) -> int:
         stdout.write(json.dumps(message, default=str) + "\n")
         stdout.flush()
 
+    def current_state(name, arguments):
+        """The stored task next to the exact call, so the approver sees what it binds to."""
+        if name.startswith("task.") and name != "task.create" and "task_id" in arguments:
+            snap = task_views.snapshot(arguments["task_id"])
+            if snap:
+                return "\nStored task now:\n" + json.dumps(snap, ensure_ascii=False, indent=2)
+        return ""
+
     def confirm(name, arguments, request_id):
         elicitation_id = 'approval-' + uuid.uuid4().hex
         emit(dict(jsonrpc="2.0", id=elicitation_id, method="elicitation/create", params=dict(
             message=("Approve this exact Solar action?\nWorkspace: " + str(workspace()) +
-                     "\nTool: " + name + "\n" + json.dumps(arguments, ensure_ascii=False, indent=2) +
+                     "\nOperation: " + name + "\n" + json.dumps(arguments, ensure_ascii=False, indent=2) +
+                     current_state(name, arguments) +
                      "\nOne execution only. A failed or uncertain execution requires new approval."),
             requestedSchema=dict(type="object", properties=dict(
                 approve=dict(type="boolean", title="Approve this action", default=False)), required=["approve"]))))

@@ -17,7 +17,7 @@ These are internal Client modules; use the Client entrypoint to change settings.
 Before discovery-mode publication, Client reads the actual Codex user MCP
 registration (honoring CODEX_HOME), validates its workspace environment, starts
 that registered stdio command and probes tools/list with a ten-second timeout.
-The registration is trusted local configuration. Search/Describe must both be
+The registration is trusted local configuration. `solar_search` and `solar_docs` must both be
 present. Missing registration refuses before pruning the catalog. The probe
 checks registration and tool presence; it does not prove harness invocation or
 validate every query. Existing exclusions and ownership rules still apply.

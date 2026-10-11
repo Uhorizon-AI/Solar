@@ -52,12 +52,12 @@ Act as <agent>. Goal: dispatch the following tasks autonomously.
 
 ## Tasks to create
 
-Do not follow this pattern. A new task is `solar_task_create`, then `solar_task_approve`. Children that must be waited on are declared in `task-with-subtasks.md`, not dispatched from here.
+Do not follow this pattern. A new task is `task.create`, then `task.approve`. Children that must be waited on are declared in `task-with-subtasks.md`, not dispatched from here.
 
 ## Result
 
 When done, list the created tasks under `## Result` in this task's body.
-Read it with `solar_task_status`. Do not search `async-tasks/` for a file.
+Read it with `solar_search` (`scope=tasks`, `task_id`). Do not search `async-tasks/` for a file.
 ```
 
 ## Notes
