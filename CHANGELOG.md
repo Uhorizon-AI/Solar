@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-10-12
+
 ### Changed
 - MCP: the public catalog is now exactly three tools. `solar_search` finds capabilities, documents, operations, resources and tasks and reads one task (detail, instructions, config, status, result, error, history). `solar_docs` reads skills, framework documents (`core-doc:`) and operation contracts (`operation:`), whole or by section. `solar_execute` runs one registered operation with a closed per-operation schema, authority and approval. The nine previous tool names answer with a non-executing `tool_renamed` error for two minor releases (recorded in the gate audit), and Client discovery verification accepts either catalog meanwhile. Mapping and policy: `core/docs/mcp-tool-migration.md`. Resources are unchanged.
 - MCP: approvals bind the operation name and exact arguments. `telegram.send` always needs an explicit `chat_id`; `task.create` always stores a draft (`queued` and `description` became `task.approve` and `instructions`); `action.run` takes its mandate from the registration (none registered: refused; a different caller-supplied one: refused). Cancel and requeue require `expected_row_version`. The operator approval CLI grants only registered A2 operations with valid arguments. Every decision gets a `trace_id` and an outcome row in the gate audit.
