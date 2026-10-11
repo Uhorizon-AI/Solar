@@ -187,6 +187,11 @@ def _preamble(text: str, sections: list[dict]) -> str:
     return text[start:first_h2]
 
 
+def sections(text: str) -> list[dict]:
+    """Public view of the level-2/3 sections of a Markdown unit (see `_sections`)."""
+    return _sections(text)
+
+
 def _reject_reference_path(value: str) -> None:
     if value.startswith(("/", "\\")) or "\\" in value or ".." in value.split("/"):
         raise ValueError("reference does not accept a path")

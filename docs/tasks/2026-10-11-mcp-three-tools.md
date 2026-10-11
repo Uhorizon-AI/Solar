@@ -55,6 +55,14 @@ uninstalled `solar_task_configure` exists outside the repository and was not ava
 this work; before merging, compare it with these two operations and either adopt one, or
 fold anything missing into them. Do not ship two edit routes.
 
+The local planning draft `docs/tasks/2026-10-11-task-configuration.md` (not in this repository)
+follows the same rule: recommended outcome is to retire it and absorb whatever it still needs into
+`task.update`/`task.schedule`. The decision belongs to the maintainer and is not made by this PR.
+
+Internal callers: nothing in `core/` invokes the `task.cancel`/`task.requeue` operations; the shell
+and Python helpers (`requeue_from_error.sh`, `task_cancel.py`) call the `solar-state` session
+methods, whose version check stays optional. Only `solar_execute` requires `expected_row_version`.
+
 ## Review follow-ups (PR 21)
 
 - `action.run` pins the registered mandate; none registered is refused.
@@ -67,3 +75,5 @@ fold anything missing into them. Do not ship two edit routes.
   effects, summary listing never loading detail, malformed/valueless checkpoint refusals. Dropped as
   no longer meaningful: the "task disappears between two reads" race (one read session now) and the
   "empty list for an unknown id" behavior (now `task_not_found`).
+- `scheduled_time: now` plus weekdays without an `HH:MM` is `schedule_invalid` (weekdays are never dropped).
+- `_execution_result` uses the public `capability_registry.sections`; `log_path` branch and the 60 KB / confinement limits are tested.

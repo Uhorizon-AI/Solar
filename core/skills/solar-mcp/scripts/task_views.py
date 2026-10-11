@@ -86,8 +86,10 @@ def plan_schedule(*, time, weekdays, zone, recurring, min_interval, after=None) 
     runs after a daylight-saving change, so it is refused instead of stored.
     """
     # `scheduled_time: now` (create.sh --queued) means "no clock restriction".
+    # Weekdays are kept: without a real HH:MM they are refused below, so a task that
+    # inherited "now" cannot be stored as "Fridays" while still running on any day.
     if time == "now":
-        time, weekdays = None, []
+        time = None
     scheduled = bool(time or weekdays)
     notes = []
     plan = dict(scheduled_time=time, scheduled_weekdays=list(weekdays or []),
@@ -192,7 +194,7 @@ def _resolve(store, task_id: str) -> dict:
 
 
 def _sections_named(body: str, titles) -> list[dict]:
-    return [item for item in capability_registry._sections(body)
+    return [item for item in capability_registry.sections(body)
             if item["level"] == 2 and item["title"] in titles]
 
 
@@ -235,7 +237,7 @@ def _execution_result(task: dict, values: dict) -> dict | None:
                 text = stream.read(_LIMIT_BYTES + 1).decode("utf-8", "replace")
         except (OSError, ValueError):
             continue
-        found = [item for item in capability_registry._sections(text) if item["title"] in ("Result", "Error")]
+        found = [item for item in capability_registry.sections(text) if item["title"] in ("Result", "Error")]
         if not found:
             continue
         return dict(file=path.name, truncated=len(text.encode()) > _LIMIT_BYTES,
@@ -281,7 +283,7 @@ def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
         return detail
     if view == "instructions":
         text = _without_sections(body, _RUNTIME_SECTIONS)
-        parsed = capability_registry._sections(text)
+        parsed = capability_registry.sections(text)
         if section:
             chosen = next((item for item in parsed if item["title"] == section), None)
             if chosen is None:

@@ -403,6 +403,27 @@ def test_a_task_queued_with_scheduled_time_now_can_be_revised_and_made_recurring
     assert error and body["code"] == "schedule_invalid"
 
 
+def test_weekdays_are_refused_without_a_real_hour_when_the_task_inherited_now(solar_env):
+    """Fridays on top of "now" would be stored but still run on any day: refuse, change nothing."""
+    with solar_state.session() as store:
+        source = store.task_create([("title", '"Queued now"'), ("scheduled_time", '"now"')],
+                                   "\n# Queued now\n", status="queued")
+    made = run("task.create", dict(title="Revision", instructions="x", revises_task_id=source))
+    before = stored(made["id"])
+    for arguments in (dict(scheduled_weekdays=[5], scheduled_timezone=MADRID),
+                      dict(scheduled_weekdays=[5])):
+        body, error = execute("task.schedule", dict(task_id=made["id"],
+                                                    expected_row_version=made["row_version"], **arguments))
+        assert error and body["code"] == "schedule_invalid", arguments
+    after = stored(made["id"])
+    assert after["row_version"] == before["row_version"] and after["frontmatter"] == before["frontmatter"]
+    # With a real HH:MM the same days are accepted and replace "now".
+    out = run("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                                    scheduled_time="17:00", scheduled_weekdays=[5], scheduled_timezone=MADRID))
+    assert search(scope="tasks", task_id=made["id"])["schedule"]["time"] == "17:00"
+    assert out["status"] == "draft"
+
+
 def test_the_digest_does_not_depend_on_how_a_value_was_quoted(solar_env):
     """Written by task.schedule or by a shell script: same meaning, same digest."""
     made = new_task()
@@ -450,3 +471,27 @@ def test_result_view_returns_the_executor_log_when_the_body_has_no_result(solar_
     for task_id in (bad, linked):
         refused = search(scope="tasks", task_id=task_id, view="result")
         assert refused["recorded"] is False and refused["execution_log"] is None
+
+
+def test_result_view_falls_back_to_the_recorded_log_path_and_stays_confined(solar_env):
+    logs = solar_env.runtime / "task-logs"
+    logs.mkdir(parents=True)
+    log = logs / "by-log-path.md"
+    log.write_text("# Async Task Execution\n\n## Error\n\n- error_code: boom\n")
+    big = logs / "big.md"
+    big.write_text("## Result\n\n" + "x" * 70000)
+    outside = solar_env.tmp_path / "elsewhere.md"
+    outside.write_text("## Result\n\nsecret\n")
+    with solar_state.session() as store:
+        by_log = store.task_create([("title", '"A"')], "\n# A\n", status="draft")
+        store.task_record(by_log, log_path=str(log))
+        huge = store.task_create([("title", '"B"')], "\n# B\n", status="draft")
+        store.task_record(huge, log_path=str(big))
+        escaped = store.task_create([("title", '"C"'), ("result_path", json.dumps(str(outside)))],
+                                    "\n# C\n", status="draft")
+        store.task_record(escaped, log_path=str(outside))
+    found = search(scope="tasks", task_id=by_log, view="result")["execution_log"]
+    assert found["outcome"] == "error" and "boom" in found["text"] and found["file"] == "by-log-path.md"
+    capped = search(scope="tasks", task_id=huge, view="result")["execution_log"]
+    assert capped["truncated"] is True and len(capped["text"].encode()) <= 60000
+    assert search(scope="tasks", task_id=escaped, view="result")["execution_log"] is None
