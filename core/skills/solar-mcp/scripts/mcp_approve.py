@@ -5,7 +5,7 @@ following the user's accepted form response. This CLI remains a trusted operator
 recovery path, not an agent self-approval route. It does not attest to an earlier
 conversation. See references/approvals.md for the trust boundary.
 
-    python3 mcp_approve.py grant solar_task_create --args '{"title":"Review X"}'
+    python3 mcp_approve.py grant task.create --args '{"title":"Review X","instructions":"..."}'
     python3 mcp_approve.py list
     python3 mcp_approve.py revoke <approval_id>
 
@@ -25,6 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import mcp_gate
+import op_schema
+import operations
 
 
 def grant(tool: str, arguments: dict, ttl: int, note: str) -> dict:
@@ -75,7 +77,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     granter = sub.add_parser("grant")
-    granter.add_argument("tool")
+    granter.add_argument("tool", help="operation name, e.g. task.approve")
     granter.add_argument("--args", default="{}", help="JSON object, exactly as the caller will send it")
     granter.add_argument("--ttl", type=int, default=900)
     granter.add_argument("--note", default="")
@@ -91,6 +93,18 @@ def main(argv: list[str]) -> int:
                 raise ValueError("--args must be a JSON object")
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
+            return 2
+        # Only a registered mutating operation with valid, exact arguments can be
+        # approved; a typo or a legacy tool name would otherwise grant nothing, silently.
+        op = operations.OPERATIONS.get(options.tool)
+        if op is None or op.authority != mcp_gate.A2:
+            print(f"error: {options.tool} is not an operation that takes an approval. Known: "
+                  + ", ".join(n for n, o in operations.OPERATIONS.items() if o.authority == mcp_gate.A2),
+                  file=sys.stderr)
+            return 2
+        problem = op_schema.check(arguments, op.schema, f"arguments.{op.name}")
+        if problem:
+            print(f"error: {problem}", file=sys.stderr)
             return 2
         record = grant(options.tool, arguments, options.ttl, options.note)
         print(json.dumps(record, indent=2, sort_keys=True))

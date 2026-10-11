@@ -9,7 +9,7 @@
    publication and MCP discovery. Core IDs are unprefixed; planet IDs use
    `planet:skill`, including nested packages. Sorted first-match resolution
    preserves the existing duplicate-name convention. `sync: false`, planet
-   exclusions and skill exclusions apply to both Search and Describe.
+   exclusions and skill exclusions apply to both `solar_search` and `solar_docs`.
 2. MCP Search returns bounded descriptions and source hashes. Describe reads
    one selected instruction unit or a registered Markdown reference. A unit
    over 4 KiB returns a heading outline with the preamble and governance
@@ -31,7 +31,7 @@ flowchart TD
     Sources[Core and planet instruction packages] --> Inventory[Shared eligible inventory]
     Inventory --> Native[Full native publication by default]
     Inventory --> Reduced[Opt-in essential publication]
-    Inventory --> Discovery[MCP Search and Describe]
+    Inventory --> Discovery[MCP solar_search and solar_docs]
     Discovery --> Harness[Harness reads selected instructions]
     Harness --> Gate[MCP handler authority gate]
     Gate --> Tasks[Task mutation handlers]
@@ -50,7 +50,7 @@ Browser, shell and native harness tools can still operate outside this gate.
 This feature does not extend MCP enforcement to those routes. Instruction
 packages remain instructions; registered action skills remain a separate list.
 `metadata.skills` does not inject descriptions: the provider harness discovers
-skills. The router resolves agent roles. Existing seven verbs retain their
+skills. The router resolves agent roles. Existing task, send and action verbs (now operations of `solar_execute`) retain their
 original argument validation; discovery validates its own two contracts only.
 
 ## Contracts and safeguards
@@ -86,7 +86,7 @@ solar client sync --codex-only
 
 The dry-run reports catalog counts and ID/description bytes, not provider
 usage. Before saving or pruning, discovery mode probes the actual registered
-Codex Solar stdio MCP for Search/Describe and its workspace binding. Missing
+Codex Solar stdio MCP for `solar_search`/`solar_docs` and its workspace binding. Missing
 registration, missing essentials or an unmanaged essential collision refuses.
 Only Client-managed copies are pruned; personal resources are preserved. Profile
 set uses the canonical atomic Client writer to refresh installation identity and

@@ -33,7 +33,7 @@ initial cost that grows with the number of advertised entries.
 ## Progressive discovery
 
 The [small-door design](capability-discovery-design.md) documents the shared
-inventory, MCP Search/Describe and opt-in reduced native profile. Full native
+inventory, MCP `solar_search`/`solar_docs` and opt-in reduced native profile. Full native
 publication remains the default; rollout requires review and harness measurements.
 Adding discovery while retaining the full advertised catalog does not remove
 its initial context cost. Sharing an MCP server process can reduce local memory

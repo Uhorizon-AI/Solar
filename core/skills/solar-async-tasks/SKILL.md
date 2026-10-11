@@ -39,13 +39,17 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 
 ## Core Commands
 
-The agent uses the MCP verbs. Each one asks for client approval and writes only through `solar-state`. If the runtime format is not `sqlite`, the verb refuses. They do not change the task's object, scope or effect.
+The agent uses `solar_search` to read tasks and `solar_execute` operations to change them. Each operation asks for client approval and writes only through `solar-state`. If the runtime format is not `sqlite`, the operation refuses. They do not change the task's object, scope or effect.
 
-- `solar_task_create` — a draft. Queuing is `solar_task_approve`, not a flag on create
-- `solar_task_approve` — a draft, or a task already planned, to the queue. Refuses an A3 mandate. There is no separate plan verb
-- `solar_task_status` — read the queue
-- `solar_task_requeue` — error back to the queue
-- `solar_task_cancel` — a queued task becomes cancelled; an active task stays active and the request is recorded
+- `task.create` — a draft (or a draft revision of another task with `revises_task_id`). Queuing is `task.approve`, never an option of create
+- `task.update` / `task.schedule` — edit or schedule a draft or planned task under `expected_row_version`. They never queue, and a queued, active or finished task cannot be edited: prepare a revision
+- `task.approve` — a draft, or a task already planned, to the queue, for the exact stored version. Refuses an A3 mandate. There is no separate plan operation
+- `task.requeue` — error back to the queue
+- `task.cancel` — a queued task becomes cancelled; an active task stays active and the request is recorded
+- `task.archive` — retire a task keeping its row, body and events; a queued recurrence is cancelled in the same step
+- `solar_search` with `scope=tasks` — list, or read one task (`view`: `detail`, `instructions`, `config`, `status`, `result`, `error`, `history`)
+
+Contracts and migration from the previous tool names: `solar_docs id=operation:<name>` and `core/docs/mcp-tool-migration.md`.
 
 Host setup stays with `solar-system` and the LaunchAgent. The agent does not start the worker and does not drive the queue through the shell.
 
@@ -64,14 +68,14 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 bash core/skills/solar-system/scripts/check_orchestrator.sh
 ```
 
-When `solar-system` supervises `async-tasks`, the agent stops after `solar_task_approve`; the LaunchAgent picks up the queued task on its tick.
+When `solar-system` supervises `async-tasks`, the agent stops after `task.approve`; the LaunchAgent picks up the queued task on its tick.
 
 Fallback rule: if `solar-system` is not supervising `async-tasks`, use `ensure_async_tasks.sh` once as documented fallback. Do not bypass the runtime with direct provider CLIs.
 
 ## Workflow
 
-1. Draft: `solar_task_create` stores a draft.
-2. Approve: `solar_task_approve` moves that draft to `queued`. A task that is already `planned` uses the same verb. There is no verb that creates the plan.
+1. Draft: `task.create` stores a draft; `task.update` and `task.schedule` refine it. None of them queues.
+2. Approve: `task.approve` moves that draft to `queued`. A task that is already `planned` uses the same operation. There is no operation that creates the plan.
 3. Execute: `solar-system` starts one eligible queued task and executes it.
 4. Complete: success sets `completed`, recurrence may requeue, failure sets `error`.
 
@@ -87,7 +91,7 @@ If the user asked for review before final edits, write a proposal or result arti
 
 ## Execution Consent
 
-**Prepare ≠ queue.** A draft is preparation. `solar_task_approve` moves that draft to the queue and is A2 only for the declared object, scope and effect. An A3 mandate cannot approve.
+**Prepare ≠ queue.** A draft is preparation. `task.approve` moves that draft to the queue and is A2 only for the declared object, scope and effect, bound to the version the approver saw. An A3 mandate cannot approve.
 
 Queued or active tasks are already approved to execute their declared body and write declared artifacts/output paths.
 
@@ -145,7 +149,7 @@ Do not append `## Result` when the task writes a dedicated artifact such as a pl
 
 `## Result` is never what the origin chat receives. A gateway parent ends its reply with a `<delivery>` block, the worker copies it into the task body as `## Delivery`, and the notification sends that section — see `references/runtime-operations.md`. `## Result` stays the full account, for the parent reading its children.
 
-Read a task with `solar_task_status`. The status is a column. Do not search `async-tasks/` for a markdown file.
+Read a task with `solar_search` (`scope=tasks`). The status is a column. Do not search `async-tasks/` for a markdown file.
 
 ## Parent Tasks With Subtasks
 
@@ -206,6 +210,6 @@ solar client sync
 
 ## Cancellation
 
-Request cancellation with `solar_task_cancel`. An active task stays active until the worker stops it.
+Request cancellation with `task.cancel`. An active task stays active until the worker stops it.
 The executor confirms `cancelled` only after process-group termination and cleanup.
 Voice OS D9 may queue explicit, bounded local preparation through the Host; the original request supplies authority, not the acknowledgement.

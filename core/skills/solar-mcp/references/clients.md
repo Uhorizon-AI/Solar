@@ -54,7 +54,7 @@ uv run --project core/tests python -m pytest core/tests/skills/solar-mcp -q
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-mcp /tmp
 ```
 
-`mcp_probe.py list` and `mcp_probe.py call solar_task_status '{}'` exercise the
+`mcp_probe.py list` and `mcp_probe.py call solar_search '{"scope":"tasks"}'` exercise the
 legacy direct-server read path; the tests additionally cover dispatcher startup.
 
 ## Runtime dependencies

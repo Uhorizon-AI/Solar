@@ -5,22 +5,34 @@ from io import StringIO
 
 import pytest
 
+import dataclasses
+
 import mcp_approve
 import mcp_gate
 import mcp_server
+import operations
+
+
+def gate_registry():
+    reg = {name: op.gate_spec() for name, op in operations.OPERATIONS.items()}
+    reg['_action_skills'] = {}
+    return reg
 
 
 def request(arguments=None):
+    inner = {'instructions': 'x', **(arguments or {'title': 'Approved task'})}
     return dict(jsonrpc='2.0', id=2, method='tools/call', params=dict(
-        name='solar_task_create', arguments=arguments or {'title': 'Approved task'}))
+        name='solar_execute', arguments=dict(operation='task.create', arguments=inner)))
 
 
 def test_confirmed_action_creates_internal_approval(solar_env, monkeypatch):
     seen = []
-    monkeypatch.setitem(mcp_server.HANDLERS, 'solar_task_create', lambda args: seen.append(args) or {'ok': True})
+    monkeypatch.setitem(operations.HANDLERS, 'task.create', lambda args: seen.append(args) or {'ok': True})
     response = mcp_server.handle(request(), lambda name, args, rid: True)
+    assert 'result' in response, response
     assert not response['result']['isError']
-    assert seen[0]['approval_id']
+    assert seen == [dict(title='Approved task', instructions='x')]
+    assert 'approval_id' not in seen[0]
     assert mcp_approve.listing()[0]['consumed_at']
 
 
@@ -38,33 +50,42 @@ def test_forged_tool_flag_cannot_authorize(solar_env):
 
 def test_explicit_recipient_required_for_confirmation(solar_env):
     message = request()
-    message['params'] = dict(name='solar_telegram_send', arguments={'text': 'hello'})
+    message['params'] = dict(name='solar_execute', arguments=dict(
+        operation='telegram.send', arguments={'text': 'hello'}))
     assert mcp_server.handle(message, lambda *args: True)['error']['code'] == -32602
 
 
+INNER = {'title': 'X', 'instructions': 'x'}
+
+
+def execute_args(**extra):
+    return dict(operation='task.create', arguments=dict(INNER), **extra)
+
+
 def test_failed_execution_burns_approval(solar_env, monkeypatch):
-    granted = mcp_approve.grant('solar_task_create', {'title': 'X'}, 900, 'test')
-    args = {'title': 'X', 'approval_id': granted['approval_id']}
+    granted = mcp_approve.grant('task.create', INNER, 900, 'test')
+    args = execute_args(approval_id=granted['approval_id'])
     def fail(arguments):
         raise RuntimeError('uncertain result')
-    monkeypatch.setitem(mcp_server.HANDLERS, 'solar_task_create', fail)
-    assert mcp_server.call_tool('solar_task_create', args)[1]
-    assert mcp_server.call_tool('solar_task_create', args)[0]['refused']['code'] == 'approval_consumed'
+    monkeypatch.setitem(operations.HANDLERS, 'task.create', fail)
+    first, error = mcp_server.call_tool('solar_execute', args)
+    assert error and first['code'] == 'operation_failed'
+    assert mcp_server.call_tool('solar_execute', args)[0]['refused']['code'] == 'approval_consumed'
 
 
 def test_approval_bound_to_workspace(solar_env, monkeypatch):
-    granted = mcp_approve.grant('solar_task_create', {'title': 'X'}, 900, 'test')
+    granted = mcp_approve.grant('task.create', INNER, 900, 'test')
     monkeypatch.setenv('SOLAR_WORKSPACE', str(solar_env.tmp_path / 'other'))
-    verdict = mcp_gate.preflight('solar_task_create', {'title': 'X', 'approval_id': granted['approval_id']}, mcp_server.TOOLS)
+    verdict = mcp_gate.preflight('task.create', dict(INNER, approval_id=granted['approval_id']), gate_registry())
     assert verdict.code == 'approval_scope_mismatch'
 
 
 def test_two_workers_cannot_reuse_approval(solar_env, monkeypatch):
     seen = []
-    granted = mcp_approve.grant('solar_task_create', {'title': 'X'}, 900, 'test')
-    args = {'title': 'X', 'approval_id': granted['approval_id']}
-    monkeypatch.setitem(mcp_server.HANDLERS, 'solar_task_create', lambda args: seen.append(True))
-    threads = [threading.Thread(target=mcp_server.call_tool, args=('solar_task_create', args)) for _ in range(2)]
+    granted = mcp_approve.grant('task.create', INNER, 900, 'test')
+    args = execute_args(approval_id=granted['approval_id'])
+    monkeypatch.setitem(operations.HANDLERS, 'task.create', lambda args: seen.append(True))
+    threads = [threading.Thread(target=mcp_server.call_tool, args=('solar_execute', args)) for _ in range(2)]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -100,7 +121,7 @@ def test_transport_confirmation_matches_server_request(solar_env, monkeypatch, r
                 lines.put(json.dumps(dict(jsonrpc='2.0', id=message['id'], result=reply)))
                 lines.put(None)
             return result
-    monkeypatch.setitem(mcp_server.HANDLERS, 'solar_task_create', lambda args: {'ok': True})
+    monkeypatch.setitem(operations.HANDLERS, 'task.create', lambda args: {'ok': True})
     lines.put(json.dumps(dict(jsonrpc='2.0', id=1, method='initialize', params=dict(capabilities={'elicitation': {}}))))
     lines.put(json.dumps(request()))
     output = Output()
@@ -123,8 +144,8 @@ def test_unadvertised_confirmation_does_not_prompt(solar_env):
 
 def test_changed_recipient_rejected(solar_env):
     args = {'text': 'hello', 'chat_id': '123'}
-    granted = mcp_approve.grant('solar_telegram_send', args, 900, 'test')
-    verdict = mcp_gate.preflight('solar_telegram_send', dict(args, chat_id='456', approval_id=granted['approval_id']), mcp_server.TOOLS)
+    granted = mcp_approve.grant('telegram.send', args, 900, 'test')
+    verdict = mcp_gate.preflight('telegram.send', dict(args, chat_id='456', approval_id=granted['approval_id']), gate_registry())
     assert verdict.code == 'approval_scope_mismatch'
 
 
@@ -138,7 +159,7 @@ def test_interleaved_requests_are_retained(solar_env, monkeypatch, cancel):
         observed.append(message.get('method'))
         return real_handle(message, confirm)
     monkeypatch.setattr(mcp_server, 'handle', handle)
-    monkeypatch.setitem(mcp_server.HANDLERS, 'solar_task_create', lambda args: {'ok': True})
+    monkeypatch.setitem(operations.HANDLERS, 'task.create', lambda args: {'ok': True})
     class Input:
         def __iter__(self):
             while True:
@@ -185,10 +206,9 @@ def test_confirmation_timeout_does_not_grant(solar_env, monkeypatch):
 
 
 def test_unknown_schema_type_fails_closed(solar_env, monkeypatch):
-    import copy
-    spec = copy.deepcopy(mcp_server.TOOLS['solar_task_create'])
-    spec['inputSchema']['properties']['title']['type'] = 'object'
-    monkeypatch.setitem(mcp_server.TOOLS, 'solar_task_create', spec)
+    op = operations.OPERATIONS['task.create']
+    schema = dict(op.schema, properties=dict(op.schema['properties'], title={'type': 'number'}))
+    monkeypatch.setitem(operations.OPERATIONS, 'task.create', dataclasses.replace(op, schema=schema))
     result = mcp_server.handle(request(), lambda *args: True)
     assert result['error']['code'] == -32602
     assert not mcp_approve.listing()
@@ -199,7 +219,7 @@ def test_cancel_closes_form_and_skips_deferred(solar_env, monkeypatch, mode):
     import queue
     lines = queue.Queue()
     effects = []
-    monkeypatch.setitem(mcp_server.HANDLERS, 'solar_task_create', lambda args: effects.append(args['title']))
+    monkeypatch.setitem(operations.HANDLERS, 'task.create', lambda args: effects.append(args['title']))
     if mode == 'timeout':
         monkeypatch.setattr(mcp_server, 'CONFIRMATION_TIMEOUT', 0)
     class Input:
@@ -250,7 +270,7 @@ def test_cancelled_id_can_be_reused(solar_env, monkeypatch, deferred_cancel):
     effects = []
     forms = []
     reused_id = 3 if deferred_cancel else 2
-    monkeypatch.setitem(mcp_server.HANDLERS, 'solar_task_create', lambda args: effects.append(args['title']))
+    monkeypatch.setitem(operations.HANDLERS, 'task.create', lambda args: effects.append(args['title']))
     class Input:
         def __iter__(self):
             while True:
@@ -307,7 +327,7 @@ def test_late_or_unknown_cancel_does_not_poison_reused_id(solar_env, monkeypatch
     lines = queue.Queue()
     effects = []
     replies = []
-    monkeypatch.setitem(mcp_server.HANDLERS, 'solar_task_create', lambda args: effects.append(args['title']))
+    monkeypatch.setitem(operations.HANDLERS, 'task.create', lambda args: effects.append(args['title']))
     def put(message):
         lines.put(json.dumps(message))
     class Input:
@@ -348,3 +368,57 @@ def test_late_or_unknown_cancel_does_not_poison_reused_id(solar_env, monkeypatch
     assert len(replies) == 2
     assert all(not reply['result']['isError'] for reply in replies)
     assert effects == ['Approved task', 'Second call']
+
+
+def test_the_approver_sees_the_stored_task_next_to_the_exact_call(solar_env):
+    """task.approve is confirmed against the task as stored, and binds its row_version."""
+    import queue
+    from mcp_helpers import new_task, stored
+    made = new_task('Quarterly review', 'Steps.', effect='Writes one local report.')
+    call = dict(operation='task.approve',
+                arguments=dict(task_id=made['id'], expected_row_version=made['row_version']))
+    lines = queue.Queue()
+    seen = []
+
+    class Input:
+        def __iter__(self):
+            while True:
+                line = lines.get(timeout=5)
+                if line is None:
+                    return
+                yield line
+
+    class Output(StringIO):
+        def write(self, text):
+            result = super().write(text)
+            message = json.loads(text)
+            if message.get('method') == 'elicitation/create':
+                seen.append(message['params']['message'])
+                lines.put(json.dumps(dict(jsonrpc='2.0', id=message['id'],
+                                          result={'action': 'accept', 'content': {'approve': True}})))
+                lines.put(None)
+            return result
+
+    lines.put(json.dumps(dict(jsonrpc='2.0', id=1, method='initialize', params=dict(capabilities={'elicitation': {}}))))
+    lines.put(json.dumps(dict(jsonrpc='2.0', id=2, method='tools/call',
+                              params=dict(name='solar_execute', arguments=call))))
+    output = Output()
+    mcp_server.serve(Input(), output)
+    assert 'Operation: task.approve' in seen[0]
+    assert 'Stored task now' in seen[0] and 'Quarterly review' in seen[0]
+    assert str(made['row_version']) in seen[0] and made['digest'] in seen[0]
+    assert 'Writes one local report.' in seen[0]
+    final = json.loads(output.getvalue().splitlines()[-1])
+    assert final['result']['isError'] is False
+    assert stored(made['id'])['status'] == 'queued'
+    record = [row for row in mcp_approve.listing() if row['tool'] == 'task.approve']
+    assert len(record) == 1 and record[0]['consumed_at']
+
+
+def test_confirmation_of_an_invalid_operation_never_prompts(solar_env):
+    forms = []
+    message = dict(jsonrpc='2.0', id=2, method='tools/call', params=dict(
+        name='solar_execute', arguments=dict(operation='task.approve', arguments=dict(
+            task_id='t', expected_row_version=1, mandate='nightly'))))
+    answer = mcp_server.handle(message, lambda *args: forms.append(args) or True)
+    assert answer['error']['code'] == -32602 and not forms and not mcp_approve.listing()

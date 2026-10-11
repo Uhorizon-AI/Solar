@@ -1,16 +1,18 @@
 ---
 name: solar-mcp
 description: >
-  Solar's own MCP server: read-only context as resources, verbs as tools behind
-  a gate that validates authority and mandate in the handler and refuses on its
-  own. Use it to connect any MCP client to Solar without opening the workspace.
+  Solar's own MCP server: three tools (search, docs, execute) over open resources
+  and a registry of operations behind a gate that validates authority and mandate
+  in the handler and refuses on its own. Use it to connect any MCP client to Solar
+  without opening the workspace.
 ---
 
 # Solar MCP
 
 A client connects from any folder, reads Solar's context as **resources**, and
-calls **tools** that cannot execute until the handler says so. The refusal is
-the point: it does not depend on the calling agent choosing to behave.
+calls **three tools**. The third runs registered **operations** that cannot
+execute until the handler says so. The refusal is the point: it does not depend
+on the calling agent choosing to behave.
 
 Runtime dependencies: `core/skills/solar-client/`, `core/skills/solar-app/`,
 `core/skills/solar-router/`, `core/skills/solar-async-tasks/` and
@@ -39,11 +41,11 @@ Client destinations, recovery and validation: [references/clients.md](references
 
 ## On-demand capabilities
 
-When a native skill name is absent, call `solar_capability_search` with the
-user's objective or an exact `planet:skill` ID, then `solar_capability_describe`
-with that ID and revision. Read applicable workspace and planet governance
+When a native skill name is absent, call `solar_search` with `scope=capabilities`
+and the user's objective or an exact `planet:skill` ID, then `solar_docs` with
+that ID and revision. Read applicable workspace and planet governance
 before using the instructions. Load listed references individually when needed;
-Describe does not execute scripts, grant authority or verify dependencies.
+`solar_docs` does not execute scripts, grant authority or verify dependencies.
 Search spans eligible namespaces; a preferred namespace is a ranking hint.
 Exclusions apply to both tools. Oversized units refuse without truncation.
 
@@ -51,10 +53,11 @@ Limits and lifecycle: [references/discovery.md](references/discovery.md).
 
 ## Approval workflow
 
-1. Prepare the exact action, scope and destination. For Telegram include an explicit
-   `chat_id` and final text; apply the relevant communication gate first.
-2. Call the tool without `approval_id`. On clients advertising MCP form elicitation,
-   the runtime presents the exact action for confirmation, creates the approval and
+1. Prepare the exact operation, arguments and destination. For `telegram.send` include an
+   explicit `chat_id` and final text; apply the relevant communication gate first. For an
+   existing task, read it first and pass its `row_version`.
+2. Call `solar_execute` without `approval_id`. On clients advertising MCP form elicitation,
+   the runtime presents the exact operation (with the stored task, when there is one) for confirmation, creates the approval and
    executes internally. Do not ask the user to create or copy an identifier.
 3. Do not ask for conversational confirmation immediately before that native prompt.
    An existing valid approval may be passed internally and does not prompt again.
@@ -80,26 +83,44 @@ conversational authority from caller-supplied fields. See
 | `solar://delegations` | Written A3 mandates: mode and validity |
 | `solar://gate` | What this server allowed and refused |
 
-## Tools (gated)
+## Tools
 
-| Tool | Authority | Passes when |
+`tools/list` exposes exactly these three. A name that is not there is not this
+server; the nine names of the previous catalog answer with a non-executing
+`tool_renamed` error during the transition in
+[mcp-tool-migration](../../docs/mcp-tool-migration.md).
+
+| Tool | Authority | Use |
 |---|---|---|
-| `solar_capability_search` | A0 | Find eligible instruction IDs and revisions, at most ten results |
-| `solar_capability_describe` | A0 | Read one eligible skill or its registered Markdown reference; stale revisions refuse |
-| `solar_task_status` | A0 | Read-only. With `task_id`, also returns stored identity and `continuity_checkpoint` when present. Checkpoint, verified result, next check, wait and decision (with source and validity) remain inside that object, without flattened duplicates. Without `task_id`, the queue summary is unchanged. Refuses if the stored checkpoint is not a JSON object. Recorded evidence does not authorize a retry; results still need verification. |
-| `solar_task_create` | A2 | Native client confirmation or an existing exact-call approval. Stores a draft through `solar-state` and refuses when the format is not `sqlite` |
-| `solar_task_approve` | A2 | Same approval. Moves a draft, or a task already planned, to the queue. Refuses an A3 mandate. Does not change object, scope or effect |
-| `solar_task_cancel` | A2 | Same approval. Cancels a queued task, or records the request for an active one. Does not change object, scope or effect |
-| `solar_task_requeue` | A2 | Same approval. Moves an error task back to the queue and drops its `## Execution Error` section. Does not change object, scope or effect |
-| `solar_telegram_send` | A2 | Same, for one exact message text. Sending outside the machine is never implicit |
-| `solar_action_run` | A3 | The skill and action are registered **and** the mandate is live |
+| `solar_search` | A0 | `scope=capabilities` skills; `docs` framework documents; `operations` what can run; `resources` the open resources (`uri` reads one); `tasks` list/filter, or one task with `task_id` and `view` = `detail` (identity, checkpoint, digest, schedule), `instructions` (`section` reads one), `config`, `status`, `result`, `error`, `history`. A recorded checkpoint is evidence, not retry authority |
+| `solar_docs` | A0 | Skill instructions and registered references, `core-doc:<name>` framework documents, `operation:<name>` contracts. Outline first, then `section`; `full` only when needed |
+| `solar_execute` | per operation | One registered operation with its own closed arguments. Unknown operations, extra keys, free paths, commands or queries are rejected before the gate |
 
-`tools/list` and `resources/list` are the catalog. A name that is not there
-is not this server. An unknown resource URI is refused with the known list.
+Operations (each is gated on its own name, arguments and authority):
 
-Approvals are server-side records: they name one tool and one set of arguments,
-expire, bind the workspace, and are reserved before the first execution attempt. Tool arguments cannot mint one. A trusted client confirmation response can;
-the MCP client is part of the trust boundary.
+| Operation | Authority | Passes when / does |
+|---|---|---|
+| `task.create` | A2 | Native confirmation or an exact-call approval. Stores a **draft**. `revises_task_id` copies configuration, schedule, execution restrictions (`origin_channel`), notification destination and resource hooks from another task and leaves it untouched. Cannot queue |
+| `task.update` | A2 | Same. Edits a draft or planned task under `expected_row_version`. A planned task returns to draft. Refused for queued, active and finished tasks |
+| `task.schedule` | A2 | Same. Time, ISO weekdays, an explicit IANA zone and recurrence for a draft or planned task. Never queues. Refuses an interval that would skip a run after a clock change |
+| `task.approve` | A2 | Same. The only operation that queues: the exact stored task at `expected_row_version`. Refuses an A3 mandate and a revision whose source can still run |
+| `task.cancel` | A2 | Same, bound to `expected_row_version`. Cancels a queued task, or records the request for an active one |
+| `task.requeue` | A2 | Same, bound to `expected_row_version`. Moves an error task back to the queue and drops its `## Execution Error` section |
+| `task.archive` | A2 | Same. Archives keeping the row, body and events. A queued recurrence is cancelled first, in the same step. Refused while active, while another task waits on it, or while subtasks run |
+| `telegram.send` | A2 | Same, for one exact text and an explicit `chat_id`. Sending outside the machine is never implicit |
+| `action.run` | A3 | The skill and action are registered **and** the mandate registered for that skill is live. A skill registered without a mandate is refused; a caller-supplied mandate is only accepted if it equals the registered one |
+
+Approvals are server-side records: they name one **operation** and one set of
+arguments (a `row_version` included), expire, bind the workspace, and are reserved
+before the first execution attempt. An approval for one operation never runs another.
+Tool arguments cannot mint one. A trusted client confirmation response can; the MCP
+client is part of the trust boundary.
+
+Task content is approved as stored: editing, scheduling or revising a task never
+activates it, a changed task invalidates any approval that named an earlier
+version, and an approved or active task keeps its instructions. To change one,
+create a revision and approve that. Every decision and its outcome is written to
+the gate audit under one `trace_id`.
 
 Action skills are opt-in, listed in `<runtime>/mcp/action-skills.json`:
 
@@ -108,12 +129,12 @@ Action skills are opt-in, listed in `<runtime>/mcp/action-skills.json`:
                   "command": ["bash", "planets/<planet>/skills/example-sync/scripts/example_sync.sh"]}}
 ```
 
-**Instruction skills never become tools.** They stay native to the harness; only
-action verbs pass through here.
+**Instruction skills never become operations.** They stay native to the harness; only
+registered action verbs pass through here.
 
 ## Sending Telegram
 
-`solar_telegram_send` is the route an agent has to Telegram, and the reason the
+`telegram.send` is the route an agent has to Telegram, and the reason the
 `solar-telegram` skill is no longer published to any client. The bot token is an
 installation secret held by the process
 (`<app data>/Solar/secrets/installation.env`, 0600): the server reads it and
@@ -149,7 +170,7 @@ Outside, and said plainly rather than disguised:
 
 Starting the stdio child does not start Solar services. Tools still depend on
 Solar's configured workspace, runtime storage and (for sends) installation secrets.
-Task verbs write only through `solar-state` and refuse when the runtime format is not `sqlite`. The supervised
+Task operations write only through `solar-state` and refuse when the runtime format is not `sqlite`. The supervised
 orchestrator processes queued tasks separately. Console and background services
 have their own startup/LaunchAgent lifecycle. A connected MCP child is not evidence
 that the queue worker, console or transport is running.

@@ -16,6 +16,7 @@ import pytest
 import mcp_approve
 import mcp_probe
 import mcp_server
+import operations
 
 
 def client(solar_env):
@@ -36,7 +37,7 @@ def test_an_unresolved_workspace_refuses_without_touching_a_runtime(tmp_path):
     env["SOLAR_RUNTIME_ROOT"] = str(runtime)
     with mcp_probe.Client(env=env, cwd=str(outside)) as probe:
         read = probe.request("resources/read", dict(uri="solar://tasks"))
-        called = probe.call_tool("solar_task_status", {})
+        called = probe.call_tool("solar_search", {"scope": "tasks"})
     assert read["error"]["code"] == -32000
     assert "workspace" in read["error"]["message"]
     assert called["result"]["isError"] is True
@@ -83,58 +84,56 @@ def test_unknown_resource_is_an_error(solar_env):
         assert "Known:" in answer["error"]["message"]
 
 
+def execute(probe, operation, arguments, **extra):
+    return probe.call_tool("solar_execute", dict(operation=operation, arguments=arguments, **extra))
+
+
+def approved(probe, operation, arguments):
+    granted = mcp_approve.grant(operation, arguments, 900, "wire test")
+    return execute(probe, operation, arguments, approval_id=granted["approval_id"])
+
+
 def test_tools_are_listed(solar_env):
     with client(solar_env) as probe:
-        names = {row["name"] for row in probe.request("tools/list")["result"]["tools"]}
-        assert names == {"solar_task_status", "solar_task_create",
-                         "solar_task_approve", "solar_task_cancel", "solar_task_requeue",
-                         "solar_telegram_send", "solar_action_run",
-                         "solar_capability_search", "solar_capability_describe"}
+        listed = probe.request("tools/list")["result"]["tools"]
+    assert [row["name"] for row in listed] == ["solar_search", "solar_docs", "solar_execute"]
 
 
-_SEVEN_TOOLS = {
-    "solar_task_status": (set(), {"task_id", "state"}),
-    "solar_task_create": ({"title"}, {"title", "description", "queued", "approval_id"}),
-    "solar_task_approve": ({"task_id"}, {"task_id", "approval_id"}),
-    "solar_task_cancel": ({"task_id"}, {"task_id", "approval_id"}),
-    "solar_task_requeue": ({"task_id"}, {"task_id", "approval_id"}),
-    "solar_telegram_send": ({"text"}, {"text", "chat_id", "parse_mode", "approval_id"}),
-    "solar_action_run": ({"skill", "action"}, {"skill", "action", "mandate", "automated"}),
-}
-
-
-def test_describe_schema_adds_section_without_changing_the_seven_tools(solar_env):
+def test_the_tool_schemas_are_closed(solar_env):
     with client(solar_env) as probe:
         listed = {row["name"]: row for row in probe.request("tools/list")["result"]["tools"]}
-        refused = probe.call_tool("solar_capability_describe",
-                                  {"id": "example:missing", "section": "Purpose", "full": True})
-    for name, (required, properties) in _SEVEN_TOOLS.items():
+    expected = {
+        "solar_search": ({"scope"}, {"scope", "query", "limit", "preferred_namespace", "state",
+                                     "task_id", "view", "section", "uri"}),
+        "solar_docs": ({"id"}, {"id", "revision", "reference", "section", "full"}),
+        "solar_execute": ({"operation", "arguments"}, {"operation", "arguments", "approval_id"}),
+    }
+    for name, (required, properties) in expected.items():
         schema = listed[name]["inputSchema"]
-        assert set(schema.get("required", [])) == required
+        assert set(schema["required"]) == required
         assert set(schema["properties"]) == properties
         assert schema["additionalProperties"] is False
-    describe = listed["solar_capability_describe"]["inputSchema"]
-    assert set(describe["properties"]) == {"id", "revision", "reference", "section", "full"}
-    assert describe["properties"]["id"]["type"] == "string"
-    assert describe["properties"]["revision"]["type"] == "string"
-    assert describe["properties"]["reference"]["type"] == "string"
-    assert describe["properties"]["section"]["type"] == "string"
-    assert describe["properties"]["full"]["type"] == "boolean"
-    assert describe["required"] == ["id"]
-    assert describe["additionalProperties"] is False
-    text = listed["solar_capability_describe"]["description"]
-    assert "section=" in text and "full=true" in text
+        for prop in schema["properties"].values():
+            assert prop["type"] in ("string", "integer", "boolean", "object")
+    assert set(listed["solar_execute"]["inputSchema"]["properties"]["operation"]["enum"]) == set(
+        operations.OPERATIONS)
+    describe = listed["solar_docs"]
+    assert "section=" in describe["description"] and "full=true" in describe["description"]
     for name in ("section", "full", "reference", "revision"):
-        assert describe["properties"][name]["description"]
+        assert describe["inputSchema"]["properties"][name]["description"]
+
+
+def test_docs_refuses_combined_section_and_full_over_the_wire(solar_env):
+    with client(solar_env) as probe:
+        refused = probe.call_tool("solar_docs", {"id": "example:missing", "section": "Purpose", "full": True})
     message = refused["result"]["content"][0]["text"]
     assert refused["result"]["isError"] is True
-    assert "Invalid tool arguments" not in message
     assert "cannot be combined" in message
 
 
-def test_reading_a_verb_needs_no_approval(solar_env):
+def test_reading_needs_no_approval(solar_env):
     with client(solar_env) as probe:
-        answer = probe.call_tool("solar_task_status", {})
+        answer = probe.call_tool("solar_search", {"scope": "tasks"})
         assert answer["result"]["isError"] is False
         assert payload(answer)["verdict"]["code"] == "read_allowed"
 
@@ -142,12 +141,13 @@ def test_reading_a_verb_needs_no_approval(solar_env):
 def test_the_handler_refuses_the_mutation(solar_env):
     """The closure of this change: refused by the handler, not by the caller."""
     with client(solar_env) as probe:
-        answer = probe.call_tool("solar_task_create", {"title": "Unapproved task"})
+        answer = execute(probe, "task.create", {"title": "Unapproved task", "instructions": "x"})
     assert answer["result"]["isError"] is True
     refused = payload(answer)["refused"]
     assert refused["allowed"] is False
     assert refused["code"] == "approval_required"
     assert refused["gate"] == "solar-mcp/handler"
+    assert refused["tool"] == "task.create"
     # And nothing was created.
     import solar_state
     with solar_state.session() as store:
@@ -156,20 +156,21 @@ def test_the_handler_refuses_the_mutation(solar_env):
 
 def test_a_forged_approval_does_not_open_the_door(solar_env):
     with client(solar_env) as probe:
-        answer = probe.call_tool("solar_task_create",
-                                 {"title": "X", "approval_id": "0" * 16})
+        answer = execute(probe, "task.create", {"title": "X", "instructions": "x"},
+                         approval_id="0" * 16)
     assert payload(answer)["refused"]["code"] == "approval_unknown"
 
 
 def test_granted_approval_lets_exactly_that_call_through_once(solar_env):
-    granted = mcp_approve.grant("solar_task_create", {"title": "Approved task"}, 900, "wire test")
-    arguments = {"title": "Approved task", "approval_id": granted["approval_id"]}
+    arguments = {"title": "Approved task", "instructions": "x"}
+    granted = mcp_approve.grant("task.create", arguments, 900, "wire test")
     with client(solar_env) as probe:
-        first = probe.call_tool("solar_task_create", arguments)
-        second = probe.call_tool("solar_task_create", arguments)
+        first = execute(probe, "task.create", arguments, approval_id=granted["approval_id"])
+        second = execute(probe, "task.create", arguments, approval_id=granted["approval_id"])
 
     assert first["result"]["isError"] is False, first
     assert payload(first)["verdict"]["code"] == "approval_ok"
+    assert payload(first)["operation"] == "task.create"
     import solar_state
     with solar_state.session() as store:
         rows = store.task_list("draft")
@@ -182,8 +183,7 @@ def test_granted_approval_lets_exactly_that_call_through_once(solar_env):
 
 def test_an_action_skill_must_be_registered_first(solar_env):
     with client(solar_env) as probe:
-        answer = probe.call_tool("solar_action_run",
-                                 {"skill": "calendar-sync", "action": "run"})
+        answer = execute(probe, "action.run", {"skill": "calendar-sync", "action": "run"})
     assert payload(answer)["refused"]["code"] == "skill_not_registered"
 
 
@@ -191,8 +191,8 @@ def test_registered_action_still_needs_a_live_mandate(solar_env):
     solar_env.register_action_skill("fixture-skill", actions=["status"],
                                     mandate="ghost", command=["true"])
     with client(solar_env) as probe:
-        answer = probe.call_tool("solar_action_run",
-                                 {"skill": "fixture-skill", "action": "status", "mandate": "ghost"})
+        answer = execute(probe, "action.run",
+                         {"skill": "fixture-skill", "action": "status", "mandate": "ghost"})
     assert payload(answer)["refused"]["code"] == "mandate_denied"
 
 
@@ -201,9 +201,8 @@ def test_registered_action_runs_under_a_live_mandate(solar_env):
     solar_env.register_action_skill("fixture-skill", actions=["status"],
                                     mandate="fixture-mandate", command=["echo"])
     with client(solar_env) as probe:
-        answer = probe.call_tool(
-            "solar_action_run",
-            {"skill": "fixture-skill", "action": "status", "mandate": "fixture-mandate"})
+        answer = execute(probe, "action.run",
+                         {"skill": "fixture-skill", "action": "status", "mandate": "fixture-mandate"})
     body = payload(answer)
     assert answer["result"]["isError"] is False, body
     assert body["result"]["exit_code"] == 0
@@ -211,41 +210,33 @@ def test_registered_action_runs_under_a_live_mandate(solar_env):
 
 def test_every_call_leaves_a_decision_in_the_gate_log(solar_env):
     with client(solar_env) as probe:
-        probe.call_tool("solar_task_create", {"title": "queda registrado"})
+        execute(probe, "task.create", {"title": "queda registrado", "instructions": "x"})
         read = probe.request("resources/read", dict(uri="solar://gate"))
     decisions = json.loads(read["result"]["contents"][0]["text"])["decisions"]
-    assert decisions[-1]["tool"] == "solar_task_create"
+    assert decisions[-1]["tool"] == "task.create"
+    assert decisions[-1]["via"] == "solar_execute"
     assert decisions[-1]["allowed"] is False
     # The approval id never reaches the log.
     assert "approval_id" not in decisions[-1]["arguments"]
 
 
 def test_create_then_approve_moves_the_same_draft_to_the_queue(solar_env):
-    """The public path: solar_task_create, then solar_task_approve. No plan step."""
-    import re
-    granted = mcp_approve.grant(
-        "solar_task_create",
-        {"title": "Ship it", "description": "Do the work."},
-        900, "wire test")
+    """The public path: task.create, then task.approve for the exact stored version."""
     with client(solar_env) as probe:
-        created = probe.call_tool("solar_task_create", {
-            "title": "Ship it",
-            "description": "Do the work.",
-            "approval_id": granted["approval_id"],
-        })
-    assert created["result"]["isError"] is False, created
-    task_id = payload(created)["result"]["id"]
-    approved = mcp_approve.grant("solar_task_approve", {"task_id": task_id}, 900, "wire test")
-    with client(solar_env) as probe:
-        answer = probe.call_tool("solar_task_approve", {
-            "task_id": task_id,
-            "approval_id": approved["approval_id"],
-        })
+        created = approved(probe, "task.create", {"title": "Ship it", "instructions": "Do the work."})
+        assert created["result"]["isError"] is False, created
+        made = payload(created)["result"]
+        assert made["status"] == "draft" and made["activated"] is False
+        task_id = made["id"]
+        import solar_state
+        with solar_state.session() as store:
+            assert store.task_get(task_id)["status"] == "draft"
+        answer = approved(probe, "task.approve",
+                          {"task_id": task_id, "expected_row_version": made["row_version"]})
     assert answer["result"]["isError"] is False, answer
     result = payload(answer)["result"]
     assert result["from_status"] == "draft"
     assert result["to_status"] == "queued"
-    import solar_state
     with solar_state.session() as store:
         task = store.task_get(task_id)
     assert task["status"] == "queued"
@@ -255,12 +246,13 @@ def test_create_then_approve_moves_the_same_draft_to_the_queue(solar_env):
 
 def test_an_already_planned_task_is_approved(solar_env):
     import solar_state
-    created = mcp_server._do_task_create({"title": "Already planned", "description": "x"})
+    created = operations._do_task_create({"title": "Already planned", "instructions": "x"})
     task_id = created["id"]
     with solar_state.session() as store:
         store.task_transition(task_id, "planned", expected_from="draft")
-    result = mcp_server._do_task_approve({"task_id": task_id})
-    assert result == dict(approved=True, id=task_id, from_status="planned", to_status="queued")
+        version = store.task_get(task_id)["row_version"]
+    result = operations._do_task_approve({"task_id": task_id, "expected_row_version": version})
+    assert result["from_status"] == "planned" and result["to_status"] == "queued"
     with solar_state.session() as store:
         task = store.task_get(task_id)
     assert task["status"] == "queued"
@@ -268,12 +260,11 @@ def test_an_already_planned_task_is_approved(solar_env):
 
 
 def _cancel(solar_env, task_id: str) -> dict:
-    granted = mcp_approve.grant("solar_task_cancel", {"task_id": task_id}, 900, "wire test")
+    import solar_state
+    with solar_state.read_session() as store:
+        version = store.task_get(task_id)["row_version"]
     with client(solar_env) as probe:
-        answer = probe.call_tool("solar_task_cancel", {
-            "task_id": task_id,
-            "approval_id": granted["approval_id"],
-        })
+        answer = approved(probe, "task.cancel", {"task_id": task_id, "expected_row_version": version})
     assert answer["result"]["isError"] is False, answer
     return payload(answer)["result"]
 
@@ -300,22 +291,19 @@ def test_cancel_is_the_row_and_files_are_refused(solar_env):
         assert store.cancellation_requested(active_id)
 
     (solar_env.runtime / "STATE_FORMAT").write_text("files\n", encoding="utf-8")
-    granted = mcp_approve.grant("solar_task_cancel", {"task_id": queued_id}, 900, "wire test")
     with client(solar_env) as probe:
-        refused = probe.call_tool("solar_task_cancel", {
-            "task_id": queued_id, "approval_id": granted["approval_id"],
-        })
+        refused = approved(probe, "task.cancel", {"task_id": queued_id, "expected_row_version": 1})
     assert refused["result"]["isError"] is True
     (solar_env.runtime / "STATE_FORMAT").write_text("sqlite\n", encoding="utf-8")
 
 
 def test_an_unknown_format_is_refused(solar_env):
     import solar_state
-    created = mcp_server._do_task_create({"title": "Stay a draft", "description": "x"})
+    created = operations._do_task_create({"title": "Stay a draft", "instructions": "x"})
     task_id = created["id"]
     (solar_env.runtime / "STATE_FORMAT").write_text("banana\n", encoding="utf-8")
     with pytest.raises(solar_state.StateUnavailable, match="banana"):
-        mcp_server._do_task_approve({"task_id": task_id})
+        operations._do_task_approve({"task_id": task_id, "expected_row_version": created["row_version"]})
     (solar_env.runtime / "STATE_FORMAT").write_text("sqlite\n", encoding="utf-8")
     with solar_state.session() as store:
         assert store.task_get(task_id)["status"] == "draft"
@@ -373,8 +361,8 @@ def test_nothing_was_written_outside_the_fixture(solar_env):
               for path in (live, live / "audit.jsonl", live / "approvals")]
 
     with client(solar_env) as probe:
-        probe.call_tool("solar_task_status", {})
-        probe.call_tool("solar_task_create", {"title": "X"})
+        probe.call_tool("solar_search", {"scope": "tasks"})
+        execute(probe, "task.create", {"title": "X", "instructions": "x"})
 
     for path in (solar_env.gate_audit, solar_env.runtime):
         assert str(path).startswith(str(solar_env.tmp_path))

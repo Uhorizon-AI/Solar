@@ -62,7 +62,7 @@ harness the person happens to be using.
 ### The small door and progressive discovery
 
 The [small-door delivery](../core/docs/capability-discovery-design.md) adds
-read-only Search/Describe and an opt-in Client profile that reduces the shared
+read-only `solar_search`/`solar_docs` and an opt-in Client profile that reduces the shared
 `.agents` catalog. Full native publication remains the default. Antigravity destinations are
 refused in discovery mode because its MCP registration is unsupported.
 

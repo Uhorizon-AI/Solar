@@ -153,8 +153,19 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
                            f"{action or '(none)'} is not an allowed action of {skill}.",
                            A3, tool, checks)
         checks.append(dict(check="action_allowed", value=True))
-        answer = check_mandate(mandate or entry.get("mandate", ""), action,
-                               bool(arguments.get("automated")))
+        registered = entry.get("mandate", "")
+        checks.append(dict(check="mandate_registered", value=bool(registered)))
+        if not registered:
+            # The mandate is part of the registration: a caller never supplies authority.
+            return Verdict(False, "mandate_denied",
+                           f"{skill} is registered without a mandate; register one in "
+                           "action-skills.json before it can run.", A3, tool, checks)
+        if mandate and mandate != registered:
+            return Verdict(False, "mandate_mismatch",
+                           f"{skill} is registered under mandate {registered}; "
+                           "a caller cannot choose a different one.", A3, tool, checks)
+        mandate = registered
+        answer = check_mandate(registered, action, bool(arguments.get("automated")))
         checks.append(dict(check="mandate", value=answer))
         if not answer.get("ok"):
             return Verdict(False, "mandate_denied",
@@ -165,10 +176,10 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
                        A3, tool, checks)
 
     if authority == A2:
-        if tool == "solar_task_approve" and (
+        if spec.get("refuses_mandate") and (
                 "mandate" in arguments or arguments.get("authority") == A3):
             return Verdict(False, "a3_refused",
-                           "solar_task_approve refuses an A3 mandate: activating "
+                           f"{tool} refuses an A3 mandate: activating "
                            "work is never implicit.", A2, tool, checks)
         approval_id = str(arguments.get("approval_id") or "")
         checks.append(dict(check="approval_id_present", value=bool(approval_id)))
@@ -224,17 +235,36 @@ def consume(tool: str, arguments: dict, registry: dict) -> None:
         _consume_approval(approval_id, record)
 
 
-def record(verdict: Verdict, arguments: dict) -> None:
-    """Every decision leaves a trace, allowed or refused."""
+def _append(row: dict) -> None:
     path = gate_root() / "audit.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    row = dict(ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def record(verdict: Verdict, arguments: dict, trace_id: str = "", via: str = "") -> None:
+    """Every decision leaves a trace, allowed or refused.
+
+    `trace_id` ties the decision to the outcome row written after execution;
+    `via` names the public tool that carried the call.
+    """
+    row = dict(ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), kind="decision",
                tool=verdict.tool, allowed=verdict.allowed, code=verdict.code,
                authority=verdict.authority,
                arguments={k: v for k, v in (arguments or {}).items() if k != "approval_id"},
                pid=os.getpid())
-    with path.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(row, sort_keys=True) + "\n")
+    if trace_id:
+        row["trace_id"] = trace_id
+    if via:
+        row["via"] = via
+    _append(row)
+
+
+def record_outcome(tool: str, trace_id: str, ok: bool, code: str, detail: str = "") -> None:
+    """What happened after an allowed decision. An uncertain failure is visible here."""
+    _append(dict(ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), kind="outcome",
+                 tool=tool, trace_id=trace_id, ok=ok, code=code, detail=detail[:300],
+                 pid=os.getpid()))
 
 
 @contextmanager

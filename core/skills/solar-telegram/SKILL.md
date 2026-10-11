@@ -3,7 +3,7 @@ name: solar-telegram
 description: >
   Operate Telegram transport for the Solar runtime: the bridge, the outbound
   alert path and their setup. Not published to any IDE — the agent-facing verb
-  is the gated MCP tool `solar_telegram_send`, and this skill is what the
+  is the gated MCP operation `telegram.send` (through `solar_execute`), and this skill is what the
   runtime and the operator use behind it.
 sync: false
 ---
@@ -22,7 +22,7 @@ Provide one reusable skill for Telegram transport in Solar:
 `sync: false` keeps this skill out of every client catalog — Codex, Claude,
 Cursor and Gemini read one index, and it is not in it. The reason is not
 tidiness: an agent that can read these scripts and a token in the same tree can
-send without passing any gate. The verb moved to `solar_telegram_send` in
+send without passing any gate. The verb moved to the `telegram.send` operation of `solar_execute` in
 `solar-mcp`, which uses native client confirmation when supported, or a trusted operator
 approval. The runtime manages the identifier, bound to workspace and exact
 arguments, expiring and reserved before execution. See

@@ -236,13 +236,18 @@ def describe(id: str, revision: str = "", reference: str = "", section: str = ""
         if reference not in references:
             raise ValueError("Unknown registered reference")
         raw = read_unit(references[reference], package)
-    if len(raw) > 60000:
-        raise ValueError("Capability unit too_large; use the native source or split references")
-    text = raw.decode("utf-8")
     listed = list(references)[:100]
     base = dict(id=id, type="instruction", revision=current, references=listed,
                 namespace=entry["namespace"], dependency_availability="unknown",
                 governance=_GOVERNANCE_NOTE)
+    return render(raw, base, entry["description"], section, full)
+
+
+def render(raw: bytes, base: dict, description: str, section: str = "", full: bool = False) -> dict:
+    """Bounded presentation of one unit: complete, one section, or an outline."""
+    if len(raw) > 60000:
+        raise ValueError("Capability unit too_large; use the native source or split references")
+    text = raw.decode("utf-8")
     if section:
         _reject_section_path(section)
         parsed = _sections(text)
@@ -258,7 +263,7 @@ def describe(id: str, revision: str = "", reference: str = "", section: str = ""
     parsed = _sections(text)
     governance = [item for item in parsed if _is_governance(item["title"])]
     outline = dict(
-        base, description=entry["description"], outline=True,
+        base, description=description, outline=True,
         unit_revision=complete["unit_revision"],
         preamble=_preamble(text, parsed),
         sections=[dict(title=item["title"], level=item["level"], bytes=item["bytes"])

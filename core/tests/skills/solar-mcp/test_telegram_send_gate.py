@@ -5,8 +5,8 @@ records what it was handed, so the assertions are about the gate and about where
 the token came from — never about a real message.
 
 The change this covers: the token stopped living in the workspace, so the only
-route an agent has to Telegram is this tool, and this tool refuses without an
-approval Louis granted out of band.
+route an agent has to Telegram is this operation, and it refuses without an
+approval granted out of band.
 """
 from __future__ import annotations
 
@@ -21,11 +21,12 @@ import pytest
 import mcp_approve
 import mcp_gate
 import mcp_server
+import operations
 from mcp_gate import A0, A2, A3, A4
 
 
 def registry(**overrides):
-    reg = dict(mcp_server.TOOLS)
+    reg = {name: op.gate_spec() for name, op in operations.OPERATIONS.items()}
     reg["_action_skills"] = {}
     reg.update(overrides)
     return reg
@@ -58,7 +59,7 @@ def stubbed_send(solar_env, monkeypatch, tmp_path):
         )), encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0, "OK: message sent", "")
 
-    monkeypatch.setattr(mcp_server.subprocess, "run", fake_run)
+    monkeypatch.setattr(operations.subprocess, "run", fake_run)
     import solar_secrets
     import importlib
     importlib.reload(solar_secrets)
@@ -70,7 +71,7 @@ def stubbed_send(solar_env, monkeypatch, tmp_path):
 # --------------------------------------------------------------------------
 
 def test_sending_without_an_approval_is_refused(solar_env):
-    verdict = mcp_gate.preflight("solar_telegram_send", {"text": "hello"}, registry())
+    verdict = mcp_gate.preflight("telegram.send", {"text": "hello"}, registry())
     assert not verdict.allowed
     assert verdict.code == "approval_required"
     assert verdict.authority == A2
@@ -81,20 +82,20 @@ def test_a_client_cannot_approve_its_own_send(solar_env):
     for forged in ({"approved": True}, {"authority": "A2"}, {"external": "ok"},
                    {"approval_id": ""}, {"approval_id": "deadbeef"}):
         verdict = mcp_gate.preflight(
-            "solar_telegram_send", {"text": "hello", **forged}, registry())
+            "telegram.send", {"text": "hello", **forged}, registry())
         assert not verdict.allowed, forged
 
 
 def test_the_approval_is_bound_to_the_exact_text(solar_env):
-    granted = mcp_approve.grant("solar_telegram_send", {"text": "hello"}, 900, "test")
+    granted = mcp_approve.grant("telegram.send", {"text": "hello"}, 900, "test")
     swapped = mcp_gate.preflight(
-        "solar_telegram_send",
+        "telegram.send",
         {"text": "something else", "approval_id": granted["approval_id"]}, registry())
     assert not swapped.allowed
     assert swapped.code == "approval_scope_mismatch"
 
     exact = mcp_gate.preflight(
-        "solar_telegram_send",
+        "telegram.send",
         {"text": "hello", "approval_id": granted["approval_id"]}, registry())
     assert exact.allowed and exact.code == "approval_ok"
 
@@ -102,19 +103,22 @@ def test_the_approval_is_bound_to_the_exact_text(solar_env):
 @pytest.mark.parametrize("authority", [A0, A3, A4])
 def test_external_communication_is_refused_at_any_other_authority(solar_env, authority):
     """A2 in front of a human is the only shape an outbound send may take."""
-    reg = registry(solar_telegram_send=dict(
-        **{**mcp_server.TOOLS["solar_telegram_send"], "authority": authority}))
-    verdict = mcp_gate.preflight("solar_telegram_send", {"text": "hello"}, reg)
+    reg = registry(**{"telegram.send": dict(
+        operations.OPERATIONS["telegram.send"].gate_spec(), authority=authority)})
+    verdict = mcp_gate.preflight("telegram.send", {"text": "hello"}, reg)
     assert not verdict.allowed
     assert verdict.code == "external_communication_refused"
 
 
 def test_the_tool_declares_what_it_is(solar_env):
-    spec = mcp_server.TOOLS["solar_telegram_send"]
-    assert spec["authority"] == A2
-    assert spec["external_communication"] is True
+    op = operations.OPERATIONS["telegram.send"]
+    assert op.authority == A2
+    assert op.external_communication is True
+    # An explicit destination is part of the schema: there is no implicit default chat.
+    assert set(op.schema["required"]) == {"text", "chat_id"}
     # The catalog has to name the send: an agent reading tools/list must find it.
-    assert "Telegram" in spec["description"]
+    assert "telegram.send" in mcp_server.TOOLS["solar_execute"]["description"]
+    assert "Telegram" in op.summary
 
 
 # --------------------------------------------------------------------------
@@ -122,7 +126,7 @@ def test_the_tool_declares_what_it_is(solar_env):
 # --------------------------------------------------------------------------
 
 def test_the_send_uses_the_process_store_not_the_workspace(solar_env, stubbed_send):
-    result = mcp_server._do_telegram_send({"text": "hello"})
+    result = operations._do_telegram_send({"text": "hello"})
     assert result["sent"] is True
     handed = json.loads(stubbed_send.read_text(encoding="utf-8"))
     assert handed["token"] == "fixture-token"
@@ -136,7 +140,7 @@ def test_a_token_in_the_workspace_does_not_reach_the_sender(solar_env, stubbed_s
     (solar_env.workspace / ".env").write_text(
         "TELEGRAM_CHAT_ID=4242\nTELEGRAM_BOT_TOKEN=leftover-in-the-workspace\n",
         encoding="utf-8")
-    mcp_server._do_telegram_send({"text": "hello"})
+    operations._do_telegram_send({"text": "hello"})
     handed = json.loads(stubbed_send.read_text(encoding="utf-8"))
     assert handed["token"] == "fixture-token"
 
@@ -155,7 +159,7 @@ def test_a_stray_key_in_the_store_reaches_nothing(solar_env, stubbed_send, tmp_p
         "TELEGRAM_CHAT_ID=9999\n",
         encoding="utf-8")
 
-    mcp_server._do_telegram_send({"text": "hello"})
+    operations._do_telegram_send({"text": "hello"})
     assert not trace.exists()
     handed = json.loads(stubbed_send.read_text(encoding="utf-8"))
     assert handed["token"] == "fixture-token"
@@ -171,19 +175,19 @@ def test_without_a_store_there_is_nothing_to_send_with(solar_env, monkeypatch, t
     import importlib
     importlib.reload(solar_secrets)
     with pytest.raises(RuntimeError, match="TELEGRAM_BOT_TOKEN"):
-        mcp_server._do_telegram_send({"text": "hello"})
+        operations._do_telegram_send({"text": "hello"})
 
 
 def test_a_chat_outside_the_allowlist_is_refused(solar_env, stubbed_send):
     with pytest.raises(RuntimeError, match="not an allowlisted chat"):
-        mcp_server._do_telegram_send({"text": "hello", "chat_id": "999"})
+        operations._do_telegram_send({"text": "hello", "chat_id": "999"})
     assert not stubbed_send.exists()
 
 
 def test_a_named_allowlist_widens_it(solar_env, stubbed_send, monkeypatch):
     (solar_env.workspace / ".env").write_text(
         "TELEGRAM_CHAT_ID=4242\nTELEGRAM_ALLOWED_CHAT_IDS=4242, 777\n", encoding="utf-8")
-    mcp_server._do_telegram_send({"text": "hello", "chat_id": "777"})
+    operations._do_telegram_send({"text": "hello", "chat_id": "777"})
     assert json.loads(stubbed_send.read_text(encoding="utf-8"))["chat_id"] == "777"
 
 
@@ -209,4 +213,4 @@ def test_send_telegram_refuses_when_the_token_is_only_in_dot_env(solar_env, tmp_
                           text=True, cwd=str(workspace), env=env)
     assert proc.returncode == 1
     assert "Missing required key: TELEGRAM_BOT_TOKEN" in proc.stdout
-    assert "solar_telegram_send" in proc.stdout
+    assert "telegram.send" in proc.stdout
