@@ -39,6 +39,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _PATHS_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "solar-paths" / "scripts"
 if str(_PATHS_SCRIPTS) not in sys.path:
@@ -218,6 +219,10 @@ class StateBusy(StateError):
 
 class TransitionRefused(StateError):
     """The task is not where the caller expected, or the move is not allowed."""
+
+
+class TaskChanged(StateError):
+    """The task changed after the caller read it (optimistic lock on `row_version`)."""
 
 
 class FormatError(StateError):
@@ -756,13 +761,24 @@ def _clock_minutes(stamp: str) -> Optional[int]:
 
 
 def scheduled_now(scheduled_time: Optional[str], weekdays: Optional[str],
-                  now: datetime) -> bool:
+                  now: datetime, timezone_name: Optional[str] = None) -> bool:
     """Whether a task may start at `now`. Same window the queue used on files.
 
     No schedule means always. `scheduled_time: now` means always. A weekday
     list uses ISO days (Monday is 1). A clock time is ready within fifteen
     minutes, wrapping midnight.
+
+    `timezone_name` is an IANA zone (`Europe/Madrid`). When set, weekday and
+    clock are read in that zone, so a wall-clock schedule keeps its local hour
+    across daylight-saving changes. An unknown zone never matches: the task
+    waits instead of running at a guessed hour. Without it, host local time.
     """
+    zone_name = (timezone_name or "").strip()
+    if zone_name:
+        try:
+            now = now.astimezone(ZoneInfo(zone_name))
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            return False
     moment = (scheduled_time or "").strip()
     days = (weekdays or "").strip()
     if not moment and not days:
@@ -785,6 +801,27 @@ def scheduled_now(scheduled_time: Optional[str], weekdays: Optional[str],
     elif diff < -720:
         diff += 1440
     return -SCHEDULE_MARGIN_MIN <= diff <= SCHEDULE_MARGIN_MIN
+
+
+# What a human approves when a task is queued: the instructions and everything
+# that decides what runs, where, and when. Runtime bookkeeping (run counters,
+# claims, appended results) is deliberately outside it.
+MATERIAL_KEYS = (
+    "title", "object", "scope", "effect", "priority", "provider", "planet", "agent",
+    "responsibility", "agent_contract", "notify_when", "origin_channel", "origin_chat_id",
+    "resources", "cleanup_required", "cleanup_timeout",
+    "scheduled_time", "scheduled_weekdays", "scheduled_timezone",
+    "recurring", "recurring_min_interval", "recurring_max_runs",
+)
+
+
+def material_digest(pairs: list[list[str]], body: str) -> str:
+    """Digest of the material content of a task at one moment."""
+    import hashlib
+    material = {key: value_of(_get_pair(pairs, key)) for key in MATERIAL_KEYS}
+    payload = json.dumps(dict(fields=material, body=body), sort_keys=True,
+                         ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _recurring_ready(pairs: list[list[str]], now_epoch: float) -> bool:
@@ -834,6 +871,11 @@ def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optiona
     conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                  "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, to_status, actor))
     return current
+
+
+def _check_version(task_id: str, current: int, expected: Optional[int]) -> None:
+    if expected is not None and current != expected:
+        raise TaskChanged(f"{task_id} changed (row_version {current}, caller read {expected}); read it again")
 
 
 def _projection(pairs: list[list[str]]) -> dict[str, Any]:
@@ -983,6 +1025,7 @@ class Session:
                         expected_from: Optional[str | Iterable[str]] = None,
                         actor: Optional[str] = None,
                         rewrite_body: Optional[Callable[[str], str]] = None,
+                        expected_row_version: Optional[int] = None,
                         **columns: Any) -> str:
         """Move a task. Refuses a move the table does not allow, or a task that is
         no longer where the caller saw it. Returns the status it came from.
@@ -994,12 +1037,14 @@ class Session:
         allowed_from = ({expected_from} if isinstance(expected_from, str)
                         else set(expected_from) if expected_from else None)
         with _transaction(self.conn) as conn:
-            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            row = conn.execute("SELECT status, row_version FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
             if row is None:
                 raise TransitionRefused(f"no task {task_id}")
             current = row["status"]
             if allowed_from is not None and current not in allowed_from:
                 raise TransitionRefused(f"{task_id} is {current}, not {'/'.join(sorted(allowed_from))}")
+            _check_version(task_id, row["row_version"], expected_row_version)
             return _move(conn, task_id, to_status, actor, rewrite_body=rewrite_body,
                          extra=columns or None)
 
@@ -1009,23 +1054,155 @@ class Session:
         if row is None or tuple(row) != before:
             raise StateError(f"{task_id}: object, scope or effect changed")
 
-    def task_approve(self, task_id: str, actor: Optional[str] = None) -> str:
+    def task_approve(self, task_id: str, actor: Optional[str] = None,
+                     expected_row_version: Optional[int] = None) -> str:
         """draft or planned -> queued. Never rewrites object, scope or effect.
 
         New work is approved from draft. A task already in planned, including
         one that was there before this verb existed, uses the same move.
+
+        With `expected_row_version` the approval is checked against the exact
+        stored task, in one transaction, and records what was approved
+        (`approved_digest`, `approved_at`, `approved_row_version`). A task that
+        revises another is refused while that other can still run.
         """
-        row = self.conn.execute(
-            "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        if row is None:
-            raise TransitionRefused(f"no task {task_id}")
-        before = tuple(row)
-        came = self.task_transition(task_id, "queued", expected_from=("draft", "planned"),
-                                    actor=actor or "approve")
-        self._unchanged_scope(task_id, before)
+        if expected_row_version is None:
+            row = self.conn.execute(
+                "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            before = tuple(row)
+            came = self.task_transition(task_id, "queued", expected_from=("draft", "planned"),
+                                        actor=actor or "approve")
+            self._unchanged_scope(task_id, before)
+            return came
+        with _transaction(self.conn) as conn:
+            row = conn.execute(
+                "SELECT status, frontmatter, body, row_version, object, scope, effect "
+                "FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            if row["status"] not in ("draft", "planned"):
+                raise TransitionRefused(f"{task_id} is {row['status']}, not draft/planned")
+            _check_version(task_id, row["row_version"], expected_row_version)
+            pairs = json.loads(row["frontmatter"])
+            source_id = _field(pairs, "revises_task_id")
+            if source_id:
+                source = conn.execute("SELECT status, frontmatter FROM tasks WHERE id = ?",
+                                      (source_id,)).fetchone()
+                if source is not None:
+                    repeats = str(_field(json.loads(source["frontmatter"]), "recurring") or "").lower() == "true"
+                    if source["status"] in ("queued", "active") or (
+                            source["status"] == "completed" and repeats):
+                        raise TransitionRefused(
+                            f"{task_id} revises {source_id}, which can still run; archive or cancel it first")
+            digest = material_digest(pairs, row["body"])
+            came = _move(conn, task_id, "queued", actor or "approve", fields={
+                "approved_digest": json.dumps(digest),
+                "approved_at": json.dumps(_now()),
+                "approved_row_version": str(row["row_version"]),
+            })
+            after = conn.execute("SELECT object, scope, effect FROM tasks WHERE id = ?",
+                                 (task_id,)).fetchone()
+            if tuple(after) != (row["object"], row["scope"], row["effect"]):
+                raise StateError(f"{task_id}: object, scope or effect changed")
         return came
 
-    def task_requeue(self, task_id: str, actor: Optional[str] = None) -> str:
+    def task_update(self, task_id: str, *, expected_row_version: int,
+                    allowed_status: Iterable[str], fields: Optional[dict] = None,
+                    body: Optional[str] = None, to_status: Optional[str] = None,
+                    actor: Optional[str] = None) -> dict:
+        """Edit a task that is not yet approved, in one transaction.
+
+        Refuses a status outside `allowed_status` (an active or queued task keeps
+        the instructions it was approved with) and a task that changed since the
+        caller read it. Never activates: `to_status` may only be a move the
+        transition table allows, and the caller names it. Returns the new
+        `row_version` and the material digest.
+        """
+        allowed = set(allowed_status)
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter, body, row_version FROM tasks "
+                               "WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            current = row["status"]
+            if current not in allowed:
+                raise TransitionRefused(f"{task_id} is {current}, not {'/'.join(sorted(allowed))}")
+            _check_version(task_id, row["row_version"], expected_row_version)
+            pairs = json.loads(row["frontmatter"])
+            for key, value in (fields or {}).items():
+                if key in ("status", "id"):
+                    raise StateError(f"{key} is not set directly; use a transition")
+                _check_field(key, str(value))
+                _set_pair(pairs, key, f" {value}" if value != "" else "")
+            new_body = row["body"] if body is None else body
+            status = current
+            if to_status and to_status != current:
+                if not conn.execute("SELECT 1 FROM transitions WHERE from_status = ? AND to_status = ?",
+                                    (current, to_status)).fetchone():
+                    raise TransitionRefused(f"{current} -> {to_status} is not an allowed transition")
+                status = to_status
+                _set_pair(pairs, "status", f" {status}")
+                conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
+                             "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, status, actor))
+            _write_task(conn, task_id, status, pairs, new_body, insert=False)
+            version = conn.execute("SELECT row_version FROM tasks WHERE id = ?",
+                                   (task_id,)).fetchone()[0]
+        return dict(task_id=task_id, status=status, row_version=version,
+                    digest=material_digest(pairs, new_body))
+
+    def task_archive(self, task_id: str, *, expected_row_version: int, reason: str,
+                     actor: Optional[str] = None) -> dict:
+        """Retire a task without deleting it. The row, its events and its body stay.
+
+        A queued task (a recurrence waiting for its next run included) is
+        cancelled and archived in one transaction, so it can no longer be
+        claimed. An active task is refused: it stops first. A task other tasks
+        wait on, or whose subtasks still run, is refused rather than releasing
+        them by surprise.
+        """
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter, row_version FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            status = row["status"]
+            if status == "archived":
+                raise TransitionRefused(f"{task_id} is already archived")
+            if status == "active":
+                raise TransitionRefused(
+                    f"{task_id} is active; request cancellation and archive it once it stopped")
+            _check_version(task_id, row["row_version"], expected_row_version)
+            for other in conn.execute(
+                    "SELECT id, status, frontmatter FROM tasks WHERE id != ?", (task_id,)):
+                if other["status"] in TERMINAL_STATUSES:
+                    continue
+                if task_id in _csv(_field(json.loads(other["frontmatter"]), "blocked_by_task_ids")):
+                    raise TransitionRefused(f"{other['id']} is waiting on {task_id}")
+            for child in conn.execute("SELECT child_id FROM task_links WHERE parent_id = ?", (task_id,)):
+                state = conn.execute("SELECT status FROM tasks WHERE id = ?", (child[0],)).fetchone()
+                if state is not None and state[0] not in TERMINAL_STATUSES:
+                    raise TransitionRefused(f"subtask {child[0]} of {task_id} is still {state[0]}")
+            pairs = json.loads(row["frontmatter"])
+            recurring = str(_field(pairs, "recurring") or "").lower() == "true"
+            if status == "queued":
+                _move(conn, task_id, "cancelled", actor or "archive")
+            _move(conn, task_id, "archived", actor or "archive", fields={
+                "archived_at": json.dumps(_now()),
+                "archived_reason": json.dumps(reason),
+                "archived_from": json.dumps(status),
+            })
+            events = conn.execute("SELECT COUNT(*) FROM task_events WHERE task_id = ?",
+                                  (task_id,)).fetchone()[0]
+            version = conn.execute("SELECT row_version FROM tasks WHERE id = ?",
+                                   (task_id,)).fetchone()[0]
+        return dict(task_id=task_id, from_status=status, status="archived",
+                    cancelled_first=status == "queued", recurring=recurring,
+                    history_events=events, row_version=version)
+
+    def task_requeue(self, task_id: str, actor: Optional[str] = None,
+                     expected_row_version: Optional[int] = None) -> str:
         """error -> queued, and drop `## Execution Error` plus everything after it.
 
         The status change and the body cut commit in one transaction. Object,
@@ -1039,11 +1216,13 @@ class Session:
         before = tuple(row)
         came = self.task_transition(task_id, "queued", expected_from="error",
                                     actor=actor or "requeue",
-                                    rewrite_body=_strip_execution_error)
+                                    rewrite_body=_strip_execution_error,
+                                    expected_row_version=expected_row_version)
         self._unchanged_scope(task_id, before)
         return came
 
-    def task_cancel(self, task_id: str, actor: Optional[str] = None) -> dict:
+    def task_cancel(self, task_id: str, actor: Optional[str] = None,
+                    expected_row_version: Optional[int] = None) -> dict:
         """Cancel a queued task, or record the request for an active one.
 
         Only `queued` and `active`, the same limit as the plan. A queued task
@@ -1054,13 +1233,14 @@ class Session:
         """
         with _transaction(self.conn) as conn:
             row = conn.execute(
-                "SELECT status, frontmatter, body, object, scope, effect FROM tasks WHERE id = ?",
-                (task_id,)).fetchone()
+                "SELECT status, frontmatter, body, object, scope, effect, row_version "
+                "FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if row is None:
                 raise TransitionRefused(f"no task {task_id}")
             status = row["status"]
             if status not in ("queued", "active"):
                 raise TransitionRefused(f"{task_id} is {status}, not queued/active")
+            _check_version(task_id, row["row_version"], expected_row_version)
             before = (row["object"], row["scope"], row["effect"])
             conn.execute(
                 "INSERT OR IGNORE INTO cancellation_requests (task_id, requested_at) VALUES (?, ?)",
@@ -1195,7 +1375,8 @@ class Session:
                 if not _recurring_ready(pairs, now_epoch):
                     continue
                 if not scheduled_now(_field(pairs, "scheduled_time"),
-                                     _field(pairs, "scheduled_weekdays"), moment):
+                                     _field(pairs, "scheduled_weekdays"), moment,
+                                     _field(pairs, "scheduled_timezone")):
                     continue
                 _move(conn, task_id, "active", worker,
                       extra={"claimed_by": worker, "claimed_at": _now()})
