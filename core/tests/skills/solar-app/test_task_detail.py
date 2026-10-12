@@ -12,38 +12,102 @@ from task_markdown import render_markdown, sanitize_html
 
 
 class HostLoggingTests(unittest.TestCase):
-    """Uses an isolated logger, so the process-wide `solar.app` logger is never mutated."""
+    """The real `solar.app` logger and the root handlers are saved and restored around each test."""
 
-    def test_host_sends_the_503_warning_to_stderr_with_the_class_only(self):
-        import io
+    def setUp(self):
         import logging
-        import uuid
+        self.logging = logging
+        self.logger = logging.getLogger('solar.app')
+        self.root = logging.getLogger()
+        self.saved = (self.logger.level, self.logger.propagate, list(self.logger.handlers), list(self.root.handlers))
+        for handler in list(self.logger.handlers) + list(self.root.handlers):
+            self.logger.removeHandler(handler)
+            self.root.removeHandler(handler)
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        level, propagate, handlers, root_handlers = self.saved
+        for handler in list(self.logger.handlers):
+            self.logger.removeHandler(handler)
+        for handler in list(self.root.handlers):
+            self.root.removeHandler(handler)
+        for handler in handlers:
+            self.logger.addHandler(handler)
+        for handler in root_handlers:
+            self.root.addHandler(handler)
+        self.logger.setLevel(level)
+        self.logger.propagate = propagate
+
+    def failing_task_detail(self):
+        handler = Handler()
+        with patch.object(console_data, 'task_detail', side_effect=sqlite3.DatabaseError('SECRET detail')):
+            app_http.get(handler, '/api/console/task-detail', {'task_id': ['t']}, '/nonexistent')
+        return handler
+
+    def test_real_logger_writes_once_to_stderr_with_the_class_only(self):
+        import io
         from contextlib import redirect_stderr
         import host_server
-        isolated = logging.getLogger('solar.app.test.' + uuid.uuid4().hex)
-        isolated.propagate = True  # configure_logging must turn it off
-        process_logger = logging.getLogger('solar.app')
-        before = (process_logger.level, process_logger.propagate, list(process_logger.handlers))
-        try:
-            buffer = io.StringIO()
-            with redirect_stderr(buffer):
-                host_server.configure_logging(isolated)
-                host_server.configure_logging(isolated)  # idempotent
-                self.assertEqual(sum(getattr(h, '_solar_host', False) for h in isolated.handlers), 1)
-                self.assertFalse(isolated.propagate)
-                handler = Handler()
-                with patch.object(app_http, 'LOGGER', isolated), \
-                        patch.object(console_data, 'task_detail', side_effect=sqlite3.DatabaseError('SECRET detail')):
-                    app_http.get(handler, '/api/console/task-detail', {'task_id': ['t']}, '/nonexistent')
-            self.assertEqual(handler.status, 503)
-            text = buffer.getvalue()
-            self.assertEqual(text.count('DatabaseError'), 1)
-            self.assertIn('solar.app.test.', text)
-            self.assertNotIn('SECRET', text)
-            self.assertEqual((process_logger.level, process_logger.propagate, list(process_logger.handlers)), before)
-        finally:
-            for handler in list(isolated.handlers):
-                isolated.removeHandler(handler)
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            host_server.configure_logging()
+            host_server.configure_logging()  # idempotent
+            self.assertEqual(sum(getattr(h, '_solar_host', False) for h in self.logger.handlers), 1)
+            handler = self.failing_task_detail()
+        self.assertEqual(handler.status, 503)
+        text = buffer.getvalue()
+        self.assertEqual(text.count('DatabaseError'), 1)
+        self.assertIn('task-detail failed', text)
+        self.assertNotIn('SECRET', text)
+        self.assertTrue(self.logger.propagate, 'propagation is left at its default')
+
+    def test_a_configured_root_is_trusted_and_nothing_prints_twice(self):
+        import io
+        from contextlib import redirect_stderr
+        import host_server
+        sink = io.StringIO()
+        root_handler = self.logging.StreamHandler(sink)
+        self.root.addHandler(root_handler)
+        self.root.setLevel(self.logging.WARNING)
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            host_server.configure_logging()
+            self.failing_task_detail()
+        self.assertFalse(any(getattr(h, '_solar_host', False) for h in self.logger.handlers))
+        self.assertEqual(stderr.getvalue(), '')
+        self.assertEqual(sink.getvalue().count('DatabaseError'), 1)
+        self.assertNotIn('SECRET', sink.getvalue())
+
+    def test_other_loggers_still_reach_the_root(self):
+        """Propagation is untouched: a child of solar.app still reaches a root handler."""
+        import io
+        import host_server
+        sink = io.StringIO()
+        self.root.addHandler(self.logging.StreamHandler(sink))
+        host_server.configure_logging()
+        self.logging.getLogger('solar.app.child').warning('child line')
+        self.assertIn('child line', sink.getvalue())
+
+    def test_generic_handler_logs_the_class_and_answers_the_fixed_body(self):
+        import io
+        from contextlib import redirect_stderr
+        import host_server
+        sent = []
+        handler = host_server.HostHandler.__new__(host_server.HostHandler)
+        handler.path = '/api/console/health?x=1'
+        handler._work_guard = lambda: True
+        handler._send_json = lambda payload, code=200: sent.append((payload, code))
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            host_server.configure_logging()
+            with patch.object(app_http, 'get', side_effect=OSError('SECRET /private/path')):
+                handler.do_GET()
+        self.assertEqual(sent, [({'error': 'Console data unavailable', 'refused': True}, 503)])
+        text = buffer.getvalue()
+        self.assertIn('OSError', text)
+        self.assertIn("'/api/console/health'", text)
+        self.assertNotIn('SECRET', text)
+        self.assertNotIn('x=1', text)
 
 
 class Handler:
@@ -220,11 +284,13 @@ class MarkdownTests(unittest.TestCase):
         for target in ('https://evil.test@good.test/x', 'https://foo.com&copy=1&x=y', 'https://user:pw@x.test/',
                        'https://a b.test/', 'https://x.test:port/', 'https://-bad.test/', 'https://x.test:123456/',
                        'https://x=y.test/', 'https://x.test@/', 'http://[1]/', 'http://[:::]/', 'http://[::1/', 'http://[....]/',
-                       'http://[::1]]/', 'http://[12345::1]/', 'http://[::g]/', 'http://[1:2:3:4:5:6:7:8:9]/', 'https://x.test:99999/', 'https://x.test:0/',
+                       'http://[::1]]/', 'http://[::ffff:1.2.3.4]/', 'http://[::ffff:102:304]/', 'http://[::1.2.3.4]/',
+                       'http://[64:ff9b::1.2.3.4]/', 'https://a-.test/', 'https://-a.test/', 'https://a.-b.test/', 'https://a.b-.test/',
+                       'https://' + 'a' * 64 + '.test/', 'https://x..test/', 'https://x.test./', 'http://[12345::1]/', 'http://[::g]/', 'http://[1:2:3:4:5:6:7:8:9]/', 'https://x.test:99999/', 'https://x.test:0/',
                        'https://x.test:65536/', 'http://[::1]:0/', 'https://münchen.de/', 'https://xn--mnchen-3ya.de@evil.test/'):
             self.assertNotIn('<a', render_markdown('[l](' + target + ')'), target)
         for target in ('https://x.com/?a=1&copy=2', 'http://localhost:9000/a', 'https://sub.x-y.example.org/p#f',
-                       'http://127.0.0.1/', 'http://[::1]:8080/x', 'https://x.test:1/', 'https://x.test:65535/',
+                       'http://127.0.0.1/', 'http://[::1]:8080/x', 'https://x.test:1/', 'https://x.test:65535/', 'https://a-b.test/', 'https://' + 'a' * 63 + '.test/',
                        'https://[::1]/x', 'http://[2001:db8::1]:8080/x', 'https://xn--mnchen-3ya.de/'):
             self.assertIn('<a href="', render_markdown('[l](' + target + ')'), target)
         self.assertEqual(sanitize_html('<a href="https://evil.test@good.test/">x</a>'), 'x')

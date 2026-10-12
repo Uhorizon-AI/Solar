@@ -14,7 +14,11 @@ from urllib.parse import urlsplit
 # no userinfo (`good.test@evil.test` misleads), no stray characters such as `&`
 # or `=` that make the real host differ from the visible one, and no
 # internationalized names (they stay text rather than risk look-alike hosts).
-_HOST = re.compile(r"(?:\[([0-9A-Fa-f:.]+)\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::([0-9]{1,5}))?")
+# Names use LDH labels: 1 to 63 letters, digits or hyphens, starting and ending
+# with a letter or digit. A bracketed host must be a pure IPv6 address: IPv4
+# literals inside the brackets and IPv4-mapped addresses are not links.
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_HOST = re.compile(r"(?:\[([0-9A-Fa-f:.]+)\]|(" + _LABEL + r"(?:\." + _LABEL + r")*))(?::([0-9]{1,5}))?")
 
 
 def _plain_authority(netloc):
@@ -22,11 +26,17 @@ def _plain_authority(netloc):
     if not match:
         return False
     if match.group(1) is not None:
+        if "." in match.group(1):
+            return False
         try:
-            ipaddress.IPv6Address(match.group(1))
+            address = ipaddress.IPv6Address(match.group(1))
         except ValueError:
             return False
-    return match.group(2) is None or 1 <= int(match.group(2)) <= 65535
+        if address.ipv4_mapped is not None:
+            return False
+    elif len(match.group(2)) > 253:
+        return False
+    return match.group(3) is None or 1 <= int(match.group(3)) <= 65535
 
 
 def _safe_link(value):

@@ -113,17 +113,39 @@ class ConsoleUiTests(unittest.TestCase):
 
 
     def test_task_list_hides_provider_channel_and_requester_up_to_1600px(self):
+        """Parses the CSS and the header markup, so spacing or ordering changes do not break it."""
         css = (ASSETS / "app.css").read_text(encoding="utf-8")
-        match = re.search(r"@media \(max-width:1600px\)\{(.*?)\}\s*(?:dl\.kv|\n|$)", css, re.S)
-        self.assertIsNotNone(match, "the 1600 px rule must exist")
-        rule = match.group(1)
-        hidden = sorted(int(n) for n in re.findall(r"\.trow>div:nth-child\((\d)\)", rule))
-        self.assertEqual(hidden, [3, 4, 6], "Provider, Channel and Requester are hidden")
-        self.assertIn("display:none", rule)
-        self.assertIn("grid-template-columns:108px minmax(0,1fr) 64px", rule, "Status, Task and Created stay")
-        # Wider than 1600 px every column shows: the base rule is the full six-column grid.
-        self.assertIn(".trow{grid-template-columns:108px minmax(0,1fr) 68px 76px 52px 112px}", css)
-        self.assertEqual(len(re.findall(r"@media \(max-width:1600px\)", css)), 1)
+        js = (ASSETS / "app.js").read_text(encoding="utf-8")
+        start = js.index('class="row hd trow"')
+        order = re.findall(r't\("col_(\w+)"\)', js[start:js.index("rows.join", start)])
+        self.assertEqual(order, ["status", "task", "provider", "channel", "created", "requester"], "header column order")
+
+        def block(source, opener):
+            start = re.search(opener, source)
+            self.assertIsNotNone(start, opener)
+            depth, i = 0, start.end() - 1
+            for j in range(i, len(source)):
+                depth += {"{": 1, "}": -1}.get(source[j], 0)
+                if depth == 0:
+                    return source[i + 1:j]
+            self.fail("unbalanced braces")
+
+        media = block(css, r"@media\s*\(\s*max-width\s*:\s*1600px\s*\)\s*\{")
+        self.assertEqual(len(re.findall(r"max-width\s*:\s*1600px", css)), 1)
+        hidden = set()
+        for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", media):
+            if re.search(r"display\s*:\s*none", body):
+                hidden |= {int(n) for n in re.findall(r"\.trow\s*>\s*div\s*:\s*nth-child\(\s*(\d+)\s*\)", selectors)}
+        names = {order[i - 1] for i in hidden}
+        self.assertEqual(names, {"provider", "channel", "requester"})
+        self.assertEqual({n for n in order} - names, {"status", "task", "created"})
+
+        def columns(body):
+            value = re.search(r"\.trow\s*\{[^}]*grid-template-columns\s*:\s*([^;}]*)", body).group(1)
+            return len(re.findall(r"(?:minmax\([^)]*\)|\S+)", value.strip()))
+
+        self.assertEqual(columns(media), 3, "three columns up to 1600 px")
+        self.assertEqual(columns(css.replace(media, "")), 6, "six columns when wider")
 
     def test_screens_follow_the_routes(self):
         result = subprocess.run(

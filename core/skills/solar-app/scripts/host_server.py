@@ -22,17 +22,25 @@ import host_workspace_context as ctx  # noqa: E402
 PORT = 9000
 
 
+LOGGER = logging.getLogger("solar.app")
+
+
 def configure_logging(logger: logging.Logger | None = None) -> None:
-    """Send the console's warnings to stderr, where the host already reports errors."""
-    logger = logger or logging.getLogger("solar.app")
-    if any(getattr(handler, "_solar_host", False) for handler in logger.handlers):
+    """Send the console's warnings to stderr, where the host already reports errors.
+
+    The handler is added only when neither the logger nor the root logger has one:
+    a process that configured the root logger is trusted to show the warnings, so
+    nothing prints twice and propagation is left alone. Calling it again does nothing.
+    """
+    logger = logger or LOGGER
+    if logger.handlers or logging.getLogger().handlers:
+        logger.setLevel(logging.WARNING)
         return
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
     handler._solar_host = True  # type: ignore[attr-defined]
     logger.addHandler(handler)
     logger.setLevel(logging.WARNING)
-    logger.propagate = False  # one line per warning even if the process configures the root logger
 
 
 def _active_workspace() -> Path:
@@ -71,7 +79,11 @@ class HostHandler(BaseHTTPRequestHandler):
         try:
             import app_http
             app_http.get(self, path, qs, _active_workspace())
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError) as exc:
+            # Generic handler: "Console data unavailable" is the body of every console route
+            # except task-detail, which answers its own "Task detail unavailable" and logs
+            # "task-detail failed". Both lines carry the exception class, never its message.
+            LOGGER.warning("console route %r failed: %s", path, type(exc).__name__)
             self._send_json({"error": "Console data unavailable", "refused": True}, 503)
 
     def do_POST(self) -> None:

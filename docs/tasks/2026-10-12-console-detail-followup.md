@@ -16,13 +16,13 @@ Close the remaining small gaps in the console task detail: link authority valida
 - `core/skills/solar-app/assets/app.js`: show `workspace_id` (English and Spanish); read `context` and `configuration` only when they are plain objects.
 - `core/skills/solar-app/scripts/host_server.py`: `configure_logging()` at start. Finding: the host silenced request logs and configured no logging, so the `solar.app` warning would only reach Python's last-resort handler. A single idempotent stderr handler is added, matching how the host already reports errors.
 - Layout and presentation after trying v0.40.0 in the browser (`app.js`, `app.css`):
-  - `.split` is two equal columns and `.sticky` has no fixed width (it scrolls inside the viewport height); below 900 px the detail stacks under the list. The task list uses a responsive grid class; below 1600 px viewport width it keeps Status, Task and Provider so the title stays readable at half width.
+  - `.split` is two equal columns and `.sticky` has no fixed width (it scrolls inside the viewport height); below 900 px the detail stacks under the list. The task list uses a responsive grid class; below 1600 px viewport width it keeps Status, Task and Created so the title stays readable at half width.
   - Field lists reuse `.kv` (label column in grey, value in normal colour, long values wrap) at 150 px label width.
   - `scheduled_weekdays` shows names (Mon..Sun / lun..dom), raw tokens for odd values. `recurring_max_runs` 0 shows as Unlimited: confirmed in `solar_state` (cap applied only when greater than 0) and in the async-tasks references (`0 = unlimited`).
   - "No recorded checkpoint" is shown when only a schedule exists; "No recorded context" only when nothing is recorded. The host-timezone fallback is shown only beside a configured time.
   - The task History is shown newest first (presentation only, `app.js`); the endpoint and solar-state order are unchanged and the newest event carries the highlight.
   - The complete record lists columns, then Instructions (own block, spacing above), then Frontmatter folded by default.
-- `core/skills/solar-app/SKILL.md`, `CHANGELOG.md` (Unreleased, Fixed).
+- `core/skills/solar-app/SKILL.md`, `CHANGELOG.md` (Unreleased, Fixed and Changed).
 - Tests: `core/tests/skills/solar-app/test_task_detail.py`, `test_console_ui.py`.
 
 Out of scope: MCP, solar-state, the reports and channels change, uppercase port notation (no change needed: ports are digits).
@@ -52,12 +52,15 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/<sk
 
 ## Completion evidence
 
-- From the repository root: `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state core/tests/skills/solar-mcp -q -p no:cacheprovider` -> 551 passed (loopback port available). Without `ps` and a writable `$HOME`, three tests (`test_cutover`, two in `test_mcp_cli`) cannot run and the count is 548.
-- `node --check`, `py_compile` of the four changed Python files and `git diff --check`: passed. solar-app, solar-state and solar-mcp validated and packaged outside the repository.
+- From the repository root: `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state core/tests/skills/solar-mcp -q -p no:cacheprovider` -> 555 passed (loopback port available). Without `ps` and a writable `$HOME`, three tests (`test_cutover`, two in `test_mcp_cli`) cannot run and the count is 552.
+- `node --check`, `py_compile` of the five changed Python files and `git diff --check`: passed. solar-app, solar-state and solar-mcp validated and packaged outside the repository.
 - Measured on a local console run from this worktree (loopback, spare port, read only on the real workspace):
   - 800 px: list and detail stacked, 673 px wide, no horizontal scroll.
   - 1280 px: list 490 px and detail 490 px; header shows Status, Task, Created; title cell 268 px.
   - 1440 px: list 570 px and detail 570 px; same three columns; title cell 348 px.
   - 2000 px: list 850 px and detail 850 px; all six columns; label/value lists side by side (150 px label column).
+- Logging decisions: `configure_logging()` adds its stderr handler only when neither `solar.app` nor the root logger has one, and leaves propagation at its default. Findings: `solar.app` (used by `app_http.LOGGER` and the host) is the only logger in the framework scripts and nothing else under `solar.*` exists, so setting `propagate = False` would not have silenced any current warning; it would however have hidden them from any later root handler (including test capture). Trusting a configured root keeps one line per warning without that side effect. If a process configures the root after the console started, a warning can print twice (stderr handler plus root); that case is documented and accepted. The log lines are route-specific on purpose: the task-detail route logs `task-detail failed: <class>` and answers "Task detail unavailable"; every other console route logs `console route '<path>' failed: <class>` and answers "Console data unavailable". Neither carries the exception message.
+- Link hosts: names must be LDH labels (1 to 63 characters, alphanumeric at both ends), bracketed hosts must be pure IPv6 (IPv4 literals and IPv4-mapped addresses are not links).
+- Column threshold: at 1280 to 1440 px the list shows Status, Task and Created; the final choice of columns and of the 1600 px threshold belongs to Louis, who will judge it on the local console. The test parses the CSS, so changing the columns only requires updating it.
 - Decisions in review: up to 1600 px of viewport the list keeps Status, Task and Created and hides Provider (usually "no provider"), Channel and Requester; a test reads the CSS and pins it. The frontmatter folds when the complete record closes and stays open across a refresh with a newer `updated_at`. A run limit that is an integer-valued zero shows as Unlimited; other values show as stored. Weekday tokens outside 1 to 7 show as stored. Other console routes answer a fixed message on unexpected read errors (`do_GET` in `host_server.py`); the existing tests do not depend on the old text.
 - Not verified: installed acceptance (no install or sync performed).
