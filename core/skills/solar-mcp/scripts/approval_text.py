@@ -218,11 +218,12 @@ def _head(copy: dict, title: str, rows: list, notes: list, extra: list = ()) -> 
 
 
 def _excerpt(copy: dict, text: str) -> str:
-    """One line, cut before escaping so an escape is never split; the total is the original length."""
-    flat = _line(text[:_EXCERPT])
-    if len(text) <= _EXCERPT:
+    """One displayed line of at most `_EXCERPT` characters, escapes counted; then the original length."""
+    flat = _line(text)
+    if len(flat) <= _EXCERPT:
         return flat
-    return flat + "… (" + copy["chars"].format(n=len(text)) + ")"
+    cut = re.sub(r"\\(?:x[0-9a-f]?|u[0-9a-f]{0,3})?$", "", flat[:_EXCERPT])   # never end on half an escape
+    return cut.rstrip() + "… (" + copy["chars"].format(n=len(text)) + ")"
 
 
 def _exact(value, limit: int = 0, start: int = 0) -> str:
@@ -297,16 +298,21 @@ def _create(copy, args):
 
 
 def _diff_lines(copy, old: str, new: str) -> list:
-    """Changed lines, the quota shared between removals and additions so neither side vanishes."""
+    """Changed lines, the quota shared between removals and additions so neither side vanishes.
+
+    A removal and the addition at the same position are cut to the same window (see `_pair`),
+    so a long line whose change lies far to the right still shows the difference.
+    """
     changed = [row for row in difflib.ndiff(old.split("\n"), new.split("\n")) if row[:2] in ("- ", "+ ")]
     minus = [row[2:] for row in changed if row[0] == "-"]
     plus = [row[2:] for row in changed if row[0] == "+"]
     keep_minus = min(len(minus), max(_DIFF_LINES // 2, _DIFF_LINES - len(plus)))
     keep_plus = min(len(plus), _DIFF_LINES - keep_minus)
-    shown = [("−", row) for row in minus[:keep_minus]] + [("+", row) for row in plus[:keep_plus]]
     out = []
-    for sign, row in shown:
-        out.append(f"{sign} {_exact(row, _VALUE)}")
+    for index in range(keep_minus):
+        out.append("− " + (_pair(minus[index], plus[index])[0] if index < len(plus) else _exact(minus[index], _VALUE)))
+    for index in range(keep_plus):
+        out.append("+ " + (_pair(minus[index], plus[index])[1] if index < len(minus) else _exact(plus[index], _VALUE)))
     if len(changed) > keep_minus + keep_plus:
         out.append("… " + copy["lines_changed"].format(n=len(changed)))
     return out

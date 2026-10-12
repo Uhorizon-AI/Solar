@@ -119,10 +119,28 @@ def test_whitespace_only_change_is_not_reported_as_no_change(solar_env):
     made = new_task("A  B")
     message = text("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"], title="A B"))
     assert "title: A  B → A B" in message and "no difference" not in message
-    body = new_task("Spacing", "keep\nthis")
-    spaced = text("task.update", dict(task_id=body["id"], expected_row_version=body["row_version"],
-                                      instructions="keep\nthis "))
-    assert "no difference" in spaced or "+ this " in spaced   # trailing blanks are trimmed on store
+    body = new_task("Spacing", "keep\nthis  now")
+    interior = text("task.update", dict(task_id=body["id"], expected_row_version=body["row_version"],
+                                        instructions="keep\nthis now"))
+    rows = [row.strip() for row in interior.splitlines()]
+    assert "− this  now" in rows and "+ this now" in rows
+    # Trailing blanks are trimmed by the store (task.update writes instructions.rstrip()),
+    # so adding one is genuinely no change.
+    trailing = text("task.update", dict(task_id=body["id"], expected_row_version=body["row_version"],
+                                        instructions="keep\nthis  now \n"))
+    assert "Changes: no difference from the stored task" in trailing
+
+
+def test_long_changed_line_shows_its_difference_on_both_sides(solar_env):
+    prefix = "x" * 300
+    made = new_task("Long line", f"{prefix}-old tail\nsecond")
+    message = text("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                                       instructions=f"{prefix}-new tail\nsecond"))
+    rows = [row.strip() for row in message.splitlines()]
+    minus = next(row for row in rows if row.startswith("− "))
+    plus = next(row for row in rows if row.startswith("+ "))
+    assert "-old" in minus and "-new" in plus and minus[2:] != plus[2:]
+    assert max(len(row) for row in rows) < 260
 
 
 def test_long_values_are_cut_where_they_differ(solar_env):
@@ -419,3 +437,13 @@ def test_excerpt_escapes_hidden_characters_and_reports_original_length(solar_env
     made = new_task("Tricky", "safe \u202e hidden " + "y" * 600)
     message = text("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
     assert "\u202e" not in message and "\\u202e" in message and "characters in total" in message
+
+
+def test_excerpt_width_is_bounded_after_escaping(solar_env):
+    for payload in ("\u202e", "\u200b", "\x07"):
+        made = new_task("Wide", payload * 500)
+        message = text("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+        row = next(r for r in message.splitlines() if r.startswith("Instructions:"))
+        assert len(row) < 450 and "characters in total" in row
+        assert not row.split("…")[0].endswith(("\\", "\\u", "\\x"))
+        assert payload not in message

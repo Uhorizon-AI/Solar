@@ -42,8 +42,8 @@ JSON and empty fields stay out. Approving or requeuing a task also shows its dec
 object, scope and effect and its recurrence limits. Characters that hide or reorder
 text are shown escaped (`\u202e`, `\x07`). A stale or missing task is flagged in the
 prompt, and the call is still refused at execution. Instructions in create, approve
-and requeue are collapsed to one line and cut at 400 characters, followed by the
-original length; edit diffs list changed lines (removals and additions share the
+and requeue are collapsed to one line, escapes included, and cut at 400 displayed
+characters, followed by the original length; edit diffs list changed lines (removals and additions share the
 quota) with the window starting at the first difference. `telegram.send` text is
 never truncated or reflowed. If a renderer fails, a plain fallback lists the
 operation name and its readable fields, without identifiers or row versions. The approval still binds the full
