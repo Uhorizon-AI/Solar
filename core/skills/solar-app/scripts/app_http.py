@@ -25,7 +25,7 @@ def get(handler, path, qs, workspace):
         handler.send_response(200)
         handler.send_header('Content-Type', mime)
         handler.send_header('Content-Length', str(len(body)))
-        handler.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox; base-uri 'none'; form-action 'none'; navigate-to 'none'")
+        handler.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox; base-uri 'none'; form-action 'none'")
         handler.send_header('X-Content-Type-Options', 'nosniff')
         handler.send_header('Cache-Control', 'no-store')
         handler.send_header('Referrer-Policy', 'no-referrer')

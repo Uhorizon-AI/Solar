@@ -101,8 +101,8 @@ an IDE directory.
 The navigation shows Reports. `/api/console/reports` reads explicit planet
 publication indexes, respecting Client planet exclusions.
 `/reports/<planet>/<relative-path>` serves only listed HTML or evidence text with
-a restrictive CSP (no scripts, forms, base rewrite or navigation), bounded files
-and no-store headers. See
+a restrictive CSP (sandboxed, no scripts, forms, base rewrite or top navigation),
+bounded files and no-store headers. See
 [publication contract](references/operation-reports.md). No report is copied
 into shared state. Source changes require installation and client publication
 before claiming installed acceptance.

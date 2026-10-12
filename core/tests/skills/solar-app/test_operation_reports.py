@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[3] / 'skills/solar-app/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -53,18 +54,48 @@ class PublishedReports(unittest.TestCase):
         self.assertEqual(result, dict(reports=[], errors=[]))
 
     def test_symlink_inside_the_planet_but_outside_operations_is_refused(self):
-        # A patient file outside operations/ (notes with client data, a stray AGENTS.md)
-        # must not become reachable just because it lives in the same planet.
+        # A file outside operations/ (notes with client data) must not be reachable
+        # even when it lives in the same planet and carries the right suffix.
+        private = self.planet / 'private/notes.html'
+        private.parent.mkdir(parents=True)
+        private.write_text('client data')
+        link = self.planet / 'operations/leadership/reports/notes.html'
+        link.symlink_to(private)
+        # Declared as a report, with a valid .html suffix; only the confinement
+        # check can reject it.
+        self.row = dict(self.row, path='operations/leadership/reports/notes.html')
+        self.index.write_text(json.dumps(dict(version=1, reports=[self.row], evidence=[])))
+        self.assertTrue(operation_reports.report_index(self.workspace)['errors'])
+        with self.assertRaises(ValueError):
+            operation_reports.published_file(self.workspace, '/reports/example/' + self.row['path'])
+
+    def test_symlinked_evidence_outside_operations_is_refused(self):
         private = self.planet / 'private/notes.txt'
         private.parent.mkdir(parents=True)
         private.write_text('client data')
         link = self.planet / 'operations/leadership/reports/notes.txt'
         link.symlink_to(private)
-        self.row = dict(self.row, path='operations/leadership/reports/notes.txt')
-        self.index.write_text(json.dumps(dict(version=1, reports=[self.row], evidence=[])))
+        # Listed as evidence, with a valid .txt suffix, so only the confinement
+        # check can reject it.
+        self.index.write_text(json.dumps(dict(version=1, reports=[self.row], evidence=['operations/leadership/reports/notes.txt'])))
         self.assertTrue(operation_reports.report_index(self.workspace)['errors'])
         with self.assertRaises(ValueError):
-            operation_reports.published_file(self.workspace, '/reports/example/' + self.row['path'])
+            operation_reports.published_file(self.workspace, '/reports/example/operations/leadership/reports/notes.txt')
+
+    def test_operations_directory_that_escapes_the_planet_is_refused(self):
+        # operations/ itself pointing outside the planet must not become a
+        # trusted root that serves arbitrary files.
+        planet = self.workspace / 'planets/escape'
+        planet.mkdir(parents=True)
+        outside = self.workspace / 'outside-operations'
+        reports = outside / 'leadership/reports'
+        reports.mkdir(parents=True)
+        (reports / 'notes.html').write_text('client data')
+        (reports / 'index.json').write_text(json.dumps(dict(version=1, reports=[dict(path='operations/leadership/reports/notes.html', title='Leak', owner='x', generated_at='2026-10-11', period='Today', coverage='Partial', next_decision='Review')], evidence=[])))
+        (planet / 'operations').symlink_to(outside)
+        self.assertTrue(operation_reports.report_index(self.workspace)['errors'])
+        with self.assertRaises(ValueError):
+            operation_reports.published_file(self.workspace, '/reports/escape/operations/leadership/reports/notes.html')
 
     def test_symlinked_report_is_a_404_not_a_file(self):
         class Handler:
@@ -73,13 +104,17 @@ class PublishedReports(unittest.TestCase):
             def send_header(self, key, value): self.headers[key] = value
             def end_headers(self): pass
             def _send_json(self, payload, status=200): self.code, self.payload = status, payload
-        private = self.planet / 'private/notes.txt'
+        private = self.planet / 'private/notes.html'
         private.parent.mkdir(parents=True)
         private.write_text('client data')
-        link = self.planet / 'operations/leadership/reports/notes.txt'
+        link = self.planet / 'operations/leadership/reports/notes.html'
         link.symlink_to(private)
+        # The link is listed in the index before it is requested, so the 404 can
+        # only come from the confinement refusal, not from "not published".
+        self.row = dict(self.row, path='operations/leadership/reports/notes.html')
+        self.index.write_text(json.dumps(dict(version=1, reports=[self.row], evidence=[])))
         handler = Handler()
-        app_http.get(handler, '/reports/example/operations/leadership/reports/notes.txt', {}, self.workspace)
+        app_http.get(handler, '/reports/example/' + self.row['path'], {}, self.workspace)
         self.assertEqual(handler.code, 404)
 
     def test_invalid_settings_refuse_discovery(self):
@@ -100,8 +135,10 @@ class PublishedReports(unittest.TestCase):
         self.assertEqual(handler.code, 200)
         self.assertIn("default-src 'none'", handler.headers['Content-Security-Policy'])
         self.assertIn('sandbox;', handler.headers['Content-Security-Policy'])
-        self.assertIn("navigate-to 'none'", handler.headers['Content-Security-Policy'])
         self.assertNotIn('allow-scripts', handler.headers['Content-Security-Policy'])
+        self.assertNotIn('allow-top-navigation', handler.headers['Content-Security-Policy'])
+        self.assertNotIn('allow-popups', handler.headers['Content-Security-Policy'])
+        self.assertEqual(handler.headers['Content-Type'], 'text/html; charset=utf-8')
         self.assertEqual(handler.headers['Cache-Control'], 'no-store')
 
     def test_the_report_route_reads_only_its_planet(self):
@@ -114,16 +151,25 @@ class PublishedReports(unittest.TestCase):
         self.assertIn(b'Report', body)
         self.assertTrue(mime.startswith('text/html'))
 
-    def test_missing_client_inventory_answers_503(self):
+    def test_unreadable_settings_answers_503(self):
         class Handler:
             def __init__(self): self.code = None; self.payload = None
             def _send_json(self, payload, status=200): self.code, self.payload = status, payload
-        # Point the workspace at a tmp dir whose .solar/settings.json is unreadable.
+        # An unreadable workspace settings file cannot scope publication.
         settings = self.workspace / '.solar/settings.json'
         settings.parent.mkdir()
         settings.write_text('{broken')
         handler = Handler()
         app_http.get(handler, '/reports/example/' + self.row['path'], {}, self.workspace)
+        self.assertEqual(handler.code, 503)
+
+    def test_absent_client_inventory_answers_503(self):
+        class Handler:
+            def __init__(self): self.code = None; self.payload = None
+            def _send_json(self, payload, status=200): self.code, self.payload = status, payload
+        handler = Handler()
+        with patch.object(operation_reports, 'INVENTORY', self.workspace / 'missing_skill_inventory.py'):
+            app_http.get(handler, '/reports/example/' + self.row['path'], {}, self.workspace)
         self.assertEqual(handler.code, 503)
 
 

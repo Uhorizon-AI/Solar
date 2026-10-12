@@ -28,9 +28,12 @@ def excluded_planets(workspace):
     if _inventory is None:
         if not INVENTORY.is_file():
             raise PublicationUnavailable('Client skill inventory is unavailable')
-        spec = importlib.util.spec_from_file_location('skill_inventory', INVENTORY)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        try:
+            spec = importlib.util.spec_from_file_location('skill_inventory', INVENTORY)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as exc:  # ImportError, SyntaxError, AttributeError, ...
+            raise PublicationUnavailable('Client skill inventory could not be loaded') from exc
         _inventory = module
     try:
         return set(_inventory.settings(workspace).get('sync_exclude_planets', []))
@@ -46,15 +49,25 @@ def bounded_read(path, limit):
     return data
 
 
+def operations_root(planet):
+    """The planet's operations/ directory, refusing one that escapes the planet."""
+    root = planet.resolve()
+    operations = (planet / OPERATIONS).resolve()
+    if not operations.is_relative_to(root):
+        raise ValueError('Planet operations directory escapes the planet')
+    return root, operations
+
+
 def confined(planet, relative, suffixes):
     if not isinstance(relative, str):
         raise ValueError('Invalid published path')
     rel = Path(relative)
     if rel.is_absolute() or '..' in rel.parts or not rel.parts or rel.parts[0] != OPERATIONS:
         raise ValueError('Published path must stay inside planet operations')
-    operations = (planet / OPERATIONS).resolve()
+    root, operations = operations_root(planet)
     target = (planet / rel).resolve(strict=True)
-    if not target.is_relative_to(operations) or target.suffix.lower() not in suffixes or not target.is_file():
+    if (not target.is_relative_to(root) or not target.is_relative_to(operations)
+            or target.suffix.lower() not in suffixes or not target.is_file()):
         raise ValueError('Published path escapes its allowed scope')
     return target
 
@@ -64,8 +77,9 @@ def read_index(planet):
     index = planet / INDEX_RELATIVE
     if not index.is_file():
         return None
-    operations = (planet / OPERATIONS).resolve()
-    if not index.resolve().is_relative_to(operations):
+    root, operations = operations_root(planet)
+    resolved = index.resolve()
+    if not resolved.is_relative_to(root) or not resolved.is_relative_to(operations):
         raise ValueError('Report index escapes operations')
     data = json.loads(bounded_read(index, MAX_INDEX))
     if not isinstance(data, dict) or data.get('version') != 1:

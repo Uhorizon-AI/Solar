@@ -14,10 +14,10 @@ not read. Limits: 30 reports, 500 evidence paths, 128 KiB index, 4 MiB file.
 
 The publishing generator escapes business input and declares real coverage.
 The console applies a sandbox CSP with no scripts, forms, images, network
-subresources or base rewriting, `navigate-to 'none'` (where the browser supports
-it) and `base-uri 'none'`, so a published report cannot navigate the console
-away; it opens in a new tab with `rel="noopener noreferrer"`. Reports should be
-self-contained with inline CSS; relative links resolve to explicitly published
+subresources or base rewriting, and opens each report in a new tab with
+`rel="noopener noreferrer"`. Because `sandbox` omits `allow-top-navigation` and
+`allow-popups`, a served report cannot navigate the console away. Reports should
+be self-contained with inline CSS; relative links resolve to explicitly published
 reports/evidence. No directory browsing, database downloads, approval controls
 or mutation routes.
 
