@@ -14,6 +14,7 @@ the gate audit. Only the language comes from configuration (`language` in
 from __future__ import annotations
 
 import difflib
+import functools
 import importlib.util
 import json
 import re
@@ -32,7 +33,7 @@ _DAYS = {
     "es": ("lun", "mar", "mié", "jue", "vie", "sáb", "dom"),
 }
 # C0/C1 controls (newline and tab aside) and characters that reorder or hide text.
-_INVISIBLE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩﻿]")
+_INVISIBLE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
 COPY = {
     "en": dict(
@@ -74,7 +75,7 @@ COPY = {
         requeue_refused="refused: only a task in error can be requeued.",
         send_head="Send Telegram message", send_effect="sends the message below outside this machine; it cannot be recalled.",
         parse_mode="interpreted as {mode}",
-        generic_head="Approve action",
+        generic_head="Approve action", operation="Operation",
         missing="refused: the task was not found.",
         changed="This task changed after it was read, so this approval will be refused.",
         unreadable="The task could not be read, so the effect below could not be verified.",
@@ -118,7 +119,7 @@ COPY = {
         requeue_refused="se rechaza: solo se reencola una tarea en error.",
         send_head="Enviar mensaje de Telegram", send_effect="envía el mensaje de abajo fuera de esta máquina; no se puede retirar.",
         parse_mode="interpretado como {mode}",
-        generic_head="Aprobar acción",
+        generic_head="Aprobar acción", operation="Operación",
         missing="se rechaza: no se encontró la tarea.",
         changed="La tarea cambió después de leerla, así que esta aprobación será rechazada.",
         unreadable="No se pudo leer la tarea, así que no se pudo verificar el efecto de abajo.",
@@ -130,14 +131,20 @@ COPY = {
 # language and text hygiene
 # ---------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=1)
+def _tokens():
+    """The console's language table, loaded once. solar-app reads it the same way."""
+    spec = importlib.util.spec_from_file_location("console_language", _LANGUAGE_PY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def language() -> str:
     """`es` only when `.solar/settings.json` says Spanish; English otherwise."""
     try:
-        spec = importlib.util.spec_from_file_location("console_language", _LANGUAGE_PY)
-        tokens = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(tokens)
         data = json.loads((workspace() / ".solar" / "settings.json").read_text(encoding="utf-8"))
-        return tokens.effective_language(data.get("language") if isinstance(data, dict) else None)
+        return _tokens().effective_language(data.get("language") if isinstance(data, dict) else None)
     except Exception:  # noqa: BLE001 - a missing setting means English, never a failed prompt
         return "en"
 
@@ -211,14 +218,41 @@ def _head(copy: dict, title: str, rows: list, notes: list, extra: list = ()) -> 
 
 
 def _excerpt(copy: dict, text: str) -> str:
-    flat = _line(text)
-    if len(flat) <= _EXCERPT:
+    """One line, cut before escaping so an escape is never split; the total is the original length."""
+    flat = _line(text[:_EXCERPT])
+    if len(text) <= _EXCERPT:
         return flat
-    return flat[:_EXCERPT].rstrip() + "… (" + copy["chars"].format(n=len(text)) + ")"
+    return flat + "… (" + copy["chars"].format(n=len(text)) + ")"
 
 
-def _days(copy_lang: str, copy: dict, weekdays) -> str:
-    names = _DAYS[copy_lang]
+def _exact(value, limit: int = 0, start: int = 0) -> str:
+    """A single-line value as stored: spaces kept, hidden characters and line breaks made visible."""
+    text = _INVISIBLE.sub(_escape, str(value if value is not None else "")).replace("\n", "\\n")
+    cut = text[start:start + limit] if limit else text[start:]
+    return ("…" if start else "") + cut + ("…" if limit and len(text) > start + limit else "")
+
+
+def _pair(old, new) -> tuple:
+    """Old and new text cut to the same window, starting just before the first difference."""
+    old, new = str(old if old is not None else ""), str(new)
+    first = next((i for i, (a, b) in enumerate(zip(old, new)) if a != b), min(len(old), len(new)))
+    start = max(0, first - 20) if max(len(old), len(new)) > _VALUE else 0
+    return _exact(old, _VALUE, start), _exact(new, _VALUE, start)
+
+
+def _repeats(copy: dict, recurring: bool, interval, cap) -> str:
+    """'yes (minimum gap …; at most N runs)' or 'no', from the values that will be stored."""
+    if not recurring:
+        return copy["no"]
+    limits = []
+    if str(interval or "").isdigit() and int(interval):
+        limits.append(copy["min_gap"].format(h=round(int(interval) / 3600, 1)))
+    limits.append(copy["max_runs"].format(n=cap) if str(cap or "0") not in ("", "0") else copy["unlimited"])
+    return copy["yes"] + " (" + "; ".join(limits) + ")"
+
+
+def _days(copy: dict, weekdays) -> str:
+    names = _DAYS[copy["lang"]]
     return ", ".join(names[d - 1] for d in sorted(weekdays)) if weekdays else copy["every_day"]
 
 
@@ -226,7 +260,7 @@ def _days(copy_lang: str, copy: dict, weekdays) -> str:
 # one renderer per operation
 # ---------------------------------------------------------------------------
 
-def _archive(lang, copy, args):
+def _archive(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
         return _head(copy, copy["archive_head"], [(copy["reason"], _line(args["reason"]))], notes)
@@ -244,7 +278,7 @@ def _archive(lang, copy, args):
     return _head(copy, copy["archive_head"], rows, notes, [copy["archive_guard"]])
 
 
-def _create(lang, copy, args):
+def _create(copy, args):
     rows = [(copy["task"], _line(args["title"], _VALUE))]
     notes = []
     source = args.get("revises_task_id")
@@ -263,15 +297,22 @@ def _create(lang, copy, args):
 
 
 def _diff_lines(copy, old: str, new: str) -> list:
-    old_rows, new_rows = old.split("\n"), new.split("\n")
-    changed = [row for row in difflib.ndiff(old_rows, new_rows) if row[:2] in ("- ", "+ ")]
-    shown = [("−" if row[0] == "-" else "+") + " " + _line(row[2:], _VALUE) for row in changed[:_DIFF_LINES]]
-    if len(changed) > _DIFF_LINES:
-        shown.append("… " + copy["lines_changed"].format(n=len(changed)))
-    return shown
+    """Changed lines, the quota shared between removals and additions so neither side vanishes."""
+    changed = [row for row in difflib.ndiff(old.split("\n"), new.split("\n")) if row[:2] in ("- ", "+ ")]
+    minus = [row[2:] for row in changed if row[0] == "-"]
+    plus = [row[2:] for row in changed if row[0] == "+"]
+    keep_minus = min(len(minus), max(_DIFF_LINES // 2, _DIFF_LINES - len(plus)))
+    keep_plus = min(len(plus), _DIFF_LINES - keep_minus)
+    shown = [("−", row) for row in minus[:keep_minus]] + [("+", row) for row in plus[:keep_plus]]
+    out = []
+    for sign, row in shown:
+        out.append(f"{sign} {_exact(row, _VALUE)}")
+    if len(changed) > keep_minus + keep_plus:
+        out.append("… " + copy["lines_changed"].format(n=len(changed)))
+    return out
 
 
-def _update(lang, copy, args):
+def _update(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
         return _head(copy, copy["update_head"], [(copy["task"], None)], notes)
@@ -281,8 +322,9 @@ def _update(lang, copy, args):
             continue
         old = facts[key] if key in ("object", "scope", "effect", "priority") else (
             facts["title"] if key == "title" else facts["values"].get(key))
-        if _line(old) != _line(args[key]):
-            lines.append(f"{key}: {_line(old, _VALUE) or copy['none']} → {_line(args[key], _VALUE)}")
+        if (old or "") != args[key]:
+            before, after = _pair(old, args[key])
+            lines.append(f"{key}: {before or copy['none']} → {after}")
     if "instructions" in args and args["instructions"].rstrip() != facts["instructions"]:
         lines.append(copy["instructions"] + ":")
         lines += ["  " + row for row in _diff_lines(copy, facts["instructions"], args["instructions"].rstrip())]
@@ -300,8 +342,8 @@ def _update(lang, copy, args):
     return _head(copy, copy["update_head"], rows, notes, extra)
 
 
-def _schedule_rows(lang, copy, stored: dict, args: dict):
-    """(rows, plan or None, problem) from the same merge the handler applies."""
+def _merged_schedule(stored: dict, args: dict):
+    """(merged fields, plan): the same merge `_do_task_schedule` applies; plan_schedule may raise."""
     def old(key):
         return stored["schedule"].get(key)
     merged = dict(
@@ -317,30 +359,25 @@ def _schedule_rows(lang, copy, stored: dict, args: dict):
     return merged, plan
 
 
-def _schedule(lang, copy, args):
+def _schedule(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
         return _head(copy, copy["schedule_head"], [], notes)
     rows = [(copy["task"], _line(facts["title"], _VALUE))]
     extra = []
     try:
-        merged, plan = _schedule_rows(lang, copy, facts, args)
+        merged, plan = _merged_schedule(facts, args)
         time = merged["time"] if merged["time"] not in (None, "now") else None
         if time:
-            rows.append((copy["days"], _days(lang, copy, merged["weekdays"])))
+            rows.append((copy["days"], _days(copy, merged["weekdays"])))
             rows.append((copy["time"], time))
             rows.append((copy["zone"], merged["zone"]))
-        repeat = copy["yes"] if merged["recurring"] else copy["no"]
-        limits = []
-        if merged["recurring"]:
-            if plan["recurring_min_interval"]:
-                limits.append(copy["min_gap"].format(h=round(plan["recurring_min_interval"] / 3600, 1)))
-            cap = args.get("recurring_max_runs", facts["values"].get("recurring_max_runs"))
-            limits.append(copy["max_runs"].format(n=cap) if cap not in (None, "", "0", 0) else copy["unlimited"])
-        rows.append((copy["repeats"], repeat + (" (" + "; ".join(limits) + ")" if limits else "")))
+        cap = args.get("recurring_max_runs", facts["values"].get("recurring_max_runs"))
+        rows.append((copy["repeats"], _repeats(copy, merged["recurring"], plan["recurring_min_interval"], cap)))
+        names = _DAYS[copy["lang"]]
         if plan["next_occurrences"]:
             rows.append((copy["next_runs"], "; ".join(
-                f"{_DAYS[lang][o['weekday'] - 1]} {o['local'][:16].replace('T', ' ')}" for o in plan["next_occurrences"][:2])))
+                f"{names[o['weekday'] - 1]} {o['local'][:16].replace('T', ' ')}" for o in plan["next_occurrences"][:2])))
         extra += [f"{copy['warn']}: {note}" for note in plan["notes"]]
     except OperationError as exc:
         extra.append(f"{copy['warn']}: {exc}")
@@ -353,26 +390,32 @@ def _schedule(lang, copy, args):
     return _head(copy, copy["schedule_head"], rows, notes, extra)
 
 
-def _approve(lang, copy, args):
-    facts, notes = _stored(args)
-    if not facts or facts.get("missing"):
-        return _head(copy, copy["approve_head"], [], notes)
-    ok = facts["status"] in ("draft", "planned")
+def _context_rows(copy: dict, facts: dict) -> list:
+    """What a run would do, as stored: task, declared object/scope/effect, instructions, schedule, limits."""
     schedule = facts["schedule"]
     rows = [(copy["task"], _line(facts["title"], _VALUE)),
             (copy["object"], _line(facts["object"], _VALUE)), (copy["scope"], _line(facts["scope"], _VALUE)),
             (copy["declared"], _line(facts["effect"], _VALUE)),
             (copy["instructions"], _excerpt(copy, facts["instructions"]))]
     if schedule.get("time") and schedule["time"] != "now":
-        rows.append((copy["time"], f"{_days(lang, copy, schedule['weekdays'])} {schedule['time']} "
+        rows.append((copy["time"], f"{_days(copy, schedule['weekdays'])} {schedule['time']} "
                                    f"({schedule.get('timezone') or '—'})"))
+    if facts["recurring"]:
+        rows.append((copy["repeats"], _repeats(copy, True, schedule.get("recurring_min_interval"),
+                                               schedule.get("recurring_max_runs"))))
+    return rows
+
+
+def _approve(copy, args):
+    facts, notes = _stored(args)
+    if not facts or facts.get("missing"):
+        return _head(copy, copy["approve_head"], [], notes)
     effect = (copy["approve_effect"] + (" " + copy["approve_recurring"] if facts["recurring"] else "")) \
-        if ok else copy["approve_refused"]
-    rows.append((copy["effect"], effect))
-    return _head(copy, copy["approve_head"], rows, notes)
+        if facts["status"] in ("draft", "planned") else copy["approve_refused"]
+    return _head(copy, copy["approve_head"], _context_rows(copy, facts) + [(copy["effect"], effect)], notes)
 
 
-def _cancel(lang, copy, args):
+def _cancel(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
         return _head(copy, copy["cancel_head_now"], [], notes)
@@ -382,16 +425,15 @@ def _cancel(lang, copy, args):
     return _head(copy, head, [(copy["task"], _line(facts["title"], _VALUE)), (copy["effect"], effect)], notes)
 
 
-def _requeue(lang, copy, args):
+def _requeue(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
         return _head(copy, copy["requeue_head"], [], notes)
     effect = copy["requeue_effect"] if facts["status"] == "error" else copy["requeue_refused"]
-    return _head(copy, copy["requeue_head"], [(copy["task"], _line(facts["title"], _VALUE)),
-                                              (copy["effect"], effect)], notes)
+    return _head(copy, copy["requeue_head"], _context_rows(copy, facts) + [(copy["effect"], effect)], notes)
 
 
-def _telegram(lang, copy, args):
+def _telegram(copy, args):
     rows = [(copy["to"], _line(args["chat_id"]))]
     if args.get("parse_mode"):
         rows.append((copy["format"], copy["parse_mode"].format(mode=args["parse_mode"])))
@@ -399,10 +441,15 @@ def _telegram(lang, copy, args):
     return _head(copy, copy["send_head"], rows, [], [copy["message"] + ":", _quote(_verbatim(args["text"]))])
 
 
-def _generic(lang, copy, name, args):
-    return _head(copy, copy["generic_head"], [(copy["task"], name)] + [
-        (key, _line(value if not isinstance(value, (dict, list)) else json.dumps(value, ensure_ascii=False)))
-        for key, value in args.items()], [])
+_INTERNAL = {"task_id", "expected_row_version", "approval_id", "revises_task_id"}
+
+
+def _generic(copy, name, args):
+    """Fallback: the operation name and the readable fields; identifiers and versions stay out."""
+    rows = [(copy["operation"], name)] + [
+        (key, _line(json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value, _VALUE))
+        for key, value in args.items() if key not in _INTERNAL]
+    return _head(copy, copy["generic_head"], rows, [])
 
 
 RENDERERS = {"task.archive": _archive, "task.create": _create, "task.update": _update,
@@ -413,9 +460,9 @@ RENDERERS = {"task.archive": _archive, "task.create": _create, "task.update": _u
 def render(name: str, arguments: dict, *, seconds: int, lang: str | None = None) -> tuple[str, str]:
     """(message, localized checkbox title) for one validated operation."""
     lang = lang or language()
-    copy = COPY[lang]
+    copy = dict(COPY[lang], lang=lang)
     try:
-        body = RENDERERS[name](lang, copy, arguments) if name in RENDERERS else _generic(lang, copy, name, arguments)
+        body = RENDERERS[name](copy, arguments) if name in RENDERERS else _generic(copy, name, arguments)
     except Exception:  # noqa: BLE001 - never block the prompt; fall back to the plain argument list
-        body = _generic(lang, copy, name, arguments)
+        body = _generic(copy, name, arguments)
     return body + "\n\n" + copy["footer"].format(seconds=seconds), copy["approve_title"]

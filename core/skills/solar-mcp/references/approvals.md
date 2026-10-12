@@ -38,10 +38,15 @@ Spanish. It shows action, object, concrete changes (edit: before → after; sche
 days, time, zone, recurrence limits; send: recipient and the full text) and the
 effect as implemented (approve authorizes execution; cancel of a queued task is
 immediate, of an active one only a stop request). Identifiers, hashes, row versions,
-JSON and empty fields stay out. Characters that hide or reorder text are shown
-escaped. A stale or missing task is flagged in the prompt, and the call is still
-refused at execution. Long instructions are excerpted with their total length;
-`telegram.send` text is never truncated. The approval still binds the full
+JSON and empty fields stay out. Approving or requeuing a task also shows its declared
+object, scope and effect and its recurrence limits. Characters that hide or reorder
+text are shown escaped (`\u202e`, `\x07`). A stale or missing task is flagged in the
+prompt, and the call is still refused at execution. Instructions in create, approve
+and requeue are collapsed to one line and cut at 400 characters, followed by the
+original length; edit diffs list changed lines (removals and additions share the
+quota) with the window starting at the first difference. `telegram.send` text is
+never truncated or reflowed. If a renderer fails, a plain fallback lists the
+operation name and its readable fields, without identifiers or row versions. The approval still binds the full
 arguments, workspace, row version, expiry and single use.
 
 Limits: Solar controls the text, not the client's modal size, scrolling or

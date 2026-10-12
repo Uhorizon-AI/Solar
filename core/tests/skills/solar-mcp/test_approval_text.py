@@ -1,6 +1,7 @@
 """The words of a confirmation: compact, human, derived from validated state, never binding."""
 import json
 import queue
+from pathlib import Path
 from io import StringIO
 
 import pytest
@@ -92,12 +93,45 @@ def test_update_shows_before_and_after_only_for_changes(solar_env):
         priority="normal", instructions="line one\nline 2\nline three"))
     assert "title: Old title → New title" in message
     assert "priority" not in message                      # unchanged: not listed
-    assert "− line two" in message and "+ line 2" in message
-    assert "line one" not in message.replace("line one\n", "")  # unchanged lines are not repeated
+    lines = [row.strip() for row in message.splitlines()]
+    assert "− line two" in lines and "+ line 2" in lines
+    assert "line one" not in lines and "line three" not in lines   # unchanged lines are not repeated
     assert "stored draft is rewritten" in message and "Nothing is queued" in message
     assert_clean(message, made)
     same = text("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"], title="Old title"))
     assert "no difference from the stored task" in same
+
+
+def test_many_changed_lines_keep_both_removals_and_additions(solar_env):
+    old = "\n".join(f"old {i}" for i in range(8))
+    new = "\n".join(f"new {i}" for i in range(8))
+    made = new_task("Big edit", old)
+    message = text("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"], instructions=new))
+    rows = [row.strip() for row in message.splitlines()]
+    assert any(row.startswith("− old") for row in rows) and any(row.startswith("+ new") for row in rows)
+    assert "16 lines changed" in message
+    one_sided = text("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                                         instructions=old + "\n" + "\n".join(f"add {i}" for i in range(6))))
+    assert sum(row.strip().startswith("+ add") for row in one_sided.splitlines()) == 4
+
+
+def test_whitespace_only_change_is_not_reported_as_no_change(solar_env):
+    made = new_task("A  B")
+    message = text("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"], title="A B"))
+    assert "title: A  B → A B" in message and "no difference" not in message
+    body = new_task("Spacing", "keep\nthis")
+    spaced = text("task.update", dict(task_id=body["id"], expected_row_version=body["row_version"],
+                                      instructions="keep\nthis "))
+    assert "no difference" in spaced or "+ this " in spaced   # trailing blanks are trimmed on store
+
+
+def test_long_values_are_cut_where_they_differ(solar_env):
+    made = new_task("A" * 190 + "-old")
+    message = text("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                                       title="A" * 190 + "-new"))
+    row = next(r for r in message.splitlines() if r.strip().startswith("title:"))
+    before, after = row.split(": ", 1)[1].split(" → ")
+    assert before != after and before.endswith("-old") and after.endswith("-new")
 
 
 def test_update_of_a_planned_task_says_it_returns_to_draft(solar_env):
@@ -301,3 +335,87 @@ def test_the_approval_binds_the_full_arguments_not_the_summary(solar_env):
     assert mcp_gate.preflight("task.archive", other, registry).code == "approval_scope_mismatch"
     other = dict(args, expected_row_version=args["expected_row_version"] + 1, approval_id=granted["approval_id"])
     assert mcp_gate.preflight("task.archive", other, registry).code == "approval_scope_mismatch"
+
+
+# ---- review follow-ups ------------------------------------------------------------------------
+
+def test_invisible_class_is_written_with_explicit_escapes():
+    """The hiding characters must stay spelled out in the source, never pasted in raw."""
+    line = next(row for row in Path(approval_text.__file__).read_text(encoding="utf-8").splitlines()
+                if row.startswith("_INVISIBLE"))
+    assert line.isascii(), "raw hidden characters pasted into the source"
+    for escape in ("\\u200b-\\u200f", "\\u202a-\\u202e", "\\u2066-\\u2069", "\\ufeff"):
+        assert escape in line, escape
+    for code in [0x00, 0x07, 0x7f, 0x9f, 0x200b, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069, 0xfeff]:
+        assert approval_text._INVISIBLE.fullmatch(chr(code)), hex(code)
+    for plain in ["a", " ", "\n", "é", "→", "…"]:
+        assert not approval_text._INVISIBLE.fullmatch(plain)
+
+
+def test_approve_shows_recurrence_limits_and_distinguishes_them(solar_env):
+    def approve_text(**schedule):
+        made = new_task("Weekly", "Do it.")
+        run("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                                  scheduled_time="09:00", scheduled_timezone="UTC", scheduled_weekdays=[1],
+                                  recurring=True, **schedule))
+        row = stored(made["id"])
+        return text("task.approve", dict(task_id=made["id"], expected_row_version=row["row_version"]))
+    once = approve_text(recurring_max_runs=1)
+    unlimited = approve_text()
+    capped = approve_text(recurring_max_runs=1, recurring_min_interval=86400)
+    assert "at most 1 runs" in once and "unlimited" in unlimited and once != unlimited
+    assert "Repeats: yes" in once and "minimum gap 24.0 h" in capped
+
+
+def test_requeue_shows_what_would_run_again(solar_env):
+    import solar_state
+
+    def errored(scope, effect):
+        made = new_task("Same title", "Same instructions.", scope=scope, effect=effect, object="Report")
+        run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+        with solar_state.session() as store:
+            store.task_transition(made["id"], "active", expected_from="queued", actor="t", claimed_by="w", claimed_at="2026-01-01T00:00:00Z")
+            store.task_transition(made["id"], "error", expected_from="active", actor="t")
+        return made, text("task.requeue", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
+    first_task, first = errored("Read the finance folder", "Writes one report.")
+    _, second = errored("Delete old backups", "Removes files.")
+    assert first != second
+    assert "Scope: Read the finance folder" in first and "Declared effect: Writes one report." in first
+    assert "Scope: Delete old backups" in second and "Declared effect: Removes files." in second
+    assert "Object: Report" in first and "Instructions: Same instructions." in first
+    assert "runs again with the same instructions" in first
+    assert_clean(first, first_task)
+
+
+@pytest.mark.parametrize("operation", ["task.archive", "task.update", "task.schedule", "task.approve",
+                                       "task.cancel", "task.requeue"])
+def test_unreadable_task_is_flagged_without_raising(solar_env, monkeypatch, operation):
+    monkeypatch.setattr(approval_text, "_facts", lambda task_id: None)
+    args = dict(task_id="t", expected_row_version=1, reason="r")
+    if operation == "task.update":
+        args["title"] = "x"
+    if operation == "task.schedule":
+        args["scheduled_time"] = "09:00"
+    message = text(operation, {k: v for k, v in args.items() if operation == "task.archive" or k != "reason"})
+    assert "Warning: The task could not be read" in message
+    assert not message.startswith("Approve action")   # the specific renderer answered, no exception
+
+
+def test_fallback_for_task_operations_hides_identifiers(solar_env, monkeypatch):
+    monkeypatch.setitem(approval_text.RENDERERS, "task.update", lambda *a: 1 / 0)
+    message = text("task.update", dict(task_id="secret-id-123", expected_row_version=7, title="New"))
+    assert message.startswith("Approve action\nOperation: task.update\ntitle: New")
+    assert "secret-id-123" not in message and "7" not in message.split("\n\n")[0]
+
+
+def test_language_table_is_loaded_once(solar_env):
+    approval_text.language()
+    first = approval_text._tokens()
+    approval_text.language()
+    assert approval_text._tokens() is first
+
+
+def test_excerpt_escapes_hidden_characters_and_reports_original_length(solar_env):
+    made = new_task("Tricky", "safe \u202e hidden " + "y" * 600)
+    message = text("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+    assert "\u202e" not in message and "\\u202e" in message and "characters in total" in message

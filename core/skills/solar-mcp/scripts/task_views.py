@@ -315,21 +315,3 @@ def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
         return dict(base, errors=[dict(title=i["title"], text=i["text"]) for i in found],
                     recorded=bool(found), error_status=task["status"] == "error")
     return dict(base, events=events[-100:], count=len(events))
-
-
-def snapshot(task_id: str) -> dict | None:
-    """What an approver should see next to the exact call. None when unreadable."""
-    import solar_state
-
-    try:
-        with solar_state.read_session() as store:
-            task = store.task_get(task_id)
-        if task is None:
-            return None
-        values = _values(task)
-        return dict(title=task["title"], status=task["status"], row_version=task["row_version"],
-                    object=task["object"], scope=task["scope"], effect=task["effect"],
-                    schedule=_schedule(values), digest=solar_state.material_digest(
-                        task["frontmatter"], task["body"]))
-    except Exception:  # noqa: BLE001 - a missing preview must not block the refusal path
-        return None
