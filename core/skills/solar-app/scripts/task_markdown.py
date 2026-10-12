@@ -9,10 +9,16 @@ import re
 from urllib.parse import urlsplit
 
 
-# The authority must be a plain host with an optional numeric port: no userinfo
-# (`good.test@evil.test` misleads) and no stray characters such as `&` or `=`
-# that make the real host differ from the visible one.
-_HOST = re.compile(r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::[0-9]{1,5})?")
+# The authority must be a plain ASCII host with an optional port from 1 to 65535:
+# no userinfo (`good.test@evil.test` misleads), no stray characters such as `&`
+# or `=` that make the real host differ from the visible one, and no
+# internationalized names (they stay text rather than risk look-alike hosts).
+_HOST = re.compile(r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::([0-9]{1,5}))?")
+
+
+def _plain_authority(netloc):
+    match = _HOST.fullmatch(netloc)
+    return bool(match) and (match.group(1) is None or 1 <= int(match.group(1)) <= 65535)
 
 
 def _safe_link(value):
@@ -32,7 +38,7 @@ def _safe_link(value):
         return False
     scheme = parts.scheme.lower()
     if scheme in ("http", "https"):
-        return value[len(scheme):].startswith("://") and bool(_HOST.fullmatch(parts.netloc))
+        return value[len(scheme):].startswith("://") and _plain_authority(parts.netloc)
     return scheme == "mailto" and bool(parts.path)
 
 

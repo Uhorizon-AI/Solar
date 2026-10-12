@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Console task detail follow-up: link ports must be 1 to 65535 and internationalized host names stay text; the workspace id is shown; a context or configuration that is not an object no longer breaks the block; the host now writes the 503 warning (exception class only) to stderr.
+
 ## [0.40.0] - 2026-10-12
 
 ### Added

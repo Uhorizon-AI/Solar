@@ -551,6 +551,32 @@ async function settled() {
   need(await shaped(null), "No recorded context", "null context");
   lack(await shaped({ agent: "shown-agent", continuity_checkpoint: { next_check: "tomorrow" } }), "open it in Complete record", "no note when something is shown");
 
+  // workspace_id is part of the contract and is shown.
+  view = await shaped({ workspace_id: "ws-fixture-1", agent: "fixture-agent" });
+  need(view, "<dt>Workspace</dt><dd>ws-fixture-1</dd>", "workspace id");
+  need(await shaped({ workspace_id: "ws-fixture-1" }, "es"), "<dt>Espacio de trabajo</dt><dd>ws-fixture-1</dd>", "spanish workspace id");
+
+  // A context or configuration that is not an object must not be read by key.
+  const wrongShapes = async (context, configuration) => {
+    const open = boot(detailRoutes({
+      "/api/console/task-detail?task_id=err-1": { body: { id: "err-1", context, context_error: null, configuration } },
+    }));
+    await settled();
+    open.click({ "data-screen": "tareas" });
+    await settled();
+    return open.els.health.innerHTML;
+  };
+  for (const [context, configuration] of [[[], "x"], ["text", []], [7, 7], [null, null], [["a"], { scheduled_time: "08:15" }]]) {
+    view = await wrongShapes(context, configuration);
+    need(view, "Context and follow-up", "block still drawn for " + JSON.stringify([context, configuration]));
+    need(view, "history-fixture", "history still drawn");
+    lack(view, "native code", "inherited members");
+    lack(view, "undefined", "undefined text");
+    lack(view, "[object", "raw objects");
+  }
+  need(await wrongShapes([], "x"), "No recorded context", "array context is empty context");
+  need(await wrongShapes(["a"], { scheduled_time: "08:15" }), "08:15", "real configuration beside a wrong context");
+
   const mandates = {
     defined: [
       { name: "live-one", file: "live-one.yaml", mode: "active", revoked_at: null },

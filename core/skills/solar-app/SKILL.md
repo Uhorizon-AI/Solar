@@ -137,9 +137,12 @@ conservative subset (headings, paragraphs, lists, quotes, rules, tables, code,
 https and mailto links are links, and raw HTML and images stay inert text. No
 dependencies or network fetches. Not supported, by design: link destinations
 containing parentheses (the link ends at the first `)`), and a `|` inside a table
-cell, including inside inline code (it always splits the cell). The parser is not
-extended for these. The view is read only: no write session, event,
-queue or verification.
+cell, including inside inline code (it always splits the cell), and
+internationalized host names such as `https://münchen.de` (links need an ASCII host
+and a port from 1 to 65535, so they stay text). The parser is not extended for these. The view is read only: no write session, event,
+queue or verification. An unexpected failure in this route answers the fixed 503
+and writes one warning with the exception class (never its message) to stderr
+through the `solar.app` logger, which the host configures at start.
 
 Landing these sources does not mean installed acceptance: install and client
 publication are still required before claiming it.

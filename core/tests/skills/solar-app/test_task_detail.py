@@ -11,6 +11,37 @@ import solar_state
 from task_markdown import render_markdown, sanitize_html
 
 
+class HostLoggingTests(unittest.TestCase):
+    def test_host_sends_the_503_warning_to_stderr_with_the_class_only(self):
+        import io
+        import logging
+        from contextlib import redirect_stderr
+        import host_server
+        logger = logging.getLogger('solar.app')
+        saved = list(logger.handlers)
+        try:
+            for handler in saved:
+                logger.removeHandler(handler)
+            buffer = io.StringIO()
+            with redirect_stderr(buffer):
+                host_server.configure_logging()
+                host_server.configure_logging()  # idempotent
+                self.assertEqual(sum(getattr(h, '_solar_host', False) for h in logger.handlers), 1)
+                handler = Handler()
+                with patch.object(console_data, 'task_detail', side_effect=sqlite3.DatabaseError('SECRET detail')):
+                    app_http.get(handler, '/api/console/task-detail', {'task_id': ['t']}, '/nonexistent')
+            self.assertEqual(handler.status, 503)
+            text = buffer.getvalue()
+            self.assertIn('DatabaseError', text)
+            self.assertIn('solar.app', text)
+            self.assertNotIn('SECRET', text)
+        finally:
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+            for handler in saved:
+                logger.addHandler(handler)
+
+
 class Handler:
     def _send_json(self, payload, status=200):
         self.payload, self.status = payload, status
@@ -184,12 +215,21 @@ class MarkdownTests(unittest.TestCase):
     def test_authority_must_be_a_plain_host(self):
         for target in ('https://evil.test@good.test/x', 'https://foo.com&copy=1&x=y', 'https://user:pw@x.test/',
                        'https://a b.test/', 'https://x.test:port/', 'https://-bad.test/', 'https://x.test:123456/',
-                       'https://x=y.test/', 'https://x.test@/'):
+                       'https://x=y.test/', 'https://x.test@/', 'https://x.test:99999/', 'https://x.test:0/',
+                       'https://x.test:65536/', 'http://[::1]:0/', 'https://münchen.de/', 'https://xn--mnchen-3ya.de@evil.test/'):
             self.assertNotIn('<a', render_markdown('[l](' + target + ')'), target)
         for target in ('https://x.com/?a=1&copy=2', 'http://localhost:9000/a', 'https://sub.x-y.example.org/p#f',
-                       'http://127.0.0.1/', 'http://[::1]:8080/x'):
+                       'http://127.0.0.1/', 'http://[::1]:8080/x', 'https://x.test:1/', 'https://x.test:65535/',
+                       'https://[::1]/x', 'http://[2001:db8::1]:8080/x', 'https://xn--mnchen-3ya.de/'):
             self.assertIn('<a href="', render_markdown('[l](' + target + ')'), target)
         self.assertEqual(sanitize_html('<a href="https://evil.test@good.test/">x</a>'), 'x')
+
+    def test_internationalized_hosts_stay_text(self):
+        """Documented limitation: a non-ASCII host is never linked; its punycode form is."""
+        rendered = render_markdown('[l](https://münchen.de/x)')
+        self.assertNotIn('<a', rendered)
+        self.assertIn('l', rendered)
+        self.assertIn('<a href="https://xn--mnchen-3ya.de/x"', render_markdown('[l](https://xn--mnchen-3ya.de/x)'))
 
     def test_consecutive_quote_lines_form_one_blockquote(self):
         self.assertEqual(render_markdown('> one\n> two\n>three\n\n> next'),

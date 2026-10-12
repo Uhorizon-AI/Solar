@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import os
 import sys
 import urllib.parse
@@ -19,6 +20,18 @@ import host_registry as reg  # noqa: E402
 import host_workspace_context as ctx  # noqa: E402
 
 PORT = 9000
+
+
+def configure_logging() -> None:
+    """Send the console's warnings to stderr, where the host already reports errors."""
+    logger = logging.getLogger("solar.app")
+    if any(getattr(handler, "_solar_host", False) for handler in logger.handlers):
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    handler._solar_host = True  # type: ignore[attr-defined]
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
 
 
 def _active_workspace() -> Path:
@@ -114,6 +127,7 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     ws = _active_workspace()
+    configure_logging()
 
     server = ThreadingHTTPServer((host, PORT), HostHandler)
     print(f"Solar Host listening on http://{host}:{PORT} (workspace={ws})")

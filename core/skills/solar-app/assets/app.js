@@ -24,6 +24,7 @@
       tc_this_task_s_stored_record_could_not_be_r: "This task's stored record could not be read.",
       tc_this_task_s_context_could_not_be_read: "This task's context could not be read.",
       tc_context_and_follow_up: "Context and follow-up",
+      tc_workspace: "Workspace",
       tc_agent: "Agent",
       tc_planet: "Planet",
       tc_responsibility: "Responsibility",
@@ -169,6 +170,7 @@
       tc_this_task_s_stored_record_could_not_be_r: "No se pudo leer el registro guardado de esta tarea.",
       tc_this_task_s_context_could_not_be_read: "No se pudo leer el contexto de esta tarea.",
       tc_context_and_follow_up: "Contexto y seguimiento",
+      tc_workspace: "Espacio de trabajo",
       tc_agent: "Agente",
       tc_planet: "Planeta",
       tc_responsibility: "Responsabilidad",
@@ -878,7 +880,7 @@
     if (saved.loading) return heading + '<p class="note">' + esc(t("reading")) + '</p></section>';
     if (saved.refused) return heading + '<p class="note" role="alert">' + esc(t("tc_this_task_s_context_could_not_be_read")) + '</p>' + fullRecord(task) + '</section>';
     var data = saved.data || {};
-    var context = data.context && typeof data.context === "object" ? data.context : {};
+    var context = asObject(data.context);
     var cp = asObject(context.continuity_checkpoint);
     var verified = asObject(cp.last_verified_result);
     var next = asObject(cp.next_check);
@@ -889,6 +891,7 @@
       if (Array.isArray(value)) value = value.every(function (item) { return item == null || typeof item !== "object"; }) ? value.join(", ") : null;
       if (value != null && typeof value !== "object" && String(value)) fields.push('<dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd>');
     }
+    field(t("tc_workspace"), context.workspace_id);
     field(t("tc_agent"), context.agent);
     field(t("tc_planet"), context.planet);
     field(t("tc_responsibility"), context.responsibility);
@@ -908,7 +911,7 @@
     if (effect) field(t("tc_effect_state"), effect === "effect_uncertain" ? (t("tc_uncertain_verify_before_retrying")) : (t("tc_recorded_state_not_verified_on_opening")));
     var contextFields = fields.length;
     var unshown = Object.keys(cp).length > 0 || Object.keys(context).some(function (name) { return context[name] !== null && typeof context[name] === "object"; });
-    var configuration = data.configuration && typeof data.configuration === "object" ? data.configuration : {};
+    var configuration = asObject(data.configuration);
     if (configuration.recurring === true || configuration.recurring === "true") field(t("tc_recurrence"), t("tc_recurring"));
     field(t("tc_minimum_interval"), intervalText(configuration.recurring_min_interval));
     field(t("tc_configured_time"), configuration.scheduled_time);
