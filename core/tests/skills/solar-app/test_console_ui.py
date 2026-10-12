@@ -29,6 +29,7 @@ QUESTIONS = (
 ROUTES = (
     "/api/console/health",
     "/api/console/tasks",
+    "/api/console/task-detail?task_id=",
     "/api/console/executions",
     "/api/console/continuity",
     "/api/console/mandates",
@@ -285,6 +286,18 @@ async function settled() {
   if (!continuity.includes("Saved text, not a message from this console.")) {
     throw new Error("active intention is not marked as saved text");
   }
+
+  page = boot(Object.assign({
+    "/api/console/tasks": { body: tasks },
+    "/api/console/task-detail?task_id=err-1": { body: { id: "err-1", context: { agent: "fixture", continuity_checkpoint: { wait: "<script>unsafe</script>", next_check: { at: "2026-10-13", action: "Review", source: "source.md" } } }, context_error: null } },
+  }, calm));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  const taskContext = page.els.health.innerHTML;
+  if (!taskContext.includes("2026-10-13") || !taskContext.includes("fixture")) throw new Error("task context missing");
+  if (taskContext.includes("<script>unsafe")) throw new Error("task context was not escaped");
+  if (!taskContext.includes("Execution") && !taskContext.includes("History")) throw new Error("execution detail disappeared");
 
   const mandates = {
     defined: [

@@ -106,3 +106,10 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 
 Host sleep stops availability. Only one active host should serve the same public
 route. This console is local and does not replace the gateway or transports.
+
+## Task context
+
+Selecting a task reads `/api/console/task-detail?task_id=<id>` on demand.
+The shared solar-state parser preserves the MCP checkpoint contract; invalid
+context is localized to that task and its stored configuration remains readable.
+Recorded evidence does not verify an effect or authorize retrying it.

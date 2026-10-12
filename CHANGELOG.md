@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- On-demand task context and stored schedule configuration, including IANA timezone, with checkpoint parsing shared with MCP task views.
+
 ## [0.39.1] - 2026-10-12
 
 ### Changed

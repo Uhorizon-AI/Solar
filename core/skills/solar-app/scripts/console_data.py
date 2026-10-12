@@ -595,6 +595,13 @@ def tasks(workspace) -> dict:
     return data
 
 
+def task_detail(workspace, task_id) -> dict | None:
+    data, error = _with_store(lambda store: runtime_views.console_task_detail(store, task_id))
+    if error is not None:
+        raise error
+    return data
+
+
 def executions(workspace) -> dict:
     data, error = _with_store(runtime_views.console_executions)
     if error is not None:

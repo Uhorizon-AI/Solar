@@ -285,6 +285,8 @@
     machine: false
   };
   var cache = {};
+  var taskContexts = {};
+  var contextEpoch = 0;
   var timer = 0;
   var healthStamp = null;
 
@@ -453,6 +455,7 @@
   }
 
   function openScreen(id) {
+    if (id === "tareas") { taskContexts = {}; contextEpoch += 1; }
     ui.screen = id;
     clearInterval(timer);
     timer = 0;
@@ -748,7 +751,62 @@
       kv(t("parent"), task.parent_id ? String(task.parent_id).slice(0, 8) : t("root"), task.parent_id ? "mono" : "note") +
       '<div class="k">' + esc(t("col_requester")) + '</div><div><span class="gap">' + t("gap") + "</span></div></div>" +
       (children.length ? '<div><div class="lbl" style="margin-bottom:4px">' + esc(t("subtasks")) + " (" + children.length + ")</div>" + kidHtml + "</div>" : "") +
-      '<div><div class="lbl" style="margin-bottom:8px">' + esc(t("history")) + '</div><div class="tl">' + lines + "</div></div></div>";
+      taskContext(task) + '<div><div class="lbl" style="margin-bottom:8px">' + esc(t("history")) + '</div><div class="tl">' + lines + "</div></div></div>";
+  }
+
+  function taskContext(task) {
+    var key = task.id + "|" + (task.updated_at || "");
+    var saved = taskContexts[key];
+    var es = LANG === "es";
+    var title = es ? "Contexto y seguimiento" : "Context and follow-up";
+    if (!saved) {
+      taskContexts[key] = { loading: true };
+      var epoch = contextEpoch;
+      load("/api/console/task-detail?task_id=" + encodeURIComponent(task.id)).then(function (reply) {
+        if (epoch !== contextEpoch) return;
+        taskContexts[key] = reply;
+        if (ui.screen === "tareas" && ui.task === task.id && cache.tareas) paint("tareas", cache.tareas);
+      });
+      saved = taskContexts[key];
+    }
+    var heading = '<section aria-label="' + esc(title) + '"><h3>' + esc(title) + '</h3>';
+    if (saved.loading) return heading + '<p class="note">' + esc(t("reading")) + '</p></section>';
+    var data = saved.data || {};
+    if (saved.refused || data.context_error) return heading + '<p class="note">' + esc(es ? "No se pudo leer el contexto: " : "Context unavailable: ") + esc(saved.refused || data.context_error) + '</p></section>';
+    var context = data.context || {};
+    var cp = context.continuity_checkpoint || {};
+    var verified = cp.last_verified_result || {};
+    var next = cp.next_check || {};
+    var decision = cp.decision || {};
+    var effect = (cp.checkpoint || {}).state;
+    var fields = [];
+    function field(label, value) {
+      if (value != null && typeof value !== "object" && String(value)) fields.push('<dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd>');
+    }
+    field(es ? "Agente" : "Agent", context.agent);
+    field(es ? "Planeta" : "Planet", context.planet);
+    field(es ? "Responsabilidad" : "Responsibility", context.responsibility);
+    field(es ? "Contrato" : "Contract", context.agent_contract);
+    field(es ? "Resultado registrado" : "Recorded result", verified.path || verified.artifact_ref);
+    field(es ? "Verificación registrada" : "Recorded verification", verified.verified_at ? fmt(verified.verified_at, true) : null);
+    field(es ? "Próxima comprobación" : "Next check", next.action);
+    field(es ? "Fecha de comprobación" : "Check date", next.at);
+    field(es ? "Fuente de comprobación" : "Check source", next.source);
+    field(es ? "Espera" : "Waiting", typeof cp.wait === "string" ? cp.wait : (cp.wait || {}).reason);
+    field(es ? "Decide" : "Decision owner", decision.owner);
+    field(es ? "Asunto" : "Subject", decision.subject || decision.action);
+    field(es ? "Fuente de la decisión" : "Decision source", decision.source);
+    field(es ? "Válida desde" : "Valid from", decision.valid_from);
+    field(es ? "Válida hasta" : "Valid until", decision.valid_until);
+    if (decision.status) field(es ? "Decisión" : "Decision", decision.status === "pending" ? (es ? "Pendiente" : "Pending") : (es ? "Estado guardado; revisar fuente" : "Recorded status; check source"));
+    if (effect) field(es ? "Situación del efecto" : "Effect state", effect === "effect_uncertain" ? (es ? "Incierto; verificar antes de repetir" : "Uncertain; verify before retrying") : (es ? "Estado registrado; no verificado al abrir" : "Recorded state; not verified on opening"));
+    var configuration = data.configuration || {};
+    field(es ? "Hora configurada" : "Configured time", configuration.scheduled_time);
+    field(es ? "Zona horaria" : "Time zone", configuration.scheduled_timezone || (es ? "Zona del equipo (sin zona guardada)" : "Host timezone (no stored zone)"));
+    field(es ? "Días ISO, lunes = 1" : "ISO weekdays, Monday = 1", configuration.scheduled_weekdays);
+    field(es ? "Máximo de ejecuciones" : "Maximum runs", configuration.recurring_max_runs);
+    field(es ? "Recursos reservados" : "Reserved resources", configuration.resources);
+    return heading + (fields.length ? '<dl>' + fields.join("") + '</dl>' : '<p class="note">' + esc(es ? "Sin contexto registrado. El estado de ejecución y su historial se conservan." : "No recorded context. Execution state and history remain available.") + '</p>') + '<p class="note">' + esc(es ? "Leer este registro no verifica el efecto ni autoriza repetirlo." : "Reading this record does not verify an effect or authorize retrying it.") + '</p></section>';
   }
 
   function machineTable(data, selected) {

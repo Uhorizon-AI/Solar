@@ -174,3 +174,12 @@ SOLAR_STATE_ALLOW_CUTOVER=1 python3 scripts/solar_state_cutover.py rollback
   newest copy is older than 24 h, so it does not depend on the orchestrator.
 - `inspect_backup(path)` opens a copy read-only and reports schema, integrity
   and counts.
+
+## Console task detail
+
+`runtime_views.console_task_detail(store, task_id)` reads task identity, recorded
+checkpoint and stored schedule/resource configuration on demand through a read
+session. Invalid context is localized to the selected task; its configuration
+remains readable. The checkpoint parser is shared with MCP task views. Recorded
+evidence does not verify an effect or authorize a retry. Task scheduling uses the
+registered `task.schedule` operation; this projection never writes or queues.

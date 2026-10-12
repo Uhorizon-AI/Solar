@@ -37,6 +37,18 @@ def get(handler, path, qs, workspace):
         limit = min(100, max(1, int(value('limit', '40'))))
         handler._send_json(app_solar.activity_page(Path(workspace), value('source'), value('state'), offset, limit))
         return
+    if path == "/api/console/task-detail":
+        task_id = qs.get("task_id", [""])[0]
+        if not task_id or len(task_id) > 200:
+            handler._send_json({"error": "A bounded task_id is required"}, 400)
+            return
+        try:
+            result = console_data.task_detail(Path(workspace), task_id)
+            handler._send_json(result if result is not None else {"error": "Task not found"},
+                               200 if result is not None else 404)
+        except (solar_state.StateError, ValueError) as exc:
+            handler._send_json({"error": str(exc), "refused": True}, 503)
+        return
     console = {
         "/api/console/health": console_data.health,
         "/api/console/tasks": console_data.tasks,

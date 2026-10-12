@@ -205,16 +205,14 @@ def _without_sections(body: str, titles) -> str:
 
 
 def _checkpoint(values: dict) -> dict | None:
+    import runtime_views
+
     if "continuity_checkpoint" not in values:
         return None
-    raw = values["continuity_checkpoint"]
     try:
-        checkpoint = json.loads(raw) if raw is not None else None
-    except (TypeError, json.JSONDecodeError):
-        checkpoint = None
-    if not isinstance(checkpoint, dict):
-        raise ViewError("checkpoint_invalid", "continuity_checkpoint must be a JSON object")
-    return checkpoint
+        return runtime_views.task_checkpoint(values["continuity_checkpoint"])
+    except ValueError as exc:
+        raise ViewError("checkpoint_invalid", str(exc)) from None
 
 
 def _execution_result(task: dict, values: dict) -> dict | None:
