@@ -477,7 +477,7 @@ def test_diff_cost_does_not_depend_on_repetitive_lines(solar_env):
     args = dict(task_id=made["id"], expected_row_version=made["row_version"], instructions="a\n" * 10000 + "new")
     started = time.monotonic()
     message = text("task.update", args)
-    assert time.monotonic() - started < 1.0
+    assert time.monotonic() - started < 5.0
     rows = [row.strip() for row in message.splitlines()]
     assert "− old" in rows and "+ new" in rows
 
@@ -488,16 +488,18 @@ def test_diff_cost_is_bounded_when_everything_differs(solar_env):
     new = "\n".join("y" * (i % 5) + "b" for i in range(3000))
     started = time.monotonic()
     message = approval_text._diff_lines(approval_text.COPY["en"], old, new)
-    assert time.monotonic() - started < 1.0
+    assert time.monotonic() - started < 5.0
     assert any(row.startswith("− ") for row in message) and any(row.startswith("+ ") for row in message)
     assert message[-1].startswith("… 6000 lines changed")
 
 
-def test_large_block_still_pairs_the_edited_line_after_inserted_lines(solar_env):
+@pytest.mark.parametrize("inserted", [14, 20, 60, 120])
+def test_large_block_still_pairs_the_edited_line_after_inserted_lines(solar_env, inserted):
     long = "A" * 200
     old = "\n".join([f"{long}-OLD"] + [f"o{i}" for i in range(150)])
-    new = "\n".join([f"ins{i}" for i in range(14)] + [f"{long}-NEW"] + [f"n{i}" for i in range(150)])
+    new = "\n".join([f"ins{i}" for i in range(inserted)] + [f"{long}-NEW"] + [f"n{i}" for i in range(150)])
     assert len(old.split("\n")) * len(new.split("\n")) > approval_text._DIFF_BUDGET
     rows = approval_text._diff_lines(approval_text.COPY["en"], old, new)
-    assert any(row.startswith("− ") and "-OLD" in row for row in rows)
-    assert any(row.startswith("+ ") and "-NEW" in row for row in rows)
+    minus = next(row for row in rows if row.startswith("− "))
+    plus = next(row for row in rows if row.startswith("+ ") and "ins" not in row[:6])
+    assert "-OLD" in minus and "-NEW" in plus

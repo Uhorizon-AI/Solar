@@ -301,29 +301,38 @@ def _create(copy, args):
 # Work bounds for the edit diff. It runs before the confirmation timer starts and while the server
 # answers nothing else, so its cost must not depend on how repetitive the instructions are.
 _DIFF_BUDGET = 10_000   # line pairs (after trimming) that may go through difflib; beyond: one block
-_MATCH_ROWS = 16        # lines per side considered when pairing a removal with its addition
+_MATCH_ROWS = 128       # lines per side considered when pairing a removal with its addition
+_MATCH_CHARS = 300      # characters compared at each end of a line
 
 
 def _similar(a: str, b: str) -> float:
-    """Share of the longer line that is common prefix plus common suffix. Linear time."""
-    head = len(os.path.commonprefix([a, b]))
-    tail = len(os.path.commonprefix([a[head:][::-1], b[head:][::-1]]))
-    return (head + tail) / max(len(a), len(b), 1)
+    """Common prefix plus common suffix as a share of the longer line; -1 when too little is shared.
+
+    Only the first and last `_MATCH_CHARS` characters are compared, so the cost per pair is
+    bounded whatever the line length. A long line needs 100 shared characters, a short one half
+    (never fewer than 4).
+    """
+    longest = max(len(a), len(b), 1)
+    head = len(os.path.commonprefix([a[:_MATCH_CHARS], b[:_MATCH_CHARS]]))
+    room = max(min(len(a), len(b)) - head, 0)
+    tail = min(len(os.path.commonprefix([a[-_MATCH_CHARS:][::-1], b[-_MATCH_CHARS:][::-1]])), room)
+    return (head + tail) / longest if head + tail >= max(4, min(longest / 2, 100)) else -1.0
 
 
 def _match(removed: list, added: list) -> dict:
-    """removed index -> added index of the most similar line (one to one).
+    """removed index -> (added index, similarity) of the most similar line (one to one).
 
-    A replaced block can hold an unrelated inserted line next to the edited one, so position
-    alone mispairs them. Only the first `_MATCH_ROWS` lines of each side are considered, which
-    covers every line that can be shown; the score is linear in the line length.
+    A replaced block can hold unrelated inserted lines next to the edited one, so position alone
+    mispairs them. The first `_MATCH_ROWS` lines of each side are scored (at most 128 x 128 cheap
+    comparisons per block, and a block is itself bounded by `_DIFF_BUDGET`); an edited line
+    further down than that is shown unpaired.
     """
     scored = sorted(((_similar(a, b), -k, -j) for k, a in enumerate(removed[:_MATCH_ROWS])
                      for j, b in enumerate(added[:_MATCH_ROWS])), reverse=True)
     match, taken = {}, set()
     for score, k, j in scored:
-        if score >= 0.5 and -k not in match and -j not in taken:
-            match[-k] = -j
+        if score >= 0 and -k not in match and -j not in taken:
+            match[-k] = (-j, score)
             taken.add(-j)
     return match
 
@@ -358,21 +367,24 @@ def _diff_lines(copy, old: str, new: str) -> list:
     insertions and deletions; a pair is cut to one window (see `_pair`), so a
     long line whose change lies far to the right shows the difference on both sides.
     """
-    minus, plus = [], []          # (line, partner or None)
+    minus, plus = [], []          # (line, partner or None, similarity)
     for removed, added in _blocks(old.split("\n"), new.split("\n")):
         match = _match(removed, added)
-        minus += [(row, added[match[k]] if k in match else None) for k, row in enumerate(removed)]
-        back = {j: k for k, j in match.items()}
-        plus += [(row, removed[back[j]] if j in back else None) for j, row in enumerate(added)]
-    # Edited lines (those with a partner) come before pure insertions and deletions.
-    minus.sort(key=lambda entry: entry[1] is None)
-    plus.sort(key=lambda entry: entry[1] is None)
+        minus += [(row, added[match[k][0]] if k in match else None, match[k][1] if k in match else 0)
+                  for k, row in enumerate(removed)]
+        back = {j: (k, score) for k, (j, score) in match.items()}
+        plus += [(row, removed[back[j][0]] if j in back else None, back[j][1] if j in back else 0)
+                 for j, row in enumerate(added)]
+    # Edited lines (those with a partner, the most similar first) come before pure insertions and
+    # deletions.
+    minus.sort(key=lambda entry: (entry[1] is None, -entry[2]))
+    plus.sort(key=lambda entry: (entry[1] is None, -entry[2]))
     keep_minus = min(len(minus), max(_DIFF_LINES // 2, _DIFF_LINES - len(plus)))
     keep_plus = min(len(plus), _DIFF_LINES - keep_minus)
     out = []
-    for row, partner in minus[:keep_minus]:
+    for row, partner, _score in minus[:keep_minus]:
         out.append("− " + (_pair(row, partner)[0] if partner is not None else _exact(row, _VALUE)))
-    for row, partner in plus[:keep_plus]:
+    for row, partner, _score in plus[:keep_plus]:
         out.append("+ " + (_pair(partner, row)[1] if partner is not None else _exact(row, _VALUE)))
     if len(minus) + len(plus) > keep_minus + keep_plus:
         out.append("… " + copy["lines_changed"].format(n=len(minus) + len(plus)))
