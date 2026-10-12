@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.40.1] - 2026-10-12
+
 ### Fixed
 - Console task detail follow-up: link ports must be 1 to 65535, bracketed IPv6 hosts must be valid addresses and internationalized host names stay text; the workspace id is shown; a context or configuration that is not an object no longer breaks the block; the host logs the 503 warning (exception class only) through the `solar.app` logger, adding a stderr handler only when neither that logger nor the root logger has one (a configured root is trusted and propagation is unchanged; if the root is configured after the console started the warning can print twice, which is accepted), and unexpected read errors on other console routes answer a fixed message instead of the exception text.
 
