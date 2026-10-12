@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-12
+
 ### Added
 - Read-only operational reports from explicit planet indexes. Paths are confined to each planet's `operations/` directory, refusing both a symlink within it that points elsewhere and an `operations/` that leaves the planet, and are served with a sandboxed CSP that omits top navigation and popups.
 
