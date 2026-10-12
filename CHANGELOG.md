@@ -7,7 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
-- Read-only operational reports from explicit planet indexes, with confined paths and sandboxed HTML serving.
+- Read-only operational reports from explicit planet indexes. Paths are confined to each planet's `operations/`, including through symlinks, and served with a sandboxed CSP that also blocks navigation.
 
 ### Changed
 - Console: the IDEs screen is renamed Apps (menu, title, question and headings in English and Spanish). Its internal id and `/api/console/ides` route are unchanged.

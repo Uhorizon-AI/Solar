@@ -1124,20 +1124,17 @@ async function settled() {
     await settled();
     const navHtml = page.els.nav.innerHTML;
     if (!navHtml.includes('data-screen="ides"')) throw new Error("the internal id stays ides");
-    if (!navHtml.includes(">" + nav + "<") && !navHtml.includes(nav)) throw new Error("menu lacks " + nav);
+    if (!navHtml.includes(">" + nav + "<")) throw new Error("menu lacks " + nav);
     if (navHtml.includes("IDEs")) throw new Error("menu still says IDEs in " + language);
     page.click({ "data-screen": "ides" });
     await settled();
     const screen = page.els.health.innerHTML;
     if (page.els.title.textContent !== nav) throw new Error("title in " + language + ": " + page.els.title.textContent);
+    if (page.els.question.textContent !== question) throw new Error("question in " + language + ": " + page.els.question.textContent);
     if (!screen.includes(skills)) throw new Error("tile label in " + language);
     if (!screen.includes(">" + column + "<")) throw new Error("column header in " + language);
     if (screen.includes("IDE")) throw new Error("IDE left on the Apps screen in " + language);
     if (!page.requests.includes("/api/console/ides")) throw new Error("the route is unchanged");
-    if (!page.els.sub || !String(page.els.sub.textContent).includes(question)) {
-      const subtitle = Object.values(page.els).map((node) => node.textContent).join("|");
-      if (!subtitle.includes(question)) throw new Error("question in " + language + ": " + subtitle.slice(0, 200));
-    }
   }
 
   const mandates = {

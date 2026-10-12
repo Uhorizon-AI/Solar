@@ -8,14 +8,18 @@ Each report entry requires string fields `path`, `title`, `owner`,
 `generated_at`, `period`, `coverage` and `next_decision`. Paths are relative to
 that planet and confined to `operations/`; report paths end in `.html`.
 Evidence paths end in `.md` or `.txt` and are served as plain text. Missing,
-traversing or escaping paths fail closed for that index. Excluded planets are
+traversing or escaping paths fail closed for that index; a resolved path outside
+`operations/`, including through a symlink, is refused. Excluded planets are
 not read. Limits: 30 reports, 500 evidence paths, 128 KiB index, 4 MiB file.
 
 The publishing generator escapes business input and declares real coverage.
 The console applies a sandbox CSP with no scripts, forms, images, network
-subresources or base rewriting. Reports should be self-contained with inline
-CSS; relative links resolve to explicitly published reports/evidence. No
-directory browsing, database downloads, approval controls or mutation routes.
+subresources or base rewriting, `navigate-to 'none'` (where the browser supports
+it) and `base-uri 'none'`, so a published report cannot navigate the console
+away; it opens in a new tab with `rel="noopener noreferrer"`. Reports should be
+self-contained with inline CSS; relative links resolve to explicitly published
+reports/evidence. No directory browsing, database downloads, approval controls
+or mutation routes.
 
 Generation time does not prove data freshness. Each area owns its coverage,
 source dates and next decision. Invalid indexes appear as localized errors.

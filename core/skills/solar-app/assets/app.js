@@ -8,8 +8,6 @@
     en: {
       page_title: "Solar local console",
       gap: "available once Solar knows who is speaking",
-      continuity: "The last thing Solar was holding when you spoke to it through Telegram, n8n, or a task. It does not update when you work directly in the IDE.",
-      saved: "Saved text, not a message from this console.",
       delegation: "Solar acts without asking you, only inside a written permission with limits and an expiry.",
       nav_label: "Console questions",
       brand_note: "console · read only",
@@ -163,8 +161,6 @@
     es: {
       page_title: "Consola local de Solar",
       gap: "disponible cuando Solar sepa quién le habla",
-      continuity: "Lo último que Solar tenía entre manos cuando le hablaste por Telegram, n8n o una tarea. No se actualiza cuando trabajas directamente en el IDE.",
-      saved: "Contenido guardado, no un mensaje de esta consola.",
       delegation: "Solar actúa sin preguntarte, solo dentro de un permiso escrito con límites y caducidad.",
       nav_label: "Preguntas de la consola",
       brand_note: "consola · solo lectura",
@@ -442,10 +438,6 @@
     if (text === t("no_data")) return text;
     return LANG === "es" ? ("hace " + text) : (text + " ago");
   }
-  function ageLabel(value) {
-    var seconds = ageFrom(value);
-    return seconds == null ? t("no_data") : agoPhrase(seconds);
-  }
   function ageText(seconds) {
     if (seconds == null || seconds < 0) return t("no_data");
     var m = Math.floor(seconds / 60);
@@ -494,17 +486,6 @@
     return '<div class="card" style="display:flex;flex-direction:column;gap:8px">' +
       pill("err", "▲", t("route_refused")) +
       '<div>' + esc(reason || t("no_reason")) + "</div></div>";
-  }
-  function plain(value) {
-    if (value == null || value === "") return t("no_data");
-    if (typeof value === "string" || typeof value === "number") return String(value);
-    try { return JSON.stringify(value); } catch (error) { return t("no_data"); }
-  }
-  function showCount(value) {
-    if (value == null || value === "") return "—";
-    if (Array.isArray(value)) return String(value.length);
-    if (typeof value === "object") return String(Object.keys(value).length);
-    return String(value);
   }
 
   function screenOf(id) {
@@ -1173,7 +1154,7 @@
     var es = LANG === "es";
     var rows = (data.reports || []).map(function (row) {
       var safe = typeof row.href === "string" && /^\/reports\/[A-Za-z0-9_-]+\/operations\//.test(row.href);
-      return '<article class="card rep"><h2>' + (safe ? '<a href="' + esc(row.href) + '">' + esc(row.title) + '</a>' : esc(row.title)) + '</h2><p>' + esc(row.coverage) + '</p><p>' + esc(row.next_decision) + '</p><p class="note">' + esc(row.owner) + ' · ' + esc(row.period) + ' · ' + esc(row.generated_at) + '</p></article>';
+      return '<article class="card rep"><h2>' + (safe ? '<a href="' + esc(row.href) + '" target="_blank" rel="noopener noreferrer">' + esc(row.title) + '</a>' : esc(row.title)) + '</h2><p>' + esc(row.coverage) + '</p><p>' + esc(row.next_decision) + '</p><p class="note">' + esc(row.owner) + ' · ' + esc(row.period) + ' · ' + esc(row.generated_at) + '</p></article>';
     }).join("");
     var errors = (data.errors || []).map(function (row) { return '<p class="note">' + esc(row.planet) + ': ' + esc(es ? "índice no disponible" : "index unavailable") + '</p>'; }).join("");
     return '<p class="note">' + esc(es ? "Vistas publicadas por cada área. La fecha de generación no acredita datos frescos. Solo lectura." : "Views explicitly published by each area. Generation date does not prove fresh data. Read only.") + '</p>' + (rows || '<p>' + esc(es ? "Todavía no hay reportes publicados." : "No published reports yet.") + '</p>') + errors;

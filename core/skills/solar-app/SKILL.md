@@ -2,7 +2,7 @@
 name: solar-app
 description: >
   Read-only Solar console on :9000. Inspect runtime health, async tasks, gateway
-  failures, continuity freshness and router executions with injected context.
+  failures, published operational reports and router executions with injected context.
 ---
 
 # Solar Console
@@ -65,6 +65,10 @@ answers them. Database rows come from `read_session()` in solar-state. Files
 outside the database (owner, cutover, pass stamp, daily backups, IDE trees,
 gateway stamp, mandate YAML, MCP gate audit) are read through solar-paths.
 `console_data.py` loads `solar-client/scripts/console_language.py`.
+`operation_reports.py` loads `solar-client/scripts/skill_inventory.py` by path
+for its planet exclusions; a missing client file disables only the reports
+routes (`/api/console/reports` and `/reports/…` answer 503), never the console
+startup, because the import happens inside the route.
 A missing file raises ImportError and names that path. These routes
 create no runtime file. Execution channel and `user_id` come from the
 audit start with the same `router_id`. An end with no start is channel
@@ -97,7 +101,8 @@ an IDE directory.
 The navigation shows Reports. `/api/console/reports` reads explicit planet
 publication indexes, respecting Client planet exclusions.
 `/reports/<planet>/<relative-path>` serves only listed HTML or evidence text with
-a restrictive CSP, no scripts or forms, bounded files and no-store headers. See
+a restrictive CSP (no scripts, forms, base rewrite or navigation), bounded files
+and no-store headers. See
 [publication contract](references/operation-reports.md). No report is copied
 into shared state. Source changes require installation and client publication
 before claiming installed acceptance.

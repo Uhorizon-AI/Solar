@@ -52,6 +52,36 @@ class PublishedReports(unittest.TestCase):
         result = operation_reports.report_index(self.workspace)
         self.assertEqual(result, dict(reports=[], errors=[]))
 
+    def test_symlink_inside_the_planet_but_outside_operations_is_refused(self):
+        # A patient file outside operations/ (notes with client data, a stray AGENTS.md)
+        # must not become reachable just because it lives in the same planet.
+        private = self.planet / 'private/notes.txt'
+        private.parent.mkdir(parents=True)
+        private.write_text('client data')
+        link = self.planet / 'operations/leadership/reports/notes.txt'
+        link.symlink_to(private)
+        self.row = dict(self.row, path='operations/leadership/reports/notes.txt')
+        self.index.write_text(json.dumps(dict(version=1, reports=[self.row], evidence=[])))
+        self.assertTrue(operation_reports.report_index(self.workspace)['errors'])
+        with self.assertRaises(ValueError):
+            operation_reports.published_file(self.workspace, '/reports/example/' + self.row['path'])
+
+    def test_symlinked_report_is_a_404_not_a_file(self):
+        class Handler:
+            def __init__(self): self.headers = {}; self.wfile = io.BytesIO()
+            def send_response(self, code): self.code = code
+            def send_header(self, key, value): self.headers[key] = value
+            def end_headers(self): pass
+            def _send_json(self, payload, status=200): self.code, self.payload = status, payload
+        private = self.planet / 'private/notes.txt'
+        private.parent.mkdir(parents=True)
+        private.write_text('client data')
+        link = self.planet / 'operations/leadership/reports/notes.txt'
+        link.symlink_to(private)
+        handler = Handler()
+        app_http.get(handler, '/reports/example/operations/leadership/reports/notes.txt', {}, self.workspace)
+        self.assertEqual(handler.code, 404)
+
     def test_invalid_settings_refuse_discovery(self):
         settings = self.workspace / '.solar/settings.json'
         settings.parent.mkdir()
@@ -70,12 +100,31 @@ class PublishedReports(unittest.TestCase):
         self.assertEqual(handler.code, 200)
         self.assertIn("default-src 'none'", handler.headers['Content-Security-Policy'])
         self.assertIn('sandbox;', handler.headers['Content-Security-Policy'])
+        self.assertIn("navigate-to 'none'", handler.headers['Content-Security-Policy'])
         self.assertNotIn('allow-scripts', handler.headers['Content-Security-Policy'])
         self.assertEqual(handler.headers['Cache-Control'], 'no-store')
 
+    def test_the_report_route_reads_only_its_planet(self):
+        # Serving one file must resolve only that planet's index, not walk the
+        # workspace and choke on a sibling planet's broken index.
+        other = self.workspace / 'planets/other/operations/leadership/reports'
+        other.mkdir(parents=True)
+        (other / 'index.json').write_text('{broken')
+        body, mime = operation_reports.published_file(self.workspace, '/reports/example/' + self.row['path'])
+        self.assertIn(b'Report', body)
+        self.assertTrue(mime.startswith('text/html'))
 
-if __name__ == '__main__':
-    unittest.main()
+    def test_missing_client_inventory_answers_503(self):
+        class Handler:
+            def __init__(self): self.code = None; self.payload = None
+            def _send_json(self, payload, status=200): self.code, self.payload = status, payload
+        # Point the workspace at a tmp dir whose .solar/settings.json is unreadable.
+        settings = self.workspace / '.solar/settings.json'
+        settings.parent.mkdir()
+        settings.write_text('{broken')
+        handler = Handler()
+        app_http.get(handler, '/reports/example/' + self.row['path'], {}, self.workspace)
+        self.assertEqual(handler.code, 503)
 
 
 class LegacyContinuityRoute(unittest.TestCase):
@@ -92,3 +141,7 @@ class LegacyContinuityRoute(unittest.TestCase):
             app_http.get(handler, '/api/console/continuity', {}, '/nonexistent')
         self.assertEqual(handler.status, 200)
         self.assertEqual(handler.payload, {'at': None, 'active': 'kept'})
+
+
+if __name__ == '__main__':
+    unittest.main()

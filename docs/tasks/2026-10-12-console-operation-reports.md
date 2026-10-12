@@ -12,7 +12,7 @@ Let the console open reports that each planet explicitly publishes, retire the g
 
 ## Why (decision record)
 
-- Source: `sun/plans/2026/10/2026-10-09_console-contexto-en-tareas-y-canales.md`: global Continuity says what Solar last held from Telegram, n8n or a task, but not what happens in the IDE, so it misleads; context belongs in the task detail. Reports answer "what needs my attention today?" from views each area already publishes.
+- Source: the workspace decision record (global Continuity says what Solar last held from Telegram, n8n or a task, but not what happens in the IDE, so it misleads); context belongs in the task detail. Reports answer "what needs my attention today?" from views each area already publishes.
 - Minimal version: a read-only index and file server confined to paths a planet lists itself. No directory browsing, no copy into shared state, no mutation.
 - `/api/console/continuity` is kept because it is a published read route; removing it would be a compatibility break with no benefit.
 
@@ -24,16 +24,17 @@ Let the console open reports that each planet explicitly publishes, retire the g
 - `core/skills/solar-app/references/operation-reports.md` (publication contract), `core/skills/solar-app/SKILL.md`, `CHANGELOG.md`.
 - Tests: `core/tests/skills/solar-app/test_operation_reports.py`, `test_console_ui.py`.
 
-Out of scope: task detail, MCP, solar-state, any mutation, router, install, sync. Unused translation strings left by the Continuity removal are not cleaned here.
+Out of scope: task detail, MCP, solar-state, any mutation, router, install, sync.
 
 ## Acceptance criteria
 
-- [ ] Only files listed in a planet's `operations/leadership/reports/index.json` are served; traversal, symlink escape, wrong suffix, oversize files and excluded planets fail closed.
-- [ ] Served HTML carries a sandbox CSP without scripts or forms, `nosniff`, no-store, no referrer.
-- [ ] The page no longer calls `/api/console/continuity`; the endpoint still answers.
-- [ ] Navigation shows Reports and Channels (English and Spanish) and no Continuity entry or summary card.
+- [x] Only files listed in a planet's `operations/leadership/reports/index.json` are served; traversal, symlink escape (outside the planet or outside `operations/`), wrong suffix, oversize files and excluded planets fail closed.
+- [x] Served HTML carries a sandbox CSP without scripts or forms, `nosniff`, no-store, no referrer.
+- [x] The page no longer calls `/api/console/continuity`; the endpoint still answers.
+- [x] Navigation shows Reports and Channels (English and Spanish) and no Continuity entry or summary card.
 - [x] The IDEs screen reads Apps in both languages and keeps its id and route.
-- [ ] The test file does not depend on the task-detail PR.
+- [x] The test file does not depend on the task-detail PR.
+- [ ] Installed acceptance (see "Not verified" below).
 
 ## Checks to run
 
@@ -47,13 +48,14 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 
 ## References
 
-- Repo policy: `CONTRIBUTING.md`; plan: `sun/plans/2026/10/2026-10-09_console-contexto-en-tareas-y-canales.md`; earlier PR 24 (branch `feat/console-operation-reports`).
+- Repo policy: `CONTRIBUTING.md`; decision record: `docs/tasks/2026-10-12-console-operation-reports.md` (this spec); earlier PR 24 (branch `feat/console-operation-reports`).
 
 ## Completion evidence
 
 - Rebased onto v0.41.0. Conflicts: `CHANGELOG.md` (kept this change under `[Unreleased]` above the released sections) and `app_http.py` (both imports kept: `operation_reports` and `task_markdown`). The Tasks, task detail and status filter code is unchanged from main.
-- Full suites from the repository root: `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state core/tests/skills/solar-mcp -q -p no:cacheprovider` -> 564 passed (without `ps` and a writable `$HOME` three tests cannot run and the count is 561). `node --check`, `git diff --check`, `py_compile` of the changed Python files and solar-app packaging: passed.
-- New: a test that `/api/console/continuity` still answers, and a CSS test for the report cards (the links were the browser's default blue on the dark theme).
+- Review fixes: report paths are confined to `operations/` (a symlink to elsewhere in the same planet is refused; test added for a `private/notes.txt` link and its 404); `/reports/<planet>/…` resolves only that planet's index instead of walking every planet; the client inventory is loaded lazily by path inside the route, so a missing `solar-client` answers 503 on the reports routes without stopping the console; the report link opens with `target="_blank" rel="noopener noreferrer"` and the CSP adds `navigate-to 'none'`; the redundant nav assertion and the "any node" subtitle check in `test_console_ui.py` are replaced by the real title/question nodes; the `unittest.main()` block moved to the end of the test file; the dead `renderContinuity` helpers (`ageLabel`, `showCount`, `plain`) and the orphaned `continuity`/`saved` copy keys are removed.
+- Full suites from the repository root: `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state core/tests/skills/solar-mcp -q -p no:cacheprovider` -> 568 passed. `node --check`, `git diff --check`, `py_compile` of the changed Python files and solar-app packaging: passed.
+- New: a test that `/api/console/continuity` still answers, a CSS test for the report cards (the links were the browser's default blue on the dark theme), and regression tests for the symlink-outside-`operations` refusal and the 503 when the client inventory is unreadable.
 - Looked at on a local console run from this worktree (loopback, spare port, read only): navigation shows Reports and Channels and no Continuity; the Summary has no Continuity card; Reports shows its empty state when the workspace publishes nothing (no planet has an index today) and, with a simulated response, cards with escaped titles, links only for `/reports/<planet>/operations/...` and an "index unavailable" line; Channels shows its note; Tasks, the detail and the filter bar are as on main.
 - Apps rename seen on the local console: the menu reads Apps in English and Spanish (Spanish forced by rewriting the health response in the browser, no setting touched); the screen shows "What does each app see?" / "¿Qué ve cada app?", "Skills per app" / "Skills por app" and the four apps with their real counts; the internal id and route are unchanged.
 - Not verified: installed acceptance, and a real published report served end to end outside the tests (no planet publishes an index yet).
