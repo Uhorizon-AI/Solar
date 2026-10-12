@@ -9,6 +9,12 @@ import re
 from urllib.parse import urlsplit
 
 
+# The authority must be a plain host with an optional numeric port: no userinfo
+# (`good.test@evil.test` misleads) and no stray characters such as `&` or `=`
+# that make the real host differ from the visible one.
+_HOST = re.compile(r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::[0-9]{1,5})?")
+
+
 def _safe_link(value):
     """Only explicit http, https and mailto destinations are links.
 
@@ -26,7 +32,7 @@ def _safe_link(value):
         return False
     scheme = parts.scheme.lower()
     if scheme in ("http", "https"):
-        return value[len(scheme):].startswith("://") and bool(parts.netloc)
+        return value[len(scheme):].startswith("://") and bool(_HOST.fullmatch(parts.netloc))
     return scheme == "mailto" and bool(parts.path)
 
 

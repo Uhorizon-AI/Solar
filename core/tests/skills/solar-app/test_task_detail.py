@@ -78,12 +78,18 @@ class TaskDetailTests(unittest.TestCase):
         secret = 'SECRET sqlite detail'
         with patch('runtime_views.console_task_detail', side_effect=sqlite3.DatabaseError(secret)):
             for qs in ({'task_id': [task_id]}, {'task_id': [task_id], 'full': ['1']}):
-                handler = self.get(qs)
+                with self.assertLogs('solar.app', level='WARNING') as logged:
+                    handler = self.get(qs)
                 self.assertEqual(handler.status, 503)
                 self.assertEqual(handler.payload, {'error': 'Task detail unavailable', 'refused': True})
                 self.assertNotIn('SECRET', json.dumps(handler.payload))
+                log = '\n'.join(logged.output)
+                self.assertIn('DatabaseError', log)
+                self.assertNotIn('SECRET', log)
 
     def test_absent_or_non_string_body_gives_null_body_html(self):
+        """Real case: a blob body. Contract case: a missing body, which the column
+        (TEXT NOT NULL DEFAULT '') cannot hold, is only exercised through a mock."""
         for stored in (b'bytes',):
             task_id = self.task(task_id='body-' + type(stored).__name__, body='# Body')
             with solar_state.session() as store:
@@ -174,6 +180,16 @@ class MarkdownTests(unittest.TestCase):
         self.assertEqual(sanitize_html('<a href="java&#x73;cript:alert(1)">x</a>'), 'x')
         self.assertEqual(sanitize_html('<a href="https://x.com/?a=1&amp;copy=2">x</a>'),
                          '<a href="https://x.com/?a=1&amp;copy=2" rel="noreferrer noopener">x</a>')
+
+    def test_authority_must_be_a_plain_host(self):
+        for target in ('https://evil.test@good.test/x', 'https://foo.com&copy=1&x=y', 'https://user:pw@x.test/',
+                       'https://a b.test/', 'https://x.test:port/', 'https://-bad.test/', 'https://x.test:123456/',
+                       'https://x=y.test/', 'https://x.test@/'):
+            self.assertNotIn('<a', render_markdown('[l](' + target + ')'), target)
+        for target in ('https://x.com/?a=1&copy=2', 'http://localhost:9000/a', 'https://sub.x-y.example.org/p#f',
+                       'http://127.0.0.1/', 'http://[::1]:8080/x'):
+            self.assertIn('<a href="', render_markdown('[l](' + target + ')'), target)
+        self.assertEqual(sanitize_html('<a href="https://evil.test@good.test/">x</a>'), 'x')
 
     def test_consecutive_quote_lines_form_one_blockquote(self):
         self.assertEqual(render_markdown('> one\n> two\n>three\n\n> next'),

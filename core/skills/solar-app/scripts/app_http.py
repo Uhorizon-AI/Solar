@@ -1,10 +1,13 @@
 """Read-only routes for the existing status, activity and execution log views."""
 from pathlib import Path
+import logging
+
 import app_solar
 import console_data
 import solar_state
 from task_markdown import render_markdown
 
+LOGGER = logging.getLogger("solar.app")
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 
@@ -46,7 +49,8 @@ def get(handler, path, qs, workspace):
         full = qs.get("full") == ["1"]
         try:
             result = console_data.task_detail(Path(workspace), task_id, full)
-        except Exception:  # any unexpected read or decode failure: fixed text, no detail
+        except Exception as exc:  # any unexpected read or decode failure: fixed text, no detail
+            LOGGER.warning("task-detail failed: %s", type(exc).__name__)  # class only, never the message
             handler._send_json({"error": "Task detail unavailable", "refused": True}, 503)
             return
         if result is None:

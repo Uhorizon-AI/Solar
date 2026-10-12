@@ -97,8 +97,9 @@ Should the complete task record (instructions included) be viewable from the con
 
 ## Completion evidence
 
-- Baseline on PR 23 head: 527 passed. After the change: 548 passed (solar-app, solar-state, solar-mcp) with a loopback test port. Three tests (`test_cutover` and two in `test_mcp_cli`) need `ps` and a writable `$HOME`; with them the count is 548 passed.
+- Baseline on PR 23 head: 527 passed. Command, from the repository root: `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state core/tests/skills/solar-mcp -q -p no:cacheprovider`. Result after the review rounds: 549 passed, with a loopback test port. Three tests (`test_cutover` and two in `test_mcp_cli`) need `ps` and a writable `$HOME`; without them the count is 546.
 - Review follow-up: the recurring interval is shown (`24 h`), open state is kept per task id, UI strings live in the dictionaries, `import runtime_views` is at module level in the MCP task views.
+- Third round: a late response to the complete record is discarded by request number; link authority must be a plain host (no userinfo); the 503 logs only the exception class; context in an unexpected shape shows a note instead of "No recorded context" and is never read through inherited members.
 - Known debt: `console_task_detail` decodes the frontmatter itself instead of sharing a row-to-task helper with `console_tasks`. It reads the raw row on purpose so an undecodable frontmatter can be reported instead of raising, and `console_tasks` goes through `task_list`; unifying them would change that path for a small gain.
 - `node --check` on app.js, `py_compile` on changed Python, and `git diff --check`: passed. solar-app, solar-state and solar-mcp validated and packaged outside the repository.
 - Public MCP unchanged (three tools); only the checkpoint parser is shared.

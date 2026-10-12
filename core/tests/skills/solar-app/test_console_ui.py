@@ -497,6 +497,60 @@ async function settled() {
   need(view, "future_column", "record reloaded after the refresh");
   if (fullCount() !== before[0] + 1 || curatedCount() !== before[1] + 1) throw new Error("newer updated_at must reload each block once: " + JSON.stringify([before, fullCount(), curatedCount(), page.requests]));
 
+  // An older "Complete record" response that arrives last must not replace the newer one.
+  const marked = (label) => Object.assign({}, complete, { record: Object.assign({}, complete.record, { future_column: label }) });
+  let releaseTasks, releaseOld, releaseNew;
+  const holdTasks = new Promise((resolve) => { releaseTasks = resolve; });
+  const holdOld = new Promise((resolve) => { releaseOld = resolve; });
+  const holdNew = new Promise((resolve) => { releaseNew = resolve; });
+  page = boot(detailRoutes({
+    "/api/console/tasks": { sequence: [{ body: tasks }, { body: newer, hold: holdTasks }] },
+    "/api/console/task-detail?task_id=err-1&full=1": { sequence: [{ body: marked("OLD-RESPONSE"), hold: holdOld }, { body: marked("NEW-RESPONSE"), hold: holdNew }] },
+  }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-screen": "resumen" });
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-full": "err-1" });
+  await settled();
+  releaseTasks();
+  await settled();
+  if (page.requests.filter((url) => url.includes("full=1")).length !== 2) throw new Error("the newer updated_at must start a second record request");
+  releaseNew();
+  await settled();
+  need(page.els.health.innerHTML, "NEW-RESPONSE", "newer record response");
+  releaseOld();
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "NEW-RESPONSE", "newer record survives the late old response");
+  lack(view, "OLD-RESPONSE", "late old response");
+
+  // Context in an unexpected shape is announced, never drawn as raw objects.
+  const shaped = async (context, language) => {
+    const open = boot(detailRoutes({
+      "/api/console/tasks": { body: language ? Object.assign({}, tasks, { language }) : tasks },
+      "/api/console/task-detail?task_id=err-1": { body: { id: "err-1", context, context_error: null, configuration: {} } },
+    }));
+    await settled();
+    open.click({ "data-screen": "tareas" });
+    await settled();
+    return open.els.health.innerHTML;
+  };
+  const odd = { continuity_checkpoint: { next_check: "tomorrow", decision: "someone", wait: { nested: { deep: 1 } } } };
+  view = await shaped(odd);
+  need(view, "open it in Complete record", "unshown context note");
+  lack(view, "native code", "inherited members of a string are not read");
+  lack(view, "No recorded context", "context exists but is not shown");
+  lack(view, "[object", "no raw objects");
+  lack(view, "nested", "raw nested keys");
+  need(await shaped(odd, "es"), "ábrelos en Registro completo", "spanish unshown note");
+  need(await shaped({}), "No recorded context", "truly empty context");
+  need(await shaped(null), "No recorded context", "null context");
+  lack(await shaped({ agent: "shown-agent", continuity_checkpoint: { next_check: "tomorrow" } }), "open it in Complete record", "no note when something is shown");
+
   const mandates = {
     defined: [
       { name: "live-one", file: "live-one.yaml", mode: "active", revoked_at: null },

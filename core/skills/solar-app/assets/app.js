@@ -54,6 +54,7 @@
       tc_iso_weekdays_monday_1: "ISO weekdays, Monday = 1",
       tc_maximum_runs: "Maximum runs",
       tc_reserved_resources: "Reserved resources",
+      tc_context_shape_note: "There is context data in a shape this view does not show; open it in Complete record.",
       tc_no_recorded_context_execution_state_and: "No recorded context. Execution state and history remain available.",
       tc_reading_this_record_does_not_verify_an_e: "Reading this record does not verify an effect or authorize retrying it.",
       tc_complete_record: "Complete record",
@@ -198,6 +199,7 @@
       tc_iso_weekdays_monday_1: "Días ISO, lunes = 1",
       tc_maximum_runs: "Máximo de ejecuciones",
       tc_reserved_resources: "Recursos reservados",
+      tc_context_shape_note: "Hay datos de contexto con una forma que esta vista no muestra; ábrelos en Registro completo.",
       tc_no_recorded_context_execution_state_and: "Sin contexto registrado. El estado de ejecución y su historial se conservan.",
       tc_reading_this_record_does_not_verify_an_e: "Leer este registro no verifica el efecto ni autoriza repetirlo.",
       tc_complete_record: "Registro completo",
@@ -835,6 +837,12 @@
       taskContext(task) + '<div><div class="lbl" style="margin-bottom:8px">' + esc(t("history")) + '</div><div class="tl">' + lines + "</div></div></div>";
   }
 
+  // Only a plain object is read by key; a string or array must not expose
+  // inherited members such as String.prototype.at.
+  function asObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+  }
+
   function intervalText(value) {
     var seconds = Number(value);
     if (value == null || value === "" || !isFinite(seconds) || seconds <= 0) return null;
@@ -871,11 +879,11 @@
     if (saved.refused) return heading + '<p class="note" role="alert">' + esc(t("tc_this_task_s_context_could_not_be_read")) + '</p>' + fullRecord(task) + '</section>';
     var data = saved.data || {};
     var context = data.context && typeof data.context === "object" ? data.context : {};
-    var cp = context.continuity_checkpoint || {};
-    var verified = cp.last_verified_result || {};
-    var next = cp.next_check || {};
-    var decision = cp.decision || {};
-    var effect = (cp.checkpoint || {}).state;
+    var cp = asObject(context.continuity_checkpoint);
+    var verified = asObject(cp.last_verified_result);
+    var next = asObject(cp.next_check);
+    var decision = asObject(cp.decision);
+    var effect = asObject(cp.checkpoint).state;
     var fields = [];
     function field(label, value) {
       if (Array.isArray(value)) value = value.every(function (item) { return item == null || typeof item !== "object"; }) ? value.join(", ") : null;
@@ -890,7 +898,7 @@
     field(t("tc_next_check"), next.action);
     field(t("tc_check_date"), next.at);
     field(t("tc_check_source"), next.source);
-    field(t("tc_waiting"), typeof cp.wait === "string" ? cp.wait : (cp.wait || {}).reason);
+    field(t("tc_waiting"), typeof cp.wait === "string" ? cp.wait : asObject(cp.wait).reason);
     field(t("tc_decision_owner"), decision.owner);
     field(t("tc_subject"), decision.subject || decision.action);
     field(t("tc_decision_source"), decision.source);
@@ -899,6 +907,7 @@
     if (decision.status) field(t("tc_decision"), decision.status === "pending" ? (t("tc_pending")) : (t("tc_recorded_status_check_source")));
     if (effect) field(t("tc_effect_state"), effect === "effect_uncertain" ? (t("tc_uncertain_verify_before_retrying")) : (t("tc_recorded_state_not_verified_on_opening")));
     var contextFields = fields.length;
+    var unshown = Object.keys(cp).length > 0 || Object.keys(context).some(function (name) { return context[name] !== null && typeof context[name] === "object"; });
     var configuration = data.configuration && typeof data.configuration === "object" ? data.configuration : {};
     if (configuration.recurring === true || configuration.recurring === "true") field(t("tc_recurrence"), t("tc_recurring"));
     field(t("tc_minimum_interval"), intervalText(configuration.recurring_min_interval));
@@ -909,7 +918,7 @@
     field(t("tc_reserved_resources"), configuration.resources);
     var message = "";
     if (data.context_error) message = '<p class="note" role="alert">' + esc(contextErrorText(data.context_error)) + '</p>';
-    else if (!contextFields) message = '<p class="note">' + esc(t("tc_no_recorded_context_execution_state_and")) + '</p>';
+    else if (!contextFields) message = '<p class="note">' + esc(t(unshown ? "tc_context_shape_note" : "tc_no_recorded_context_execution_state_and")) + '</p>';
     return heading + message + (fields.length ? '<dl>' + fields.join("") + '</dl>' : '') +
       '<p class="note">' + esc(t("tc_reading_this_record_does_not_verify_an_e")) + '</p>' +
       fullRecord(task) + '</section>';
@@ -946,12 +955,14 @@
 
   function loadFull(task, state) {
     var epoch = contextEpoch;
+    state.seq = (state.seq || 0) + 1;
+    var mine = state.seq;
     state.stamp = task.updated_at || "";
     state.loading = true;
     state.refused = null;
     state.data = null;
     load("/api/console/task-detail?task_id=" + encodeURIComponent(task.id) + "&full=1").then(function (reply) {
-      if (epoch !== contextEpoch || taskFull[task.id] !== state) return;
+      if (epoch !== contextEpoch || taskFull[task.id] !== state || state.seq !== mine) return;
       state.loading = false;
       state.data = reply.data || null;
       state.refused = reply.refused || null;
