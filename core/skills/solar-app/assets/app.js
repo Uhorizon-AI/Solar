@@ -611,10 +611,14 @@
     if (el && el.focus) el.focus();
   }
   // A live region outside the repainted block, so a filter change still announces the count.
-  function announce(text) {
-    if (!text) return;
+  // When the group is empty the count says nothing useful, so the empty-state title is what
+  // gets announced; #live is then the only status region, not a second voice beside the panel.
+  function announce(text, emptyText) {
     var node = $("live");
-    if (node) node.textContent = text;
+    if (!node) return;
+    // An empty group prefers its own title; "Showing 0 of 0" would say nothing useful.
+    var message = emptyText || text || "";
+    if (message) node.textContent = message;
   }
 
   function openScreen(id, seed) {
@@ -677,7 +681,7 @@
       var keep = focusedTarget();
       box.innerHTML = renderTasks(data);
       restoreFocus(box, keep);
-      announce(ui.announce);
+      announce(ui.announce, ui.empty);
     }
     else if (id === "ejecuciones") box.innerHTML = renderExec(data);
     else if (id === "continuidad") box.innerHTML = renderContinuity(data);
@@ -879,9 +883,12 @@
     }
     var lead = filters.filter(function (filter) { return filter.fill; }).map(chipHtml).join("");
     var rest = filters.filter(function (filter) { return !filter.fill; }).map(chipHtml).join("");
+    // The Recurring switch lives inside the toolbar box so it shares the first mobile row
+    // with Errors, Drafts and Running; the .fbreak forces the rest onto the second row.
     var filterHtml = '<div class="fbar"><div class="ftool" role="toolbar" aria-label="' + esc(t("f_toolbar")) + '">' + lead +
-      '<span class="fsep" aria-hidden="true"></span><span class="fbreak" aria-hidden="true"></span>' + rest + '</div>' +
-      '<label class="rsw"><input type="checkbox" data-recurring="1"' + (ui.recurring ? " checked" : "") + '> <span>' + esc(t("f_recurring")) + "</span></label></div>";
+      '<span class="fsep" aria-hidden="true"></span>' +
+      '<span class="fbreak" aria-hidden="true"></span>' + rest +
+      '<label class="rsw"><input type="checkbox" data-recurring="1"' + (ui.recurring ? " checked" : "") + '> <span>' + esc(t("f_recurring")) + "</span></label></div></div>";
     ui.chipKeys = filters.map(function (filter) { return filter.key; });
     function match(task) {
       if (ui.recurring && !task.recurring) return false;
@@ -923,20 +930,24 @@
     var selected = ui.task ? byId[ui.task] : null;
     var detail = selected ? taskDetail(selected, byId, kids, history) : "<div></div>";
     var empty = "";
+    var emptyTitle = "";
     if (!visible) {
       if (activeFilter.key === "errors") {
         var nextGroup = filters.filter(function (filter) { return ["running", "drafts", "queue"].indexOf(filter.key) >= 0 && filter.n > 0; })[0];
         // With the Recurring switch on, an empty Errors group means no recurring error, not no error at all.
         var errorTitle = ui.recurring ? t("f_no_error_rec") : t("f_no_error");
         var errorHint = ui.recurring ? t("f_no_error_rec_hint") : t("f_no_error_hint");
-        empty = '<div class="good" role="status"><div class="goodt"><span class="fg ok" aria-hidden="true">✓</span> ' + esc(errorTitle) + '</div><div class="note">' + esc(errorHint) + "</div>" +
+        emptyTitle = errorTitle;
+        empty = '<div class="good"><div class="goodt"><span class="fg ok" aria-hidden="true">✓</span> ' + esc(errorTitle) + '</div><div class="note">' + esc(errorHint) + "</div>" +
           (nextGroup ? '<button type="button" class="fnext" data-filter="' + esc(nextGroup.key) + '">' + esc(t("f_next") + nextGroup.label + " (" + nextGroup.n + ")") + "</button>" : "") + "</div>";
-      } else empty = '<div class="note" style="padding:12px">' + esc(t("no_tasks")) + "</div>";
+      } else { emptyTitle = t("no_tasks"); empty = '<div class="note" style="padding:12px">' + esc(emptyTitle) + "</div>"; }
     }
     var machine = ui.machine ? machineTable(data, selected) : "";
     // The count text the list shows; a stable live region (in app.html) repeats it so a
     // repaint of this block still announces the change.
     ui.announce = t("showing") + visible + t("of") + activeFilter.n;
+    // When the group is empty the count says nothing useful; #live then announces this title.
+    ui.empty = emptyTitle;
     return filterHtml +
       '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div style="padding:10px 12px" class="note">' + esc(ui.announce) + "</div>" +
       '<div class="row hd trow"><div>' + esc(t("col_status")) + "</div><div>" + esc(t("col_task")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("col_created")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +

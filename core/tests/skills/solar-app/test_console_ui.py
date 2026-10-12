@@ -163,6 +163,15 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertRegex(narrow, r'\[data-filter="errors"\]\{order:1\}')
         self.assertRegex(narrow, r'\[data-filter="drafts"\],\.fchip\[data-filter="running"\]\{order:2\}', "Drafts and Running share the first mobile row")
         self.assertRegex(narrow, r"\.rsw\{order:3")
+        self.assertRegex(narrow, r"\.fbreak\{display:block;flex-basis:100%", "the rest of the chips drop to the second row")
+        # At 800 px the first row is Errors, Drafts, Running and the Recurring switch. The
+        # switch must sit inside the toolbar box (a sibling of the chips) and before the
+        # .fbreak, or it cannot share that row; the box itself stays for role="toolbar".
+        js = (ASSETS / "app.js").read_text(encoding="utf-8")
+        bar = js[js.index('class="fbar"'):js.index("ui.chipKeys = filters")]
+        self.assertIn('class="ftool" role="toolbar"', bar, "the toolbar keeps its box and role")
+        self.assertLess(bar.index('class="fbreak"'), bar.index('class="rsw"'), "the switch stays on the first row")
+        self.assertLess(bar.index("lead +"), bar.index('class="rsw"'), "the switch follows the primary chips")
         # The wide-bar comment must match the real breakpoint.
         self.assertRegex(css, r"from 1840 px[^*]*\*/\s*@media \(min-width:1840px\)", "comment matches the 1840 px value")
         # Red, blue and green belong to one thing each.
@@ -934,7 +943,8 @@ async function settled() {
   view = page.els.health.innerHTML;
   need(view, "No tasks in error", "good-news title");
   need(view, "Nothing needs retrying.", "good-news hint");
-  need(view, 'role="status"', "good news is announced");
+  lack(view, 'role="status"', "the panel is not a second status region");
+  need(page.els.live.textContent, "No tasks in error", "the live region alone announces the good news");
   need(view, '<button type="button" class="fnext" data-filter="drafts">Next pending: Drafts (2)</button>', "link to the next pending group");
   lack(view, "No tasks.", "not a bare empty state");
   page.click({ "data-filter": "drafts" });

@@ -123,13 +123,14 @@ Accessibility: the chips sit in a `role="toolbar"` with one tab stop (roving
 tabindex), arrows, Home and End move between chips, Enter and Space select, each
 chip is labelled with its count ("Errors, 2 tasks"), "Showing N of M" is announced
 by a stable `aria-live="polite"` region outside the repainted block (a value-only
-change in a reused node, not a node recreated each paint), and the focus ring is
-2 px in the text colour. A repaint that rebuilds the toolbar (a delayed detail
-load, a refresh) keeps the focused chip or checkbox, so keyboard navigation
-continues. Below 900 px the bar wraps into two touch-sized rows (Errors, Drafts,
-Running and the checkbox first); the toolbar keeps its box, so `role="toolbar"`
-stays exposed. Filtering is presentation only: the route, the data and the state
-machine are unchanged.
+change in a reused node, not a node recreated each paint); that region is the only
+`role="status"`, so the empty-state panel does not also announce itself. The focus
+ring is 2 px in the text colour. A repaint that rebuilds the toolbar (a delayed
+detail load, a refresh) keeps the focused chip or checkbox, so keyboard navigation
+continues. Below 900 px the bar wraps into two touch-sized rows: Errors, Drafts,
+Running and the Recurring switch, all inside the toolbar box (no `display:contents`,
+so `role="toolbar"` stays exposed), then the rest below a `.fbreak`. Filtering is
+presentation only: the route, the data and the state machine are unchanged.
 
 ## Laptop runtime note
 
