@@ -325,6 +325,16 @@ solar_client_console_language_py() {
   printf '%s\n' "$helper"
 }
 
+# Codex native agent publisher (opt-in); ships next to this file.
+solar_client_codex_agents_py() {
+  local helper="${SOLAR_CODEX_AGENTS_PY:-$_CLIENT_LIB_SCRIPT_DIR/codex_agents.py}"
+  if [[ ! -f "$helper" ]]; then
+    printf 'ERROR: Codex agent publisher is missing: %s. It ships inside the solar-client skill (scripts/codex_agents.py).\n' "$helper" >&2
+    return 1
+  fi
+  printf '%s\n' "$helper"
+}
+
 # Effective console language: en when the key is missing or not Spanish.
 solar_client_read_language() {
   local workspace="$1"

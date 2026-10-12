@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Opt-in native Codex agents: with `solar client sync codex-agents enable`, `solar client sync` also publishes derived roles from top-level `planets/<planet>/agents/*.md` contracts into `.codex/agents/solar__<planet>__<agent>.toml` (only `name`, `description`, `developer_instructions`), tracked by a hash manifest so edited, unmanaged or colliding files are reported and never overwritten, and unchanged generated files are retired when a contract goes away. Adds `codex-agents status|preview [--contents]|enable|disable` and Codex-specific exclusions (`exclude --client codex <planet>|<planet>:<agent>`) on top of the global ones; an excluded planet is never opened by the publisher. Off by default; other clients are unchanged.
+
 ## [0.42.1] - 2026-10-13
 
 ### Fixed
