@@ -6,6 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Read-only operational reports from explicit planet indexes, with confined paths and sandboxed HTML serving.
+
+### Changed
+- Console: the IDEs screen is renamed Apps (menu, title, question and headings in English and Spanish). Its internal id and `/api/console/ides` route are unchanged.
+- Replace global Continuity navigation and its summary card with Reports, and rename External entry to Channels (diagnostics only, no conversation history). The legacy continuity endpoint is retained. The three-tool MCP contract is unchanged.
+
 ## [0.41.0] - 2026-10-12
 
 ### Changed
