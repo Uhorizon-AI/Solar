@@ -2,7 +2,7 @@
 name: solar-app
 description: >
   Read-only Solar console on :9000. Inspect runtime health, async tasks, gateway
-  failures, continuity freshness and router executions with injected context.
+  failures, published operational reports and router executions with injected context.
 ---
 
 # Solar Console
@@ -58,12 +58,17 @@ routes still answer; the page does not call them.
 
 ## Console data
 
-Eight read-only routes under `/api/console/`: `health`, `tasks`, `executions`,
-`continuity`, `mandates`, `ides`, `ingress`, `requester`. `console_data.py`
+Read-only routes under `/api/console/`: `health`, `tasks`, `executions`,
+`reports`, `mandates`, `ides`, `ingress`, `requester`, plus the legacy `continuity`
+route, kept for compatibility but not used by the page. `console_data.py`
 answers them. Database rows come from `read_session()` in solar-state. Files
 outside the database (owner, cutover, pass stamp, daily backups, IDE trees,
 gateway stamp, mandate YAML, MCP gate audit) are read through solar-paths.
 `console_data.py` loads `solar-client/scripts/console_language.py`.
+`operation_reports.py` loads `solar-client/scripts/skill_inventory.py` by path
+for its planet exclusions; a missing client file disables only the reports
+routes (`/api/console/reports` and `/reports/…` answer 503), never the console
+startup, because the import happens inside the route.
 A missing file raises ImportError and names that path. These routes
 create no runtime file. Execution channel and `user_id` come from the
 audit start with the same `router_id`. An end with no start is channel
@@ -81,10 +86,26 @@ router is a fault when the state refuses, and quiet time is not a fault by
 itself.
 The host refuses to bind when `SOLAR_APP_HOST` is not a loopback address.
 
-The continuity screen and its card on the summary explain that the record is
-what Solar last held from Telegram, n8n, or a task, and that it does not move
-when work happens in the IDE. The active intention is labeled as stored text.
-The continuity payload is unchanged.
+Global continuity remains available through its legacy read-only endpoint for
+compatibility; it is not a navigation screen or a summary card. The Channels
+screen (formerly External entry) shows entry diagnostics only and does not
+promise conversation history.
+
+## Operational reports
+
+The screen formerly called IDEs is named Apps in the navigation, its title, question
+and headings (English and Spanish); its internal id (`ides`) and route
+(`/api/console/ides`) are unchanged, and "IDE" stays only where a path is literally
+an IDE directory.
+
+The navigation shows Reports. `/api/console/reports` reads explicit planet
+publication indexes, respecting Client planet exclusions.
+`/reports/<planet>/<relative-path>` serves only listed HTML or evidence text with
+a restrictive CSP (sandboxed, no scripts, forms, base rewrite or top navigation),
+bounded files and no-store headers. See
+[publication contract](references/operation-reports.md). No report is copied
+into shared state. Source changes require installation and client publication
+before claiming installed acceptance.
 
 Delegation modes are labeled Active, Trial (no real effects), Paused, and
 Revoked. With `"language": "es"` those labels are Activa, En prueba (sin

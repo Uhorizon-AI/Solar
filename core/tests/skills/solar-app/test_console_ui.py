@@ -20,10 +20,10 @@ QUESTIONS = (
     "¿Está sana mi instalación, y desde cuándo no hace nada?",
     "¿Qué tareas hay y qué les ha pasado?",
     "¿Qué ha ejecutado Solar y cómo le ha ido?",
-    "¿Dónde se quedó?",
+    "¿Qué requiere mi atención hoy?",
     "¿Qué hace Solar sin preguntarme?",
-    "¿Qué ve cada IDE?",
-    "¿Qué puede entrar desde fuera?",
+    "¿Qué ve cada app?",
+    "¿Qué canales reciben encargos y cómo funcionan?",
     "¿Quién pidió esto?",
 )
 ROUTES = (
@@ -31,7 +31,7 @@ ROUTES = (
     "/api/console/tasks",
     "/api/console/task-detail?task_id=",
     "/api/console/executions",
-    "/api/console/continuity",
+    "/api/console/reports",
     "/api/console/mandates",
     "/api/console/ides",
     "/api/console/ingress",
@@ -148,6 +148,11 @@ class ConsoleUiTests(unittest.TestCase):
 
         self.assertEqual(columns(media), 3, "three columns up to 1600 px")
         self.assertEqual(columns(css.replace(media, "")), 6, "six columns when wider")
+
+    def test_report_cards_are_styled_for_the_dark_theme(self):
+        css = (ASSETS / "app.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.rep a\{[^}]*color:var\(--info\)", "report links use a theme token, not the browser blue")
+        self.assertRegex(css, r"\.rep h2\{[^}]*font-size:15px", "report titles are not default h2")
 
     def test_filter_bar_styles_keep_the_agreed_rules(self):
         css = (ASSETS / "app.css").read_text(encoding="utf-8")
@@ -343,9 +348,7 @@ async function settled() {
     if (!summary.includes("✓ " + name)) throw new Error("calm summary omits " + name);
   });
   if (!summary.includes(health.attention)) throw new Error("summary did not show the attention line");
-  if (!summary.includes("The last thing Solar was holding when you spoke to it through Telegram, n8n, or a task.")) {
-    throw new Error("summary continuity card has no explanation");
-  }
+  if (summary.includes("The last thing Solar was holding")) throw new Error("global continuity card remained");
   if (summary.includes("async-tasks")) throw new Error("feature id stayed visible");
   if (!summary.includes("Background tasks ok")) throw new Error("feature was not named");
   if (page.els.title.textContent !== "Summary") throw new Error("opened on " + page.els.title.textContent);
@@ -397,19 +400,13 @@ async function settled() {
   if (entry.includes("Connector ready")) throw new Error("entrada reused a stale gateway");
 
   page = boot(Object.assign({
-    "/api/console/continuity": { body: { at: "not-a-date", active: "sigue aqui", channels: [], summaries: [] } },
+    "/api/console/reports": { body: { reports: [{ title: "Attention", href: "/reports/example/operations/attention.html", owner: "Example", period: "Today", coverage: "Partial", generated_at: "2026-10-11", next_decision: "Review" }], errors: [] } },
   }, calm));
   await settled();
-  page.click({ "data-screen": "continuidad" });
+  page.click({ "data-screen": "reportes" });
   await settled();
-  const continuity = page.els.health.innerHTML;
-  if (!continuity.includes("sigue aqui") || !continuity.includes("no data")) throw new Error("invalid continuity date broke the screen");
-  if (!continuity.includes("The last thing Solar was holding when you spoke to it through Telegram, n8n, or a task.")) {
-    throw new Error("continuity screen has no explanation");
-  }
-  if (!continuity.includes("Saved text, not a message from this console.")) {
-    throw new Error("active intention is not marked as saved text");
-  }
+  if (!page.els.health.innerHTML.includes("Attention")) throw new Error("published report missing");
+  if (page.els.nav.innerHTML.includes('data-screen="continuidad"')) throw new Error("legacy navigation remained");
 
   const need = (html, text, why) => { if (!html.includes(text)) throw new Error(why + ": missing " + text); };
   const lack = (html, text, why) => { if (html.includes(text)) throw new Error(why + ": found " + text); };
@@ -1121,6 +1118,25 @@ async function settled() {
   need(view, "↻ Recurrentes", "spanish switch");
   need(view, 'aria-label="Errores, 2 tareas"', "spanish count");
 
+  // The IDEs screen is named Apps in both languages; its id and route are unchanged.
+  for (const [language, nav, question, skills, column] of [["en", "Apps", "What does each app see?", "Skills per app", "App"], ["es", "Apps", "¿Qué ve cada app?", "Skills por app", "App"]]) {
+    page = boot(Object.assign({ "/api/console/ides": { body: [] }, "/api/console/health": { body: Object.assign({}, health, { language }) } }));
+    await settled();
+    const navHtml = page.els.nav.innerHTML;
+    if (!navHtml.includes('data-screen="ides"')) throw new Error("the internal id stays ides");
+    if (!navHtml.includes(">" + nav + "<")) throw new Error("menu lacks " + nav);
+    if (navHtml.includes("IDEs")) throw new Error("menu still says IDEs in " + language);
+    page.click({ "data-screen": "ides" });
+    await settled();
+    const screen = page.els.health.innerHTML;
+    if (page.els.title.textContent !== nav) throw new Error("title in " + language + ": " + page.els.title.textContent);
+    if (page.els.question.textContent !== question) throw new Error("question in " + language + ": " + page.els.question.textContent);
+    if (!screen.includes(skills)) throw new Error("tile label in " + language);
+    if (!screen.includes(">" + column + "<")) throw new Error("column header in " + language);
+    if (screen.includes("IDE")) throw new Error("IDE left on the Apps screen in " + language);
+    if (!page.requests.includes("/api/console/ides")) throw new Error("the route is unchanged");
+  }
+
   const mandates = {
     defined: [
       { name: "live-one", file: "live-one.yaml", mode: "active", revoked_at: null },
@@ -1166,9 +1182,7 @@ async function settled() {
   await settled();
   if (page.els.title.textContent !== "Resumen") throw new Error("spanish setting left the title in English");
   if (page.document.title !== "Consola local de Solar") throw new Error("browser title stayed " + page.document.title);
-  if (!page.els.health.innerHTML.includes("Lo último que Solar tenía entre manos cuando le hablaste por Telegram, n8n o una tarea.")) {
-    throw new Error("spanish setting left the continuity card in English");
-  }
+  if (page.els.health.innerHTML.includes("Lo último que Solar tenía")) throw new Error("global Spanish continuity card remained");
   console.log(JSON.stringify({ ok: true }));
 })().catch((error) => {
   console.error(error && error.stack || error);

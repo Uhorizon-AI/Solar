@@ -8,8 +8,6 @@
     en: {
       page_title: "Solar local console",
       gap: "available once Solar knows who is speaking",
-      continuity: "The last thing Solar was holding when you spoke to it through Telegram, n8n, or a task. It does not update when you work directly in the IDE.",
-      saved: "Saved text, not a message from this console.",
       delegation: "Solar acts without asking you, only inside a written permission with limits and an expiry.",
       nav_label: "Console questions",
       brand_note: "console · read only",
@@ -74,18 +72,19 @@
       nav_summary: "Summary",
       nav_tasks: "Tasks",
       nav_runs: "Runs",
-      nav_continuity: "Continuity",
       nav_autonomy: "Autonomy",
-      nav_ides: "IDEs",
-      nav_entry: "External entry",
+      nav_ides: "Apps",
+      nav_entry: "Channels",
+      nav_reports: "Reports",
+      q_reports: "What needs my attention today?",
+      channels_note: "Entry diagnostics only. Conversation history is not available here.",
       nav_requester: "Requester",
       q_summary: "Is the installation healthy, and how long has it been idle?",
       q_tasks: "Which tasks exist and what happened to them?",
       q_runs: "What has Solar run and how did it go?",
-      q_continuity: "Where did it leave off?",
       q_autonomy: "What does Solar do without asking?",
-      q_ides: "What does each IDE see?",
-      q_entry: "What can come in from outside?",
+      q_ides: "What does each app see?",
+      q_entry: "Which channels receive requests and how are they working?",
       q_requester: "Who asked for this?",
       st_draft: "Draft", st_planned: "Planned", st_queued: "Queued", st_active: "Active",
       st_completed: "Completed", st_error: "Error", st_archived: "Archived", st_cancelled: "Cancelled", st_none: "No status",
@@ -143,7 +142,7 @@
       perm_decisions: "Permission decisions", permitted: "allowed", not_permitted: "not allowed",
       perm_note: "Not allowed means it asks for approval or it is denied; the data does not split those.",
       recent_decisions: "Latest decisions", tool: "Tool", decision: "Decision", reason: "Reason",
-      ides: "IDEs", skills_per: "Skills per IDE", broken_links: "Broken links", repair: "Repair", none_broken: "None",
+      ides: "Apps", app_col: "App", skills_per: "Skills per app", broken_links: "Broken links", repair: "Repair", none_broken: "None",
       receives: "Receives", path: "Path", skills: "Skills", broken: "Broken",
       shared_copy: "Shared copy", copy: "Copy", link: "Link",
       connector_ready: "Connector ready", connector_down: "Connector not ready",
@@ -162,8 +161,6 @@
     es: {
       page_title: "Consola local de Solar",
       gap: "disponible cuando Solar sepa quién le habla",
-      continuity: "Lo último que Solar tenía entre manos cuando le hablaste por Telegram, n8n o una tarea. No se actualiza cuando trabajas directamente en el IDE.",
-      saved: "Contenido guardado, no un mensaje de esta consola.",
       delegation: "Solar actúa sin preguntarte, solo dentro de un permiso escrito con límites y caducidad.",
       nav_label: "Preguntas de la consola",
       brand_note: "consola · solo lectura",
@@ -228,18 +225,19 @@
       nav_summary: "Resumen",
       nav_tasks: "Tareas",
       nav_runs: "Ejecuciones",
-      nav_continuity: "Continuidad",
       nav_autonomy: "Autonomía",
-      nav_ides: "IDEs",
-      nav_entry: "Entrada externa",
+      nav_ides: "Apps",
+      nav_entry: "Canales",
+      nav_reports: "Reportes",
+      q_reports: "¿Qué requiere mi atención hoy?",
+      channels_note: "Diagnósticos de entrada. Esta pantalla no muestra historial de conversaciones.",
       nav_requester: "Solicitante",
       q_summary: "¿Está sana mi instalación, y desde cuándo no hace nada?",
       q_tasks: "¿Qué tareas hay y qué les ha pasado?",
       q_runs: "¿Qué ha ejecutado Solar y cómo le ha ido?",
-      q_continuity: "¿Dónde se quedó?",
       q_autonomy: "¿Qué hace Solar sin preguntarme?",
-      q_ides: "¿Qué ve cada IDE?",
-      q_entry: "¿Qué puede entrar desde fuera?",
+      q_ides: "¿Qué ve cada app?",
+      q_entry: "¿Qué canales reciben encargos y cómo funcionan?",
       q_requester: "¿Quién pidió esto?",
       st_draft: "Borrador", st_planned: "Planificada", st_queued: "En cola", st_active: "Activa",
       st_completed: "Completada", st_error: "Error", st_archived: "Archivada", st_cancelled: "Cancelada", st_none: "Sin estado",
@@ -297,7 +295,7 @@
       perm_decisions: "Decisiones de permiso", permitted: "permitidas", not_permitted: "no permitidas",
       perm_note: "Sin permitir = pide aprobación o se deniega; los datos no las separan.",
       recent_decisions: "Últimas decisiones", tool: "Herramienta", decision: "Decisión", reason: "Motivo",
-      ides: "IDEs", skills_per: "Skills por IDE", broken_links: "Enlaces rotos", repair: "Reparar", none_broken: "Ninguno",
+      ides: "Apps", app_col: "App", skills_per: "Skills por app", broken_links: "Enlaces rotos", repair: "Reparar", none_broken: "Ninguno",
       receives: "Recibe", path: "Ruta", skills: "Skills", broken: "Rotos",
       shared_copy: "Copia compartida", copy: "Copia", link: "Enlace",
       connector_ready: "Conector listo", connector_down: "Conector no listo",
@@ -347,7 +345,7 @@
       ["resumen", t("nav_summary"), t("q_summary"), "/api/console/health"],
       ["tareas", t("nav_tasks"), t("q_tasks"), "/api/console/tasks"],
       ["ejecuciones", t("nav_runs"), t("q_runs"), "/api/console/executions"],
-      ["continuidad", t("nav_continuity"), t("q_continuity"), "/api/console/continuity"],
+      ["reportes", t("nav_reports"), t("q_reports"), "/api/console/reports"],
       ["autonomia", t("nav_autonomy"), t("q_autonomy"), "/api/console/mandates"],
       ["ides", t("nav_ides"), t("q_ides"), "/api/console/ides"],
       ["entrada", t("nav_entry"), t("q_entry"), "/api/console/ingress"],
@@ -440,10 +438,6 @@
     if (text === t("no_data")) return text;
     return LANG === "es" ? ("hace " + text) : (text + " ago");
   }
-  function ageLabel(value) {
-    var seconds = ageFrom(value);
-    return seconds == null ? t("no_data") : agoPhrase(seconds);
-  }
   function ageText(seconds) {
     if (seconds == null || seconds < 0) return t("no_data");
     var m = Math.floor(seconds / 60);
@@ -492,17 +486,6 @@
     return '<div class="card" style="display:flex;flex-direction:column;gap:8px">' +
       pill("err", "▲", t("route_refused")) +
       '<div>' + esc(reason || t("no_reason")) + "</div></div>";
-  }
-  function plain(value) {
-    if (value == null || value === "") return t("no_data");
-    if (typeof value === "string" || typeof value === "number") return String(value);
-    try { return JSON.stringify(value); } catch (error) { return t("no_data"); }
-  }
-  function showCount(value) {
-    if (value == null || value === "") return "—";
-    if (Array.isArray(value)) return String(value.length);
-    if (typeof value === "object") return String(Object.keys(value).length);
-    return String(value);
   }
 
   function screenOf(id) {
@@ -554,7 +537,6 @@
       var n = ((cache.tareas.data.by_status || {}).error || {}).n || 0;
       if (n) return '<span class="pill sm badge err">' + esc(n) + "</span>";
     }
-    if (id === "continuidad") return '<span class="pill sm badge neu">◷</span>';
     if (id === "entrada") return '<span class="pill sm badge info">?</span>';
     return '<span class="pill sm badge gap-hide"></span>';
   }
@@ -684,7 +666,7 @@
       announce(ui.announce, ui.empty);
     }
     else if (id === "ejecuciones") box.innerHTML = renderExec(data);
-    else if (id === "continuidad") box.innerHTML = renderContinuity(data);
+    else if (id === "reportes") box.innerHTML = renderReports(data);
     else if (id === "autonomia") box.innerHTML = renderMandates(data);
     else if (id === "ides") box.innerHTML = renderIdes(data);
     else if (id === "entrada") box.innerHTML = renderIngress(data);
@@ -786,13 +768,9 @@
     var pass = launch.state === "unverified" || launch.at == null
       ? '<div class="gap">' + esc(t("not_recorded")) + "</div>"
       : '<div class="' + (launch.state === "stale" ? "txt-err" : "") + '">' + esc(agoPhrase(launch.age_seconds)) + "</div>";
-    var continuityWhen = data.continuity_at
-      ? (t("updated_prefix") + ageText(data.continuity_age_seconds) + (LANG === "es" ? "" : " ago") + " · " + fmt(data.continuity_at) + ".")
-      : t("no_record");
     var cards = [
       [t("c_database"), data.database ? ["err", "▲", t("pill_refused")] : ["ok", "✓", t("pill_readable")], data.database ? data.database.refused : t("db_readable"), data.database ? "" : ""],
-      ["Gateway", gateway.state === "healthy" ? ["ok", "✓", t("pill_ready")] : (gateway.state === "problems" ? ["err", "▲", t("pill_trouble")] : ["info", "?", t("pill_no_data")]), gatewayCause(gateway), launch.at ? (t("no_pass") === "No pass" ? ("Pass " + fmt(launch.at, true)) : ("Pasada " + fmt(launch.at, true))) : t("no_pass")],
-      [t("nav_continuity"), data.continuity_at ? ["neu", "◷", t("pill_recorded")] : ["info", "?", t("pill_no_data")], t("continuity"), continuityWhen]
+      ["Gateway", gateway.state === "healthy" ? ["ok", "✓", t("pill_ready")] : (gateway.state === "problems" ? ["err", "▲", t("pill_trouble")] : ["info", "?", t("pill_no_data")]), gatewayCause(gateway), launch.at ? (t("no_pass") === "No pass" ? ("Pass " + fmt(launch.at, true)) : ("Pasada " + fmt(launch.at, true))) : t("no_pass")]
     ];
     var compHtml = cards.map(function (card) {
       return '<div class="card" style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div class="h3">' +
@@ -1172,6 +1150,16 @@
     return '<span style="white-space:pre-wrap;overflow-wrap:anywhere">' + esc(value) + '</span>';
   }
 
+  function renderReports(data) {
+    var es = LANG === "es";
+    var rows = (data.reports || []).map(function (row) {
+      var safe = typeof row.href === "string" && /^\/reports\/[A-Za-z0-9_-]+\/operations\//.test(row.href);
+      return '<article class="card rep"><h2>' + (safe ? '<a href="' + esc(row.href) + '" target="_blank" rel="noopener noreferrer">' + esc(row.title) + '</a>' : esc(row.title)) + '</h2><p>' + esc(row.coverage) + '</p><p>' + esc(row.next_decision) + '</p><p class="note">' + esc(row.owner) + ' · ' + esc(row.period) + ' · ' + esc(row.generated_at) + '</p></article>';
+    }).join("");
+    var errors = (data.errors || []).map(function (row) { return '<p class="note">' + esc(row.planet) + ': ' + esc(es ? "índice no disponible" : "index unavailable") + '</p>'; }).join("");
+    return '<p class="note">' + esc(es ? "Vistas publicadas por cada área. La fecha de generación no acredita datos frescos. Solo lectura." : "Views explicitly published by each area. Generation date does not prove fresh data. Read only.") + '</p>' + (rows || '<p>' + esc(es ? "Todavía no hay reportes publicados." : "No published reports yet.") + '</p>') + errors;
+  }
+
   function machineTable(data, selected) {
     var byStatus = data.by_status || {};
     var rows = (data.statuses || []).map(function (status) {
@@ -1258,35 +1246,6 @@
       t("gap") + "</div></div></div>" + recent + "</div>";
   }
 
-  function renderContinuity(data) {
-    var channels = data.channels || [];
-    if (!Array.isArray(channels)) channels = channels ? [String(channels)] : [];
-    var summaries = (data.summaries || []).map(function (row) {
-      var kind = String(row.file || "").indexOf("task_") === 0 ? t("task_kind") : t("channel_kind");
-      var when = parseTs(row.date);
-      var ago = when ? ageText((Date.now() - when.getTime()) / 1000) : t("no_data");
-      return '<div class="row" style="grid-template-columns:80px minmax(0,1fr) 90px 100px"><div>' + pill("neu", "", kind) +
-        '</div><div class="w100"><div class="mono" style="word-break:break-all;font-size:11.5px">' + esc(row.file) +
-        '</div><div class="note">' + esc(row.first_line || "") + '</div></div><div>' + esc(fmtDay(row.date)) +
-        '</div><div class="note">' + esc(ago) + "</div></div>";
-    }).join("");
-    var next = data.next_owner ? esc(data.next_owner) : '<span class="gap">' + esc(t("unassigned")) + "</span>";
-    return '<div class="card" style="display:flex;flex-direction:column;gap:8px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div class="lbl">' + esc(t("active_intent")) + "</div>" +
-      pill("neu", "◷", ageLabel(data.at)) +
-      '</div><div class="note">' + esc(t("continuity")) + '</div><div class="lbl">' + esc(t("saved")) +
-      '</div><div style="font-size:15px">' + esc(plain(data.active)) + "</div></div>" +
-      '<div class="tiles"><div class="card"><div class="lbl">' + esc(t("pending")) + '</div><div class="big">' + esc(showCount(data.pending)) + "</div></div>" +
-      '<div class="card"><div class="lbl">' + esc(t("decisions")) + '</div><div class="big">' + esc(showCount(data.decisions)) + "</div></div>" +
-      '<div class="card"><div class="lbl">' + esc(t("next_owner")) + '</div><div style="margin-top:8px">' + next + "</div></div>" +
-      '<div class="card"><div class="lbl">' + esc(t("updated_label")) + '</div><div class="big">' + esc(ageLabel(data.at)) +
-      '</div><div class="note">' + esc(data.at ? fmt(data.at) : t("no_data")) + "</div></div></div>" +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="lbl">' + esc(t("channels_seen")) + "</span>" +
-      channels.map(function (name) { return '<span class="tag" style="color:var(--text)">' + esc(channelLabel(name)) + "</span>"; }).join("") + "</div>" +
-      '<div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("summaries")) + "</div>" +
-      '<div class="row hd" style="grid-template-columns:80px minmax(0,1fr) 90px 100px"><div>' + esc(t("origin")) + "</div><div>" + esc(t("file")) + "</div><div>" + esc(t("date")) + "</div><div>" + esc(t("ago_col")) + "</div></div>" +
-      summaries + "</div>";
-  }
-
   function mandateMode(item) {
     if (item && item.revoked_at) return "revoked";
     return item && item.mode;
@@ -1369,7 +1328,7 @@
       '<div class="card"><div class="lbl">' + esc(t("skills_per")) + '</div><div class="big">' + esc(skillCount) + "</div></div>" +
       '<div class="card"><div class="lbl">' + esc(t("broken_links")) + '</div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div class="big">' +
       broken + "</div>" + pill(broken ? "err" : "ok", broken ? "▲" : "✓", broken ? t("repair") : t("none_broken")) + "</div></div></div>" +
-      '<div class="card" style="padding:0;overflow:hidden"><div class="row hd" style="grid-template-columns:160px 160px 150px 70px minmax(0,1fr)"><div>IDE</div><div>' + esc(t("receives")) + "</div><div>" + esc(t("path")) + "</div><div>" + esc(t("skills")) + "</div><div>" + esc(t("broken")) + "</div></div>" +
+      '<div class="card" style="padding:0;overflow:hidden"><div class="row hd" style="grid-template-columns:160px 160px 150px 70px minmax(0,1fr)"><div>' + esc(t("app_col")) + "</div><div>" + esc(t("receives")) + "</div><div>" + esc(t("path")) + "</div><div>" + esc(t("skills")) + "</div><div>" + esc(t("broken")) + "</div></div>" +
       body + "</div>";
   }
 
@@ -1386,7 +1345,7 @@
     var keyText = Array.isArray(keys) ? keys.join(",") : String(keys || "");
     var n8n = keyText.indexOf("SOLAR_N8N_WEBHOOK_SECRET") >= 0 ? pill("ok", "✓", t("configured")) : pill("neu", "○", t("absent"));
     var httpAddr = stamp.http_host && stamp.http_port ? stamp.http_host + ":" + stamp.http_port : t("no_data");
-    return '<div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("http_channels")) + "</div>" +
+    return '<div class="note">' + esc(t("channels_note")) + '</div><div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("http_channels")) + "</div>" +
       '<div class="row hd" style="grid-template-columns:180px 200px minmax(0,1fr)"><div>' + esc(t("channel")) + "</div><div>" + esc(t("address")) + "</div><div>" + esc(t("scope")) + "</div></div>" +
       '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("console")) + '</div><div class="mono">' + esc(location.host || "127.0.0.1:9000") + "</div><div>" + pill("ok", "✓", t("local_only")) + "</div></div>" +
       '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("gateway_http")) + '</div><div class="mono">' + esc(httpAddr) + "</div><div>" + pill("ok", "✓", t("local_tunnel")) + "</div></div>" +

@@ -5,6 +5,7 @@ import logging
 import app_solar
 import console_data
 import solar_state
+import operation_reports
 from task_markdown import render_markdown
 
 LOGGER = logging.getLogger("solar.app")
@@ -12,6 +13,31 @@ ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 
 def get(handler, path, qs, workspace):
+    if path.startswith('/reports/'):
+        try:
+            body, mime = operation_reports.published_file(workspace, path)
+        except operation_reports.PublicationUnavailable:
+            handler._send_json({'error': 'Published report unavailable'}, 503)
+            return
+        except (OSError, ValueError, TypeError):
+            handler._send_json({'error': 'Published report unavailable'}, 404)
+            return
+        handler.send_response(200)
+        handler.send_header('Content-Type', mime)
+        handler.send_header('Content-Length', str(len(body)))
+        handler.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox; base-uri 'none'; form-action 'none'")
+        handler.send_header('X-Content-Type-Options', 'nosniff')
+        handler.send_header('Cache-Control', 'no-store')
+        handler.send_header('Referrer-Policy', 'no-referrer')
+        handler.end_headers()
+        handler.wfile.write(body)
+        return
+    if path == '/api/console/reports':
+        try:
+            handler._send_json(operation_reports.report_index(workspace))
+        except (OSError, ValueError, TypeError):
+            handler._send_json({'error': 'Report publication settings unavailable', 'refused': True}, 503)
+        return
     if path in ("/", "/dashboard"):
         handler.send_response(302)
         handler.send_header("Location", "/app")
