@@ -10,10 +10,19 @@ from urllib.parse import urlsplit
 
 
 def _safe_link(value):
-    value = html.unescape(value).strip()
-    if not value or any(ord(char) < 33 for char in value) or "\\" in value:
+    """Only explicit http, https and mailto destinations are links."""
+    if not isinstance(value, str) or not value or html.unescape(value) != value:
         return False
-    return not value.startswith("//") and urlsplit(value).scheme.lower() in ("", "https", "http", "mailto")
+    if any(ord(char) < 33 or ord(char) == 127 for char in value) or "\\" in value:
+        return False
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return False
+    scheme = parts.scheme.lower()
+    if scheme in ("http", "https"):
+        return value[len(scheme):].startswith("://") and bool(parts.netloc)
+    return scheme == "mailto" and bool(parts.path)
 
 
 class _Sanitizer(HTMLParser):
@@ -24,22 +33,25 @@ class _Sanitizer(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.output = []
+        self.links = []
 
     def handle_starttag(self, tag, attrs):
         if tag not in self.tags:
             return
-        attribute = ""
         if tag == "a":
-            href = dict(attrs).get("href", "")
-            try:
-                if _safe_link(href):
-                    attribute = ' href="' + html.escape(href, quote=True) + '" rel="noreferrer noopener"'
-            except ValueError:
-                pass
-        self.output.append("<" + tag + attribute + ">")
+            href = dict(attrs).get("href") or ""
+            safe = _safe_link(href)
+            self.links.append(safe)
+            if safe:
+                self.output.append('<a href="' + html.escape(href, quote=True) + '" rel="noreferrer noopener">')
+            return
+        self.output.append("<" + tag + ">")
 
     def handle_endtag(self, tag):
-        if tag in self.tags and tag not in ("br", "hr"):
+        if tag == "a":
+            if self.links and self.links.pop():
+                self.output.append("</a>")
+        elif tag in self.tags and tag not in ("br", "hr"):
             self.output.append("</" + tag + ">")
 
     def handle_data(self, data):
@@ -53,21 +65,33 @@ def sanitize_html(value):
     return "".join(parser.output)
 
 
-_INLINE = re.compile(r"(`+)(.+?)\1|(?<!!)\[([^]\n]+)\]\(([^\s]*)\)|\*\*(.+?)\*\*|__(.+?)__|\*([^*\n]+)\*|_([^_\n]+)_")
+# Emphasis uses `*` only. It needs a non-space inside both marks and no letter
+# or digit touching the outside, so `1 * 2 * 3` and `2*3*4` stay text.
+_OUTER = r"(?<![^\W_]|\*)"
+_OUTER_END = r"(?![^\W_]|\*)"
+_INLINE = re.compile(
+    r"(`+)(.+?)\1"
+    r"|(?<!!)\[([^]\n]+)\]\(([^\s)]*)\)"
+    r"|" + _OUTER + r"\*\*(?=\S)(.+?)(?<=\S)\*\*" + _OUTER_END +
+    r"|" + _OUTER + r"\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*" + _OUTER_END
+)
 
 
 def _inline(text):
     parts, position = [], 0
     for match in _INLINE.finditer(text):
         parts.append(html.escape(text[position:match.start()]))
-        code, content, label, href, strong, strong_under, em, em_under = match.groups()
+        code, content, label, href, strong, em = match.groups()
         if code:
             parts.append("<code>" + html.escape(content) + "</code>")
         elif label is not None:
-            parts.append('<a href="' + html.escape(href, quote=True) + '">' + html.escape(label) + '</a>')
+            if _safe_link(href):
+                parts.append('<a href="' + html.escape(href, quote=True) + '">' + html.escape(label) + '</a>')
+            else:
+                parts.append(html.escape(label))
         else:
-            tag = "strong" if strong is not None or strong_under is not None else "em"
-            parts.append("<" + tag + ">" + html.escape(strong or strong_under or em or em_under) + "</" + tag + ">")
+            tag = "strong" if strong is not None else "em"
+            parts.append("<" + tag + ">" + html.escape(strong if strong is not None else em) + "</" + tag + ">")
         position = match.end()
     parts.append(html.escape(text[position:]))
     return "".join(parts)
@@ -86,6 +110,7 @@ def _markdown(text):
         line = lines[i]
         fence = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
         heading = re.match(r"^\s{0,3}(#{1,6})\s+(.+)$", line)
+        rule = re.fullmatch(r"\s{0,3}([-*_])(?:\s*\1){2,}\s*", line)
         item = re.match(r"^\s*(?:([-+*])|\d+[.)])\s+(.+)$", line)
         if fence:
             flush()
@@ -99,6 +124,9 @@ def _markdown(text):
             flush()
             tag = "h" + str(len(heading[1]))
             output.append("<" + tag + ">" + _inline(heading[2]) + "</" + tag + ">")
+        elif rule:
+            flush()
+            output.append("<hr>")
         elif item:
             flush()
             tag = "ul" if item[1] else "ol"
@@ -111,9 +139,14 @@ def _markdown(text):
                 i += 1
             output.append("</" + tag + ">")
             continue
-        elif line.startswith("> "):
+        elif line.startswith(">"):
             flush()
-            output.append("<blockquote>" + _inline(line[2:]) + "</blockquote>")
+            quote = []
+            while i < len(lines) and lines[i].startswith(">"):
+                quote.append(_inline(lines[i][2:] if lines[i].startswith("> ") else lines[i][1:]))
+                i += 1
+            output.append("<blockquote>" + "<br>".join(quote) + "</blockquote>")
+            continue
         elif i + 1 < len(lines) and "|" in line and re.fullmatch(r"\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*", lines[i + 1]):
             flush()
             def cells(value, tag):

@@ -174,3 +174,25 @@ SOLAR_STATE_ALLOW_CUTOVER=1 python3 scripts/solar_state_cutover.py rollback
   newest copy is older than 24 h, so it does not depend on the orchestrator.
 - `inspect_backup(path)` opens a copy read-only and reports schema, integrity
   and counts.
+
+## Console task detail
+
+`runtime_views.console_task_detail(store, task_id, full=False)` reads one task on
+demand through a read session and never writes. It returns `id`, `context`,
+`context_error` and `configuration`, or `None` for an unknown id.
+
+- `context` holds only stored keys: `workspace_id`, `agent`, `planet`,
+  `responsibility`, `agent_contract` and `continuity_checkpoint`, decoded by
+  `task_checkpoint(raw)`, the parser the MCP task views share.
+- `context_error` is `None` or a stable code: `checkpoint_invalid` (the
+  checkpoint is not a JSON object) or `frontmatter_unreadable` (the stored
+  frontmatter cannot be decoded). Either way `context` is `None`; `configuration`
+  is still returned when readable, else `{}`.
+- `configuration` holds the stored schedule keys (`scheduled_time`,
+  `scheduled_weekdays`, `scheduled_timezone`, `recurring`, `recurring_min_interval`,
+  `recurring_max_runs`, `resources`, `cleanup_required`, `cleanup_timeout`).
+- With `full=True`, `record` adds the complete row, including columns added later;
+  if the frontmatter cannot be decoded, it keeps the frontmatter as stored text.
+
+Recorded evidence does not verify an effect or authorize a retry. Scheduling uses
+the registered `task.schedule` operation; this projection never writes or queues.

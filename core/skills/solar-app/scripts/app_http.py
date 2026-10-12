@@ -43,13 +43,18 @@ def get(handler, path, qs, workspace):
         if not task_id or len(task_id) > 200:
             handler._send_json({"error": "A bounded task_id is required"}, 400)
             return
+        full = qs.get("full") == ["1"]
         try:
-            result = console_data.task_detail(Path(workspace), task_id)
-            handler._send_json({"record": result, "body_html": render_markdown(result.get("body"))}
-                               if result is not None else {"error": "Task not found"},
-                               200 if result is not None else 404)
-        except (solar_state.StateError, ValueError) as exc:
-            handler._send_json({"error": str(exc), "refused": True}, 503)
+            result = console_data.task_detail(Path(workspace), task_id, full)
+        except (solar_state.StateError, ValueError):
+            handler._send_json({"error": "Task detail unavailable", "refused": True}, 503)
+            return
+        if result is None:
+            handler._send_json({"error": "Task not found"}, 404)
+            return
+        if full:
+            result["body_html"] = render_markdown(result["record"].get("body"))
+        handler._send_json(result)
         return
     console = {
         "/api/console/health": console_data.health,

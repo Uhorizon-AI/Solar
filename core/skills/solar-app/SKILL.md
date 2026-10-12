@@ -107,14 +107,36 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 Host sleep stops availability. Only one active host should serve the same public
 route. This console is local and does not replace the gateway or transports.
 
-## Complete task detail
+## Task detail: curated context and opt-in complete record
 
-Selecting a task reads `/api/console/task-detail?task_id=<id>` on demand.
-The endpoint returns the full solar-state record and sanitized HTML derived only
-from its Markdown body. The console presents every column and frontmatter entry,
-including unfamiliar fields, without a manually maintained projection. Malformed
-frontmatter remains visible as text. Execution history and approvals are unchanged.
-`task_markdown.py` renders a conservative Markdown subset (headings, paragraphs,
-lists, quotes, tables, code, emphasis and links); raw HTML and images remain inert
-text. An HTML allowlist strips attributes and unsafe link destinations. No runtime
-dependencies or network fetches are required. This is a read-only view, not an editor.
+Selecting a task reads `GET /api/console/task-detail?task_id=<id>` on demand
+(`task_id` is required and at most 200 characters).
+
+| Status | Body |
+|---|---|
+| 400 | `{"error": "A bounded task_id is required"}` |
+| 404 | `{"error": "Task not found"}` |
+| 503 | `{"error": "Task detail unavailable", "refused": true}` (fixed text, never the exception text) |
+| 200 | `{"id", "context", "context_error", "configuration"}` |
+| 200 with `full=1` | the same keys plus `record` and `body_html` |
+
+By default the console shows a "Context and follow-up" block: the recorded
+checkpoint (owner, next check, wait, decision) and the stored schedule. It comes
+from solar-state `runtime_views.console_task_detail`, which shares its checkpoint
+parser with the MCP task views. `context_error` is a stable code
+(`checkpoint_invalid` or `frontmatter_unreadable`) that affects only that task;
+the schedule and history stay visible, and an unreadable frontmatter still answers
+200. Reading the record does not verify an effect nor authorize retrying it.
+
+The complete record is opt-in: only the "Complete record" button requests
+`full=1` (exactly the string `1`). It adds the whole solar-state row, including
+columns added later and malformed frontmatter as stored text, and `body_html`,
+sanitized HTML derived only from the Markdown body. `task_markdown.py` renders a
+conservative subset (headings, paragraphs, lists, quotes, rules, tables, code,
+`*` emphasis, and links); underscores are never emphasis, only explicit http,
+https and mailto links are links, and raw HTML and images stay inert text. No
+dependencies or network fetches. The view is read only: no write session, event,
+queue or verification.
+
+Landing these sources does not mean installed acceptance: install and client
+publication are still required before claiming it.

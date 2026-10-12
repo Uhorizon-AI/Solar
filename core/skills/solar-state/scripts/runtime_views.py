@@ -349,6 +349,83 @@ def _average(total, count):
     return round(total / count)
 
 
+_CONTEXT_KEYS = ('workspace_id', 'agent', 'planet', 'responsibility', 'agent_contract')
+_CONFIGURATION_KEYS = ('scheduled_time', 'scheduled_weekdays', 'scheduled_timezone', 'recurring',
+                       'recurring_min_interval', 'recurring_max_runs', 'resources',
+                       'cleanup_required', 'cleanup_timeout')
+
+
+def task_checkpoint(raw):
+    """Decode a stored checkpoint without verifying its recorded effects."""
+    try:
+        checkpoint = json.loads(raw) if raw is not None else None
+    except (TypeError, json.JSONDecodeError):
+        checkpoint = None
+    if not isinstance(checkpoint, dict):
+        raise ValueError('continuity_checkpoint must be a JSON object')
+    return checkpoint
+
+
+def _frontmatter_values(task):
+    """Readable frontmatter pairs as a dict. Malformed entries are skipped.
+
+    Raises ValueError when the frontmatter is not a list at all.
+    """
+    pairs = task.get('frontmatter')
+    if not isinstance(pairs, (list, tuple)):
+        raise ValueError('frontmatter is not a list')
+    values = {}
+    for pair in pairs:
+        if (isinstance(pair, (list, tuple)) and len(pair) == 2 and isinstance(pair[0], str)
+                and (pair[1] is None or isinstance(pair[1], str))):
+            values[pair[0]] = solar_state.value_of(pair[1])
+    return values
+
+
+def task_context_fields(task):
+    """Curated context of a task. Raises ValueError when the checkpoint is invalid."""
+    values = _frontmatter_values(task)
+    result = {key: values[key] for key in _CONTEXT_KEYS if key in values}
+    if 'continuity_checkpoint' in values:
+        result['continuity_checkpoint'] = task_checkpoint(values['continuity_checkpoint'])
+    return result
+
+
+def task_configuration_fields(task):
+    """Stored schedule and resource configuration; only keys that are stored."""
+    values = _frontmatter_values(task)
+    return {key: values[key] for key in _CONFIGURATION_KEYS if key in values}
+
+
+def console_task_detail(store, task_id, full=False):
+    """One task for the console, read only. None when the id does not exist.
+
+    A checkpoint or frontmatter that cannot be read is reported as a stable
+    `context_error` code for this task only. With `full`, the complete row is
+    added; if the frontmatter cannot be decoded the row keeps it as stored text.
+    """
+    row = store.conn.execute('SELECT * FROM tasks WHERE id = ?', (task_id,)).fetchone()
+    if row is None:
+        return None
+    task = dict(row)
+    try:
+        task['frontmatter'] = json.loads(task['frontmatter'])
+    except (TypeError, ValueError):
+        pass
+    result = {'id': task_id, 'context': None, 'context_error': None, 'configuration': {}}
+    if not isinstance(task.get('frontmatter'), (list, tuple)):
+        result['context_error'] = 'frontmatter_unreadable'
+    else:
+        result['configuration'] = task_configuration_fields(task)
+        try:
+            result['context'] = task_context_fields(task)
+        except ValueError:
+            result['context_error'] = 'checkpoint_invalid'
+    if full:
+        result['record'] = task
+    return result
+
+
 def console_tasks(store):
     """Every task, including archived and planned, plus history and subtasks.
 

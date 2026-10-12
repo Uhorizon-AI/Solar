@@ -286,6 +286,7 @@
   };
   var cache = {};
   var taskContexts = {};
+  var taskFull = {};
   var contextEpoch = 0;
   var timer = 0;
   var healthStamp = null;
@@ -455,7 +456,7 @@
   }
 
   function openScreen(id) {
-    if (id === "tareas") { taskContexts = {}; contextEpoch += 1; }
+    if (id === "tareas") { taskContexts = {}; taskFull = {}; contextEpoch += 1; }
     ui.screen = id;
     clearInterval(timer);
     timer = 0;
@@ -754,11 +755,18 @@
       taskContext(task) + '<div><div class="lbl" style="margin-bottom:8px">' + esc(t("history")) + '</div><div class="tl">' + lines + "</div></div></div>";
   }
 
+  function contextErrorText(code) {
+    var es = LANG === "es";
+    if (code === "checkpoint_invalid") return es ? "El punto de continuidad guardado de esta tarea no es válido." : "This task's stored continuity checkpoint is not valid.";
+    if (code === "frontmatter_unreadable") return es ? "No se pudo leer el registro guardado de esta tarea." : "This task's stored record could not be read.";
+    return es ? "No se pudo leer el contexto de esta tarea." : "This task's context could not be read.";
+  }
+
   function taskContext(task) {
     var key = task.id + "|" + (task.updated_at || "");
     var saved = taskContexts[key];
     var es = LANG === "es";
-    var title = es ? "Registro completo de la tarea" : "Complete task record";
+    var title = es ? "Contexto y seguimiento" : "Context and follow-up";
     if (!saved) {
       taskContexts[key] = { loading: true };
       var epoch = contextEpoch;
@@ -771,15 +779,68 @@
     }
     var heading = '<section aria-label="' + esc(title) + '"><h3>' + esc(title) + '</h3>';
     if (saved.loading) return heading + '<p class="note">' + esc(t("reading")) + '</p></section>';
+    if (saved.refused) return heading + '<p class="note" role="alert">' + esc(es ? "No se pudo leer el contexto de esta tarea." : "This task's context could not be read.") + '</p>' + fullRecord(task, key) + '</section>';
     var data = saved.data || {};
-    if (saved.refused) return heading + '<p class="note">' + esc(saved.refused) + '</p></section>';
+    var context = data.context && typeof data.context === "object" ? data.context : {};
+    var cp = context.continuity_checkpoint || {};
+    var verified = cp.last_verified_result || {};
+    var next = cp.next_check || {};
+    var decision = cp.decision || {};
+    var effect = (cp.checkpoint || {}).state;
+    var fields = [];
+    function field(label, value) {
+      if (Array.isArray(value)) value = value.every(function (item) { return item == null || typeof item !== "object"; }) ? value.join(", ") : null;
+      if (value != null && typeof value !== "object" && String(value)) fields.push('<dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd>');
+    }
+    field(es ? "Agente" : "Agent", context.agent);
+    field(es ? "Planeta" : "Planet", context.planet);
+    field(es ? "Responsabilidad" : "Responsibility", context.responsibility);
+    field(es ? "Contrato" : "Contract", context.agent_contract);
+    field(es ? "Resultado registrado" : "Recorded result", verified.path || verified.artifact_ref);
+    field(es ? "Verificación registrada" : "Recorded verification", verified.verified_at ? fmt(verified.verified_at, true) : null);
+    field(es ? "Próxima comprobación" : "Next check", next.action);
+    field(es ? "Fecha de comprobación" : "Check date", next.at);
+    field(es ? "Fuente de comprobación" : "Check source", next.source);
+    field(es ? "Espera" : "Waiting", typeof cp.wait === "string" ? cp.wait : (cp.wait || {}).reason);
+    field(es ? "Decide" : "Decision owner", decision.owner);
+    field(es ? "Asunto" : "Subject", decision.subject || decision.action);
+    field(es ? "Fuente de la decisión" : "Decision source", decision.source);
+    field(es ? "Válida desde" : "Valid from", decision.valid_from);
+    field(es ? "Válida hasta" : "Valid until", decision.valid_until);
+    if (decision.status) field(es ? "Decisión" : "Decision", decision.status === "pending" ? (es ? "Pendiente" : "Pending") : (es ? "Estado guardado; revisar fuente" : "Recorded status; check source"));
+    if (effect) field(es ? "Situación del efecto" : "Effect state", effect === "effect_uncertain" ? (es ? "Incierto; verificar antes de repetir" : "Uncertain; verify before retrying") : (es ? "Estado registrado; no verificado al abrir" : "Recorded state; not verified on opening"));
+    var contextFields = fields.length;
+    var configuration = data.configuration && typeof data.configuration === "object" ? data.configuration : {};
+    field(es ? "Hora configurada" : "Configured time", configuration.scheduled_time);
+    field(es ? "Zona horaria" : "Time zone", configuration.scheduled_timezone || (es ? "Zona del equipo (sin zona guardada)" : "Host timezone (no stored zone)"));
+    field(es ? "Días ISO, lunes = 1" : "ISO weekdays, Monday = 1", configuration.scheduled_weekdays);
+    field(es ? "Máximo de ejecuciones" : "Maximum runs", configuration.recurring_max_runs);
+    field(es ? "Recursos reservados" : "Reserved resources", configuration.resources);
+    var message = "";
+    if (data.context_error) message = '<p class="note" role="alert">' + esc(contextErrorText(data.context_error)) + '</p>';
+    else if (!contextFields) message = '<p class="note">' + esc(es ? "Sin contexto registrado. El estado de ejecución y su historial se conservan." : "No recorded context. Execution state and history remain available.") + '</p>';
+    return heading + message + (fields.length ? '<dl>' + fields.join("") + '</dl>' : '') +
+      '<p class="note">' + esc(es ? "Leer este registro no verifica el efecto ni autoriza repetirlo." : "Reading this record does not verify an effect or authorize retrying it.") + '</p>' +
+      fullRecord(task, key) + '</section>';
+  }
+
+  function fullRecord(task, key) {
+    var es = LANG === "es";
+    var state = taskFull[key] || {};
+    var label = es ? "Registro completo" : "Complete record";
+    var button = '<button type="button" class="chip" data-full="' + esc(task.id) + '" aria-expanded="' + (state.open ? "true" : "false") + '">' +
+      (state.open ? "▾ " : "▸ ") + esc(label) + '</button>';
+    if (!state.open) return button;
+    if (state.loading) return button + '<p class="note">' + esc(t("reading")) + '</p>';
+    if (state.refused) return button + '<p class="note" role="alert">' + esc(es ? "No se pudo leer el registro completo." : "The complete record could not be read.") + '</p>';
+    var data = state.data || {};
     var record = data.record;
-    if (!record || typeof record !== "object" || Array.isArray(record)) return heading + '<p class="note">' + esc(es ? "Registro no disponible." : "Record unavailable.") + '</p></section>';
-    return heading + '<dl class="task-record">' + Object.keys(record).map(function (name) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) return button + '<p class="note">' + esc(es ? "Registro no disponible." : "Record unavailable.") + '</p>';
+    return button + '<dl class="task-record">' + Object.keys(record).map(function (name) {
       var value = record[name];
       var content;
       if (name === "body" && typeof value === "string" && typeof data.body_html === "string") {
-        // Only the server's allowlist-sanitized Markdown enters as HTML.
+        // The only place server HTML enters: the allowlist-sanitized Markdown of the body.
         content = '<div class="task-markdown">' + data.body_html + '</div>';
       } else if (name === "frontmatter" && Array.isArray(value)) {
         content = '<dl>' + value.map(function (pair) {
@@ -787,9 +848,36 @@
           return '<dt>' + esc(pair[0]) + '</dt><dd>' + recordValue(pair[1]) + '</dd>';
         }).join("") + '</dl>';
       } else content = recordValue(value);
-      var label = name === "body" ? (es ? "Instrucciones" : "Instructions") : name;
-      return '<dt>' + esc(label) + '</dt><dd>' + content + '</dd>';
-    }).join("") + '</dl></section>';
+      var heading = name === "body" ? (es ? "Instrucciones" : "Instructions") : name;
+      return '<dt>' + esc(heading) + '</dt><dd>' + content + '</dd>';
+    }).join("") + '</dl>';
+  }
+
+  function toggleFull(id) {
+    var task = null;
+    ((cache.tareas && cache.tareas.data && cache.tareas.data.tasks) || []).forEach(function (row) { if (row.id === id) task = row; });
+    if (!task) return;
+    var key = task.id + "|" + (task.updated_at || "");
+    var state = taskFull[key] || {};
+    if (state.open) {
+      state.open = false;
+    } else {
+      state.open = true;
+      if (!state.data) {
+        state.loading = true;
+        state.refused = null;
+        var epoch = contextEpoch;
+        load("/api/console/task-detail?task_id=" + encodeURIComponent(task.id) + "&full=1").then(function (reply) {
+          if (epoch !== contextEpoch) return;
+          state.loading = false;
+          state.data = reply.data || null;
+          state.refused = reply.refused || null;
+          if (ui.screen === "tareas" && ui.task === task.id && cache.tareas) paint("tareas", cache.tareas);
+        });
+      }
+    }
+    taskFull[key] = state;
+    if (ui.screen === "tareas" && cache.tareas) paint("tareas", cache.tareas);
   }
 
   function recordValue(value) {
@@ -1068,6 +1156,11 @@
     if (task) {
       ui.task = task.getAttribute("data-task");
       if (cache.tareas) paint("tareas", cache.tareas);
+      return;
+    }
+    var full = event.target.closest("[data-full]");
+    if (full) {
+      toggleFull(full.getAttribute("data-full"));
       return;
     }
     if (event.target.closest("[data-machine]")) {

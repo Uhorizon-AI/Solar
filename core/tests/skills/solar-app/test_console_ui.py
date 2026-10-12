@@ -161,6 +161,7 @@ const ingress = { claim_telegram: false, stamp: null, hostname: null };
 function boot(routes) {
   const els = {};
   const clicks = [];
+  const requests = [];
   function make(id) {
     const node = { id, innerHTML: "", textContent: "", className: "" };
     node.addEventListener = () => {};
@@ -174,6 +175,7 @@ function boot(routes) {
     },
     location: { host: "127.0.0.1:9000" },
     fetch(url) {
+      requests.push(url);
       const hit = routes[url];
       if (!hit) return Promise.reject(new Error("missing " + url));
       const status = hit.status || 200;
@@ -189,6 +191,7 @@ function boot(routes) {
   return {
     document: sandbox.document,
     els,
+    requests,
     click(attrs) {
       const target = {
         getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
@@ -287,20 +290,160 @@ async function settled() {
     throw new Error("active intention is not marked as saved text");
   }
 
-  page = boot(Object.assign({
+  const need = (html, text, why) => { if (!html.includes(text)) throw new Error(why + ": missing " + text); };
+  const lack = (html, text, why) => { if (html.includes(text)) throw new Error(why + ": found " + text); };
+  const curated = {
+    id: "err-1",
+    context: {
+      agent: "fixture-agent",
+      planet: "fixture-planet",
+      continuity_checkpoint: {
+        next_check: { action: "Compare the weekly report", at: "2026-10-13" },
+        wait: "<script>waiting()</script>",
+      },
+    },
+    context_error: null,
+    configuration: {
+      scheduled_time: "09:30", scheduled_timezone: "Europe/Madrid", scheduled_weekdays: [1, 3],
+      recurring_max_runs: 5, resources: ["res-a", "res-b"],
+    },
+  };
+  const complete = Object.assign({}, curated, {
+    record: {
+      id: "err-1", agent: "fixture",
+      future_column: { nested: "2026-10-14", zero: 0, flag: false },
+      frontmatter: [["unknown_field", "<script>unsafe()</script>"], ["broken", { detail: "still visible" }], null],
+      body: "# Instructions", empty: null,
+    },
+    body_html: "<h1>Instructions</h1><p>Safe body</p>",
+  });
+  const detailRoutes = (extra) => Object.assign({
     "/api/console/tasks": { body: tasks },
-    "/api/console/task-detail?task_id=err-1": { body: { record: { id: "err-1", agent: "fixture", future_column: { nested: "2026-10-13", zero: 0, flag: false }, frontmatter: [["unknown_field", "<script>unsafe</script>"], ["broken", { detail: "still visible" }], null], body: "# Instructions", empty: null }, body_html: "<h1>Instructions</h1><p>Safe body</p>" } },
-  }, calm));
+    "/api/console/task-detail?task_id=err-1": { body: curated },
+    "/api/console/task-detail?task_id=err-1&full=1": { body: complete },
+  }, extra || {}, calm);
+
+  page = boot(detailRoutes({
+    "/api/console/task-detail?task_id=ok-1": {
+      body: { id: "ok-1", context: null, context_error: null, configuration: { scheduled_time: "07:00" } },
+    },
+  }));
   await settled();
   page.click({ "data-screen": "tareas" });
   await settled();
-  const taskContext = page.els.health.innerHTML;
-  if (!taskContext.includes("2026-10-13") || !taskContext.includes("fixture")) throw new Error("task context missing");
-  if (!taskContext.includes("future_column") || !taskContext.includes("unknown_field") || !taskContext.includes("still visible") || !taskContext.includes("false") || !taskContext.includes("null")) throw new Error("complete record lost fields");
-  if (!taskContext.includes("<h1>Instructions</h1>")) throw new Error("Markdown body was not rendered");
-  if (taskContext.includes("<script>unsafe")) throw new Error("task context was not escaped");
-  if (!taskContext.includes("history-fixture")) throw new Error("stored history disappeared");
-  if (!taskContext.includes("Execution") && !taskContext.includes("History")) throw new Error("execution detail disappeared");
+  let view = page.els.health.innerHTML;
+  need(view, "Context and follow-up", "curated title");
+  need(view, "<dt>Agent</dt><dd>fixture-agent</dd>", "curated agent");
+  need(view, "Compare the weekly report", "next check");
+  need(view, "2026-10-13", "check date");
+  need(view, "&lt;script&gt;waiting()&lt;/script&gt;", "escaped wait");
+  lack(view, "<script>waiting", "curated block escaping");
+  need(view, "09:30", "configured time");
+  need(view, "Europe/Madrid", "stored zone");
+  need(view, "1, 3", "weekdays");
+  need(view, "res-a, res-b", "resources");
+  need(view, "does not verify an effect", "effect note");
+  need(view, "history-fixture", "stored history actor");
+  need(view, ">History<", "history heading");
+  need(view, "Active → Error", "history transition");
+  need(view, "Complete record", "full record button");
+  need(view, 'aria-expanded="false"', "button collapsed");
+  lack(view, "future_column", "record before click");
+  lack(view, "Safe body", "body before click");
+  lack(view, "task-markdown", "body container before click");
+  if (page.requests.some((url) => url.includes("full=1"))) throw new Error("full=1 requested before the click");
+
+  page.click({ "data-full": "err-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  if (!page.requests.includes("/api/console/task-detail?task_id=err-1&full=1")) throw new Error("click did not request full=1");
+  if (page.requests.filter((url) => url.includes("full=1")).length !== 1) throw new Error("full=1 requested more than once");
+  need(view, 'aria-expanded="true"', "button expanded");
+  need(view, "future_column", "future column");
+  need(view, "2026-10-14", "nested value");
+  need(view, "unknown_field", "unknown frontmatter field");
+  need(view, "still visible", "malformed entry");
+  need(view, "<dd><span", "scalar values");
+  need(view, ">false<", "false value");
+  need(view, ">0<", "zero value");
+  need(view, ">null<", "null value");
+  need(view, "<dt>Instructions</dt>", "body label");
+  need(view, '<div class="task-markdown"><h1>Instructions</h1><p>Safe body</p></div>', "body html");
+  need(view, "&lt;script&gt;unsafe()&lt;/script&gt;", "escaped frontmatter");
+  lack(view, "<script>unsafe", "frontmatter escaping");
+  need(view, "history-fixture", "history after the click");
+  page.click({ "data-full": "err-1" });
+  view = page.els.health.innerHTML;
+  lack(view, "future_column", "record after collapsing");
+  need(view, 'aria-expanded="false"', "button collapsed again");
+  page.click({ "data-full": "err-1" });
+  await settled();
+  need(page.els.health.innerHTML, "future_column", "record reopened from cache");
+  if (page.requests.filter((url) => url.includes("full=1")).length !== 1) throw new Error("reopening refetched the record");
+
+  page.click({ "data-filter": "todos" });
+  page.click({ "data-task": "ok-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "07:00", "second task time");
+  need(view, "Host timezone (no stored zone)", "zone fallback");
+  need(view, "No recorded context", "empty context note");
+  lack(view, "future_column", "record leaked to another task");
+
+  const broken = { id: "err-1", context: null, context_error: "checkpoint_invalid", configuration: curated.configuration };
+  page = boot(detailRoutes({ "/api/console/task-detail?task_id=err-1": { body: broken } }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "continuity checkpoint is not valid", "localized checkpoint error");
+  lack(view, "checkpoint_invalid", "raw error code");
+  need(view, "09:30", "configuration beside the error");
+  need(view, "history-fixture", "history beside the error");
+  const unknownCode = Object.assign({}, broken, { context_error: "surprise_code" });
+  page = boot(detailRoutes({ "/api/console/task-detail?task_id=err-1": { body: unknownCode } }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "context could not be read", "generic error");
+  lack(view, "surprise_code", "unknown error code");
+  need(view, "09:30", "configuration beside the generic error");
+
+  page = boot(detailRoutes({
+    "/api/console/task-detail?task_id=err-1": { status: 503, body: { error: "Task detail unavailable", refused: true } },
+    "/api/console/task-detail?task_id=err-1&full=1": { status: 503, body: { error: "Task detail unavailable", refused: true } },
+  }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "context could not be read.", "refused curated block");
+  need(view, "history-fixture", "history after refusal");
+  page.click({ "data-full": "err-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "The complete record could not be read.", "refused complete record");
+  lack(view, "future_column", "record after refusal");
+
+  const spanishTasks = Object.assign({}, tasks, { language: "es" });
+  page = boot(detailRoutes({
+    "/api/console/tasks": { body: spanishTasks },
+    "/api/console/task-detail?task_id=err-1": { body: Object.assign({}, curated, { configuration: { scheduled_time: "09:30" } }) },
+  }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "Contexto y seguimiento", "spanish title");
+  need(view, "<dt>Agente</dt>", "spanish agent label");
+  need(view, "Próxima comprobación", "spanish next check");
+  need(view, "Zona del equipo (sin zona guardada)", "spanish zone fallback");
+  need(view, "no verifica el efecto", "spanish effect note");
+  need(view, "Registro completo", "spanish button");
+  page.click({ "data-full": "err-1" });
+  await settled();
+  need(page.els.health.innerHTML, "<dt>Instrucciones</dt>", "spanish body label");
 
   const mandates = {
     defined: [
