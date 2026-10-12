@@ -163,6 +163,9 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertRegex(narrow, r'\[data-filter="errors"\]\{order:1\}')
         self.assertRegex(narrow, r'\[data-filter="drafts"\],\.fchip\[data-filter="running"\]\{order:2\}', "Drafts and Running share the first mobile row")
         self.assertRegex(narrow, r"\.rsw\{order:3")
+        # On desktop the switch is pushed to the bar's right edge (no media query); mobile
+        # repeats it so it closes the first row after the primary chips.
+        self.assertRegex(css, r"\.rsw\{[^}]*margin-left:auto", "the switch sits at the right edge on desktop")
         self.assertRegex(narrow, r"\.fbreak\{display:block;flex-basis:100%", "the rest of the chips drop to the second row")
         # At 800 px the first row is Errors, Drafts, Running and the Recurring switch. The
         # switch must sit inside the toolbar box (a sibling of the chips) and before the

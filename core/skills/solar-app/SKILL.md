@@ -121,7 +121,9 @@ subtask ("3 subtasks"), filtered or not; the detail lists them all.
 
 Accessibility: the chips sit in a `role="toolbar"` with one tab stop (roving
 tabindex), arrows, Home and End move between chips, Enter and Space select, each
-chip is labelled with its count ("Errors, 2 tasks"), "Showing N of M" is announced
+chip is labelled with its count ("Errors, 2 tasks"); the Recurring checkbox is not
+part of that roving tabindex (arrows skip it), it is reached with Tab. "Showing N of
+M" is announced
 by a stable `aria-live="polite"` region outside the repainted block (a value-only
 change in a reused node, not a node recreated each paint); that region is the only
 `role="status"`, so the empty-state panel does not also announce itself. The focus

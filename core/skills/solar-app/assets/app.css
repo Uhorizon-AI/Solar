@@ -78,7 +78,7 @@ body{margin:0}
    a 1 px separator; Queue, Done, Closed and All are unfilled; the Recurring switch is a
    real checkbox on the right, not a chip. Red is only for errors, blue only for running,
    green only for the zero-errors check. */
-.fbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.fbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 /* Wide screens (from 1840 px of viewport, list at least ~910 px): the bar is as wide as the
    list column, so the Recurring checkbox lines up with the list's right edge. Narrower, it
@@ -98,7 +98,7 @@ body{margin:0}
 .fg.run{color:var(--info)}
 .fsep{width:1px;height:20px;background:var(--line);margin:0 4px;flex:none}
 .fbreak{display:none}
-.rsw{display:inline-flex;align-items:center;gap:8px;min-height:36px;font-size:12.5px;cursor:pointer;white-space:nowrap}
+.rsw{display:inline-flex;align-items:center;gap:8px;min-height:36px;font-size:12.5px;cursor:pointer;white-space:nowrap;margin-left:auto}
 .rsw input{width:16px;height:16px;margin:0;accent-color:var(--brand)}
 .fchip:focus-visible,.rsw input:focus-visible,.fnext:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 .good{padding:16px 12px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
