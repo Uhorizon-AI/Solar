@@ -142,10 +142,12 @@ internationalized host names such as `https://münchen.de` (links need an ASCII
 host, a valid bracketed IPv6 address if any, and a port from 1 to 65535, so they
 stay text). The parser is not extended for these. The view is read only: no write
 session, event, queue or verification. An unexpected failure in this route
-answers the fixed 503 and writes one warning with the exception class (never its
-message) to stderr through the `solar.app` logger, which the host configures at
-start. Other console routes answer a fixed "Console data unavailable" on
-unexpected read errors.
+answers the fixed 503 and logs one warning with the exception class (never its
+message) through the `solar.app` logger. The host adds a stderr handler only when
+neither that logger nor the root logger has one; a configured root is trusted and
+propagation is unchanged. If the root is configured after the console started, the
+warning can print twice (accepted). Other console routes answer a fixed "Console
+data unavailable" on unexpected read errors.
 
 Tasks screen layout: list and detail share the width evenly and stack below 900
 px. The list keeps Status, Task and Created up to 1600 px of viewport width,

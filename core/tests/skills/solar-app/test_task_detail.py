@@ -78,15 +78,42 @@ class HostLoggingTests(unittest.TestCase):
         self.assertEqual(sink.getvalue().count('DatabaseError'), 1)
         self.assertNotIn('SECRET', sink.getvalue())
 
-    def test_other_loggers_still_reach_the_root(self):
-        """Propagation is untouched: a child of solar.app still reaches a root handler."""
+    def test_children_of_solar_app_print_once_and_propagation_is_untouched(self):
         import io
+        from contextlib import redirect_stderr
         import host_server
-        sink = io.StringIO()
-        self.root.addHandler(self.logging.StreamHandler(sink))
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            host_server.configure_logging()  # the root logger has no handler here
+            self.logging.getLogger('solar.app.child').warning('child line')
+        self.assertEqual(stderr.getvalue().count('child line'), 1)
+        self.assertIn('solar.app.child', stderr.getvalue())
+        self.assertIs(self.logger.propagate, True)
+
+    def test_root_configured_after_the_console_started_prints_twice_by_design(self):
+        """Accepted case, pinned so nobody removes it with propagate = False."""
+        import io
+        from contextlib import redirect_stderr
+        import host_server
+        stderr, sink = io.StringIO(), io.StringIO()
+        with redirect_stderr(stderr):
+            host_server.configure_logging()
+            self.root.addHandler(self.logging.StreamHandler(sink))
+            self.logging.getLogger('solar.app').warning('late root line')
+        self.assertEqual(stderr.getvalue().count('late root line'), 1)
+        self.assertEqual(sink.getvalue().count('late root line'), 1)
+
+    def test_an_existing_level_is_kept(self):
+        import host_server
+        self.logger.setLevel(self.logging.INFO)
+        host_server.configure_logging()  # adds the handler, keeps INFO
+        self.assertEqual(self.logger.level, self.logging.INFO)
+        self.root.addHandler(self.logging.StreamHandler(__import__('io').StringIO()))
+        host_server.configure_logging()  # early branch, keeps INFO
+        self.assertEqual(self.logger.level, self.logging.INFO)
+        self.logger.setLevel(self.logging.NOTSET)
         host_server.configure_logging()
-        self.logging.getLogger('solar.app.child').warning('child line')
-        self.assertIn('child line', sink.getvalue())
+        self.assertEqual(self.logger.level, self.logging.WARNING)
 
     def test_generic_handler_logs_the_class_and_answers_the_fixed_body(self):
         import io

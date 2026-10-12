@@ -30,17 +30,22 @@ def configure_logging(logger: logging.Logger | None = None) -> None:
 
     The handler is added only when neither the logger nor the root logger has one:
     a process that configured the root logger is trusted to show the warnings, so
-    nothing prints twice and propagation is left alone. Calling it again does nothing.
+    its handlers and format apply (the line format below is used only when this
+    function adds the handler; that is an accepted decision) and propagation is left
+    alone. Do not "fix" the next case with `propagate = False`: if the root logger
+    is configured after the console started, a warning prints twice (this stderr
+    handler plus the root's). That case is accepted and pinned by a test. The level
+    is set to WARNING only when none was chosen. Calling it again does nothing.
     """
     logger = logger or LOGGER
-    if logger.handlers or logging.getLogger().handlers:
+    if logger.level == logging.NOTSET:
         logger.setLevel(logging.WARNING)
+    if logger.handlers or logging.getLogger().handlers:
         return
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
     handler._solar_host = True  # type: ignore[attr-defined]
     logger.addHandler(handler)
-    logger.setLevel(logging.WARNING)
 
 
 def _active_workspace() -> Path:

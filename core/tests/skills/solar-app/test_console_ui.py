@@ -118,6 +118,8 @@ class ConsoleUiTests(unittest.TestCase):
         js = (ASSETS / "app.js").read_text(encoding="utf-8")
         start = js.index('class="row hd trow"')
         order = re.findall(r't\("col_(\w+)"\)', js[start:js.index("rows.join", start)])
+        self.assertEqual(len(order), 6)
+        self.assertEqual(len(set(order)), 6, "six unique header columns")
         self.assertEqual(order, ["status", "task", "provider", "channel", "created", "requester"], "header column order")
 
         def block(source, opener):
