@@ -102,6 +102,29 @@ bash -n core/skills/solar-client/scripts/solar
 python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/solar-app /tmp
 ```
 
+## Task status filters
+
+One toolbar over the list and the detail, in this order: Errors (`error`),
+Running (`active`), Drafts (`draft`), a 1 px separator, Queue (`planned`,
+`queued`), Done (`completed`), Closed (`cancelled`, `archived`) and All; a real
+"Recurring" checkbox sits on the right and is not a chip. Errors never hides: at 0
+it shows a green check, and selecting it shows "No tasks in error" with a link to
+the next pending group. Running exists only while a task is active. Every other
+group hides at 0 unless selected. The default filter is the first non-empty of
+Errors, Running and Drafts, else All, decided at each opening and never remembered
+between sessions; only the URL hash (`#tasks/<group>` with `+recurring`) carries it
+over a reload. The Recurring checkbox intersects the group and the chip counts
+follow it. Active tasks sort first inside any group that holds them. Rows show all
+eight states as a pill with glyph and text (red only for `error`, blue only for
+`active`); recurring tasks carry a "↻" mark after the id.
+
+Accessibility: the chips sit in a `role="toolbar"` with one tab stop (roving
+tabindex), arrows, Home and End move between chips, Enter and Space select, each
+chip is labelled with its count ("Errors, 2 tasks"), "Showing N of M" is a polite
+live region, and the focus ring is 2 px in the text colour. Below 900 px the bar
+wraps into two touch-sized rows (Errors, Drafts and the checkbox first). Filtering is
+presentation only: the route, the data and the state machine are unchanged.
+
 ## Laptop runtime note
 
 Host sleep stops availability. Only one active host should serve the same public

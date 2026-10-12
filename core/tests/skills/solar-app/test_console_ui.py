@@ -149,6 +149,23 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertEqual(columns(media), 3, "three columns up to 1600 px")
         self.assertEqual(columns(css.replace(media, "")), 6, "six columns when wider")
 
+    def test_filter_bar_styles_keep_the_agreed_rules(self):
+        css = (ASSETS / "app.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.fchip:focus-visible[^{]*\{outline:2px solid var\(--text\)", "2 px light focus ring, not amber")
+        self.assertRegex(css, r"\.fchip\{[^}]*flex:none", "chips never grow")
+        self.assertRegex(css, r"\.fchip\.on\{[^}]*box-shadow:inset 0 -2px 0 var\(--brand\)", "amber 2 px underline on the selection")
+        self.assertRegex(css, r"\.fchip \.fn\{[^}]*tabular-nums", "tabular numerals")
+        narrow = re.search(r"@media \(max-width:900px\)\{(.*?)\n\}", css, re.S).group(1)
+        self.assertIn("min-height:40px", narrow, "touch height when stacked")
+        self.assertRegex(narrow, r'\[data-filter="errors"\]\{order:1\}')
+        self.assertRegex(narrow, r'\[data-filter="drafts"\]\{order:2\}')
+        self.assertRegex(narrow, r"\.rsw\{order:3")
+        # Red, blue and green belong to one thing each.
+        self.assertRegex(css, r"\.fg\.err\{color:var\(--err\)\}")
+        self.assertRegex(css, r"\.fg\.run\{color:var\(--info\)\}")
+        self.assertRegex(css, r"\.fg\.ok\{color:var\(--ok\)\}")
+        self.assertRegex(css, r"\.pill\.run\{color:var\(--info\)")
+
     def test_screens_follow_the_routes(self):
         result = subprocess.run(
             ["node", "-e", _JS_HARNESS, str(ASSETS / "app.js")],
@@ -195,9 +212,12 @@ const tasks = {
 };
 const ingress = { claim_telegram: false, stamp: null, hostname: null };
 
-function boot(routes) {
+function boot(routes, hash) {
   const els = {};
   const clicks = [];
+  const keys = [];
+  const location = { host: "127.0.0.1:9000", hash: hash || "" };
+  const history = { replaceState(state, title, url) { location.hash = url; } };
   const requests = [];
   function make(id) {
     const node = { id, innerHTML: "", textContent: "", className: "" };
@@ -208,9 +228,10 @@ function boot(routes) {
   const sandbox = {
     document: {
       getElementById(id) { return els[id] || make(id); },
-      addEventListener(type, fn) { if (type === "click") clicks.push(fn); },
+      addEventListener(type, fn) { if (type === "click") clicks.push(fn); if (type === "keydown") keys.push(fn); },
     },
-    location: { host: "127.0.0.1:9000" },
+    location,
+    history,
     fetch(url) {
       requests.push(url);
       let hit = routes[url];
@@ -241,6 +262,19 @@ function boot(routes) {
       };
       clicks.forEach((fn) => fn({ target }));
     },
+    key(attrs, name) {
+      const target = {
+        getAttribute(attr) { return Object.prototype.hasOwnProperty.call(attrs, attr) ? attrs[attr] : null; },
+        closest(sel) {
+          const attr = (String(sel).match(/\[([^\]=\s]+)/) || [])[1];
+          return attr && Object.prototype.hasOwnProperty.call(attrs, attr) ? target : null;
+        },
+      };
+      let prevented = false;
+      keys.forEach((fn) => fn({ target, key: name, preventDefault() { prevented = true; } }));
+      return prevented;
+    },
+    location,
   };
 }
 function flush() {
@@ -274,9 +308,9 @@ async function settled() {
   page.click({ "data-screen": "tareas" });
   await settled();
   if (page.els.title.textContent !== "Tasks") throw new Error("nav did not open tasks");
-  if (!page.els.health.innerHTML.includes("Broken")) throw new Error("attention filter hid the error");
-  if (page.els.health.innerHTML.includes("Finished")) throw new Error("attention filter showed a completed task");
-  page.click({ "data-filter": "completed" });
+  if (!page.els.health.innerHTML.includes("Broken")) throw new Error("default filter hid the error");
+  if (page.els.health.innerHTML.includes("Finished")) throw new Error("default filter showed a completed task");
+  page.click({ "data-filter": "done" });
   await settled();
   const filtered = page.els.health.innerHTML;
   if (!filtered.includes("Finished")) throw new Error("completed filter hid the visible task");
@@ -286,9 +320,9 @@ async function settled() {
   await settled();
   page.click({ "data-screen": "tareas" });
   await settled();
-  page.click({ "data-filter": "todos" });
+  page.click({ "data-filter": "all" });
   page.click({ "data-task": "ok-1" });
-  page.click({ "data-filter": "error" });
+  page.click({ "data-filter": "errors" });
   const selected = page.els.health.innerHTML;
   if (!selected.includes("Broken") || selected.includes("Finished")) throw new Error("detail stayed on the hidden task");
 
@@ -424,7 +458,7 @@ async function settled() {
   need(page.els.health.innerHTML, "future_column", "record reopened from cache");
   if (page.requests.filter((url) => url.includes("full=1")).length !== 1) throw new Error("reopening refetched the record");
 
-  page.click({ "data-filter": "todos" });
+  page.click({ "data-filter": "all" });
   page.click({ "data-task": "ok-1" });
   await settled();
   view = page.els.health.innerHTML;
@@ -758,6 +792,211 @@ async function settled() {
   page.click({ "data-front": "never-opened" });
   await settled();
   need(page.els.health.innerHTML, "Context and follow-up", "screen intact after a stray toggle");
+
+  // ---- Status filter bar -------------------------------------------------------
+  const STATES = ["draft", "planned", "queued", "active", "completed", "error", "archived", "cancelled"];
+  const mk = (id, status, extra) => Object.assign({ id, status, title: "T-" + id, provider: null, channel: null, created_at: "2026-04-01", updated_at: "2026-09-01", recurring: false, parent_id: null }, extra || {});
+  const fixture = (list) => {
+    const by = {};
+    list.forEach((task) => {
+      by[task.status] = by[task.status] || { n: 0, recurring: 0 };
+      by[task.status].n += 1;
+      if (task.recurring) by[task.status].recurring += 1;
+    });
+    return { tasks: list, by_status: by, links: [], history: [], statuses: STATES, transitions: [] };
+  };
+  const open = async (body, options) => {
+    const opened = boot(Object.assign({ "/api/console/tasks": { body: options && options.language ? Object.assign({}, body, { language: options.language }) : body } }, calm), options && options.hash);
+    await settled();
+    opened.click({ "data-screen": "tareas" });
+    await settled();
+    return opened;
+  };
+  const chipKeys = (html) => (html.match(/data-chip="1"/g) ? (html.match(/data-filter="([a-z]+)" data-chip="1"/g) || []).map((m) => m.match(/data-filter="([a-z]+)"/)[1]) : []);
+  const selectedChip = (html) => (html.match(/data-filter="([a-z]+)" data-chip="1" aria-pressed="true"/) || [])[1];
+  const rowsOf = (html) => (html.match(/data-task="[^"]+"/g) || []).map((m) => m.slice(11, -1));
+  const everything = fixture([
+    mk("d1", "draft"), mk("d2", "draft"), mk("p1", "planned", { recurring: true }), mk("q1", "queued"), mk("a1", "active", { recurring: true }),
+    mk("c1", "completed"), mk("c2", "completed", { recurring: true }), mk("e1", "error", { recurring: true }), mk("e2", "error"),
+    mk("x1", "cancelled"), mk("x2", "archived", { recurring: true }),
+  ]);
+
+  // Groups, order and what each one holds.
+  page = await open(everything);
+  view = page.els.health.innerHTML;
+  if (JSON.stringify(chipKeys(view)) !== JSON.stringify(["errors", "running", "drafts", "queue", "done", "closed", "all"])) throw new Error("chips: " + JSON.stringify(chipKeys(view)));
+  need(view, 'aria-label="Errors, 2 tasks"', "errors label with count");
+  need(view, 'aria-label="Running, 1 task"', "running label, singular");
+  need(view, 'aria-label="Drafts, 2 tasks"', "drafts label");
+  need(view, 'aria-label="Queue, 2 tasks"', "queue = planned + queued");
+  need(view, 'aria-label="Done, 2 tasks"', "done = completed only");
+  need(view, 'aria-label="Closed, 2 tasks"', "closed = cancelled + archived");
+  need(view, 'aria-label="All, 11 tasks"', "all");
+  lack(view, "Attention", "no derived Attention chip");
+  lack(view, "↻1", "no per-chip recurring counters");
+  const groupRows = {};
+  for (const key of ["errors", "running", "drafts", "queue", "done", "closed", "all"]) {
+    page.click({ "data-filter": key });
+    groupRows[key] = rowsOf(page.els.health.innerHTML).sort();
+  }
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  if (!same(groupRows.errors, ["e1", "e2"]) || !same(groupRows.running, ["a1"]) || !same(groupRows.drafts, ["d1", "d2"])) throw new Error("rows by group: " + JSON.stringify(groupRows));
+  if (!same(groupRows.queue, ["p1", "q1"]) || !same(groupRows.done, ["c1", "c2"]) || !same(groupRows.closed, ["x1", "x2"])) throw new Error("rows by group: " + JSON.stringify(groupRows));
+  if (groupRows.all.length !== 11) throw new Error("All lists every task");
+  // Every row keeps its real status as a pill with glyph and text.
+  page.click({ "data-filter": "all" });
+  view = page.els.health.innerHTML;
+  for (const [cls, glyph, word] of [["err", "▲", "Error"], ["run", "▶", "Active"], ["draft", "◌", "Draft"], ["plain", "◷", "Planned"], ["plain", "≡", "Queued"],
+    ["plain", "✓", "Completed"], ["dim", "⊘", "Cancelled"], ["dim", "▭", "Archived"]]) {
+    need(view, '<span class="pill ' + cls + '">' + glyph + " " + word + "</span>", "row pill " + word);
+  }
+  // Recurring mark after the id, always visible, labelled, not a pill.
+  need(view, '<span class="rmark" role="img" aria-label="Recurring">↻</span>', "recurring mark");
+
+  // Default filter: first non-empty of Errors, Running, Drafts; else All. Decided at each opening.
+  const only = (statuses) => fixture(statuses.map((status, i) => mk("s" + i, status)));
+  page = await open(everything);
+  if (selectedChip(page.els.health.innerHTML) !== "errors") throw new Error("default with errors");
+  page = await open(only(["active", "draft", "completed"]));
+  if (selectedChip(page.els.health.innerHTML) !== "running") throw new Error("default with only running and drafts");
+  page = await open(only(["draft", "completed", "planned"]));
+  if (selectedChip(page.els.health.innerHTML) !== "drafts") throw new Error("default with only drafts");
+  page = await open(only(["completed", "planned", "cancelled"]));
+  if (selectedChip(page.els.health.innerHTML) !== "all") throw new Error("default with the three empty");
+  page = await open(only([]));
+  if (selectedChip(page.els.health.innerHTML) !== "all") throw new Error("default with no tasks");
+  // Nothing is remembered between openings.
+  page = await open(everything);
+  page.click({ "data-filter": "closed" });
+  page.click({ "data-screen": "resumen" });
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  if (selectedChip(page.els.health.innerHTML) !== "errors") throw new Error("the filter must be decided again at each opening");
+
+  // Hide at 0 except Errors and the selected group; Running only exists with active tasks.
+  page = await open(only(["completed", "completed"]));
+  view = page.els.health.innerHTML;
+  if (JSON.stringify(chipKeys(view)) !== JSON.stringify(["errors", "done", "all"])) throw new Error("hidden groups: " + JSON.stringify(chipKeys(view)));
+  need(view, "✓", "zero errors shows a check");
+  need(view, '<span class="fg ok" aria-hidden="true">✓</span><span class="fl">Errors</span> <b class="fn">0</b>', "Errors 0 with a green check");
+  lack(view, "fchip fill on bad", "Errors 0 is not red");
+  lack(page.els.health.innerHTML, 'data-filter="running"', "no Running chip without active tasks");
+  page = await open(everything);
+  need(page.els.health.innerHTML, 'data-filter="running"', "Running chip with an active task");
+  need(page.els.health.innerHTML, "fchip fill on bad", "Errors with N > 0 is red and selected by default");
+  lack(page.els.health.innerHTML, 'data-filter="done" data-chip="1" aria-pressed="true"', "only the selected chip is pressed");
+  // A selected group stays even when it empties.
+  page = await open(only(["completed"]), { hash: "#tasks/running" });
+  view = page.els.health.innerHTML;
+  if (selectedChip(view) !== "running") throw new Error("a selected group stays at 0");
+  need(view, "No tasks.", "empty selected group says so");
+
+  // Zero errors selected: good news with a link to the next pending group.
+  page = await open(only(["draft", "draft", "completed"]));
+  page.click({ "data-filter": "errors" });
+  view = page.els.health.innerHTML;
+  need(view, "No tasks in error", "good-news title");
+  need(view, "Nothing needs retrying.", "good-news hint");
+  need(view, 'role="status"', "good news is announced");
+  need(view, '<button type="button" class="fnext" data-filter="drafts">Next pending: Drafts (2)</button>', "link to the next pending group");
+  lack(view, "No tasks.", "not a bare empty state");
+  page.click({ "data-filter": "drafts" });
+  if (selectedChip(page.els.health.innerHTML) !== "drafts") throw new Error("the link selects the group");
+  page = await open(only(["completed"]), { hash: "#tasks/errors" });
+  need(page.els.health.innerHTML, "No tasks in error", "good news with nothing pending");
+  lack(page.els.health.innerHTML, "fnext", "no link when nothing is pending");
+  page = await open(only(["draft"]), { hash: "#tasks/errors", language: "es" });
+  need(page.els.health.innerHTML, "No hay tareas con error", "spanish good news");
+  need(page.els.health.innerHTML, "Nada que reintentar.", "spanish hint");
+  need(page.els.health.innerHTML, "Siguiente pendiente: Borradores (1)", "spanish next link");
+
+  // Recurring switch: a real checkbox, intersects the group, counts follow it.
+  page = await open(everything);
+  view = page.els.health.innerHTML;
+  need(view, '<input type="checkbox" data-recurring="1">', "real checkbox, off by default");
+  need(view, "↻ Recurring", "switch label");
+  lack(view, "data-recurring=\"1\" data-chip", "the switch is not a chip");
+  page.click({ "data-recurring": "1" });
+  view = page.els.health.innerHTML;
+  need(view, '<input type="checkbox" data-recurring="1" checked>', "checkbox checked");
+  need(view, 'aria-label="Errors, 1 task"', "errors count follows the switch");
+  need(view, 'aria-label="Running, 1 task"', "running follows the switch");
+  lack(view, 'data-filter="drafts"', "drafts hide when no recurring draft exists");
+  need(view, 'aria-label="Queue, 1 task"', "queue follows the switch");
+  need(view, 'aria-label="Done, 1 task"', "done follows the switch");
+  need(view, 'aria-label="Closed, 1 task"', "closed follows the switch");
+  need(view, 'aria-label="All, 5 tasks"', "all follows the switch");
+  if (!same(rowsOf(view).sort(), ["e1"])) throw new Error("switch intersects the selected group: " + JSON.stringify(rowsOf(view)));
+  page.click({ "data-filter": "all" });
+  if (!same(rowsOf(page.els.health.innerHTML).sort(), ["a1", "c2", "e1", "p1", "x2"])) throw new Error("switch with All");
+  page.click({ "data-recurring": "1" });
+  need(page.els.health.innerHTML, 'aria-label="All, 11 tasks"', "switch off restores the counts");
+
+  // Active tasks first inside any group that holds them.
+  const mixed = fixture([mk("q9", "queued", { updated_at: "2026-09-09" }), mk("a9", "active", { updated_at: "2026-01-01" }), mk("p9", "planned", { updated_at: "2026-09-08" }), mk("a8", "active", { updated_at: "2026-02-01" })]);
+  page = await open(mixed);
+  page.click({ "data-filter": "all" });
+  const order = rowsOf(page.els.health.innerHTML).filter((id) => /^(a|p|q)\d$/.test(id));
+  if (order.slice(0, 2).sort().join() !== "a8,a9") throw new Error("active first: " + order.join());
+  page.click({ "data-filter": "running" });
+  if (!same(rowsOf(page.els.health.innerHTML), ["a8", "a9"])) throw new Error("running lists active tasks newest first: " + rowsOf(page.els.health.innerHTML).join());
+
+  // URL hash: the selection survives a reload and nothing else does.
+  page = await open(everything);
+  page.click({ "data-filter": "queue" });
+  if (page.location.hash !== "#tasks/queue") throw new Error("hash after selecting: " + page.location.hash);
+  page.click({ "data-recurring": "1" });
+  if (page.location.hash !== "#tasks/queue+recurring") throw new Error("hash with the switch: " + page.location.hash);
+  const reloaded = boot(Object.assign({ "/api/console/tasks": { body: everything } }, calm), page.location.hash);
+  await settled();
+  if (reloaded.els.title.textContent !== "Tasks") throw new Error("a tasks hash reopens the Tasks screen");
+  view = reloaded.els.health.innerHTML;
+  if (selectedChip(view) !== "queue") throw new Error("reload restores the group");
+  need(view, '<input type="checkbox" data-recurring="1" checked>', "reload restores the switch");
+  if (!same(rowsOf(view), ["p1"])) throw new Error("reload restores the intersection");
+  for (const bad of ["#tasks/bogus", "#other", "#tasks/queue+x", ""]) {
+    const ignored = boot(Object.assign({ "/api/console/tasks": { body: everything } }, calm), bad);
+    await settled();
+    if (ignored.els.title.textContent !== "Summary") throw new Error("hash ignored: " + bad);
+  }
+
+  // Toolbar semantics, roving tabindex and keyboard.
+  page = await open(everything);
+  view = page.els.health.innerHTML;
+  need(view, 'role="toolbar" aria-label="Filter tasks by status"', "toolbar");
+  need(view, "aria-live=\"polite\">Showing ", "live region for the count");
+  need(view, "Showing 2 of 2", "count of the default group");
+  const tabindexes = (html) => (html.match(/data-chip="1" aria-pressed="(?:true|false)" tabindex="(-?\d)"/g) || []).map((m) => m.slice(-2, -1)).join("");
+  if ((view.match(/tabindex="0"/g) || []).length !== 1) throw new Error("one tab stop in the toolbar");
+  if (tabindexes(view) !== "0111111") throw new Error("tabindex layout: " + tabindexes(view));
+  // Arrows move the tab stop without selecting.
+  if (!page.key({ "data-chip": "1", "data-filter": "errors" }, "ArrowRight")) throw new Error("arrows are handled");
+  view = page.els.health.innerHTML;
+  if (selectedChip(view) !== "errors") throw new Error("arrows do not select");
+  need(view, 'data-filter="running" data-chip="1" aria-pressed="false" tabindex="0"', "tab stop moved to Running");
+  page.key({ "data-chip": "1", "data-filter": "running" }, "ArrowLeft");
+  page.key({ "data-chip": "1", "data-filter": "errors" }, "ArrowLeft");
+  need(page.els.health.innerHTML, 'data-filter="all" data-chip="1" aria-pressed="false" tabindex="0"', "wraps to the last chip");
+  page.key({ "data-chip": "1", "data-filter": "all" }, "Home");
+  need(page.els.health.innerHTML, 'data-filter="errors" data-chip="1" aria-pressed="true" tabindex="0"', "Home");
+  page.key({ "data-chip": "1", "data-filter": "errors" }, "End");
+  need(page.els.health.innerHTML, 'data-filter="all" data-chip="1" aria-pressed="false" tabindex="0"', "End");
+  if (page.key({ "data-chip": "1", "data-filter": "all" }, "a")) throw new Error("other keys are left alone");
+  // Enter and Space activate the button natively (a click); the selection then holds the tab stop.
+  page.click({ "data-filter": "closed" });
+  view = page.els.health.innerHTML;
+  need(view, 'data-filter="closed" data-chip="1" aria-pressed="true" tabindex="0"', "selected chip holds the tab stop");
+  if ((view.match(/tabindex="0"/g) || []).length !== 1) throw new Error("still one tab stop");
+  // Names do not rely on colour alone: each chip has text and a numeric count.
+  for (const label of ["Errors", "Running", "Drafts", "Queue", "Done", "Closed", "All"]) need(view, '<span class="fl">' + label + "</span>", "chip text " + label);
+  page = await open(everything, { language: "es" });
+  view = page.els.health.innerHTML;
+  need(view, 'aria-label="Filtrar tareas por estado"', "spanish toolbar");
+  need(view, 'aria-label="Errores, 2 tareas"', "spanish count label");
+  for (const label of ["Errores", "En ejecución", "Borradores", "En cola", "Completadas", "Cerradas", "Todas"]) need(view, '<span class="fl">' + label + "</span>", "spanish chip " + label);
+  need(view, "↻ Recurrentes", "spanish switch");
+  need(view, 'aria-label="Errores, 2 tareas"', "spanish count");
 
   const mandates = {
     defined: [

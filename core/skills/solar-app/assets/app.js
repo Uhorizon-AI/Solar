@@ -119,7 +119,10 @@
       install: "Installation", version: "Version", mode: "Mode", owner: "Owner", cutover: "Latest cutover",
       launch_title: "LaunchAgent", label: "Label", interval: "Interval", every_60: "every 60 s", last_pass: "Latest pass", functions: "Features",
       daily_copy: "Daily copy", copies: " saved copies", no_copy: "no copy",
-      attention: "Attention", all_tasks: "All", recurring_title: "recurring", subtasks: "subtasks",
+      f_errors: "Errors", f_running: "Running", f_drafts: "Drafts", f_queue: "Queue", f_done: "Done", f_closed: "Closed",
+      f_toolbar: "Filter tasks by status", f_task: "task", f_tasks: "tasks", f_recurring: "↻ Recurring",
+      f_no_error: "No tasks in error", f_no_error_hint: "Nothing needs retrying.", f_next: "Next pending: ",
+      all_tasks: "All", subtasks: "subtasks",
       no_provider: "no provider", no_tasks: "No tasks.", showing: "Showing ", of: " of ",
       col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "Created", col_requester: "Requester",
       state_machine: "State machine", no_history: "No history.", detail: "Detail", recurring: "recurring",
@@ -269,7 +272,10 @@
       install: "Instalación", version: "Versión", mode: "Modo", owner: "Dueño", cutover: "Último corte",
       launch_title: "LaunchAgent", label: "Etiqueta", interval: "Intervalo", every_60: "cada 60 s", last_pass: "Última pasada", functions: "Funciones",
       daily_copy: "Copia diaria", copies: " copias guardadas", no_copy: "sin copia",
-      attention: "Atención", all_tasks: "Todas", recurring_title: "recurrentes", subtasks: "subtareas",
+      f_errors: "Errores", f_running: "En ejecución", f_drafts: "Borradores", f_queue: "En cola", f_done: "Completadas", f_closed: "Cerradas",
+      f_toolbar: "Filtrar tareas por estado", f_task: "tarea", f_tasks: "tareas", f_recurring: "↻ Recurrentes",
+      f_no_error: "No hay tareas con error", f_no_error_hint: "Nada que reintentar.", f_next: "Siguiente pendiente: ",
+      all_tasks: "Todas", subtasks: "subtareas",
       no_provider: "sin proveedor", no_tasks: "Sin tareas.", showing: "Mostrando ", of: " de ",
       col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Creada", col_requester: "Solicitante",
       state_machine: "Máquina de estados", no_history: "Sin historia.", detail: "Detalle", recurring: "recurrente",
@@ -306,7 +312,18 @@
       decisions_word: "decisiones"
     }
   };
-  var ATT = ["error", "queued", "active", "planned"];
+  // Status filter groups over the eight stored statuses, in display order.
+  // Errors never hides; every other group hides at 0 unless selected. Done is only
+  // `completed`; Closed is `cancelled` and `archived`.
+  var GROUPS = [
+    { key: "errors", label: "f_errors", statuses: ["error"], fill: true, glyph: "▲" },
+    { key: "running", label: "f_running", statuses: ["active"], fill: true, glyph: "▶" },
+    { key: "drafts", label: "f_drafts", statuses: ["draft"], fill: true, glyph: "◌" },
+    { key: "queue", label: "f_queue", statuses: ["planned", "queued"] },
+    { key: "done", label: "f_done", statuses: ["completed"] },
+    { key: "closed", label: "f_closed", statuses: ["cancelled", "archived"] }
+  ];
+  var FILTER_KEYS = GROUPS.map(function (group) { return group.key; }).concat(["all"]);
   var RANK = { error: 0, active: 1, queued: 2, planned: 3, draft: 4, completed: 5, archived: 6, cancelled: 7 };
 
   function t(key) {
@@ -336,10 +353,11 @@
     ];
   }
   function statusRow(status) {
+    // Red only for error, blue only for active; the rest are neutral and say their state in text too.
     var labels = {
-      draft: ["neu", "○", "st_draft"], planned: ["info", "◔", "st_planned"], queued: ["info", "◑", "st_queued"],
-      active: ["info", "▶", "st_active"], completed: ["ok", "✓", "st_completed"], error: ["err", "▲", "st_error"],
-      archived: ["neu", "▭", "st_archived"], cancelled: ["neu", "⊘", "st_cancelled"]
+      draft: ["draft", "◌", "st_draft"], planned: ["plain", "◷", "st_planned"], queued: ["plain", "≡", "st_queued"],
+      active: ["run", "▶", "st_active"], completed: ["plain", "✓", "st_completed"], error: ["err", "▲", "st_error"],
+      archived: ["dim", "▭", "st_archived"], cancelled: ["dim", "⊘", "st_cancelled"]
     };
     var row = labels[status] || ["neu", "·", "st_none"];
     return { tone: row[0], glyph: row[1], label: t(row[2]) };
@@ -372,7 +390,11 @@
   var ui = {
     screen: "resumen",
     theme: "dark",
-    filter: "atencion",
+    filter: null,
+    filterAuto: true,
+    recurring: false,
+    focusKey: null,
+    refocus: null,
     task: null,
     machine: false
   };
@@ -547,8 +569,45 @@
     });
   }
 
-  function openScreen(id) {
-    if (id === "tareas") { taskContexts = {}; taskFull = {}; contextEpoch += 1; }
+  function readFilterHash() {
+    var match = /^#tasks\/([a-z]+)(\+recurring)?$/.exec(String((typeof location !== "undefined" && location.hash) || ""));
+    return match && FILTER_KEYS.indexOf(match[1]) >= 0 ? { filter: match[1], recurring: !!match[2] } : null;
+  }
+  function writeFilterHash() {
+    var url = "#tasks/" + ui.filter + (ui.recurring ? "+recurring" : "");
+    try {
+      if (typeof history !== "undefined" && history.replaceState) history.replaceState(null, "", url);
+      else location.hash = url;
+    } catch (error) { /* the filter still works without a hash */ }
+  }
+  function clearFilterHash() {
+    try {
+      if (typeof location === "undefined" || !/^#tasks\//.test(String(location.hash || ""))) return;
+      if (typeof history !== "undefined" && history.replaceState) history.replaceState(null, "", String(location.pathname || "") + String(location.search || ""));
+      else location.hash = "";
+    } catch (error) { /* a stale hash only affects a reload */ }
+  }
+  function restoreFocus(box) {
+    var target = ui.refocus;
+    ui.refocus = null;
+    if (!target || !box || !box.querySelector) return;
+    var el = box.querySelector(target === "recurring" ? "[data-recurring]" : '[data-filter="' + String(ui.focusKey || "") + '"][data-chip]');
+    if (el && el.focus) el.focus();
+  }
+
+  function openScreen(id, seed) {
+    if (id === "tareas") {
+      taskContexts = {}; taskFull = {}; contextEpoch += 1;
+      // The filter is decided at every opening; only the URL hash can carry it over a reload,
+      // so it seeds the first opening of a page load and is cleared on any other opening.
+      var saved = seed || null;
+      if (!saved) clearFilterHash();
+      ui.filterAuto = !saved;
+      ui.filter = saved ? saved.filter : null;
+      ui.recurring = saved ? saved.recurring : false;
+      ui.focusKey = null;
+    }
+    else clearFilterHash();
     ui.screen = id;
     clearInterval(timer);
     timer = 0;
@@ -592,7 +651,7 @@
     }
     var data = payload.data;
     if (id === "resumen") box.innerHTML = renderHealth(data);
-    else if (id === "tareas") box.innerHTML = renderTasks(data);
+    else if (id === "tareas") { box.innerHTML = renderTasks(data); restoreFocus(box); }
     else if (id === "ejecuciones") box.innerHTML = renderExec(data);
     else if (id === "continuidad") box.innerHTML = renderContinuity(data);
     else if (id === "autonomia") box.innerHTML = renderMandates(data);
@@ -762,26 +821,48 @@
       kids[id] = kids[id].filter(function (child) { if (seen[child]) return false; seen[child] = true; return true; });
     });
     function count(status) { return byStatus[status] || { n: 0, recurring: 0 }; }
-    var attN = ATT.reduce(function (sum, status) { return sum + count(status).n; }, 0);
-    var total = (data.statuses || []).reduce(function (sum, status) { return sum + count(status).n; }, 0);
-    var filters = [{ key: "atencion", label: t("attention"), n: attN, rec: "", tone: "err", glyph: "▲" }, { key: "todos", label: t("all_tasks"), n: total, rec: "", tone: "neu", glyph: "≡" }];
-    (data.statuses || []).forEach(function (status) {
-      var spec = ts(status);
-      var row = count(status);
-      filters.push({ key: status, label: spec.label, n: row.n, rec: row.recurring ? " ↻" + row.recurring : "", tone: spec.tone, glyph: spec.glyph });
-    });
-    var filterHtml = filters.map(function (filter) {
-      return '<button type="button" class="chip' + (ui.filter === filter.key ? " on" : "") + '" data-filter="' + esc(filter.key) + '">' +
-        pill(filter.tone, filter.glyph, "") + esc(filter.label) + " <b>" + filter.n + "</b>" +
-        (filter.rec ? '<span class="muted" title="' + esc(t("recurring_title")) + '">' + esc(filter.rec) + "</span>" : "") + "</button>";
-    }).join("");
+    // Counts follow the Recurring switch.
+    function groupCount(statuses) {
+      return statuses.reduce(function (sum, status) { var row = count(status); return sum + (ui.recurring ? (row.recurring || 0) : row.n); }, 0);
+    }
+    function rawCount(statuses) { return statuses.reduce(function (sum, status) { return sum + count(status).n; }, 0); }
+    var totalAll = (data.statuses || []).reduce(function (sum, status) { return sum + (ui.recurring ? (count(status).recurring || 0) : count(status).n); }, 0);
+    if (ui.filterAuto) {
+      // Decided at every opening: first non-empty of Errors, Running, Drafts; else All.
+      ui.filter = "all";
+      for (var g = 0; g < 3; g += 1) { if (rawCount(GROUPS[g].statuses) > 0) { ui.filter = GROUPS[g].key; break; } }
+    }
+    var filters = GROUPS.map(function (group) {
+      return { key: group.key, label: t(group.label), statuses: group.statuses, fill: !!group.fill, glyph: group.glyph, n: groupCount(group.statuses) };
+    }).filter(function (filter) { return filter.key === "errors" || filter.n > 0 || filter.key === ui.filter; });
+    filters.push({ key: "all", label: t("all_tasks"), statuses: null, fill: false, n: totalAll });
+    var activeFilter = filters.filter(function (filter) { return filter.key === ui.filter; })[0] || filters[filters.length - 1];
+    var recurringN = tasks.filter(function (task) { return task.recurring; }).length;
+    var focusKey = filters.some(function (filter) { return filter.key === ui.focusKey; }) ? ui.focusKey : activeFilter.key;
+    function chipHtml(filter) {
+      var selectedChip = filter.key === activeFilter.key;
+      var isErrors = filter.key === "errors";
+      var glyph = "";
+      if (isErrors) glyph = filter.n > 0 ? '<span class="fg err" aria-hidden="true">▲</span>' : '<span class="fg ok" aria-hidden="true">✓</span>';
+      else if (filter.key === "running") glyph = '<span class="fg run" aria-hidden="true">▶</span>';
+      else if (filter.key === "drafts") glyph = '<span class="fg" aria-hidden="true">◌</span>';
+      var word = filter.n === 1 ? t("f_task") : t("f_tasks");
+      return '<button type="button" class="fchip' + (filter.fill ? " fill" : "") + (selectedChip ? " on" : "") + (isErrors && filter.n > 0 ? " bad" : "") +
+        '" data-filter="' + esc(filter.key) + '" data-chip="1" aria-pressed="' + (selectedChip ? "true" : "false") + '" tabindex="' + (filter.key === focusKey ? "0" : "-1") +
+        '" aria-label="' + esc(filter.label + ", " + filter.n + " " + word) + '">' + glyph + '<span class="fl">' + esc(filter.label) + '</span> <b class="fn">' + filter.n + "</b></button>";
+    }
+    var lead = filters.filter(function (filter) { return filter.fill; }).map(chipHtml).join("");
+    var rest = filters.filter(function (filter) { return !filter.fill; }).map(chipHtml).join("");
+    var filterHtml = '<div class="fbar"><div class="ftool" role="toolbar" aria-label="' + esc(t("f_toolbar")) + '">' + lead +
+      '<span class="fsep" aria-hidden="true"></span><span class="fbreak" aria-hidden="true"></span>' + rest + '</div>' +
+      '<label class="rsw"><input type="checkbox" data-recurring="1"' + (ui.recurring ? " checked" : "") + '> <span>' + esc(t("f_recurring")) + "</span></label></div>";
+    ui.chipKeys = filters.map(function (filter) { return filter.key; });
     function match(task) {
-      if (ui.filter === "todos") return true;
-      if (ui.filter === "atencion") return ATT.indexOf(task.status) >= 0;
-      return task.status === ui.filter;
+      if (ui.recurring && !task.recurring) return false;
+      return !activeFilter.statuses || activeFilter.statuses.indexOf(task.status) >= 0;
     }
     var roots = tasks.filter(function (task) { return !task.parent_id || !byId[task.parent_id]; }).slice().sort(function (a, b) {
-      return (RANK[a.status] - RANK[b.status]) || String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+      return ((b.status === "active") - (a.status === "active")) || (RANK[a.status] - RANK[b.status]) || String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
     });
     var planned = [];
     roots.forEach(function (parent) {
@@ -802,7 +883,7 @@
       return '<div class="row trow pick ' + cls + '" data-task="' + esc(task.id) + '">' +
         "<div>" + pill(spec.tone, spec.glyph, spec.label) + "</div>" +
         '<div class="w100" style="min-width:0;padding-left:' + (level ? 18 : 0) + 'px"><div class="trunc">' + (level ? "└ " : "") + esc(task.title || task.id) + "</div>" +
-        '<div class="mono muted" style="font-size:10.5px">' + esc(String(task.id).slice(0, 8)) + (nKids ? " · " + nKids + " " + t("subtasks") : "") + (task.recurring ? " · ↻" : "") + "</div></div>" +
+        '<div class="mono muted" style="font-size:10.5px">' + esc(String(task.id).slice(0, 8)) + (task.recurring ? ' <span class="rmark" role="img" aria-label="Recurring">↻</span>' : "") + (nKids ? " · " + nKids + " " + t("subtasks") : "") + "</div></div>" +
         '<div class="' + (task.provider ? "" : "note") + '">' + esc(task.provider || t("no_provider")) + "</div>" +
         '<div class="opt ' + (task.channel ? "" : "note") + '">' + esc(channelLabel(task.channel)) + "</div>" +
         '<div class="opt note">' + esc(fmtDay(task.created_at)) + "</div>" +
@@ -810,13 +891,21 @@
     });
     var visible = rows.length;
     var selected = ui.task ? byId[ui.task] : null;
-    var detail = selected ? taskDetail(selected, byId, kids, history) : '<div class="note">' + esc(t("no_tasks")) + "</div>";
+    var detail = selected ? taskDetail(selected, byId, kids, history) : "<div></div>";
+    var empty = "";
+    if (!visible) {
+      if (activeFilter.key === "errors") {
+        var nextGroup = filters.filter(function (filter) { return ["running", "drafts", "queue"].indexOf(filter.key) >= 0 && filter.n > 0; })[0];
+        empty = '<div class="good" role="status"><div class="goodt"><span class="fg ok" aria-hidden="true">✓</span> ' + esc(t("f_no_error")) + '</div><div class="note">' + esc(t("f_no_error_hint")) + "</div>" +
+          (nextGroup ? '<button type="button" class="fnext" data-filter="' + esc(nextGroup.key) + '">' + esc(t("f_next") + nextGroup.label + " (" + nextGroup.n + ")") + "</button>" : "") + "</div>";
+      } else empty = '<div class="note" style="padding:12px">' + esc(t("no_tasks")) + "</div>";
+    }
     var machine = ui.machine ? machineTable(data, selected) : "";
-    return '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + filterHtml + "</div>" +
-      '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div style="padding:10px 12px" class="note">' + esc(t("showing")) +
-      visible + esc(t("of")) + (filters.filter(function (filter) { return filter.key === ui.filter; })[0] || { n: total }).n + "</div>" +
+    return filterHtml +
+      '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div style="padding:10px 12px" class="note" aria-live="polite">' + esc(t("showing")) +
+      visible + esc(t("of")) + activeFilter.n + "</div>" +
       '<div class="row hd trow"><div>' + esc(t("col_status")) + "</div><div>" + esc(t("col_task")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("col_created")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
-      t("gap") + "</div></div></div>" + rows.join("") + "</div>" + detail + "</div>" +
+      t("gap") + "</div></div></div>" + rows.join("") + empty + "</div>" + detail + "</div>" +
       '<div class="card" style="padding:0;overflow:hidden"><button type="button" class="chip" style="margin:10px 12px" data-machine="1" aria-expanded="' +
       (ui.machine ? "true" : "false") + '">' + (ui.machine ? "▾ " : "▸ ") + esc(t("state_machine")) + "</button>" + machine + "</div>";
   }
@@ -1296,9 +1385,21 @@
       openScreen(screen.getAttribute("data-screen"));
       return;
     }
+    var recurring = event.target.closest("[data-recurring]");
+    if (recurring) {
+      ui.recurring = !ui.recurring;
+      ui.refocus = "recurring";
+      writeFilterHash();
+      if (cache.tareas) paint("tareas", cache.tareas);
+      return;
+    }
     var filter = event.target.closest("[data-filter]");
     if (filter) {
       ui.filter = filter.getAttribute("data-filter");
+      ui.filterAuto = false;
+      ui.focusKey = ui.filter;
+      ui.refocus = "filter";
+      writeFilterHash();
       if (cache.tareas) paint("tareas", cache.tareas);
       return;
     }
@@ -1324,6 +1425,23 @@
     }
   });
 
+  // Roving tabindex: one tab stop in the toolbar; arrows move between chips, Enter and Space
+  // select through the button's own click.
+  document.addEventListener("keydown", function (event) {
+    var chip = event.target.closest && event.target.closest("[data-chip]");
+    if (!chip) return;
+    var keys = ui.chipKeys || [];
+    var at = keys.indexOf(chip.getAttribute("data-filter"));
+    if (at < 0) return;
+    var move = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+    var to = move ? (at + move + keys.length) % keys.length : (event.key === "Home" ? 0 : (event.key === "End" ? keys.length - 1 : -1));
+    if (to < 0) return;
+    if (event.preventDefault) event.preventDefault();
+    ui.focusKey = keys[to];
+    ui.refocus = "filter";
+    if (cache.tareas) paint("tareas", cache.tareas);
+  });
+
   $("theme").addEventListener("click", function () {
     ui.theme = ui.theme === "light" ? "dark" : "light";
     try { localStorage.setItem("solar-console-theme", ui.theme); } catch (error) { /* keep the toggle for this view */ }
@@ -1335,5 +1453,6 @@
     if (stored === "light" || stored === "dark") ui.theme = stored;
   } catch (error) { /* default stays dark */ }
 
-  openScreen("resumen");
+  var bootFilter = readFilterHash();
+  openScreen(bootFilter ? "tareas" : "resumen", bootFilter);
 })();
