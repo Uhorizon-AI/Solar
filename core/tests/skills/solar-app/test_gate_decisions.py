@@ -52,6 +52,28 @@ class GateDecisions(unittest.TestCase):
         # Same time, same call: one row, so no Allowed/Denied pair with the same timestamp.
         self.assertEqual(len({row['ts'] for row in gate['last']}), 1)
 
+    def test_an_explicit_null_kind_counts_as_an_old_row(self):
+        # `kind` present but null is the same as no `kind`: both are pre-kind rows,
+        # and they count on their boolean `allowed`.
+        gate = self.read([
+            json.dumps(dict(ts='2026-09-01T00:00:00Z', kind=None, tool='solar_search', allowed=True, code='read_allowed')),
+            json.dumps(dict(ts='2026-09-01T00:00:01Z', kind=None, tool='solar_search', allowed=False, code='level_not_granted')),
+        ])
+        self.assertEqual((gate['total'], gate['allowed']), (2, 1))
+        self.assertEqual([row['allowed'] for row in gate['last']], [True, False])
+
+    def test_a_non_boolean_allowed_is_not_a_decision(self):
+        # A pre-kind row only counts when `allowed` is a real boolean; a string,
+        # a number or a null is ignored instead of being drawn as a denial.
+        gate = self.read([
+            json.dumps(dict(ts='2026-09-01T00:00:00Z', tool='solar_search', allowed='true')),
+            json.dumps(dict(ts='2026-09-01T00:00:01Z', tool='solar_search', allowed=1)),
+            json.dumps(dict(ts='2026-09-01T00:00:02Z', tool='solar_search', allowed=None)),
+            json.dumps(decision('2026-10-12T10:00:00Z', 'solar_task_approve', True, trace='a')),
+        ])
+        self.assertEqual((gate['total'], gate['allowed']), (1, 1))
+        self.assertEqual([row['tool'] for row in gate['last']], ['solar_task_approve'])
+
     def test_only_the_last_twenty_decisions_are_listed(self):
         rows = []
         for i in range(30):

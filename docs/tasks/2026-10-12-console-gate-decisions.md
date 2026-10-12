@@ -24,13 +24,14 @@ Out of scope: the audit writer, the MCP contract, the state machine.
 
 ## Acceptance criteria
 
-- [x] Decision allowed, decision denied, outcome ok, an old row without `kind`, a corrupt line, a row with neither `kind` nor `allowed`, and an unknown kind: only the decisions count.
+- [x] Decision allowed, decision denied, outcome ok, an old row without `kind`, an explicit `kind: null` on an old row, a corrupt line, a row with neither `kind` nor `allowed`, a row with a non-boolean `allowed` (`"true"`, `1`, `null`), and an unknown kind: only the decisions count.
 - [x] No false "Denied" and no Allowed/Denied pair with the same timestamp from one call.
 - [x] Only the last 20 decisions are listed; a missing or empty audit gives zeros.
 
 ## Checks to run
 
 ```bash
+# Repository root, with `ps` available and a writable $HOME (loopback binds itself; no port to set).
 uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state core/tests/skills/solar-mcp -q -p no:cacheprovider
 git diff --check
 python3 -m py_compile core/skills/solar-app/scripts/console_data.py
@@ -39,7 +40,6 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 
 ## Completion evidence
 
-- Real audit on this machine (about 72 KB, no row touched): 241 rows = 137 old rows without `kind` + 56 decisions + 48 outcomes. Total before the fix 241, after 193 (137 + 56); allowed stays 164. In the last 20 rows the false "Denied" went from 11 to 0 and the same-time Allowed/Denied pairs from 9 to 0; the 2 remaining non-allowed rows are real `approval_required` decisions, shown as "Asks for approval".
-- Seen on a local console run from this worktree (loopback, read only): Autonomy shows 193 decisions, 164 allowed, 29 not allowed; the latest list has 18 Allowed, 2 Asks for approval and no Denied.
-- From the repository root: `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state core/tests/skills/solar-mcp -q -p no:cacheprovider` -> 562 passed (without `ps` and a writable `$HOME` three tests cannot run and the count is 559). `git diff --check`, `py_compile` and solar-app packaging: passed.
+- From the repository root, with `ps` available and a writable `$HOME`: `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state core/tests/skills/solar-mcp -q -p no:cacheprovider` -> 577 passed. `git diff --check`, `py_compile` of the changed Python and solar-app packaging: passed.
+- Review follow-up: the spec keeps the criteria and the validation commands; the machine-specific audit figures (row breakdown, totals, and the before/after false-"Denied" count on a real audit) live in the PR description as evidence, not as a contract.
 - Not verified: installed acceptance.
