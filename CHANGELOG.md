@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Console task detail: selecting a task reads, on demand and read only, a curated "Context and follow-up" block (recorded checkpoint, owner, next check, wait, decision, stored schedule with IANA timezone and resources). The checkpoint parser is shared with the MCP task views, whose three tools, schemas and `checkpoint_invalid` refusal are unchanged. An invalid checkpoint or unreadable frontmatter is reported for that task only as a stable `context_error` code and does not hide its schedule or history. The complete stored record (every column, every frontmatter entry, instructions rendered as sanitized Markdown with only http, https and mailto links) loads only on an explicit `full=1` request; failures answer with a fixed message, never exception text.
+
 ## [0.39.1] - 2026-10-12
 
 ### Changed

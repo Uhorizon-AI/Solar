@@ -29,6 +29,7 @@ QUESTIONS = (
 ROUTES = (
     "/api/console/health",
     "/api/console/tasks",
+    "/api/console/task-detail?task_id=",
     "/api/console/executions",
     "/api/console/continuity",
     "/api/console/mandates",
@@ -151,7 +152,7 @@ const tasks = {
     { id: "ok-1", status: "completed", title: "Finished", provider: null, channel: null, created_at: "2026-04-02", updated_at: "2026-09-02", recurring: false, parent_id: null },
   ],
   by_status: { error: { n: 1, recurring: 0 }, completed: { n: 1, recurring: 0 } },
-  links: [], history: [],
+  links: [], history: [{ task_id: "err-1", ts: "2026-09-01T10:00:00Z", from_status: "active", to_status: "error", actor: "history-fixture" }],
   statuses: ["draft", "planned", "queued", "active", "completed", "error", "archived", "cancelled"],
   transitions: [],
 };
@@ -160,6 +161,7 @@ const ingress = { claim_telegram: false, stamp: null, hostname: null };
 function boot(routes) {
   const els = {};
   const clicks = [];
+  const requests = [];
   function make(id) {
     const node = { id, innerHTML: "", textContent: "", className: "" };
     node.addEventListener = () => {};
@@ -173,10 +175,13 @@ function boot(routes) {
     },
     location: { host: "127.0.0.1:9000" },
     fetch(url) {
-      const hit = routes[url];
+      requests.push(url);
+      let hit = routes[url];
+      if (hit && Array.isArray(hit.sequence)) hit = hit.sequence.length > 1 ? hit.sequence.shift() : hit.sequence[0];
       if (!hit) return Promise.reject(new Error("missing " + url));
       const status = hit.status || 200;
-      return Promise.resolve({ status, ok: status < 300, json: () => Promise.resolve(hit.body) });
+      const reply = () => Promise.resolve({ status, ok: status < 300, json: () => Promise.resolve(hit.body) });
+      return hit.hold ? hit.hold.then(reply) : reply();
     },
     setInterval() { return 1; },
     clearInterval() {},
@@ -188,6 +193,7 @@ function boot(routes) {
   return {
     document: sandbox.document,
     els,
+    requests,
     click(attrs) {
       const target = {
         getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
@@ -285,6 +291,265 @@ async function settled() {
   if (!continuity.includes("Saved text, not a message from this console.")) {
     throw new Error("active intention is not marked as saved text");
   }
+
+  const need = (html, text, why) => { if (!html.includes(text)) throw new Error(why + ": missing " + text); };
+  const lack = (html, text, why) => { if (html.includes(text)) throw new Error(why + ": found " + text); };
+  const curated = {
+    id: "err-1",
+    context: {
+      agent: "fixture-agent",
+      planet: "fixture-planet",
+      continuity_checkpoint: {
+        next_check: { action: "Compare the weekly report", at: "2026-10-13" },
+        wait: "<script>waiting()</script>",
+      },
+    },
+    context_error: null,
+    configuration: {
+      scheduled_time: "09:30", scheduled_timezone: "Europe/Madrid", scheduled_weekdays: [1, 3],
+      recurring_max_runs: 5, resources: ["res-a", "res-b"],
+    },
+  };
+  const complete = Object.assign({}, curated, {
+    record: {
+      id: "err-1", agent: "fixture",
+      future_column: { nested: "2026-10-14", zero: 0, flag: false },
+      frontmatter: [["unknown_field", "<script>unsafe()</script>"], ["broken", { detail: "still visible" }], null],
+      body: "# Instructions", empty: null,
+    },
+    body_html: "<h1>Instructions</h1><p>Safe body</p>",
+  });
+  const detailRoutes = (extra) => Object.assign({
+    "/api/console/tasks": { body: tasks },
+    "/api/console/task-detail?task_id=err-1": { body: curated },
+    "/api/console/task-detail?task_id=err-1&full=1": { body: complete },
+  }, extra || {}, calm);
+
+  page = boot(detailRoutes({
+    "/api/console/task-detail?task_id=ok-1": {
+      body: { id: "ok-1", context: null, context_error: null, configuration: { scheduled_time: "07:00" } },
+    },
+  }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  let view = page.els.health.innerHTML;
+  need(view, "Context and follow-up", "curated title");
+  need(view, "<dt>Agent</dt><dd>fixture-agent</dd>", "curated agent");
+  need(view, "Compare the weekly report", "next check");
+  need(view, "2026-10-13", "check date");
+  need(view, "&lt;script&gt;waiting()&lt;/script&gt;", "escaped wait");
+  lack(view, "<script>waiting", "curated block escaping");
+  need(view, "09:30", "configured time");
+  need(view, "Europe/Madrid", "stored zone");
+  need(view, "1, 3", "weekdays");
+  need(view, "res-a, res-b", "resources");
+  need(view, "does not verify an effect", "effect note");
+  need(view, "history-fixture", "stored history actor");
+  need(view, ">History<", "history heading");
+  need(view, "Active → Error", "history transition");
+  need(view, "Complete record", "full record button");
+  need(view, 'aria-expanded="false"', "button collapsed");
+  lack(view, "future_column", "record before click");
+  lack(view, "Safe body", "body before click");
+  lack(view, "task-markdown", "body container before click");
+  if (page.requests.some((url) => url.includes("full=1"))) throw new Error("full=1 requested before the click");
+
+  page.click({ "data-full": "err-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  if (!page.requests.includes("/api/console/task-detail?task_id=err-1&full=1")) throw new Error("click did not request full=1");
+  if (page.requests.filter((url) => url.includes("full=1")).length !== 1) throw new Error("full=1 requested more than once");
+  need(view, 'aria-expanded="true"', "button expanded");
+  need(view, "future_column", "future column");
+  need(view, "2026-10-14", "nested value");
+  need(view, "unknown_field", "unknown frontmatter field");
+  need(view, "still visible", "malformed entry");
+  need(view, "<dd><span", "scalar values");
+  need(view, ">false<", "false value");
+  need(view, ">0<", "zero value");
+  need(view, ">null<", "null value");
+  need(view, "<dt>Instructions</dt>", "body label");
+  need(view, '<div class="task-markdown"><h1>Instructions</h1><p>Safe body</p></div>', "body html");
+  need(view, "&lt;script&gt;unsafe()&lt;/script&gt;", "escaped frontmatter");
+  lack(view, "<script>unsafe", "frontmatter escaping");
+  need(view, "history-fixture", "history after the click");
+  page.click({ "data-full": "err-1" });
+  view = page.els.health.innerHTML;
+  lack(view, "future_column", "record after collapsing");
+  need(view, 'aria-expanded="false"', "button collapsed again");
+  page.click({ "data-full": "err-1" });
+  await settled();
+  need(page.els.health.innerHTML, "future_column", "record reopened from cache");
+  if (page.requests.filter((url) => url.includes("full=1")).length !== 1) throw new Error("reopening refetched the record");
+
+  page.click({ "data-filter": "todos" });
+  page.click({ "data-task": "ok-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "07:00", "second task time");
+  need(view, "Host timezone (no stored zone)", "zone fallback");
+  need(view, "No recorded context", "empty context note");
+  lack(view, "future_column", "record leaked to another task");
+
+  const broken = { id: "err-1", context: null, context_error: "checkpoint_invalid", configuration: curated.configuration };
+  page = boot(detailRoutes({ "/api/console/task-detail?task_id=err-1": { body: broken } }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "continuity checkpoint is not valid", "localized checkpoint error");
+  lack(view, "checkpoint_invalid", "raw error code");
+  need(view, "09:30", "configuration beside the error");
+  need(view, "history-fixture", "history beside the error");
+  const unknownCode = Object.assign({}, broken, { context_error: "surprise_code" });
+  page = boot(detailRoutes({ "/api/console/task-detail?task_id=err-1": { body: unknownCode } }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "context could not be read", "generic error");
+  lack(view, "surprise_code", "unknown error code");
+  need(view, "09:30", "configuration beside the generic error");
+
+  page = boot(detailRoutes({
+    "/api/console/task-detail?task_id=err-1": { status: 503, body: { error: "Task detail unavailable", refused: true } },
+    "/api/console/task-detail?task_id=err-1&full=1": { status: 503, body: { error: "Task detail unavailable", refused: true } },
+  }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "context could not be read.", "refused curated block");
+  need(view, "history-fixture", "history after refusal");
+  page.click({ "data-full": "err-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "The complete record could not be read.", "refused complete record");
+  lack(view, "future_column", "record after refusal");
+
+  const spanishTasks = Object.assign({}, tasks, { language: "es" });
+  page = boot(detailRoutes({
+    "/api/console/tasks": { body: spanishTasks },
+    "/api/console/task-detail?task_id=err-1": { body: Object.assign({}, curated, { configuration: { scheduled_time: "09:30" } }) },
+  }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "Contexto y seguimiento", "spanish title");
+  need(view, "<dt>Agente</dt>", "spanish agent label");
+  need(view, "Próxima comprobación", "spanish next check");
+  need(view, "Zona del equipo (sin zona guardada)", "spanish zone fallback");
+  need(view, "no verifica el efecto", "spanish effect note");
+  need(view, "Registro completo", "spanish button");
+  page.click({ "data-full": "err-1" });
+  await settled();
+  need(page.els.health.innerHTML, "<dt>Instrucciones</dt>", "spanish body label");
+
+  // Recurring cadence is visible even without a fixed time.
+  const cadence = (extra) => Object.assign({}, curated, { context: null, configuration: extra });
+  const interval = async (configuration, language) => {
+    const tasksFor = language ? Object.assign({}, tasks, { language }) : tasks;
+    const open = boot(detailRoutes({
+      "/api/console/tasks": { body: tasksFor },
+      "/api/console/task-detail?task_id=err-1": { body: cadence(configuration) },
+    }));
+    await settled();
+    open.click({ "data-screen": "tareas" });
+    await settled();
+    return open.els.health.innerHTML;
+  };
+  view = await interval({ recurring: "true", recurring_min_interval: "86400" });
+  need(view, "<dt>Recurrence</dt><dd>Recurring</dd>", "recurrence");
+  need(view, "<dt>Minimum interval</dt><dd>24 h</dd>", "daily cadence without a fixed time");
+  need(await interval({ recurring: true, recurring_min_interval: "5400" }), "<dd>90 min</dd>", "minutes");
+  need(await interval({ recurring: "true", recurring_min_interval: 45 }), "<dd>45 s</dd>", "seconds");
+  lack(await interval({ recurring: "false" }), "Minimum interval", "no interval when none stored");
+  lack(await interval({ recurring_min_interval: "soon" }), "Minimum interval", "unreadable interval");
+  view = await interval({ recurring: "true", recurring_min_interval: "86400" }, "es");
+  need(view, "<dt>Intervalo mínimo</dt><dd>24 h</dd>", "spanish cadence");
+  need(view, "<dt>Recurrencia</dt><dd>Recurrente</dd>", "spanish recurrence");
+
+  // A newer updated_at refreshes the data but keeps the open record open.
+  const newer = JSON.parse(JSON.stringify(tasks));
+  newer.tasks[0].updated_at = "2026-09-05";
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  page = boot(detailRoutes({ "/api/console/tasks": { sequence: [{ body: tasks }, { body: newer, hold }] } }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-screen": "resumen" });
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-full": "err-1" });
+  await settled();
+  need(page.els.health.innerHTML, "future_column", "record open before the refresh");
+  const fullCount = () => page.requests.filter((url) => url.includes("full=1")).length;
+  const curatedCount = () => page.requests.filter((url) => url === "/api/console/task-detail?task_id=err-1").length;
+  const before = [fullCount(), curatedCount()];
+  release();
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, 'aria-expanded="true"', "record stays open after the refresh");
+  need(view, "future_column", "record reloaded after the refresh");
+  if (fullCount() !== before[0] + 1 || curatedCount() !== before[1] + 1) throw new Error("newer updated_at must reload each block once: " + JSON.stringify([before, fullCount(), curatedCount(), page.requests]));
+
+  // An older "Complete record" response that arrives last must not replace the newer one.
+  const marked = (label) => Object.assign({}, complete, { record: Object.assign({}, complete.record, { future_column: label }) });
+  let releaseTasks, releaseOld, releaseNew;
+  const holdTasks = new Promise((resolve) => { releaseTasks = resolve; });
+  const holdOld = new Promise((resolve) => { releaseOld = resolve; });
+  const holdNew = new Promise((resolve) => { releaseNew = resolve; });
+  page = boot(detailRoutes({
+    "/api/console/tasks": { sequence: [{ body: tasks }, { body: newer, hold: holdTasks }] },
+    "/api/console/task-detail?task_id=err-1&full=1": { sequence: [{ body: marked("OLD-RESPONSE"), hold: holdOld }, { body: marked("NEW-RESPONSE"), hold: holdNew }] },
+  }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-screen": "resumen" });
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-full": "err-1" });
+  await settled();
+  releaseTasks();
+  await settled();
+  if (page.requests.filter((url) => url.includes("full=1")).length !== 2) throw new Error("the newer updated_at must start a second record request");
+  releaseNew();
+  await settled();
+  need(page.els.health.innerHTML, "NEW-RESPONSE", "newer record response");
+  releaseOld();
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "NEW-RESPONSE", "newer record survives the late old response");
+  lack(view, "OLD-RESPONSE", "late old response");
+
+  // Context in an unexpected shape is announced, never drawn as raw objects.
+  const shaped = async (context, language) => {
+    const open = boot(detailRoutes({
+      "/api/console/tasks": { body: language ? Object.assign({}, tasks, { language }) : tasks },
+      "/api/console/task-detail?task_id=err-1": { body: { id: "err-1", context, context_error: null, configuration: {} } },
+    }));
+    await settled();
+    open.click({ "data-screen": "tareas" });
+    await settled();
+    return open.els.health.innerHTML;
+  };
+  const odd = { continuity_checkpoint: { next_check: "tomorrow", decision: "someone", wait: { nested: { deep: 1 } } } };
+  view = await shaped(odd);
+  need(view, "open it in Complete record", "unshown context note");
+  lack(view, "native code", "inherited members of a string are not read");
+  lack(view, "No recorded context", "context exists but is not shown");
+  lack(view, "[object", "no raw objects");
+  lack(view, "nested", "raw nested keys");
+  need(await shaped(odd, "es"), "ábrelos en Registro completo", "spanish unshown note");
+  need(await shaped({}), "No recorded context", "truly empty context");
+  need(await shaped(null), "No recorded context", "null context");
+  lack(await shaped({ agent: "shown-agent", continuity_checkpoint: { next_check: "tomorrow" } }), "open it in Complete record", "no note when something is shown");
 
   const mandates = {
     defined: [

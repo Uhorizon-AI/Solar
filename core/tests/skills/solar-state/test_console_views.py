@@ -199,3 +199,69 @@ def test_execution_channel_and_user_id_come_from_the_start(ready):
     recent = {row["ts"]: row["channel"] for row in runs["recent"]}
     assert recent["2026-09-01T00:01:00Z"] == "telegram"
     assert recent["2026-09-01T00:04:00Z"] == "other"
+
+
+def _detail_task(ready, fields, body=""):
+    with st.session(ready, auto_backup=False) as store:
+        return store.task_create(fields, body=body)
+
+
+def test_console_task_detail_returns_curated_context_and_configuration(ready):
+    checkpoint = {"next_check": {"at": "2026-10-13", "action": "Review"}, "wait": "Owner"}
+    task_id = _detail_task(ready, [
+        ("agent", "fixture"), ("planet", "solar"), ("continuity_checkpoint", json.dumps(checkpoint)),
+        ("scheduled_time", "09:30"), ("scheduled_timezone", "Europe/Madrid"), ("unrelated", "hidden"),
+    ])
+    with st.read_session(ready) as store:
+        result = runtime_views.console_task_detail(store, task_id)
+    assert result == {
+        "id": task_id, "context_error": None,
+        "context": {"agent": "fixture", "planet": "solar", "continuity_checkpoint": checkpoint},
+        "configuration": {"scheduled_time": "09:30", "scheduled_timezone": "Europe/Madrid"},
+    }
+
+
+def test_console_task_detail_invalid_checkpoint_keeps_configuration(ready):
+    task_id = _detail_task(ready, [("continuity_checkpoint", "[]"), ("scheduled_timezone", "Europe/Madrid")])
+    with st.read_session(ready) as store:
+        result = runtime_views.console_task_detail(store, task_id)
+    assert result["context"] is None
+    assert result["context_error"] == "checkpoint_invalid"
+    assert result["configuration"] == {"scheduled_timezone": "Europe/Madrid"}
+    assert "record" not in result
+
+
+def test_console_task_detail_unreadable_frontmatter(ready):
+    task_id = _detail_task(ready, [("agent", "fixture")], body="Keep me")
+    with st.session(ready, auto_backup=False) as store:
+        store.conn.execute("UPDATE tasks SET frontmatter = ? WHERE id = ?", ("[broken", task_id))
+    with st.read_session(ready) as store:
+        result = runtime_views.console_task_detail(store, task_id)
+        assert result == {"id": task_id, "context": None, "context_error": "frontmatter_unreadable",
+                          "configuration": {}}
+        full = runtime_views.console_task_detail(store, task_id, full=True)
+    assert full["record"]["frontmatter"] == "[broken"
+    assert full["record"]["body"] == "Keep me"
+
+
+def test_console_task_detail_full_adds_record_and_future_columns(ready):
+    task_id = _detail_task(ready, [("agent", "fixture")], body="# Body")
+    with st.session(ready, auto_backup=False) as store:
+        store.conn.execute("ALTER TABLE tasks ADD COLUMN future_column TEXT")
+        store.conn.execute("UPDATE tasks SET future_column = 'later' WHERE id = ?", (task_id,))
+    with st.read_session(ready) as store:
+        assert "record" not in runtime_views.console_task_detail(store, task_id)
+        record = runtime_views.console_task_detail(store, task_id, full=True)["record"]
+    assert record["future_column"] == "later"
+    assert record["body"] == "# Body"
+    assert any(pair[0] == "agent" and pair[1].strip() == "fixture" for pair in record["frontmatter"])
+
+
+def test_console_task_detail_missing_id_and_no_mutation(ready):
+    task_id = _detail_task(ready, [("agent", "fixture")])
+    with st.read_session(ready) as store:
+        before = store.task_export(task_id)
+        assert runtime_views.console_task_detail(store, "missing") is None
+        runtime_views.console_task_detail(store, task_id, full=True)
+        assert store.task_export(task_id) == before
+        assert store.conn.total_changes == 0

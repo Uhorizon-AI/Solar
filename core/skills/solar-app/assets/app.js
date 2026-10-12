@@ -20,6 +20,47 @@
       updated: "Updated ",
       updated_empty: "Updated —",
       reading: "Reading…",
+      tc_this_task_s_stored_continuity_checkpoint: "This task's stored continuity checkpoint is not valid.",
+      tc_this_task_s_stored_record_could_not_be_r: "This task's stored record could not be read.",
+      tc_this_task_s_context_could_not_be_read: "This task's context could not be read.",
+      tc_context_and_follow_up: "Context and follow-up",
+      tc_agent: "Agent",
+      tc_planet: "Planet",
+      tc_responsibility: "Responsibility",
+      tc_contract: "Contract",
+      tc_recorded_result: "Recorded result",
+      tc_recorded_verification: "Recorded verification",
+      tc_next_check: "Next check",
+      tc_check_date: "Check date",
+      tc_check_source: "Check source",
+      tc_waiting: "Waiting",
+      tc_decision_owner: "Decision owner",
+      tc_subject: "Subject",
+      tc_decision_source: "Decision source",
+      tc_valid_from: "Valid from",
+      tc_valid_until: "Valid until",
+      tc_decision: "Decision",
+      tc_pending: "Pending",
+      tc_recorded_status_check_source: "Recorded status; check source",
+      tc_effect_state: "Effect state",
+      tc_uncertain_verify_before_retrying: "Uncertain; verify before retrying",
+      tc_recorded_state_not_verified_on_opening: "Recorded state; not verified on opening",
+      tc_recurrence: "Recurrence",
+      tc_recurring: "Recurring",
+      tc_minimum_interval: "Minimum interval",
+      tc_configured_time: "Configured time",
+      tc_time_zone: "Time zone",
+      tc_host_timezone_no_stored_zone: "Host timezone (no stored zone)",
+      tc_iso_weekdays_monday_1: "ISO weekdays, Monday = 1",
+      tc_maximum_runs: "Maximum runs",
+      tc_reserved_resources: "Reserved resources",
+      tc_context_shape_note: "There is context data in a shape this view does not show; open it in Complete record.",
+      tc_no_recorded_context_execution_state_and: "No recorded context. Execution state and history remain available.",
+      tc_reading_this_record_does_not_verify_an_e: "Reading this record does not verify an effect or authorize retrying it.",
+      tc_complete_record: "Complete record",
+      tc_the_complete_record_could_not_be_read: "The complete record could not be read.",
+      tc_record_unavailable: "Record unavailable.",
+      tc_instructions: "Instructions",
       no_reply: "no reply",
       no_data: "no data",
       less_than_min: "less than 1 min",
@@ -124,6 +165,47 @@
       updated: "Actualizado ",
       updated_empty: "Actualizado —",
       reading: "Leyendo…",
+      tc_this_task_s_stored_continuity_checkpoint: "El punto de continuidad guardado de esta tarea no es válido.",
+      tc_this_task_s_stored_record_could_not_be_r: "No se pudo leer el registro guardado de esta tarea.",
+      tc_this_task_s_context_could_not_be_read: "No se pudo leer el contexto de esta tarea.",
+      tc_context_and_follow_up: "Contexto y seguimiento",
+      tc_agent: "Agente",
+      tc_planet: "Planeta",
+      tc_responsibility: "Responsabilidad",
+      tc_contract: "Contrato",
+      tc_recorded_result: "Resultado registrado",
+      tc_recorded_verification: "Verificación registrada",
+      tc_next_check: "Próxima comprobación",
+      tc_check_date: "Fecha de comprobación",
+      tc_check_source: "Fuente de comprobación",
+      tc_waiting: "Espera",
+      tc_decision_owner: "Decide",
+      tc_subject: "Asunto",
+      tc_decision_source: "Fuente de la decisión",
+      tc_valid_from: "Válida desde",
+      tc_valid_until: "Válida hasta",
+      tc_decision: "Decisión",
+      tc_pending: "Pendiente",
+      tc_recorded_status_check_source: "Estado guardado; revisar fuente",
+      tc_effect_state: "Situación del efecto",
+      tc_uncertain_verify_before_retrying: "Incierto; verificar antes de repetir",
+      tc_recorded_state_not_verified_on_opening: "Estado registrado; no verificado al abrir",
+      tc_recurrence: "Recurrencia",
+      tc_recurring: "Recurrente",
+      tc_minimum_interval: "Intervalo mínimo",
+      tc_configured_time: "Hora configurada",
+      tc_time_zone: "Zona horaria",
+      tc_host_timezone_no_stored_zone: "Zona del equipo (sin zona guardada)",
+      tc_iso_weekdays_monday_1: "Días ISO, lunes = 1",
+      tc_maximum_runs: "Máximo de ejecuciones",
+      tc_reserved_resources: "Recursos reservados",
+      tc_context_shape_note: "Hay datos de contexto con una forma que esta vista no muestra; ábrelos en Registro completo.",
+      tc_no_recorded_context_execution_state_and: "Sin contexto registrado. El estado de ejecución y su historial se conservan.",
+      tc_reading_this_record_does_not_verify_an_e: "Leer este registro no verifica el efecto ni autoriza repetirlo.",
+      tc_complete_record: "Registro completo",
+      tc_the_complete_record_could_not_be_read: "No se pudo leer el registro completo.",
+      tc_record_unavailable: "Registro no disponible.",
+      tc_instructions: "Instrucciones",
       no_reply: "sin respuesta",
       no_data: "sin dato",
       less_than_min: "menos de 1 min",
@@ -285,6 +367,9 @@
     machine: false
   };
   var cache = {};
+  var taskContexts = {};
+  var taskFull = {};
+  var contextEpoch = 0;
   var timer = 0;
   var healthStamp = null;
 
@@ -453,6 +538,7 @@
   }
 
   function openScreen(id) {
+    if (id === "tareas") { taskContexts = {}; taskFull = {}; contextEpoch += 1; }
     ui.screen = id;
     clearInterval(timer);
     timer = 0;
@@ -748,7 +834,157 @@
       kv(t("parent"), task.parent_id ? String(task.parent_id).slice(0, 8) : t("root"), task.parent_id ? "mono" : "note") +
       '<div class="k">' + esc(t("col_requester")) + '</div><div><span class="gap">' + t("gap") + "</span></div></div>" +
       (children.length ? '<div><div class="lbl" style="margin-bottom:4px">' + esc(t("subtasks")) + " (" + children.length + ")</div>" + kidHtml + "</div>" : "") +
-      '<div><div class="lbl" style="margin-bottom:8px">' + esc(t("history")) + '</div><div class="tl">' + lines + "</div></div></div>";
+      taskContext(task) + '<div><div class="lbl" style="margin-bottom:8px">' + esc(t("history")) + '</div><div class="tl">' + lines + "</div></div></div>";
+  }
+
+  // Only a plain object is read by key; a string or array must not expose
+  // inherited members such as String.prototype.at.
+  function asObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+  }
+
+  function intervalText(value) {
+    var seconds = Number(value);
+    if (value == null || value === "" || !isFinite(seconds) || seconds <= 0) return null;
+    if (seconds % 3600 === 0) return seconds / 3600 + " h";
+    if (seconds % 60 === 0) return seconds / 60 + " min";
+    return seconds + " s";
+  }
+
+  function contextErrorText(code) {
+    if (code === "checkpoint_invalid") return t("tc_this_task_s_stored_continuity_checkpoint");
+    if (code === "frontmatter_unreadable") return t("tc_this_task_s_stored_record_could_not_be_r");
+    return t("tc_this_task_s_context_could_not_be_read");
+  }
+
+  function taskContext(task) {
+    var title = t("tc_context_and_follow_up");
+    var stamp = task.updated_at || "";
+    var saved = taskContexts[task.id];
+    if (!saved || saved.stamp !== stamp) {
+      var entry = { stamp: stamp, loading: true };
+      taskContexts[task.id] = entry;
+      var epoch = contextEpoch;
+      load("/api/console/task-detail?task_id=" + encodeURIComponent(task.id)).then(function (reply) {
+        if (epoch !== contextEpoch || taskContexts[task.id] !== entry) return;
+        entry.loading = false;
+        entry.data = reply.data;
+        entry.refused = reply.refused;
+        if (ui.screen === "tareas" && ui.task === task.id && cache.tareas) paint("tareas", cache.tareas);
+      });
+      saved = entry;
+    }
+    var heading = '<section aria-label="' + esc(title) + '"><h3>' + esc(title) + '</h3>';
+    if (saved.loading) return heading + '<p class="note">' + esc(t("reading")) + '</p></section>';
+    if (saved.refused) return heading + '<p class="note" role="alert">' + esc(t("tc_this_task_s_context_could_not_be_read")) + '</p>' + fullRecord(task) + '</section>';
+    var data = saved.data || {};
+    var context = data.context && typeof data.context === "object" ? data.context : {};
+    var cp = asObject(context.continuity_checkpoint);
+    var verified = asObject(cp.last_verified_result);
+    var next = asObject(cp.next_check);
+    var decision = asObject(cp.decision);
+    var effect = asObject(cp.checkpoint).state;
+    var fields = [];
+    function field(label, value) {
+      if (Array.isArray(value)) value = value.every(function (item) { return item == null || typeof item !== "object"; }) ? value.join(", ") : null;
+      if (value != null && typeof value !== "object" && String(value)) fields.push('<dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd>');
+    }
+    field(t("tc_agent"), context.agent);
+    field(t("tc_planet"), context.planet);
+    field(t("tc_responsibility"), context.responsibility);
+    field(t("tc_contract"), context.agent_contract);
+    field(t("tc_recorded_result"), verified.path || verified.artifact_ref);
+    field(t("tc_recorded_verification"), verified.verified_at ? fmt(verified.verified_at, true) : null);
+    field(t("tc_next_check"), next.action);
+    field(t("tc_check_date"), next.at);
+    field(t("tc_check_source"), next.source);
+    field(t("tc_waiting"), typeof cp.wait === "string" ? cp.wait : asObject(cp.wait).reason);
+    field(t("tc_decision_owner"), decision.owner);
+    field(t("tc_subject"), decision.subject || decision.action);
+    field(t("tc_decision_source"), decision.source);
+    field(t("tc_valid_from"), decision.valid_from);
+    field(t("tc_valid_until"), decision.valid_until);
+    if (decision.status) field(t("tc_decision"), decision.status === "pending" ? (t("tc_pending")) : (t("tc_recorded_status_check_source")));
+    if (effect) field(t("tc_effect_state"), effect === "effect_uncertain" ? (t("tc_uncertain_verify_before_retrying")) : (t("tc_recorded_state_not_verified_on_opening")));
+    var contextFields = fields.length;
+    var unshown = Object.keys(cp).length > 0 || Object.keys(context).some(function (name) { return context[name] !== null && typeof context[name] === "object"; });
+    var configuration = data.configuration && typeof data.configuration === "object" ? data.configuration : {};
+    if (configuration.recurring === true || configuration.recurring === "true") field(t("tc_recurrence"), t("tc_recurring"));
+    field(t("tc_minimum_interval"), intervalText(configuration.recurring_min_interval));
+    field(t("tc_configured_time"), configuration.scheduled_time);
+    field(t("tc_time_zone"), configuration.scheduled_timezone || (t("tc_host_timezone_no_stored_zone")));
+    field(t("tc_iso_weekdays_monday_1"), configuration.scheduled_weekdays);
+    field(t("tc_maximum_runs"), configuration.recurring_max_runs);
+    field(t("tc_reserved_resources"), configuration.resources);
+    var message = "";
+    if (data.context_error) message = '<p class="note" role="alert">' + esc(contextErrorText(data.context_error)) + '</p>';
+    else if (!contextFields) message = '<p class="note">' + esc(t(unshown ? "tc_context_shape_note" : "tc_no_recorded_context_execution_state_and")) + '</p>';
+    return heading + message + (fields.length ? '<dl>' + fields.join("") + '</dl>' : '') +
+      '<p class="note">' + esc(t("tc_reading_this_record_does_not_verify_an_e")) + '</p>' +
+      fullRecord(task) + '</section>';
+  }
+
+  function fullRecord(task) {
+    var state = taskFull[task.id] || {};
+    if (state.open && state.stamp !== (task.updated_at || "")) loadFull(task, state);
+    var label = t("tc_complete_record");
+    var button = '<button type="button" class="chip" data-full="' + esc(task.id) + '" aria-expanded="' + (state.open ? "true" : "false") + '">' +
+      (state.open ? "▾ " : "▸ ") + esc(label) + '</button>';
+    if (!state.open) return button;
+    if (state.loading) return button + '<p class="note">' + esc(t("reading")) + '</p>';
+    if (state.refused) return button + '<p class="note" role="alert">' + esc(t("tc_the_complete_record_could_not_be_read")) + '</p>';
+    var data = state.data || {};
+    var record = data.record;
+    if (!record || typeof record !== "object" || Array.isArray(record)) return button + '<p class="note">' + esc(t("tc_record_unavailable")) + '</p>';
+    return button + '<dl class="task-record">' + Object.keys(record).map(function (name) {
+      var value = record[name];
+      var content;
+      if (name === "body" && typeof value === "string" && typeof data.body_html === "string") {
+        // The only place server HTML enters: the allowlist-sanitized Markdown of the body.
+        content = '<div class="task-markdown">' + data.body_html + '</div>';
+      } else if (name === "frontmatter" && Array.isArray(value)) {
+        content = '<dl>' + value.map(function (pair) {
+          if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string") return '<dd>' + recordValue(pair) + '</dd>';
+          return '<dt>' + esc(pair[0]) + '</dt><dd>' + recordValue(pair[1]) + '</dd>';
+        }).join("") + '</dl>';
+      } else content = recordValue(value);
+      var heading = name === "body" ? (t("tc_instructions")) : name;
+      return '<dt>' + esc(heading) + '</dt><dd>' + content + '</dd>';
+    }).join("") + '</dl>';
+  }
+
+  function loadFull(task, state) {
+    var epoch = contextEpoch;
+    state.seq = (state.seq || 0) + 1;
+    var mine = state.seq;
+    state.stamp = task.updated_at || "";
+    state.loading = true;
+    state.refused = null;
+    state.data = null;
+    load("/api/console/task-detail?task_id=" + encodeURIComponent(task.id) + "&full=1").then(function (reply) {
+      if (epoch !== contextEpoch || taskFull[task.id] !== state || state.seq !== mine) return;
+      state.loading = false;
+      state.data = reply.data || null;
+      state.refused = reply.refused || null;
+      if (ui.screen === "tareas" && ui.task === task.id && cache.tareas) paint("tareas", cache.tareas);
+    });
+  }
+
+  function toggleFull(id) {
+    var task = null;
+    ((cache.tareas && cache.tareas.data && cache.tareas.data.tasks) || []).forEach(function (row) { if (row.id === id) task = row; });
+    if (!task) return;
+    var state = taskFull[task.id] || (taskFull[task.id] = {});
+    state.open = !state.open;
+    if (state.open && (state.stamp !== (task.updated_at || "") || (!state.data && !state.loading))) loadFull(task, state);
+    if (ui.screen === "tareas" && cache.tareas) paint("tareas", cache.tareas);
+  }
+
+  function recordValue(value) {
+    if (value === null) return '<span class="note">null</span>';
+    if (Array.isArray(value)) return '<ul>' + value.map(function (item) { return '<li>' + recordValue(item) + '</li>'; }).join("") + '</ul>';
+    if (typeof value === "object") return '<dl>' + Object.keys(value).map(function (key) { return '<dt>' + esc(key) + '</dt><dd>' + recordValue(value[key]) + '</dd>'; }).join("") + '</dl>';
+    return '<span style="white-space:pre-wrap;overflow-wrap:anywhere">' + esc(value) + '</span>';
   }
 
   function machineTable(data, selected) {
@@ -1020,6 +1256,11 @@
     if (task) {
       ui.task = task.getAttribute("data-task");
       if (cache.tareas) paint("tareas", cache.tareas);
+      return;
+    }
+    var full = event.target.closest("[data-full]");
+    if (full) {
+      toggleFull(full.getAttribute("data-full"));
       return;
     }
     if (event.target.closest("[data-machine]")) {

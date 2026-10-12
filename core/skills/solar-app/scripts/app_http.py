@@ -1,9 +1,13 @@
 """Read-only routes for the existing status, activity and execution log views."""
 from pathlib import Path
+import logging
+
 import app_solar
 import console_data
 import solar_state
+from task_markdown import render_markdown
 
+LOGGER = logging.getLogger("solar.app")
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 
@@ -36,6 +40,25 @@ def get(handler, path, qs, workspace):
         offset = max(0, int(value('offset', '0')))
         limit = min(100, max(1, int(value('limit', '40'))))
         handler._send_json(app_solar.activity_page(Path(workspace), value('source'), value('state'), offset, limit))
+        return
+    if path == "/api/console/task-detail":
+        task_id = qs.get("task_id", [""])[0]
+        if not task_id or len(task_id) > 200:
+            handler._send_json({"error": "A bounded task_id is required"}, 400)
+            return
+        full = qs.get("full") == ["1"]
+        try:
+            result = console_data.task_detail(Path(workspace), task_id, full)
+        except Exception as exc:  # any unexpected read or decode failure: fixed text, no detail
+            LOGGER.warning("task-detail failed: %s", type(exc).__name__)  # class only, never the message
+            handler._send_json({"error": "Task detail unavailable", "refused": True}, 503)
+            return
+        if result is None:
+            handler._send_json({"error": "Task not found"}, 404)
+            return
+        if full:
+            result["body_html"] = render_markdown(result["record"].get("body"))
+        handler._send_json(result)
         return
     console = {
         "/api/console/health": console_data.health,
