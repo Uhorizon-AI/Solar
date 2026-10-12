@@ -176,10 +176,12 @@ function boot(routes) {
     location: { host: "127.0.0.1:9000" },
     fetch(url) {
       requests.push(url);
-      const hit = routes[url];
+      let hit = routes[url];
+      if (hit && Array.isArray(hit.sequence)) hit = hit.sequence.length > 1 ? hit.sequence.shift() : hit.sequence[0];
       if (!hit) return Promise.reject(new Error("missing " + url));
       const status = hit.status || 200;
-      return Promise.resolve({ status, ok: status < 300, json: () => Promise.resolve(hit.body) });
+      const reply = () => Promise.resolve({ status, ok: status < 300, json: () => Promise.resolve(hit.body) });
+      return hit.hold ? hit.hold.then(reply) : reply();
     },
     setInterval() { return 1; },
     clearInterval() {},
@@ -444,6 +446,56 @@ async function settled() {
   page.click({ "data-full": "err-1" });
   await settled();
   need(page.els.health.innerHTML, "<dt>Instrucciones</dt>", "spanish body label");
+
+  // Recurring cadence is visible even without a fixed time.
+  const cadence = (extra) => Object.assign({}, curated, { context: null, configuration: extra });
+  const interval = async (configuration, language) => {
+    const tasksFor = language ? Object.assign({}, tasks, { language }) : tasks;
+    const open = boot(detailRoutes({
+      "/api/console/tasks": { body: tasksFor },
+      "/api/console/task-detail?task_id=err-1": { body: cadence(configuration) },
+    }));
+    await settled();
+    open.click({ "data-screen": "tareas" });
+    await settled();
+    return open.els.health.innerHTML;
+  };
+  view = await interval({ recurring: "true", recurring_min_interval: "86400" });
+  need(view, "<dt>Recurrence</dt><dd>Recurring</dd>", "recurrence");
+  need(view, "<dt>Minimum interval</dt><dd>24 h</dd>", "daily cadence without a fixed time");
+  need(await interval({ recurring: true, recurring_min_interval: "5400" }), "<dd>90 min</dd>", "minutes");
+  need(await interval({ recurring: "true", recurring_min_interval: 45 }), "<dd>45 s</dd>", "seconds");
+  lack(await interval({ recurring: "false" }), "Minimum interval", "no interval when none stored");
+  lack(await interval({ recurring_min_interval: "soon" }), "Minimum interval", "unreadable interval");
+  view = await interval({ recurring: "true", recurring_min_interval: "86400" }, "es");
+  need(view, "<dt>Intervalo mínimo</dt><dd>24 h</dd>", "spanish cadence");
+  need(view, "<dt>Recurrencia</dt><dd>Recurrente</dd>", "spanish recurrence");
+
+  // A newer updated_at refreshes the data but keeps the open record open.
+  const newer = JSON.parse(JSON.stringify(tasks));
+  newer.tasks[0].updated_at = "2026-09-05";
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  page = boot(detailRoutes({ "/api/console/tasks": { sequence: [{ body: tasks }, { body: newer, hold }] } }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-screen": "resumen" });
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-full": "err-1" });
+  await settled();
+  need(page.els.health.innerHTML, "future_column", "record open before the refresh");
+  const fullCount = () => page.requests.filter((url) => url.includes("full=1")).length;
+  const curatedCount = () => page.requests.filter((url) => url === "/api/console/task-detail?task_id=err-1").length;
+  const before = [fullCount(), curatedCount()];
+  release();
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, 'aria-expanded="true"', "record stays open after the refresh");
+  need(view, "future_column", "record reloaded after the refresh");
+  if (fullCount() !== before[0] + 1 || curatedCount() !== before[1] + 1) throw new Error("newer updated_at must reload each block once: " + JSON.stringify([before, fullCount(), curatedCount(), page.requests]));
 
   const mandates = {
     defined: [

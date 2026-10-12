@@ -6,7 +6,6 @@ never writes. Writes live in `operations.py`.
 from __future__ import annotations
 
 import datetime
-import json
 import re
 import sys
 from pathlib import Path
@@ -16,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import capability_registry  # noqa: E402
 from mcp_context import OperationError  # noqa: E402
+import runtime_views  # noqa: E402  (solar-state/scripts is on sys.path via mcp_context)
 
 _UTC = datetime.timezone.utc
 _VIEWS = ("detail", "instructions", "config", "status", "result", "error", "history")
@@ -205,8 +205,6 @@ def _without_sections(body: str, titles) -> str:
 
 
 def _checkpoint(values: dict) -> dict | None:
-    import runtime_views  # solar-state/scripts is on sys.path via mcp_context
-
     if "continuity_checkpoint" not in values:
         return None
     try:

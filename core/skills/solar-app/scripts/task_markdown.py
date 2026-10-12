@@ -10,8 +10,13 @@ from urllib.parse import urlsplit
 
 
 def _safe_link(value):
-    """Only explicit http, https and mailto destinations are links."""
-    if not isinstance(value, str) or not value or html.unescape(value) != value:
+    """Only explicit http, https and mailto destinations are links.
+
+    The value is judged as literal text: the generator re-escapes it, so an
+    entity-encoded scheme (`java&#x73;cript:`) never parses as an allowed scheme,
+    while a legitimate query such as `?a=1&copy=2` stays a link.
+    """
+    if not isinstance(value, str) or not value:
         return False
     if any(ord(char) < 33 or ord(char) == 127 for char in value) or "\\" in value:
         return False

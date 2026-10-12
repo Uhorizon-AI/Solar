@@ -20,6 +20,46 @@
       updated: "Updated ",
       updated_empty: "Updated —",
       reading: "Reading…",
+      tc_this_task_s_stored_continuity_checkpoint: "This task's stored continuity checkpoint is not valid.",
+      tc_this_task_s_stored_record_could_not_be_r: "This task's stored record could not be read.",
+      tc_this_task_s_context_could_not_be_read: "This task's context could not be read.",
+      tc_context_and_follow_up: "Context and follow-up",
+      tc_agent: "Agent",
+      tc_planet: "Planet",
+      tc_responsibility: "Responsibility",
+      tc_contract: "Contract",
+      tc_recorded_result: "Recorded result",
+      tc_recorded_verification: "Recorded verification",
+      tc_next_check: "Next check",
+      tc_check_date: "Check date",
+      tc_check_source: "Check source",
+      tc_waiting: "Waiting",
+      tc_decision_owner: "Decision owner",
+      tc_subject: "Subject",
+      tc_decision_source: "Decision source",
+      tc_valid_from: "Valid from",
+      tc_valid_until: "Valid until",
+      tc_decision: "Decision",
+      tc_pending: "Pending",
+      tc_recorded_status_check_source: "Recorded status; check source",
+      tc_effect_state: "Effect state",
+      tc_uncertain_verify_before_retrying: "Uncertain; verify before retrying",
+      tc_recorded_state_not_verified_on_opening: "Recorded state; not verified on opening",
+      tc_recurrence: "Recurrence",
+      tc_recurring: "Recurring",
+      tc_minimum_interval: "Minimum interval",
+      tc_configured_time: "Configured time",
+      tc_time_zone: "Time zone",
+      tc_host_timezone_no_stored_zone: "Host timezone (no stored zone)",
+      tc_iso_weekdays_monday_1: "ISO weekdays, Monday = 1",
+      tc_maximum_runs: "Maximum runs",
+      tc_reserved_resources: "Reserved resources",
+      tc_no_recorded_context_execution_state_and: "No recorded context. Execution state and history remain available.",
+      tc_reading_this_record_does_not_verify_an_e: "Reading this record does not verify an effect or authorize retrying it.",
+      tc_complete_record: "Complete record",
+      tc_the_complete_record_could_not_be_read: "The complete record could not be read.",
+      tc_record_unavailable: "Record unavailable.",
+      tc_instructions: "Instructions",
       no_reply: "no reply",
       no_data: "no data",
       less_than_min: "less than 1 min",
@@ -124,6 +164,46 @@
       updated: "Actualizado ",
       updated_empty: "Actualizado —",
       reading: "Leyendo…",
+      tc_this_task_s_stored_continuity_checkpoint: "El punto de continuidad guardado de esta tarea no es válido.",
+      tc_this_task_s_stored_record_could_not_be_r: "No se pudo leer el registro guardado de esta tarea.",
+      tc_this_task_s_context_could_not_be_read: "No se pudo leer el contexto de esta tarea.",
+      tc_context_and_follow_up: "Contexto y seguimiento",
+      tc_agent: "Agente",
+      tc_planet: "Planeta",
+      tc_responsibility: "Responsabilidad",
+      tc_contract: "Contrato",
+      tc_recorded_result: "Resultado registrado",
+      tc_recorded_verification: "Verificación registrada",
+      tc_next_check: "Próxima comprobación",
+      tc_check_date: "Fecha de comprobación",
+      tc_check_source: "Fuente de comprobación",
+      tc_waiting: "Espera",
+      tc_decision_owner: "Decide",
+      tc_subject: "Asunto",
+      tc_decision_source: "Fuente de la decisión",
+      tc_valid_from: "Válida desde",
+      tc_valid_until: "Válida hasta",
+      tc_decision: "Decisión",
+      tc_pending: "Pendiente",
+      tc_recorded_status_check_source: "Estado guardado; revisar fuente",
+      tc_effect_state: "Situación del efecto",
+      tc_uncertain_verify_before_retrying: "Incierto; verificar antes de repetir",
+      tc_recorded_state_not_verified_on_opening: "Estado registrado; no verificado al abrir",
+      tc_recurrence: "Recurrencia",
+      tc_recurring: "Recurrente",
+      tc_minimum_interval: "Intervalo mínimo",
+      tc_configured_time: "Hora configurada",
+      tc_time_zone: "Zona horaria",
+      tc_host_timezone_no_stored_zone: "Zona del equipo (sin zona guardada)",
+      tc_iso_weekdays_monday_1: "Días ISO, lunes = 1",
+      tc_maximum_runs: "Máximo de ejecuciones",
+      tc_reserved_resources: "Recursos reservados",
+      tc_no_recorded_context_execution_state_and: "Sin contexto registrado. El estado de ejecución y su historial se conservan.",
+      tc_reading_this_record_does_not_verify_an_e: "Leer este registro no verifica el efecto ni autoriza repetirlo.",
+      tc_complete_record: "Registro completo",
+      tc_the_complete_record_could_not_be_read: "No se pudo leer el registro completo.",
+      tc_record_unavailable: "Registro no disponible.",
+      tc_instructions: "Instrucciones",
       no_reply: "sin respuesta",
       no_data: "sin dato",
       less_than_min: "menos de 1 min",
@@ -755,31 +835,40 @@
       taskContext(task) + '<div><div class="lbl" style="margin-bottom:8px">' + esc(t("history")) + '</div><div class="tl">' + lines + "</div></div></div>";
   }
 
+  function intervalText(value) {
+    var seconds = Number(value);
+    if (value == null || value === "" || !isFinite(seconds) || seconds <= 0) return null;
+    if (seconds % 3600 === 0) return seconds / 3600 + " h";
+    if (seconds % 60 === 0) return seconds / 60 + " min";
+    return seconds + " s";
+  }
+
   function contextErrorText(code) {
-    var es = LANG === "es";
-    if (code === "checkpoint_invalid") return es ? "El punto de continuidad guardado de esta tarea no es válido." : "This task's stored continuity checkpoint is not valid.";
-    if (code === "frontmatter_unreadable") return es ? "No se pudo leer el registro guardado de esta tarea." : "This task's stored record could not be read.";
-    return es ? "No se pudo leer el contexto de esta tarea." : "This task's context could not be read.";
+    if (code === "checkpoint_invalid") return t("tc_this_task_s_stored_continuity_checkpoint");
+    if (code === "frontmatter_unreadable") return t("tc_this_task_s_stored_record_could_not_be_r");
+    return t("tc_this_task_s_context_could_not_be_read");
   }
 
   function taskContext(task) {
-    var key = task.id + "|" + (task.updated_at || "");
-    var saved = taskContexts[key];
-    var es = LANG === "es";
-    var title = es ? "Contexto y seguimiento" : "Context and follow-up";
-    if (!saved) {
-      taskContexts[key] = { loading: true };
+    var title = t("tc_context_and_follow_up");
+    var stamp = task.updated_at || "";
+    var saved = taskContexts[task.id];
+    if (!saved || saved.stamp !== stamp) {
+      var entry = { stamp: stamp, loading: true };
+      taskContexts[task.id] = entry;
       var epoch = contextEpoch;
       load("/api/console/task-detail?task_id=" + encodeURIComponent(task.id)).then(function (reply) {
-        if (epoch !== contextEpoch) return;
-        taskContexts[key] = reply;
+        if (epoch !== contextEpoch || taskContexts[task.id] !== entry) return;
+        entry.loading = false;
+        entry.data = reply.data;
+        entry.refused = reply.refused;
         if (ui.screen === "tareas" && ui.task === task.id && cache.tareas) paint("tareas", cache.tareas);
       });
-      saved = taskContexts[key];
+      saved = entry;
     }
     var heading = '<section aria-label="' + esc(title) + '"><h3>' + esc(title) + '</h3>';
     if (saved.loading) return heading + '<p class="note">' + esc(t("reading")) + '</p></section>';
-    if (saved.refused) return heading + '<p class="note" role="alert">' + esc(es ? "No se pudo leer el contexto de esta tarea." : "This task's context could not be read.") + '</p>' + fullRecord(task, key) + '</section>';
+    if (saved.refused) return heading + '<p class="note" role="alert">' + esc(t("tc_this_task_s_context_could_not_be_read")) + '</p>' + fullRecord(task) + '</section>';
     var data = saved.data || {};
     var context = data.context && typeof data.context === "object" ? data.context : {};
     var cp = context.continuity_checkpoint || {};
@@ -792,50 +881,52 @@
       if (Array.isArray(value)) value = value.every(function (item) { return item == null || typeof item !== "object"; }) ? value.join(", ") : null;
       if (value != null && typeof value !== "object" && String(value)) fields.push('<dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd>');
     }
-    field(es ? "Agente" : "Agent", context.agent);
-    field(es ? "Planeta" : "Planet", context.planet);
-    field(es ? "Responsabilidad" : "Responsibility", context.responsibility);
-    field(es ? "Contrato" : "Contract", context.agent_contract);
-    field(es ? "Resultado registrado" : "Recorded result", verified.path || verified.artifact_ref);
-    field(es ? "Verificación registrada" : "Recorded verification", verified.verified_at ? fmt(verified.verified_at, true) : null);
-    field(es ? "Próxima comprobación" : "Next check", next.action);
-    field(es ? "Fecha de comprobación" : "Check date", next.at);
-    field(es ? "Fuente de comprobación" : "Check source", next.source);
-    field(es ? "Espera" : "Waiting", typeof cp.wait === "string" ? cp.wait : (cp.wait || {}).reason);
-    field(es ? "Decide" : "Decision owner", decision.owner);
-    field(es ? "Asunto" : "Subject", decision.subject || decision.action);
-    field(es ? "Fuente de la decisión" : "Decision source", decision.source);
-    field(es ? "Válida desde" : "Valid from", decision.valid_from);
-    field(es ? "Válida hasta" : "Valid until", decision.valid_until);
-    if (decision.status) field(es ? "Decisión" : "Decision", decision.status === "pending" ? (es ? "Pendiente" : "Pending") : (es ? "Estado guardado; revisar fuente" : "Recorded status; check source"));
-    if (effect) field(es ? "Situación del efecto" : "Effect state", effect === "effect_uncertain" ? (es ? "Incierto; verificar antes de repetir" : "Uncertain; verify before retrying") : (es ? "Estado registrado; no verificado al abrir" : "Recorded state; not verified on opening"));
+    field(t("tc_agent"), context.agent);
+    field(t("tc_planet"), context.planet);
+    field(t("tc_responsibility"), context.responsibility);
+    field(t("tc_contract"), context.agent_contract);
+    field(t("tc_recorded_result"), verified.path || verified.artifact_ref);
+    field(t("tc_recorded_verification"), verified.verified_at ? fmt(verified.verified_at, true) : null);
+    field(t("tc_next_check"), next.action);
+    field(t("tc_check_date"), next.at);
+    field(t("tc_check_source"), next.source);
+    field(t("tc_waiting"), typeof cp.wait === "string" ? cp.wait : (cp.wait || {}).reason);
+    field(t("tc_decision_owner"), decision.owner);
+    field(t("tc_subject"), decision.subject || decision.action);
+    field(t("tc_decision_source"), decision.source);
+    field(t("tc_valid_from"), decision.valid_from);
+    field(t("tc_valid_until"), decision.valid_until);
+    if (decision.status) field(t("tc_decision"), decision.status === "pending" ? (t("tc_pending")) : (t("tc_recorded_status_check_source")));
+    if (effect) field(t("tc_effect_state"), effect === "effect_uncertain" ? (t("tc_uncertain_verify_before_retrying")) : (t("tc_recorded_state_not_verified_on_opening")));
     var contextFields = fields.length;
     var configuration = data.configuration && typeof data.configuration === "object" ? data.configuration : {};
-    field(es ? "Hora configurada" : "Configured time", configuration.scheduled_time);
-    field(es ? "Zona horaria" : "Time zone", configuration.scheduled_timezone || (es ? "Zona del equipo (sin zona guardada)" : "Host timezone (no stored zone)"));
-    field(es ? "Días ISO, lunes = 1" : "ISO weekdays, Monday = 1", configuration.scheduled_weekdays);
-    field(es ? "Máximo de ejecuciones" : "Maximum runs", configuration.recurring_max_runs);
-    field(es ? "Recursos reservados" : "Reserved resources", configuration.resources);
+    if (configuration.recurring === true || configuration.recurring === "true") field(t("tc_recurrence"), t("tc_recurring"));
+    field(t("tc_minimum_interval"), intervalText(configuration.recurring_min_interval));
+    field(t("tc_configured_time"), configuration.scheduled_time);
+    field(t("tc_time_zone"), configuration.scheduled_timezone || (t("tc_host_timezone_no_stored_zone")));
+    field(t("tc_iso_weekdays_monday_1"), configuration.scheduled_weekdays);
+    field(t("tc_maximum_runs"), configuration.recurring_max_runs);
+    field(t("tc_reserved_resources"), configuration.resources);
     var message = "";
     if (data.context_error) message = '<p class="note" role="alert">' + esc(contextErrorText(data.context_error)) + '</p>';
-    else if (!contextFields) message = '<p class="note">' + esc(es ? "Sin contexto registrado. El estado de ejecución y su historial se conservan." : "No recorded context. Execution state and history remain available.") + '</p>';
+    else if (!contextFields) message = '<p class="note">' + esc(t("tc_no_recorded_context_execution_state_and")) + '</p>';
     return heading + message + (fields.length ? '<dl>' + fields.join("") + '</dl>' : '') +
-      '<p class="note">' + esc(es ? "Leer este registro no verifica el efecto ni autoriza repetirlo." : "Reading this record does not verify an effect or authorize retrying it.") + '</p>' +
-      fullRecord(task, key) + '</section>';
+      '<p class="note">' + esc(t("tc_reading_this_record_does_not_verify_an_e")) + '</p>' +
+      fullRecord(task) + '</section>';
   }
 
-  function fullRecord(task, key) {
-    var es = LANG === "es";
-    var state = taskFull[key] || {};
-    var label = es ? "Registro completo" : "Complete record";
+  function fullRecord(task) {
+    var state = taskFull[task.id] || {};
+    if (state.open && state.stamp !== (task.updated_at || "")) loadFull(task, state);
+    var label = t("tc_complete_record");
     var button = '<button type="button" class="chip" data-full="' + esc(task.id) + '" aria-expanded="' + (state.open ? "true" : "false") + '">' +
       (state.open ? "▾ " : "▸ ") + esc(label) + '</button>';
     if (!state.open) return button;
     if (state.loading) return button + '<p class="note">' + esc(t("reading")) + '</p>';
-    if (state.refused) return button + '<p class="note" role="alert">' + esc(es ? "No se pudo leer el registro completo." : "The complete record could not be read.") + '</p>';
+    if (state.refused) return button + '<p class="note" role="alert">' + esc(t("tc_the_complete_record_could_not_be_read")) + '</p>';
     var data = state.data || {};
     var record = data.record;
-    if (!record || typeof record !== "object" || Array.isArray(record)) return button + '<p class="note">' + esc(es ? "Registro no disponible." : "Record unavailable.") + '</p>';
+    if (!record || typeof record !== "object" || Array.isArray(record)) return button + '<p class="note">' + esc(t("tc_record_unavailable")) + '</p>';
     return button + '<dl class="task-record">' + Object.keys(record).map(function (name) {
       var value = record[name];
       var content;
@@ -848,35 +939,33 @@
           return '<dt>' + esc(pair[0]) + '</dt><dd>' + recordValue(pair[1]) + '</dd>';
         }).join("") + '</dl>';
       } else content = recordValue(value);
-      var heading = name === "body" ? (es ? "Instrucciones" : "Instructions") : name;
+      var heading = name === "body" ? (t("tc_instructions")) : name;
       return '<dt>' + esc(heading) + '</dt><dd>' + content + '</dd>';
     }).join("") + '</dl>';
+  }
+
+  function loadFull(task, state) {
+    var epoch = contextEpoch;
+    state.stamp = task.updated_at || "";
+    state.loading = true;
+    state.refused = null;
+    state.data = null;
+    load("/api/console/task-detail?task_id=" + encodeURIComponent(task.id) + "&full=1").then(function (reply) {
+      if (epoch !== contextEpoch || taskFull[task.id] !== state) return;
+      state.loading = false;
+      state.data = reply.data || null;
+      state.refused = reply.refused || null;
+      if (ui.screen === "tareas" && ui.task === task.id && cache.tareas) paint("tareas", cache.tareas);
+    });
   }
 
   function toggleFull(id) {
     var task = null;
     ((cache.tareas && cache.tareas.data && cache.tareas.data.tasks) || []).forEach(function (row) { if (row.id === id) task = row; });
     if (!task) return;
-    var key = task.id + "|" + (task.updated_at || "");
-    var state = taskFull[key] || {};
-    if (state.open) {
-      state.open = false;
-    } else {
-      state.open = true;
-      if (!state.data) {
-        state.loading = true;
-        state.refused = null;
-        var epoch = contextEpoch;
-        load("/api/console/task-detail?task_id=" + encodeURIComponent(task.id) + "&full=1").then(function (reply) {
-          if (epoch !== contextEpoch) return;
-          state.loading = false;
-          state.data = reply.data || null;
-          state.refused = reply.refused || null;
-          if (ui.screen === "tareas" && ui.task === task.id && cache.tareas) paint("tareas", cache.tareas);
-        });
-      }
-    }
-    taskFull[key] = state;
+    var state = taskFull[task.id] || (taskFull[task.id] = {});
+    state.open = !state.open;
+    if (state.open && (state.stamp !== (task.updated_at || "") || (!state.data && !state.loading))) loadFull(task, state);
     if (ui.screen === "tareas" && cache.tareas) paint("tareas", cache.tareas);
   }
 

@@ -1,5 +1,6 @@
 """Task detail: curated context by default, complete record only on request."""
 import json
+import sqlite3
 import unittest
 from unittest.mock import patch
 
@@ -64,12 +65,38 @@ class TaskDetailTests(unittest.TestCase):
 
     def test_refusal_uses_fixed_message(self):
         secret = 'SECRET /private/path detail'
-        for error in (solar_state.StateError(secret), ValueError(secret)):
+        for error in (solar_state.StateError(secret), ValueError(secret), sqlite3.OperationalError(secret),
+                      RuntimeError(secret), KeyError(secret), json.JSONDecodeError(secret, '', 0)):
             with patch.object(console_data, 'task_detail', side_effect=error):
                 handler = self.get({'task_id': ['task']})
             self.assertEqual(handler.status, 503)
             self.assertEqual(handler.payload, {'error': 'Task detail unavailable', 'refused': True})
             self.assertNotIn('SECRET', json.dumps(handler.payload))
+
+    def test_unexpected_failure_in_the_real_read_path_is_fixed_503(self):
+        task_id = self.task(body='# Body')
+        secret = 'SECRET sqlite detail'
+        with patch('runtime_views.console_task_detail', side_effect=sqlite3.DatabaseError(secret)):
+            for qs in ({'task_id': [task_id]}, {'task_id': [task_id], 'full': ['1']}):
+                handler = self.get(qs)
+                self.assertEqual(handler.status, 503)
+                self.assertEqual(handler.payload, {'error': 'Task detail unavailable', 'refused': True})
+                self.assertNotIn('SECRET', json.dumps(handler.payload))
+
+    def test_absent_or_non_string_body_gives_null_body_html(self):
+        for stored in (b'bytes',):
+            task_id = self.task(task_id='body-' + type(stored).__name__, body='# Body')
+            with solar_state.session() as store:
+                store.conn.execute('UPDATE tasks SET body = ? WHERE id = ?', (stored, task_id))
+            handler = self.get({'task_id': [task_id], 'full': ['1']})
+            self.assertEqual(handler.status, 200, stored)
+            self.assertIsNone(handler.payload['body_html'], stored)
+            self.assertEqual(handler.payload['record']['body'], stored)
+        for record in ({'id': 'x'}, {'id': 'x', 'body': None}):
+            with patch.object(console_data, 'task_detail', return_value={'id': 'x', 'record': record}):
+                handler = self.get({'task_id': ['x'], 'full': ['1']})
+            self.assertEqual(handler.status, 200)
+            self.assertIsNone(handler.payload['body_html'])
 
     def test_unreadable_frontmatter_is_200_not_503(self):
         task_id = self.task(body='## Keep these instructions')
@@ -135,6 +162,18 @@ class MarkdownTests(unittest.TestCase):
         self.assertEqual(render_markdown('[a](HTTP://Example.test/x?y=1) [m](mailto:a@b.test)'),
                          '<p><a href="HTTP://Example.test/x?y=1" rel="noreferrer noopener">a</a> '
                          '<a href="mailto:a@b.test" rel="noreferrer noopener">m</a></p>')
+
+    def test_entity_like_text_in_a_query_stays_a_link_but_encoded_schemes_do_not(self):
+        rendered = render_markdown('[a](https://x.com/?a=1&copy=2&reg=3&sect=4)')
+        self.assertEqual(rendered, '<p><a href="https://x.com/?a=1&amp;copy=2&amp;reg=3&amp;sect=4" '
+                                   'rel="noreferrer noopener">a</a></p>')
+        for target in ('java&#x73;cript:alert', 'java&#115;cript:alert', 'javascript&colon;alert', 'jav&Tab;ascript:x',
+                       'javascript:alert', 'data:text/html,x', '//evil.test', '/relative'):
+            self.assertEqual(render_markdown('[l](' + target + ')'), '<p>l</p>', target)
+        # An anchor that reaches the sanitizer with an entity-encoded scheme is dropped too.
+        self.assertEqual(sanitize_html('<a href="java&#x73;cript:alert(1)">x</a>'), 'x')
+        self.assertEqual(sanitize_html('<a href="https://x.com/?a=1&amp;copy=2">x</a>'),
+                         '<a href="https://x.com/?a=1&amp;copy=2" rel="noreferrer noopener">x</a>')
 
     def test_consecutive_quote_lines_form_one_blockquote(self):
         self.assertEqual(render_markdown('> one\n> two\n>three\n\n> next'),

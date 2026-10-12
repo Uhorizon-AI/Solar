@@ -46,7 +46,7 @@ def get(handler, path, qs, workspace):
         full = qs.get("full") == ["1"]
         try:
             result = console_data.task_detail(Path(workspace), task_id, full)
-        except (solar_state.StateError, ValueError):
+        except Exception:  # any unexpected read or decode failure: fixed text, no detail
             handler._send_json({"error": "Task detail unavailable", "refused": True}, 503)
             return
         if result is None:

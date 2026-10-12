@@ -135,7 +135,10 @@ sanitized HTML derived only from the Markdown body. `task_markdown.py` renders a
 conservative subset (headings, paragraphs, lists, quotes, rules, tables, code,
 `*` emphasis, and links); underscores are never emphasis, only explicit http,
 https and mailto links are links, and raw HTML and images stay inert text. No
-dependencies or network fetches. The view is read only: no write session, event,
+dependencies or network fetches. Not supported, by design: link destinations
+containing parentheses (the link ends at the first `)`), and a `|` inside a table
+cell, including inside inline code (it always splits the cell). The parser is not
+extended for these. The view is read only: no write session, event,
 queue or verification.
 
 Landing these sources does not mean installed acceptance: install and client

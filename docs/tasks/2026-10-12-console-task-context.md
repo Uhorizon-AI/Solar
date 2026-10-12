@@ -4,7 +4,7 @@
 **Date:** 2026-10-12
 **Status:** pending_review
 
-Supersedes the earlier "complete task detail" revision of this file. PR B (reports, channels, Continuity retirement) is specified separately in `docs/tasks/2026-10-12-console-operation-reports.md` and does not touch the task-detail route.
+Supersedes the earlier "complete task detail" revision of this file. PR B (reports, channels, Continuity retirement) is specified separately in its own task spec on another branch and does not touch the task-detail route.
 
 ## Objective
 
@@ -24,7 +24,7 @@ When a task is selected in the console, show a curated "Context and follow-up" b
 |---|---|
 | 400 | `{"error": "A bounded task_id is required"}` (missing or longer than 200 chars) |
 | 404 | `{"error": "Task not found"}` |
-| 503 | `{"error": "Task detail unavailable", "refused": true}`; fixed text, never the exception text |
+| 503 | `{"error": "Task detail unavailable", "refused": true}`; fixed text for any unexpected read or decode failure, never the exception text |
 | 200 | `{"id", "context", "context_error", "configuration"}` |
 | 200 with `full=1` (exactly the string `1`) | the same keys plus `"record"` and `"body_html"` |
 
@@ -61,10 +61,11 @@ Out of scope: Continuity retirement, Channels, Reports (PR B); any MCP schema, t
 ## Markdown fixes (carried from the review of the first revision)
 
 - Underscore emphasis is not supported (`task_id and user_id`, `__init__` stay text). `*`/`**` emphasis needs a non-space right after the opening mark, a non-space right before the closing mark, and no letter or digit touching the outer sides (`1 * 2 * 3`, `2*3*4` stay text).
-- Links: only `http`, `https`, `mailto`. Relative, empty-scheme, protocol-relative, `javascript:`, `data:` and encoded variants are not links; the label stays as text and no `<a>` without a safe `href` is emitted.
+- Links: only `http`, `https`, `mailto`. Relative, empty-scheme, protocol-relative, `javascript:`, `data:` and entity-encoded schemes (`java&#x73;cript:`) are not links, while entity-like query text (`?a=1&copy=2`) stays a link because the destination is judged as literal text; the label stays as text and no `<a>` without a safe `href` is emitted.
 - Consecutive `> ` lines form one blockquote.
 - `---`, `***`, `___` (optionally spaced) on their own line become `<hr>`.
-- The 503 never echoes exception text.
+- The 503 never echoes exception text and covers any unexpected failure.
+- Unsupported by design (documented in the solar-app skill): link destinations containing parentheses and `|` inside table cells.
 
 ## Acceptance criteria
 
@@ -96,7 +97,9 @@ Should the complete task record (instructions included) be viewable from the con
 
 ## Completion evidence
 
-- Baseline on PR 23 head: 527 passed. After the change: 545 passed (solar-app, solar-state, solar-mcp) with a loopback test port.
+- Baseline on PR 23 head: 527 passed. After the change: 548 passed (solar-app, solar-state, solar-mcp) with a loopback test port. Three tests (`test_cutover` and two in `test_mcp_cli`) need `ps` and a writable `$HOME`; with them the count is 548 passed.
+- Review follow-up: the recurring interval is shown (`24 h`), open state is kept per task id, UI strings live in the dictionaries, `import runtime_views` is at module level in the MCP task views.
+- Known debt: `console_task_detail` decodes the frontmatter itself instead of sharing a row-to-task helper with `console_tasks`. It reads the raw row on purpose so an undecodable frontmatter can be reported instead of raising, and `console_tasks` goes through `task_list`; unifying them would change that path for a small gain.
 - `node --check` on app.js, `py_compile` on changed Python, and `git diff --check`: passed. solar-app, solar-state and solar-mcp validated and packaged outside the repository.
 - Public MCP unchanged (three tools); only the checkpoint parser is shared.
 - Not verified: installed visual acceptance (no install, sync or update performed).
