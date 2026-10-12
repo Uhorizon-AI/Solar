@@ -28,14 +28,11 @@ LOGGER = logging.getLogger("solar.app")
 def configure_logging(logger: logging.Logger | None = None) -> None:
     """Send the console's warnings to stderr, where the host already reports errors.
 
-    The handler is added only when neither the logger nor the root logger has one:
-    a process that configured the root logger is trusted to show the warnings, so
-    its handlers and format apply (the line format below is used only when this
-    function adds the handler; that is an accepted decision) and propagation is left
-    alone. Do not "fix" the next case with `propagate = False`: if the root logger
-    is configured after the console started, a warning prints twice (this stderr
-    handler plus the root's). That case is accepted and pinned by a test. The level
-    is set to WARNING only when none was chosen. Calling it again does nothing.
+    Adds a stderr handler only when neither this logger nor the root logger has one;
+    a configured root is trusted and propagation is left alone. The level is set to
+    WARNING only when none was chosen. If the root is configured after the console
+    started, a warning prints twice: accepted and pinned by a test, so do not add
+    `propagate = False`. Calling it again does nothing.
     """
     logger = logger or LOGGER
     if logger.level == logging.NOTSET:
@@ -44,7 +41,7 @@ def configure_logging(logger: logging.Logger | None = None) -> None:
         return
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
-    handler._solar_host = True  # type: ignore[attr-defined]
+    handler._solar_host = True  # type: ignore[attr-defined]  # marks the handler added here; tests count it
     logger.addHandler(handler)
 
 

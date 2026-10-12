@@ -104,11 +104,12 @@ class HostLoggingTests(unittest.TestCase):
         self.assertEqual(sink.getvalue().count('late root line'), 1)
 
     def test_an_existing_level_is_kept(self):
+        import io
         import host_server
         self.logger.setLevel(self.logging.INFO)
         host_server.configure_logging()  # adds the handler, keeps INFO
         self.assertEqual(self.logger.level, self.logging.INFO)
-        self.root.addHandler(self.logging.StreamHandler(__import__('io').StringIO()))
+        self.root.addHandler(self.logging.StreamHandler(io.StringIO()))
         host_server.configure_logging()  # early branch, keeps INFO
         self.assertEqual(self.logger.level, self.logging.INFO)
         self.logger.setLevel(self.logging.NOTSET)
