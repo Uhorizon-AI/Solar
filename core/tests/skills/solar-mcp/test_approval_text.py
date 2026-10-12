@@ -503,3 +503,15 @@ def test_large_block_still_pairs_the_edited_line_after_inserted_lines(solar_env,
     minus = next(row for row in rows if row.startswith("− "))
     plus = next(row for row in rows if row.startswith("+ ") and "ins" not in row[:6])
     assert "-OLD" in minus and "-NEW" in plus
+
+
+def test_edited_line_beyond_the_pairing_window_is_shown_unpaired(solar_env):
+    """Documented limit: past `_MATCH_ROWS` inserted lines the edit is listed without its pair."""
+    long = "A" * 200
+    inserted = approval_text._MATCH_ROWS + 2
+    old = "\n".join([f"{long}-OLD"] + [f"o{i}" for i in range(150)])
+    new = "\n".join([f"ins{i}" for i in range(inserted)] + [f"{long}-NEW"] + [f"n{i}" for i in range(150)])
+    rows = approval_text._diff_lines(approval_text.COPY["en"], old, new)
+    assert not any("-OLD" in row or "-NEW" in row for row in rows)     # no window: tails not shown
+    assert any(row.startswith("− ") for row in rows) and any(row.startswith("+ ") for row in rows)
+    assert rows[-1].startswith("… ") and "lines changed" in rows[-1]   # and the prompt says more changed
