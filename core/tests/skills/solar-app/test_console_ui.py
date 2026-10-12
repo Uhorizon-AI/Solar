@@ -814,7 +814,7 @@ async function settled() {
   };
   const chipKeys = (html) => (html.match(/data-chip="1"/g) ? (html.match(/data-filter="([a-z]+)" data-chip="1"/g) || []).map((m) => m.match(/data-filter="([a-z]+)"/)[1]) : []);
   const selectedChip = (html) => (html.match(/data-filter="([a-z]+)" data-chip="1" aria-pressed="true"/) || [])[1];
-  const rowsOf = (html) => (html.match(/data-task="[^"]+"/g) || []).map((m) => m.slice(11, -1));
+  const rowsOf = (html) => (html.match(/class="row trow[^"]*" data-task="([^"]+)"/g) || []).map((m) => m.match(/data-task="([^"]+)"/)[1]);
   const everything = fixture([
     mk("d1", "draft"), mk("d2", "draft"), mk("p1", "planned", { recurring: true }), mk("q1", "queued"), mk("a1", "active", { recurring: true }),
     mk("c1", "completed"), mk("c2", "completed", { recurring: true }), mk("e1", "error", { recurring: true }), mk("e2", "error"),
@@ -910,6 +910,45 @@ async function settled() {
   need(page.els.health.innerHTML, "No hay tareas con error", "spanish good news");
   need(page.els.health.innerHTML, "Nada que reintentar.", "spanish hint");
   need(page.els.health.innerHTML, "Siguiente pendiente: Borradores (1)", "spanish next link");
+  // With the Recurring switch on, empty Errors means no recurring error, not no error at all.
+  page = await open(only(["draft"]), { hash: "#tasks/errors+recurring" });
+  view = page.els.health.innerHTML;
+  need(view, "No recurring tasks in error", "recurring good-news title");
+  need(view, "Nothing recurring needs retrying.", "recurring good-news hint");
+  lack(view, "No tasks in error", "not the plain error message while the switch is on");
+  page = await open(only(["draft"]), { hash: "#tasks/errors+recurring", language: "es" });
+  need(page.els.health.innerHTML, "No hay tareas recurrentes con error", "spanish recurring good news");
+
+  // Subtasks: a parent expands under All and hiding happens per task, not per parent.
+  const tree = {
+    tasks: [mk("rp", "planned", { recurring: true, title: "Parent-recurring" }), mk("rc", "planned", { title: "Child-plain", parent_id: "rp" })],
+    by_status: { planned: { n: 2, recurring: 1 } }, links: [{ parent_id: "rp", child_id: "rc" }], history: [], statuses: STATES, transitions: [],
+  };
+  page = await open(tree);
+  page.click({ "data-filter": "all" });
+  view = page.els.health.innerHTML;
+  if (!same(rowsOf(view).sort(), ["rc", "rp"])) throw new Error("parent and child both list: " + JSON.stringify(rowsOf(view)));
+  need(view, "└ ", "child is indented");
+  need(view, "Showing 2 of 2", "parent and child both count");
+  // The switch hides the non-recurring child from the list; the parent stays (it matches).
+  page.click({ "data-recurring": "1" });
+  view = page.els.health.innerHTML;
+  if (!same(rowsOf(view).sort(), ["rp"])) throw new Error("the switch filters the child row out: " + JSON.stringify(rowsOf(view)));
+  need(view, "Parent-recurring", "recurring parent stays");
+  need(view, "Showing 1 of 1", "the count follows the switch");
+  // A parent kept only as context for a matching child is not a member of the group,
+  // so the "Showing N of M" never counts it (no more "Showing 2 of 1").
+  const context = {
+    tasks: [mk("cp", "planned", { title: "Context-parent" }), mk("ce", "error", { title: "Error-child", parent_id: "cp" })],
+    by_status: { planned: { n: 1, recurring: 0 }, error: { n: 1, recurring: 0 } }, links: [{ parent_id: "cp", child_id: "ce" }], history: [], statuses: STATES, transitions: [],
+  };
+  page = await open(context);
+  page.click({ "data-filter": "errors" });
+  view = page.els.health.innerHTML;
+  const contextRows = rowsOf(view);
+  if (!contextRows.includes("ce")) throw new Error("matching child must list: " + JSON.stringify(contextRows));
+  need(view, "Context-parent", "parent kept as context for the matching child");
+  need(view, "Showing 1 of 1", "the context parent is not counted as a member");
 
   // Recurring switch: a real checkbox, intersects the group, counts follow it.
   page = await open(everything);

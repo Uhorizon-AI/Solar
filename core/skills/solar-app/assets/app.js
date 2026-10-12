@@ -121,7 +121,8 @@
       daily_copy: "Daily copy", copies: " saved copies", no_copy: "no copy",
       f_errors: "Errors", f_running: "Running", f_drafts: "Drafts", f_queue: "Queue", f_done: "Done", f_closed: "Closed",
       f_toolbar: "Filter tasks by status", f_task: "task", f_tasks: "tasks", f_recurring: "↻ Recurring",
-      f_no_error: "No tasks in error", f_no_error_hint: "Nothing needs retrying.", f_next: "Next pending: ",
+      f_no_error: "No tasks in error", f_no_error_hint: "Nothing needs retrying.",
+      f_no_error_rec: "No recurring tasks in error", f_no_error_rec_hint: "Nothing recurring needs retrying.", f_next: "Next pending: ",
       all_tasks: "All", subtasks: "subtasks",
       no_provider: "no provider", no_tasks: "No tasks.", showing: "Showing ", of: " of ",
       col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "Created", col_requester: "Requester",
@@ -274,7 +275,8 @@
       daily_copy: "Copia diaria", copies: " copias guardadas", no_copy: "sin copia",
       f_errors: "Errores", f_running: "En ejecución", f_drafts: "Borradores", f_queue: "En cola", f_done: "Completadas", f_closed: "Cerradas",
       f_toolbar: "Filtrar tareas por estado", f_task: "tarea", f_tasks: "tareas", f_recurring: "↻ Recurrentes",
-      f_no_error: "No hay tareas con error", f_no_error_hint: "Nada que reintentar.", f_next: "Siguiente pendiente: ",
+      f_no_error: "No hay tareas con error", f_no_error_hint: "Nada que reintentar.",
+      f_no_error_rec: "No hay tareas recurrentes con error", f_no_error_rec_hint: "Nada recurrente que reintentar.", f_next: "Siguiente pendiente: ",
       all_tasks: "Todas", subtasks: "subtareas",
       no_provider: "sin proveedor", no_tasks: "Sin tareas.", showing: "Mostrando ", of: " de ",
       col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Creada", col_requester: "Solicitante",
@@ -837,7 +839,6 @@
     }).filter(function (filter) { return filter.key === "errors" || filter.n > 0 || filter.key === ui.filter; });
     filters.push({ key: "all", label: t("all_tasks"), statuses: null, fill: false, n: totalAll });
     var activeFilter = filters.filter(function (filter) { return filter.key === ui.filter; })[0] || filters[filters.length - 1];
-    var recurringN = tasks.filter(function (task) { return task.recurring; }).length;
     var focusKey = filters.some(function (filter) { return filter.key === ui.focusKey; }) ? ui.focusKey : activeFilter.key;
     function chipHtml(filter) {
       var selectedChip = filter.key === activeFilter.key;
@@ -865,13 +866,18 @@
       return ((b.status === "active") - (a.status === "active")) || (RANK[a.status] - RANK[b.status]) || String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
     });
     var planned = [];
+    // "Showing N" counts only tasks that match the group; a parent kept as context for a
+    // matching child is drawn dimmed but is not a member of the group.
+    var visible = 0;
     roots.forEach(function (parent) {
       var children = (kids[parent.id] || []).map(function (id) { return byId[id]; }).filter(Boolean);
       var parentMatch = match(parent);
       var childMatch = children.filter(match);
       if (parentMatch || childMatch.length) {
-        planned.push([parent, 0, children.length, !parentMatch]);
-        (parentMatch ? children : childMatch).forEach(function (child) { planned.push([child, 1, 0, false]); });
+        if (parentMatch) visible += 1;
+        visible += childMatch.length;
+        planned.push([parent, 0, childMatch.length, !parentMatch]);
+        childMatch.forEach(function (child) { planned.push([child, 1, 0, false]); });
       }
     });
     var visibleIds = planned.map(function (row) { return row[0].id; });
@@ -889,14 +895,16 @@
         '<div class="opt note">' + esc(fmtDay(task.created_at)) + "</div>" +
         '<div class="opt req" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
     });
-    var visible = rows.length;
     var selected = ui.task ? byId[ui.task] : null;
     var detail = selected ? taskDetail(selected, byId, kids, history) : "<div></div>";
     var empty = "";
     if (!visible) {
       if (activeFilter.key === "errors") {
         var nextGroup = filters.filter(function (filter) { return ["running", "drafts", "queue"].indexOf(filter.key) >= 0 && filter.n > 0; })[0];
-        empty = '<div class="good" role="status"><div class="goodt"><span class="fg ok" aria-hidden="true">✓</span> ' + esc(t("f_no_error")) + '</div><div class="note">' + esc(t("f_no_error_hint")) + "</div>" +
+        // With the Recurring switch on, an empty Errors group means no recurring error, not no error at all.
+        var errorTitle = ui.recurring ? t("f_no_error_rec") : t("f_no_error");
+        var errorHint = ui.recurring ? t("f_no_error_rec_hint") : t("f_no_error_hint");
+        empty = '<div class="good" role="status"><div class="goodt"><span class="fg ok" aria-hidden="true">✓</span> ' + esc(errorTitle) + '</div><div class="note">' + esc(errorHint) + "</div>" +
           (nextGroup ? '<button type="button" class="fnext" data-filter="' + esc(nextGroup.key) + '">' + esc(t("f_next") + nextGroup.label + " (" + nextGroup.n + ")") + "</button>" : "") + "</div>";
       } else empty = '<div class="note" style="padding:12px">' + esc(t("no_tasks")) + "</div>";
     }
