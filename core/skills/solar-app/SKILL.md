@@ -107,6 +107,12 @@ bounded files and no-store headers. See
 into shared state. Source changes require installation and client publication
 before claiming installed acceptance.
 
+The Autonomy screen's permission decisions come from the MCP gate audit, which holds
+two rows per call: a `decision` row (with `allowed`) and, after execution, an
+`outcome` row. Only decision rows are counted and listed (older rows without `kind`
+count when they carry a boolean `allowed`; anything else is ignored). The payload
+stays `total`, `allowed` and `last`.
+
 Delegation modes are labeled Active, Trial (no real effects), Paused, and
 Revoked. With `"language": "es"` those labels are Activa, En prueba (sin
 efectos reales), Pausada, and Revocada. A filled `revoked_at` marks the
