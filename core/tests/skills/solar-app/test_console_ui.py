@@ -155,11 +155,16 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertRegex(css, r"\.fchip\{[^}]*flex:none", "chips never grow")
         self.assertRegex(css, r"\.fchip\.on\{[^}]*box-shadow:inset 0 -2px 0 var\(--brand\)", "amber 2 px underline on the selection")
         self.assertRegex(css, r"\.fchip \.fn\{[^}]*tabular-nums", "tabular numerals")
+        self.assertRegex(css, r"\.sr-only\{[^}]*clip:rect\(0,0,0,0\)", "live region is out of sight but readable")
         narrow = re.search(r"@media \(max-width:900px\)\{(.*?)\n\}", css, re.S).group(1)
         self.assertIn("min-height:40px", narrow, "touch height when stacked")
+        self.assertNotIn("display:contents", narrow, "the toolbar keeps its box so role=toolbar stays")
+        self.assertRegex(narrow, r"\.ftool\{[^}]*flex:1 1 100%")
         self.assertRegex(narrow, r'\[data-filter="errors"\]\{order:1\}')
-        self.assertRegex(narrow, r'\[data-filter="drafts"\]\{order:2\}')
+        self.assertRegex(narrow, r'\[data-filter="drafts"\],\.fchip\[data-filter="running"\]\{order:2\}', "Drafts and Running share the first mobile row")
         self.assertRegex(narrow, r"\.rsw\{order:3")
+        # The wide-bar comment must match the real breakpoint.
+        self.assertRegex(css, r"from 1840 px[^*]*\*/\s*@media \(min-width:1840px\)", "comment matches the 1840 px value")
         # Red, blue and green belong to one thing each.
         self.assertRegex(css, r"\.fg\.err\{color:var\(--err\)\}")
         self.assertRegex(css, r"\.fg\.run\{color:var\(--info\)\}")
@@ -225,8 +230,37 @@ function boot(routes, hash) {
     els[id] = node;
     return node;
   }
+  // The console captures document.activeElement before a repaint and calls .focus() on the
+  // rebuilt chip, so the harness models focus: a focusable node is answered by querySelector
+  // against the chips the current innerHTML holds.
+  const chipsFrom = (html) => (html.match(/data-filter="([a-z]+)" data-chip="1"/g) || []).map((m) => m.match(/data-filter="([a-z]+)"/)[1]);
+  const fake = (target) => {
+    const attrs = target.kind === "recurring" ? { "data-recurring": "1", "data-chip": null } : { "data-filter": target.key, "data-chip": "1" };
+    return {
+      focus() { sandbox.document.activeElement = this; },
+      getAttribute(name) { return attrs[name] == null ? null : attrs[name]; },
+    };
+  };
+  function make(id) {
+    let html = "";
+    const node = {
+      id, textContent: "", className: "",
+      get innerHTML() { return html; },
+      // Replacing the block drops any focused node inside it, as the real DOM does.
+      set innerHTML(value) { html = value; if (sandbox.document.activeElement) sandbox.document.activeElement = null; },
+      querySelector(sel) {
+        if (/\[data-recurring\]/.test(sel)) return fake({ kind: "recurring" });
+        const m = sel.match(/\[data-filter="([a-z]+)"\]/);
+        return m && chipsFrom(html).includes(m[1]) ? fake({ kind: "filter", key: m[1] }) : null;
+      },
+    };
+    node.addEventListener = () => {};
+    els[id] = node;
+    return node;
+  }
   const sandbox = {
     document: {
+      activeElement: null,
       getElementById(id) { return els[id] || make(id); },
       addEventListener(type, fn) { if (type === "click") clicks.push(fn); if (type === "keydown") keys.push(fn); },
     },
@@ -252,6 +286,8 @@ function boot(routes, hash) {
     document: sandbox.document,
     els,
     requests,
+    get focusedFilter() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-filter") : null; },
+    get focusedRecurring() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-recurring") != null : false; },
     click(attrs) {
       const target = {
         getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
@@ -851,7 +887,7 @@ async function settled() {
     need(view, '<span class="pill ' + cls + '">' + glyph + " " + word + "</span>", "row pill " + word);
   }
   // Recurring mark after the id, always visible, labelled, not a pill.
-  need(view, '<span class="rmark" role="img" aria-label="Recurring">↻</span>', "recurring mark");
+  need(view, '<span class="rmark" role="img" aria-label="recurring">↻</span>', "recurring mark");
 
   // Default filter: first non-empty of Errors, Running, Drafts; else All. Decided at each opening.
   const only = (statuses) => fixture(statuses.map((status, i) => mk("s" + i, status)));
@@ -949,6 +985,41 @@ async function settled() {
   if (!contextRows.includes("ce")) throw new Error("matching child must list: " + JSON.stringify(contextRows));
   need(view, "Context-parent", "parent kept as context for the matching child");
   need(view, "Showing 1 of 1", "the context parent is not counted as a member");
+  // The "N subtasks" on a parent counts every child, filtered or not (the detail lists them all).
+  const many = {
+    tasks: [mk("pe", "error", { title: "Parent-error" }), mk("k1", "completed", { parent_id: "pe" }), mk("k2", "completed", { parent_id: "pe" }), mk("k3", "completed", { parent_id: "pe" })],
+    by_status: { error: { n: 1, recurring: 0 }, completed: { n: 3, recurring: 0 } }, links: [], history: [], statuses: STATES, transitions: [],
+  };
+  page = await open(many);
+  page.click({ "data-filter": "errors" });
+  view = page.els.health.innerHTML;
+  need(view, "3 subtasks", "the parent counts every child, not only the matching ones");
+  need(view, "Showing 1 of 1", "only the parent is a member under Errors");
+
+  // A repaint while the detail loads (deferred) must not drop the focus: arrows keep working.
+  let releaseDetail;
+  const detailHold = new Promise((resolve) => { releaseDetail = resolve; });
+  page = boot(Object.assign({}, detailRoutes(), {
+    "/api/console/tasks": { body: tasks },
+    "/api/console/task-detail?task_id=err-1": { hold: detailHold.then(() => ({ body: curated })) },
+  }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-filter": "all" });
+  page.key({ "data-chip": "1", "data-filter": "all" }, "ArrowLeft");
+  if (page.focusedFilter !== "done") throw new Error("arrow moved the focus before the repaint: " + page.focusedFilter);
+  page.click({ "data-task": "err-1" });
+  await settled();
+  // The curated detail is still loading; the toolbar was repainted to show it.
+  releaseDetail();
+  await settled();
+  if (page.focusedFilter !== "done") throw new Error("the deferred detail repaint dropped the focus: " + page.focusedFilter);
+  page.key({ "data-chip": "1", "data-filter": "done" }, "ArrowLeft");
+  if (page.focusedFilter !== "errors") throw new Error("arrows stopped working after the repaint: " + page.focusedFilter);
+  // The Recurring checkbox survives a repaint too.
+  page.click({ "data-recurring": "1" });
+  if (!page.focusedRecurring) throw new Error("focus left the Recurring checkbox after its repaint");
 
   // Recurring switch: a real checkbox, intersects the group, counts follow it.
   page = await open(everything);
@@ -1004,7 +1075,7 @@ async function settled() {
   page = await open(everything);
   view = page.els.health.innerHTML;
   need(view, 'role="toolbar" aria-label="Filter tasks by status"', "toolbar");
-  need(view, "aria-live=\"polite\">Showing ", "live region for the count");
+  if (!page.els.live.textContent.includes("Showing ")) throw new Error("live region announces the count");
   need(view, "Showing 2 of 2", "count of the default group");
   const tabindexes = (html) => (html.match(/data-chip="1" aria-pressed="(?:true|false)" tabindex="(-?\d)"/g) || []).map((m) => m.slice(-2, -1)).join("");
   if ((view.match(/tabindex="0"/g) || []).length !== 1) throw new Error("one tab stop in the toolbar");

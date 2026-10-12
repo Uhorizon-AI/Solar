@@ -397,6 +397,7 @@
     recurring: false,
     focusKey: null,
     refocus: null,
+    announce: null,
     task: null,
     machine: false
   };
@@ -589,12 +590,31 @@
       else location.hash = "";
     } catch (error) { /* a stale hash only affects a reload */ }
   }
-  function restoreFocus(box) {
-    var target = ui.refocus;
+  // The chip (or the Recurring checkbox) that holds focus, read before a repaint replaces
+  // the toolbar; otherwise the one-shot intent set by a click or an arrow key.
+  function focusedTarget() {
+    var active = (typeof document !== "undefined" && document.activeElement) || null;
+    if (!active || !active.getAttribute) return null;
+    if (active.getAttribute("data-recurring") != null) return { kind: "recurring" };
+    if (active.getAttribute("data-chip") != null) return { kind: "filter", key: active.getAttribute("data-filter") };
+    return null;
+  }
+  function restoreFocus(box, target) {
+    // A repaint (a delayed detail load, a refresh) rebuilds the toolbar and drops focus, so
+    // the control that had it is captured before the swap and restored after. An explicit
+    // intent left by a click or an arrow key wins over the captured element, so arrow keys
+    // still move the tab stop right after a repaint.
+    var want = (ui.refocus === "recurring" ? { kind: "recurring" } : (ui.refocus === "filter" ? { kind: "filter", key: ui.focusKey } : null)) || target;
     ui.refocus = null;
-    if (!target || !box || !box.querySelector) return;
-    var el = box.querySelector(target === "recurring" ? "[data-recurring]" : '[data-filter="' + String(ui.focusKey || "") + '"][data-chip]');
+    if (!want || !box || !box.querySelector) return;
+    var el = box.querySelector(want.kind === "recurring" ? "[data-recurring]" : '[data-filter="' + String(want.key || "") + '"][data-chip]');
     if (el && el.focus) el.focus();
+  }
+  // A live region outside the repainted block, so a filter change still announces the count.
+  function announce(text) {
+    if (!text) return;
+    var node = $("live");
+    if (node) node.textContent = text;
   }
 
   function openScreen(id, seed) {
@@ -653,7 +673,12 @@
     }
     var data = payload.data;
     if (id === "resumen") box.innerHTML = renderHealth(data);
-    else if (id === "tareas") { box.innerHTML = renderTasks(data); restoreFocus(box); }
+    else if (id === "tareas") {
+      var keep = focusedTarget();
+      box.innerHTML = renderTasks(data);
+      restoreFocus(box, keep);
+      announce(ui.announce);
+    }
     else if (id === "ejecuciones") box.innerHTML = renderExec(data);
     else if (id === "continuidad") box.innerHTML = renderContinuity(data);
     else if (id === "autonomia") box.innerHTML = renderMandates(data);
@@ -876,7 +901,7 @@
       if (parentMatch || childMatch.length) {
         if (parentMatch) visible += 1;
         visible += childMatch.length;
-        planned.push([parent, 0, childMatch.length, !parentMatch]);
+        planned.push([parent, 0, children.length, !parentMatch]);
         childMatch.forEach(function (child) { planned.push([child, 1, 0, false]); });
       }
     });
@@ -889,7 +914,7 @@
       return '<div class="row trow pick ' + cls + '" data-task="' + esc(task.id) + '">' +
         "<div>" + pill(spec.tone, spec.glyph, spec.label) + "</div>" +
         '<div class="w100" style="min-width:0;padding-left:' + (level ? 18 : 0) + 'px"><div class="trunc">' + (level ? "└ " : "") + esc(task.title || task.id) + "</div>" +
-        '<div class="mono muted" style="font-size:10.5px">' + esc(String(task.id).slice(0, 8)) + (task.recurring ? ' <span class="rmark" role="img" aria-label="Recurring">↻</span>' : "") + (nKids ? " · " + nKids + " " + t("subtasks") : "") + "</div></div>" +
+        '<div class="mono muted" style="font-size:10.5px">' + esc(String(task.id).slice(0, 8)) + (task.recurring ? ' <span class="rmark" role="img" aria-label="' + esc(t("recurring")) + '">↻</span>' : "") + (nKids ? " · " + nKids + " " + t("subtasks") : "") + "</div></div>" +
         '<div class="' + (task.provider ? "" : "note") + '">' + esc(task.provider || t("no_provider")) + "</div>" +
         '<div class="opt ' + (task.channel ? "" : "note") + '">' + esc(channelLabel(task.channel)) + "</div>" +
         '<div class="opt note">' + esc(fmtDay(task.created_at)) + "</div>" +
@@ -909,9 +934,11 @@
       } else empty = '<div class="note" style="padding:12px">' + esc(t("no_tasks")) + "</div>";
     }
     var machine = ui.machine ? machineTable(data, selected) : "";
+    // The count text the list shows; a stable live region (in app.html) repeats it so a
+    // repaint of this block still announces the change.
+    ui.announce = t("showing") + visible + t("of") + activeFilter.n;
     return filterHtml +
-      '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div style="padding:10px 12px" class="note" aria-live="polite">' + esc(t("showing")) +
-      visible + esc(t("of")) + activeFilter.n + "</div>" +
+      '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div style="padding:10px 12px" class="note">' + esc(ui.announce) + "</div>" +
       '<div class="row hd trow"><div>' + esc(t("col_status")) + "</div><div>" + esc(t("col_task")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("col_created")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
       t("gap") + "</div></div></div>" + rows.join("") + empty + "</div>" + detail + "</div>" +
       '<div class="card" style="padding:0;overflow:hidden"><button type="button" class="chip" style="margin:10px 12px" data-machine="1" aria-expanded="' +
