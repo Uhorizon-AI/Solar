@@ -7,7 +7,11 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- Read-only operational reports from explicit planet indexes, with confined paths and sandboxed HTML serving.
 - On-demand task context and stored schedule configuration, including IANA timezone, with checkpoint parsing shared with MCP task views.
+
+### Changed
+- Replace global Continuity navigation with Reports and rename external entry to Channels; retain the legacy continuity endpoint.
 
 ## [0.39.1] - 2026-10-12
 

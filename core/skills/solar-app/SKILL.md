@@ -58,7 +58,7 @@ routes still answer; the page does not call them.
 
 ## Console data
 
-Eight read-only routes under `/api/console/`: `health`, `tasks`, `executions`,
+Legacy read-only routes under `/api/console/`: `health`, `tasks`, `executions`,
 `continuity`, `mandates`, `ides`, `ingress`, `requester`. `console_data.py`
 answers them. Database rows come from `read_session()` in solar-state. Files
 outside the database (owner, cutover, pass stamp, daily backups, IDE trees,
@@ -81,10 +81,23 @@ router is a fault when the state refuses, and quiet time is not a fault by
 itself.
 The host refuses to bind when `SOLAR_APP_HOST` is not a loopback address.
 
-The continuity screen and its card on the summary explain that the record is
-what Solar last held from Telegram, n8n, or a task, and that it does not move
-when work happens in the IDE. The active intention is labeled as stored text.
-The continuity payload is unchanged.
+Global continuity remains available through its legacy read-only endpoint for
+compatibility; it is not a navigation screen or a summary card.
+
+## Task context and operational reports
+
+The navigation replaces global Continuity with Reports; Channels retains the
+existing ingress diagnostics. `/api/console/continuity` remains compatible.
+Selecting a task reads `/api/console/task-detail?task_id=<id>` on demand. The
+shared solar-state parser preserves the MCP checkpoint contract; an invalid
+checkpoint is a local context error, not a new execution status or verification.
+
+`/api/console/reports` reads explicit planet publication indexes, respecting
+Client planet exclusions. `/reports/<planet>/<relative-path>` serves only
+listed HTML or evidence text with restrictive CSP, no scripts/forms, bounded
+files and no-store headers. See [publication contract](references/operation-reports.md).
+No report is copied into shared state. Source changes require installation and
+client publication before claiming installed acceptance.
 
 Delegation modes are labeled Active, Trial (no real effects), Paused, and
 Revoked. With `"language": "es"` those labels are Activa, En prueba (sin
@@ -106,10 +119,3 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 
 Host sleep stops availability. Only one active host should serve the same public
 route. This console is local and does not replace the gateway or transports.
-
-## Task context
-
-Selecting a task reads `/api/console/task-detail?task_id=<id>` on demand.
-The shared solar-state parser preserves the MCP checkpoint contract; invalid
-context is localized to that task and its stored configuration remains readable.
-Recorded evidence does not verify an effect or authorize retrying it.
