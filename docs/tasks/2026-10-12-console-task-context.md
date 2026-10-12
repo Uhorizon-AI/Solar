@@ -1,18 +1,25 @@
-# Console task context
+# Complete console task detail
 
 Date: 2026-10-12
 Status: pending_review
 
 ## Objective
-Expose recorded task responsibility, checkpoint and stored schedule in the console on demand, without changing execution or approval.
+
+Read and display a complete SQLite task record through solar-state, including all columns, frontmatter and Markdown instructions, while preserving execution history and approvals.
 
 ## Scope
-Read-only task-detail endpoint, shared checkpoint parsing, selected-task presentation and synthetic regression tests. Based on main v0.39.1; preserve the native compact approval implementation.
+
+Console-only full-record read endpoint and generic HTML presentation. No manually curated context/schedule projection, task export to Markdown, shared checkpoint parser, MCP changes or solar-state changes. Existing console task-list APIs provide summaries only, so the detail endpoint remains necessary.
+
+The body alone is rendered with a conservative dependency-free Markdown renderer and then sanitized using an HTML allowlist. Unsupported syntax stays text; raw HTML and images are inert. Per-field display preserves unknown/new fields and malformed metadata. Corrupt frontmatter JSON falls back to the raw complete row within the same solar-state read session.
 
 ## Acceptance
-- Task and MCP/state regressions pass, including invalid checkpoints.
-- Selected-task rendering escapes input and preserves execution history.
-- No installation update, live task mutation or publication of business data.
+
+- Complete records, future SQLite columns and additional frontmatter remain visible.
+- Invalid content does not hide other fields or execution history.
+- Markdown is readable and unsafe HTML, attributes and link schemes cannot become active.
+- Reads neither write nor execute tasks; existing native approval code remains unchanged.
 
 ## Validation
-Combined solar-app/state/MCP suites: 522 passed; one route-list assertion initially failed because this split omitted the new expected route. After correcting that test, all three console UI tests passed. Skill packaging, JS syntax and whitespace checks passed. Visual acceptance remains pending; no installation or client sync performed.
+
+All 40 solar-app tests passed, including full-record/future-column reads, malformed frontmatter, safe Markdown rendering, preserved UI history and read-only SQL checks. JS syntax, whitespace and solar-app packaging validation passed. An initial sandboxed run could not bind the temporary test port; the authorized loopback run passed. The user authorized publishing this revision to PR 23 for review. No installation, sync, merge, release or edits to other PR branches. Browser acceptance on an installed client is not claimed.

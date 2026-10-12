@@ -3,6 +3,7 @@ from pathlib import Path
 import app_solar
 import console_data
 import solar_state
+from task_markdown import render_markdown
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
@@ -44,7 +45,8 @@ def get(handler, path, qs, workspace):
             return
         try:
             result = console_data.task_detail(Path(workspace), task_id)
-            handler._send_json(result if result is not None else {"error": "Task not found"},
+            handler._send_json({"record": result, "body_html": render_markdown(result.get("body"))}
+                               if result is not None else {"error": "Task not found"},
                                200 if result is not None else 404)
         except (solar_state.StateError, ValueError) as exc:
             handler._send_json({"error": str(exc), "refused": True}, 503)

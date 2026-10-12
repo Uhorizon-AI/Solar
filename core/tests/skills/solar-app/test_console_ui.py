@@ -152,7 +152,7 @@ const tasks = {
     { id: "ok-1", status: "completed", title: "Finished", provider: null, channel: null, created_at: "2026-04-02", updated_at: "2026-09-02", recurring: false, parent_id: null },
   ],
   by_status: { error: { n: 1, recurring: 0 }, completed: { n: 1, recurring: 0 } },
-  links: [], history: [],
+  links: [], history: [{ task_id: "err-1", ts: "2026-09-01T10:00:00Z", from_status: "active", to_status: "error", actor: "history-fixture" }],
   statuses: ["draft", "planned", "queued", "active", "completed", "error", "archived", "cancelled"],
   transitions: [],
 };
@@ -289,14 +289,17 @@ async function settled() {
 
   page = boot(Object.assign({
     "/api/console/tasks": { body: tasks },
-    "/api/console/task-detail?task_id=err-1": { body: { id: "err-1", context: { agent: "fixture", continuity_checkpoint: { wait: "<script>unsafe</script>", next_check: { at: "2026-10-13", action: "Review", source: "source.md" } } }, context_error: null } },
+    "/api/console/task-detail?task_id=err-1": { body: { record: { id: "err-1", agent: "fixture", future_column: { nested: "2026-10-13", zero: 0, flag: false }, frontmatter: [["unknown_field", "<script>unsafe</script>"], ["broken", { detail: "still visible" }], null], body: "# Instructions", empty: null }, body_html: "<h1>Instructions</h1><p>Safe body</p>" } },
   }, calm));
   await settled();
   page.click({ "data-screen": "tareas" });
   await settled();
   const taskContext = page.els.health.innerHTML;
   if (!taskContext.includes("2026-10-13") || !taskContext.includes("fixture")) throw new Error("task context missing");
+  if (!taskContext.includes("future_column") || !taskContext.includes("unknown_field") || !taskContext.includes("still visible") || !taskContext.includes("false") || !taskContext.includes("null")) throw new Error("complete record lost fields");
+  if (!taskContext.includes("<h1>Instructions</h1>")) throw new Error("Markdown body was not rendered");
   if (taskContext.includes("<script>unsafe")) throw new Error("task context was not escaped");
+  if (!taskContext.includes("history-fixture")) throw new Error("stored history disappeared");
   if (!taskContext.includes("Execution") && !taskContext.includes("History")) throw new Error("execution detail disappeared");
 
   const mandates = {

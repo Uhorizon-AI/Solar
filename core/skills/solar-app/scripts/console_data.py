@@ -595,8 +595,17 @@ def tasks(workspace) -> dict:
     return data
 
 
+def _task_record(store, task_id):
+    try:
+        return store.task_get(task_id)
+    except json.JSONDecodeError:
+        # Corrupt frontmatter remains visible as text without hiding other columns.
+        row = store.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+
 def task_detail(workspace, task_id) -> dict | None:
-    data, error = _with_store(lambda store: runtime_views.console_task_detail(store, task_id))
+    data, error = _with_store(lambda store: _task_record(store, task_id))
     if error is not None:
         raise error
     return data

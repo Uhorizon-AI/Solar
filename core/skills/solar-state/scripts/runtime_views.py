@@ -349,48 +349,6 @@ def _average(total, count):
     return round(total / count)
 
 
-def task_checkpoint(raw):
-    """Decode a stored checkpoint without verifying its recorded effects."""
-    try:
-        checkpoint = json.loads(raw) if raw is not None else None
-    except (TypeError, json.JSONDecodeError):
-        checkpoint = None
-    if not isinstance(checkpoint, dict):
-        raise ValueError('continuity_checkpoint must be a JSON object')
-    return checkpoint
-
-
-def task_context_fields(task):
-    """Decode the published MCP detail contract without loading effects."""
-    fields = {key: solar_state.value_of(value) for key, value in task['frontmatter']}
-    result = {key: fields[key] for key in
-              ('workspace_id', 'agent', 'planet', 'responsibility', 'agent_contract')
-              if key in fields}
-    if 'continuity_checkpoint' in fields:
-        result['continuity_checkpoint'] = task_checkpoint(fields['continuity_checkpoint'])
-    return result
-
-
-def task_configuration_fields(task):
-    keys = ('scheduled_time', 'scheduled_weekdays', 'scheduled_timezone', 'recurring',
-            'recurring_min_interval', 'recurring_max_runs', 'resources',
-            'cleanup_required', 'cleanup_timeout')
-    fields = {key: solar_state.value_of(value) for key, value in task['frontmatter']}
-    return {key: fields[key] for key in keys if key in fields}
-
-
-def console_task_detail(store, task_id):
-    task = store.task_get(task_id)
-    if task is None:
-        return None
-    try:
-        return {'id': task_id, 'context': task_context_fields(task), 'context_error': None,
-                'configuration': task_configuration_fields(task)}
-    except ValueError as exc:
-        return {'id': task_id, 'context': None, 'context_error': str(exc),
-                'configuration': task_configuration_fields(task)}
-
-
 def console_tasks(store):
     """Every task, including archived and planned, plus history and subtasks.
 

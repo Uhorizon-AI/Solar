@@ -107,9 +107,14 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/sol
 Host sleep stops availability. Only one active host should serve the same public
 route. This console is local and does not replace the gateway or transports.
 
-## Task context
+## Complete task detail
 
 Selecting a task reads `/api/console/task-detail?task_id=<id>` on demand.
-The shared solar-state parser preserves the MCP checkpoint contract; invalid
-context is localized to that task and its stored configuration remains readable.
-Recorded evidence does not verify an effect or authorize retrying it.
+The endpoint returns the full solar-state record and sanitized HTML derived only
+from its Markdown body. The console presents every column and frontmatter entry,
+including unfamiliar fields, without a manually maintained projection. Malformed
+frontmatter remains visible as text. Execution history and approvals are unchanged.
+`task_markdown.py` renders a conservative Markdown subset (headings, paragraphs,
+lists, quotes, tables, code, emphasis and links); raw HTML and images remain inert
+text. An HTML allowlist strips attributes and unsafe link destinations. No runtime
+dependencies or network fetches are required. This is a read-only view, not an editor.

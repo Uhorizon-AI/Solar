@@ -7,7 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
-- On-demand task context and stored schedule configuration, including IANA timezone, with checkpoint parsing shared with MCP task views.
+- On-demand complete task records and frontmatter in the console, with sanitized Markdown instructions and existing execution history.
 
 ## [0.39.1] - 2026-10-12
 
