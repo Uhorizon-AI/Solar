@@ -462,8 +462,42 @@ def test_diff_pairs_lines_inside_their_block_not_across_an_insertion(solar_env):
 
 
 def test_every_copy_key_exists_in_both_languages_and_is_used():
+    # A textual scan: a key built dynamically (copy[f"..."]) would be reported as unused.
+    # Select between literal keys instead, e.g. copy["a" if cond else "b"].
     assert set(approval_text.COPY["en"]) == set(approval_text.COPY["es"])
     source = Path(approval_text.__file__).read_text(encoding="utf-8")
     code = source[:source.index("COPY = {")] + source[source.index("def language"):]
     unused = [key for key in approval_text.COPY["en"] if f'"{key}"' not in code and f"'{key}'" not in code]
     assert not unused, unused
+
+
+def test_diff_cost_does_not_depend_on_repetitive_lines(solar_env):
+    import time
+    made = new_task("Repeats", "a\n" * 10000 + "old")
+    args = dict(task_id=made["id"], expected_row_version=made["row_version"], instructions="a\n" * 10000 + "new")
+    started = time.monotonic()
+    message = text("task.update", args)
+    assert time.monotonic() - started < 1.0
+    rows = [row.strip() for row in message.splitlines()]
+    assert "− old" in rows and "+ new" in rows
+
+
+def test_diff_cost_is_bounded_when_everything_differs(solar_env):
+    import time
+    old = "\n".join("x" * (i % 7) + "a" for i in range(3000))
+    new = "\n".join("y" * (i % 5) + "b" for i in range(3000))
+    started = time.monotonic()
+    message = approval_text._diff_lines(approval_text.COPY["en"], old, new)
+    assert time.monotonic() - started < 1.0
+    assert any(row.startswith("− ") for row in message) and any(row.startswith("+ ") for row in message)
+    assert message[-1].startswith("… 6000 lines changed")
+
+
+def test_large_block_still_pairs_the_edited_line_after_inserted_lines(solar_env):
+    long = "A" * 200
+    old = "\n".join([f"{long}-OLD"] + [f"o{i}" for i in range(150)])
+    new = "\n".join([f"ins{i}" for i in range(14)] + [f"{long}-NEW"] + [f"n{i}" for i in range(150)])
+    assert len(old.split("\n")) * len(new.split("\n")) > approval_text._DIFF_BUDGET
+    rows = approval_text._diff_lines(approval_text.COPY["en"], old, new)
+    assert any(row.startswith("− ") and "-OLD" in row for row in rows)
+    assert any(row.startswith("+ ") and "-NEW" in row for row in rows)

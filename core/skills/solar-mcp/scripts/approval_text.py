@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import difflib
 import functools
+import os
 import importlib.util
 import json
 import re
@@ -297,41 +298,75 @@ def _create(copy, args):
     return _head(copy, copy["revise_head" if source else "create_head"], rows, notes)
 
 
+# Work bounds for the edit diff. It runs before the confirmation timer starts and while the server
+# answers nothing else, so its cost must not depend on how repetitive the instructions are.
+_DIFF_BUDGET = 10_000   # line pairs (after trimming) that may go through difflib; beyond: one block
+_MATCH_ROWS = 16        # lines per side considered when pairing a removal with its addition
+
+
+def _similar(a: str, b: str) -> float:
+    """Share of the longer line that is common prefix plus common suffix. Linear time."""
+    head = len(os.path.commonprefix([a, b]))
+    tail = len(os.path.commonprefix([a[head:][::-1], b[head:][::-1]]))
+    return (head + tail) / max(len(a), len(b), 1)
+
+
 def _match(removed: list, added: list) -> dict:
     """removed index -> added index of the most similar line (one to one).
 
     A replaced block can hold an unrelated inserted line next to the edited one, so position
-    alone mispairs them. Large blocks fall back to position to keep the work bounded.
+    alone mispairs them. Only the first `_MATCH_ROWS` lines of each side are considered, which
+    covers every line that can be shown; the score is linear in the line length.
     """
-    if len(removed) * len(added) > 100:
-        return {k: k for k in range(min(len(removed), len(added)))}
-    scored = sorted(((difflib.SequenceMatcher(None, a[:2000], b[:2000], autojunk=False).ratio(), k, j)
-                     for k, a in enumerate(removed) for j, b in enumerate(added)), reverse=True)
+    scored = sorted(((_similar(a, b), -k, -j) for k, a in enumerate(removed[:_MATCH_ROWS])
+                     for j, b in enumerate(added[:_MATCH_ROWS])), reverse=True)
     match, taken = {}, set()
-    for ratio, k, j in scored:
-        if ratio >= 0.5 and k not in match and j not in taken:
-            match[k] = j
-            taken.add(j)
+    for score, k, j in scored:
+        if score >= 0.5 and -k not in match and -j not in taken:
+            match[-k] = -j
+            taken.add(-j)
     return match
+
+
+def _blocks(old_rows: list, new_rows: list) -> list:
+    """(removed, added) blocks of changed lines, in bounded time.
+
+    Common leading and trailing lines are trimmed in linear time first, which settles the usual
+    edit (a few lines changed in a long text) however repetitive the text is. What remains goes
+    through difflib only while its size is small; otherwise it is one block.
+    """
+    head = 0
+    while head < min(len(old_rows), len(new_rows)) and old_rows[head] == new_rows[head]:
+        head += 1
+    tail = 0
+    while tail < min(len(old_rows), len(new_rows)) - head and old_rows[-1 - tail] == new_rows[-1 - tail]:
+        tail += 1
+    old_mid, new_mid = old_rows[head:len(old_rows) - tail], new_rows[head:len(new_rows) - tail]
+    if not old_mid and not new_mid:
+        return []
+    if len(old_mid) * len(new_mid) > _DIFF_BUDGET:
+        return [(old_mid, new_mid)]
+    ops = difflib.SequenceMatcher(None, old_mid, new_mid, autojunk=False).get_opcodes()
+    return [(old_mid[a1:a2], new_mid[b1:b2]) for tag, a1, a2, b1, b2 in ops if tag != "equal"]
 
 
 def _diff_lines(copy, old: str, new: str) -> list:
     """Changed lines, the quota shared between removals and additions so neither side vanishes.
 
-    Lines are paired inside each replaced block (first with first, second with second), never
-    across an unrelated insertion or deletion, and a pair is cut to one window (see `_pair`):
-    a long line whose change lies far to the right still shows the difference on both sides.
+    Within each changed block a removal is paired with the most similar addition (see `_match`),
+    so an inserted line does not shift the pairs, and edited lines are listed before pure
+    insertions and deletions; a pair is cut to one window (see `_pair`), so a
+    long line whose change lies far to the right shows the difference on both sides.
     """
-    old_rows, new_rows = old.split("\n"), new.split("\n")
     minus, plus = [], []          # (line, partner or None)
-    for tag, a1, a2, b1, b2 in difflib.SequenceMatcher(None, old_rows, new_rows, autojunk=False).get_opcodes():
-        if tag == "equal":
-            continue
-        removed, added = old_rows[a1:a2], new_rows[b1:b2]
+    for removed, added in _blocks(old.split("\n"), new.split("\n")):
         match = _match(removed, added)
         minus += [(row, added[match[k]] if k in match else None) for k, row in enumerate(removed)]
         back = {j: k for k, j in match.items()}
         plus += [(row, removed[back[j]] if j in back else None) for j, row in enumerate(added)]
+    # Edited lines (those with a partner) come before pure insertions and deletions.
+    minus.sort(key=lambda entry: entry[1] is None)
+    plus.sort(key=lambda entry: entry[1] is None)
     keep_minus = min(len(minus), max(_DIFF_LINES // 2, _DIFF_LINES - len(plus)))
     keep_plus = min(len(plus), _DIFF_LINES - keep_minus)
     out = []
@@ -473,6 +508,8 @@ def _telegram(copy, args):
     return _head(copy, copy["send_head"], rows, [], [copy["message"] + ":", _quote(_verbatim(args["text"]))])
 
 
+# Defence in depth: a renderer that fails (or a future operation without one) must not print
+# identifiers or versions; today only action.run and forced failures reach the fallback.
 _INTERNAL = {"task_id", "expected_row_version", "approval_id", "revises_task_id"}
 
 
