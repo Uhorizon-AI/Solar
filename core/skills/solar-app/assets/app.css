@@ -70,8 +70,29 @@ body{margin:0}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
 .tiles3{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:12px}
 .tiles2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;align-items:start}
-.split{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start}
-.sticky{position:sticky;top:76px}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+.sticky{position:sticky;top:76px;max-height:calc(100vh - 92px);overflow:auto}
+.trow{grid-template-columns:108px minmax(0,1fr) 68px 76px 52px 112px}
+/* Up to 1600 px of viewport the list is about half of the content width (~490 px at
+   1280, ~570 px at 1440): keep Status, Task and Created; hide Provider (3rd
+   cell), Channel (4th) and Requester (6th). Above 1600 px every column shows. */
+@media (max-width:1600px){.trow{grid-template-columns:108px minmax(0,1fr) 64px}.trow>div:nth-child(3),.trow>div:nth-child(4),.trow>div:nth-child(6){display:none}}
+dl.kv{margin:0}
+.kv.wide{grid-template-columns:150px minmax(0,1fr)}
+.kv dt.k,.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.kv dd{color:var(--text)}
+.kv dd dl.kv{margin:0}
+.kv dd ul{margin:0;padding-left:16px}
+.task-body{margin-top:14px}
+.task-front{margin-top:14px}
+.task-front .kv{margin-top:8px}
+.task-markdown{margin-top:6px;overflow-wrap:anywhere;line-height:1.5;max-width:72ch}
+.task-markdown :is(h1,h2,h3,h4,h5,h6){font-family:'Montserrat',sans-serif;font-size:14px;margin:12px 0 4px}
+.task-markdown :is(p,ul,ol,blockquote,table,pre){margin:6px 0}
+.task-markdown :is(pre,table){display:block;overflow:auto;max-width:100%}
+.task-markdown pre{background:var(--panel2);padding:8px;border-radius:4px}
+.task-markdown blockquote{border-left:3px solid var(--line);padding-left:10px;color:var(--muted)}
+.task-markdown :is(th,td){border:1px solid var(--line);padding:3px 8px;text-align:left}
 .h3{font-family:'Montserrat',sans-serif;font-size:14px;font-weight:700;margin:0}
 .note{font-size:12px;color:var(--muted)}
 .ttl{font-family:'Montserrat',sans-serif;font-size:20px;font-weight:700;margin:0;line-height:1.2}
@@ -90,8 +111,10 @@ body{margin:0}
   .nav .nm,.nav .num{display:none}
   .nav .ico{display:block}
   .nav .badge{position:absolute;top:3px;right:4px}
+}
+@media (max-width:900px){
   .split{grid-template-columns:minmax(0,1fr)}
-  .sticky{position:static}
+  .sticky{position:static;max-height:none;overflow:visible}
 }
 @media (max-width:760px){
   .app{flex-direction:column}

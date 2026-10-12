@@ -50,7 +50,9 @@ def get(handler, path, qs, workspace):
         try:
             result = console_data.task_detail(Path(workspace), task_id, full)
         except Exception as exc:  # any unexpected read or decode failure: fixed text, no detail
-            LOGGER.warning("task-detail failed: %s", type(exc).__name__)  # class only, never the message
+            # Route-specific line (the body says "Task detail unavailable"); the generic handler in
+            # host_server logs "console route ... failed". Class only, never the message.
+            LOGGER.warning("task-detail failed: %s", type(exc).__name__)
             handler._send_json({"error": "Task detail unavailable", "refused": True}, 503)
             return
         if result is None:

@@ -112,6 +112,43 @@ class ConsoleUiTests(unittest.TestCase):
                     thread.join()
 
 
+    def test_task_list_hides_provider_channel_and_requester_up_to_1600px(self):
+        """Parses the CSS and the header markup, so spacing or ordering changes do not break it."""
+        css = (ASSETS / "app.css").read_text(encoding="utf-8")
+        js = (ASSETS / "app.js").read_text(encoding="utf-8")
+        start = js.index('class="row hd trow"')
+        order = re.findall(r't\("col_(\w+)"\)', js[start:js.index("rows.join", start)])
+        self.assertEqual(len(order), 6)
+        self.assertEqual(len(set(order)), 6, "six unique header columns")
+        self.assertEqual(order, ["status", "task", "provider", "channel", "created", "requester"], "header column order")
+
+        def block(source, opener):
+            start = re.search(opener, source)
+            self.assertIsNotNone(start, opener)
+            depth, i = 0, start.end() - 1
+            for j in range(i, len(source)):
+                depth += {"{": 1, "}": -1}.get(source[j], 0)
+                if depth == 0:
+                    return source[i + 1:j]
+            self.fail("unbalanced braces")
+
+        media = block(css, r"@media\s*\(\s*max-width\s*:\s*1600px\s*\)\s*\{")
+        self.assertEqual(len(re.findall(r"max-width\s*:\s*1600px", css)), 1)
+        hidden = set()
+        for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", media):
+            if re.search(r"display\s*:\s*none", body):
+                hidden |= {int(n) for n in re.findall(r"\.trow\s*>\s*div\s*:\s*nth-child\(\s*(\d+)\s*\)", selectors)}
+        names = {order[i - 1] for i in hidden}
+        self.assertEqual(names, {"provider", "channel", "requester"})
+        self.assertEqual({n for n in order} - names, {"status", "task", "created"})
+
+        def columns(body):
+            value = re.search(r"\.trow\s*\{[^}]*grid-template-columns\s*:\s*([^;}]*)", body).group(1)
+            return len(re.findall(r"(?:minmax\([^)]*\)|\S+)", value.strip()))
+
+        self.assertEqual(columns(media), 3, "three columns up to 1600 px")
+        self.assertEqual(columns(css.replace(media, "")), 6, "six columns when wider")
+
     def test_screens_follow_the_routes(self):
         result = subprocess.run(
             ["node", "-e", _JS_HARNESS, str(ASSETS / "app.js")],
@@ -335,14 +372,14 @@ async function settled() {
   await settled();
   let view = page.els.health.innerHTML;
   need(view, "Context and follow-up", "curated title");
-  need(view, "<dt>Agent</dt><dd>fixture-agent</dd>", "curated agent");
+  need(view, "<dt class=\"k\">Agent</dt><dd>fixture-agent</dd>", "curated agent");
   need(view, "Compare the weekly report", "next check");
   need(view, "2026-10-13", "check date");
   need(view, "&lt;script&gt;waiting()&lt;/script&gt;", "escaped wait");
   lack(view, "<script>waiting", "curated block escaping");
   need(view, "09:30", "configured time");
   need(view, "Europe/Madrid", "stored zone");
-  need(view, "1, 3", "weekdays");
+  need(view, "<dt class=\"k\">Days</dt><dd>Mon, Wed</dd>", "weekday names");
   need(view, "res-a, res-b", "resources");
   need(view, "does not verify an effect", "effect note");
   need(view, "history-fixture", "stored history actor");
@@ -363,13 +400,17 @@ async function settled() {
   need(view, 'aria-expanded="true"', "button expanded");
   need(view, "future_column", "future column");
   need(view, "2026-10-14", "nested value");
+  lack(view, "unknown_field", "frontmatter is folded by default");
+  page.click({ "data-front": "err-1" });
+  await settled();
+  view = page.els.health.innerHTML;
   need(view, "unknown_field", "unknown frontmatter field");
   need(view, "still visible", "malformed entry");
   need(view, "<dd><span", "scalar values");
   need(view, ">false<", "false value");
   need(view, ">0<", "zero value");
   need(view, ">null<", "null value");
-  need(view, "<dt>Instructions</dt>", "body label");
+  need(view, "<div class=\"lbl\">Instructions</div>", "body label");
   need(view, '<div class="task-markdown"><h1>Instructions</h1><p>Safe body</p></div>', "body html");
   need(view, "&lt;script&gt;unsafe()&lt;/script&gt;", "escaped frontmatter");
   lack(view, "<script>unsafe", "frontmatter escaping");
@@ -389,7 +430,8 @@ async function settled() {
   view = page.els.health.innerHTML;
   need(view, "07:00", "second task time");
   need(view, "Host timezone (no stored zone)", "zone fallback");
-  need(view, "No recorded context", "empty context note");
+  need(view, "No recorded checkpoint", "configuration without a checkpoint");
+  lack(view, "No recorded context", "no contradictory note beside configured fields");
   lack(view, "future_column", "record leaked to another task");
 
   const broken = { id: "err-1", context: null, context_error: "checkpoint_invalid", configuration: curated.configuration };
@@ -438,14 +480,14 @@ async function settled() {
   await settled();
   view = page.els.health.innerHTML;
   need(view, "Contexto y seguimiento", "spanish title");
-  need(view, "<dt>Agente</dt>", "spanish agent label");
+  need(view, "<dt class=\"k\">Agente</dt>", "spanish agent label");
   need(view, "Próxima comprobación", "spanish next check");
   need(view, "Zona del equipo (sin zona guardada)", "spanish zone fallback");
   need(view, "no verifica el efecto", "spanish effect note");
   need(view, "Registro completo", "spanish button");
   page.click({ "data-full": "err-1" });
   await settled();
-  need(page.els.health.innerHTML, "<dt>Instrucciones</dt>", "spanish body label");
+  need(page.els.health.innerHTML, "<div class=\"lbl\">Instrucciones</div>", "spanish body label");
 
   // Recurring cadence is visible even without a fixed time.
   const cadence = (extra) => Object.assign({}, curated, { context: null, configuration: extra });
@@ -461,15 +503,15 @@ async function settled() {
     return open.els.health.innerHTML;
   };
   view = await interval({ recurring: "true", recurring_min_interval: "86400" });
-  need(view, "<dt>Recurrence</dt><dd>Recurring</dd>", "recurrence");
-  need(view, "<dt>Minimum interval</dt><dd>24 h</dd>", "daily cadence without a fixed time");
+  need(view, "<dt class=\"k\">Recurrence</dt><dd>Recurring</dd>", "recurrence");
+  need(view, "<dt class=\"k\">Minimum interval</dt><dd>24 h</dd>", "daily cadence without a fixed time");
   need(await interval({ recurring: true, recurring_min_interval: "5400" }), "<dd>90 min</dd>", "minutes");
   need(await interval({ recurring: "true", recurring_min_interval: 45 }), "<dd>45 s</dd>", "seconds");
   lack(await interval({ recurring: "false" }), "Minimum interval", "no interval when none stored");
   lack(await interval({ recurring_min_interval: "soon" }), "Minimum interval", "unreadable interval");
   view = await interval({ recurring: "true", recurring_min_interval: "86400" }, "es");
-  need(view, "<dt>Intervalo mínimo</dt><dd>24 h</dd>", "spanish cadence");
-  need(view, "<dt>Recurrencia</dt><dd>Recurrente</dd>", "spanish recurrence");
+  need(view, "<dt class=\"k\">Intervalo mínimo</dt><dd>24 h</dd>", "spanish cadence");
+  need(view, "<dt class=\"k\">Recurrencia</dt><dd>Recurrente</dd>", "spanish recurrence");
 
   // A newer updated_at refreshes the data but keeps the open record open.
   const newer = JSON.parse(JSON.stringify(tasks));
@@ -550,6 +592,172 @@ async function settled() {
   need(await shaped({}), "No recorded context", "truly empty context");
   need(await shaped(null), "No recorded context", "null context");
   lack(await shaped({ agent: "shown-agent", continuity_checkpoint: { next_check: "tomorrow" } }), "open it in Complete record", "no note when something is shown");
+
+  // workspace_id is part of the contract and is shown.
+  view = await shaped({ workspace_id: "ws-fixture-1", agent: "fixture-agent" });
+  need(view, "<dt class=\"k\">Workspace</dt><dd>ws-fixture-1</dd>", "workspace id");
+  need(await shaped({ workspace_id: "ws-fixture-1" }, "es"), "<dt class=\"k\">Espacio de trabajo</dt><dd>ws-fixture-1</dd>", "spanish workspace id");
+
+  // A context or configuration that is not an object must not be read by key.
+  const wrongShapes = async (context, configuration) => {
+    const open = boot(detailRoutes({
+      "/api/console/task-detail?task_id=err-1": { body: { id: "err-1", context, context_error: null, configuration } },
+    }));
+    await settled();
+    open.click({ "data-screen": "tareas" });
+    await settled();
+    return open.els.health.innerHTML;
+  };
+  for (const [context, configuration] of [[[], "x"], ["text", []], [7, 7], [null, null], [["a"], { scheduled_time: "08:15" }]]) {
+    view = await wrongShapes(context, configuration);
+    need(view, "Context and follow-up", "block still drawn for " + JSON.stringify([context, configuration]));
+    need(view, "history-fixture", "history still drawn");
+    lack(view, "native code", "inherited members");
+    lack(view, "undefined", "undefined text");
+    lack(view, "[object", "raw objects");
+  }
+  need(await wrongShapes([], "x"), "No recorded context", "array context is empty context");
+  need(await wrongShapes(["a"], { scheduled_time: "08:15" }), "08:15", "real configuration beside a wrong context");
+
+  // Message precedence: nothing / configuration only / unexpected shape.
+  const configOnly = await wrongShapes({}, { recurring: "true", recurring_min_interval: "3600", recurring_max_runs: "0" });
+  need(configOnly, "No recorded checkpoint", "configuration without checkpoint");
+  lack(configOnly, "No recorded context", "no contradictory message beside configured fields");
+  need(configOnly, "<dt class=\"k\">Maximum runs</dt><dd>Unlimited</dd>", "0 runs means unlimited");
+  need(await wrongShapes({}, {}), "No recorded context", "nothing recorded at all");
+  lack(await wrongShapes({}, {}), "Time zone", "no fallback zone without a configured time");
+  need(await wrongShapes({}, { scheduled_time: "08:00" }), "Host timezone (no stored zone)", "fallback zone beside a configured time");
+  need(await wrongShapes({}, { recurring_max_runs: 5 }), "<dd>5</dd>", "a real run limit is shown as is");
+
+  // Weekday names, in both languages, with a fallback for odd values.
+  const days = async (value, language) => {
+    const open = boot(detailRoutes({
+      "/api/console/tasks": { body: language ? Object.assign({}, tasks, { language }) : tasks },
+      "/api/console/task-detail?task_id=err-1": { body: { id: "err-1", context: {}, context_error: null, configuration: { scheduled_weekdays: value } } },
+    }));
+    await settled();
+    open.click({ "data-screen": "tareas" });
+    await settled();
+    return open.els.health.innerHTML;
+  };
+  need(await days([1, 2, 3, 4, 5, 6, 7]), "<dd>Mon, Tue, Wed, Thu, Fri, Sat, Sun</dd>", "all english names");
+  need(await days("1,3, 5"), "<dd>Mon, Wed, Fri</dd>", "stored comma string");
+  need(await days([5], "es"), "<dt class=\"k\">Días</dt><dd>vie</dd>", "spanish name");
+  need(await days([1, 7], "es"), "<dd>lun, dom</dd>", "spanish names");
+  need(await days([9, "x", 3]), "<dd>9, x, Wed</dd>", "odd values fall back to the raw token");
+  lack(await days([]), "<dt class=\"k\">Days</dt>", "no days, no row");
+
+  // The complete record keeps the frontmatter folded and the instructions apart.
+  page = boot(detailRoutes());
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-full": "err-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "future_column", "columns listed");
+  need(view, "<div class=\"task-body\"><div class=\"lbl\">Instructions</div>", "instructions block");
+  need(view, "<h1>Instructions</h1>", "markdown body");
+  need(view, "Frontmatter", "frontmatter title");
+  need(view, "data-front=\"err-1\" aria-expanded=\"false\"", "frontmatter folded");
+  lack(view, "unknown_field", "frontmatter content hidden while folded");
+  if (view.indexOf("task-body") > view.indexOf("task-front")) throw new Error("frontmatter must come after the instructions");
+  page.click({ "data-front": "err-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, "data-front=\"err-1\" aria-expanded=\"true\"", "frontmatter unfolded");
+  need(view, "unknown_field", "frontmatter content shown");
+  need(view, "&lt;script&gt;unsafe()&lt;/script&gt;", "frontmatter escaped");
+  lack(view, "<script>unsafe", "frontmatter not injected");
+  need(view, "future_column", "columns remain after unfolding");
+  page.click({ "data-front": "err-1" });
+  await settled();
+  lack(page.els.health.innerHTML, "unknown_field", "folded again");
+
+  // The list adapts by class, not by inline widths.
+  view = page.els.health.innerHTML;
+  need(view, "class=\"row trow pick", "task rows use the responsive grid");
+  need(view, "class=\"row hd trow\"", "header uses the responsive grid");
+  lack(view, "grid-template-columns:108px", "no fixed inline columns on the list");
+
+  // History: newest first, each event keeps its own date, the newest carries the highlight.
+  const threeEvents = JSON.parse(JSON.stringify(tasks));
+  threeEvents.history = [
+    { task_id: "err-1", ts: "2026-09-01T08:00:00Z", from_status: null, to_status: "queued", actor: "first-actor" },
+    { task_id: "err-1", ts: "2026-09-01T09:00:00Z", from_status: "queued", to_status: "active", actor: "second-actor" },
+    { task_id: "err-1", ts: "2026-09-02T10:00:00Z", from_status: "active", to_status: "error", actor: "third-actor" },
+    { task_id: "ok-1", ts: "2026-09-03T10:00:00Z", from_status: "active", to_status: "completed", actor: "other-task-actor" },
+  ];
+  page = boot(detailRoutes({ "/api/console/tasks": { body: threeEvents } }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  view = page.els.health.innerHTML;
+  const at = (text) => view.indexOf(text);
+  if (!(at("third-actor") > 0 && at("third-actor") < at("second-actor") && at("second-actor") < at("first-actor"))) {
+    throw new Error("history must list the newest event first");
+  }
+  lack(view, "other-task-actor", "another task's history");
+  if (at('<div class="now"') < 0 || at('<div class="now"') > at("third-actor") || at('<div class="now"') < at("History")) {
+    throw new Error("the newest event must carry the highlight");
+  }
+  if ((view.match(/class="now"/g) || []).length !== 1) throw new Error("exactly one highlighted event");
+  need(view, "Active → Error · third-actor", "newest transition");
+  need(view, "Queued → Active · second-actor", "middle transition");
+  need(view, "Queued · first-actor", "first transition");
+  // Dates are the events' own, in the same descending order.
+  const dates = view.slice(at("History")).match(/<div class="note">[^<]*(?:Sept?|Oct)[^<]*<\/div>/g) || [];
+  if (dates.length !== 3) throw new Error("each event keeps its date: " + JSON.stringify(dates));
+
+  // Zero means no limit for any integer-valued zero; other values are shown as stored.
+  const runs = async (value) => (await wrongShapes({}, { recurring_max_runs: value }));
+  for (const zero of [0, "0", "00", " 0 ", 0.0]) {
+    need(await runs(zero), "<dt class=\"k\">Maximum runs</dt><dd>Unlimited</dd>", "zero as " + JSON.stringify(zero));
+  }
+  for (const other of [-1, "abc", 1.5, 7, "10"]) {
+    const html = await runs(other);
+    need(html, "<dt class=\"k\">Maximum runs</dt><dd>" + other + "</dd>", "shown as stored: " + JSON.stringify(other));
+    lack(html, "Unlimited", "not unlimited: " + JSON.stringify(other));
+  }
+
+  // Weekday tokens outside 1-7 are kept as they are beside valid ones.
+  need(await days([0, 1, 8, true, 7]), "<dd>0, Mon, 8, true, Sun</dd>", "out-of-range tokens");
+  need(await days("0, 3, x"), "<dd>0, Wed, x</dd>", "out-of-range tokens in a stored string");
+
+  // The frontmatter folds when the record closes and survives a refresh while the record stays open.
+  const newerAgain = JSON.parse(JSON.stringify(tasks));
+  newerAgain.tasks[0].updated_at = "2026-09-09";
+  let releaseAgain;
+  const holdAgain = new Promise((resolve) => { releaseAgain = resolve; });
+  page = boot(detailRoutes({ "/api/console/tasks": { sequence: [{ body: tasks }, { body: newerAgain, hold: holdAgain }] } }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-screen": "resumen" });
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-full": "err-1" });
+  await settled();
+  page.click({ "data-front": "err-1" });
+  await settled();
+  need(page.els.health.innerHTML, "unknown_field", "frontmatter open before the refresh");
+  releaseAgain();
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, 'data-front="err-1" aria-expanded="true"', "frontmatter stays open across a refresh");
+  need(view, "unknown_field", "frontmatter content after the refresh");
+  page.click({ "data-full": "err-1" });
+  await settled();
+  page.click({ "data-full": "err-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, 'data-front="err-1" aria-expanded="false"', "frontmatter folds when the record closes");
+  lack(view, "unknown_field", "folded content after reopening");
+  // Toggling a frontmatter whose record state is unknown is a harmless no-op.
+  page.click({ "data-front": "never-opened" });
+  await settled();
+  need(page.els.health.innerHTML, "Context and follow-up", "screen intact after a stray toggle");
 
   const mandates = {
     defined: [

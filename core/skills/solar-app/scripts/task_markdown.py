@@ -4,15 +4,39 @@ Unsupported syntax stays text. Raw HTML is never interpreted. A final HTML
 allowlist also constrains the generated markup and link destinations.
 """
 import html
+import ipaddress
 from html.parser import HTMLParser
 import re
 from urllib.parse import urlsplit
 
 
-# The authority must be a plain host with an optional numeric port: no userinfo
-# (`good.test@evil.test` misleads) and no stray characters such as `&` or `=`
-# that make the real host differ from the visible one.
-_HOST = re.compile(r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::[0-9]{1,5})?")
+# The authority must be a plain ASCII host with an optional port from 1 to 65535:
+# no userinfo (`good.test@evil.test` misleads), no stray characters such as `&`
+# or `=` that make the real host differ from the visible one, and no
+# internationalized names (they stay text rather than risk look-alike hosts).
+# Names use LDH labels: 1 to 63 letters, digits or hyphens, starting and ending
+# with a letter or digit. A bracketed host must be a pure IPv6 address: IPv4
+# literals inside the brackets and IPv4-mapped addresses are not links.
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_HOST = re.compile(r"(?:\[([0-9A-Fa-f:.]+)\]|(" + _LABEL + r"(?:\." + _LABEL + r")*))(?::([0-9]{1,5}))?")
+
+
+def _plain_authority(netloc):
+    match = _HOST.fullmatch(netloc)
+    if not match:
+        return False
+    if match.group(1) is not None:
+        if "." in match.group(1):
+            return False
+        try:
+            address = ipaddress.IPv6Address(match.group(1))
+        except ValueError:
+            return False
+        if address.ipv4_mapped is not None:
+            return False
+    elif len(match.group(2)) > 253:
+        return False
+    return match.group(3) is None or 1 <= int(match.group(3)) <= 65535
 
 
 def _safe_link(value):
@@ -32,7 +56,7 @@ def _safe_link(value):
         return False
     scheme = parts.scheme.lower()
     if scheme in ("http", "https"):
-        return value[len(scheme):].startswith("://") and bool(_HOST.fullmatch(parts.netloc))
+        return value[len(scheme):].startswith("://") and _plain_authority(parts.netloc)
     return scheme == "mailto" and bool(parts.path)
 
 

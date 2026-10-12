@@ -24,6 +24,7 @@
       tc_this_task_s_stored_record_could_not_be_r: "This task's stored record could not be read.",
       tc_this_task_s_context_could_not_be_read: "This task's context could not be read.",
       tc_context_and_follow_up: "Context and follow-up",
+      tc_workspace: "Workspace",
       tc_agent: "Agent",
       tc_planet: "Planet",
       tc_responsibility: "Responsibility",
@@ -51,7 +52,11 @@
       tc_configured_time: "Configured time",
       tc_time_zone: "Time zone",
       tc_host_timezone_no_stored_zone: "Host timezone (no stored zone)",
-      tc_iso_weekdays_monday_1: "ISO weekdays, Monday = 1",
+      tc_weekdays: "Days",
+      tc_day_1: "Mon", tc_day_2: "Tue", tc_day_3: "Wed", tc_day_4: "Thu", tc_day_5: "Fri", tc_day_6: "Sat", tc_day_7: "Sun",
+      tc_unlimited: "Unlimited",
+      tc_no_recorded_checkpoint: "No recorded checkpoint. Execution state and history remain available.",
+      tc_frontmatter: "Frontmatter",
       tc_maximum_runs: "Maximum runs",
       tc_reserved_resources: "Reserved resources",
       tc_context_shape_note: "There is context data in a shape this view does not show; open it in Complete record.",
@@ -169,6 +174,7 @@
       tc_this_task_s_stored_record_could_not_be_r: "No se pudo leer el registro guardado de esta tarea.",
       tc_this_task_s_context_could_not_be_read: "No se pudo leer el contexto de esta tarea.",
       tc_context_and_follow_up: "Contexto y seguimiento",
+      tc_workspace: "Espacio de trabajo",
       tc_agent: "Agente",
       tc_planet: "Planeta",
       tc_responsibility: "Responsabilidad",
@@ -196,7 +202,11 @@
       tc_configured_time: "Hora configurada",
       tc_time_zone: "Zona horaria",
       tc_host_timezone_no_stored_zone: "Zona del equipo (sin zona guardada)",
-      tc_iso_weekdays_monday_1: "Días ISO, lunes = 1",
+      tc_weekdays: "Días",
+      tc_day_1: "lun", tc_day_2: "mar", tc_day_3: "mié", tc_day_4: "jue", tc_day_5: "vie", tc_day_6: "sáb", tc_day_7: "dom",
+      tc_unlimited: "Sin límite",
+      tc_no_recorded_checkpoint: "Sin checkpoint registrado. El estado de ejecución y su historial se conservan.",
+      tc_frontmatter: "Frontmatter",
       tc_maximum_runs: "Máximo de ejecuciones",
       tc_reserved_resources: "Recursos reservados",
       tc_context_shape_note: "Hay datos de contexto con una forma que esta vista no muestra; ábrelos en Registro completo.",
@@ -789,7 +799,7 @@
       var task = row[0], level = row[1], nKids = row[2], dim = row[3];
       var spec = ts(task.status);
       var cls = (task.status === "error" ? "err " : "") + (ui.task === task.id ? "sel " : "") + (dim ? "dim" : "");
-      return '<div class="row pick ' + cls + '" style="grid-template-columns:108px minmax(0,1fr) 68px 76px 52px 112px" data-task="' + esc(task.id) + '">' +
+      return '<div class="row trow pick ' + cls + '" data-task="' + esc(task.id) + '">' +
         "<div>" + pill(spec.tone, spec.glyph, spec.label) + "</div>" +
         '<div class="w100" style="min-width:0;padding-left:' + (level ? 18 : 0) + 'px"><div class="trunc">' + (level ? "└ " : "") + esc(task.title || task.id) + "</div>" +
         '<div class="mono muted" style="font-size:10.5px">' + esc(String(task.id).slice(0, 8)) + (nKids ? " · " + nKids + " " + t("subtasks") : "") + (task.recurring ? " · ↻" : "") + "</div></div>" +
@@ -805,7 +815,7 @@
     return '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + filterHtml + "</div>" +
       '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div style="padding:10px 12px" class="note">' + esc(t("showing")) +
       visible + esc(t("of")) + (filters.filter(function (filter) { return filter.key === ui.filter; })[0] || { n: total }).n + "</div>" +
-      '<div class="row hd" style="grid-template-columns:108px minmax(0,1fr) 68px 76px 52px 112px"><div>' + esc(t("col_status")) + "</div><div>" + esc(t("col_task")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("col_created")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
+      '<div class="row hd trow"><div>' + esc(t("col_status")) + "</div><div>" + esc(t("col_task")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("col_created")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
       t("gap") + "</div></div></div>" + rows.join("") + "</div>" + detail + "</div>" +
       '<div class="card" style="padding:0;overflow:hidden"><button type="button" class="chip" style="margin:10px 12px" data-machine="1" aria-expanded="' +
       (ui.machine ? "true" : "false") + '">' + (ui.machine ? "▾ " : "▸ ") + esc(t("state_machine")) + "</button>" + machine + "</div>";
@@ -814,11 +824,12 @@
   function taskDetail(task, byId, kids, history) {
     var spec = ts(task.status);
     var children = (kids[task.id] || []).map(function (id) { return byId[id]; }).filter(Boolean);
-    var events = history.filter(function (event) { return event.task_id === task.id; });
+    // The endpoint lists events oldest first (ts, seq); the detail shows the newest on top.
+    var events = history.filter(function (event) { return event.task_id === task.id; }).reverse();
     var lines = events.map(function (event, index) {
       var what = (event.from_status ? ts(event.from_status).label + " → " : "") + ts(event.to_status).label;
       if (event.actor) what += " · " + event.actor;
-      return '<div class="' + (index === events.length - 1 ? "now" : "") + '"><div style="font-weight:500">' + esc(what) + '</div><div class="note">' + esc(fmt(event.ts, true)) + "</div></div>";
+      return '<div class="' + (index === 0 ? "now" : "") + '"><div style="font-weight:500">' + esc(what) + '</div><div class="note">' + esc(fmt(event.ts, true)) + "</div></div>";
     }).join("") || '<div class="note">' + esc(t("no_history")) + "</div>";
     var kidHtml = children.map(function (child) {
       var childSpec = ts(child.status);
@@ -841,6 +852,24 @@
   // inherited members such as String.prototype.at.
   function asObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+  }
+
+  function weekdaysText(value) {
+    var parts = Array.isArray(value) ? value : (typeof value === "string" ? value.split(",") : (value == null ? [] : [value]));
+    var names = [];
+    parts.forEach(function (part) {
+      if (part !== null && typeof part === "object") return;
+      var token = String(part).trim();
+      if (!token) return;
+      names.push(/^[1-7]$/.test(token) ? t("tc_day_" + token) : token);
+    });
+    return names.length ? names.join(", ") : null;
+  }
+
+  function runsText(value) {
+    if (value == null || value === "") return null;
+    // Any integer-valued zero (0, "0", "00", " 0 ", 0.0) means no limit; everything else is shown as stored.
+    return /^[-+]?0+(\.0+)?$/.test(String(value).trim()) ? t("tc_unlimited") : value;
   }
 
   function intervalText(value) {
@@ -878,7 +907,7 @@
     if (saved.loading) return heading + '<p class="note">' + esc(t("reading")) + '</p></section>';
     if (saved.refused) return heading + '<p class="note" role="alert">' + esc(t("tc_this_task_s_context_could_not_be_read")) + '</p>' + fullRecord(task) + '</section>';
     var data = saved.data || {};
-    var context = data.context && typeof data.context === "object" ? data.context : {};
+    var context = asObject(data.context);
     var cp = asObject(context.continuity_checkpoint);
     var verified = asObject(cp.last_verified_result);
     var next = asObject(cp.next_check);
@@ -887,8 +916,9 @@
     var fields = [];
     function field(label, value) {
       if (Array.isArray(value)) value = value.every(function (item) { return item == null || typeof item !== "object"; }) ? value.join(", ") : null;
-      if (value != null && typeof value !== "object" && String(value)) fields.push('<dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd>');
+      if (value != null && typeof value !== "object" && String(value)) fields.push('<dt class="k">' + esc(label) + '</dt><dd>' + esc(value) + '</dd>');
     }
+    field(t("tc_workspace"), context.workspace_id);
     field(t("tc_agent"), context.agent);
     field(t("tc_planet"), context.planet);
     field(t("tc_responsibility"), context.responsibility);
@@ -908,18 +938,18 @@
     if (effect) field(t("tc_effect_state"), effect === "effect_uncertain" ? (t("tc_uncertain_verify_before_retrying")) : (t("tc_recorded_state_not_verified_on_opening")));
     var contextFields = fields.length;
     var unshown = Object.keys(cp).length > 0 || Object.keys(context).some(function (name) { return context[name] !== null && typeof context[name] === "object"; });
-    var configuration = data.configuration && typeof data.configuration === "object" ? data.configuration : {};
+    var configuration = asObject(data.configuration);
     if (configuration.recurring === true || configuration.recurring === "true") field(t("tc_recurrence"), t("tc_recurring"));
     field(t("tc_minimum_interval"), intervalText(configuration.recurring_min_interval));
     field(t("tc_configured_time"), configuration.scheduled_time);
-    field(t("tc_time_zone"), configuration.scheduled_timezone || (t("tc_host_timezone_no_stored_zone")));
-    field(t("tc_iso_weekdays_monday_1"), configuration.scheduled_weekdays);
-    field(t("tc_maximum_runs"), configuration.recurring_max_runs);
+    field(t("tc_time_zone"), configuration.scheduled_timezone || (configuration.scheduled_time ? t("tc_host_timezone_no_stored_zone") : null));
+    field(t("tc_weekdays"), weekdaysText(configuration.scheduled_weekdays));
+    field(t("tc_maximum_runs"), runsText(configuration.recurring_max_runs));
     field(t("tc_reserved_resources"), configuration.resources);
     var message = "";
     if (data.context_error) message = '<p class="note" role="alert">' + esc(contextErrorText(data.context_error)) + '</p>';
-    else if (!contextFields) message = '<p class="note">' + esc(t(unshown ? "tc_context_shape_note" : "tc_no_recorded_context_execution_state_and")) + '</p>';
-    return heading + message + (fields.length ? '<dl>' + fields.join("") + '</dl>' : '') +
+    else if (!contextFields) message = '<p class="note">' + esc(t(unshown ? "tc_context_shape_note" : (fields.length ? "tc_no_recorded_checkpoint" : "tc_no_recorded_context_execution_state_and"))) + '</p>';
+    return heading + message + (fields.length ? '<dl class="kv wide">' + fields.join("") + '</dl>' : '') +
       '<p class="note">' + esc(t("tc_reading_this_record_does_not_verify_an_e")) + '</p>' +
       fullRecord(task) + '</section>';
   }
@@ -936,21 +966,34 @@
     var data = state.data || {};
     var record = data.record;
     if (!record || typeof record !== "object" || Array.isArray(record)) return button + '<p class="note">' + esc(t("tc_record_unavailable")) + '</p>';
-    return button + '<dl class="task-record">' + Object.keys(record).map(function (name) {
-      var value = record[name];
-      var content;
-      if (name === "body" && typeof value === "string" && typeof data.body_html === "string") {
-        // The only place server HTML enters: the allowlist-sanitized Markdown of the body.
-        content = '<div class="task-markdown">' + data.body_html + '</div>';
-      } else if (name === "frontmatter" && Array.isArray(value)) {
-        content = '<dl>' + value.map(function (pair) {
-          if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string") return '<dd>' + recordValue(pair) + '</dd>';
-          return '<dt>' + esc(pair[0]) + '</dt><dd>' + recordValue(pair[1]) + '</dd>';
-        }).join("") + '</dl>';
-      } else content = recordValue(value);
-      var heading = name === "body" ? (t("tc_instructions")) : name;
-      return '<dt>' + esc(heading) + '</dt><dd>' + content + '</dd>';
+    var names = Object.keys(record).filter(function (name) { return name !== "frontmatter" && name !== "body"; });
+    var columns = '<dl class="kv wide task-record">' + names.map(function (name) {
+      return '<dt class="k">' + esc(name) + '</dt><dd>' + recordValue(record[name]) + '</dd>';
     }).join("") + '</dl>';
+    var body = "";
+    if ("body" in record) {
+      var text = record.body;
+      // The only place server HTML enters: the allowlist-sanitized Markdown of the body.
+      var inner = typeof text === "string" && typeof data.body_html === "string"
+        ? '<div class="task-markdown">' + data.body_html + '</div>' : recordValue(text);
+      body = '<div class="task-body"><div class="lbl">' + esc(t("tc_instructions")) + '</div>' + inner + '</div>';
+    }
+    var front = "";
+    if ("frontmatter" in record) {
+      var fm = record.frontmatter;
+      front = '<div class="task-front"><button type="button" class="chip" data-front="' + esc(task.id) + '" aria-expanded="' + (state.frontOpen ? "true" : "false") + '">' +
+        (state.frontOpen ? "▾ " : "▸ ") + esc(t("tc_frontmatter")) + '</button>';
+      if (state.frontOpen) {
+        front += Array.isArray(fm)
+          ? '<dl class="kv wide">' + fm.map(function (pair) {
+            if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string") return '<dt class="k"></dt><dd>' + recordValue(pair) + '</dd>';
+            return '<dt class="k">' + esc(pair[0]) + '</dt><dd>' + recordValue(pair[1]) + '</dd>';
+          }).join("") + '</dl>'
+          : recordValue(fm);
+      }
+      front += '</div>';
+    }
+    return button + columns + body + front;
   }
 
   function loadFull(task, state) {
@@ -970,12 +1013,19 @@
     });
   }
 
+  function toggleFront(id) {
+    var state = taskFull[id] || (taskFull[id] = {});
+    state.frontOpen = !state.frontOpen;
+    if (ui.screen === "tareas" && cache.tareas) paint("tareas", cache.tareas);
+  }
+
   function toggleFull(id) {
     var task = null;
     ((cache.tareas && cache.tareas.data && cache.tareas.data.tasks) || []).forEach(function (row) { if (row.id === id) task = row; });
     if (!task) return;
     var state = taskFull[task.id] || (taskFull[task.id] = {});
     state.open = !state.open;
+    if (!state.open) state.frontOpen = false;
     if (state.open && (state.stamp !== (task.updated_at || "") || (!state.data && !state.loading))) loadFull(task, state);
     if (ui.screen === "tareas" && cache.tareas) paint("tareas", cache.tareas);
   }
@@ -983,7 +1033,7 @@
   function recordValue(value) {
     if (value === null) return '<span class="note">null</span>';
     if (Array.isArray(value)) return '<ul>' + value.map(function (item) { return '<li>' + recordValue(item) + '</li>'; }).join("") + '</ul>';
-    if (typeof value === "object") return '<dl>' + Object.keys(value).map(function (key) { return '<dt>' + esc(key) + '</dt><dd>' + recordValue(value[key]) + '</dd>'; }).join("") + '</dl>';
+    if (typeof value === "object") return '<dl class="kv wide">' + Object.keys(value).map(function (key) { return '<dt class="k">' + esc(key) + '</dt><dd>' + recordValue(value[key]) + '</dd>'; }).join("") + '</dl>';
     return '<span style="white-space:pre-wrap;overflow-wrap:anywhere">' + esc(value) + '</span>';
   }
 
@@ -1256,6 +1306,11 @@
     if (task) {
       ui.task = task.getAttribute("data-task");
       if (cache.tareas) paint("tareas", cache.tareas);
+      return;
+    }
+    var front = event.target.closest("[data-front]");
+    if (front) {
+      toggleFront(front.getAttribute("data-front"));
       return;
     }
     var full = event.target.closest("[data-full]");

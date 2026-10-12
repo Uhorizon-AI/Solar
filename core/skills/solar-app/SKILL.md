@@ -136,10 +136,26 @@ conservative subset (headings, paragraphs, lists, quotes, rules, tables, code,
 `*` emphasis, and links); underscores are never emphasis, only explicit http,
 https and mailto links are links, and raw HTML and images stay inert text. No
 dependencies or network fetches. Not supported, by design: link destinations
-containing parentheses (the link ends at the first `)`), and a `|` inside a table
-cell, including inside inline code (it always splits the cell). The parser is not
-extended for these. The view is read only: no write session, event,
-queue or verification.
+containing parentheses (the link ends at the first `)`); a `|` inside a table
+cell, including inside inline code (it always splits the cell); and
+internationalized host names such as `https://münchen.de` (links need an ASCII
+host, a valid bracketed IPv6 address if any, and a port from 1 to 65535, so they
+stay text). The parser is not extended for these. The view is read only: no write
+session, event, queue or verification. An unexpected failure in this route
+answers the fixed 503 and logs one warning with the exception class (never its
+message) through the `solar.app` logger. The host adds a stderr handler only when
+neither that logger nor the root logger has one; a configured root is trusted and
+propagation is unchanged. If the root is configured after the console started, the
+warning can print twice (accepted). Other console routes answer a fixed "Console
+data unavailable" on unexpected read errors.
+
+Tasks screen layout: list and detail share the width evenly and stack below 900
+px. The list keeps Status, Task and Created up to 1600 px of viewport width,
+where the list is about half of the content (measured: 490 px at 1280 and
+570 px at 1440), and hides Provider, Channel and Requester; wider than 1600 px every
+column shows. The detail shows the newest history event first. Schedule days
+show names, a run limit of 0 shows as unlimited, and the complete record keeps
+its frontmatter folded until opened.
 
 Landing these sources does not mean installed acceptance: install and client
 publication are still required before claiming it.

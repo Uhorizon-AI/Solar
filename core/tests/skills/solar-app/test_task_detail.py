@@ -11,6 +11,133 @@ import solar_state
 from task_markdown import render_markdown, sanitize_html
 
 
+class HostLoggingTests(unittest.TestCase):
+    """The real `solar.app` logger and the root handlers are saved and restored around each test."""
+
+    def setUp(self):
+        import logging
+        self.logging = logging
+        self.logger = logging.getLogger('solar.app')
+        self.root = logging.getLogger()
+        self.saved = (self.logger.level, self.logger.propagate, list(self.logger.handlers), list(self.root.handlers))
+        for handler in list(self.logger.handlers) + list(self.root.handlers):
+            self.logger.removeHandler(handler)
+            self.root.removeHandler(handler)
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        level, propagate, handlers, root_handlers = self.saved
+        for handler in list(self.logger.handlers):
+            self.logger.removeHandler(handler)
+        for handler in list(self.root.handlers):
+            self.root.removeHandler(handler)
+        for handler in handlers:
+            self.logger.addHandler(handler)
+        for handler in root_handlers:
+            self.root.addHandler(handler)
+        self.logger.setLevel(level)
+        self.logger.propagate = propagate
+
+    def failing_task_detail(self):
+        handler = Handler()
+        with patch.object(console_data, 'task_detail', side_effect=sqlite3.DatabaseError('SECRET detail')):
+            app_http.get(handler, '/api/console/task-detail', {'task_id': ['t']}, '/nonexistent')
+        return handler
+
+    def test_real_logger_writes_once_to_stderr_with_the_class_only(self):
+        import io
+        from contextlib import redirect_stderr
+        import host_server
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            host_server.configure_logging()
+            host_server.configure_logging()  # idempotent
+            self.assertEqual(sum(getattr(h, '_solar_host', False) for h in self.logger.handlers), 1)
+            handler = self.failing_task_detail()
+        self.assertEqual(handler.status, 503)
+        text = buffer.getvalue()
+        self.assertEqual(text.count('DatabaseError'), 1)
+        self.assertIn('task-detail failed', text)
+        self.assertNotIn('SECRET', text)
+        self.assertTrue(self.logger.propagate, 'propagation is left at its default')
+
+    def test_a_configured_root_is_trusted_and_nothing_prints_twice(self):
+        import io
+        from contextlib import redirect_stderr
+        import host_server
+        sink = io.StringIO()
+        root_handler = self.logging.StreamHandler(sink)
+        self.root.addHandler(root_handler)
+        self.root.setLevel(self.logging.WARNING)
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            host_server.configure_logging()
+            self.failing_task_detail()
+        self.assertFalse(any(getattr(h, '_solar_host', False) for h in self.logger.handlers))
+        self.assertEqual(stderr.getvalue(), '')
+        self.assertEqual(sink.getvalue().count('DatabaseError'), 1)
+        self.assertNotIn('SECRET', sink.getvalue())
+
+    def test_children_of_solar_app_print_once_and_propagation_is_untouched(self):
+        import io
+        from contextlib import redirect_stderr
+        import host_server
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            host_server.configure_logging()  # the root logger has no handler here
+            self.logging.getLogger('solar.app.child').warning('child line')
+        self.assertEqual(stderr.getvalue().count('child line'), 1)
+        self.assertIn('solar.app.child', stderr.getvalue())
+        self.assertIs(self.logger.propagate, True)
+
+    def test_root_configured_after_the_console_started_prints_twice_by_design(self):
+        """Accepted case, pinned so nobody removes it with propagate = False."""
+        import io
+        from contextlib import redirect_stderr
+        import host_server
+        stderr, sink = io.StringIO(), io.StringIO()
+        with redirect_stderr(stderr):
+            host_server.configure_logging()
+            self.root.addHandler(self.logging.StreamHandler(sink))
+            self.logging.getLogger('solar.app').warning('late root line')
+        self.assertEqual(stderr.getvalue().count('late root line'), 1)
+        self.assertEqual(sink.getvalue().count('late root line'), 1)
+
+    def test_an_existing_level_is_kept(self):
+        import io
+        import host_server
+        self.logger.setLevel(self.logging.INFO)
+        host_server.configure_logging()  # adds the handler, keeps INFO
+        self.assertEqual(self.logger.level, self.logging.INFO)
+        self.root.addHandler(self.logging.StreamHandler(io.StringIO()))
+        host_server.configure_logging()  # early branch, keeps INFO
+        self.assertEqual(self.logger.level, self.logging.INFO)
+        self.logger.setLevel(self.logging.NOTSET)
+        host_server.configure_logging()
+        self.assertEqual(self.logger.level, self.logging.WARNING)
+
+    def test_generic_handler_logs_the_class_and_answers_the_fixed_body(self):
+        import io
+        from contextlib import redirect_stderr
+        import host_server
+        sent = []
+        handler = host_server.HostHandler.__new__(host_server.HostHandler)
+        handler.path = '/api/console/health?x=1'
+        handler._work_guard = lambda: True
+        handler._send_json = lambda payload, code=200: sent.append((payload, code))
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            host_server.configure_logging()
+            with patch.object(app_http, 'get', side_effect=OSError('SECRET /private/path')):
+                handler.do_GET()
+        self.assertEqual(sent, [({'error': 'Console data unavailable', 'refused': True}, 503)])
+        text = buffer.getvalue()
+        self.assertIn('OSError', text)
+        self.assertIn("'/api/console/health'", text)
+        self.assertNotIn('SECRET', text)
+        self.assertNotIn('x=1', text)
+
+
 class Handler:
     def _send_json(self, payload, status=200):
         self.payload, self.status = payload, status
@@ -184,12 +311,24 @@ class MarkdownTests(unittest.TestCase):
     def test_authority_must_be_a_plain_host(self):
         for target in ('https://evil.test@good.test/x', 'https://foo.com&copy=1&x=y', 'https://user:pw@x.test/',
                        'https://a b.test/', 'https://x.test:port/', 'https://-bad.test/', 'https://x.test:123456/',
-                       'https://x=y.test/', 'https://x.test@/'):
+                       'https://x=y.test/', 'https://x.test@/', 'http://[1]/', 'http://[:::]/', 'http://[::1/', 'http://[....]/',
+                       'http://[::1]]/', 'http://[::ffff:1.2.3.4]/', 'http://[::ffff:102:304]/', 'http://[::1.2.3.4]/',
+                       'http://[64:ff9b::1.2.3.4]/', 'https://a-.test/', 'https://-a.test/', 'https://a.-b.test/', 'https://a.b-.test/',
+                       'https://' + 'a' * 64 + '.test/', 'https://x..test/', 'https://x.test./', 'http://[12345::1]/', 'http://[::g]/', 'http://[1:2:3:4:5:6:7:8:9]/', 'https://x.test:99999/', 'https://x.test:0/',
+                       'https://x.test:65536/', 'http://[::1]:0/', 'https://münchen.de/', 'https://xn--mnchen-3ya.de@evil.test/'):
             self.assertNotIn('<a', render_markdown('[l](' + target + ')'), target)
         for target in ('https://x.com/?a=1&copy=2', 'http://localhost:9000/a', 'https://sub.x-y.example.org/p#f',
-                       'http://127.0.0.1/', 'http://[::1]:8080/x'):
+                       'http://127.0.0.1/', 'http://[::1]:8080/x', 'https://x.test:1/', 'https://x.test:65535/', 'https://a-b.test/', 'https://' + 'a' * 63 + '.test/',
+                       'https://[::1]/x', 'http://[2001:db8::1]:8080/x', 'https://xn--mnchen-3ya.de/'):
             self.assertIn('<a href="', render_markdown('[l](' + target + ')'), target)
         self.assertEqual(sanitize_html('<a href="https://evil.test@good.test/">x</a>'), 'x')
+
+    def test_internationalized_hosts_stay_text(self):
+        """Documented limitation: a non-ASCII host is never linked; its punycode form is."""
+        rendered = render_markdown('[l](https://münchen.de/x)')
+        self.assertNotIn('<a', rendered)
+        self.assertIn('l', rendered)
+        self.assertIn('<a href="https://xn--mnchen-3ya.de/x"', render_markdown('[l](https://xn--mnchen-3ya.de/x)'))
 
     def test_consecutive_quote_lines_form_one_blockquote(self):
         self.assertEqual(render_markdown('> one\n> two\n>three\n\n> next'),

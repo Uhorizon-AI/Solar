@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import os
 import sys
 import urllib.parse
@@ -19,6 +20,29 @@ import host_registry as reg  # noqa: E402
 import host_workspace_context as ctx  # noqa: E402
 
 PORT = 9000
+
+
+LOGGER = logging.getLogger("solar.app")
+
+
+def configure_logging(logger: logging.Logger | None = None) -> None:
+    """Send the console's warnings to stderr, where the host already reports errors.
+
+    Adds a stderr handler only when neither this logger nor the root logger has one;
+    a configured root is trusted and propagation is left alone. The level is set to
+    WARNING only when none was chosen. If the root is configured after the console
+    started, a warning prints twice: accepted and pinned by a test, so do not add
+    `propagate = False`. Calling it again does nothing.
+    """
+    logger = logger or LOGGER
+    if logger.level == logging.NOTSET:
+        logger.setLevel(logging.WARNING)
+    if logger.handlers or logging.getLogger().handlers:
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    handler._solar_host = True  # type: ignore[attr-defined]  # marks the handler added here; tests count it
+    logger.addHandler(handler)
 
 
 def _active_workspace() -> Path:
@@ -58,7 +82,11 @@ class HostHandler(BaseHTTPRequestHandler):
             import app_http
             app_http.get(self, path, qs, _active_workspace())
         except (OSError, ValueError, TypeError) as exc:
-            self._send_json({"error": str(exc)}, 503)
+            # Generic handler: "Console data unavailable" is the body of every console route
+            # except task-detail, which answers its own "Task detail unavailable" and logs
+            # "task-detail failed". Both lines carry the exception class, never its message.
+            LOGGER.warning("console route %r failed: %s", path, type(exc).__name__)
+            self._send_json({"error": "Console data unavailable", "refused": True}, 503)
 
     def do_POST(self) -> None:
         self._send_json({"error": "Read-only console"}, 405)
@@ -114,6 +142,7 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     ws = _active_workspace()
+    configure_logging()
 
     server = ThreadingHTTPServer((host, PORT), HostHandler)
     print(f"Solar Host listening on http://{host}:{PORT} (workspace={ws})")
