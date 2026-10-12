@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- MCP: native confirmations are now a compact, human summary (action, object, concrete changes, effect, reason) in the configured console language, instead of JSON arguments, the full task state, identifiers and hashes. The text is generated from validated arguments and the stored task; approval binding, authority, row version, expiry and single use are unchanged. See `core/skills/solar-mcp/references/approvals.md`.
+
 ## [0.39.0] - 2026-10-12
 
 ### Changed

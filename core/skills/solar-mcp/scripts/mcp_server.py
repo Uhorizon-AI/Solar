@@ -46,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mcp_context  # noqa: E402  (also puts solar-paths and solar-state on sys.path)
 import mcp_gate  # noqa: E402
 import runtime_views  # noqa: E402
+import approval_text  # noqa: E402
 import capability_registry  # noqa: E402
 import docs_registry  # noqa: E402
 import op_schema  # noqa: E402
@@ -455,7 +456,7 @@ def handle(message: dict, confirm=None) -> dict | None:
                         return _error(request_id, -32602, str(exc))
                 if confirm(op.name, inner, request_id):
                     import mcp_approve
-                    granted = mcp_approve.grant(op.name, inner, 120, "client elicitation: explicit confirmation")
+                    granted = mcp_approve.grant(op.name, inner, CONFIRMATION_TIMEOUT, "client elicitation: explicit confirmation")
                     arguments["approval_id"] = granted["approval_id"]
         payload, is_error = call_tool(name, arguments)
         result = dict(content=_text(payload), isError=is_error)
@@ -517,23 +518,15 @@ def serve(stdin=None, stdout=None) -> int:
         stdout.write(json.dumps(message, default=str) + "\n")
         stdout.flush()
 
-    def current_state(name, arguments):
-        """The stored task next to the exact call, so the approver sees what it binds to."""
-        if name.startswith("task.") and name != "task.create" and "task_id" in arguments:
-            snap = task_views.snapshot(arguments["task_id"])
-            if snap:
-                return "\nStored task now:\n" + json.dumps(snap, ensure_ascii=False, indent=2)
-        return ""
-
     def confirm(name, arguments, request_id):
+        # The text is rendered here from the validated arguments and the stored
+        # task, never from caller prose; the binding stays on the full arguments.
         elicitation_id = 'approval-' + uuid.uuid4().hex
+        message, checkbox = approval_text.render(name, arguments, seconds=CONFIRMATION_TIMEOUT)
         emit(dict(jsonrpc="2.0", id=elicitation_id, method="elicitation/create", params=dict(
-            message=("Approve this exact Solar action?\nWorkspace: " + str(workspace()) +
-                     "\nOperation: " + name + "\n" + json.dumps(arguments, ensure_ascii=False, indent=2) +
-                     current_state(name, arguments) +
-                     "\nOne execution only. A failed or uncertain execution requires new approval."),
+            message=message,
             requestedSchema=dict(type="object", properties=dict(
-                approve=dict(type="boolean", title="Approve this action", default=False)), required=["approve"]))))
+                approve=dict(type="boolean", title=checkbox, default=False)), required=["approve"]))))
         def close_form():
             emit(dict(jsonrpc="2.0", method="notifications/cancelled",
                       params=dict(requestId=elicitation_id, reason="Origin cancelled or confirmation expired")))

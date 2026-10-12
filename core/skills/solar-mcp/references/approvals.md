@@ -29,6 +29,30 @@ The operator CLI grants only registered A2 operations with valid arguments; anyt
 Telegram confirmation requires an explicit destination (`chat_id` is required by the schema), so changing the default
 chat cannot redirect a confirmed call.
 
+## Confirmation text
+
+`approval_text.py` writes the prompt from the validated arguments and the task as
+stored at that moment; the schemas are closed, so no agent-supplied summary exists
+to substitute for it. English unless `language` in `.solar/settings.json` is
+Spanish. It shows action, object, concrete changes (edit: before → after; schedule:
+days, time, zone, recurrence limits; send: recipient and the full text) and the
+effect as implemented (approve authorizes execution; cancel of a queued task is
+immediate, of an active one only a stop request). Identifiers, hashes, row versions,
+JSON and empty fields stay out. Approving or requeuing a task also shows its declared
+object, scope and effect and its recurrence limits. Characters that hide or reorder
+text are shown escaped (`\u202e`, `\x07`). A stale or missing task is flagged in the
+prompt, and the call is still refused at execution. Instructions in create, approve
+and requeue are collapsed to one line, escapes included, and cut at 400 displayed
+characters, followed by the original length; edit diffs list changed lines (removals and additions share the
+quota) with the window starting at the first difference. `telegram.send` text is
+never truncated or reflowed. If a renderer fails, a plain fallback lists the
+operation name and its readable fields, without identifiers or row versions. The approval still binds the full
+arguments, workspace, row version, expiry and single use.
+
+Limits: Solar controls the text, not the client's modal size, scrolling or
+buttons; the form is the one `approve` checkbox the protocol defines. Client
+rendering of multi-line text is unverified here.
+
 ## Operator recovery (not an agent self-approval route)
 
 The trusted operator may still manage out-of-band approvals:

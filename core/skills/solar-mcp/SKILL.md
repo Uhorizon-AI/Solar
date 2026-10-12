@@ -57,7 +57,8 @@ Limits and lifecycle: [references/discovery.md](references/discovery.md).
    explicit `chat_id` and final text; apply the relevant communication gate first. For an
    existing task, read it first and pass its `row_version`.
 2. Call `solar_execute` without `approval_id`. On clients advertising MCP form elicitation,
-   the runtime presents the exact operation (with the stored task, when there is one) for confirmation, creates the approval and
+   the runtime presents a compact summary of the exact operation (action, task, changes and effect, from the
+   validated arguments and the stored task) for confirmation, creates the approval and
    executes internally. Do not ask the user to create or copy an identifier.
 3. Do not ask for conversational confirmation immediately before that native prompt.
    An existing valid approval may be passed internally and does not prompt again.

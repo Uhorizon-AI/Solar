@@ -404,10 +404,9 @@ def test_the_approver_sees_the_stored_task_next_to_the_exact_call(solar_env):
                               params=dict(name='solar_execute', arguments=call))))
     output = Output()
     mcp_server.serve(Input(), output)
-    assert 'Operation: task.approve' in seen[0]
-    assert 'Stored task now' in seen[0] and 'Quarterly review' in seen[0]
-    assert str(made['row_version']) in seen[0] and made['digest'] in seen[0]
-    assert 'Writes one local report.' in seen[0]
+    assert seen[0].startswith('Approve task for execution\nTask: Quarterly review')
+    assert 'Writes one local report.' in seen[0] and 'authorizes the task to run' in seen[0]
+    assert made['id'] not in seen[0] and made['digest'] not in seen[0] and '{' not in seen[0]
     final = json.loads(output.getvalue().splitlines()[-1])
     assert final['result']['isError'] is False
     assert stored(made['id'])['status'] == 'queued'
