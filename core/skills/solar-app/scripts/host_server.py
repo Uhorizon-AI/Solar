@@ -22,9 +22,9 @@ import host_workspace_context as ctx  # noqa: E402
 PORT = 9000
 
 
-def configure_logging() -> None:
+def configure_logging(logger: logging.Logger | None = None) -> None:
     """Send the console's warnings to stderr, where the host already reports errors."""
-    logger = logging.getLogger("solar.app")
+    logger = logger or logging.getLogger("solar.app")
     if any(getattr(handler, "_solar_host", False) for handler in logger.handlers):
         return
     handler = logging.StreamHandler(sys.stderr)
@@ -32,6 +32,7 @@ def configure_logging() -> None:
     handler._solar_host = True  # type: ignore[attr-defined]
     logger.addHandler(handler)
     logger.setLevel(logging.WARNING)
+    logger.propagate = False  # one line per warning even if the process configures the root logger
 
 
 def _active_workspace() -> Path:
@@ -70,8 +71,8 @@ class HostHandler(BaseHTTPRequestHandler):
         try:
             import app_http
             app_http.get(self, path, qs, _active_workspace())
-        except (OSError, ValueError, TypeError) as exc:
-            self._send_json({"error": str(exc)}, 503)
+        except (OSError, ValueError, TypeError):
+            self._send_json({"error": "Console data unavailable", "refused": True}, 503)
 
     def do_POST(self) -> None:
         self._send_json({"error": "Read-only console"}, 405)

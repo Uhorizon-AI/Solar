@@ -73,7 +73,10 @@ body{margin:0}
 .split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
 .sticky{position:sticky;top:76px;max-height:calc(100vh - 92px);overflow:auto}
 .trow{grid-template-columns:108px minmax(0,1fr) 68px 76px 52px 112px}
-@media (max-width:1600px){.trow{grid-template-columns:108px minmax(0,1fr) 68px}.trow>div:nth-child(n+4){display:none}}
+/* Up to 1600 px of viewport the list is about half of the content width (~490 px at
+   1280, ~570 px at 1440): keep Status, Task and Created; hide Provider (3rd
+   cell), Channel (4th) and Requester (6th). Above 1600 px every column shows. */
+@media (max-width:1600px){.trow{grid-template-columns:108px minmax(0,1fr) 64px}.trow>div:nth-child(3),.trow>div:nth-child(4),.trow>div:nth-child(6){display:none}}
 dl.kv{margin:0}
 .kv.wide{grid-template-columns:150px minmax(0,1fr)}
 .kv dt.k,.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;word-break:break-word}

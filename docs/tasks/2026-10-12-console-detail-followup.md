@@ -37,7 +37,7 @@ Out of scope: MCP, solar-state, the reports and channels change, uppercase port 
 - [x] `https://münchen.de` stays text; a test pins it.
 - [x] `workspace_id` appears in both languages.
 - [x] `context: []`, `configuration: "x"` and similar shapes leave the block, the history and the note intact.
-- [x] Visual check of the local console from this worktree at 800, 1280 and 2000 px (see delivery message); installed acceptance remains separate.
+- [ ] Installed acceptance of the layout and the new presentation: pending, outside this change. The visual measurements below come from a local console run from this worktree, not from the installed client.
 - [x] The 503 warning reaches stderr with the exception class only; a test pins it.
 
 ## Checks to run
@@ -54,4 +54,10 @@ python3 core/skills/solar-skill-creator/scripts/package_skill.py core/skills/<sk
 
 - From the repository root: `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-state core/tests/skills/solar-mcp -q -p no:cacheprovider` -> 551 passed (loopback port available). Without `ps` and a writable `$HOME`, three tests (`test_cutover`, two in `test_mcp_cli`) cannot run and the count is 548.
 - `node --check`, `py_compile` of the four changed Python files and `git diff --check`: passed. solar-app, solar-state and solar-mcp validated and packaged outside the repository.
+- Measured on a local console run from this worktree (loopback, spare port, read only on the real workspace):
+  - 800 px: list and detail stacked, 673 px wide, no horizontal scroll.
+  - 1280 px: list 490 px and detail 490 px; header shows Status, Task, Created; title cell 268 px.
+  - 1440 px: list 570 px and detail 570 px; same three columns; title cell 348 px.
+  - 2000 px: list 850 px and detail 850 px; all six columns; label/value lists side by side (150 px label column).
+- Decisions in review: up to 1600 px of viewport the list keeps Status, Task and Created and hides Provider (usually "no provider"), Channel and Requester; a test reads the CSS and pins it. The frontmatter folds when the complete record closes and stays open across a refresh with a newer `updated_at`. A run limit that is an integer-valued zero shows as Unlimited; other values show as stored. Weekday tokens outside 1 to 7 show as stored. Other console routes answer a fixed message on unexpected read errors (`do_GET` in `host_server.py`); the existing tests do not depend on the old text.
 - Not verified: installed acceptance (no install or sync performed).

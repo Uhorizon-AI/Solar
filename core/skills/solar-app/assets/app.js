@@ -868,7 +868,8 @@
 
   function runsText(value) {
     if (value == null || value === "") return null;
-    return String(value).trim() === "0" ? t("tc_unlimited") : value;
+    // Any integer-valued zero (0, "0", "00", " 0 ", 0.0) means no limit; everything else is shown as stored.
+    return /^[-+]?0+(\.0+)?$/.test(String(value).trim()) ? t("tc_unlimited") : value;
   }
 
   function intervalText(value) {
@@ -1013,8 +1014,7 @@
   }
 
   function toggleFront(id) {
-    var state = taskFull[id];
-    if (!state) return;
+    var state = taskFull[id] || (taskFull[id] = {});
     state.frontOpen = !state.frontOpen;
     if (ui.screen === "tareas" && cache.tareas) paint("tareas", cache.tareas);
   }
@@ -1025,6 +1025,7 @@
     if (!task) return;
     var state = taskFull[task.id] || (taskFull[task.id] = {});
     state.open = !state.open;
+    if (!state.open) state.frontOpen = false;
     if (state.open && (state.stamp !== (task.updated_at || "") || (!state.data && !state.loading))) loadFull(task, state);
     if (ui.screen === "tareas" && cache.tareas) paint("tareas", cache.tareas);
   }

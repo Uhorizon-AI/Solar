@@ -4,6 +4,7 @@ Unsupported syntax stays text. Raw HTML is never interpreted. A final HTML
 allowlist also constrains the generated markup and link destinations.
 """
 import html
+import ipaddress
 from html.parser import HTMLParser
 import re
 from urllib.parse import urlsplit
@@ -13,12 +14,19 @@ from urllib.parse import urlsplit
 # no userinfo (`good.test@evil.test` misleads), no stray characters such as `&`
 # or `=` that make the real host differ from the visible one, and no
 # internationalized names (they stay text rather than risk look-alike hosts).
-_HOST = re.compile(r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::([0-9]{1,5}))?")
+_HOST = re.compile(r"(?:\[([0-9A-Fa-f:.]+)\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::([0-9]{1,5}))?")
 
 
 def _plain_authority(netloc):
     match = _HOST.fullmatch(netloc)
-    return bool(match) and (match.group(1) is None or 1 <= int(match.group(1)) <= 65535)
+    if not match:
+        return False
+    if match.group(1) is not None:
+        try:
+            ipaddress.IPv6Address(match.group(1))
+        except ValueError:
+            return False
+    return match.group(2) is None or 1 <= int(match.group(2)) <= 65535
 
 
 def _safe_link(value):

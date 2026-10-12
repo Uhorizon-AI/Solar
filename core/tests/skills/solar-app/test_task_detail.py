@@ -12,34 +12,38 @@ from task_markdown import render_markdown, sanitize_html
 
 
 class HostLoggingTests(unittest.TestCase):
+    """Uses an isolated logger, so the process-wide `solar.app` logger is never mutated."""
+
     def test_host_sends_the_503_warning_to_stderr_with_the_class_only(self):
         import io
         import logging
+        import uuid
         from contextlib import redirect_stderr
         import host_server
-        logger = logging.getLogger('solar.app')
-        saved = list(logger.handlers)
+        isolated = logging.getLogger('solar.app.test.' + uuid.uuid4().hex)
+        isolated.propagate = True  # configure_logging must turn it off
+        process_logger = logging.getLogger('solar.app')
+        before = (process_logger.level, process_logger.propagate, list(process_logger.handlers))
         try:
-            for handler in saved:
-                logger.removeHandler(handler)
             buffer = io.StringIO()
             with redirect_stderr(buffer):
-                host_server.configure_logging()
-                host_server.configure_logging()  # idempotent
-                self.assertEqual(sum(getattr(h, '_solar_host', False) for h in logger.handlers), 1)
+                host_server.configure_logging(isolated)
+                host_server.configure_logging(isolated)  # idempotent
+                self.assertEqual(sum(getattr(h, '_solar_host', False) for h in isolated.handlers), 1)
+                self.assertFalse(isolated.propagate)
                 handler = Handler()
-                with patch.object(console_data, 'task_detail', side_effect=sqlite3.DatabaseError('SECRET detail')):
+                with patch.object(app_http, 'LOGGER', isolated), \
+                        patch.object(console_data, 'task_detail', side_effect=sqlite3.DatabaseError('SECRET detail')):
                     app_http.get(handler, '/api/console/task-detail', {'task_id': ['t']}, '/nonexistent')
             self.assertEqual(handler.status, 503)
             text = buffer.getvalue()
-            self.assertIn('DatabaseError', text)
-            self.assertIn('solar.app', text)
+            self.assertEqual(text.count('DatabaseError'), 1)
+            self.assertIn('solar.app.test.', text)
             self.assertNotIn('SECRET', text)
+            self.assertEqual((process_logger.level, process_logger.propagate, list(process_logger.handlers)), before)
         finally:
-            for handler in list(logger.handlers):
-                logger.removeHandler(handler)
-            for handler in saved:
-                logger.addHandler(handler)
+            for handler in list(isolated.handlers):
+                isolated.removeHandler(handler)
 
 
 class Handler:
@@ -215,7 +219,8 @@ class MarkdownTests(unittest.TestCase):
     def test_authority_must_be_a_plain_host(self):
         for target in ('https://evil.test@good.test/x', 'https://foo.com&copy=1&x=y', 'https://user:pw@x.test/',
                        'https://a b.test/', 'https://x.test:port/', 'https://-bad.test/', 'https://x.test:123456/',
-                       'https://x=y.test/', 'https://x.test@/', 'https://x.test:99999/', 'https://x.test:0/',
+                       'https://x=y.test/', 'https://x.test@/', 'http://[1]/', 'http://[:::]/', 'http://[::1/', 'http://[....]/',
+                       'http://[::1]]/', 'http://[12345::1]/', 'http://[::g]/', 'http://[1:2:3:4:5:6:7:8:9]/', 'https://x.test:99999/', 'https://x.test:0/',
                        'https://x.test:65536/', 'http://[::1]:0/', 'https://münchen.de/', 'https://xn--mnchen-3ya.de@evil.test/'):
             self.assertNotIn('<a', render_markdown('[l](' + target + ')'), target)
         for target in ('https://x.com/?a=1&copy=2', 'http://localhost:9000/a', 'https://sub.x-y.example.org/p#f',

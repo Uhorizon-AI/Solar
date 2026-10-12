@@ -112,6 +112,19 @@ class ConsoleUiTests(unittest.TestCase):
                     thread.join()
 
 
+    def test_task_list_hides_provider_channel_and_requester_up_to_1600px(self):
+        css = (ASSETS / "app.css").read_text(encoding="utf-8")
+        match = re.search(r"@media \(max-width:1600px\)\{(.*?)\}\s*(?:dl\.kv|\n|$)", css, re.S)
+        self.assertIsNotNone(match, "the 1600 px rule must exist")
+        rule = match.group(1)
+        hidden = sorted(int(n) for n in re.findall(r"\.trow>div:nth-child\((\d)\)", rule))
+        self.assertEqual(hidden, [3, 4, 6], "Provider, Channel and Requester are hidden")
+        self.assertIn("display:none", rule)
+        self.assertIn("grid-template-columns:108px minmax(0,1fr) 64px", rule, "Status, Task and Created stay")
+        # Wider than 1600 px every column shows: the base rule is the full six-column grid.
+        self.assertIn(".trow{grid-template-columns:108px minmax(0,1fr) 68px 76px 52px 112px}", css)
+        self.assertEqual(len(re.findall(r"@media \(max-width:1600px\)", css)), 1)
+
     def test_screens_follow_the_routes(self):
         result = subprocess.run(
             ["node", "-e", _JS_HARNESS, str(ASSETS / "app.js")],
@@ -671,6 +684,56 @@ async function settled() {
   // Dates are the events' own, in the same descending order.
   const dates = view.slice(at("History")).match(/<div class="note">[^<]*(?:Sept?|Oct)[^<]*<\/div>/g) || [];
   if (dates.length !== 3) throw new Error("each event keeps its date: " + JSON.stringify(dates));
+
+  // Zero means no limit for any integer-valued zero; other values are shown as stored.
+  const runs = async (value) => (await wrongShapes({}, { recurring_max_runs: value }));
+  for (const zero of [0, "0", "00", " 0 ", 0.0]) {
+    need(await runs(zero), "<dt class=\"k\">Maximum runs</dt><dd>Unlimited</dd>", "zero as " + JSON.stringify(zero));
+  }
+  for (const other of [-1, "abc", 1.5, 7, "10"]) {
+    const html = await runs(other);
+    need(html, "<dt class=\"k\">Maximum runs</dt><dd>" + other + "</dd>", "shown as stored: " + JSON.stringify(other));
+    lack(html, "Unlimited", "not unlimited: " + JSON.stringify(other));
+  }
+
+  // Weekday tokens outside 1-7 are kept as they are beside valid ones.
+  need(await days([0, 1, 8, true, 7]), "<dd>0, Mon, 8, true, Sun</dd>", "out-of-range tokens");
+  need(await days("0, 3, x"), "<dd>0, Wed, x</dd>", "out-of-range tokens in a stored string");
+
+  // The frontmatter folds when the record closes and survives a refresh while the record stays open.
+  const newerAgain = JSON.parse(JSON.stringify(tasks));
+  newerAgain.tasks[0].updated_at = "2026-09-09";
+  let releaseAgain;
+  const holdAgain = new Promise((resolve) => { releaseAgain = resolve; });
+  page = boot(detailRoutes({ "/api/console/tasks": { sequence: [{ body: tasks }, { body: newerAgain, hold: holdAgain }] } }));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-screen": "resumen" });
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-full": "err-1" });
+  await settled();
+  page.click({ "data-front": "err-1" });
+  await settled();
+  need(page.els.health.innerHTML, "unknown_field", "frontmatter open before the refresh");
+  releaseAgain();
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, 'data-front="err-1" aria-expanded="true"', "frontmatter stays open across a refresh");
+  need(view, "unknown_field", "frontmatter content after the refresh");
+  page.click({ "data-full": "err-1" });
+  await settled();
+  page.click({ "data-full": "err-1" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, 'data-front="err-1" aria-expanded="false"', "frontmatter folds when the record closes");
+  lack(view, "unknown_field", "folded content after reopening");
+  // Toggling a frontmatter whose record state is unknown is a harmless no-op.
+  page.click({ "data-front": "never-opened" });
+  await settled();
+  need(page.els.health.innerHTML, "Context and follow-up", "screen intact after a stray toggle");
 
   const mandates = {
     defined: [
