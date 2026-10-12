@@ -297,24 +297,50 @@ def _create(copy, args):
     return _head(copy, copy["revise_head" if source else "create_head"], rows, notes)
 
 
+def _match(removed: list, added: list) -> dict:
+    """removed index -> added index of the most similar line (one to one).
+
+    A replaced block can hold an unrelated inserted line next to the edited one, so position
+    alone mispairs them. Large blocks fall back to position to keep the work bounded.
+    """
+    if len(removed) * len(added) > 100:
+        return {k: k for k in range(min(len(removed), len(added)))}
+    scored = sorted(((difflib.SequenceMatcher(None, a[:2000], b[:2000], autojunk=False).ratio(), k, j)
+                     for k, a in enumerate(removed) for j, b in enumerate(added)), reverse=True)
+    match, taken = {}, set()
+    for ratio, k, j in scored:
+        if ratio >= 0.5 and k not in match and j not in taken:
+            match[k] = j
+            taken.add(j)
+    return match
+
+
 def _diff_lines(copy, old: str, new: str) -> list:
     """Changed lines, the quota shared between removals and additions so neither side vanishes.
 
-    A removal and the addition at the same position are cut to the same window (see `_pair`),
-    so a long line whose change lies far to the right still shows the difference.
+    Lines are paired inside each replaced block (first with first, second with second), never
+    across an unrelated insertion or deletion, and a pair is cut to one window (see `_pair`):
+    a long line whose change lies far to the right still shows the difference on both sides.
     """
-    changed = [row for row in difflib.ndiff(old.split("\n"), new.split("\n")) if row[:2] in ("- ", "+ ")]
-    minus = [row[2:] for row in changed if row[0] == "-"]
-    plus = [row[2:] for row in changed if row[0] == "+"]
+    old_rows, new_rows = old.split("\n"), new.split("\n")
+    minus, plus = [], []          # (line, partner or None)
+    for tag, a1, a2, b1, b2 in difflib.SequenceMatcher(None, old_rows, new_rows, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        removed, added = old_rows[a1:a2], new_rows[b1:b2]
+        match = _match(removed, added)
+        minus += [(row, added[match[k]] if k in match else None) for k, row in enumerate(removed)]
+        back = {j: k for k, j in match.items()}
+        plus += [(row, removed[back[j]] if j in back else None) for j, row in enumerate(added)]
     keep_minus = min(len(minus), max(_DIFF_LINES // 2, _DIFF_LINES - len(plus)))
     keep_plus = min(len(plus), _DIFF_LINES - keep_minus)
     out = []
-    for index in range(keep_minus):
-        out.append("− " + (_pair(minus[index], plus[index])[0] if index < len(plus) else _exact(minus[index], _VALUE)))
-    for index in range(keep_plus):
-        out.append("+ " + (_pair(minus[index], plus[index])[1] if index < len(minus) else _exact(plus[index], _VALUE)))
-    if len(changed) > keep_minus + keep_plus:
-        out.append("… " + copy["lines_changed"].format(n=len(changed)))
+    for row, partner in minus[:keep_minus]:
+        out.append("− " + (_pair(row, partner)[0] if partner is not None else _exact(row, _VALUE)))
+    for row, partner in plus[:keep_plus]:
+        out.append("+ " + (_pair(partner, row)[1] if partner is not None else _exact(row, _VALUE)))
+    if len(minus) + len(plus) > keep_minus + keep_plus:
+        out.append("… " + copy["lines_changed"].format(n=len(minus) + len(plus)))
     return out
 
 

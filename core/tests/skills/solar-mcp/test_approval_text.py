@@ -236,11 +236,11 @@ def test_send_shows_recipient_and_exact_untruncated_content(solar_env):
 
 
 def test_send_makes_hidden_and_reordering_characters_visible(solar_env):
-    message = text("telegram.send", dict(text="pay ‮evil​\x07", chat_id="42"))
-    assert "‮" not in message and "​" not in message and "\x07" not in message
+    message = text("telegram.send", dict(text="pay \u202eevil\u200b\x07", chat_id="42"))
+    assert "\u202e" not in message and "\u200b" not in message and "\x07" not in message
     assert "\\u202e" in message and "\\u200b" in message and "\\x07" in message
-    title = text("task.archive", dict(task_id="x", expected_row_version=1, reason="a‮b\nc"))
-    assert "‮" not in title and "\n" not in title.split("Reason: ")[1].split("\n")[0]
+    title = text("task.archive", dict(task_id="x", expected_row_version=1, reason="a\u202eb\nc"))
+    assert "\u202e" not in title and "\n" not in title.split("Reason: ")[1].split("\n")[0]
 
 
 def test_summary_cannot_be_supplied_by_the_agent(solar_env):
@@ -447,3 +447,23 @@ def test_excerpt_width_is_bounded_after_escaping(solar_env):
         assert len(row) < 450 and "characters in total" in row
         assert not row.split("…")[0].endswith(("\\", "\\u", "\\x"))
         assert payload not in message
+
+
+def test_diff_pairs_lines_inside_their_block_not_across_an_insertion(solar_env):
+    long = "A" * 200
+    made = new_task("Insertion", f"header\n{long}-OLD\nfooter")
+    message = text("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                                       instructions=f"header\nextra line\n{long}-NEW\nfooter"))
+    rows = [row.strip() for row in message.splitlines()]
+    minus = next(row for row in rows if row.startswith("− "))
+    plus = [row for row in rows if row.startswith("+ ")]
+    assert "-OLD" in minus
+    assert "+ extra line" in plus and any("-NEW" in row for row in plus)
+
+
+def test_every_copy_key_exists_in_both_languages_and_is_used():
+    assert set(approval_text.COPY["en"]) == set(approval_text.COPY["es"])
+    source = Path(approval_text.__file__).read_text(encoding="utf-8")
+    code = source[:source.index("COPY = {")] + source[source.index("def language"):]
+    unused = [key for key in approval_text.COPY["en"] if f'"{key}"' not in code and f"'{key}'" not in code]
+    assert not unused, unused
