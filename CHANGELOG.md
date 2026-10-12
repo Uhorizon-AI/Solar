@@ -8,6 +8,7 @@ The format is based on Keep a Changelog.
 
 ### Fixed
 - Console task detail follow-up: link ports must be 1 to 65535 and internationalized host names stay text; the workspace id is shown; a context or configuration that is not an object no longer breaks the block; the host now writes the 503 warning (exception class only) to stderr.
+- Console Tasks screen: the list and the detail share the width evenly (stacked below 900 px) instead of a fixed 320 px detail column; field lists use two label/value columns that wrap long values; schedule days show names; `Maximum runs` 0 shows as unlimited; "No recorded checkpoint" replaces "No recorded context" when a schedule is shown; the complete record keeps the frontmatter folded and the instructions apart; the task History lists the newest event first.
 
 ## [0.40.0] - 2026-10-12
 

@@ -15,6 +15,13 @@ Close the remaining small gaps in the console task detail: link authority valida
 - `core/skills/solar-app/scripts/task_markdown.py`: port range 1 to 65535; bracketed IPv6 with optional port is a valid host; internationalized (non-ASCII) hosts are not linked. Decision: do not punycode-encode them. Encoding would show a link whose visible host differs from the real one (look-alike hosts), so the limitation is documented in the skill under "Not supported, by design"; the punycode form typed by the author is a normal link.
 - `core/skills/solar-app/assets/app.js`: show `workspace_id` (English and Spanish); read `context` and `configuration` only when they are plain objects.
 - `core/skills/solar-app/scripts/host_server.py`: `configure_logging()` at start. Finding: the host silenced request logs and configured no logging, so the `solar.app` warning would only reach Python's last-resort handler. A single idempotent stderr handler is added, matching how the host already reports errors.
+- Layout and presentation after trying v0.40.0 in the browser (`app.js`, `app.css`):
+  - `.split` is two equal columns and `.sticky` has no fixed width (it scrolls inside the viewport height); below 900 px the detail stacks under the list. The task list uses a responsive grid class; below 1600 px viewport width it keeps Status, Task and Provider so the title stays readable at half width.
+  - Field lists reuse `.kv` (label column in grey, value in normal colour, long values wrap) at 150 px label width.
+  - `scheduled_weekdays` shows names (Mon..Sun / lun..dom), raw tokens for odd values. `recurring_max_runs` 0 shows as Unlimited: confirmed in `solar_state` (cap applied only when greater than 0) and in the async-tasks references (`0 = unlimited`).
+  - "No recorded checkpoint" is shown when only a schedule exists; "No recorded context" only when nothing is recorded. The host-timezone fallback is shown only beside a configured time.
+  - The task History is shown newest first (presentation only, `app.js`); the endpoint and solar-state order are unchanged and the newest event carries the highlight.
+  - The complete record lists columns, then Instructions (own block, spacing above), then Frontmatter folded by default.
 - `core/skills/solar-app/SKILL.md`, `CHANGELOG.md` (Unreleased, Fixed).
 - Tests: `core/tests/skills/solar-app/test_task_detail.py`, `test_console_ui.py`.
 
@@ -30,6 +37,7 @@ Out of scope: MCP, solar-state, the reports and channels change, uppercase port 
 - [x] `https://münchen.de` stays text; a test pins it.
 - [x] `workspace_id` appears in both languages.
 - [x] `context: []`, `configuration: "x"` and similar shapes leave the block, the history and the note intact.
+- [x] Visual check of the local console from this worktree at 800, 1280 and 2000 px (see delivery message); installed acceptance remains separate.
 - [x] The 503 warning reaches stderr with the exception class only; a test pins it.
 
 ## Checks to run
