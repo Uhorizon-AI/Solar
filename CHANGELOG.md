@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Console Autonomy "Latest decisions": the MCP gate audit writes a decision row and an outcome row per call, and both were counted as decisions, inflating the total and showing every outcome as "Denied". Only decision rows (and older rows with a boolean `allowed` and no `kind`) are counted and listed; the payload (`total`, `allowed`, `last`) is unchanged.
+
 ## [0.42.0] - 2026-10-12
 
 ### Added

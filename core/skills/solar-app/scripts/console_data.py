@@ -676,6 +676,18 @@ def mandates(workspace) -> dict:
     }
 
 
+def _is_gate_decision(row: dict) -> bool:
+    """The gate audit holds two rows per call: the decision and, after execution, its outcome.
+
+    Only decisions are counted and shown. Rows written before `kind` existed count when
+    they carry a boolean `allowed`; anything else (outcomes, unknown kinds) is ignored.
+    """
+    kind = row.get("kind")
+    if kind is not None:
+        return kind == "decision"
+    return isinstance(row.get("allowed"), bool)
+
+
 def _gate_decisions() -> dict:
     path = solar_runtime.runtime_dir("mcp") / "audit.jsonl"
     rows = []
@@ -692,7 +704,7 @@ def _gate_decisions() -> dict:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(row, dict):
+            if isinstance(row, dict) and _is_gate_decision(row):
                 rows.append(row)
     allowed = sum(1 for row in rows if row.get("allowed") is True)
     last = [
