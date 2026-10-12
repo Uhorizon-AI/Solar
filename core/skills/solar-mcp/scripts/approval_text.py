@@ -1,0 +1,421 @@
+"""The human text of a confirmation: what the person is asked to approve.
+
+Built only from the *validated* operation arguments and from the task as the
+store holds it right now. Nothing the calling agent supplies as prose can reach
+it (the operation schemas are closed, there is no summary field), and nothing
+here grants or changes authority: the approval still binds the operation name,
+the exact arguments, the workspace and the task `row_version` internally.
+
+The text is short on purpose. Identifiers, hashes, row versions and empty fields
+stay out of it; the full arguments stay in the server for validation, binding and
+the gate audit. Only the language comes from configuration (`language` in
+`.solar/settings.json`): English unless it is Spanish.
+"""
+from __future__ import annotations
+
+import difflib
+import importlib.util
+import json
+import re
+from pathlib import Path
+
+import task_views
+from mcp_context import OperationError, workspace
+
+_LANGUAGE_PY = Path(__file__).resolve().parents[2] / "solar-client" / "scripts" / "console_language.py"
+
+_EXCERPT = 400      # instructions shown when approving or creating a task
+_VALUE = 160        # one changed field value
+_DIFF_LINES = 4     # changed instruction lines listed in an edit
+_DAYS = {
+    "en": ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"),
+    "es": ("lun", "mar", "mié", "jue", "vie", "sáb", "dom"),
+}
+# C0/C1 controls (newline and tab aside) and characters that reorder or hide text.
+_INVISIBLE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩﻿]")
+
+COPY = {
+    "en": dict(
+        approve_title="Approve this action",
+        footer="Single use, valid {seconds} seconds. If it fails or is uncertain, a new approval is needed.",
+        task="Task", reason="Reason", effect="Effect", to="To", message="Message", format="Format",
+        warn="Warning", none="(none)", unlimited="unlimited",
+        archive_head="Archive task",
+        archive_queued="the task is cancelled first (it will not run) and then archived; its history is kept.",
+        archive_queued_rec="the recurrence is stopped (the task will not run again), then the task is archived; its history is kept.",
+        archive_plain="the task is archived and keeps its history.",
+        archive_active="refused while the task is running. Cancel it first and archive it once it stopped.",
+        archive_done="refused: the task is already archived.",
+        archive_guard="Also refused if another task waits on it or one of its subtasks is still running.",
+        create_head="Create draft task", revise_head="Create draft revision",
+        revision_of="Revises", create_effect="stores one draft. Nothing is queued or run; approving it is a separate step.",
+        revise_effect="stores one draft copy of that task with its settings and schedule; the original is untouched. Nothing is queued or run.",
+        instructions="Instructions", chars="{n} characters in total",
+        update_head="Edit task", changes="Changes", no_diff="no difference from the stored task",
+        update_planned="the task returns to draft and must be approved again. Nothing is queued or run.",
+        update_draft="the stored draft is rewritten. Nothing is queued or run.",
+        edit_active="refused: a running task keeps the instructions it started with.",
+        edit_closed="refused: a task that is {status} is not edited; prepare a revision instead.",
+        lines_changed="{n} lines changed",
+        schedule_head="Schedule task", days="Days", time="Time", zone="Time zone", repeats="Repeats",
+        yes="yes", no="no", every_day="every day", min_gap="minimum gap {h} h", max_runs="at most {n} runs",
+        next_runs="Next runs", schedule_effect="stores the schedule. The task is not queued; approving it is a separate step.",
+        schedule_planned="the task returns to draft and must be approved again.",
+        approve_head="Approve task for execution", status="Status", declared="Declared effect", scope="Scope", object="Object",
+        approve_effect="authorizes the task to run: it is queued with the instructions stored now and a worker will execute them. Editing it afterwards invalidates this approval.",
+        approve_recurring="It then repeats on its schedule.",
+        approve_refused="refused: only a draft or planned task can be approved.",
+        cancel_head_now="Cancel task", cancel_head_req="Request task stop",
+        cancel_now="the queued task is cancelled immediately and will not run.",
+        cancel_req="this only records a request to stop. The task stays active until its worker stops it; work already done is not undone.",
+        cancel_refused="refused: only a queued or active task can be cancelled.",
+        requeue_head="Requeue task",
+        requeue_effect="the task goes back to the queue and runs again with the same instructions; the recorded execution error is dropped.",
+        requeue_refused="refused: only a task in error can be requeued.",
+        send_head="Send Telegram message", send_effect="sends the message below outside this machine; it cannot be recalled.",
+        parse_mode="interpreted as {mode}",
+        generic_head="Approve action",
+        missing="refused: the task was not found.",
+        changed="This task changed after it was read, so this approval will be refused.",
+        unreadable="The task could not be read, so the effect below could not be verified.",
+    ),
+    "es": dict(
+        approve_title="Aprobar esta acción",
+        footer="Un solo uso, válida {seconds} segundos. Si falla o es incierta, hace falta una nueva aprobación.",
+        task="Tarea", reason="Motivo", effect="Efecto", to="Destinatario", message="Mensaje", format="Formato",
+        warn="Aviso", none="(ninguno)", unlimited="sin límite",
+        archive_head="Archivar tarea",
+        archive_queued="la tarea se cancela primero (no se ejecutará) y después se archiva; conserva su historial.",
+        archive_queued_rec="la repetición se detiene (la tarea no volverá a ejecutarse) y después se archiva; conserva su historial.",
+        archive_plain="la tarea queda archivada y conserva su historial.",
+        archive_active="se rechaza mientras la tarea se ejecuta. Cancélala primero y archívala cuando se haya detenido.",
+        archive_done="se rechaza: la tarea ya está archivada.",
+        archive_guard="También se rechaza si otra tarea depende de ella o si alguna subtarea sigue en curso.",
+        create_head="Crear tarea en borrador", revise_head="Crear revisión en borrador",
+        revision_of="Revisa", create_effect="guarda un borrador. No se encola ni se ejecuta nada; aprobarlo es un paso aparte.",
+        revise_effect="guarda una copia en borrador de esa tarea con su configuración y programación; la original no cambia. No se encola ni se ejecuta nada.",
+        instructions="Instrucciones", chars="{n} caracteres en total",
+        update_head="Editar tarea", changes="Cambios", no_diff="sin diferencias con la tarea guardada",
+        update_planned="la tarea vuelve a borrador y debe aprobarse de nuevo. No se encola ni se ejecuta nada.",
+        update_draft="se reescribe el borrador guardado. No se encola ni se ejecuta nada.",
+        edit_active="se rechaza: una tarea en ejecución conserva las instrucciones con las que empezó.",
+        edit_closed="se rechaza: una tarea en estado {status} no se edita; prepara una revisión.",
+        lines_changed="{n} líneas cambiadas",
+        schedule_head="Programar tarea", days="Días", time="Hora", zone="Zona horaria", repeats="Repite",
+        yes="sí", no="no", every_day="todos los días", min_gap="separación mínima {h} h", max_runs="como máximo {n} ejecuciones",
+        next_runs="Próximas ejecuciones", schedule_effect="guarda la programación. La tarea no se encola; aprobarla es un paso aparte.",
+        schedule_planned="la tarea vuelve a borrador y debe aprobarse de nuevo.",
+        approve_head="Aprobar tarea para ejecución", status="Estado", declared="Efecto declarado", scope="Alcance", object="Objeto",
+        approve_effect="autoriza su ejecución: se encola con las instrucciones guardadas ahora y un worker las ejecutará. Editarla después invalida esta aprobación.",
+        approve_recurring="Después se repite según su programación.",
+        approve_refused="se rechaza: solo se aprueba una tarea en borrador o planificada.",
+        cancel_head_now="Cancelar tarea", cancel_head_req="Solicitar la parada de la tarea",
+        cancel_now="la tarea en cola se cancela de inmediato y no se ejecutará.",
+        cancel_req="solo registra una solicitud de parada. La tarea sigue activa hasta que su worker la detenga; lo ya hecho no se deshace.",
+        cancel_refused="se rechaza: solo se cancela una tarea en cola o activa.",
+        requeue_head="Reencolar tarea",
+        requeue_effect="la tarea vuelve a la cola y se ejecuta de nuevo con las mismas instrucciones; se elimina el error de ejecución registrado.",
+        requeue_refused="se rechaza: solo se reencola una tarea en error.",
+        send_head="Enviar mensaje de Telegram", send_effect="envía el mensaje de abajo fuera de esta máquina; no se puede retirar.",
+        parse_mode="interpretado como {mode}",
+        generic_head="Aprobar acción",
+        missing="se rechaza: no se encontró la tarea.",
+        changed="La tarea cambió después de leerla, así que esta aprobación será rechazada.",
+        unreadable="No se pudo leer la tarea, así que no se pudo verificar el efecto de abajo.",
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# language and text hygiene
+# ---------------------------------------------------------------------------
+
+def language() -> str:
+    """`es` only when `.solar/settings.json` says Spanish; English otherwise."""
+    try:
+        spec = importlib.util.spec_from_file_location("console_language", _LANGUAGE_PY)
+        tokens = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tokens)
+        data = json.loads((workspace() / ".solar" / "settings.json").read_text(encoding="utf-8"))
+        return tokens.effective_language(data.get("language") if isinstance(data, dict) else None)
+    except Exception:  # noqa: BLE001 - a missing setting means English, never a failed prompt
+        return "en"
+
+
+def _escape(match) -> str:
+    code = ord(match.group())
+    return f"\\x{code:02x}" if code < 256 else f"\\u{code:04x}"
+
+
+def _line(value, limit: int = 0) -> str:
+    """One visible line: control and direction characters shown, whitespace collapsed."""
+    text = " ".join(_INVISIBLE.sub(_escape, str(value if value is not None else "")).split())
+    return text[:limit].rstrip() + "…" if limit and len(text) > limit else text
+
+
+def _verbatim(value) -> str:
+    """Exact text, line breaks kept; only characters that hide or reorder are made visible."""
+    return _INVISIBLE.sub(_escape, str(value)).replace("\r\n", "\n")
+
+
+def _quote(text: str) -> str:
+    return "\n".join("  " + row for row in text.split("\n"))
+
+
+# ---------------------------------------------------------------------------
+# stored task facts
+# ---------------------------------------------------------------------------
+
+def _facts(task_id: str) -> dict | None:
+    """The task as stored now, for the summary only. None when it cannot be read."""
+    import solar_state
+
+    try:
+        with solar_state.read_session() as store:
+            task = store.task_get(task_id)
+        if task is None:
+            return dict(missing=True)
+        values = task_views._values(task)
+        title = task["title"] or ""
+        heading = f"\n# {title}\n"
+        body = task["body"] or ""
+        instructions = body[len(heading):] if body.startswith(heading) else body
+        return dict(title=title, status=task["status"], row_version=task["row_version"],
+                    values=values, priority=task["priority"], object=task["object"] or "",
+                    scope=task["scope"] or "", effect=task["effect"] or "",
+                    recurring=str(values.get("recurring") or "").lower() == "true",
+                    instructions=instructions.strip("\n").rstrip(), schedule=task_views._schedule(values))
+    except Exception:  # noqa: BLE001 - the prompt must still appear, flagged as unverified
+        return None
+
+
+def _stored(arguments: dict):
+    """(facts, notes) with the notes that apply to every task operation."""
+    facts = _facts(arguments["task_id"])
+    notes = []
+    if facts is None:
+        notes.append("unreadable")
+    elif facts.get("missing"):
+        notes.append("missing")
+    elif "expected_row_version" in arguments and facts["row_version"] != arguments["expected_row_version"]:
+        notes.append("changed")
+    return facts, notes
+
+
+def _head(copy: dict, title: str, rows: list, notes: list, extra: list = ()) -> str:
+    out = [title]
+    out += [f"{label}: {value}" for label, value in rows if value not in (None, "")]
+    out += list(extra)
+    out += [f"{copy['warn']}: {copy[note]}" for note in notes]
+    return "\n".join(out)
+
+
+def _excerpt(copy: dict, text: str) -> str:
+    flat = _line(text)
+    if len(flat) <= _EXCERPT:
+        return flat
+    return flat[:_EXCERPT].rstrip() + "… (" + copy["chars"].format(n=len(text)) + ")"
+
+
+def _days(copy_lang: str, copy: dict, weekdays) -> str:
+    names = _DAYS[copy_lang]
+    return ", ".join(names[d - 1] for d in sorted(weekdays)) if weekdays else copy["every_day"]
+
+
+# ---------------------------------------------------------------------------
+# one renderer per operation
+# ---------------------------------------------------------------------------
+
+def _archive(lang, copy, args):
+    facts, notes = _stored(args)
+    if not facts or facts.get("missing"):
+        return _head(copy, copy["archive_head"], [(copy["reason"], _line(args["reason"]))], notes)
+    status = facts["status"]
+    if status == "active":
+        effect = copy["archive_active"]
+    elif status == "archived":
+        effect = copy["archive_done"]
+    elif status == "queued":
+        effect = copy["archive_queued_rec" if facts["recurring"] else "archive_queued"]
+    else:
+        effect = copy["archive_plain"]
+    rows = [(copy["task"], _line(facts["title"], _VALUE)), (copy["reason"], _line(args["reason"])),
+            (copy["effect"], effect)]
+    return _head(copy, copy["archive_head"], rows, notes, [copy["archive_guard"]])
+
+
+def _create(lang, copy, args):
+    rows = [(copy["task"], _line(args["title"], _VALUE))]
+    notes = []
+    source = args.get("revises_task_id")
+    if source:
+        facts = _facts(source)
+        if facts and not facts.get("missing"):
+            rows.append((copy["revision_of"], _line(facts["title"], _VALUE)))
+        else:
+            notes.append("missing" if facts else "unreadable")
+    for key in ("object", "scope", "effect", "priority", "provider", "planet", "agent", "responsibility"):
+        if key in args:
+            rows.append((key, _line(args[key], _VALUE)))
+    rows.append((copy["instructions"], _excerpt(copy, args["instructions"])))
+    rows.append((copy["effect"], copy["revise_effect" if source else "create_effect"]))
+    return _head(copy, copy["revise_head" if source else "create_head"], rows, notes)
+
+
+def _diff_lines(copy, old: str, new: str) -> list:
+    old_rows, new_rows = old.split("\n"), new.split("\n")
+    changed = [row for row in difflib.ndiff(old_rows, new_rows) if row[:2] in ("- ", "+ ")]
+    shown = [("−" if row[0] == "-" else "+") + " " + _line(row[2:], _VALUE) for row in changed[:_DIFF_LINES]]
+    if len(changed) > _DIFF_LINES:
+        shown.append("… " + copy["lines_changed"].format(n=len(changed)))
+    return shown
+
+
+def _update(lang, copy, args):
+    facts, notes = _stored(args)
+    if not facts or facts.get("missing"):
+        return _head(copy, copy["update_head"], [(copy["task"], None)], notes)
+    lines = []
+    for key in ("title", "object", "scope", "effect", "priority", "provider", "planet", "agent", "responsibility"):
+        if key not in args:
+            continue
+        old = facts[key] if key in ("object", "scope", "effect", "priority") else (
+            facts["title"] if key == "title" else facts["values"].get(key))
+        if _line(old) != _line(args[key]):
+            lines.append(f"{key}: {_line(old, _VALUE) or copy['none']} → {_line(args[key], _VALUE)}")
+    if "instructions" in args and args["instructions"].rstrip() != facts["instructions"]:
+        lines.append(copy["instructions"] + ":")
+        lines += ["  " + row for row in _diff_lines(copy, facts["instructions"], args["instructions"].rstrip())]
+    status = facts["status"]
+    if status == "active":
+        effect = copy["edit_active"]
+    elif status not in ("draft", "planned"):
+        effect = copy["edit_closed"].format(status=status)
+    else:
+        effect = copy["update_planned" if status == "planned" else "update_draft"]
+    rows = [(copy["task"], _line(facts["title"], _VALUE))]
+    extra = [copy["changes"] + ":"] + ["  " + row if not row.startswith(" ") else row for row in lines] \
+        if lines else [copy["changes"] + ": " + copy["no_diff"]]
+    extra.append(f"{copy['effect']}: {effect}")
+    return _head(copy, copy["update_head"], rows, notes, extra)
+
+
+def _schedule_rows(lang, copy, stored: dict, args: dict):
+    """(rows, plan or None, problem) from the same merge the handler applies."""
+    def old(key):
+        return stored["schedule"].get(key)
+    merged = dict(
+        time=args.get("scheduled_time", old("time")),
+        zone=args.get("scheduled_timezone", old("timezone")),
+        recurring=args.get("recurring", bool(old("recurring"))),
+        weekdays=args["scheduled_weekdays"] if "scheduled_weekdays" in args else list(old("weekdays") or []))
+    interval = args.get("recurring_min_interval")
+    if interval is None and str(old("recurring_min_interval") or "").isdigit():
+        interval = int(old("recurring_min_interval"))
+    plan = task_views.plan_schedule(time=merged["time"], weekdays=merged["weekdays"], zone=merged["zone"],
+                                    recurring=merged["recurring"], min_interval=interval)
+    return merged, plan
+
+
+def _schedule(lang, copy, args):
+    facts, notes = _stored(args)
+    if not facts or facts.get("missing"):
+        return _head(copy, copy["schedule_head"], [], notes)
+    rows = [(copy["task"], _line(facts["title"], _VALUE))]
+    extra = []
+    try:
+        merged, plan = _schedule_rows(lang, copy, facts, args)
+        time = merged["time"] if merged["time"] not in (None, "now") else None
+        if time:
+            rows.append((copy["days"], _days(lang, copy, merged["weekdays"])))
+            rows.append((copy["time"], time))
+            rows.append((copy["zone"], merged["zone"]))
+        repeat = copy["yes"] if merged["recurring"] else copy["no"]
+        limits = []
+        if merged["recurring"]:
+            if plan["recurring_min_interval"]:
+                limits.append(copy["min_gap"].format(h=round(plan["recurring_min_interval"] / 3600, 1)))
+            cap = args.get("recurring_max_runs", facts["values"].get("recurring_max_runs"))
+            limits.append(copy["max_runs"].format(n=cap) if cap not in (None, "", "0", 0) else copy["unlimited"])
+        rows.append((copy["repeats"], repeat + (" (" + "; ".join(limits) + ")" if limits else "")))
+        if plan["next_occurrences"]:
+            rows.append((copy["next_runs"], "; ".join(
+                f"{_DAYS[lang][o['weekday'] - 1]} {o['local'][:16].replace('T', ' ')}" for o in plan["next_occurrences"][:2])))
+        extra += [f"{copy['warn']}: {note}" for note in plan["notes"]]
+    except OperationError as exc:
+        extra.append(f"{copy['warn']}: {exc}")
+    status = facts["status"]
+    if status in ("draft", "planned"):
+        effect = copy["schedule_effect"] + (" " + copy["schedule_planned"] if status == "planned" else "")
+    else:
+        effect = copy["edit_active"] if status == "active" else copy["edit_closed"].format(status=status)
+    rows.append((copy["effect"], effect))
+    return _head(copy, copy["schedule_head"], rows, notes, extra)
+
+
+def _approve(lang, copy, args):
+    facts, notes = _stored(args)
+    if not facts or facts.get("missing"):
+        return _head(copy, copy["approve_head"], [], notes)
+    ok = facts["status"] in ("draft", "planned")
+    schedule = facts["schedule"]
+    rows = [(copy["task"], _line(facts["title"], _VALUE)),
+            (copy["object"], _line(facts["object"], _VALUE)), (copy["scope"], _line(facts["scope"], _VALUE)),
+            (copy["declared"], _line(facts["effect"], _VALUE)),
+            (copy["instructions"], _excerpt(copy, facts["instructions"]))]
+    if schedule.get("time") and schedule["time"] != "now":
+        rows.append((copy["time"], f"{_days(lang, copy, schedule['weekdays'])} {schedule['time']} "
+                                   f"({schedule.get('timezone') or '—'})"))
+    effect = (copy["approve_effect"] + (" " + copy["approve_recurring"] if facts["recurring"] else "")) \
+        if ok else copy["approve_refused"]
+    rows.append((copy["effect"], effect))
+    return _head(copy, copy["approve_head"], rows, notes)
+
+
+def _cancel(lang, copy, args):
+    facts, notes = _stored(args)
+    if not facts or facts.get("missing"):
+        return _head(copy, copy["cancel_head_now"], [], notes)
+    status = facts["status"]
+    head = copy["cancel_head_req"] if status == "active" else copy["cancel_head_now"]
+    effect = {"queued": copy["cancel_now"], "active": copy["cancel_req"]}.get(status, copy["cancel_refused"])
+    return _head(copy, head, [(copy["task"], _line(facts["title"], _VALUE)), (copy["effect"], effect)], notes)
+
+
+def _requeue(lang, copy, args):
+    facts, notes = _stored(args)
+    if not facts or facts.get("missing"):
+        return _head(copy, copy["requeue_head"], [], notes)
+    effect = copy["requeue_effect"] if facts["status"] == "error" else copy["requeue_refused"]
+    return _head(copy, copy["requeue_head"], [(copy["task"], _line(facts["title"], _VALUE)),
+                                              (copy["effect"], effect)], notes)
+
+
+def _telegram(lang, copy, args):
+    rows = [(copy["to"], _line(args["chat_id"]))]
+    if args.get("parse_mode"):
+        rows.append((copy["format"], copy["parse_mode"].format(mode=args["parse_mode"])))
+    rows.append((copy["effect"], copy["send_effect"]))
+    return _head(copy, copy["send_head"], rows, [], [copy["message"] + ":", _quote(_verbatim(args["text"]))])
+
+
+def _generic(lang, copy, name, args):
+    return _head(copy, copy["generic_head"], [(copy["task"], name)] + [
+        (key, _line(value if not isinstance(value, (dict, list)) else json.dumps(value, ensure_ascii=False)))
+        for key, value in args.items()], [])
+
+
+RENDERERS = {"task.archive": _archive, "task.create": _create, "task.update": _update,
+             "task.schedule": _schedule, "task.approve": _approve, "task.cancel": _cancel,
+             "task.requeue": _requeue, "telegram.send": _telegram}
+
+
+def render(name: str, arguments: dict, *, seconds: int, lang: str | None = None) -> tuple[str, str]:
+    """(message, localized checkbox title) for one validated operation."""
+    lang = lang or language()
+    copy = COPY[lang]
+    try:
+        body = RENDERERS[name](lang, copy, arguments) if name in RENDERERS else _generic(lang, copy, name, arguments)
+    except Exception:  # noqa: BLE001 - never block the prompt; fall back to the plain argument list
+        body = _generic(lang, copy, name, arguments)
+    return body + "\n\n" + copy["footer"].format(seconds=seconds), copy["approve_title"]

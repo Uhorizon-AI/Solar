@@ -29,6 +29,25 @@ The operator CLI grants only registered A2 operations with valid arguments; anyt
 Telegram confirmation requires an explicit destination (`chat_id` is required by the schema), so changing the default
 chat cannot redirect a confirmed call.
 
+## Confirmation text
+
+`approval_text.py` writes the prompt from the validated arguments and the task as
+stored at that moment; the schemas are closed, so no agent-supplied summary exists
+to substitute for it. English unless `language` in `.solar/settings.json` is
+Spanish. It shows action, object, concrete changes (edit: before → after; schedule:
+days, time, zone, recurrence limits; send: recipient and the full text) and the
+effect as implemented (approve authorizes execution; cancel of a queued task is
+immediate, of an active one only a stop request). Identifiers, hashes, row versions,
+JSON and empty fields stay out. Characters that hide or reorder text are shown
+escaped. A stale or missing task is flagged in the prompt, and the call is still
+refused at execution. Long instructions are excerpted with their total length;
+`telegram.send` text is never truncated. The approval still binds the full
+arguments, workspace, row version, expiry and single use.
+
+Limits: Solar controls the text, not the client's modal size, scrolling or
+buttons; the form is the one `approve` checkbox the protocol defines. Client
+rendering of multi-line text is unverified here.
+
 ## Operator recovery (not an agent self-approval route)
 
 The trusted operator may still manage out-of-band approvals:
