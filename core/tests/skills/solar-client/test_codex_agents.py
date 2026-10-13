@@ -12,10 +12,13 @@ import subprocess
 import sys
 import textwrap
 import time
-import tomllib
 from pathlib import Path
 
 import pytest
+
+# Publishing requires Python >= 3.11 (tomllib); the suite declares >=3.10, so on
+# 3.10 skip this module instead of failing collection for the whole run.
+tomllib = pytest.importorskip("tomllib", reason="Codex agent publication needs Python 3.11+")
 
 CORE = Path(__file__).resolve().parents[3]
 SCRIPTS = CORE / "skills/solar-client/scripts"
@@ -603,13 +606,28 @@ def test_enable_disable_exclude_round_trip_preserves_keys(ws, env):
     assert data["agents_skill_profile"] == {"mode": "native"}
     assert data["codex_agents"] == {"enabled": True, "exclude_planets": ["demo"], "exclude_agents": ["demo:sales"]}
     listing = run(ws, env, "exclude", "list").stdout.split("\n")
-    assert listing[:2] == ["demo", "demo:sales"]
+    assert listing[:2] == ["planet: demo", "agent: demo:sales"]
+    # Global exclusions (which also apply to Codex agents) are shown last.
+    assert listing[2] == "planet: other (global, applies to Codex agents too)"
     assert run(ws, env, "disable").returncode == 0
     assert settings(ws)["codex_agents"]["enabled"] is False
     assert run(ws, env, "exclude", "remove", "demo").returncode == 0
     assert run(ws, env, "exclude", "remove", "demo:sales").returncode == 0
-    assert run(ws, env, "exclude", "list").stdout.strip() == "(none)"
+    assert run(ws, env, "exclude", "list").stdout.strip() == (
+        "planet: other (global, applies to Codex agents too)")
     assert settings(ws)["custom_user"] == "y"
+
+
+def test_exclude_list_shows_labeled_entries_and_globals(ws, env):
+    write_settings(ws, sync_exclude_planets=["gplanet"])
+    run(ws, env, "exclude", "add", "demo")
+    run(ws, env, "exclude", "add", "demo:sales")
+    out = run(ws, env, "exclude", "list").stdout.split("\n")
+    assert out[:3] == [
+        "planet: demo",
+        "agent: demo:sales",
+        "planet: gplanet (global, applies to Codex agents too)",
+    ]
 
 
 def test_legacy_manifest_is_read_and_removed_on_write(ws, env):
@@ -734,14 +752,62 @@ def test_retire_unchanged_file_when_source_removed(ws, env):
     assert [e["file"] for e in manifest(ws)["agents"]] == ["solar__demo__sales.toml", "solar__other__ops.toml"]
 
 
-def test_retire_invalid_source(ws, env):
+def test_invalid_contract_keeps_published_file(ws, env):
+    """Editing a contract into an invalid state must not delete the role."""
     enable(ws, env)
     run(ws, env, "publish")
+    target = agents_dir(ws) / "solar__demo__support.toml"
+    before = target.read_bytes()
     (ws / "planets/demo/agents/support.md").write_text("no frontmatter now\n")
     proc = run(ws, env, "publish")
     assert proc.returncode == 0
-    assert "solar__demo__support.toml" not in toml_files(ws)
+    assert "solar__demo__support.toml" in toml_files(ws)
+    assert target.read_bytes() == before
     assert "omitted: planets/demo/agents/support.md: no frontmatter" in proc.stdout
+    assert "kept: contract is invalid" in proc.stdout
+
+
+@pytest.mark.parametrize("broken", [
+    "no frontmatter now\n",
+    b"---\nname: support\ndescription: x\n---\n\n  \n",
+    b"---\nname: support\ndescription: x\n---\n\nbo\x00dy\n",
+])
+def test_invalid_contracts_never_retire(ws, env, broken):
+    enable(ws, env)
+    run(ws, env, "publish")
+    path = ws / "planets/demo/agents/support.md"
+    if isinstance(broken, bytes):
+        path.write_bytes(broken)
+    else:
+        path.write_text(broken)
+    assert run(ws, env, "publish").returncode == 0
+    assert "solar__demo__support.toml" in toml_files(ws)
+
+
+def test_removing_invalid_contract_then_retires(ws, env):
+    """Once the invalid .md disappears, the kept file is finally retired."""
+    enable(ws, env)
+    run(ws, env, "publish")
+    (ws / "planets/demo/agents/support.md").write_text("no frontmatter now\n")
+    assert run(ws, env, "publish").returncode == 0
+    assert "solar__demo__support.toml" in toml_files(ws)
+    (ws / "planets/demo/agents/support.md").unlink()
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0 and "retire: solar__demo__support.toml" in proc.stdout
+    assert "solar__demo__support.toml" not in toml_files(ws)
+
+
+def test_invalid_contract_then_excluded_retires(ws, env):
+    """An invalid contract whose planet is later excluded is retired, not kept."""
+    enable(ws, env)
+    run(ws, env, "publish")
+    (ws / "planets/demo/agents/support.md").write_text("no frontmatter now\n")
+    assert run(ws, env, "publish").returncode == 0
+    assert run(ws, env, "exclude", "add", "demo").returncode == 0
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0
+    assert "solar__demo__support.toml" not in toml_files(ws)
+    assert "solar__demo__sales.toml" not in toml_files(ws)
 
 
 def test_user_edited_file_is_kept_and_reported_on_retire(ws, env):

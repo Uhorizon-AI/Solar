@@ -78,10 +78,10 @@ PY
 }
 settings_key() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])).get(sys.argv[2])))' "$WS/.solar/settings.json" "$1"; }
 
-# 1. Off by default: sync creates nothing under .codex/agents.
+# 1. Off by default: sync creates nothing under .codex/agents and is silent.
 OUT="$(bash "$SYNC_CLIENTS" --codex-only 2>&1)"
 assert_missing "default: no .codex/agents" "$WS/.codex/agents"
-assert_ok "default: sync says disabled" grep -q 'disabled (opt-in)' <<<"$OUT"
+assert_fails "default: sync is silent about codex agents" grep -qi 'codex agent' <<<"$OUT"
 assert_ok "default: skills still published" test -d "$WS/.agents"
 
 # 2. --claude-only keeps the old behaviour and never creates .codex/agents.
@@ -91,19 +91,24 @@ assert_missing "claude-only: no .codex" "$WS/.codex"
 
 # 3. Codex-specific exclusion leaves the global list alone.
 bash "$CLIENT_SYNC" exclude add --client codex personal-x >/dev/null
-assert_eq "codex list" "$(bash "$CLIENT_SYNC" exclude list --client codex)" "personal-x"
+assert_eq "codex list" "$(bash "$CLIENT_SYNC" exclude list --client codex)" "planet: personal-x"
 assert_eq "global list unchanged" "$(bash "$CLIENT_SYNC" exclude list)" "(none)"
 assert_eq "settings: codex block" "$(settings_key codex_agents)" '{"enabled": false, "exclude_planets": ["personal-x"], "exclude_agents": []}'
 assert_eq "settings: global key not created" "$(settings_key sync_exclude_planets)" "null"
 assert_eq "settings: unrelated key kept" "$(settings_key custom_user)" '"keep-me"'
 bash "$CLIENT_SYNC" exclude --client codex add demo:support >/dev/null
-assert_ok "identity exclusion listed" grep -qx 'demo:support' <(bash "$CLIENT_SYNC" exclude list --client codex)
+assert_ok "identity exclusion listed" grep -qx 'agent: demo:support' <(bash "$CLIENT_SYNC" exclude list --client codex)
 bash "$CLIENT_SYNC" exclude remove demo:support --client codex >/dev/null
-assert_eq "identity exclusion removed" "$(bash "$CLIENT_SYNC" exclude list --client codex)" "personal-x"
+assert_eq "identity exclusion removed" "$(bash "$CLIENT_SYNC" exclude list --client codex)" "planet: personal-x"
 assert_fails "unknown client is rejected" bash "$CLIENT_SYNC" exclude list --client nope
 assert_fails "--client without value is rejected" bash "$CLIENT_SYNC" exclude list --client
 RC=0; bash "$CLIENT_SYNC" exclude list --client nope >/dev/null 2>&1 || RC=$?
 assert_eq "unknown client exits 2" "$RC" "2"
+# --client=codex (equals form) behaves like the separated form.
+bash "$CLIENT_SYNC" exclude --client=codex add demo:ops >/dev/null
+assert_ok "equals form add listed" grep -qx 'agent: demo:ops' <(bash "$CLIENT_SYNC" exclude list --client=codex)
+bash "$CLIENT_SYNC" exclude --client=codex remove demo:ops >/dev/null
+assert_eq "equals form list" "$(bash "$CLIENT_SYNC" exclude --client=codex list)" "planet: personal-x"
 
 # 4. Scope preview shows the exclusion and opens nothing.
 OUT="$(bash "$CLIENT_SYNC" codex-agents preview)"
@@ -168,7 +173,8 @@ mv "$TMP/codex-real" "$WS/.codex"
 # 10. Global exclusion applies to Codex agents; plain exclude behaves as before.
 bash "$CLIENT_SYNC" exclude add demo >/dev/null
 assert_eq "plain exclude list" "$(bash "$CLIENT_SYNC" exclude list)" "demo"
-assert_eq "codex list not changed by global" "$(bash "$CLIENT_SYNC" exclude list --client codex)" "personal-x"
+assert_ok "codex list shows both codex and global entries" grep -q 'planet: personal-x' <(bash "$CLIENT_SYNC" exclude list --client codex)
+assert_ok "codex list flags the global entry" grep -q 'planet: demo (global, applies to Codex agents too)' <(bash "$CLIENT_SYNC" exclude list --client codex)
 bash "$SYNC_CLIENTS" --codex-only >/dev/null 2>&1
 assert_missing "globally excluded planet retired for Codex" "$WS/.codex/agents/solar__demo__sales.toml"
 bash "$CLIENT_SYNC" exclude remove demo >/dev/null

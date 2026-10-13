@@ -14,7 +14,8 @@ Usage:
   solar client sync exclude add <planet>
   solar client sync exclude remove <planet>
   solar client sync exclude list|add|remove --client codex [<planet>|<planet>:<agent>]
-  solar client sync codex-agents status|enable|disable
+  solar client sync codex-agents status [--json]
+  solar client sync codex-agents enable|disable
   solar client sync codex-agents preview [--contents] [--json]
   solar client sync exclude-skill list
   solar client sync exclude-skill add <skill>

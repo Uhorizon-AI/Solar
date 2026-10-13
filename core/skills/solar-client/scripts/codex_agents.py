@@ -60,6 +60,12 @@ SOURCE_LINE_PREFIX = "# source: "
 
 SETTINGS_KEYS = {"enabled", "exclude_planets", "exclude_agents"}
 
+# Canonical layout/scope written into .solar/settings.json. Keep in sync with the
+# writers in client_lib.sh (solar_client_write_settings_v12 and friends); this is
+# the single literal for this script so a layout migration touches one place.
+SOLAR_LAYOUT = "solar-client-v1.2"
+SOLAR_SCOPE = "workspace"
+
 
 class Usage(Exception):
     """Invalid usage or settings (exit 2)."""
@@ -146,8 +152,8 @@ def write_config(workspace: Path, cfg: Config) -> None:
         "exclude_planets": list(cfg.exclude_planets),
         "exclude_agents": list(cfg.exclude_agents),
     }
-    data["scope"] = "workspace"
-    data["layout"] = "solar-client-v1.2"
+    data["scope"] = SOLAR_SCOPE
+    data["layout"] = SOLAR_LAYOUT
     os.makedirs(write_path.parent, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=write_path.parent)
     try:
@@ -483,6 +489,7 @@ class Scan:
     eligible: list = field(default_factory=list)
     omitted: list = field(default_factory=list)       # (source, reason)
     unknown_sources: set = field(default_factory=set)
+    invalid_sources: set = field(default_factory=set)  # contract exists but does not validate
     unknown_planets: set = field(default_factory=set)  # exact planet names
 
 
@@ -592,15 +599,18 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
                 continue
             if not stat.S_ISREG(elst.st_mode):
                 scan.omitted.append((source, "unsafe link or not a regular file"))
+                scan.invalid_sources.add(source)
                 continue
             try:
                 raw = _read_regular(str(agents_dir / fname), MAX_SOURCE_BYTES)
             except ContractError as exc:
                 scan.omitted.append((source, str(exc)))
+                scan.invalid_sources.add(source)
                 continue
             except OSError as exc:
                 if exc.errno == errno.ELOOP:
                     scan.omitted.append((source, "unsafe link or not a regular file"))
+                    scan.invalid_sources.add(source)
                 else:
                     scan.unknown_sources.add(source)
                     scan.omitted.append((source, f"unreadable: {exc.strerror or exc}"))
@@ -610,6 +620,7 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
                 name = public_name(pname, stem)
             except ContractError as exc:
                 scan.omitted.append((source, str(exc)))
+                scan.invalid_sources.add(source)
                 continue
             hit = None
             for ex_name, pats in patterns.items():
@@ -623,6 +634,7 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
                 pname, stem, name, contract.description, contract.body, contract.source_sha)
             if not verify_generated(text, name, contract.description, instructions):
                 scan.omitted.append((source, "serialization failed"))
+                scan.invalid_sources.add(source)
                 continue
             scan.eligible.append(Eligible(
                 pname, stem, source, f"{pname}:{stem}", name, f"{name}.toml",
@@ -936,6 +948,14 @@ def build_plan(scan: Scan, dest: Dest) -> Plan:
             final[entry["file"]] = entry
             plan.omitted.append((entry["source"], "kept: source status unknown"))
             continue
+        if entry["source"] in scan.invalid_sources:
+            # The contract still exists but does not validate (bad frontmatter,
+            # empty body, serialization failed). Keep the published file instead
+            # of retiring it: editing a contract must never delete the role. It
+            # is retired only when the .md disappears or the agent/planet is excluded.
+            final[entry["file"]] = entry
+            plan.omitted.append((entry["source"], "kept: contract is invalid"))
+            continue
         kind = dest.entries.get(entry["file"])
         data = dest.contents.get(entry["file"])
         if kind is None:
@@ -1072,8 +1092,11 @@ def report(plan: Plan, as_json: bool = False, dry_run: bool = False, enabled: bo
 
 def require_tomllib() -> None:
     if tomllib is None:
-        raise Refusal("Python 3.11 or newer is required (tomllib is missing); "
-                      "Codex agent publication is skipped")
+        version = sys.version.split()[0] if sys.version else "unknown"
+        raise Refusal(
+            f"Codex agent publication needs Python 3.11 or newer (tomllib is missing), "
+            f"but the interpreter on PATH is Python {version} ({sys.executable}); "
+            f"run solar client sync with a Python 3.11+ `python3`")
 
 
 def scope_listing(workspace: Path, cfg: Config) -> dict:
@@ -1163,8 +1186,14 @@ def cmd_disable(workspace: Path, args) -> int:
 def cmd_exclude(workspace: Path, args) -> int:
     cfg = load_config(workspace)
     if args.action == "list":
-        lines = list(cfg.exclude_planets) + list(cfg.exclude_agents)
-        print("\n".join(lines) if lines else "(none)")
+        lines = [f"planet: {p}" for p in cfg.exclude_planets]
+        lines += [f"agent: {a}" for a in cfg.exclude_agents]
+        global_lines = [f"planet: {p} (global, applies to Codex agents too)"
+                        for p in cfg.global_exclude_planets]
+        for line in lines + global_lines:
+            print(line)
+        if not (lines or global_lines):
+            print("(none)")
         return EXIT_OK
     target = args.target
     if target is None:

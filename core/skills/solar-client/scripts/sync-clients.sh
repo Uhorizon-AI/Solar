@@ -546,8 +546,21 @@ sync_codex() {
 # untouched (warn and continue); any other failure is reported, the remaining
 # clients still sync, and the script exits non-zero at the end.
 sync_codex_agents() {
+  # Off by default: when disabled, invoke nothing and print nothing, so a sync
+  # with no changes writes nothing and stays silent.
+  if [[ "$(solar_client_codex_agents_enabled "$ROOT_DIR")" != "true" ]]; then
+    return 0
+  fi
   local rc=0
-  python3 "$(dirname "${BASH_SOURCE[0]}")/codex_agents.py" --workspace "$ROOT_DIR" publish || rc=$?
+  # Shared resolver: honours SOLAR_CODEX_AGENTS_PY and reports a clear error if
+  # the publisher is missing (instead of a raw python traceback).
+  local helper
+  if ! helper="$(solar_client_codex_agents_py)"; then
+    echo -e "${RED}ERROR:${NC} Codex agent publisher is missing; other clients were still synced" >&2
+    CODEX_AGENTS_FAILED=true
+    return 0
+  fi
+  python3 "$helper" --workspace "$ROOT_DIR" publish || rc=$?
   case "$rc" in
     0) ;;
     3) log_warn "Codex agents: some agents were left untouched because of conflicts (see above)" ;;

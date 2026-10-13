@@ -8,7 +8,7 @@ through `tomllib`); without it enable, `preview --contents` and publish refuse.
 ## Commands
 
 ```bash
-solar client sync codex-agents status                    # enabled flag and exclusions; reads no planet
+solar client sync codex-agents status [--json]           # enabled flag and exclusions; reads no planet
 solar client sync codex-agents preview [--json]          # scope only: planet names and classification
 solar client sync codex-agents preview --contents [--json]  # full plan, dry run, never writes
 solar client sync codex-agents enable | disable
@@ -53,10 +53,31 @@ point at another non-excluded planet directly under `planets/`.
 
 A contract is published only if frontmatter has `name` (equal to the file stem) and
 `description` (at most 1024 characters) and the body is not empty; other reasons are
-reported as `omitted: <source>: <reason>`. An agent whose text references an excluded
-planet (`planets/<P>`, `../<P>/`, `<P>:<name>`) is omitted without opening that planet.
-An identity in `exclude_agents` (`planet:agent`, case-insensitive, `-` equals `_`) is
-omitted before its file is opened.
+reported as `omitted: <source>: <reason>`. A contract that exists but does not
+validate (broken frontmatter, empty body, serialization failure, unsafe/non-regular
+file) is `kept: contract is invalid`: its already-published `.toml` is **not** retired,
+so editing a contract never deletes the role. It is retired only when the `.md`
+disappears or the agent/planet becomes excluded. An agent whose text references an
+excluded planet (`planets/<P>`, `../<P>/`, `<P>:<name>`) is omitted without opening
+that planet. An identity in `exclude_agents` (`planet:agent`, case-insensitive, `-`
+equals `_`) is omitted before its file is opened.
+
+## Excluding a planet after it was published
+
+Disabling (`codex-agents disable`) stops publication but does not remove files already
+written; `publish` returns before scanning, so a later `exclude add --client codex`
+alone will not retract them. To retract a planet you already published, re-enable,
+sync (the publisher retires its unchanged files now that the planet is excluded), then
+disable again:
+
+```bash
+solar client sync codex-agents enable
+solar client sync --codex-only        # retires the now-excluded planet's files
+solar client sync codex-agents disable
+```
+
+If a `.toml` you edited by hand stays behind, delete it yourself; Solar never removes a
+file it does not own.
 
 ## Generated files
 
