@@ -31,6 +31,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Executable bit on solar CLI
         run: |
           mode="$(git ls-files -s core/skills/solar-client/scripts/solar | awk '{print $1}')"
@@ -79,6 +82,8 @@ jobs:
         run: |
           bash core/tests/skills/solar-paths/test_resolve_solar_paths.sh
           bash core/tests/skills/solar-client/test_client_update.sh
+          bash core/tests/skills/solar-client/test_sync_codex_agents.sh
+          uv run --project core/tests pytest core/tests/skills/solar-client/test_codex_agents.py -q
 
   install-ubuntu-informative:
     name: Install E2E (Ubuntu, informative)

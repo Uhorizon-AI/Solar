@@ -13,6 +13,10 @@ Usage:
   solar client sync exclude list
   solar client sync exclude add <planet>
   solar client sync exclude remove <planet>
+  solar client sync exclude list|add|remove --client codex [<planet>|<planet>:<agent>]
+  solar client sync codex-agents status [--json]
+  solar client sync codex-agents enable|disable
+  solar client sync codex-agents preview [--contents] [--json]
   solar client sync exclude-skill list
   solar client sync exclude-skill add <skill>
   solar client sync exclude-skill remove <skill>
@@ -26,6 +30,14 @@ A skill name is the catalog name: "solar-telegram" for a core skill,
 reaches core; excluding the planet "solar" does not remove a core skill.
 A skill that declares "sync: false" in its own SKILL.md is excluded without
 any entry here.
+
+Native Codex agents (.codex/agents) are opt-in and off by default.
+codex-agents enable turns them on; sync then publishes them with the Codex
+client. "exclude --client codex" keeps a planet or a single agent
+(<planet>:<agent>) out of Codex agents only; other clients are unchanged.
+Global "exclude" (no --client) also applies to Codex agents, in addition to
+hiding the planet from every other client. Details:
+core/skills/solar-client/references/codex-agents.md
 EOF
 }
 
@@ -36,9 +48,66 @@ if [[ "${1:-}" == "profile" ]]; then
     --core "$(solar_core_dir)" "$@"
 fi
 
+# Native Codex agents: opt-in publication settings and dry runs.
+if [[ "${1:-}" == "codex-agents" ]]; then
+  shift
+  solar_resolve_paths --quiet
+  case "${1:-}" in
+    status|enable|disable|preview)
+      _ca_cmd="$1"
+      shift
+      _ca_py="$(solar_client_codex_agents_py)" || exit 1
+      exec python3 "$_ca_py" --workspace "$SOLAR_WORKSPACE" "$_ca_cmd" "$@"
+      ;;
+    -h|--help|"")
+      usage_sync
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown sync codex-agents subcommand: ${1:-}" >&2
+      usage_sync >&2
+      exit 2
+      ;;
+  esac
+fi
+
 # Intercept exclude BEFORE the catch-all that forwards args to sync-clients.sh.
 if [[ "${1:-}" == "exclude" ]]; then
   shift
+  # Optional --client <name> (before or after the planet). Without it, the
+  # behaviour below is the original global exclusion.
+  _client=""
+  _rest=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --client)
+        if [[ $# -lt 2 ]]; then
+          echo "ERROR: --client requires a value (codex)" >&2
+          exit 2
+        fi
+        _client="$2"
+        shift 2
+        ;;
+      --client=*)
+        _client="${1#--client=}"
+        shift
+        ;;
+      *)
+        _rest+=("$1")
+        shift
+        ;;
+    esac
+  done
+  set -- "${_rest[@]+"${_rest[@]}"}"
+  if [[ -n "$_client" ]]; then
+    if [[ "$_client" != "codex" ]]; then
+      echo "ERROR: unknown client for sync exclude: $_client (supported: codex)" >&2
+      exit 2
+    fi
+    solar_resolve_paths --quiet
+    _ca_py="$(solar_client_codex_agents_py)" || exit 1
+    exec python3 "$_ca_py" --workspace "$SOLAR_WORKSPACE" exclude "$@"
+  fi
   solar_resolve_paths --quiet
   if ! _exclude_raw="$(solar_client_read_sync_exclude_planets "$SOLAR_WORKSPACE")"; then
     echo "ERROR: cannot read sync exclusions; repair workspace settings before continuing" >&2

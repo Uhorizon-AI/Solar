@@ -94,6 +94,7 @@ UNIT_UPGRADE="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_upgrade.s
 UNIT_MANIFEST="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_manifest.sh"
 UNIT_BUNDLE="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_bundle.sh"
 UNIT_SYNC_EXCLUDE="$INSTALL_ROOT/core/tests/skills/solar-client/test_sync_exclude.sh"
+UNIT_SYNC_CODEX_AGENTS="$INSTALL_ROOT/core/tests/skills/solar-client/test_sync_codex_agents.sh"
 if [[ -f "$UNIT_RESOLVE" ]]; then
   bash "$UNIT_RESOLVE" >/dev/null 2>&1 && pass "unit: test_resolve_solar_paths.sh" || fail "unit: test_resolve_solar_paths.sh"
 else
@@ -123,6 +124,11 @@ if [[ -f "$UNIT_SYNC_EXCLUDE" ]]; then
   bash "$UNIT_SYNC_EXCLUDE" >/dev/null 2>&1 && pass "unit: test_sync_exclude.sh" || fail "unit: test_sync_exclude.sh"
 else
   fail "missing test_sync_exclude.sh"
+fi
+if [[ -f "$UNIT_SYNC_CODEX_AGENTS" ]]; then
+  bash "$UNIT_SYNC_CODEX_AGENTS" >/dev/null 2>&1 && pass "unit: test_sync_codex_agents.sh" || fail "unit: test_sync_codex_agents.sh"
+else
+  fail "missing test_sync_codex_agents.sh"
 fi
 
 echo "=== Workspace conflict (exported vs cwd) ==="

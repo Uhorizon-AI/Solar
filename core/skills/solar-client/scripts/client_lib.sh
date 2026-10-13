@@ -325,6 +325,37 @@ solar_client_console_language_py() {
   printf '%s\n' "$helper"
 }
 
+# Print "true" when codex_agents.enabled is true in .solar/settings.json
+# (default false). Tolerant: any read problem prints "false" and exits 0.
+solar_client_codex_agents_enabled() {
+  local workspace="$1"
+  local path
+  path="$(solar_client_settings_path "$workspace")"
+  [[ -f "$path" ]] || { printf 'false\n'; return 0; }
+  python3 - <<'PY' "$path"
+import json, sys
+enabled = False
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        data = json.load(fh)
+    block = data.get("codex_agents") if isinstance(data, dict) else None
+    enabled = bool(block.get("enabled")) if isinstance(block, dict) else False
+except Exception:
+    enabled = False
+print("true" if enabled else "false")
+PY
+}
+
+# Codex native agent publisher (opt-in); ships next to this file.
+solar_client_codex_agents_py() {
+  local helper="${SOLAR_CODEX_AGENTS_PY:-$_CLIENT_LIB_SCRIPT_DIR/codex_agents.py}"
+  if [[ ! -f "$helper" ]]; then
+    printf 'ERROR: Codex agent publisher is missing: %s. It ships inside the solar-client skill (scripts/codex_agents.py).\n' "$helper" >&2
+    return 1
+  fi
+  printf '%s\n' "$helper"
+}
+
 # Effective console language: en when the key is missing or not Spanish.
 solar_client_read_language() {
   local workspace="$1"

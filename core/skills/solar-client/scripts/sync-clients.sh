@@ -8,6 +8,8 @@
 # - .claude/{skills,agents,commands}
 # - .cursor/{skills,agents,commands}
 # - .agents/skills  (Antigravity and Codex: copies, skills only)
+# - .codex/agents   (Codex only, opt-in: derived roles from planet agent contracts,
+#                    published by codex_agents.py; off unless `codex-agents enable`)
 # Codex does not get a second copy under .codex/skills.
 #
 # Naming:
@@ -67,6 +69,7 @@ GEMINI_SKILLS="$GEMINI_DIR/skills"
 GEMINI_COMMANDS="$GEMINI_DIR/commands"
 
 SYNC_CODEX=false
+CODEX_AGENTS_FAILED=false
 SYNC_CLAUDE=false
 SYNC_CURSOR=false
 SYNC_GEMINI=false
@@ -534,7 +537,38 @@ sync_codex() {
     warn_antigravity_shared_names
     sync_antigravity_skills "$AGENTS_PROFILE_INDEX" "$AGY_SKILLS"
   fi
+  sync_codex_agents
   echo
+}
+
+# Native Codex agents (.codex/agents). Opt-in; the publisher itself returns 0
+# without reading any planet while disabled. Exit 3 means conflicts were left
+# untouched (warn and continue); any other failure is reported, the remaining
+# clients still sync, and the script exits non-zero at the end.
+sync_codex_agents() {
+  # Off by default: when disabled, invoke nothing and print nothing, so a sync
+  # with no changes writes nothing and stays silent.
+  if [[ "$(solar_client_codex_agents_enabled "$ROOT_DIR")" != "true" ]]; then
+    return 0
+  fi
+  local rc=0
+  # Shared resolver: honours SOLAR_CODEX_AGENTS_PY and reports a clear error if
+  # the publisher is missing (instead of a raw python traceback).
+  local helper
+  if ! helper="$(solar_client_codex_agents_py)"; then
+    echo -e "${RED}ERROR:${NC} Codex agent publisher is missing; other clients were still synced" >&2
+    CODEX_AGENTS_FAILED=true
+    return 0
+  fi
+  python3 "$helper" --workspace "$ROOT_DIR" publish || rc=$?
+  case "$rc" in
+    0) ;;
+    3) log_warn "Codex agents: some agents were left untouched because of conflicts (see above)" ;;
+    *)
+      echo -e "${RED}ERROR:${NC} Codex agent publication failed (exit $rc); other clients were still synced" >&2
+      CODEX_AGENTS_FAILED=true
+      ;;
+  esac
 }
 
 sync_claude() {
@@ -868,5 +902,10 @@ $SYNC_GEMINI && sync_gemini
 $SYNC_VSCODE && sync_vscode
 $SYNC_CURSOR && sync_cursor
 $SYNC_ANTIGRAVITY && sync_antigravity
+
+if $CODEX_AGENTS_FAILED; then
+  echo -e "${RED}Sync finished with errors: Codex agents were not published.${NC}" >&2
+  exit 1
+fi
 
 echo -e "${GREEN}✅ Sync complete.${NC}"

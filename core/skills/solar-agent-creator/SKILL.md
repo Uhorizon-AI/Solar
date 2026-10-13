@@ -46,6 +46,14 @@ None
    authorized; report saved changes, pending publication and continuity renewal
    separately. A draft, attempted operation or loaded role is not a result.
 
+## Codex role publication
+
+Contracts under `planets/<planet>/agents/` remain the only editable source. Solar Client
+can publish derived Codex roles from them (opt-in; see the solar-client reference
+`codex-agents.md`). Never edit a generated file; keep frontmatter to `name` and
+`description`. Publishing a role grants no authority. After changing a contract, re-run
+`solar client sync` and start a new Codex session; report that publication separately.
+
 ## Runtime memory
 
 The public entry remains `solar agent --workspace <workspace> ...`.
