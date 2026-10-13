@@ -15,6 +15,9 @@ import app_http
 
 class PublishedReports(unittest.TestCase):
     def setUp(self):
+        self.inventory_patch = patch.object(operation_reports, '_inventory', None)
+        self.inventory_patch.start()
+        self.addCleanup(self.inventory_patch.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.workspace = Path(self.tmp.name)
@@ -191,3 +194,73 @@ class LegacyContinuityRoute(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DashboardCatalogs(unittest.TestCase):
+    setUp = PublishedReports.setUp
+    publish = PublishedReports.publish
+
+    def tool(self, **overrides):
+        row = dict(title='Triage', description='Review contacts', owner='Sales',
+                   updated_at='2026-10-13', start_command='python3 server.py',
+                   mode='interactive', url='http://127.0.0.1:8777/')
+        row.update(overrides)
+        return row
+
+    def catalog(self, **overrides):
+        path = self.planet / operation_reports.DASHBOARDS_RELATIVE
+        path.write_text(json.dumps(dict(version=1, dashboards=[self.tool(**overrides)])))
+        return path
+
+    def test_tools_and_reports_coexist_without_mutating_indexes(self):
+        path = self.catalog()
+        before = path.read_bytes(), self.index.read_bytes()
+        data = operation_reports.dashboard_index(self.workspace)
+        self.assertEqual([x['kind'] for x in data['dashboards']], ['report', 'tool'])
+        self.assertEqual([x['mode'] for x in data['dashboards']], ['read_only', 'interactive'])
+        self.assertEqual(before, (path.read_bytes(), self.index.read_bytes()))
+        self.assertEqual(len(operation_reports.report_index(self.workspace)['reports']), 1)
+
+    def test_url_allowlist(self):
+        for url in ['http://localhost:1/', 'http://127.0.0.1:65535/']:
+            self.assertEqual(operation_reports.dashboard_url(url), url)
+        for url in ['https://localhost:8777/', 'https://example.com/',
+                    'http://localhost/', 'http://localhost:0/', 'http://localhost:65536/',
+                    'http://[::1]:8777/', 'http://localhost:8777/path',
+                    'http://localhost:8777/?x=1', 'http://localhost:8777/#x',
+                    'http://user@localhost:8777/', 'javascript:alert(1)', 'data:text/html,foo',
+                    'http://localhost.evil:8777/', 'http://127.1:8777/',
+                    'http://localhost:8777/\n', None]:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                operation_reports.dashboard_url(url)
+
+    def test_mode_and_start_command_required(self):
+        for fields in [dict(mode='write'), dict(start_command=''), dict(mode=None)]:
+            self.catalog(**fields)
+            data = operation_reports.dashboard_index(self.workspace)
+            self.assertEqual(len(data['dashboards']), 1)
+            self.assertEqual(data['errors'][0]['source'], 'dashboards')
+
+    def test_excluded_planet_is_not_opened(self):
+        self.catalog()
+        with patch.object(operation_reports, 'excluded_planets', return_value={'example'}), patch.object(operation_reports, 'read_dashboards', side_effect=AssertionError('must not read')):
+            self.assertEqual(operation_reports.dashboard_index(self.workspace), dict(dashboards=[], errors=[]))
+
+    def test_catalog_symlink_escape_is_refused(self):
+        path = self.catalog()
+        other = self.workspace / 'private.json'
+        other.write_bytes(path.read_bytes())
+        path.unlink()
+        path.symlink_to(other)
+        self.assertTrue(operation_reports.dashboard_index(self.workspace)['errors'])
+
+    def test_dashboard_route_and_legacy_reports(self):
+        self.catalog()
+        class Handler:
+            def _send_json(self, payload, status=200):
+                self.payload, self.status = payload, status
+        handler = Handler()
+        app_http.get(handler, '/api/console/dashboards', {}, self.workspace)
+        self.assertEqual(len(handler.payload['dashboards']), 2)
+        app_http.get(handler, '/api/console/reports', {}, self.workspace)
+        self.assertEqual(len(handler.payload['reports']), 1)

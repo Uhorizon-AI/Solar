@@ -20,7 +20,7 @@ QUESTIONS = (
     "¿Está sana mi instalación, y desde cuándo no hace nada?",
     "¿Qué tareas hay y qué les ha pasado?",
     "¿Qué ha ejecutado Solar y cómo le ha ido?",
-    "¿Qué requiere mi atención hoy?",
+    "¿Dónde puedo trabajar con cada planeta?",
     "¿Qué hace Solar sin preguntarme?",
     "¿Qué ve cada app?",
     "¿Qué canales reciben encargos y cómo funcionan?",
@@ -31,7 +31,7 @@ ROUTES = (
     "/api/console/tasks",
     "/api/console/task-detail?task_id=",
     "/api/console/executions",
-    "/api/console/reports",
+    "/api/console/dashboards",
     "/api/console/mandates",
     "/api/console/ides",
     "/api/console/ingress",
@@ -152,7 +152,7 @@ class ConsoleUiTests(unittest.TestCase):
     def test_report_cards_are_styled_for_the_dark_theme(self):
         css = (ASSETS / "app.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\.rep a\{[^}]*color:var\(--info\)", "report links use a theme token, not the browser blue")
-        self.assertRegex(css, r"\.rep h2\{[^}]*font-size:15px", "report titles are not default h2")
+        self.assertRegex(css, r"\.rep (?:h2|h3)[^{]*\{[^}]*font-size:15px", "report titles are not default h2")
 
     def test_filter_bar_styles_keep_the_agreed_rules(self):
         css = (ASSETS / "app.css").read_text(encoding="utf-8")
@@ -400,12 +400,29 @@ async function settled() {
   if (entry.includes("Connector ready")) throw new Error("entrada reused a stale gateway");
 
   page = boot(Object.assign({
-    "/api/console/reports": { body: { reports: [{ title: "Attention", href: "/reports/example/operations/attention.html", owner: "Example", period: "Today", coverage: "Partial", generated_at: "2026-10-11", next_decision: "Review" }], errors: [] } },
+    "/api/console/dashboards": { body: { dashboards: [{ kind: "report", mode: "read_only", title: "Attention", href: "/reports/example/operations/attention.html", owner: "Example", period: "Today", coverage: "Partial", generated_at: "2026-10-11", next_decision: "Review" }], errors: [] } },
   }, calm));
   await settled();
   page.click({ "data-screen": "reportes" });
   await settled();
   if (!page.els.health.innerHTML.includes("Attention")) throw new Error("published report missing");
+  // Tool metadata stays inert and only exact local destinations become links.
+  page = boot(Object.assign({
+    "/api/console/dashboards": { body: { dashboards: [
+      {kind:"tool", planet:"example", title:"Triage", href:"http://127.0.0.1:8777/", mode:"interactive", start_command:"python3 server.py <script>", description:"Contacts", owner:"Sales", updated_at:"Today"},
+      {kind:"tool", planet:"example", title:"External", href:"https://example.com/", mode:"read_only", start_command:"echo example", description:"Rejected", owner:"Sales", updated_at:"Today"}
+    ], errors: [] } }
+  }, calm));
+  await settled();
+  page.click({"data-screen":"reportes"});
+  await settled();
+  const catalog = page.els.health.innerHTML;
+  if (!catalog.includes('rel="noopener noreferrer"') || !catalog.includes('target="_blank"')) throw new Error("unsafe dashboard link");
+  if (!catalog.includes("Interactive (can modify data in that tool)") || !catalog.includes("How to start (copy):")) throw new Error("missing tool instructions");
+  if (catalog.includes('<script>') || !catalog.includes('&lt;script&gt;')) throw new Error("unsafe command text");
+  if (catalog.includes('href="https://example.com/"')) throw new Error("external tool link");
+  const nav = page.els.nav.innerHTML;
+  if (!(nav.indexOf('data-screen="tareas"') < nav.indexOf('data-screen="reportes"') && nav.indexOf('data-screen="reportes"') < nav.indexOf('data-screen="ejecuciones"'))) throw new Error("dashboard order");
   if (page.els.nav.innerHTML.includes('data-screen="continuidad"')) throw new Error("legacy navigation remained");
 
   const need = (html, text, why) => { if (!html.includes(text)) throw new Error(why + ": missing " + text); };

@@ -25,3 +25,25 @@ Generation time does not prove data freshness. Each area owns its coverage,
 source dates and next decision. Invalid indexes appear as localized errors.
 An absent index means unpublished, not empty business activity. Publishing
 does not authorize production, contact changes, external sends or recurrence.
+
+## Dashboard catalogs
+
+Publish tools in the versioned `operations/leadership/dashboards.json`, separate
+from the generated, potentially ignored report index. Version 1 has a `dashboards`
+list (maximum 30). Each entry requires nonempty bounded strings `title`,
+`description`, `owner`, `updated_at`, and `start_command`, plus `mode` set to
+`read_only` or `interactive` and `url`. The command is displayed as escaped,
+copyable text; it is never executed. No availability checks are made.
+
+URLs must match exactly `http://localhost:<port>/` or
+`http://127.0.0.1:<port>/`, with an explicit port from 1 to 65535. External hosts,
+HTTPS, credentials, other loopback spellings, paths, queries, fragments and other
+schemes are refused. Tools open with `target="_blank"` and
+`rel="noopener noreferrer"`. Interactive tools may modify their own data;
+Console remains read only. Catalog files share report size, confinement and
+planet exclusion checks. A bad tool catalog does not hide valid reports.
+
+`GET /api/console/dashboards` combines tools and reports, tagging entries with
+`kind`, `mode`, and `planet`. Reports have mode `read_only`. The existing
+`/api/console/reports`, `/reports/…`, and navigation id `reportes` remain
+compatible. The UI groups entries by planet. Catalogs contain no business records.

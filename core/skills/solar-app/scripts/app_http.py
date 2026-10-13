@@ -32,9 +32,10 @@ def get(handler, path, qs, workspace):
         handler.end_headers()
         handler.wfile.write(body)
         return
-    if path == '/api/console/reports':
+    if path in ('/api/console/reports', '/api/console/dashboards'):
         try:
-            handler._send_json(operation_reports.report_index(workspace))
+            reader = operation_reports.dashboard_index if path.endswith('/dashboards') else operation_reports.report_index
+            handler._send_json(reader(workspace))
         except (OSError, ValueError, TypeError):
             handler._send_json({'error': 'Report publication settings unavailable', 'refused': True}, 503)
         return

@@ -75,8 +75,8 @@
       nav_autonomy: "Autonomy",
       nav_ides: "Apps",
       nav_entry: "Channels",
-      nav_reports: "Reports",
-      q_reports: "What needs my attention today?",
+      nav_reports: "Dashboards",
+      q_reports: "Where can I work with each planet?",
       channels_note: "Entry diagnostics only. Conversation history is not available here.",
       nav_requester: "Requester",
       q_summary: "Is the installation healthy, and how long has it been idle?",
@@ -228,8 +228,8 @@
       nav_autonomy: "Autonomía",
       nav_ides: "Apps",
       nav_entry: "Canales",
-      nav_reports: "Reportes",
-      q_reports: "¿Qué requiere mi atención hoy?",
+      nav_reports: "Dashboards",
+      q_reports: "¿Dónde puedo trabajar con cada planeta?",
       channels_note: "Diagnósticos de entrada. Esta pantalla no muestra historial de conversaciones.",
       nav_requester: "Solicitante",
       q_summary: "¿Está sana mi instalación, y desde cuándo no hace nada?",
@@ -344,8 +344,8 @@
     return [
       ["resumen", t("nav_summary"), t("q_summary"), "/api/console/health"],
       ["tareas", t("nav_tasks"), t("q_tasks"), "/api/console/tasks"],
+      ["reportes", t("nav_reports"), t("q_reports"), "/api/console/dashboards"],
       ["ejecuciones", t("nav_runs"), t("q_runs"), "/api/console/executions"],
-      ["reportes", t("nav_reports"), t("q_reports"), "/api/console/reports"],
       ["autonomia", t("nav_autonomy"), t("q_autonomy"), "/api/console/mandates"],
       ["ides", t("nav_ides"), t("q_ides"), "/api/console/ides"],
       ["entrada", t("nav_entry"), t("q_entry"), "/api/console/ingress"],
@@ -1150,14 +1150,35 @@
     return '<span style="white-space:pre-wrap;overflow-wrap:anywhere">' + esc(value) + '</span>';
   }
 
+  function safeToolLink(href) {
+    if (typeof href !== "string" || /[\u0000-\u0020\u007f]/.test(href) || !/^http:\/\/(?:127\.0\.0\.1|localhost):[0-9]{1,5}\/$/.test(href)) return false;
+    var port = Number(href.split(":")[2].slice(0, -1));
+    return port >= 1 && port <= 65535;
+  }
+
   function renderReports(data) {
     var es = LANG === "es";
-    var rows = (data.reports || []).map(function (row) {
-      var safe = typeof row.href === "string" && /^\/reports\/[A-Za-z0-9_-]+\/operations\//.test(row.href);
-      return '<article class="card rep"><h2>' + (safe ? '<a href="' + esc(row.href) + '" target="_blank" rel="noopener noreferrer">' + esc(row.title) + '</a>' : esc(row.title)) + '</h2><p>' + esc(row.coverage) + '</p><p>' + esc(row.next_decision) + '</p><p class="note">' + esc(row.owner) + ' · ' + esc(row.period) + ' · ' + esc(row.generated_at) + '</p></article>';
+    var groups = Object.create(null);
+    (data.dashboards || []).forEach(function (row) {
+      var planet = row.planet || (es ? "Sin planeta" : "No planet");
+      if (!groups[planet]) groups[planet] = [];
+      groups[planet].push(row);
+    });
+    var rows = Object.keys(groups).sort().map(function (planet) {
+      var cards = groups[planet].map(function (row) {
+        var tool = row.kind === "tool";
+        var safe = tool ? safeToolLink(row.href) : typeof row.href === "string" && /^\/reports\/[A-Za-z0-9_-]+\/operations\//.test(row.href);
+        var type = tool ? (es ? "Herramienta" : "Tool") : (es ? "Reporte" : "Report");
+        var detail = tool ? row.description : row.coverage;
+        var mode = row.mode === "interactive" ? (es ? "Interactivo (puede modificar datos en esa herramienta)" : "Interactive (can modify data in that tool)") : (es ? "Solo lectura" : "Read only");
+        var note = tool ? (es ? "El servicio puede requerir arranque manual." : "The service may require a manual start.") : row.next_decision;
+        var start = tool ? '<p class="note">' + esc(es ? "Cómo arrancarlo (copiar):" : "How to start (copy):") + '</p><pre class="dashboard-start"><code>' + esc(row.start_command) + '</code></pre>' : '';
+        return '<article class="card rep"><p class="note">' + esc(type) + ' · ' + esc(mode) + '</p><h3>' + esc(row.title) + '</h3><p>' + esc(detail) + '</p><p>' + esc(note) + '</p>' + start + '<p class="note">' + esc(row.owner) + ' · ' + esc(tool ? row.updated_at : row.period + ' · ' + row.generated_at) + '</p>' + (safe ? '<a href="' + esc(row.href) + '" target="_blank" rel="noopener noreferrer">' + esc(es ? "Abrir ↗" : "Open ↗") + '</a>' : '') + '</article>';
+      }).join("");
+      return '<section class="dashboard-group"><h2>' + esc(planet) + '</h2><div class="tiles2">' + cards + '</div></section>';
     }).join("");
-    var errors = (data.errors || []).map(function (row) { return '<p class="note">' + esc(row.planet) + ': ' + esc(es ? "índice no disponible" : "index unavailable") + '</p>'; }).join("");
-    return '<p class="note">' + esc(es ? "Vistas publicadas por cada área. La fecha de generación no acredita datos frescos. Solo lectura." : "Views explicitly published by each area. Generation date does not prove fresh data. Read only.") + '</p>' + (rows || '<p>' + esc(es ? "Todavía no hay reportes publicados." : "No published reports yet.") + '</p>') + errors;
+    var errors = (data.errors || []).map(function (row) { return '<p class="note">' + esc(row.planet) + ': ' + esc(row.source) + ' · ' + esc(es ? "índice no disponible" : "index unavailable") + '</p>'; }).join("");
+    return '<p class="note">' + esc(es ? "Herramientas y reportes publicados por cada planeta. Console es de solo lectura. Cada vista se abre en otra pestaña; la fecha de publicación no acredita datos frescos." : "Tools and reports published by each planet. Console is read only. Each view opens in a new tab; publication date does not prove fresh data.") + '</p>' + (rows || '<p>' + esc(es ? "Todavía no hay dashboards publicados." : "No published dashboards yet.") + '</p>') + errors;
   }
 
   function machineTable(data, selected) {

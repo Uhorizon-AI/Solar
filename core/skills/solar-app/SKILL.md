@@ -98,7 +98,11 @@ and headings (English and Spanish); its internal id (`ides`) and route
 (`/api/console/ides`) are unchanged, and "IDE" stays only where a path is literally
 an IDE directory.
 
-The navigation shows Reports. `/api/console/reports` reads explicit planet
+The navigation shows Dashboards immediately after Tasks (internal id `reportes`).
+`/api/console/dashboards` combines versioned tool catalogs with derived reports;
+links open in new tabs and each entry declares its mode. Tool startup commands
+are copyable text only; the console never starts or probes a tool.
+`/api/console/reports` remains unchanged and reads explicit planet
 publication indexes, respecting Client planet exclusions.
 `/reports/<planet>/<relative-path>` serves only listed HTML or evidence text with
 a restrictive CSP (sandboxed, no scripts, forms, base rewrite or top navigation),

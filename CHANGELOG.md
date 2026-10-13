@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Read-only Console Dashboards after Tasks, combining versioned per-planet tool catalogs with published reports. Local tool links require explicit loopback HTTP root URLs and access modes; startup commands are copyable text. Existing Reports API and internal navigation id remain compatible.
+
 ## [0.44.0] - 2026-10-13
 
 ### Changed
