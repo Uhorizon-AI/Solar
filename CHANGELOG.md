@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- **A Solar Client older than this version refuses the new manifest (format 2, exit 5) once a workspace has migrated, so update every machine or checkout that shares that workspace before running `solar client sync --codex-only` on it.** Automatic migration happens on the next `sync --codex-only` (or full sync) with publication enabled: the manifest moves to format 2 (format 1 is still read) and each unchanged `solar__*` file (manifest, generation mark, `name` and hash all match) is replaced by the new role in the same locked run; edited, unmanaged or manifest-less `solar__*` files are reported as conflicts and left untouched. A second run changes nothing, and an interrupted run converges on the next one.
+- Native Codex agents are published as `<planet>:<agent>` (for example `uhorizon:uh-backend-dev`) instead of `solar__<planet>__<agent>`: the role `name` and the file `<planet>:<agent>.toml` use the contract `name` as is (hyphens and case kept, no `_` rewriting), the same string already used as the identity in the exclusions (which still match `-`/`_` and case loosely). Planet and agent names accept only `[A-Za-z0-9._-]`, must start with a letter or digit and are at most 64 characters; invalid names are rejected with a reason, never substituted. Publication stays off by default.
+- `:` in file names is not portable to Windows. No extra Windows check was added on purpose: the publisher already requires POSIX locking (`fcntl`) and never runs there; the limit only affects checkouts shared with Windows. A letter-case-only rename of a contract publishes the new role one sync later.
+
 ## [0.43.0] - 2026-10-13
 
 ### Added

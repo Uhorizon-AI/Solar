@@ -35,8 +35,11 @@ Antigravity and Codex do not receive commands, workflows or rules. Solar records
 ## Codex native agents (opt-in)
 
 Off by default. When enabled, `solar client sync` (Codex client) also writes derived
-roles `solar__<planet>__<agent>.toml` into `.codex/agents/` from the top-level
-`planets/<planet>/agents/*.md` contracts. Contracts stay the only editable source.
+roles `<planet>:<agent>.toml` into `.codex/agents/` from the top-level
+`planets/<planet>/agents/*.md` contracts. The role `name` is `<planet>:<agent>`
+(for example `uhorizon:uh-backend-dev`), with the contract `name` kept as is. Contracts
+stay the only editable source. Roles published by earlier versions as
+`solar__<planet>__<agent>` migrate automatically on the next `sync --codex-only`.
 
 - Generated files carry only `name`, `description` and `developer_instructions`
   (a short wrapper plus the verbatim contract body). Never sandbox, approval, MCP,
@@ -62,6 +65,9 @@ roles `solar__<planet>__<agent>.toml` into `.codex/agents/` from the top-level
 
   Global `exclude add <planet>` (no `--client`) is a wider decision: it hides the planet
   from every other client too.
+- Planet and agent names may use only `[A-Za-z0-9._-]`, must start with a letter or
+  digit and are at most 64 characters each; other names are rejected with a reason,
+  never rewritten. `:` in file names is not portable to Windows (known limit).
 - Codex must trust the project and a new Codex session is needed to see new or changed
   roles. Publishing a role grants no authority. ChatGPT Chat/Work are not covered, and
   sessions started from a nested repository are not verified.
