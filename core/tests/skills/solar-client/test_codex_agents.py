@@ -30,6 +30,21 @@ PERSONAL = "personal-x"
 
 # chmod(0) does not block reads for root, so tests that rely on an unreadable
 # file/dir fail for the wrong reason (or pass vacuously) as root. Skip them.
+def _volume_is_case_sensitive():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "Probe").write_text("x")
+        return not (Path(tmp) / "probe").exists()
+
+
+# Tests that put two sources differing only by case on disk need a case-sensitive
+# volume (Linux); on a case-insensitive one (default macOS) both names are one file.
+CASE_SENSITIVE = _volume_is_case_sensitive()
+needs_case_sensitive = pytest.mark.skipif(
+    not CASE_SENSITIVE, reason="volume is case-insensitive: Lead.md and lead.md are one file")
+needs_case_insensitive = pytest.mark.skipif(
+    CASE_SENSITIVE, reason="volume is case-sensitive")
+
 needs_unreadable = pytest.mark.skipif(
     os.geteuid() == 0, reason="root ignores file modes, so chmod(0) is still readable")
 
@@ -218,7 +233,7 @@ def test_generated_file_has_closed_field_list(ws, env):
         assert parsed["name"] + ".toml" == name
         for forbidden in ("sandbox", "approval", "mcp", "network", "model", "credentials"):
             assert forbidden not in set(parsed)
-    tricky = tomllib.loads((agents_dir(ws) / "solar__demo__tricky.toml").read_text())
+    tricky = tomllib.loads((agents_dir(ws) / "demo:tricky.toml").read_text())
     assert tricky["description"] == 'Quotes "here" and \\ slashes'
     assert 'Body with """ triple\nand a trailing quote "\n' in tricky["developer_instructions"]
     assert "does not grant" not in tricky["developer_instructions"]
@@ -230,7 +245,7 @@ def test_body_crlf_is_normalized_to_lf(ws, env):
     enable(ws, env)
     write_agent(ws, "demo", "crlf", raw=b"---\r\nname: crlf\r\ndescription: Windows line endings\r\n---\r\n\r\nline one\r\nline two\r\n")
     assert run(ws, env, "publish").returncode == 0
-    text = tomllib.loads((agents_dir(ws) / "solar__demo__crlf.toml").read_text())["developer_instructions"]
+    text = tomllib.loads((agents_dir(ws) / "demo:crlf.toml").read_text())["developer_instructions"]
     assert "line one\nline two\n" in text and "\r" not in text
 
 
@@ -244,7 +259,7 @@ BAD = {
     "noname": (b"---\ndescription: x\n---\nbody\n", "no name"),
     "nodesc": (b"---\nname: nodesc\n---\nbody\n", "no description"),
     "mismatch": (b"---\nname: other\ndescription: x\n---\nbody\n", "does not match"),
-    "badchars": (b"---\nname: 'bad name'\ndescription: x\n---\nbody\n", "unsupported characters"),
+    "badchars": (b"---\nname: 'bad name'\ndescription: x\n---\nbody\n", "characters outside"),
     "emptybody": (b"---\nname: emptybody\ndescription: x\n---\n\n  \n", "empty body"),
     "nul": (b"---\nname: nul\ndescription: x\n---\nbo\x00dy\n", "NUL"),
     "badutf8": (b"---\nname: badutf8\ndescription: x\n---\nbo\xff\xfedy\n", "UTF-8"),
@@ -264,7 +279,7 @@ def test_invalid_contracts_are_omitted_with_reason(ws, env, stem):
     assert expected in omitted(data)[source]
     assert all(item["source"] != source for item in data["items"])
     # Other agents are not affected.
-    assert "solar__demo__sales.toml" in actions(data)
+    assert "demo:sales.toml" in actions(data)
 
 
 def test_valid_scalar_forms(ws, env):
@@ -274,7 +289,7 @@ def test_valid_scalar_forms(ws, env):
     write_agent(ws, "demo", "sq", "---\nname: 'sq'\ndescription: 'It''s fine'\ntools: [a, b]\n---\nbody\n")
     enable(ws, env)
     assert run(ws, env, "publish").returncode == 0
-    desc = lambda n: tomllib.loads((agents_dir(ws) / f"solar__demo__{n}.toml").read_text())["description"]
+    desc = lambda n: tomllib.loads((agents_dir(ws) / f"demo:{n}.toml").read_text())["description"]
     assert desc("folded") == "First part second part."
     assert desc("literal") == "First second"
     assert desc("dq") == 'Quoted "x" here'
@@ -294,7 +309,7 @@ def test_ignored_files_and_nested_agents_are_never_published(ws, env):
         d.mkdir(parents=True, exist_ok=True)
         (d / "nested.md").write_text(contract("nested"))
     assert run(ws, env, "publish").returncode == 0
-    assert toml_files(ws) == ["solar__demo__sales.toml", "solar__demo__support.toml", "solar__other__ops.toml"]
+    assert toml_files(ws) == ["demo:sales.toml", "demo:support.toml", "other:ops.toml"]
     out = run(ws, env, "publish").stdout
     assert "nested" not in out and "README" not in out and "hidden" not in out
 
@@ -303,88 +318,193 @@ def test_ignored_files_and_nested_agents_are_never_published(ws, env):
 # Names
 # --------------------------------------------------------------------------
 
-def test_name_normalization(ws, env):
-    write_agent(ws, "demo", "Sales-Lead_2", contract("Sales-Lead_2"))
+def test_published_name_is_planet_colon_agent_verbatim(ws, env):
+    write_agent(ws, "demo", "Sales-Lead_2.v1", contract("Sales-Lead_2.v1"))
+    write_agent(ws, "demo", "trail_", contract("trail_"))
     data = preview_json(ws, env)
-    assert actions(data)["solar__demo__sales_lead_2.toml"] == "add"
+    assert actions(data)["demo:Sales-Lead_2.v1.toml"] == "add"
+    assert actions(data)["demo:trail_.toml"] == "add"
+
+
+def test_name_file_stem_and_identity_come_from_one_function(ws, env):
+    enable(ws, env)
+    assert run(ws, env, "publish").returncode == 0
+    for entry in manifest(ws)["agents"]:
+        planet, agent = entry["source"].split("/")[1], entry["source"].split("/")[3][:-3]
+        assert entry["name"] == entry["identity"] == ca.canonical_identity(planet, agent)
+        assert entry["file"] == entry["name"] + ".toml"
+        parsed = tomllib.loads((agents_dir(ws) / entry["file"]).read_text())
+        assert parsed["name"] == entry["name"]
+
+
+def test_hyphen_and_underscore_are_distinct_published_names(ws, env):
+    enable(ws, env)
+    write_agent(ws, "demo", "uh-sales", contract("uh-sales"))
+    write_agent(ws, "demo", "uh_sales", contract("uh_sales"))
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0, proc.stdout
+    assert {"demo:uh-sales.toml", "demo:uh_sales.toml"} <= set(toml_files(ws))
 
 
 @pytest.mark.parametrize("planet,agent,why", [
-    ("demo", "a--b", "public agent name"),
-    ("demo", "a__b", "public agent name"),
-    ("demo", "trail_", "public agent name"),
-    ("my.planet", "a", "public agent name"),
-    ("demo", "x" * 100, "96"),
+    ("demo", "a b", "characters outside"),
+    ("demo", "a:b", "contains ':'"),
+    ("my:planet", "a", "contains ':'"),
+    ("-lead", "a", "starts with '-', '.' or '_'"),
+    ("demo", "-lead", "starts with '-', '.' or '_'"),
+    ("_p", "a", "starts with '-', '.' or '_'"),
+    ("demo", "caf\u00e9", "characters outside"),
+    ("demo", "x" * 65, "longer than 64"),
+    ("p" * 65, "a", "longer than 64"),
 ])
-def test_unrepresentable_names_are_omitted(ws, env, planet, agent, why):
+def test_invalid_components_are_rejected_with_reason_and_never_substituted(ws, env, planet, agent, why):
+    enable(ws, env)
     write_agent(ws, planet, agent, contract(agent))
     data = preview_json(ws, env)
     source = f"planets/{planet}/agents/{agent}.md"
-    assert why in omitted(data)[source]
+    reason = omitted(data).get(source) or omitted(data)[f"planets/{planet}"]
+    assert why in reason and "nothing is substituted" in reason
+    assert run(ws, env, "publish").returncode == 0
+    assert toml_files(ws) == ["demo:sales.toml", "demo:support.toml", "other:ops.toml"]
+
+
+def test_canonical_identity_rejects_unsafe_components():
+    assert ca.canonical_identity("uhorizon", "uh-backend-dev") == "uhorizon:uh-backend-dev"
+    assert ca.canonical_identity("louis", "lou-ai") == "louis:lou-ai"
+    for planet, agent in [("a:b", "c"), ("a", "b:c"), ("a/b", "c"), ("a", "b/c"), ("", "c"), (".", "c"),
+                          ("..", "c"), ("a", "-b"), ("a", ".b"), ("a", "_b"), ("a", "b" * 65)]:
+        with pytest.raises(ca.ContractError):
+            ca.canonical_identity(planet, agent)
+
+
+def test_role_name_serializes_with_colon_hyphen_and_unicode_body(ws, env):
+    enable(ws, env)
+    description = 'Descripci\u00f3n "con comillas" \\ y \u65e5\u672c\u8a9e'
+    body = '# Rol\n\nTexto con \u00f1, emoji \U0001F680, """triple""" y\r\nsalto CRLF\n\n\tTab y "comillas"\n'
+    write_agent(ws, "uhorizon", "uh-backend-dev", contract("uh-backend-dev", description, body))
+    write_agent(ws, "louis", "lou-ai", contract("lou-ai"))
+    assert run(ws, env, "publish").returncode == 0
+    path = agents_dir(ws) / "uhorizon:uh-backend-dev.toml"
+    parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert set(parsed) == {"name", "description", "developer_instructions"}
+    assert parsed["name"] == "uhorizon:uh-backend-dev"
+    assert parsed["description"] == description
+    assert body.replace("\r\n", "\n") in parsed["developer_instructions"]
+    assert "`uhorizon:uh-backend-dev`" in parsed["developer_instructions"]
+    assert "solar__" not in path.read_text()
+    assert (agents_dir(ws) / "louis:lou-ai.toml").is_file()
+    assert 'name = "uhorizon:uh-backend-dev"' in path.read_text()
 
 
 # --------------------------------------------------------------------------
 # Collisions and ownership
 # --------------------------------------------------------------------------
 
-def test_hyphen_underscore_pair_collide(ws, env):
+def synthetic_eligible(planet, agent):
+    name = ca.canonical_identity(planet, agent)
+    return ca.Eligible(planet, agent, f"planets/{planet}/agents/{agent}.md", name, name, f"{name}.toml",
+                       "0" * 64, f"data {name}".encode(), "d", "i")
+
+
+@pytest.mark.parametrize("first,second", [(("demo", "Lead"), ("demo", "lead")),
+                                          (("Zed", "c"), ("zed", "c"))])
+def test_case_only_collisions_are_detected_without_touching_the_disk(first, second):
+    """Independent of the volume: the grouping works on the sources, not on files."""
+    scan = ca.Scan(eligible=[synthetic_eligible(*first), synthetic_eligible(*second),
+                             synthetic_eligible("demo", "other")])
+    plan = ca.build_plan(scan, ca.Dest())
+    assert sorted(src for src, _ in plan.conflicts) == sorted(
+        f"planets/{p}/agents/{a}.md" for p, a in (first, second))
+    assert all("same public name as" in why for _, why in plan.conflicts)
+    assert [item.file for item, _ in plan.writes] == ["demo:other.toml"]
+
+
+@needs_case_sensitive
+def test_agent_names_differing_only_by_case_collide_on_disk(ws, env):
     enable(ws, env)
-    write_agent(ws, "demo", "a-b", contract("a-b"))
-    write_agent(ws, "demo", "a_b", contract("a_b"))
+    write_agent(ws, "demo", "Lead", contract("Lead"))
+    write_agent(ws, "demo", "lead", contract("lead"))
     proc = run(ws, env, "publish")
     assert proc.returncode == 3
-    assert "solar__demo__a_b.toml" not in toml_files(ws)
-    assert proc.stdout.count("conflict:") == 2
-    assert "solar__demo__sales.toml" in toml_files(ws)
+    assert not [n for n in toml_files(ws) if n.lower() == "demo:lead.toml"]
+    assert proc.stdout.count("conflict:") == 2 and "same public name as" in proc.stdout
+    assert "demo:sales.toml" in toml_files(ws)
 
 
-def test_planet_normalization_collision(ws, env):
+@needs_case_sensitive
+def test_planet_names_differing_only_by_case_collide_on_disk(ws, env):
     enable(ws, env)
-    write_agent(ws, "a-b", "c", contract("c"))
-    write_agent(ws, "a_b", "c", contract("c"))
+    write_agent(ws, "Zed", "c", contract("c"))
+    write_agent(ws, "zed", "c", contract("c"))
     assert run(ws, env, "publish").returncode == 3
-    assert "solar__a_b__c.toml" not in toml_files(ws)
+    assert not [n for n in toml_files(ws) if n.lower() == "zed:c.toml"]
+
+
+@needs_case_insensitive
+def test_case_variant_sources_are_one_file_on_a_case_insensitive_volume(ws, env):
+    enable(ws, env)
+    write_agent(ws, "demo", "Lead", contract("Lead"))
+    write_agent(ws, "demo", "lead", contract("lead"))  # same file: only one source exists
+    assert run(ws, env, "publish").returncode in (0, 3)
+    assert len([n for n in toml_files(ws) if n.lower() == "demo:lead.toml"]) <= 1
+
+
+def test_case_only_rename_retires_then_publishes_on_the_next_run(ws, env):
+    """Documented behavior: the case-variant guard defers the new role by one run."""
+    enable(ws, env)
+    folder = ws / "planets/demo/agents"
+    (folder / "Lead.md").write_text(contract("Lead"))
+    assert run(ws, env, "publish").returncode == 0
+    (folder / "Lead.md").unlink()
+    (folder / "lead.md").write_text(contract("lead"))
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 3 and "differs only by letter case" in proc.stdout
+    assert "demo:Lead.toml" not in toml_files(ws) and "demo:lead.toml" not in toml_files(ws)
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0, proc.stdout
+    assert [n for n in toml_files(ws) if n.lower() == "demo:lead.toml"] == ["demo:lead.toml"]
+    assert_converged(ws, env)
 
 
 def test_case_variant_foreign_file_blocks(ws, env):
     agents_dir(ws).mkdir(parents=True)
-    foreign = agents_dir(ws) / "SOLAR__demo__sales.toml"
-    foreign.write_text('name = "SOLAR__demo__sales"\ndescription = "m"\ndeveloper_instructions = "x"\n')
+    foreign = agents_dir(ws) / "DEMO:sales.toml"
+    foreign.write_text('name = "DEMO:sales"\ndescription = "m"\ndeveloper_instructions = "x"\n')
     before = foreign.read_bytes()
     enable(ws, env)
     proc = run(ws, env, "publish")
     assert proc.returncode == 3
     assert foreign.read_bytes() == before
-    assert "solar__demo__sales.toml" not in os.listdir(agents_dir(ws))
+    assert "demo:sales.toml" not in os.listdir(agents_dir(ws))
     assert "planets/demo/agents/sales.md" in conflicts(preview_json(ws, env))
 
 
 def test_foreign_toml_with_same_name_blocks(ws, env):
     agents_dir(ws).mkdir(parents=True)
     foreign = agents_dir(ws) / "mine.toml"
-    foreign.write_text('name = "solar__demo__sales"\ndescription = "m"\ndeveloper_instructions = "x"\n')
+    foreign.write_text('name = "demo:sales"\ndescription = "m"\ndeveloper_instructions = "x"\n')
     enable(ws, env)
     assert run(ws, env, "publish").returncode == 3
-    assert "solar__demo__sales.toml" not in toml_files(ws)
-    assert "solar__demo__support.toml" in toml_files(ws)
+    assert "demo:sales.toml" not in toml_files(ws)
+    assert "demo:support.toml" in toml_files(ws)
 
 
 def test_config_toml_agent_table_blocks_and_is_untouched(ws, env):
     (ws / ".codex").mkdir()
     config = ws / ".codex/config.toml"
-    config.write_text('[agents.solar__demo__sales]\ndescription = "x"\n[agents]\nmax_threads = 3\n')
+    config.write_text('[agents."DEMO:Sales"]\ndescription = "x"\n[agents]\nmax_threads = 3\n')
     before = config.read_bytes()
     enable(ws, env)
     assert run(ws, env, "publish").returncode == 3
-    assert "solar__demo__sales.toml" not in toml_files(ws)
-    assert "solar__demo__support.toml" in toml_files(ws)
+    assert "demo:sales.toml" not in toml_files(ws)
+    assert "demo:support.toml" in toml_files(ws)
     assert config.read_bytes() == before
 
 
 @pytest.mark.parametrize("kind", ["dir", "symlink", "file"])
 def test_target_path_not_ours_is_a_conflict(ws, env, kind, tmp_path):
     agents_dir(ws).mkdir(parents=True)
-    target = agents_dir(ws) / "solar__demo__sales.toml"
+    target = agents_dir(ws) / "demo:sales.toml"
     outside = tmp_path / "outside.toml"
     outside.write_text("outside\n")
     if kind == "dir":
@@ -398,18 +518,18 @@ def test_target_path_not_ours_is_a_conflict(ws, env, kind, tmp_path):
     assert outside.read_text() == "outside\n"
     if kind == "file":
         assert target.read_text() == "unmanaged\n"
-    assert "solar__demo__support.toml" in toml_files(ws)
+    assert "demo:support.toml" in toml_files(ws)
 
 
 def test_unmanaged_file_with_generation_mark_is_not_adopted(ws, env):
     enable(ws, env)
     assert run(ws, env, "publish").returncode == 0
     (agents_dir(ws) / ca.MANIFEST_NAME).unlink()
-    before = (agents_dir(ws) / "solar__demo__sales.toml").read_bytes()
+    before = (agents_dir(ws) / "demo:sales.toml").read_bytes()
     proc = run(ws, env, "publish")
     assert proc.returncode == 3
     assert "generation mark" in proc.stdout
-    assert (agents_dir(ws) / "solar__demo__sales.toml").read_bytes() == before
+    assert (agents_dir(ws) / "demo:sales.toml").read_bytes() == before
 
 
 def test_foreign_toml_referencing_contract_blocks_that_agent(ws, env):
@@ -419,8 +539,8 @@ def test_foreign_toml_referencing_contract_blocks_that_agent(ws, env):
     enable(ws, env)
     proc = run(ws, env, "publish")
     assert proc.returncode == 3
-    assert "solar__demo__sales.toml" not in toml_files(ws)
-    assert "solar__demo__support.toml" in toml_files(ws)
+    assert "demo:sales.toml" not in toml_files(ws)
+    assert "demo:support.toml" in toml_files(ws)
     assert "references this contract" in proc.stdout
 
 
@@ -433,8 +553,8 @@ def test_manual_agent_untouched_and_identity_exclusion(ws, env):
     assert run(ws, env, "exclude", "add", "demo:sales").returncode == 0
     assert run(ws, env, "publish").returncode == 0
     assert (manual.read_bytes(), os.stat(manual).st_mtime_ns) == before
-    assert "solar__demo__sales.toml" not in toml_files(ws)
-    assert "solar__demo__support.toml" in toml_files(ws)
+    assert "demo:sales.toml" not in toml_files(ws)
+    assert "demo:support.toml" in toml_files(ws)
     data = preview_json(ws, env)
     assert omitted(data)["planets/demo/agents/sales.md"] == "excluded by identity"
 
@@ -464,11 +584,11 @@ def test_planet_exclusions(ws, env, mode):
     assert run(ws, env, "enable").returncode == 0
     assert run(ws, env, "publish").returncode == 0
     files = toml_files(ws)
-    assert "solar__personal_x__diary.toml" not in files
+    assert "personal-x:diary.toml" not in files
     if mode == "mixed":
-        assert "solar__other__ops.toml" not in files
+        assert "other:ops.toml" not in files
     else:
-        assert "solar__other__ops.toml" in files
+        assert "other:ops.toml" in files
     assert PERSONAL.replace("-", "_") not in json.dumps(manifest(ws))
 
 
@@ -476,7 +596,7 @@ def test_planet_exclusion_is_case_insensitive(ws, env):
     write_settings(ws, sync_exclude_planets=["PERSONAL-X"])
     assert run(ws, env, "enable").returncode == 0
     assert run(ws, env, "publish").returncode == 0
-    assert "solar__personal_x__diary.toml" not in toml_files(ws)
+    assert "personal-x:diary.toml" not in toml_files(ws)
 
 
 def test_reference_to_excluded_planet_omits_agent_with_explanation(ws, env):
@@ -490,7 +610,7 @@ def test_reference_to_excluded_planet_omits_agent_with_explanation(ws, env):
     reasons = omitted(data)
     for stem in ("ref-path", "ref-rel", "ref-id", "ref-desc"):
         assert reasons[f"planets/demo/agents/{stem}.md"] == "references excluded planet personal-x"
-    assert "solar__demo__ref_near.toml" in actions(data)
+    assert "demo:ref-near.toml" in actions(data)
 
 
 # --------------------------------------------------------------------------
@@ -529,6 +649,14 @@ def audited(ws, env, tmp_path, *args):
     return proc, json.loads(log.read_text())
 
 
+def touched_planet(seen, planet):
+    """Audit events that opened, listed or walked anything under planets/<planet>.
+    Published files are named after the planet (<planet>:<agent>.toml) and live under
+    .codex/agents, so the planets/ path prefix is what identifies a source access."""
+    marker = f"/planets/{planet}"
+    return [s for s in seen if s[1].endswith(marker) or f"{marker}/" in s[1]]
+
+
 @pytest.mark.parametrize("args", [
     ("publish",), ("preview",), ("preview", "--contents"), ("preview", "--contents", "--json"),
     ("status",), ("enable",),
@@ -539,7 +667,7 @@ def test_excluded_planet_is_never_touched(ws, env, tmp_path, args):
         assert run(ws, env, "enable").returncode == 0
     proc, seen = audited(ws, env, tmp_path, *args)
     assert proc.returncode == 0, proc.stderr
-    assert not [s for s in seen if PERSONAL in s[1]], seen
+    assert not touched_planet(seen, PERSONAL), seen
     if (ws / ".codex/agents").exists():
         written = "".join(p.read_text() for p in (ws / ".codex/agents").glob("*") if p.is_file())
         assert PERSONAL.replace("-", "_") not in written and PERSONAL not in written
@@ -555,7 +683,7 @@ def test_excluded_planet_survives_chmod_000(ws, env):
         assert run(ws, env, "publish").returncode == 0
         assert run(ws, env, "preview", "--contents").returncode == 0
         assert run(ws, env, "preview").returncode == 0
-        assert "solar__demo__sales.toml" in toml_files(ws)
+        assert "demo:sales.toml" in toml_files(ws)
     finally:
         os.chmod(planet, 0o755)
 
@@ -578,13 +706,13 @@ def test_disabled_publish_with_nonexistent_planets_dir(tmp_path, env):
 def test_retire_when_source_planet_excluded_later_never_reads_it(ws, env, tmp_path):
     assert run(ws, env, "enable").returncode == 0
     assert run(ws, env, "publish").returncode == 0
-    assert "solar__personal_x__diary.toml" in toml_files(ws)
+    assert "personal-x:diary.toml" in toml_files(ws)
     run(ws, env, "exclude", "add", PERSONAL)
     proc, seen = audited(ws, env, tmp_path, "publish")
     assert proc.returncode == 0, proc.stderr
-    assert "solar__personal_x__diary.toml" not in toml_files(ws)
-    assert not [s for s in seen if PERSONAL in s[1]], seen
-    assert "retire: solar__personal_x__diary.toml" in proc.stdout
+    assert "personal-x:diary.toml" not in toml_files(ws)
+    assert not touched_planet(seen, PERSONAL), seen
+    assert "retire: personal-x:diary.toml" in proc.stdout
 
 
 # --------------------------------------------------------------------------
@@ -752,21 +880,21 @@ def test_retire_unchanged_file_when_source_removed(ws, env):
     assert run(ws, env, "publish").returncode == 0
     (ws / "planets/demo/agents/support.md").unlink()
     proc = run(ws, env, "publish")
-    assert proc.returncode == 0 and "retire: solar__demo__support.toml" in proc.stdout
-    assert "solar__demo__support.toml" not in toml_files(ws)
-    assert [e["file"] for e in manifest(ws)["agents"]] == ["solar__demo__sales.toml", "solar__other__ops.toml"]
+    assert proc.returncode == 0 and "retire: demo:support.toml" in proc.stdout
+    assert "demo:support.toml" not in toml_files(ws)
+    assert [e["file"] for e in manifest(ws)["agents"]] == ["demo:sales.toml", "other:ops.toml"]
 
 
 def test_invalid_contract_keeps_published_file(ws, env):
     """Editing a contract into an invalid state must not delete the role."""
     enable(ws, env)
     run(ws, env, "publish")
-    target = agents_dir(ws) / "solar__demo__support.toml"
+    target = agents_dir(ws) / "demo:support.toml"
     before = target.read_bytes()
     (ws / "planets/demo/agents/support.md").write_text("no frontmatter now\n")
     proc = run(ws, env, "publish")
     assert proc.returncode == 0
-    assert "solar__demo__support.toml" in toml_files(ws)
+    assert "demo:support.toml" in toml_files(ws)
     assert target.read_bytes() == before
     assert "omitted: planets/demo/agents/support.md: no frontmatter" in proc.stdout
     assert "kept: contract is invalid" in proc.stdout
@@ -786,7 +914,7 @@ def test_invalid_contracts_never_retire(ws, env, broken):
     else:
         path.write_text(broken)
     assert run(ws, env, "publish").returncode == 0
-    assert "solar__demo__support.toml" in toml_files(ws)
+    assert "demo:support.toml" in toml_files(ws)
 
 
 def test_removing_invalid_contract_then_retires(ws, env):
@@ -795,11 +923,11 @@ def test_removing_invalid_contract_then_retires(ws, env):
     run(ws, env, "publish")
     (ws / "planets/demo/agents/support.md").write_text("no frontmatter now\n")
     assert run(ws, env, "publish").returncode == 0
-    assert "solar__demo__support.toml" in toml_files(ws)
+    assert "demo:support.toml" in toml_files(ws)
     (ws / "planets/demo/agents/support.md").unlink()
     proc = run(ws, env, "publish")
-    assert proc.returncode == 0 and "retire: solar__demo__support.toml" in proc.stdout
-    assert "solar__demo__support.toml" not in toml_files(ws)
+    assert proc.returncode == 0 and "retire: demo:support.toml" in proc.stdout
+    assert "demo:support.toml" not in toml_files(ws)
 
 
 def test_invalid_contract_then_excluded_retires(ws, env):
@@ -811,75 +939,52 @@ def test_invalid_contract_then_excluded_retires(ws, env):
     assert run(ws, env, "exclude", "add", "demo").returncode == 0
     proc = run(ws, env, "publish")
     assert proc.returncode == 0
-    assert "solar__demo__support.toml" not in toml_files(ws)
-    assert "solar__demo__sales.toml" not in toml_files(ws)
+    assert "demo:support.toml" not in toml_files(ws)
+    assert "demo:sales.toml" not in toml_files(ws)
 
 
-def test_rename_same_public_name_adopts_entry(ws, env):
-    """Renaming a contract must not keep and retire the same entry at once."""
+def test_rename_publishes_new_name_and_retires_old_in_one_run(ws, env):
     enable(ws, env)
-    run(ws, env, "publish")
     folder = ws / "planets/demo/agents"
     (folder / "foo-bar.md").write_text(contract("foo-bar"))
     assert run(ws, env, "publish").returncode == 0
-    assert "solar__demo__foo_bar.toml" in toml_files(ws)
-    # Rename file and frontmatter name: same public name, new identity.
+    assert "demo:foo-bar.toml" in toml_files(ws)
     (folder / "foo-bar.md").unlink()
     (folder / "foo_bar.md").write_text(contract("foo_bar"))
     proc = run(ws, env, "publish")
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "solar__demo__foo_bar.toml" in toml_files(ws)
-    assert [e["identity"] for e in manifest(ws)["agents"] if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo_bar"]
-    # And it converges: the next run is a clean no-op, no conflict.
-    proc = run(ws, env, "publish")
-    assert proc.returncode == 0
-    assert "conflict:" not in proc.stdout
-
-
-@pytest.mark.parametrize("old,new", [("Foo_bar", "foo_bar"), ("foo-bar", "foo_bar")])
-def test_rename_case_or_separator_adopts_entry(ws, env, old, new):
-    enable(ws, env)
-    folder = ws / "planets/demo/agents"
-    (folder / f"{old}.md").write_text(contract(old))
-    assert run(ws, env, "publish").returncode == 0
-    (folder / f"{old}.md").unlink()
-    (folder / f"{new}.md").write_text(contract(new))
-    assert run(ws, env, "publish").returncode == 0
-    assert toml_files(ws).count("solar__demo__foo_bar.toml") == 1
-    entry = [e for e in manifest(ws)["agents"] if e["file"] == "solar__demo__foo_bar.toml"]
-    assert len(entry) == 1 and entry[0]["identity"] == f"demo:{new}"
+    assert "demo:foo-bar.toml" not in toml_files(ws)
+    assert "demo:foo_bar.toml" in toml_files(ws)
+    assert [e["identity"] for e in manifest(ws)["agents"] if e["file"] == "demo:foo_bar.toml"] == ["demo:foo_bar"]
+    assert_converged(ws, env)
 
 
 def test_rename_across_planets_retires_old_and_adds_new(ws, env):
-    """A moved contract to a different planet retires the old and adds the new."""
     enable(ws, env)
     write_agent(ws, "other", "foo-bar", contract("foo-bar"))
     assert run(ws, env, "publish").returncode == 0
     (ws / "planets/other/agents/foo-bar.md").unlink()
     write_agent(ws, "demo", "foo-bar", contract("foo-bar"))
-    proc = run(ws, env, "publish")
-    assert proc.returncode == 0
-    assert "solar__other__foo_bar.toml" not in toml_files(ws)
-    assert "solar__demo__foo_bar.toml" in toml_files(ws)
-    assert [e["identity"] for e in manifest(ws)["agents"]
-            if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo-bar"]
+    assert run(ws, env, "publish").returncode == 0
+    assert "other:foo-bar.toml" not in toml_files(ws)
+    assert "demo:foo-bar.toml" in toml_files(ws)
 
 
-def test_rename_with_excluded_old_planet_never_reads_it(ws, env):
+def test_retire_with_excluded_planet_never_reads_it(ws, env, tmp_path):
     enable(ws, env)
     write_agent(ws, "demo", "foo-bar", contract("foo-bar"))
     assert run(ws, env, "publish").returncode == 0
     (ws / "planets/demo/agents/foo-bar.md").unlink()
     write_agent(ws, "other", "foo-bar", contract("foo-bar"))
     assert run(ws, env, "exclude", "add", "demo").returncode == 0
-    proc = run(ws, env, "publish")
+    proc, seen = audited(ws, env, tmp_path, "publish")
     assert proc.returncode == 0
-    assert "solar__demo__foo_bar.toml" not in toml_files(ws)
-    assert "solar__other__foo_bar.toml" in toml_files(ws)
+    assert not touched_planet(seen, "demo"), seen
+    assert "demo:foo-bar.toml" not in toml_files(ws)
+    assert "other:foo-bar.toml" in toml_files(ws)
 
 
 def test_interrupted_rename_converges(ws, env):
-    """A crash mid-rename must converge on the next run, no duplicate entries."""
     enable(ws, env)
     folder = ws / "planets/demo/agents"
     (folder / "foo-bar.md").write_text(contract("foo-bar"))
@@ -889,107 +994,43 @@ def test_interrupted_rename_converges(ws, env):
     proc = run(ws, env, "publish", extra_env={"SOLAR_CODEX_AGENTS_TEST_FAIL_AFTER": "1"})
     assert proc.returncode != 0
     assert run(ws, env, "publish").returncode == 0
-    assert toml_files(ws).count("solar__demo__foo_bar.toml") == 1
+    assert toml_files(ws).count("demo:foo_bar.toml") == 1
+    assert "demo:foo-bar.toml" not in toml_files(ws)
     entries = manifest(ws)["agents"]
     assert len({e["file"] for e in entries}) == len(entries)
     assert_converged(ws, env)
 
 
-def test_present_invalid_old_contract_blocks_adoption(ws, env):
-    """A still-present old contract (invalid) is never replaced: keep and report."""
+def test_invalid_old_contract_keeps_its_role_while_new_stem_publishes(ws, env):
     enable(ws, env)
     folder = ws / "planets/demo/agents"
     (folder / "foo-bar.md").write_text(contract("foo-bar"))
     assert run(ws, env, "publish").returncode == 0
-    original = (agents_dir(ws) / "solar__demo__foo_bar.toml").read_bytes()
-    # The old contract still exists but no longer validates; a valid new stem appears.
+    original = (agents_dir(ws) / "demo:foo-bar.toml").read_bytes()
     (folder / "foo-bar.md").write_text("no frontmatter now\n")
     (folder / "foo_bar.md").write_text(contract("foo_bar"))
     proc = run(ws, env, "publish")
-    assert proc.returncode == 3, proc.stdout + proc.stderr
-    assert "belongs to another source" in proc.stdout
-    # The published role is untouched and still belongs to the old identity.
-    assert (agents_dir(ws) / "solar__demo__foo_bar.toml").read_bytes() == original
-    assert [e["identity"] for e in manifest(ws)["agents"]
-            if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo-bar"]
-
-
-def test_present_mismatched_name_old_contract_blocks_adoption(ws, env):
-    """Editing the old contract to an invalid name must not transfer identity."""
-    enable(ws, env)
-    folder = ws / "planets/demo/agents"
-    (folder / "foo-bar.md").write_text(contract("foo-bar"))
-    assert run(ws, env, "publish").returncode == 0
-    (folder / "foo-bar.md").write_text(contract("some-other-name"))
-    (folder / "foo_bar.md").write_text(contract("foo_bar"))
-    proc = run(ws, env, "publish")
-    assert proc.returncode == 3
-    assert "belongs to another source" in proc.stdout
-    assert [e["identity"] for e in manifest(ws)["agents"]
-            if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo-bar"]
-
-
-def test_excluded_old_planet_is_never_adopted(ws, env):
-    """An excluded (unobserved) old planet is never assumed empty."""
-    enable(ws, env)
-    write_agent(ws, "demo", "foo-bar", contract("foo-bar"))
-    assert run(ws, env, "publish").returncode == 0
-    (ws / "planets/demo/agents/foo-bar.md").unlink()
-    write_agent(ws, "other", "foo-bar", contract("foo-bar"))
-    assert run(ws, env, "exclude", "add", "demo").returncode == 0
-    assert run(ws, env, "publish").returncode == 0
-    assert "solar__demo__foo_bar.toml" not in toml_files(ws)
-    assert "solar__other__foo_bar.toml" in toml_files(ws)
-
-
-@needs_unreadable
-def test_unknown_state_old_contract_blocks_adoption(ws, env):
-    """An unreadable (unknown state) old contract is never replaced."""
-    enable(ws, env)
-    folder = ws / "planets/demo/agents"
-    (folder / "foo-bar.md").write_text(contract("foo-bar"))
-    assert run(ws, env, "publish").returncode == 0
-    old = folder / "foo-bar.md"
-    os.chmod(old, 0)
-    (folder / "foo_bar.md").write_text(contract("foo_bar"))
-    try:
-        proc = run(ws, env, "publish")
-        assert proc.returncode == 3, proc.stdout + proc.stderr
-        assert "belongs to another source" in proc.stdout
-        assert "solar__demo__foo_bar.toml" in toml_files(ws)
-        assert [e["identity"] for e in manifest(ws)["agents"]
-                if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo-bar"]
-    finally:
-        os.chmod(old, 0o644)
-
-
-def test_simultaneous_old_and_new_identity_collide(ws, env):
-    """If both old and new stems exist at once, it is a conflict, never a duality."""
-    enable(ws, env)
-    folder = ws / "planets/demo/agents"
-    (folder / "foo-bar.md").write_text(contract("foo-bar"))
-    (folder / "foo_bar.md").write_text(contract("foo_bar"))
-    proc = run(ws, env, "publish")
-    assert proc.returncode == 3
-    assert "same public name as" in proc.stdout
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (agents_dir(ws) / "demo:foo-bar.toml").read_bytes() == original
+    assert "demo:foo_bar.toml" in toml_files(ws)
 
 
 def test_user_edited_file_is_kept_and_reported_on_retire(ws, env):
     enable(ws, env)
     run(ws, env, "publish")
-    target = agents_dir(ws) / "solar__demo__support.toml"
+    target = agents_dir(ws) / "demo:support.toml"
     target.write_text(target.read_text() + "# user note\n")
     (ws / "planets/demo/agents/support.md").unlink()
     proc = run(ws, env, "publish")
     assert proc.returncode == 3 and "cannot retire" in proc.stdout
     assert target.exists() and "# user note" in target.read_text()
-    assert "solar__demo__support.toml" in [e["file"] for e in manifest(ws)["agents"]]
+    assert "demo:support.toml" in [e["file"] for e in manifest(ws)["agents"]]
 
 
 def test_mark_stripped_file_is_not_deleted_even_if_manifest_hash_matches(ws, env):
     enable(ws, env)
     run(ws, env, "publish")
-    target = agents_dir(ws) / "solar__demo__support.toml"
+    target = agents_dir(ws) / "demo:support.toml"
     stripped = "".join(target.read_text().splitlines(True)[2:])
     target.write_text(stripped)
     data = manifest(ws)
@@ -1005,7 +1046,7 @@ def test_mark_stripped_file_is_not_deleted_even_if_manifest_hash_matches(ws, env
 def test_edited_managed_file_is_not_overwritten_on_update(ws, env):
     enable(ws, env)
     run(ws, env, "publish")
-    target = agents_dir(ws) / "solar__demo__sales.toml"
+    target = agents_dir(ws) / "demo:sales.toml"
     target.write_text(target.read_text() + "# mine\n")
     edited = target.read_bytes()
     write_agent(ws, "demo", "sales", contract("sales", "Changed description."))
@@ -1018,18 +1059,18 @@ def test_source_change_updates_file(ws, env):
     run(ws, env, "publish")
     write_agent(ws, "demo", "sales", contract("sales", "Changed description."))
     proc = run(ws, env, "publish")
-    assert proc.returncode == 0 and "update: solar__demo__sales.toml" in proc.stdout
-    parsed = tomllib.loads((agents_dir(ws) / "solar__demo__sales.toml").read_text())
+    assert proc.returncode == 0 and "update: demo:sales.toml" in proc.stdout
+    parsed = tomllib.loads((agents_dir(ws) / "demo:sales.toml").read_text())
     assert parsed["description"] == "Changed description."
 
 
 def test_user_deleted_managed_file_is_restored(ws, env):
     enable(ws, env)
     run(ws, env, "publish")
-    (agents_dir(ws) / "solar__demo__sales.toml").unlink()
+    (agents_dir(ws) / "demo:sales.toml").unlink()
     proc = run(ws, env, "publish")
-    assert proc.returncode == 0 and "restore: solar__demo__sales.toml" in proc.stdout
-    assert "solar__demo__sales.toml" in toml_files(ws)
+    assert proc.returncode == 0 and "restore: demo:sales.toml" in proc.stdout
+    assert "demo:sales.toml" in toml_files(ws)
 
 
 @needs_unreadable
@@ -1041,7 +1082,7 @@ def test_unreadable_source_is_never_retired(ws, env):
     try:
         proc = run(ws, env, "publish")
         assert proc.returncode == 0
-        assert "solar__demo__support.toml" in toml_files(ws)
+        assert "demo:support.toml" in toml_files(ws)
         assert "source status unknown" in proc.stdout
     finally:
         os.chmod(source, 0o644)
@@ -1083,12 +1124,13 @@ def mutate(path, fn):
 
 MANIFEST_MUTATIONS = {
     "unknown_top_key": lambda d: d.update(extra=1),
-    "bad_format": lambda d: d.update(format=2),
+    "bad_format": lambda d: d.update(format=3),
+    "format1_with_new_name": lambda d: d.update(format=1),
     "bad_generator": lambda d: d.update(generator="other"),
     "unknown_entry_key": lambda d: d["agents"][0].update(extra=1),
     "missing_entry_key": lambda d: d["agents"][0].pop("sha256"),
     "path_traversal": lambda d: d["agents"][0].update(file="../../outside.toml"),
-    "separator": lambda d: d["agents"][0].update(file="sub/solar__demo__sales.toml"),
+    "separator": lambda d: d["agents"][0].update(file="sub/demo:sales.toml"),
     "manual_name": lambda d: d["agents"][0].update(name="uh_sales", file="uh_sales.toml"),
     "short_hash": lambda d: d["agents"][0].update(sha256="abc"),
     "bad_identity": lambda d: d["agents"][0].update(identity="demo:other"),
@@ -1124,8 +1166,8 @@ def test_entry_pointing_at_manual_file_is_never_touched(ws, env):
 
 def test_solar_prefixed_manual_file_with_matching_hash_but_no_mark_is_kept(ws, env):
     path = published(ws, env)
-    manual = agents_dir(ws) / "solar__demo__support.toml"
-    manual.write_text('name = "solar__demo__support"\ndescription = "x"\ndeveloper_instructions = "y"\n')
+    manual = agents_dir(ws) / "demo:support.toml"
+    manual.write_text('name = "demo:support"\ndescription = "x"\ndeveloper_instructions = "y"\n')
     mutate(path, lambda d: [e.update(sha256=ca.sha256_hex(manual.read_bytes()))
                             for e in d["agents"] if e["file"] == manual.name])
     before = manual.read_bytes()
@@ -1136,11 +1178,11 @@ def test_solar_prefixed_manual_file_with_matching_hash_but_no_mark_is_kept(ws, e
 
 def test_hash_tampering_means_not_ours(ws, env):
     path = published(ws, env)
-    mutate(path, lambda d: [e.update(sha256="0" * 64) for e in d["agents"] if e["file"] == "solar__demo__sales.toml"])
-    before = (agents_dir(ws) / "solar__demo__sales.toml").read_bytes()
+    mutate(path, lambda d: [e.update(sha256="0" * 64) for e in d["agents"] if e["file"] == "demo:sales.toml"])
+    before = (agents_dir(ws) / "demo:sales.toml").read_bytes()
     write_agent(ws, "demo", "sales", contract("sales", "Changed."))
     assert run(ws, env, "publish").returncode == 3
-    assert (agents_dir(ws) / "solar__demo__sales.toml").read_bytes() == before
+    assert (agents_dir(ws) / "demo:sales.toml").read_bytes() == before
 
 
 # --------------------------------------------------------------------------
@@ -1164,7 +1206,7 @@ def test_partial_failure_converges_on_next_run(ws, env, fail_after):
     assert proc.returncode != 0
     proc = run(ws, env, "publish")
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert toml_files(ws) == ["solar__demo__sales.toml", "solar__demo__support.toml", "solar__other__ops.toml"]
+    assert toml_files(ws) == ["demo:sales.toml", "demo:support.toml", "other:ops.toml"]
     assert_converged(ws, env)
     assert not [p for p in agents_dir(ws).iterdir() if p.name.startswith(ca.TMP_PREFIX)]
 
@@ -1172,7 +1214,7 @@ def test_partial_failure_converges_on_next_run(ws, env, fail_after):
 def test_recovery_preserves_user_edited_file_and_retires_cleanly(ws, env):
     enable(ws, env)
     assert run(ws, env, "publish").returncode == 0
-    sales = agents_dir(ws) / "solar__demo__sales.toml"
+    sales = agents_dir(ws) / "demo:sales.toml"
     sales.write_text(sales.read_text() + "# user\n")
     edited = sales.read_bytes()
     write_agent(ws, "demo", "support", contract("support", "Changed."))
@@ -1183,9 +1225,9 @@ def test_recovery_preserves_user_edited_file_and_retires_cleanly(ws, env):
     proc = run(ws, env, "publish")
     assert proc.returncode == 3  # the edited file is reported, everything else applied
     assert sales.read_bytes() == edited
-    assert "solar__other__ops.toml" not in toml_files(ws)
-    assert "solar__demo__newone.toml" in toml_files(ws)
-    assert tomllib.loads((agents_dir(ws) / "solar__demo__support.toml").read_text())["description"] == "Changed."
+    assert "other:ops.toml" not in toml_files(ws)
+    assert "demo:newone.toml" in toml_files(ws)
+    assert tomllib.loads((agents_dir(ws) / "demo:support.toml").read_text())["description"] == "Changed."
     assert run(ws, env, "publish").returncode == 3
 
 
@@ -1219,7 +1261,7 @@ def test_lock_held_means_exit_4_and_nothing_changes(ws, env):
     assert proc.returncode == 4
     assert snapshot(ws / ".codex") == before
     assert run(ws, env, "publish").returncode == 0
-    assert "solar__demo__late.toml" in toml_files(ws)
+    assert "demo:late.toml" in toml_files(ws)
 
 
 def test_stale_temp_files_are_cleaned(ws, env):
@@ -1292,7 +1334,7 @@ def test_preview_after_publish_never_writes(ws, env):
     (ws / "planets/demo/agents/support.md").unlink()
     before = snapshot(ws)
     proc = run(ws, env, "preview", "--contents")
-    assert proc.returncode == 0 and "would retire: solar__demo__support.toml" in proc.stdout
+    assert proc.returncode == 0 and "would retire: demo:support.toml" in proc.stdout
     assert snapshot(ws) == before
 
 
@@ -1323,3 +1365,392 @@ def test_python_without_tomllib_refuses(ws, env, monkeypatch):
     monkeypatch.setattr(ca, "tomllib", None)
     with pytest.raises(ca.Refusal):
         ca.require_tomllib()
+
+
+# --------------------------------------------------------------------------
+# Migration from the format 1 scheme (solar__<planet>__<agent>)
+# --------------------------------------------------------------------------
+
+LEGACY_SET = [("demo", "sales"), ("demo", "support"), ("other", "ops")]
+
+
+def legacy_file(planet, agent):
+    return f"{ca.legacy_public_name(planet, agent)}.toml"
+
+
+def write_legacy_publication(ws, targets=LEGACY_SET, with_manifest=True):
+    """Synthesize what a format 1 publication left behind: solar__ files and a
+    format 1 manifest. Files are rendered with the current renderer under the old
+    name, which keeps the generation mark, the source line and the hash contract."""
+    agents_dir(ws).mkdir(parents=True, exist_ok=True)
+    entries = []
+    for planet, agent in targets:
+        raw = (ws / "planets" / planet / "agents" / f"{agent}.md").read_bytes()
+        parsed = ca.parse_contract(planet, agent, raw)
+        name = ca.legacy_public_name(planet, agent)
+        text, _ = ca.render_agent(planet, agent, name, parsed.description, parsed.body, parsed.source_sha)
+        (agents_dir(ws) / f"{name}.toml").write_text(text)
+        entries.append({
+            "source": f"planets/{planet}/agents/{agent}.md", "identity": f"{planet}:{agent}",
+            "source_sha256": parsed.source_sha, "name": name, "file": f"{name}.toml",
+            "sha256": ca.sha256_hex(text.encode()),
+        })
+    if with_manifest:
+        doc = {"format": 1, "generator": ca.MANIFEST_GENERATOR, "agents": entries}
+        (agents_dir(ws) / ca.MANIFEST_NAME).write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+
+
+NEW_SET = ["demo:sales.toml", "demo:support.toml", "other:ops.toml"]
+OLD_SET = sorted(legacy_file(p, a) for p, a in LEGACY_SET)
+
+
+def test_legacy_manifest_is_read_by_the_validator():
+    entries = [{"source": "planets/demo/agents/sales.md", "identity": "demo:sales",
+                "source_sha256": "a" * 64, "name": "solar__demo__sales",
+                "file": "solar__demo__sales.toml", "sha256": "b" * 64}]
+    raw = json.dumps({"format": 1, "generator": ca.MANIFEST_GENERATOR, "agents": entries}).encode()
+    assert ca.validate_manifest(raw)[0]["name"] == "solar__demo__sales"
+    # A new-scheme name is not a format 1 name.
+    new = [dict(entries[0], name="demo:sales", file="demo:sales.toml")]
+    with pytest.raises(ca.Refusal):
+        ca.validate_manifest(json.dumps({"format": 1, "generator": ca.MANIFEST_GENERATOR, "agents": new}).encode())
+    # A format 2 manifest may list old and new entries of one source while a migration is in flight.
+    both = entries + new
+    assert len(ca.validate_manifest(json.dumps({"format": 2, "generator": ca.MANIFEST_GENERATOR, "agents": both}).encode())) == 2
+
+
+def test_legacy_unchanged_files_migrate_in_one_run(ws, env):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert toml_files(ws) == NEW_SET
+    data = manifest(ws)
+    assert data["format"] == 2 and [e["file"] for e in data["agents"]] == NEW_SET
+    assert "retire: solar__demo__sales.toml" in proc.stdout and "(migrated to demo:sales)" in proc.stdout
+    assert "add: demo:sales.toml" in proc.stdout
+    for name in NEW_SET:
+        assert tomllib.loads((agents_dir(ws) / name).read_text())["name"] == name[:-5]
+    assert_converged(ws, env)
+    # The second run changes nothing, not even mtimes.
+    before = snapshot(ws)
+    time.sleep(0.05)
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0 and snapshot(ws) == before
+    assert all(line.startswith("keep:") for line in proc.stdout.splitlines() if line)
+
+
+def test_legacy_preview_describes_migration_and_writes_nothing(ws, env):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    before = snapshot(ws)
+    proc = run(ws, env, "preview", "--contents")
+    assert proc.returncode == 0
+    assert "would add: demo:sales.toml" in proc.stdout
+    assert "would retire: solar__demo__sales.toml" in proc.stdout
+    assert snapshot(ws) == before
+
+
+def test_legacy_edited_file_is_a_conflict_and_untouched(ws, env):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    edited = agents_dir(ws) / legacy_file("demo", "sales")
+    edited.write_text(edited.read_text() + "# my note\n")
+    before = edited.read_bytes()
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 3
+    assert edited.read_bytes() == before
+    assert "demo:sales.toml" not in toml_files(ws)
+    assert "legacy file solar__demo__sales.toml was edited" in proc.stdout
+    # The rest migrated.
+    assert toml_files(ws) == sorted(["demo:support.toml", "other:ops.toml", edited.name])
+    data = manifest(ws)
+    assert data["format"] == 2 and edited.name in [e["file"] for e in data["agents"]]
+    # Stable: the next run reports the same conflict and changes nothing.
+    snap = snapshot(ws)
+    time.sleep(0.05)
+    assert run(ws, env, "publish").returncode == 3
+    assert snapshot(ws) == snap
+    # Once the user removes the edited file, the new role is published.
+    edited.unlink()
+    assert run(ws, env, "publish").returncode == 0
+    assert toml_files(ws) == NEW_SET
+    assert [e["file"] for e in manifest(ws)["agents"]] == NEW_SET
+
+
+@pytest.mark.parametrize("damage", ["mark_stripped", "name_changed"])
+def test_legacy_file_is_retired_only_when_mark_name_and_hash_all_match(ws, env, damage):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    target = agents_dir(ws) / legacy_file("demo", "sales")
+    text = target.read_text()
+    if damage == "mark_stripped":
+        text = "".join(text.splitlines(True)[2:])
+    else:
+        text = text.replace('name = "solar__demo__sales"', 'name = "solar__demo__renamed"')
+    target.write_text(text)
+    # Make the manifest hash match, so only the mark / name guard can protect the file.
+    path = agents_dir(ws) / ca.MANIFEST_NAME
+    mutate(path, lambda d: [e.update(sha256=ca.sha256_hex(text.encode()))
+                            for e in d["agents"] if e["file"] == target.name])
+    assert run(ws, env, "publish").returncode == 3
+    assert target.read_text() == text
+    assert "demo:sales.toml" not in toml_files(ws)
+
+
+def test_legacy_files_without_manifest_are_never_ours(ws, env):
+    write_legacy_publication(ws, with_manifest=False)
+    handmade = agents_dir(ws) / "solar__demo__handmade.toml"
+    handmade.write_text('name = "solar__demo__handmade"\ndescription = "mine"\ndeveloper_instructions = "x"\n')
+    before = {p.name: p.read_bytes() for p in agents_dir(ws).glob("*.toml")}
+    enable(ws, env)
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 3
+    assert "references this contract" in proc.stdout
+    assert {p.name: p.read_bytes() for p in agents_dir(ws).glob("*.toml")} == before
+    assert not (agents_dir(ws) / ca.MANIFEST_NAME).exists()
+    # Even when the contracts disappear nothing with the solar__ prefix is deleted.
+    for planet, agent in LEGACY_SET:
+        (ws / "planets" / planet / "agents" / f"{agent}.md").unlink()
+    assert run(ws, env, "publish").returncode == 0
+    assert {p.name: p.read_bytes() for p in agents_dir(ws).glob("*.toml")} == before
+
+
+def test_legacy_entry_whose_contract_is_gone_is_retired(ws, env):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    (ws / "planets/demo/agents/support.md").unlink()
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0
+    assert toml_files(ws) == ["demo:sales.toml", "other:ops.toml"]
+    assert "retire: solar__demo__support.toml" in proc.stdout
+
+
+def test_legacy_file_already_deleted_by_the_user_is_just_dropped(ws, env):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    (agents_dir(ws) / legacy_file("demo", "sales")).unlink()
+    assert run(ws, env, "publish").returncode == 0
+    assert toml_files(ws) == NEW_SET
+    assert_converged(ws, env)
+
+
+def test_legacy_new_target_conflict_keeps_the_old_role(ws, env):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    (agents_dir(ws) / "demo:sales.toml").write_text("unmanaged\n")
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 3
+    assert (agents_dir(ws) / "demo:sales.toml").read_text() == "unmanaged\n"
+    assert (agents_dir(ws) / legacy_file("demo", "sales")).is_file()
+    assert "demo:support.toml" in toml_files(ws) and legacy_file("demo", "support") not in toml_files(ws)
+
+
+FAIL_POINTS = list(range(0, 8))  # 1 transitional manifest + 3 writes + 3 deletes + 1 final manifest
+
+
+@pytest.mark.parametrize("fail_after", FAIL_POINTS)
+def test_legacy_partial_failure_never_loses_a_role_and_resumes(ws, env, fail_after):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    proc = run(ws, env, "publish", extra_env={"SOLAR_CODEX_AGENTS_TEST_FAIL_AFTER": str(fail_after)})
+    assert proc.returncode != 0
+    present = set(toml_files(ws))
+    for planet, agent in LEGACY_SET:
+        assert {legacy_file(planet, agent), f"{planet}:{agent}.toml"} & present, (planet, agent)
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert toml_files(ws) == NEW_SET
+    assert manifest(ws)["format"] == 2
+    assert_converged(ws, env)
+    assert not [p for p in agents_dir(ws).iterdir() if p.name.startswith(ca.TMP_PREFIX)]
+    before = snapshot(ws)
+    time.sleep(0.05)
+    assert run(ws, env, "publish").returncode == 0 and snapshot(ws) == before
+
+
+def test_legacy_partial_failure_with_an_edited_file_still_converges(ws, env):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    edited = agents_dir(ws) / legacy_file("other", "ops")
+    edited.write_text(edited.read_text() + "# mine\n")
+    kept = edited.read_bytes()
+    assert run(ws, env, "publish", extra_env={"SOLAR_CODEX_AGENTS_TEST_FAIL_AFTER": "3"}).returncode != 0
+    assert run(ws, env, "publish").returncode == 3
+    assert edited.read_bytes() == kept
+    assert "other:ops.toml" not in toml_files(ws)
+    assert {"demo:sales.toml", "demo:support.toml"} <= set(toml_files(ws))
+
+
+def test_legacy_entry_of_excluded_planet_is_retired_without_reading_the_planet(ws, env, tmp_path):
+    write_legacy_publication(ws, LEGACY_SET + [(PERSONAL, "diary")])
+    assert run(ws, env, "exclude", "add", PERSONAL).returncode == 0
+    assert run(ws, env, "enable").returncode == 0
+    proc, seen = audited(ws, env, tmp_path, "publish")
+    assert proc.returncode == 0, proc.stderr
+    assert not touched_planet(seen, PERSONAL), seen
+    assert toml_files(ws) == NEW_SET
+
+
+def test_excluded_planet_with_synthetic_personal_planet_is_never_listed_or_opened(ws, env, tmp_path):
+    write_agent(ws, "personal", "journal", contract("journal", "Private synthetic role."))
+    (ws / "planets/personal/agents/notes.md").write_text(contract("notes", body="Read planets/personal/secret.md\n"))
+    write_agent(ws, "demo", "peek", contract("peek", body="Ask personal:journal about it\n"))
+    assert run(ws, env, "exclude", "add", "personal").returncode == 0
+    assert run(ws, env, "enable").returncode == 0
+    for args in (("publish",), ("preview", "--contents"), ("preview",), ("status",)):
+        proc, seen = audited(ws, env, tmp_path, *args)
+        assert proc.returncode == 0, proc.stderr
+        assert not touched_planet(seen, "personal"), (args, seen)
+    assert not [n for n in toml_files(ws) if n.startswith("personal:") or n == "demo:peek.toml"]
+    assert omitted(preview_json(ws, env))["planets/demo/agents/peek.md"] == "references excluded planet personal"
+
+
+def test_manual_agent_is_intact_and_its_contract_identity_is_protected(tmp_path, env):
+    root = tmp_path / "ws"
+    root.mkdir()
+    write_settings(root)
+    write_agent(root, "uhorizon", "uh-sales", contract("uh-sales"))
+    write_agent(root, "uhorizon", "uh-backend-dev", contract("uh-backend-dev"))
+    agents_dir(root).mkdir(parents=True)
+    manual = agents_dir(root) / "uh_sales.toml"
+    manual.write_text('name = "uh_sales"\ndescription = "Manual"\n'
+                      'developer_instructions = "Read planets/uhorizon/agents/uh-sales.md"\n')
+    digest = ca.sha256_hex(manual.read_bytes())
+    assert run(root, env, "enable").returncode == 0
+    proc = run(root, env, "publish")
+    assert proc.returncode == 3 and "references this contract" in proc.stdout
+    assert ca.sha256_hex(manual.read_bytes()) == digest
+    assert "uhorizon:uh-sales.toml" not in toml_files(root)
+    assert "uhorizon:uh-backend-dev.toml" in toml_files(root)
+    # Excluding the identity makes it a clean omission and still leaves the manual file alone.
+    assert run(root, env, "exclude", "add", "uhorizon:uh-sales").returncode == 0
+    proc = run(root, env, "publish")
+    assert proc.returncode == 0, proc.stdout
+    assert omitted(preview_json(root, env))["planets/uhorizon/agents/uh-sales.md"] == "excluded by identity"
+    assert ca.sha256_hex(manual.read_bytes()) == digest
+    assert "uhorizon:uh-sales.toml" not in toml_files(root)
+
+
+def test_identity_exclusion_retires_a_published_new_scheme_role(ws, env):
+    enable(ws, env)
+    assert run(ws, env, "publish").returncode == 0
+    assert "demo:sales.toml" in toml_files(ws)
+    assert run(ws, env, "exclude", "add", "DEMO:Sales").returncode == 0
+    assert run(ws, env, "publish").returncode == 0
+    assert "demo:sales.toml" not in toml_files(ws) and "demo:support.toml" in toml_files(ws)
+
+
+def test_wrapper_and_messages_use_the_new_names(ws, env):
+    enable(ws, env)
+    proc = run(ws, env, "publish")
+    assert "add: demo:sales.toml <- planets/demo/agents/sales.md" in proc.stdout
+    assert "solar__" not in proc.stdout
+    text = (agents_dir(ws) / "demo:sales.toml").read_text()
+    assert "solar__" not in text
+    assert "identity: demo:sales " in text
+
+
+def test_template_files_are_skipped_and_leading_underscore_names_are_rejected(ws, env):
+    """`_lead.md` is a template by convention: never published, and not a valid name."""
+    enable(ws, env)
+    write_agent(ws, "demo", "_lead", contract("_lead"))
+    assert run(ws, env, "publish").returncode == 0
+    assert toml_files(ws) == ["demo:sales.toml", "demo:support.toml", "other:ops.toml"]
+    with pytest.raises(ca.ContractError):
+        ca.canonical_identity("demo", "_lead")
+
+
+def test_maximum_length_names_publish_and_round_trip(ws, env):
+    enable(ws, env)
+    planet, agent = "p" * ca.MAX_COMPONENT_LEN, "a" * ca.MAX_COMPONENT_LEN
+    write_agent(ws, planet, agent, contract(agent))
+    assert run(ws, env, "publish").returncode == 0
+    name = f"{planet}:{agent}"
+    assert len(name) == 2 * ca.MAX_COMPONENT_LEN + 1
+    assert (agents_dir(ws) / f"{name}.toml").is_file()
+    entry = [e for e in manifest(ws)["agents"] if e["name"] == name][0]
+    assert entry["file"] == f"{name}.toml" and entry["identity"] == name
+    assert tomllib.loads((agents_dir(ws) / entry["file"]).read_text())["name"] == name
+    assert_converged(ws, env)
+
+
+def test_identity_exclusion_is_deliberately_wider_than_published_names(ws, env):
+    """Published names keep `-` and `_` apart; exclusions still treat them as equal
+    (the privacy-safe direction), so excluding uh-sales also excludes uh_sales."""
+    enable(ws, env)
+    write_agent(ws, "demo", "uh-sales", contract("uh-sales"))
+    write_agent(ws, "demo", "uh_sales", contract("uh_sales"))
+    assert run(ws, env, "exclude", "add", "demo:uh-sales").returncode == 0
+    assert run(ws, env, "publish").returncode == 0
+    files = toml_files(ws)
+    assert "demo:uh-sales.toml" not in files and "demo:uh_sales.toml" not in files
+    reasons = omitted(preview_json(ws, env))
+    assert reasons["planets/demo/agents/uh-sales.md"] == "excluded by identity"
+    assert reasons["planets/demo/agents/uh_sales.md"] == "excluded by identity"
+
+
+def test_published_name_is_the_exclusion_identity_and_the_documented_form(ws, env):
+    enable(ws, env)
+    assert run(ws, env, "publish").returncode == 0
+    for entry in manifest(ws)["agents"]:
+        assert run(ws, env, "exclude", "add", entry["name"]).returncode == 0  # same string
+    assert run(ws, env, "publish").returncode == 0
+    assert toml_files(ws) == []
+    docs = [CORE / "skills/solar-client/references/codex-agents.md",
+            CORE / "skills/solar-client/SKILL.md",
+            CORE / "skills/solar-agent-creator/SKILL.md"]
+    for doc in docs:
+        text = doc.read_text()
+        assert "<planet>:<agent>" in text, doc
+    agent_doc = docs[2].read_text()
+    assert f"{ca.MAX_COMPONENT_LEN} characters" in agent_doc and "[A-Za-z0-9._-]" in agent_doc
+    assert f"{ca.MAX_COMPONENT_LEN} characters" in docs[0].read_text()
+
+
+def test_plan_items_have_one_shape_for_every_action(ws, env):
+    write_legacy_publication(ws)
+    enable(ws, env)
+    (ws / "planets/demo/agents/support.md").unlink()
+    data = preview_json(ws, env)
+    assert {item["action"] for item in data["items"]} >= {"add", "retire"}
+    assert all(set(item) == {"action", "file", "source", "identity", "reason"} for item in data["items"])
+    assert [i["reason"] for i in data["items"] if i["file"] == legacy_file("demo", "sales")] == [
+        "migrated to demo:sales"]
+    assert all(i["reason"] is None for i in data["items"] if i["action"] == "add")
+
+
+FIXTURE = Path(__file__).parent / "fixtures/codex_agents_v0_43_0"
+
+
+def install_v043_fixture(ws):
+    """Real output of Solar v0.43.0 (see the fixture README), placed in `ws`."""
+    for contract_file in sorted((FIXTURE / "contracts").glob("*/*.md")):
+        folder = ws / "planets" / contract_file.parent.name / "agents"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / contract_file.name).write_bytes(contract_file.read_bytes())
+    agents_dir(ws).mkdir(parents=True, exist_ok=True)
+    for published in sorted((FIXTURE / "published").iterdir()):
+        target = ".solar-managed.json" if published.name == "solar-managed.json" else published.name
+        (agents_dir(ws) / target).write_bytes(published.read_bytes())
+
+
+def test_real_v0_43_0_output_migrates_without_conflict(ws, env):
+    install_v043_fixture(ws)
+    old_files = sorted(p.name for p in agents_dir(ws).glob("solar__*.toml"))
+    assert old_files == ["solar__louis__lou_ai.toml", "solar__uhorizon__uh_backend_dev.toml"]
+    assert json.loads((agents_dir(ws) / ca.MANIFEST_NAME).read_text())["format"] == 1
+    enable(ws, env)
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "conflict:" not in proc.stdout
+    assert [n for n in toml_files(ws) if n.startswith("solar__")] == []
+    assert "uhorizon:uh-backend-dev.toml" in toml_files(ws) and "louis:lou-ai.toml" in toml_files(ws)
+    assert manifest(ws)["format"] == 2
+    parsed = tomllib.loads((agents_dir(ws) / "uhorizon:uh-backend-dev.toml").read_text())
+    assert parsed["name"] == "uhorizon:uh-backend-dev"
+    assert "Synthetic body" in parsed["developer_instructions"]
+    assert_converged(ws, env)
+    before = snapshot(ws)
+    time.sleep(0.05)
+    assert run(ws, env, "publish").returncode == 0 and snapshot(ws) == before

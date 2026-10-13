@@ -50,9 +50,13 @@ None
 
 Contracts under `planets/<planet>/agents/` remain the only editable source. Solar Client
 can publish derived Codex roles from them (opt-in; see the solar-client reference
-`codex-agents.md`). Never edit a generated file; keep frontmatter to `name` and
-`description`. Publishing a role grants no authority. After changing a contract, re-run
-`solar client sync` and start a new Codex session; report that publication separately.
+`codex-agents.md`). The published role is named `<planet>:<agent>` (for example
+`uhorizon:uh-backend-dev`) from the contract `name`, which must be `[A-Za-z0-9._-]`,
+start with a letter or digit, have no `:` or `/` and be at most 64 characters; invalid
+names are rejected, never rewritten. Never edit a generated file; keep frontmatter to
+`name` and `description`. Publishing a role grants no authority. After changing a
+contract, re-run `solar client sync` and start a new Codex session; report that
+publication separately.
 
 ## Runtime memory
 

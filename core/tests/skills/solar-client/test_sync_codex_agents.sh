@@ -116,7 +116,7 @@ assert_ok "preview: personal planet excluded" grep -q 'personal-x: excluded (cod
 assert_ok "preview: demo would be read" grep -q 'demo: would read' <<<"$OUT"
 assert_missing "preview: wrote nothing" "$WS/.codex"
 OUT="$(bash "$CLIENT_SYNC" codex-agents preview --contents)"
-assert_ok "preview --contents lists adds" grep -q 'would add: solar__demo__sales.toml' <<<"$OUT"
+assert_ok "preview --contents lists adds" grep -q 'would add: demo:sales.toml' <<<"$OUT"
 assert_missing "preview --contents wrote nothing" "$WS/.codex"
 assert_eq "status disabled" "$(bash "$CLIENT_SYNC" codex-agents status | head -1)" "Codex agents: disabled"
 assert_fails "unknown codex-agents subcommand" bash "$CLIENT_SYNC" codex-agents nope
@@ -125,9 +125,9 @@ assert_fails "unknown codex-agents subcommand" bash "$CLIENT_SYNC" codex-agents 
 bash "$CLIENT_SYNC" codex-agents enable >/dev/null
 assert_eq "enabled flag" "$(settings_key codex_agents | python3 -c 'import json,sys; print(json.load(sys.stdin)["enabled"])')" "True"
 bash "$SYNC_CLIENTS" --codex-only >/dev/null 2>&1
-assert_ok "demo:sales published" test -f "$WS/.codex/agents/solar__demo__sales.toml"
-assert_ok "demo:support published" test -f "$WS/.codex/agents/solar__demo__support.toml"
-assert_missing "excluded planet not published" "$WS/.codex/agents/solar__personal_x__diary.toml"
+assert_ok "demo:sales published" test -f "$WS/.codex/agents/demo:sales.toml"
+assert_ok "demo:support published" test -f "$WS/.codex/agents/demo:support.toml"
+assert_missing "excluded planet not published" "$WS/.codex/agents/personal-x:diary.toml"
 assert_fails "personal planet absent from manifest" grep -q 'personal' "$WS/.codex/agents/.solar-managed.json"
 assert_eq "external CODEX_HOME untouched" "$(cat "$CODEX_HOME/config.toml")" "# external"
 assert_missing "no .codex/config.toml created" "$WS/.codex/config.toml"
@@ -143,20 +143,20 @@ assert_eq "claude sync leaves .codex alone" "$(tree_state "$WS/.codex")" "$BEFOR
 # 7. Retire after removing a contract.
 rm "$WS/planets/demo/agents/support.md"
 bash "$SYNC_CLIENTS" --codex-only >/dev/null 2>&1
-assert_missing "retired agent file removed" "$WS/.codex/agents/solar__demo__support.toml"
-assert_ok "other agent remains" test -f "$WS/.codex/agents/solar__demo__sales.toml"
+assert_missing "retired agent file removed" "$WS/.codex/agents/demo:support.toml"
+assert_ok "other agent remains" test -f "$WS/.codex/agents/demo:sales.toml"
 
 # 8. Conflict: sync warns, continues and exits 0; the unmanaged file is untouched.
 agent demo extra
-echo 'manual' >"$WS/.codex/agents/solar__demo__extra.toml"
+echo 'manual' >"$WS/.codex/agents/demo:extra.toml"
 agent demo fresh
 RC=0
 OUT="$(bash "$SYNC_CLIENTS" --codex-only 2>&1)" || RC=$?
 assert_eq "conflict does not fail sync" "$RC" "0"
 assert_ok "conflict is reported" grep -q 'left untouched because of conflicts' <<<"$OUT"
-assert_eq "conflicting file untouched" "$(cat "$WS/.codex/agents/solar__demo__extra.toml")" "manual"
-assert_ok "non-conflicting agent still published" test -f "$WS/.codex/agents/solar__demo__fresh.toml"
-rm "$WS/.codex/agents/solar__demo__extra.toml" "$WS/planets/demo/agents/extra.md"
+assert_eq "conflicting file untouched" "$(cat "$WS/.codex/agents/demo:extra.toml")" "manual"
+assert_ok "non-conflicting agent still published" test -f "$WS/.codex/agents/demo:fresh.toml"
+rm "$WS/.codex/agents/demo:extra.toml" "$WS/planets/demo/agents/extra.md"
 
 # 9. Hard failure: other clients still sync, overall exit is non-zero.
 rm -rf "$WS/.claude"
@@ -176,11 +176,11 @@ assert_eq "plain exclude list" "$(bash "$CLIENT_SYNC" exclude list)" "demo"
 assert_ok "codex list shows both codex and global entries" grep -q 'planet: personal-x' <(bash "$CLIENT_SYNC" exclude list --client codex)
 assert_ok "codex list flags the global entry" grep -q 'planet: demo (global, applies to Codex agents too)' <(bash "$CLIENT_SYNC" exclude list --client codex)
 bash "$SYNC_CLIENTS" --codex-only >/dev/null 2>&1
-assert_missing "globally excluded planet retired for Codex" "$WS/.codex/agents/solar__demo__sales.toml"
+assert_missing "globally excluded planet retired for Codex" "$WS/.codex/agents/demo:sales.toml"
 bash "$CLIENT_SYNC" exclude remove demo >/dev/null
 assert_eq "plain exclude list empty again" "$(bash "$CLIENT_SYNC" exclude list)" "(none)"
 bash "$SYNC_CLIENTS" --codex-only >/dev/null 2>&1
-assert_ok "agents come back once the global exclusion is lifted" test -f "$WS/.codex/agents/solar__demo__fresh.toml"
+assert_ok "agents come back once the global exclusion is lifted" test -f "$WS/.codex/agents/demo:fresh.toml"
 RC=0; bash "$CLIENT_SYNC" exclude add >/dev/null 2>&1 || RC=$?
 assert_eq "plain exclude add without planet still exits 2" "$RC" "2"
 
@@ -200,7 +200,7 @@ assert_eq "repair keeps codex_agents" "$(settings_key codex_agents)" "$BLOCK_BEF
 # 12. disable stops publication but leaves files.
 bash "$CLIENT_SYNC" codex-agents disable >/dev/null
 bash "$SYNC_CLIENTS" --codex-only >/dev/null 2>&1
-assert_ok "disable leaves published files" test -f "$WS/.codex/agents/solar__demo__fresh.toml"
+assert_ok "disable leaves published files" test -f "$WS/.codex/agents/demo:fresh.toml"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

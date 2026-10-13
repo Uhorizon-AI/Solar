@@ -21,6 +21,48 @@ Settings live in `.solar/settings.json` under `codex_agents`:
 disabled. Unknown subkeys, wrong types and ids outside `[A-Za-z0-9_.-]+` are
 rejected (exit 2). Disabling stops publication but leaves published files.
 
+## Naming scheme
+
+The published role is `<planet>:<agent>`, with the contract `name` (which must equal the
+file stem) kept as is: hyphens stay hyphens, letter case is preserved. Examples:
+`uhorizon:uh-backend-dev`, `louis:lou-ai`. This is the same string Client already uses
+as the canonical identity in the exclusions (`exclude add --client codex
+uhorizon:uh-sales`); both come from one function (`canonical_identity`).
+
+The file is named like the role, `<planet>:<agent>.toml`, and the TOML `name` field is
+the same string. Verified for this scheme: Codex CLI and the Desktop engine discover and
+invoke roles whose file name and `name` field are both `<planet>:<agent>` on macOS. It is
+not verified that the file name may differ from the `name` field, so Solar never makes
+them differ.
+
+Valid components: only `[A-Za-z0-9._-]`, starting with a letter or digit (no leading
+`-`, `.` or `_`), no `:` and no `/`, at most 64 characters each (so a name is at most 129
+characters). A leading `_` is rejected because `_*.md` files are templates that the scan
+always skips, so such a contract could never be published. Anything else is omitted with
+a reason (`omitted: <source>: agent name contains ':' ...`) and is never substituted or
+normalized; rename the file or the planet.
+
+Collisions are conflicts: two sources whose names differ only in letter case (`Lead` and
+`lead`), a foreign `.toml` with the same name or file (including case variants) and an
+`[agents.<name>]` table in `.codex/config.toml`. `uh-sales` and `uh_sales` are different
+roles and both publish. On a case-insensitive volume (default macOS) `Lead.md` and
+`lead.md` are the same file, so only one source can exist there.
+
+Renaming a contract only by letter case (`Lead` to `lead`) is a retire plus an add. The
+guard against case-variant files defers the new role by one run: the first sync retires
+the old file (an unchanged generated file) and reports a conflict (exit 3) for the new
+one, and the next sync publishes it.
+
+Exclusions are deliberately wider than the names: `exclude add <planet>:<agent>` matches
+case-insensitively and treats `-` and `_` as equal, so excluding `uhorizon:uh-sales` also
+excludes `uhorizon:uh_sales`. Excluding more than strictly needed is the privacy-safe
+direction.
+
+Known limits: `:` is not allowed in Windows file names, so a workspace with these files
+cannot be checked out onto Windows. The publisher itself already needs POSIX (`fcntl`
+locking), so it never runs on Windows; there is no extra Windows check. The scheme
+targets macOS and Linux.
+
 ## Before enabling when a personal or private planet exists
 
 Run in this order, with `<personal-planet>` replaced by that planet:
@@ -81,18 +123,23 @@ file it does not own.
 
 ## Generated files
 
-`solar__<planet>__<agent>.toml`, each component lowercased with `-` as `_`, at most 96
-characters. Header marker lines, then exactly `name`, `description`,
-`developer_instructions`. CRLF/CR in the body become LF. The instructions are a short
-English wrapper (derived copy, resolve paths from the workspace root, read root and
-planet governance, stop when sources are missing or conflict, the source prevails over
-this copy, no authority is granted) followed by the verbatim body.
+`<planet>:<agent>.toml` (see Naming scheme). Header marker lines, then exactly `name`,
+`description`, `developer_instructions`. CRLF/CR in the body become LF. The instructions
+are a short English wrapper (naming the role, derived copy, resolve paths from the
+workspace root, read root and planet governance, stop when sources are missing or
+conflict, the source prevails over this copy, no authority is granted) followed by the
+verbatim body.
+
+`preview --contents --json` lists `items` that all have the same keys: `action`, `file`,
+`source`, `identity` and `reason` (`null` unless the action needs one, such as
+`migrated to <name>` on the retirement of an old `solar__` file).
 
 ## Ownership and conflicts
 
 Only `.codex/agents/` and its manifest `.solar-managed.json` are written. A file is
 ours only if the manifest lists it, the generation mark is present, the parsed `name`
-matches and the SHA-256 equals the manifest. A `solar__` prefix alone proves nothing.
+matches and the SHA-256 equals the manifest. A name or prefix alone (including `solar__`)
+proves nothing.
 Conflicts (reported, the agent is left untouched, exit 3, the rest is applied):
 unmanaged or edited file, directory or symlink at the path, case-variant file, two
 sources with the same public name, a foreign `.toml` with the same `name`, an
@@ -101,20 +148,44 @@ that already cites the contract path. Unchanged generated files of agents that a
 longer eligible are deleted; edited ones are kept and reported. A source that could not
 be read is never retired. A deleted managed file is restored.
 
-Renaming a contract (letter case, `-` vs `_`, or a new stem) keeps the same public
-name: the previous identity is adopted by the new source in a single plan only when
-Solar confirms the previous source is gone (the `.md`, its `agents/` dir or its planet
-no longer exists). A source that is still present but invalid, unreadable or on an
-excluded/unknown planet keeps its published role and is reported as a conflict, so a
-contract is never replaced while it still exists. If both the old and the new stem
-exist at once, it is a conflict (two sources, same public name) and nothing is
-overwritten.
+Renaming a contract (a new stem or planet) changes the public name: the new role is
+published and the old one is retired when its source is gone (a source that still exists
+but is invalid, or is unreadable, or sits on an excluded planet keeps its role, and an
+excluded planet is never read).
 
 Exit codes: 0 ok, 2 usage or invalid settings, 3 conflicts, 4 lock timeout
 (`SOLAR_CODEX_AGENTS_LOCK_TIMEOUT`, seconds), 5 refusal before any write (corrupt
 manifest, symlinked `.codex` or `.codex/agents`, `planets/` missing while the manifest
 has entries, scan error). In `sync`, exit 3 is a warning; other failures are reported,
 the remaining clients still sync and the command ends non-zero.
+
+## Migrating from `solar__<planet>__<agent>`
+
+Earlier versions (manifest format 1) published `solar__<planet>__<agent>.toml` with
+`name = "solar__<planet>__<agent>"` (components lowercased, `-` as `_`). The manifest is
+now format 2; format 1 is still read. The first run of `solar client sync --codex-only`
+(or a full sync) with publication enabled migrates, per agent, in the same run, under the
+same lock:
+
+1. The new role is written (atomically, through a transitional manifest that lists the old
+   entry as `retiring`).
+2. The old file is deleted **only** when the manifest lists it, the generation mark is
+   present, its parsed `name` matches the entry and its SHA-256 equals the manifest, i.e.
+   it is unchanged generated output.
+3. The final manifest (format 2) lists only the new roles.
+
+Anything else is a conflict that is reported and left alone, and the new role of that
+agent is not published until the old file is gone (so there is never a duplicate role):
+an old file you edited, one that lost its mark or whose `name` changed, one that is not a
+file. A `solar__*.toml` that no manifest lists is never ours (the prefix proves nothing)
+and is not touched; if it quotes the contract path it blocks the new role as an unmanaged
+file does. If the old file was already deleted by hand, only its manifest entry is dropped.
+
+To resolve a conflict, delete the old file (or restore the generated text) and sync again.
+A crash in the middle converges on the next run: both files may exist for a moment, never
+neither, and the second run changes nothing. An older Solar Client refuses a format 2
+manifest (exit 5) rather than misreading it, so update every checkout that shares the
+workspace.
 
 Writes are serialized with `flock` on `.codex/agents`, go through a transitional
 manifest (so a crash converges on the next run), and a run with nothing to change writes
@@ -125,3 +196,7 @@ nothing.
 A new Codex session is needed to see new or changed roles, and Codex must trust the
 project. Publishing a role grants no authority. ChatGPT Chat/Work are not covered.
 Sessions started from a nested repository inside the workspace are not verified.
+A file name different from the `name` field is not verified with Codex, so Solar never
+generates one. `:` in file names is not portable to Windows. Codex invoking roles published with this
+scheme by a Solar sync, using a real model, is verified by hand on macOS after installing;
+the offline tests here do not run Codex.

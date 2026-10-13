@@ -1,0 +1,22 @@
+{
+  "agents": [
+    {
+      "file": "solar__louis__lou_ai.toml",
+      "identity": "louis:lou-ai",
+      "name": "solar__louis__lou_ai",
+      "sha256": "66776ad63377f9d6c5ecc4dc033cb589c2da2947b096a2c701dc59d71ba0c942",
+      "source": "planets/louis/agents/lou-ai.md",
+      "source_sha256": "58ffd4af4b249c18852491b93209c2a3c6e16b9eeb12a2cb61918fa74957ed48"
+    },
+    {
+      "file": "solar__uhorizon__uh_backend_dev.toml",
+      "identity": "uhorizon:uh-backend-dev",
+      "name": "solar__uhorizon__uh_backend_dev",
+      "sha256": "7c356b923cd4502f2655140a86f161159e20a7acfd5295f0c30a9dfcb3e8ca99",
+      "source": "planets/uhorizon/agents/uh-backend-dev.md",
+      "source_sha256": "fd1ab2dd502cc58813f8570225620094839fd974f28ef26c7c5c69bfb4c413ae"
+    }
+  ],
+  "format": 1,
+  "generator": "solar-client-codex-agents"
+}

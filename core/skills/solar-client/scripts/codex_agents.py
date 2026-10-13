@@ -2,7 +2,7 @@
 """Opt-in publisher of native Codex agents derived from planet agent contracts.
 
 Reads ``planets/<planet>/agents/<agent>.md`` and writes derived roles to
-``<workspace>/.codex/agents/solar__<planet>__<agent>.toml``. Publication is OFF
+``<workspace>/.codex/agents/<planet>:<agent>.toml``. Publication is OFF
 by default and never touches a planet that is excluded. Standard library only;
 Python >= 3.11 is required to publish (generated TOML is round-tripped through
 ``tomllib`` before it is written).
@@ -40,15 +40,23 @@ EXIT_OK, EXIT_USAGE, EXIT_CONFLICT, EXIT_LOCK, EXIT_REFUSED = 0, 2, 3, 4, 5
 ID_RE = re.compile(r"[A-Za-z0-9_.-]+\Z")
 GLOBAL_ID_RE = re.compile(r"[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
 IDENTITY_RE = re.compile(r"([A-Za-z0-9_.-]+):([A-Za-z0-9_.-]+)\Z")
-AGENT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
-COMPONENT_RE = re.compile(r"[a-z0-9]+(_[a-z0-9]+)*\Z")
-PUBLIC_NAME_RE = re.compile(r"solar__[a-z0-9]+(_[a-z0-9]+)*__[a-z0-9]+(_[a-z0-9]+)*\Z")
-SOURCE_RE = re.compile(r"planets/([A-Za-z0-9_.-]+)/agents/([A-Za-z0-9][A-Za-z0-9_-]*)\.md\Z")
+# Planet and agent components of a published name: [A-Za-z0-9._-], starting with a
+# letter or digit, no ":" and no "/" (":" is the separator of the canonical identity).
+# A leading "_" is rejected because the scan skips "_*.md" files (templates), so a
+# name like "_lead" could never be published.
+COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+SOURCE_RE = re.compile(r"planets/([^/]+)/agents/([^/]+)\.md\Z")
+# Names published by manifest format 1 (solar__<planet>__<agent>); read only to migrate.
+LEGACY_COMPONENT_RE = re.compile(r"[a-z0-9]+(_[a-z0-9]+)*\Z")
+LEGACY_NAME_RE = re.compile(r"solar__[a-z0-9]+(_[a-z0-9]+)*__[a-z0-9]+(_[a-z0-9]+)*\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
 MAX_SOURCE_BYTES = 256 * 1024
 MAX_DEST_READ = 4 * 1024 * 1024
-MAX_NAME_LEN = 96
+MAX_COMPONENT_LEN = 64
+MAX_LEGACY_NAME_LEN = 96
+MANIFEST_FORMAT = 2
+LEGACY_MANIFEST_FORMAT = 1
 MAX_DESCRIPTION = 1024
 
 MANIFEST_NAME = ".solar-managed.json"
@@ -256,7 +264,7 @@ def sha256_hex(data: bytes) -> str:
 
 
 WRAPPER = """\
-This role is a derived copy of a Solar agent contract. Solar Client generated it from {source} (sha256 {sha}). It is not the editable source.
+This role, `{name}`, is a derived copy of a Solar agent contract. Solar Client generated it from {source} (sha256 {sha}). It is not the editable source.
 
 Before acting:
 - Resolve every path from the workspace root.
@@ -274,12 +282,12 @@ This role grants no authority to execute, send, schedule or change permissions. 
 def render_agent(planet: str, agent: str, name: str, description: str,
                  body: str, source_sha: str) -> str:
     source = f"planets/{planet}/agents/{agent}.md"
-    instructions = WRAPPER.format(source=source, sha=source_sha, planet=planet)
+    instructions = WRAPPER.format(name=name, source=source, sha=source_sha, planet=planet)
     body = body.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
     instructions += body
     return (
         f"{MARK_LINE}\n"
-        f"{SOURCE_LINE_PREFIX}{source} identity: {planet}:{agent} source_sha256: {source_sha}\n"
+        f"{SOURCE_LINE_PREFIX}{source} identity: {name} source_sha256: {source_sha}\n"
         f"name = {toml_basic_string(name)}\n"
         f"description = {toml_basic_string(description)}\n"
         f"developer_instructions = {toml_multiline_string(instructions)}\n"
@@ -428,8 +436,9 @@ def parse_contract(planet: str, stem: str, raw: bytes) -> Contract:
     name = meta.get("name", "")
     if not name:
         raise ContractError("frontmatter has no name")
-    if not AGENT_NAME_RE.fullmatch(name):
-        raise ContractError("name has unsupported characters")
+    problem = component_problem(name)
+    if problem:
+        raise ContractError(f"name {problem}")
     if name != stem:
         raise ContractError("name does not match the file name")
     description = " ".join(meta.get("description", "").split())
@@ -442,16 +451,45 @@ def parse_contract(planet: str, stem: str, raw: bytes) -> Contract:
     return Contract(planet, stem, description, body, text, sha256_hex(raw))
 
 
-def public_name(planet: str, agent: str) -> str:
+def component_problem(value: str):
+    """Why `value` cannot be a planet or agent component of a published name
+    (None when it can). The reasons are shown to the user; nothing is rewritten."""
+    if not value:
+        return "is empty"
+    if ":" in value:
+        return "contains ':' (reserved as the planet/agent separator)"
+    if "/" in value:
+        return "contains '/'"
+    if value[0] in "-._":
+        return "starts with '-', '.' or '_' ('_' marks templates, which are never published)"
+    if len(value) > MAX_COMPONENT_LEN:
+        return f"is longer than {MAX_COMPONENT_LEN} characters"
+    if not COMPONENT_RE.fullmatch(value):
+        return "has characters outside [A-Za-z0-9._-]"
+    return None
+
+
+def canonical_identity(planet: str, agent: str) -> str:
+    """The one place that builds `<planet>:<agent>`. It is the published role name
+    (and the file stem) and also the identity used by the exclusion lists."""
+    for kind, value in (("planet", planet), ("agent", agent)):
+        problem = component_problem(value)
+        if problem:
+            raise ContractError(f"{kind} name {value!r} {problem}; rename it, nothing is substituted")
+    return f"{planet}:{agent}"
+
+
+def legacy_public_name(planet: str, agent: str) -> str:
+    """Name published by manifest format 1; used only to read and migrate old entries."""
     comps = []
     for part in (planet, agent):
         comp = part.lower().replace("-", "_")
-        if not COMPONENT_RE.fullmatch(comp):
-            raise ContractError("name cannot be represented as a public agent name")
+        if not LEGACY_COMPONENT_RE.fullmatch(comp):
+            raise ContractError("name cannot be represented as a legacy public agent name")
         comps.append(comp)
     name = f"solar__{comps[0]}__{comps[1]}"
-    if len(name) > MAX_NAME_LEN:
-        raise ContractError("public name longer than 96 characters")
+    if len(name) > MAX_LEGACY_NAME_LEN:
+        raise ContractError("legacy public name longer than 96 characters")
     return name
 
 
@@ -491,13 +529,6 @@ class Scan:
     unknown_sources: set = field(default_factory=set)
     invalid_sources: set = field(default_factory=set)  # contract exists but does not validate
     unknown_planets: set = field(default_factory=set)  # exact planet names
-    # Presence facts used to prove a source disappeared before adopting its entry
-    # on a rename: present_sources = every .md listed (valid or not);
-    # scanned_planets = planets whose agents/ dir was actually listed;
-    # listed_planets = every entry name under planets/.
-    present_sources: set = field(default_factory=set)
-    scanned_planets: set = field(default_factory=set)
-    listed_planets: set = field(default_factory=set)
     excluded_planets: set = field(default_factory=set)  # casefolded planet keys
 
 
@@ -541,7 +572,6 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
     if names is None:
         scan.planets_missing = True
         return scan
-    scan.listed_planets = set(names)
     planets_dir = workspace / "planets"
     planets_real = os.path.realpath(planets_dir)
     excluded = excluded_planet_map(cfg)
@@ -569,8 +599,9 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
                 continue
         elif not stat.S_ISDIR(lst.st_mode):
             continue
-        if not ID_RE.fullmatch(pname):
-            scan.omitted.append((f"planets/{pname}", "planet name has unsupported characters"))
+        problem = component_problem(pname)
+        if problem:
+            scan.omitted.append((f"planets/{pname}", f"planet name {problem}; rename it, nothing is substituted"))
             continue
         agents_dir = ppath / "agents"
         try:
@@ -590,18 +621,17 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
                 entries = sorted(e.name for e in it)
         except OSError as exc:
             raise Refusal(f"cannot list planets/{pname}/agents: {exc.strerror or exc}")
-        scan.scanned_planets.add(pname)
         for fname in entries:
             if fname.lower() == "readme.md" or fname.startswith((".", "_")) or not fname.endswith(".md"):
                 continue
             stem = fname[:-3]
             source = f"planets/{pname}/agents/{fname}"
-            scan.present_sources.add(source)
             if agent_key(pname, stem) in excluded_ids:
                 scan.omitted.append((source, "excluded by identity"))
                 continue
-            if not AGENT_NAME_RE.fullmatch(stem):
-                scan.omitted.append((source, "file name is not a valid agent name"))
+            problem = component_problem(stem)
+            if problem:
+                scan.omitted.append((source, f"agent name {problem}; rename the file, nothing is substituted"))
                 continue
             try:
                 elst = os.lstat(agents_dir / fname)
@@ -629,7 +659,7 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
                 continue
             try:
                 contract = parse_contract(pname, stem, raw)
-                name = public_name(pname, stem)
+                name = canonical_identity(pname, stem)
             except ContractError as exc:
                 scan.omitted.append((source, str(exc)))
                 scan.invalid_sources.add(source)
@@ -649,7 +679,7 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
                 scan.invalid_sources.add(source)
                 continue
             scan.eligible.append(Eligible(
-                pname, stem, source, f"{pname}:{stem}", name, f"{name}.toml",
+                pname, stem, source, name, name, f"{name}.toml",
                 contract.source_sha, text.encode("utf-8"), contract.description, instructions))
     return scan
 
@@ -670,6 +700,10 @@ class Dest:
     stale_tmp: list = field(default_factory=list)
 
 
+def is_legacy_name(name: str) -> bool:
+    return LEGACY_NAME_RE.fullmatch(name) is not None
+
+
 def validate_manifest(raw: bytes) -> list:
     def bad(msg):
         raise Refusal(f"corrupt {MANIFEST_NAME}: {msg}")
@@ -679,8 +713,9 @@ def validate_manifest(raw: bytes) -> list:
         bad(str(exc))
     if not isinstance(data, dict) or set(data) != {"format", "generator", "agents"}:
         bad("unexpected top-level keys")
-    if data["format"] != 1 or data["generator"] != MANIFEST_GENERATOR:
+    if data["format"] not in (LEGACY_MANIFEST_FORMAT, MANIFEST_FORMAT) or data["generator"] != MANIFEST_GENERATOR:
         bad("unexpected format or generator")
+    fmt = data["format"]
     if not isinstance(data["agents"], list):
         bad("agents must be an array")
     required = {"source", "identity", "source_sha256", "name", "file", "sha256"}
@@ -707,20 +742,34 @@ def validate_manifest(raw: bytes) -> list:
         match = SOURCE_RE.fullmatch(entry["source"])
         if not match or entry["identity"] != f"{match.group(1)}:{match.group(2)}":
             bad("source and identity do not agree")
-        if not PUBLIC_NAME_RE.fullmatch(entry["name"]) or len(entry["name"]) > MAX_NAME_LEN:
-            bad("name is not a valid public name")
         if entry["file"] != entry["name"] + ".toml":
             bad("file does not match name")
-        try:
-            expected = public_name(match.group(1), match.group(2))
-        except ContractError:
-            bad("identity cannot produce a public name")
+        if is_legacy_name(entry["name"]):
+            # Names of format 1 stay readable (to migrate them). A format 2
+            # manifest may still list them until the migration finishes.
+            if len(entry["name"]) > MAX_LEGACY_NAME_LEN:
+                bad("name is not a valid public name")
+            try:
+                expected = legacy_public_name(match.group(1), match.group(2))
+            except ContractError:
+                bad("identity cannot produce a public name")
+        else:
+            if fmt == LEGACY_MANIFEST_FORMAT:
+                bad("name is not a valid public name")
+            try:
+                expected = canonical_identity(match.group(1), match.group(2))
+            except ContractError:
+                bad("identity cannot produce a public name")
         if expected != entry["name"]:
             bad("name does not derive from identity")
+        # A migration in flight lists the same source twice: its old-scheme entry
+        # and its new-scheme one. Uniqueness is per scheme.
+        scheme = is_legacy_name(entry["name"])
         for key in seen:
-            if entry[key] in seen[key]:
+            value = entry[key] if key in ("file", "name") else (scheme, entry[key])
+            if value in seen[key]:
                 bad(f"duplicate {key}")
-            seen[key].add(entry[key])
+            seen[key].add(value)
         entries.append(entry)
     return entries
 
@@ -892,52 +941,37 @@ def _manifest_entry(item: Eligible) -> dict:
     }
 
 
+def plan_item(action: str, file: str, source: str, identity: str, reason=None) -> dict:
+    """Every plan item has the same keys; `reason` is null unless the action needs one."""
+    return {"action": action, "file": file, "source": source, "identity": identity,
+            "reason": reason}
+
+
 def build_plan(scan: Scan, dest: Dest) -> Plan:
     plan = Plan()
     plan.omitted = list(scan.omitted)
     by_file = {e["file"]: e for e in dest.manifest}
-    eligible_idents = {e.identity for e in scan.eligible}
+    # Entries published under the format 1 scheme (solar__<planet>__<agent>), by
+    # source identity. They are retired in the same plan that publishes the
+    # new-scheme role, and only when they are provably ours.
+    legacy_by_identity = {e["identity"]: e for e in dest.manifest if is_legacy_name(e["name"])}
+    handled: set = set()  # legacy files decided together with their new role
     groups: dict = {}
     for item in scan.eligible:
         groups.setdefault(item.name.casefold(), []).append(item)
     final: dict = {}
     transitional: dict = {}
 
-    def vanished(source: str) -> bool:
-        """True only when Solar confirmed this source is gone: the contract, its
-        agents/ dir or its planet no longer exists. A source still present
-        (invalid, unreadable, name mismatch) or on an excluded/unobservable
-        planet is never adopted."""
-        if source in scan.present_sources or source in scan.unknown_sources:
-            return False
-        match = SOURCE_RE.fullmatch(source)
-        if match is None:
-            return False
-        planet = match.group(1)
-        if planet_key(planet) in scan.excluded_planets or planet in scan.unknown_planets:
-            return False
-        if planet in scan.scanned_planets:
-            return True  # agents/ was listed and this contract was not there
-        return planet not in scan.listed_planets  # planet dir is gone entirely
-
     for item in sorted(scan.eligible, key=lambda e: e.file):
         entry = by_file.get(item.file)
+        legacy = legacy_by_identity.get(item.identity)
         reason = None
         action = None
         previous = None
         kind = dest.entries.get(item.file)
-        # A rename (letter case, '-' vs '_', or a new stem) keeps the same public
-        # name: adopt the previous entry only when its source is gone, so it is
-        # never both kept and retired. A still-present source (invalid contract,
-        # collision) keeps its entry and reports a conflict instead.
-        renamed = (entry is not None and entry["identity"] != item.identity
-                   and entry["identity"] not in eligible_idents
-                   and vanished(entry["source"]))
         if len(groups[item.name.casefold()]) > 1:
             others = sorted(o.source for o in groups[item.name.casefold()] if o is not item)
             reason = f"same public name as {', '.join(others)}"
-        elif entry is not None and entry["identity"] != item.identity and not renamed:
-            reason = "target file belongs to another source"
         elif kind is not None and kind != "file":
             reason = f"target path is a {kind}"
         elif kind == "file":
@@ -962,21 +996,41 @@ def build_plan(scan: Scan, dest: Dest) -> Plan:
             elif any(item.source in text for text in dest.foreign_text):
                 reason = "an unmanaged Codex agent file already references this contract"
             elif any(n.casefold() == item.file.casefold() and n != item.file for n in dest.entries):
-                reason = "a file whose name differs only by letter case exists"
+                reason = ("a file whose name differs only by letter case exists; if it is an unchanged "
+                          "generated file of a removed source it is retired in this run and "
+                          "this role is published on the next one")
+        retire_legacy = False
+        if reason is None and legacy is not None:
+            lkind = dest.entries.get(legacy["file"])
+            if lkind is None:
+                pass  # the old file is already gone; only its manifest entry is dropped
+            elif lkind == "file" and is_ours(legacy, dest.contents.get(legacy["file"])):
+                retire_legacy = True
+            else:
+                reason = (f"legacy file {legacy['file']} was edited or is not a generated file; "
+                          f"it is left untouched and {item.name} is not published until you "
+                          f"remove or restore it")
+        if legacy is not None:
+            handled.add(legacy["file"])
         if reason is not None:
             plan.conflicts.append((item.source, reason))
             if entry is not None:
                 final[item.file] = entry
+            if legacy is not None:
+                final[legacy["file"]] = legacy
             continue
         new_entry = _manifest_entry(item)
         final[item.file] = new_entry
-        plan.items.append({"action": action, "file": item.file, "source": item.source,
-                           "identity": item.identity})
+        plan.items.append(plan_item(action, item.file, item.source, item.identity))
         if action in ("add", "restore", "update"):
             plan.writes.append((item, previous))
             transitional[item.file] = dict(new_entry, previous_sha256=previous)
+        if retire_legacy:
+            plan.items.append(plan_item("retire", legacy["file"], item.source, item.identity,
+                                        f"migrated to {item.name}"))
+            plan.deletes.append(legacy)
     for entry in dest.manifest:
-        if entry["identity"] in eligible_idents:
+        if entry["file"] in handled:
             continue
         if entry["file"] in final:
             # The eligible loop already kept this entry (e.g. a conflicting
@@ -998,12 +1052,10 @@ def build_plan(scan: Scan, dest: Dest) -> Plan:
         kind = dest.entries.get(entry["file"])
         data = dest.contents.get(entry["file"])
         if kind is None:
-            plan.items.append({"action": "retire", "file": entry["file"],
-                               "source": entry["source"], "identity": entry["identity"]})
+            plan.items.append(plan_item("retire", entry["file"], entry["source"], entry["identity"]))
             continue
         if kind == "file" and is_ours(entry, data):
-            plan.items.append({"action": "retire", "file": entry["file"],
-                               "source": entry["source"], "identity": entry["identity"]})
+            plan.items.append(plan_item("retire", entry["file"], entry["source"], entry["identity"]))
             plan.deletes.append(entry)
             continue
         final[entry["file"]] = entry
@@ -1021,7 +1073,7 @@ def build_plan(scan: Scan, dest: Dest) -> Plan:
 
 
 def manifest_bytes(entries: list) -> bytes:
-    doc = {"format": 1, "generator": MANIFEST_GENERATOR, "agents": entries}
+    doc = {"format": MANIFEST_FORMAT, "generator": MANIFEST_GENERATOR, "agents": entries}
     return (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
@@ -1120,7 +1172,8 @@ def report(plan: Plan, as_json: bool = False, dry_run: bool = False, enabled: bo
         return
     prefix = "would " if dry_run else ""
     for item in plan.items:
-        print(f"{prefix}{item['action']}: {item['file']} <- {item['source']}")
+        note = f" ({item['reason']})" if item.get("reason") else ""
+        print(f"{prefix}{item['action']}: {item['file']} <- {item['source']}{note}")
     for source, reason in plan.omitted:
         print(f"omitted: {source}: {reason}")
     for source, reason in plan.conflicts:
