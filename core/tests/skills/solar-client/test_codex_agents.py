@@ -810,6 +810,97 @@ def test_invalid_contract_then_excluded_retires(ws, env):
     assert "solar__demo__sales.toml" not in toml_files(ws)
 
 
+def test_rename_same_public_name_adopts_entry(ws, env):
+    """Renaming a contract must not keep and retire the same entry at once."""
+    enable(ws, env)
+    run(ws, env, "publish")
+    folder = ws / "planets/demo/agents"
+    (folder / "foo-bar.md").write_text(contract("foo-bar"))
+    assert run(ws, env, "publish").returncode == 0
+    assert "solar__demo__foo_bar.toml" in toml_files(ws)
+    # Rename file and frontmatter name: same public name, new identity.
+    (folder / "foo-bar.md").unlink()
+    (folder / "foo_bar.md").write_text(contract("foo_bar"))
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "solar__demo__foo_bar.toml" in toml_files(ws)
+    assert [e["identity"] for e in manifest(ws)["agents"] if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo_bar"]
+    # And it converges: the next run is a clean no-op, no conflict.
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0
+    assert "conflict:" not in proc.stdout
+
+
+@pytest.mark.parametrize("old,new", [("Foo_bar", "foo_bar"), ("foo-bar", "foo_bar")])
+def test_rename_case_or_separator_adopts_entry(ws, env, old, new):
+    enable(ws, env)
+    folder = ws / "planets/demo/agents"
+    (folder / f"{old}.md").write_text(contract(old))
+    assert run(ws, env, "publish").returncode == 0
+    (folder / f"{old}.md").unlink()
+    (folder / f"{new}.md").write_text(contract(new))
+    assert run(ws, env, "publish").returncode == 0
+    assert toml_files(ws).count("solar__demo__foo_bar.toml") == 1
+    entry = [e for e in manifest(ws)["agents"] if e["file"] == "solar__demo__foo_bar.toml"]
+    assert len(entry) == 1 and entry[0]["identity"] == f"demo:{new}"
+
+
+def test_rename_across_planets_retires_old_and_adds_new(ws, env):
+    """A moved contract to a different planet retires the old and adds the new."""
+    enable(ws, env)
+    write_agent(ws, "other", "foo-bar", contract("foo-bar"))
+    assert run(ws, env, "publish").returncode == 0
+    (ws / "planets/other/agents/foo-bar.md").unlink()
+    write_agent(ws, "demo", "foo-bar", contract("foo-bar"))
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0
+    assert "solar__other__foo_bar.toml" not in toml_files(ws)
+    assert "solar__demo__foo_bar.toml" in toml_files(ws)
+    assert [e["identity"] for e in manifest(ws)["agents"]
+            if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo-bar"]
+
+
+def test_rename_with_excluded_old_planet_never_reads_it(ws, env):
+    enable(ws, env)
+    write_agent(ws, "demo", "foo-bar", contract("foo-bar"))
+    assert run(ws, env, "publish").returncode == 0
+    (ws / "planets/demo/agents/foo-bar.md").unlink()
+    write_agent(ws, "other", "foo-bar", contract("foo-bar"))
+    assert run(ws, env, "exclude", "add", "demo").returncode == 0
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 0
+    assert "solar__demo__foo_bar.toml" not in toml_files(ws)
+    assert "solar__other__foo_bar.toml" in toml_files(ws)
+
+
+def test_interrupted_rename_converges(ws, env):
+    """A crash mid-rename must converge on the next run, no duplicate entries."""
+    enable(ws, env)
+    folder = ws / "planets/demo/agents"
+    (folder / "foo-bar.md").write_text(contract("foo-bar"))
+    assert run(ws, env, "publish").returncode == 0
+    (folder / "foo-bar.md").unlink()
+    (folder / "foo_bar.md").write_text(contract("foo_bar"))
+    proc = run(ws, env, "publish", extra_env={"SOLAR_CODEX_AGENTS_TEST_FAIL_AFTER": "1"})
+    assert proc.returncode != 0
+    assert run(ws, env, "publish").returncode == 0
+    assert toml_files(ws).count("solar__demo__foo_bar.toml") == 1
+    entries = manifest(ws)["agents"]
+    assert len({e["file"] for e in entries}) == len(entries)
+    assert_converged(ws, env)
+
+
+def test_simultaneous_old_and_new_identity_collide(ws, env):
+    """If both old and new stems exist at once, it is a conflict, never a duality."""
+    enable(ws, env)
+    folder = ws / "planets/demo/agents"
+    (folder / "foo-bar.md").write_text(contract("foo-bar"))
+    (folder / "foo_bar.md").write_text(contract("foo_bar"))
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 3
+    assert "same public name as" in proc.stdout
+
+
 def test_user_edited_file_is_kept_and_reported_on_retire(ws, env):
     enable(ws, env)
     run(ws, env, "publish")

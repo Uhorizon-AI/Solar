@@ -101,6 +101,12 @@ that already cites the contract path. Unchanged generated files of agents that a
 longer eligible are deleted; edited ones are kept and reported. A source that could not
 be read is never retired. A deleted managed file is restored.
 
+Renaming a contract (letter case, `-` vs `_`, or a new stem) keeps the same public
+name: the previous identity is adopted by the new source in a single plan, so the
+role is updated in place and never kept and retired at the same time. If both the old
+and the new stem exist at once, it is a conflict (two sources, same public name) and
+nothing is overwritten.
+
 Exit codes: 0 ok, 2 usage or invalid settings, 3 conflicts, 4 lock timeout
 (`SOLAR_CODEX_AGENTS_LOCK_TIMEOUT`, seconds), 5 refusal before any write (corrupt
 manifest, symlinked `.codex` or `.codex/agents`, `planets/` missing while the manifest

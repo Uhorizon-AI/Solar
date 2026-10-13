@@ -9,6 +9,7 @@ The format is based on Keep a Changelog.
 ### Added
 - Opt-in native Codex agents: with `solar client sync codex-agents enable`, `solar client sync` also publishes derived roles from top-level `planets/<planet>/agents/*.md` contracts into `.codex/agents/solar__<planet>__<agent>.toml` (only `name`, `description`, `developer_instructions`), tracked by a hash manifest so edited, unmanaged or colliding files are reported and never overwritten, and unchanged generated files are retired when a contract goes away. Adds `codex-agents status [--json]|preview [--contents] [--json]|enable|disable` and Codex-specific exclusions (`exclude --client codex <planet>|<planet>:<agent>`, including the `--client=codex` form) on top of the global ones; an excluded planet is never opened by the publisher. Off by default and silent while disabled; other clients are unchanged.
 - A contract that still exists but no longer validates (broken frontmatter, empty body, serialization failure) keeps its published role (`kept: contract is invalid`): editing a contract never deletes the agent. It is retired only when the `.md` disappears or the agent/planet is excluded.
+- Renaming a contract (letter case, `-` vs `_`, new stem) updates the published role in place: the previous identity is adopted by the new source in the same plan, so it is never kept and retired at once (previously the file was deleted and later runs reported a persistent conflict). Two sources sharing a public name remain a conflict.
 
 ## [0.42.1] - 2026-10-13
 

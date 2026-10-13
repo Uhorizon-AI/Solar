@@ -897,10 +897,15 @@ def build_plan(scan: Scan, dest: Dest) -> Plan:
         action = None
         previous = None
         kind = dest.entries.get(item.file)
+        # A rename (letter case, '-' vs '_', or a new stem) keeps the same public
+        # name: the previous identity is gone, so adopt its entry instead of
+        # keeping the old one and retiring it in the same plan.
+        renamed = (entry is not None and entry["identity"] != item.identity
+                   and entry["identity"] not in eligible_idents)
         if len(groups[item.name.casefold()]) > 1:
             others = sorted(o.source for o in groups[item.name.casefold()] if o is not item)
             reason = f"same public name as {', '.join(others)}"
-        elif entry is not None and entry["identity"] != item.identity:
+        elif entry is not None and entry["identity"] != item.identity and not renamed:
             reason = "target file belongs to another source"
         elif kind is not None and kind != "file":
             reason = f"target path is a {kind}"
@@ -939,9 +944,12 @@ def build_plan(scan: Scan, dest: Dest) -> Plan:
         if action in ("add", "restore", "update"):
             plan.writes.append((item, previous))
             transitional[item.file] = dict(new_entry, previous_sha256=previous)
-
     for entry in dest.manifest:
         if entry["identity"] in eligible_idents:
+            continue
+        if entry["file"] in final:
+            # The eligible loop already kept this entry (e.g. a conflicting
+            # target). Never keep and retire the same entry in one plan.
             continue
         planet = entry["identity"].split(":", 1)[0]
         if entry["source"] in scan.unknown_sources or planet in scan.unknown_planets:
