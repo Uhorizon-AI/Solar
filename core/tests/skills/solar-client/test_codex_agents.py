@@ -28,6 +28,11 @@ import codex_agents as ca  # noqa: E402
 
 PERSONAL = "personal-x"
 
+# chmod(0) does not block reads for root, so tests that rely on an unreadable
+# file/dir fail for the wrong reason (or pass vacuously) as root. Skip them.
+needs_unreadable = pytest.mark.skipif(
+    os.geteuid() == 0, reason="root ignores file modes, so chmod(0) is still readable")
+
 
 # --------------------------------------------------------------------------
 # helpers
@@ -937,6 +942,7 @@ def test_excluded_old_planet_is_never_adopted(ws, env):
     assert "solar__other__foo_bar.toml" in toml_files(ws)
 
 
+@needs_unreadable
 def test_unknown_state_old_contract_blocks_adoption(ws, env):
     """An unreadable (unknown state) old contract is never replaced."""
     enable(ws, env)
@@ -1026,6 +1032,7 @@ def test_user_deleted_managed_file_is_restored(ws, env):
     assert "solar__demo__sales.toml" in toml_files(ws)
 
 
+@needs_unreadable
 def test_unreadable_source_is_never_retired(ws, env):
     enable(ws, env)
     run(ws, env, "publish")
