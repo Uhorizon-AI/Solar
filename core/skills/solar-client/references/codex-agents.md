@@ -102,10 +102,13 @@ longer eligible are deleted; edited ones are kept and reported. A source that co
 be read is never retired. A deleted managed file is restored.
 
 Renaming a contract (letter case, `-` vs `_`, or a new stem) keeps the same public
-name: the previous identity is adopted by the new source in a single plan, so the
-role is updated in place and never kept and retired at the same time. If both the old
-and the new stem exist at once, it is a conflict (two sources, same public name) and
-nothing is overwritten.
+name: the previous identity is adopted by the new source in a single plan only when
+Solar confirms the previous source is gone (the `.md`, its `agents/` dir or its planet
+no longer exists). A source that is still present but invalid, unreadable or on an
+excluded/unknown planet keeps its published role and is reported as a conflict, so a
+contract is never replaced while it still exists. If both the old and the new stem
+exist at once, it is a conflict (two sources, same public name) and nothing is
+overwritten.
 
 Exit codes: 0 ok, 2 usage or invalid settings, 3 conflicts, 4 lock timeout
 (`SOLAR_CODEX_AGENTS_LOCK_TIMEOUT`, seconds), 5 refusal before any write (corrupt

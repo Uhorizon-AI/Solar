@@ -890,6 +890,73 @@ def test_interrupted_rename_converges(ws, env):
     assert_converged(ws, env)
 
 
+def test_present_invalid_old_contract_blocks_adoption(ws, env):
+    """A still-present old contract (invalid) is never replaced: keep and report."""
+    enable(ws, env)
+    folder = ws / "planets/demo/agents"
+    (folder / "foo-bar.md").write_text(contract("foo-bar"))
+    assert run(ws, env, "publish").returncode == 0
+    original = (agents_dir(ws) / "solar__demo__foo_bar.toml").read_bytes()
+    # The old contract still exists but no longer validates; a valid new stem appears.
+    (folder / "foo-bar.md").write_text("no frontmatter now\n")
+    (folder / "foo_bar.md").write_text(contract("foo_bar"))
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert "belongs to another source" in proc.stdout
+    # The published role is untouched and still belongs to the old identity.
+    assert (agents_dir(ws) / "solar__demo__foo_bar.toml").read_bytes() == original
+    assert [e["identity"] for e in manifest(ws)["agents"]
+            if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo-bar"]
+
+
+def test_present_mismatched_name_old_contract_blocks_adoption(ws, env):
+    """Editing the old contract to an invalid name must not transfer identity."""
+    enable(ws, env)
+    folder = ws / "planets/demo/agents"
+    (folder / "foo-bar.md").write_text(contract("foo-bar"))
+    assert run(ws, env, "publish").returncode == 0
+    (folder / "foo-bar.md").write_text(contract("some-other-name"))
+    (folder / "foo_bar.md").write_text(contract("foo_bar"))
+    proc = run(ws, env, "publish")
+    assert proc.returncode == 3
+    assert "belongs to another source" in proc.stdout
+    assert [e["identity"] for e in manifest(ws)["agents"]
+            if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo-bar"]
+
+
+def test_excluded_old_planet_is_never_adopted(ws, env):
+    """An excluded (unobserved) old planet is never assumed empty."""
+    enable(ws, env)
+    write_agent(ws, "demo", "foo-bar", contract("foo-bar"))
+    assert run(ws, env, "publish").returncode == 0
+    (ws / "planets/demo/agents/foo-bar.md").unlink()
+    write_agent(ws, "other", "foo-bar", contract("foo-bar"))
+    assert run(ws, env, "exclude", "add", "demo").returncode == 0
+    assert run(ws, env, "publish").returncode == 0
+    assert "solar__demo__foo_bar.toml" not in toml_files(ws)
+    assert "solar__other__foo_bar.toml" in toml_files(ws)
+
+
+def test_unknown_state_old_contract_blocks_adoption(ws, env):
+    """An unreadable (unknown state) old contract is never replaced."""
+    enable(ws, env)
+    folder = ws / "planets/demo/agents"
+    (folder / "foo-bar.md").write_text(contract("foo-bar"))
+    assert run(ws, env, "publish").returncode == 0
+    old = folder / "foo-bar.md"
+    os.chmod(old, 0)
+    (folder / "foo_bar.md").write_text(contract("foo_bar"))
+    try:
+        proc = run(ws, env, "publish")
+        assert proc.returncode == 3, proc.stdout + proc.stderr
+        assert "belongs to another source" in proc.stdout
+        assert "solar__demo__foo_bar.toml" in toml_files(ws)
+        assert [e["identity"] for e in manifest(ws)["agents"]
+                if e["file"] == "solar__demo__foo_bar.toml"] == ["demo:foo-bar"]
+    finally:
+        os.chmod(old, 0o644)
+
+
 def test_simultaneous_old_and_new_identity_collide(ws, env):
     """If both old and new stems exist at once, it is a conflict, never a duality."""
     enable(ws, env)

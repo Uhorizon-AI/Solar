@@ -491,6 +491,14 @@ class Scan:
     unknown_sources: set = field(default_factory=set)
     invalid_sources: set = field(default_factory=set)  # contract exists but does not validate
     unknown_planets: set = field(default_factory=set)  # exact planet names
+    # Presence facts used to prove a source disappeared before adopting its entry
+    # on a rename: present_sources = every .md listed (valid or not);
+    # scanned_planets = planets whose agents/ dir was actually listed;
+    # listed_planets = every entry name under planets/.
+    present_sources: set = field(default_factory=set)
+    scanned_planets: set = field(default_factory=set)
+    listed_planets: set = field(default_factory=set)
+    excluded_planets: set = field(default_factory=set)  # casefolded planet keys
 
 
 def list_planet_entries(workspace: Path):
@@ -533,9 +541,11 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
     if names is None:
         scan.planets_missing = True
         return scan
+    scan.listed_planets = set(names)
     planets_dir = workspace / "planets"
     planets_real = os.path.realpath(planets_dir)
     excluded = excluded_planet_map(cfg)
+    scan.excluded_planets = set(excluded)
     excluded_ids = excluded_agent_keys(cfg)
     excluded_names = [name for name in sorted(set(cfg.exclude_planets) | set(cfg.global_exclude_planets))]
     patterns = {name: reference_patterns(name) for name in excluded_names}
@@ -580,11 +590,13 @@ def scan_sources(workspace: Path, cfg: Config) -> Scan:
                 entries = sorted(e.name for e in it)
         except OSError as exc:
             raise Refusal(f"cannot list planets/{pname}/agents: {exc.strerror or exc}")
+        scan.scanned_planets.add(pname)
         for fname in entries:
             if fname.lower() == "readme.md" or fname.startswith((".", "_")) or not fname.endswith(".md"):
                 continue
             stem = fname[:-3]
             source = f"planets/{pname}/agents/{fname}"
+            scan.present_sources.add(source)
             if agent_key(pname, stem) in excluded_ids:
                 scan.omitted.append((source, "excluded by identity"))
                 continue
@@ -891,6 +903,23 @@ def build_plan(scan: Scan, dest: Dest) -> Plan:
     final: dict = {}
     transitional: dict = {}
 
+    def vanished(source: str) -> bool:
+        """True only when Solar confirmed this source is gone: the contract, its
+        agents/ dir or its planet no longer exists. A source still present
+        (invalid, unreadable, name mismatch) or on an excluded/unobservable
+        planet is never adopted."""
+        if source in scan.present_sources or source in scan.unknown_sources:
+            return False
+        match = SOURCE_RE.fullmatch(source)
+        if match is None:
+            return False
+        planet = match.group(1)
+        if planet_key(planet) in scan.excluded_planets or planet in scan.unknown_planets:
+            return False
+        if planet in scan.scanned_planets:
+            return True  # agents/ was listed and this contract was not there
+        return planet not in scan.listed_planets  # planet dir is gone entirely
+
     for item in sorted(scan.eligible, key=lambda e: e.file):
         entry = by_file.get(item.file)
         reason = None
@@ -898,10 +927,12 @@ def build_plan(scan: Scan, dest: Dest) -> Plan:
         previous = None
         kind = dest.entries.get(item.file)
         # A rename (letter case, '-' vs '_', or a new stem) keeps the same public
-        # name: the previous identity is gone, so adopt its entry instead of
-        # keeping the old one and retiring it in the same plan.
+        # name: adopt the previous entry only when its source is gone, so it is
+        # never both kept and retired. A still-present source (invalid contract,
+        # collision) keeps its entry and reports a conflict instead.
         renamed = (entry is not None and entry["identity"] != item.identity
-                   and entry["identity"] not in eligible_idents)
+                   and entry["identity"] not in eligible_idents
+                   and vanished(entry["source"]))
         if len(groups[item.name.casefold()]) > 1:
             others = sorted(o.source for o in groups[item.name.casefold()] if o is not item)
             reason = f"same public name as {', '.join(others)}"
