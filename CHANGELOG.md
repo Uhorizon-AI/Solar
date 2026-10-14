@@ -12,9 +12,12 @@ The format is based on Keep a Changelog.
 - `core/docs/test-isolation.md`: the required isolation guide for shell tests, covering the runtime and `launchctl` checks, the opt-in service check, the `SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE` and `SOLAR_CLIENT_PS_OUTPUT_FILE` hooks (and that they do not cover the LaunchAgent step) and the resource rules.
 
 ### Changed
-- `SOLAR_APP_PORT` is fixed at 9000, now expressed as `SOLAR_APP_PORT_OVERRIDE:-9000`. The override exists only so a test can keep its stub off the machine's real console port.
+- Console identity policy is a single decision point, `host_identity.py`: `check_host.sh` (with and without a flag), `host_lib.sh` (listener identity and orphan stopping), `start_host.sh` and `stop_host.sh` all call it, so no reuse path can drift away from another. A console that reports half an identity (only `workspace` or only `runtime`) is now refused unless a proof says the process is this runtime's own.
+- `SOLAR_APP_PORT` stays fixed at 9000. `SOLAR_APP_PORT_OVERRIDE` is honored only when the runtime is a temporary one: a real installation keeps 9000 even when the override leaks into its environment.
 - `solar_host_stop_orphan_listeners` stops a listener only when it looks like `host_server.py` **and** its `/health` reports this runtime's workspace and runtime; anything else is reported as a foreign console and left running.
 - `start_host.sh` no longer sweeps the port with `solar_host_stop_orphan_listeners`: a foreign console is reported and the run exits 3, and a reused pid in the pid file is dropped instead of killed.
+- `stop_host.sh` reuses the same proof as `start_host.sh` before stopping: a pid that is not a live `host_server.py` is dropped with a warning, never killed, and a foreign listener on the port exits 3 with the diagnosis instead of reporting "Solar Host not running".
+- `ensure_host.sh` refuses a foreign console with the same diagnosis and exits 3 instead of retrying, because retrying cannot converge.
 
 ### Fixed
 - `test_discovery_profile.py` pins `SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none` and passes `solar_test_guard --services`, so its full `client_sync.sh` run can no longer reach the state cutover against the machine's real services.
