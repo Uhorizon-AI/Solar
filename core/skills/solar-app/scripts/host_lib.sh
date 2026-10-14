@@ -214,15 +214,21 @@ PY
   set +e
   # Only the pid under test is handed to the policy: the caller asked about this
   # one listener, and passing the whole port list would let a different listener
-  # satisfy the pid-file proof for it.
-  solar_host_identity_own "$health_file" "$SOLAR_HOST_PID_FILE" "$pid" >/dev/null 2>&1
+  # satisfy the pid-file proof for it. The reason is captured to tell a proven
+  # foreign console ("another workspace/runtime") from an unproven one.
+  local reason
+  reason="$(solar_host_identity_own "$health_file" "$SOLAR_HOST_PID_FILE" "$pid" 2>&1)"
   status=$?
   set -e
   rm -f "$health_file"
   if [[ "$status" -eq 0 ]]; then
     echo own
-  else
+  elif [[ "$reason" == *"another workspace"* || "$reason" == *"another runtime"* ]]; then
     echo foreign
+  else
+    # It answered but its identity is incomplete and no proof was found: that is
+    # "unproven", not "foreign". The message must not assert more than we know.
+    echo unproven
   fi
 }
 
@@ -364,23 +370,32 @@ solar_host_report_port_blocker() {
   esac
 }
 
-# Guard for the reuse path: when something holds the console port and it is not
-# this runtime's own console, report it and return 3. Retrying cannot converge,
-# so every caller (start_host.sh, ensure_host.sh) stops here with the same
-# message. An own hung console (this install's host_server.py in its command
+# Guard for the reuse path: when something holds the console port and no
+# listener is this runtime's own console, report it and return 3. Retrying cannot
+# converge, so every caller (start_host.sh, ensure_host.sh) stops here with the
+# same message. An own hung console (this install's host_server.py in its command
 # line) is not this case: it returns 0 and the caller may recover it. Returns 0 —
-# and does nothing — when the port is free or the listener is provably ours.
+# and does nothing — when the port is free or any listener is provably ours.
 solar_host_refuse_foreign_listener() {
   solar_host_load_env
-  solar_host_port_listener_pids | grep -q . || return 0
-  local identity
-  identity="$(solar_host_listener_identity)"
-  if [[ "$identity" != own ]]; then
-    # Pass the tested identity through: "foreign" (it answered as another
-    # workspace or runtime) and "unproven" (it did not answer and no proof was
-    # found) are different claims, and the message must say which one it is.
-    solar_host_report_foreign_listener "" "$identity"
-    return 3
-  fi
-  return 0
+  local pid identity first_blocker_pid="" first_blocker_identity=""
+  # Every listener is examined: with two listeners, a foreign first pid must not
+  # stop the run while the second is this runtime's own console.
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    identity="$(solar_host_listener_identity "$pid")"
+    if [[ "$identity" == own ]]; then
+      return 0
+    fi
+    if [[ -z "$first_blocker_pid" ]]; then
+      first_blocker_pid="$pid"
+      first_blocker_identity="$identity"
+    fi
+  done < <(solar_host_port_listener_pids)
+  [[ -n "$first_blocker_pid" ]] || return 0
+  # Pass the tested identity through: "foreign" (it answered as another
+  # workspace or runtime) and "unproven" (it did not answer and no proof was
+  # found) are different claims, and the message must say which one it is.
+  solar_host_report_foreign_listener "$first_blocker_pid" "$first_blocker_identity"
+  return 3
 }

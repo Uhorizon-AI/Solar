@@ -267,12 +267,22 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
     own = False
     pid_file_pid = _pid_file_pid(pid_file)
     if pid_file_pid is not None:
-        # The pid file must name a live host_server.py, and — when the port's
-        # listeners are known — it must be one of them. A pid that is not the
-        # first listener is still a listener.
-        own = pid_file_own_server("", pid=pid_file_pid) and (
-            not listeners or str(pid_file_pid) in listeners
-        )
+        if listeners:
+            # The pid file must name a live host_server.py, and it must be one of
+            # the port's listeners. A pid that is not the first listener is still
+            # a listener.
+            own = pid_file_own_server("", pid=pid_file_pid) and (
+                str(pid_file_pid) in listeners
+            )
+        else:
+            # No listener could be enumerated (lsof missing or timed out). The
+            # pid file alone only proves runtime membership, which would let a
+            # foreign console on the port be adopted on an unrelated own pid. So
+            # demand the strict, install-level proof instead: the pid file's
+            # process must be this install's own host_server.py.
+            own = pid_file_own_server("", pid=pid_file_pid) and command_is_install_server(
+                pid_command(pid_file_pid), install_roots
+            )
     if not own:
         own = command_is_install_server(listener_command, install_roots)
     if not own and listeners:

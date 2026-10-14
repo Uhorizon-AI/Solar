@@ -148,6 +148,27 @@ class EvaluateTest(unittest.TestCase):
         finally:
             host_identity.pid_file_own_server = original
 
+    def test_pid_file_without_listeners_needs_the_install_proof(self):
+        # lsof failed (or is missing): no listener could be enumerated. An own
+        # pid file alone only proves runtime membership and would adopt a foreign
+        # console on the port, so it must not be enough: the pid's own command
+        # has to be this install's host_server.py.
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        original_pid_file = host_identity.pid_file_own_server
+        original_command = host_identity.pid_command
+        host_identity.pid_file_own_server = lambda path, pid=None: True
+        try:
+            host_identity.pid_command = lambda pid: "python3 /somewhere/else/host_server.py"
+            reason = self.evaluate({}, pid_file=str(pid_file), listener_pids=[])
+            self.assertIn("no identity and no process", reason)
+
+            host_identity.pid_command = lambda pid: f"python3 {self.server}"
+            self.assertIsNone(self.evaluate({}, pid_file=str(pid_file), listener_pids=[]))
+        finally:
+            host_identity.pid_file_own_server = original_pid_file
+            host_identity.pid_command = original_command
+
     def test_blank_health_with_another_install_command_is_rejected(self):
         command = "python3 /somewhere/else/core/skills/solar-app/scripts/host_server.py"
         self.assertIn("no identity and no process", self.evaluate({}, listener_command=command))

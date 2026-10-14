@@ -322,3 +322,24 @@ def test_health_body_carries_physical_paths_for_loopback(tmp_path):
     # Physical paths: no symlink, no `~`, no relative tail.
     assert payload["workspace"] == str(tmp_path)
     assert payload["runtime"]
+
+
+def test_health_reports_the_physical_workspace_when_reached_through_a_symlink(tmp_path):
+    # The console may be started from a symlinked workspace path. /health must
+    # answer with the physical path so a supervisor comparing it with its own
+    # (also physical) workspace does not read it as another workspace.
+    import json as _json
+    import app_http
+
+    real = tmp_path / "real-ws"
+    real.mkdir()
+    link = tmp_path / "ws-link"
+    link.symlink_to(real)
+
+    handler = _FakeHandler(("127.0.0.1", 44444))
+    app_http.get(handler, "/health", {}, str(link))
+
+    payload = _json.loads(handler.body.decode("utf-8"))
+    assert payload["workspace"] == str(real.resolve())
+    assert Path(payload["workspace"]).is_absolute()
+    assert "ws-link" not in payload["workspace"]

@@ -58,9 +58,11 @@ def get(handler, path, qs, workspace):
         handler._send((ASSETS / name).read_bytes(), content_type=mime)
         return
     if path == "/health":
+        # The workspace is resolved to its physical path so a caller comparing it
+        # with its own workspace is not defeated by a symlinked or relative path.
         handler._send_json({"service": "solar-console", "status": "available", "process_ok": True,
-                            "workspace": str(workspace),
-                            "runtime": str(app_solar.solar_runtime.runtime_root())})
+                            "workspace": str(Path(workspace).resolve()),
+                            "runtime": str(Path(app_solar.solar_runtime.runtime_root()).resolve())})
         return
     if path == "/api/app/activity":
         value = lambda key, default='': qs.get(key, [default])[0]
