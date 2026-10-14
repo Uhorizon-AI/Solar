@@ -1108,6 +1108,34 @@ ON_ENDPOINT_PIDS="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
 rm -f "$TMP/bin/lsof" "$TMP/bin/ps"
 stop_stub
 
+# --- 19b. An `other` listener read last does not fail the helper ---------------
+# `solar_host_port_listener_pids_on_endpoint` is consumed under `set -o pipefail`:
+# when lsof prints the `other` listener last, the loop's last command returns 1
+# and start_host.sh would abort even though the probed listener was already found.
+cat >"$TMP/bin/lsof" <<EOF
+#!/usr/bin/env bash
+# Both forms: the bare pid list and the keyed name field. 111111 is on the probed
+# 127.0.0.1 (match); 222222 is on 127.0.0.2 (other) and is printed LAST.
+for _arg in "\$@"; do
+  case "\$_arg" in
+    -Fn) printf 'p111111\nn127.0.0.1:%s\np222222\nn127.0.0.2:%s\n' "$STUB_PORT" "$STUB_PORT"; exit 0 ;;
+  esac
+done
+printf '%s\n' "111111"
+printf '%s\n' "222222"
+EOF
+chmod +x "$TMP/bin/lsof"
+set +e
+LAST_OTHER_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  bash -c 'source "$1"; solar_host_port_listener_pids_on_endpoint' _ "$HOST_LIB" 2>/dev/null)"
+last_other_ec=$?
+set -e
+[[ "$last_other_ec" -eq 0 ]] && pass "an other listener read last does not fail the helper" \
+  || fail "an other listener read last does not fail the helper (ec=$last_other_ec)"
+[[ "$LAST_OTHER_OUT" == "111111" ]] && pass "only the match listener is echoed when other is last" \
+  || fail "only the match listener is echoed when other is last (got '$LAST_OTHER_OUT')"
+rm -f "$TMP/bin/lsof" "$TMP/bin/ps"
+
 # --- 20. A pid file naming this install's server on another endpoint stays -----
 # Same install, same port, but another address: the pid-file process runs this
 # install's host_server.py yet serves a different socket than SOLAR_APP_BASE_URL

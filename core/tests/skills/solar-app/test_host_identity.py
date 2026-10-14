@@ -178,13 +178,28 @@ class EvaluateTest(unittest.TestCase):
         original_command = host_identity.pid_command
         try:
             host_identity.pid_command = lambda pid: "python3 /somewhere/else/host_server.py"
-            reason = self.evaluate({}, pid_file=str(pid_file), listener_pids=[])
+            reason = self.evaluate({}, pid_file=str(pid_file), listener_pids=None)
             self.assertIn("no identity and no process", reason)
 
             host_identity.pid_command = lambda pid: f"python3 {self.server}"
-            self.assertIsNone(self.evaluate({}, pid_file=str(pid_file), listener_pids=[]))
+            self.assertIsNone(self.evaluate({}, pid_file=str(pid_file), listener_pids=None))
         finally:
             host_identity.pid_command = original_command
+
+    def test_pid_file_on_another_endpoint_with_evidence_is_rejected(self):
+        # lsof DID enumerate the port, but the pid file's process serves another
+        # socket (an empty endpoint-filtered list): the evidence is "no listener
+        # serves the probed endpoint", not "no evidence", so the pid file must not
+        # adopt the foreign listener the probe actually reaches.
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        original_command = host_identity.pid_command
+        host_identity.pid_command = lambda pid: f"python3 {self.server}"
+        try:
+            reason = self.evaluate({}, pid_file=str(pid_file), listener_pids=[])
+        finally:
+            host_identity.pid_command = original_command
+        self.assertIn("no identity and no process", reason)
 
     def test_relative_identity_path_is_treated_as_no_identity(self):
         # An old console may report a relative path. `resolve()` would anchor it
@@ -747,12 +762,19 @@ class EndpointTest(unittest.TestCase):
             self.assertEqual(
                 host_identity.listener_endpoint_state("111", "::1", 9000), "match")
 
-    def test_a_wildcard_bind_matches_any_host(self):
-        # `lsof` reports both wildcards as `*`; a wildcard answers on every local
-        # address, so it matches a probe of either family and of any literal host.
+    def test_a_bare_wildcard_bind_matches_any_host(self):
+        # `lsof` reports both wildcards as a bare `*`; without `-i4`/`-i6` family
+        # evidence it stays family-agnostic and matches a probe of either family.
         self.assertTrue(host_identity.endpoint_matches("*:9000", "127.0.0.1", 9000))
         self.assertTrue(host_identity.endpoint_matches("*:9000", "::1", 9000))
-        self.assertTrue(host_identity.endpoint_matches("0.0.0.0:9000", "127.0.0.2", 9000))
+
+    def test_a_literal_wildcard_host_matches_only_its_own_family(self):
+        # A literal `0.0.0.0` (never printed by `lsof`, which uses `*`) names the
+        # IPv4 wildcard: it matches an IPv4 probe, not an IPv6 one.
+        self.assertTrue(host_identity.endpoint_matches("0.0.0.0:9000", "127.0.0.1", 9000))
+        self.assertFalse(host_identity.endpoint_matches("0.0.0.0:9000", "::1", 9000))
+        self.assertTrue(host_identity.endpoint_matches("[::]:9000", "::1", 9000))
+        self.assertFalse(host_identity.endpoint_matches("[::]:9000", "127.0.0.1", 9000))
 
     def test_a_listener_on_another_address_does_not_match(self):
         self.assertFalse(host_identity.endpoint_matches("127.0.0.2:9000", "127.0.0.1", 9000))
@@ -788,15 +810,22 @@ class EndpointTest(unittest.TestCase):
                 ["111"],
             )
 
-    def test_without_endpoint_evidence_every_listener_is_returned(self):
-        # `lsof` missing or a double that only answers `-t`: the caller must keep
-        # the pre-endpoint behaviour, not lose the whole list.
+    def test_without_endpoint_evidence_returns_none(self):
+        # `lsof` missing or a double that only answers `-t`: no endpoint evidence
+        # at all. The caller gets None ("no evidence") so it can keep the
+        # pre-endpoint behaviour and not confuse it with "the port is empty".
         with self._lsof("", returncode=1):
-            with mock.patch.object(host_identity, "port_listener_pids", return_value=["4", "7"]):
-                self.assertEqual(
-                    host_identity.port_listener_pids_on_endpoint("127.0.0.1", 9000),
-                    ["4", "7"],
-                )
+            self.assertIsNone(
+                host_identity.port_listener_pids_on_endpoint("127.0.0.1", 9000))
+
+    def test_evidence_with_no_matching_listener_returns_empty(self):
+        # `lsof` DID enumerate the port but no listener serves the probed address:
+        # an empty list, not None, so the caller knows the pid file names a process
+        # on another socket and must not adopt it.
+        stdout = "p222\nn127.0.0.2:9000\n"
+        with self._lsof(stdout):
+            self.assertEqual(
+                host_identity.port_listener_pids_on_endpoint("127.0.0.1", 9000), [])
 
     def test_endpoint_verdicts_lists_every_listener(self):
         stdout = "p222\nn127.0.0.2:9000\np111\nn127.0.0.1:9000\n"
@@ -818,10 +847,53 @@ class EndpointTest(unittest.TestCase):
                 [("111", "match"), ("222", "match")],
             )
 
+    def test_a_wildcard_is_annotated_with_its_served_family(self):
+        # `lsof` prints both wildcards as `*`, so `-i4`/`-i6` recover the family:
+        # a wildcard listed only by `-i6` serves IPv6, and the annotated address
+        # must not match an IPv4 probe (an IPV6_V6ONLY wildcard can coexist with an
+        # IPv4 console on the same port).
+        wildcard = "p111\nn*:9000\n"
+        only_v6 = "p111\nn*:9000\n"
+        only_v4 = "p111\nn*:9000\n"
+
+        def fake_run(args, **kwargs):
+            joined = " ".join(args)
+            if "-i4TCP:9000" in joined:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
+            if "-i6TCP:9000" in joined:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=only_v6)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout=wildcard)
+
+        with mock.patch.object(host_identity.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(
+                host_identity.port_listener_endpoints(9000), {"111": {"*:9000 [ipv6]"}})
+            self.assertFalse(host_identity.endpoint_matches("*:9000 [ipv6]", "127.0.0.1", 9000))
+            self.assertTrue(host_identity.endpoint_matches("*:9000 [ipv6]", "::1", 9000))
+
+        def fake_v4(args, **kwargs):
+            joined = " ".join(args)
+            if "-i4TCP:9000" in joined:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=only_v4)
+            if "-i6TCP:9000" in joined:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout=wildcard)
+
+        with mock.patch.object(host_identity.subprocess, "run", side_effect=fake_v4):
+            self.assertEqual(
+                host_identity.port_listener_endpoints(9000), {"111": {"*:9000 [ipv4]"}})
+            self.assertTrue(host_identity.endpoint_matches("*:9000 [ipv4]", "127.0.0.1", 9000))
+            self.assertFalse(host_identity.endpoint_matches("*:9000 [ipv4]", "::1", 9000))
+
+    def test_a_bare_wildcard_without_family_evidence_matches_any_host(self):
+        # No `-i4`/`-i6` evidence (a double that only answers the plain query): the
+        # address stays a bare `*`, which keeps the pre-family behaviour.
+        self.assertTrue(host_identity.endpoint_matches("*:9000", "127.0.0.1", 9000))
+        self.assertTrue(host_identity.endpoint_matches("*:9000", "::1", 9000))
+
     def test_evaluate_port_resolves_only_the_probed_endpoint(self):
         # The `--port` fallback must resolve the endpoint's listeners, not the whole
         # port: an own host_server.py on another address must not stand in for the
-        # console the probe reaches.
+        # console the probe reaches, even when the pid file names it.
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         health = root / "health.json"
@@ -829,6 +901,8 @@ class EndpointTest(unittest.TestCase):
         own_server = root / "install/core/skills/solar-app/scripts/host_server.py"
         own_server.parent.mkdir(parents=True, exist_ok=True)
         own_server.write_text("#!/usr/bin/env python3\n")
+        pid_file = root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
         original_command = host_identity.pid_command
         host_identity.pid_command = lambda pid: f"python3 {own_server}"
         stdout = "p111\nn127.0.0.2:9000\n"
@@ -837,13 +911,14 @@ class EndpointTest(unittest.TestCase):
                 rc = host_identity.main([
                     "evaluate", "--health-file", str(health),
                     "--workspace", "/tmp/ws", "--runtime", "/tmp/rt",
+                    "--pid-file", str(pid_file),
                     "--host", "127.0.0.1", "--port", "9000",
                     "--install-root", str(root / "install"),
                 ])
         finally:
             host_identity.pid_command = original_command
-        # The only listener serves 127.0.0.2, not the probed 127.0.0.1: it must not
-        # be adopted, so the run ends with a mismatch.
+        # The only listener serves 127.0.0.2, not the probed 127.0.0.1, and the pid
+        # file names it: it must not be adopted through the pid file either.
         self.assertEqual(rc, 1)
 
     def test_cli_port_endpoints_prints_pid_and_state(self):
@@ -852,21 +927,6 @@ class EndpointTest(unittest.TestCase):
             self.assertEqual(host_identity.main(
                 ["port-endpoints", "--host", "127.0.0.1", "--port", "9000"]), 0)
         self.assertEqual(out.getvalue().splitlines(), ["111 match", "222 other"])
-
-    def test_cli_pid_serves_endpoint_exit_codes(self):
-        # 0 match, 1 other, 2 unknown: three distinct codes so the shell can tell
-        # "another address" from "no evidence".
-        stdout = "p111\nn127.0.0.1:9000\np222\nn127.0.0.2:9000\n"
-        with self._lsof(stdout):
-            self.assertEqual(host_identity.main(
-                ["pid-serves-endpoint", "--pid", "111", "--host", "127.0.0.1",
-                 "--port", "9000"]), 0)
-            self.assertEqual(host_identity.main(
-                ["pid-serves-endpoint", "--pid", "222", "--host", "127.0.0.1",
-                 "--port", "9000"]), 1)
-            self.assertEqual(host_identity.main(
-                ["pid-serves-endpoint", "--pid", "333", "--host", "127.0.0.1",
-                 "--port", "9000"]), 2)
 
 
 if __name__ == "__main__":

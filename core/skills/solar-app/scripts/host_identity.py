@@ -106,17 +106,11 @@ def port_listener_pids(port) -> list:
     )
 
 
-def port_listener_endpoints(port) -> dict:
-    """``{pid: {"host:port", ...}}`` for the listeners of ``port``, from ``lsof -Fn``.
-
-    Several processes can listen on the *same* port on *different* addresses
-    (``127.0.0.1:9000`` and ``127.0.0.2:9000``): the port number alone does not
-    identify a listener. ``lsof -t`` collapses them to a bare pid list, so this
-    one asks for the name field too and keeps the address each pid actually
-    serves.
+def _listener_name_field(port) -> dict:
+    """``{pid: {"host:port", ...}}`` from ``lsof -Fn``, one call for the port.
 
     The address is the raw lsof name (``127.0.0.1:9000``, ``*:9000``,
-    ``[::1]:9000``), unmodified: :func:`endpoint_matches` owns the comparison.
+    ``[::1]:9000``); no family is attached here.
     """
     try:
         shown = subprocess.run(
@@ -141,6 +135,75 @@ def port_listener_endpoints(port) -> dict:
     return {pid: addresses for pid, addresses in found.items() if addresses}
 
 
+def _wildcard_families(port) -> dict:
+    """``{pid: {"ipv4","ipv6"}}`` for the listeners of ``port`` on a wildcard bind.
+
+    ``lsof`` prints the IPv4 (``0.0.0.0``) and the IPv6 (``::``) wildcard as the
+    same ``*``, so the name field alone cannot tell which family a wildcard
+    serves. ``-i4``/``-i6`` do: asked for the same port, each lists the listeners
+    of its own family, so the intersection with the ``*`` listeners gives the
+    family a wildcard actually serves. Two extra calls, and only when a wildcard
+    is present.
+    """
+    result: dict = {}
+    for family, flag in (("ipv4", "-i4TCP:"), ("ipv6", "-i6TCP:")):
+        try:
+            shown = subprocess.run(
+                ["lsof", "-nP", flag + str(port), "-sTCP:LISTEN", "-Fn"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        pid = ""
+        for line in (shown.stdout or "").splitlines():
+            if not line:
+                continue
+            kind, value = line[0], line[1:]
+            if kind == "p":
+                pid = value.strip() if value.strip().isdigit() else ""
+            elif kind == "n" and pid:
+                result.setdefault(pid, set()).add(family)
+    return result
+
+
+def port_listener_endpoints(port) -> dict:
+    """``{pid: {"host:port", ...}}`` for the listeners of ``port``, from ``lsof -Fn``.
+
+    Several processes can listen on the *same* port on *different* addresses
+    (``127.0.0.1:9000`` and ``127.0.0.2:9000``): the port number alone does not
+    identify a listener. ``lsof -t`` collapses them to a bare pid list, so this
+    one asks for the name field too and keeps the address each pid actually
+    serves.
+
+    A wildcard name (``*:9000``) is annotated with the family it really serves
+    (``*:9000 [ipv4]`` / ``[ipv6]`` / ``[ipv4,ipv6]``), recovered with
+    ``-i4``/``-i6``: the ``*`` spelling alone cannot tell an IPv4 wildcard from
+    an IPv6 one, and an ``IPV6_V6ONLY`` wildcard coexists with an IPv4 console on
+    the same port. Without that family evidence the wildcard stays a bare ``*``
+    and :func:`endpoint_matches` matches any host (the pre-family behaviour).
+
+    The address is otherwise the raw lsof name (``127.0.0.1:9000``,
+    ``[::1]:9000``), unmodified: :func:`endpoint_matches` owns the comparison.
+    """
+    found = _listener_name_field(port)
+    if not found:
+        return {}
+    wildcards = [pid for pid, addresses in found.items()
+                 if any(_endpoint_host(address) == "*" for address in addresses)]
+    families = _wildcard_families(port) if wildcards else {}
+    annotated: dict = {}
+    for pid, addresses in found.items():
+        out = set()
+        for address in addresses:
+            if _endpoint_host(address) == "*" and pid in families:
+                served = ",".join(sorted(families[pid]))
+                out.add(address + " [" + served + "]")
+            else:
+                out.add(address)
+        annotated[pid] = out
+    return annotated
+
+
 def _host_families(host: str) -> frozenset:
     """The socket families ``host`` can name, for endpoint comparison.
 
@@ -151,9 +214,10 @@ def _host_families(host: str) -> frozenset:
     ``127.0.0.1`` and ``::1`` are the loopback of two *different* families: they
     are not the same socket, so they never collapse into one another. ``localhost``
     is a name that resolves to the loopback of both families, so it names both.
-    A wildcard bind answers on every local address; ``lsof`` prints the IPv4
-    (``0.0.0.0``) and IPv6 (``::``) wildcard as the same ``*``, so the family
-    cannot be recovered from it and the wildcard is kept as matching any host.
+    A literal wildcard (``0.0.0.0`` / ``::``) answers on the wildcard of its own
+    family; a bare ``*`` has no family evidence and is kept as ``any`` so it
+    matches any probe host (the pre-family behaviour). The ``*`` with a recovered
+    family is handled in :func:`endpoint_matches` before this is reached.
 
     Any other host (``127.0.0.2``, a LAN address, a hostname off the loopback) is
     its own literal socket.
@@ -161,8 +225,12 @@ def _host_families(host: str) -> frozenset:
     host = (host or "").strip().strip("[]").rstrip(".").lower()
     if not host:
         return frozenset()
-    if host in ("*", "0.0.0.0", "::", "0"):
+    if host == "*":
         return frozenset({"any"})
+    if host == "0.0.0.0":
+        return frozenset({"ipv4"})
+    if host == "::":
+        return frozenset({"ipv6"})
     if host == "localhost":
         return frozenset({"ipv4", "ipv6"})
     if host == "127.0.0.1":
@@ -175,9 +243,10 @@ def _host_families(host: str) -> frozenset:
 def _hosts_match(listener_host: str, probe_host: str) -> bool:
     """True when a listener bound to ``listener_host`` serves a probe of ``probe_host``.
 
-    A wildcard bind (``*``/``0.0.0.0``/``::``) answers on every local address, so
-    it matches any probe host. Otherwise the families must intersect: this is what
-    keeps ``::1`` and ``127.0.0.1`` — two sockets of different families — apart.
+    A wildcard bind with no family evidence (a bare ``*``) answers on every local
+    address, so it matches any probe host. Otherwise the families must intersect:
+    this is what keeps ``::1`` and ``127.0.0.1`` — two sockets of different
+    families — apart.
     """
     families = _host_families(listener_host)
     if not families:
@@ -188,8 +257,12 @@ def _hosts_match(listener_host: str, probe_host: str) -> bool:
 
 
 def _endpoint_host(address: str) -> str:
-    """The host of an lsof address (``127.0.0.1:9000`` / ``[::1]:9000`` / ``*:9000``)."""
-    address = (address or "").strip()
+    """The host of an lsof address (``127.0.0.1:9000`` / ``[::1]:9000`` / ``*:9000``).
+
+    The ``[families]`` annotation :func:`port_listener_endpoints` adds to a
+    wildcard is dropped here: it is not part of the host.
+    """
+    address = (address or "").strip().split(" ", 1)[0].strip()
     if address.startswith("["):
         end = address.find("]")
         return address[1:end] if end > 0 else address
@@ -200,10 +273,24 @@ def _endpoint_host(address: str) -> str:
 
 def _endpoint_port(address: str) -> str:
     """The port of an lsof address, or "" when it carries none."""
-    address = (address or "").strip()
+    address = (address or "").strip().split(" ", 1)[0].strip()
     if ":" not in address:
         return ""
     return address.rsplit(":", 1)[1]
+
+
+def _endpoint_wildcard_families(address: str) -> frozenset:
+    """The families a wildcard address serves, from its ``[families]`` annotation.
+
+    Empty when the address carries no annotation: the family could not be
+    recovered, so :func:`endpoint_matches` keeps its pre-family behaviour and a
+    bare ``*`` matches any host.
+    """
+    address = (address or "").strip()
+    if "[" not in address or not address.endswith("]"):
+        return frozenset()
+    inner = address[address.rfind("[") + 1:-1]
+    return frozenset(part.strip() for part in inner.split(",") if part.strip())
 
 
 def endpoint_matches(address: str, host: str, port) -> bool:
@@ -214,17 +301,20 @@ def endpoint_matches(address: str, host: str, port) -> bool:
     probe reaches, so a listener on any other address must not be attributed
     that answer. Different socket families are different sockets too, so a
     listener on ``[::1]:port`` does not answer a probe of ``127.0.0.1:port``.
+
+    A wildcard name annotated with its served families (``*:9000 [ipv6]``) only
+    matches a probe of a host in one of those families; a bare ``*`` (no family
+    evidence) matches any host, the pre-family behaviour.
     """
     if not address:
         return False
     if str(_endpoint_port(address)) != str(port):
         return False
-    return _hosts_match(_endpoint_host(address), host)
-
-
-def pid_serves_endpoint(pid, host, port) -> bool:
-    """True when ``pid`` is a listener of ``port`` on the ``host`` a probe reaches."""
-    return listener_endpoint_state(pid, host, port) == "match"
+    listener_host = _endpoint_host(address)
+    families = _endpoint_wildcard_families(address)
+    if listener_host == "*" and families:
+        return bool(families & _host_families(host))
+    return _hosts_match(listener_host, host)
 
 
 def listener_endpoint_state(pid, host, port) -> str:
@@ -279,18 +369,28 @@ def endpoint_verdicts(host, port) -> list:
     return verdicts
 
 
-def port_listener_pids_on_endpoint(host, port) -> list:
+def port_listener_pids_on_endpoint(host, port):
     """Listeners of ``port`` that serve the ``host`` a probe reaches, in numeric order.
 
     A probe of ``host:port`` only ever reaches the socket bound to that address,
     so a listener of the same port on a different address must not stand in for
-    it. When ``lsof`` gives no endpoint evidence (missing, failed or a double that
-    only answers ``-t``) every listener of the port is returned: the caller keeps
-    the pre-endpoint behaviour instead of losing the whole list.
+    it.
+
+    Returns ``None`` when ``lsof`` gives **no endpoint evidence** at all
+    (missing, failed, or a double that only answers ``-t``): the caller then keeps
+    the pre-endpoint behaviour and does not lose the whole list. Returns a list —
+    possibly empty — when ``lsof`` **did** enumerate the port: an empty list means
+    "the port has listeners but none of them serves the probed endpoint", which
+    the caller must not turn into "no evidence" and adopt a foreign listener.
     """
     endpoints = port_listener_endpoints(port)
     if not endpoints:
-        return port_listener_pids(port)
+        # No `-Fn` evidence. Fall back to the bare pid list: a double (or an lsof
+        # that only answers `-t`) still proves the port has listeners, and the
+        # caller keeps the pre-endpoint behaviour. Only when that is empty too is
+        # there genuinely no evidence at all (``None``).
+        pids = port_listener_pids(port)
+        return pids if pids else None
     return [
         pid for pid in sorted(endpoints, key=int)
         if any(endpoint_matches(address, host, port) for address in endpoints[pid])
@@ -422,22 +522,24 @@ def command_is_install_server(command: str, install_roots) -> bool:
     return False
 
 
-def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
+def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=None,
              listener_command="", install_roots=()):
     """Return ``None`` when the console is this runtime's own, else a reason.
 
     ``health`` is the parsed ``/health`` payload. ``pid_file``,
     ``listener_command`` and ``listener_pids`` are the independent proofs that
     the process is ours; any one is enough for a console that reports no identity
-    or only half of it. ``listener_command`` is only read when the health payload
-    is incomplete, so a healthy console never costs a ``ps`` call; when it is
-    empty and ``listener_pids`` is set, the command lines are resolved on demand
-    from each listener. Both ``listener_pids`` and the pid file are read only
-    when the payload turns out incomplete: the supervisor's frequent path pays for
-    neither.
+    or only half of it. ``listener_pids`` and ``pid_file`` are read only when the
+    payload is incomplete: the supervisor's frequent path pays for neither, and
+    ``listener_command`` is only read then too, so a healthy console costs no
+    ``ps`` and no ``lsof``.
 
     ``listener_pids`` may be a callable, resolved at most once and only when the
-    payload is incomplete, so a healthy console never pays for ``lsof``.
+    payload is incomplete. It carries the endpoint evidence: ``None`` means "no
+    evidence at all" (the port was not resolved, or ``lsof`` failed), while a list
+    — possibly empty — means ``lsof`` did enumerate the port. An empty list with
+    evidence is not "no listeners": it means none serves the probed endpoint, and
+    a pid file naming a process on another socket must not be adopted through it.
 
     A pid file only proves ownership of the pid it names. When the port's
     listeners are known, that pid must be one of them: a foreign console on the
@@ -462,6 +564,12 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
         return None
 
     listeners = listener_pids() if callable(listener_pids) else listener_pids
+    # ``None`` is "no endpoint evidence at all" (lsof missing/failed, or a caller
+    # that did not resolve the port); a list — possibly empty — is "lsof did
+    # enumerate the port". An empty list with endpoint evidence means the port has
+    # listeners but none serves the probed endpoint: that must not be treated as
+    # "no listeners" and let the pid file adopt a foreign console.
+    has_endpoint_evidence = listeners is not None
     listeners = [str(pid).strip() for pid in (listeners or []) if str(pid).strip()]
 
     own = False
@@ -480,6 +588,11 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
             # the port's listeners. A pid that is not the first listener is still
             # a listener.
             own = pid_file_own and str(pid_file_pid) in listeners
+        elif has_endpoint_evidence:
+            # lsof enumerated the port and no listener serves the probed endpoint:
+            # the pid file's process is confirmed on another socket, so it proves
+            # nothing about the console the probe reaches.
+            own = False
         else:
             # No listener could be enumerated (lsof missing or timed out). The
             # pid file alone only proves runtime membership, which would let a
@@ -576,12 +689,6 @@ def main(argv=None) -> int:
     names.add_argument("--pid", required=True)
     names.add_argument("--install-root", action="append", default=[])
 
-    serves = sub.add_parser("pid-serves-endpoint",
-                            help="Does the pid listen on the host:port a probe reaches?")
-    serves.add_argument("--pid", required=True)
-    serves.add_argument("--host", default="127.0.0.1")
-    serves.add_argument("--port", required=True)
-
     endpoints_parser = sub.add_parser(
         "port-endpoints",
         help="Print `pid match|other` for every listener of the port.")
@@ -597,10 +704,6 @@ def main(argv=None) -> int:
     if args.subcommand == "pid-file-names-listener":
         ok = pid_file_names_listener(args.pid_file, args.pid, args.install_root)
         return 0 if ok else 1
-    if args.subcommand == "pid-serves-endpoint":
-        # 0 match, 1 other address, 2 unknown (no endpoint evidence at all).
-        return {"match": 0, "other": 1, "unknown": 2}[
-            listener_endpoint_state(args.pid, args.host, args.port)]
     if args.subcommand == "port-endpoints":
         for listener, state in endpoint_verdicts(args.host, args.port):
             print(listener + " " + state)
@@ -626,7 +729,9 @@ def main(argv=None) -> int:
         # another family) is not offered as a proof of ownership.
         listener_source = lambda: port_listener_pids_on_endpoint(host, port)
     else:
-        listener_source = []
+        # No list and no port: the caller did not attempt endpoint resolution, so
+        # there is no endpoint evidence to gate on (not "an empty port").
+        listener_source = None
     reason = evaluate(
         health=_load_health(args.health_file),
         workspace=args.workspace,

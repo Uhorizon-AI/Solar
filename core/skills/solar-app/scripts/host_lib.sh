@@ -313,6 +313,11 @@ solar_host_probe_endpoint() {
 # With no endpoint evidence at all (lsof missing, or a double that only answers
 # `-t`) every listener is returned, which is the pre-endpoint behaviour: the
 # fallback must never hide a listener the sweep has to report.
+#
+# The function always returns 0: an empty result must not be an error. Its exit
+# code is consumed under `set -o pipefail` by start_host.sh/stop_host.sh, so a
+# non-zero return for the last `other` listener would abort the run even though
+# the probed listener was found.
 solar_host_port_listener_pids_on_endpoint() {
   solar_host_load_env
   local listed pid state
@@ -325,6 +330,7 @@ solar_host_port_listener_pids_on_endpoint() {
     [[ -n "$pid" ]] || continue
     [[ "$state" == match ]] && printf '%s\n' "$pid"
   done <<<"$listed"
+  return 0
 }
 
 # Print "pid match|other" for every listener of the port, one lsof call for the
