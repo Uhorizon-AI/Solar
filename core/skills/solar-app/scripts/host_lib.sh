@@ -146,7 +146,7 @@ solar_host_identity_install_roots() {
 solar_host_identity_own() {
   local health_file="$1"
   local pid_file="${2-}"
-  local listener_pid="${3-}"
+  local listener_pids="${3-}"
   local -a roots=()
   while IFS= read -r root; do
     [[ -n "$root" ]] && roots+=(--install-root "$root")
@@ -156,7 +156,7 @@ solar_host_identity_own() {
     --workspace "$(solar_host_identity_workspace)" \
     --runtime "$(solar_host_identity_runtime)" \
     --pid-file "$pid_file" \
-    --listener-pid "$listener_pid" \
+    --listener-pids "$listener_pids" \
     "${roots[@]+"${roots[@]}"}"
 }
 
@@ -212,6 +212,9 @@ PY
     return 0
   fi
   set +e
+  # Only the pid under test is handed to the policy: the caller asked about this
+  # one listener, and passing the whole port list would let a different listener
+  # satisfy the pid-file proof for it.
   solar_host_identity_own "$health_file" "$SOLAR_HOST_PID_FILE" "$pid" >/dev/null 2>&1
   status=$?
   set -e

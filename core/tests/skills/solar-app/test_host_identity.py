@@ -116,9 +116,9 @@ class EvaluateTest(unittest.TestCase):
         original = host_identity.pid_file_own_server
         host_identity.pid_file_own_server = lambda path, pid=None: True
         try:
-            # listener_pid differs from the pid in the file, and the listener has
-            # no identity, so it must be rejected.
-            reason = self.evaluate({}, pid_file=str(pid_file), listener_pid="424242")
+            # The port's listener differs from the pid in the file, and the
+            # listener has no identity, so it must be rejected.
+            reason = self.evaluate({}, pid_file=str(pid_file), listener_pids=["424242"])
         finally:
             host_identity.pid_file_own_server = original
         self.assertIn("no identity and no process", reason)
@@ -130,7 +130,21 @@ class EvaluateTest(unittest.TestCase):
         host_identity.pid_file_own_server = lambda path, pid=None: True
         try:
             self.assertIsNone(self.evaluate(
-                {}, pid_file=str(pid_file), listener_pid=str(os.getpid())))
+                {}, pid_file=str(pid_file), listener_pids=[str(os.getpid())]))
+        finally:
+            host_identity.pid_file_own_server = original
+
+    def test_pid_file_matching_a_second_listener_is_adopted(self):
+        # Several listeners on the port and the pid file names one that is not
+        # the first: it is still a listener, so it must be adopted.
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        original = host_identity.pid_file_own_server
+        host_identity.pid_file_own_server = lambda path, pid=None: True
+        try:
+            self.assertIsNone(self.evaluate(
+                {}, pid_file=str(pid_file),
+                listener_pids=["424242", str(os.getpid())]))
         finally:
             host_identity.pid_file_own_server = original
 
@@ -143,7 +157,7 @@ class EvaluateTest(unittest.TestCase):
         command = host_identity.pid_command(os.getpid())
         if "host_server.py" in command:
             self.skipTest("this test's own command line mentions host_server.py")
-        self.assertIn("no identity and no process", self.evaluate({}, listener_pid=str(os.getpid())))
+        self.assertIn("no identity and no process", self.evaluate({}, listener_pids=[str(os.getpid())]))
 
     def test_partial_identity_needs_a_proof(self):
         reason = self.evaluate({"runtime": str(self.rt)})
@@ -364,20 +378,40 @@ class CliTest(unittest.TestCase):
         ])
         self.assertEqual(rc, 1)
 
-    def test_port_listener_pids_returns_the_lowest_numerically(self):
-        # `lsof -t` can print several pids; the first must be the numerically
-        # lowest, so the Python path and the shell's `head -n1` agree even when a
-        # shorter pid ("999") sits lexicographically after a longer one ("10000").
+    def test_evaluate_accepts_a_comma_separated_listener_list(self):
+        # The wire format is a list; a pid that is not the first entry still
+        # counts, which is the fix this CLI option carries.
+        health = self.root / "health.json"
+        health.write_text("{}")
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        original = host_identity.pid_file_own_server
+        host_identity.pid_file_own_server = lambda path, pid=None: True
+        try:
+            rc = host_identity.main([
+                "evaluate", "--health-file", str(health),
+                "--workspace", "/tmp/ws", "--runtime", "/tmp/rt",
+                "--pid-file", str(pid_file),
+                "--listener-pids", "424242,%d" % os.getpid(),
+            ])
+        finally:
+            host_identity.pid_file_own_server = original
+        self.assertEqual(rc, 0)
+
+    def test_port_listener_pids_returns_the_list_in_numeric_order(self):
+        # `lsof -t` can print several pids; they come back numerically sorted, so
+        # "999" precedes "1002"/"10000" even though it sorts later as text. The
+        # shell applies the same rule with `sort -n -u`.
         shown = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="10000\n999\n1002\n",
         )
         with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
-            self.assertEqual(host_identity.port_listener_pids("127.0.0.1", 9000), "999")
+            self.assertEqual(host_identity.port_listener_pids(9000), ["999", "1002", "10000"])
 
     def test_port_listener_pids_is_empty_without_a_listener(self):
         shown = subprocess.CompletedProcess(args=[], returncode=1, stdout="")
         with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
-            self.assertEqual(host_identity.port_listener_pids("127.0.0.1", 9000), "")
+            self.assertEqual(host_identity.port_listener_pids(9000), [])
 
     def test_port_listener_pids_ignores_non_numeric_output(self):
         # A warning line on stdout (not a pid) must not raise, and must not be
@@ -386,12 +420,33 @@ class CliTest(unittest.TestCase):
             args=[], returncode=0, stdout="lsof: WARNING: can't stat()\n4242\n",
         )
         with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
-            self.assertEqual(host_identity.port_listener_pids("127.0.0.1", 9000), "4242")
+            self.assertEqual(host_identity.port_listener_pids(9000), ["4242"])
 
     def test_port_listener_pids_returns_empty_when_only_noise(self):
         shown = subprocess.CompletedProcess(args=[], returncode=0, stdout="lsof: WARNING\n")
         with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
-            self.assertEqual(host_identity.port_listener_pids("127.0.0.1", 9000), "")
+            self.assertEqual(host_identity.port_listener_pids(9000), [])
+
+    def test_port_listener_pids_deduplicates_the_same_pid(self):
+        shown = subprocess.CompletedProcess(args=[], returncode=0, stdout="7\n7\n")
+        with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
+            self.assertEqual(host_identity.port_listener_pids(9000), ["7"])
+
+    def test_port_listener_pids_matches_the_shell_order(self):
+        # Parity between the two implementations of the same rule: Python sorts
+        # with key=int and the shell with `sort -n -u`. Feed both the identical
+        # lsof output and require the identical list, so a change to one that
+        # diverges from the other fails here.
+        shown = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="100\n99\n1000\n99\n",
+        )
+        with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
+            from_python = host_identity.port_listener_pids(9000)
+        from_shell = subprocess.run(
+            ["bash", "-c", 'printf "%s\\n" 100 99 1000 99 | sort -n -u'],
+            capture_output=True, text=True, check=True,
+        ).stdout.split()
+        self.assertEqual(from_python, from_shell)
 
 
 if __name__ == "__main__":

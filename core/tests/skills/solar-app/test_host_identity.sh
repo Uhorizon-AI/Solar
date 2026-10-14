@@ -437,6 +437,29 @@ set -e
 [[ "$ec" -eq 0 ]] && pass "partial identity with this runtime's pid file is adopted" \
   || { fail "partial identity with this runtime's pid file is adopted (ec=$ec)"; cat "$TMP/live.err" >&2; }
 rm -f "$SOLAR_HOST_RUNTIME_DIR/host.pid"
+# The pid file names a listener that is NOT the first pid lsof prints. It is
+# still the process on the port, so the console must be adopted (the whole
+# listener list is compared, not just the first pid).
+lsof_double_ordered() {
+  cat >"$TMP/bin/lsof" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "111111"
+printf '%s\n' "$STUB_PID"
+EOF
+  chmod +x "$TMP/bin/lsof"
+}
+lsof_double_ordered
+printf '%s\n' "$STUB_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
+ec=$?
+set -e
+[[ "$ec" -eq 0 ]] && pass "a pid file matching a non-first listener is adopted" \
+  || { fail "a pid file matching a non-first listener is adopted (ec=$ec)"; cat "$TMP/live.err" >&2; }
+rm -f "$SOLAR_HOST_RUNTIME_DIR/host.pid"
+# Drop the lsof double: later sections must see the real listener list again
+# (section 12 classifies real command lines with the real lsof).
+rm -f "$TMP/bin/lsof"
 # A console that reports only the workspace is refused the same way.
 cat >"$TMP/partial.identity.json" <<EOF
 {"workspace":"$SOLAR_WORKSPACE"}

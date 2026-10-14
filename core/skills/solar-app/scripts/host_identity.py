@@ -74,11 +74,13 @@ def pid_command(pid: int) -> str:
     return shown.stdout or ""
 
 
-def port_listener_pids(host: str, port) -> str:
-    """The first pid listening on ``host:port``, or "" when there is none.
+def port_listener_pids(port) -> list:
+    """Every pid listening on ``port`` in numeric order, or ``[]`` when none.
 
     The same ``lsof`` query the shell does, exposed here so a caller can resolve
-    the listener lazily: it runs only when the identity payload is incomplete.
+    the listeners lazily: it runs only when the identity payload is incomplete.
+    Returning the whole list lets a caller accept a pid that is not the first,
+    which is what makes the pid-file proof and the port sweep agree.
     """
     try:
         shown = subprocess.run(
@@ -86,16 +88,16 @@ def port_listener_pids(host: str, port) -> str:
             capture_output=True, text=True, timeout=5, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ""
-    # Numeric order, not text order: "10000" must not come before "999". The
-    # shell's `head -n1` over `lsof` sees lsof's own order, so keep numeric order
-    # here to make the two paths choose the same pid. Non-numeric lines (an lsof
-    # warning on stdout) are skipped, never a ValueError.
-    pids = sorted(
+        return []
+    # Numeric order, not text order ("10000" must not come before "999"), the
+    # same rule `solar_host_port_listener_pids` applies with `sort -n -u`, so the
+    # two implementations return the identical list for the same lsof output.
+    # Non-numeric lines (an lsof warning on stdout) are skipped, never a
+    # ValueError.
+    return sorted(
         {line.strip() for line in (shown.stdout or "").splitlines() if line.strip().isdigit()},
         key=int,
     )
-    return pids[0] if pids else ""
 
 
 def _pid_file_pid(pid_file: str):
@@ -221,22 +223,28 @@ def command_is_install_server(command: str, install_roots) -> bool:
     return False
 
 
-def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
+def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
              listener_command="", install_roots=()):
     """Return ``None`` when the console is this runtime's own, else a reason.
 
     ``health`` is the parsed ``/health`` payload. ``pid_file``,
-    ``listener_command`` and ``listener_pid`` are the independent proofs that the
-    process is ours; any one is enough for a console that reports no identity or
-    only half of it. ``listener_command`` is only read when the health payload is
-    incomplete, so a healthy console never costs a ``ps`` call; when it is empty
-    and ``listener_pid`` is set, the command line is resolved on demand. Both
-    ``listener_pid`` and the pid file are read only when the payload turns out
-    incomplete: the supervisor's frequent path pays for neither.
+    ``listener_command`` and ``listener_pids`` are the independent proofs that
+    the process is ours; any one is enough for a console that reports no identity
+    or only half of it. ``listener_command`` is only read when the health payload
+    is incomplete, so a healthy console never costs a ``ps`` call; when it is
+    empty and ``listener_pids`` is set, the command line is resolved on demand
+    from the first listener. Both ``listener_pids`` and the pid file are read only
+    when the payload turns out incomplete: the supervisor's frequent path pays for
+    neither.
 
-    A pid file only proves ownership of the pid it names. When ``listener_pid``
-    is also known, it must be the same process: a foreign console on the port
-    would otherwise be adopted because an unrelated own pid is alive.
+    ``listener_pids`` may be a callable, resolved at most once and only when the
+    payload is incomplete, so a healthy console never pays for ``lsof``.
+
+    A pid file only proves ownership of the pid it names. When the port's
+    listeners are known, that pid must be one of them: a foreign console on the
+    port would otherwise be adopted because an unrelated own pid is alive. The
+    whole list is compared, not just its first pid: with several listeners, a
+    valid pid beyond the first must still be accepted.
     """
     got_ws = str((health or {}).get("workspace") or "")
     got_rt = str((health or {}).get("runtime") or "")
@@ -246,32 +254,24 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
         return "another runtime (" + got_rt + ")"
     if got_ws and got_rt:
         return None
-    # The listener pid may be a callable: it is resolved at most once, and only
-    # when the payload is incomplete, so a healthy console never pays for lsof.
-    resolved_listener = {"done": False, "value": ""}
 
-    def listener():
-        if not resolved_listener["done"]:
-            value = listener_pid() if callable(listener_pid) else listener_pid
-            resolved_listener["value"] = str(value or "").strip()
-            resolved_listener["done"] = True
-        return resolved_listener["value"]
+    listeners = listener_pids() if callable(listener_pids) else listener_pids
+    listeners = [str(pid).strip() for pid in (listeners or []) if str(pid).strip()]
 
     own = False
     pid_file_pid = _pid_file_pid(pid_file)
     if pid_file_pid is not None:
         # The pid file must name a live host_server.py, and — when the port's
-        # listener is known — it must be that very process. Otherwise a foreign
-        # console on the port would be adopted on an unrelated own pid. The pid
-        # already resolved is passed in, so the file is read only once.
+        # listeners are known — it must be one of them. A pid that is not the
+        # first listener is still a listener.
         own = pid_file_own_server("", pid=pid_file_pid) and (
-            not listener() or str(pid_file_pid) == listener()
+            not listeners or str(pid_file_pid) in listeners
         )
     if not own:
         command = listener_command
-        if not command and listener():
+        if not command and listeners:
             try:
-                command = pid_command(int(listener()))
+                command = pid_command(int(listeners[0]))
             except ValueError:
                 command = ""
         own = command_is_install_server(command, install_roots)
@@ -314,11 +314,11 @@ def main(argv=None) -> int:
     check.add_argument("--workspace", required=True)
     check.add_argument("--runtime", required=True)
     check.add_argument("--pid-file", default="")
+    check.add_argument("--listener-pids", default="",
+                       help="Comma- or newline-separated listeners the caller already resolved.")
     check.add_argument("--listener-command", default="")
-    check.add_argument("--listener-pid", default="")
-    check.add_argument("--host", default="127.0.0.1")
     check.add_argument("--port", default="",
-                       help="Resolve the listener with lsof only if the payload is incomplete.")
+                       help="Resolve the listeners with lsof only if the payload is incomplete.")
     check.add_argument("--install-root", action="append", default=[])
 
     own = sub.add_parser("pid-file-is-own-server", help="Is the pid file a live host_server.py?")
@@ -337,17 +337,25 @@ def main(argv=None) -> int:
 
     # The pid file is read only when the /health payload turns out incomplete.
     # The listener is resolved with lsof under the same condition; a healthy
-    # console pays neither lsof nor ps.
-    listener_source = args.listener_pid
-    if not listener_source and args.port:
-        host, port = args.host, args.port
-        listener_source = lambda: port_listener_pids(host, port)
+    # console pays neither lsof nor ps. On the wire a caller passes a
+    # comma- or newline-separated list; --port asks the tool to resolve it.
+    if args.listener_pids.strip():
+        listener_source = [
+            pid.strip()
+            for pid in args.listener_pids.replace(",", "\n").splitlines()
+            if pid.strip()
+        ]
+    elif args.port:
+        port = args.port
+        listener_source = lambda: port_listener_pids(port)
+    else:
+        listener_source = []
     reason = evaluate(
         health=_load_health(args.health_file),
         workspace=args.workspace,
         runtime=args.runtime,
         pid_file=args.pid_file,
-        listener_pid=listener_source,
+        listener_pids=listener_source,
         listener_command=args.listener_command,
         install_roots=args.install_root,
     )
