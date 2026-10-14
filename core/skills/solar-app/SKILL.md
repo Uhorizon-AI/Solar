@@ -106,15 +106,37 @@ runtime can prove the process is its own: its own pid file names a live
 `host_server.py`, or the listener's command line is this install's
 `host_server.py` (the legacy console from before `/health` reported a
 `runtime`). `stop_host.sh` uses the same proof before stopping, so a pid reused
-by another program is dropped, never killed, and a foreign listener exits 3 with
-the diagnosis instead of reporting "Solar Host not running". An own listener that
-cannot be stopped (ours by identity, but its command line is not `host_server.py`)
-exits 4 with "not host_server.py" instead of a false clean stop. Exit codes:
-`3` foreign console, `4` own-but-not-stoppable console; in both, nothing was
-touched and the diagnosis goes to stderr. Consumers (the console restart in
-`solar client update`, the orchestrator) do not branch on the code; they see a
-non-zero and stop, which is what they already did for a foreign console because
-`start_host.sh` refuses to replace it.
+by another program is dropped, never killed.
+
+### Exit codes 3 and 4 (port held by something that is not this console)
+
+`ensure_host.sh`, `start_host.sh` and `stop_host.sh` exit non-zero with the
+diagnosis on stderr when the port is held by a console they will not touch:
+
+- **3 — foreign console.** Another workspace's or runtime's console holds
+  `:9000`. Nothing was stopped. `solar client update` runs
+  `stop_host.sh && start_host.sh` for the console, so the update fails at the
+  restart step instead of reporting a restart that did not happen.
+- **4 — own listener that cannot be stopped.** The listener answers as this
+  runtime's own but its command line is not `host_server.py`, so Solar will not
+  kill it. Nothing was stopped.
+
+Recovery is manual, by design:
+
+```bash
+# See who holds :9000 and what it is
+lsof -nP -iTCP:9000 -sTCP:LISTEN
+ps -p <pid> -o command=
+curl -s http://127.0.0.1:9000/health
+
+# Retire it yourself once you know it is not a console you need, then retry
+kill <pid>
+solar app start
+```
+
+Consumers (`solar client update`, the orchestrator) do not branch on the exact
+code: they see a non-zero and stop, which is what they already did for a foreign
+console because `start_host.sh` refuses to replace it.
 
 Global continuity remains available through its legacy read-only endpoint for
 compatibility; it is not a navigation screen or a summary card. The Channels

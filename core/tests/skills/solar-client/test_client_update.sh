@@ -391,6 +391,21 @@ assert_ok "restart: our console was not started over the foreign one" \
   bash -c '! grep -q start "$1"' _ "$FOREIGN_LOG"
 assert_ok "restart: the diagnosis names the manual command" \
   bash -c 'grep -q "$1" <<<"$2"' _ "$FAKE_FOREIGN_STOP" "$foreign_out"
+# Exit 4 (own listener that cannot be stopped) fails the restart the same way as
+# exit 3: it is still a port Solar refuses to take over.
+printf '#!/usr/bin/env bash\necho stop >>"%s"\nexit 4\n' "$FOREIGN_LOG" >"$FAKE_FOREIGN_STOP"
+chmod +x "$FAKE_FOREIGN_STOP"
+: >"$FOREIGN_LOG"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="host"
+set +e
+own4_out="$(solar_client_restart_running_services "$MOCK_INSTALL_ROOT" 2>&1)"
+own4_ec=$?
+set -e
+assert_ok "restart: exit 4 from the stop also fails the console restart" test "$own4_ec" -ne 0
+assert_ok "restart: exit 4 does not report the console restarted" \
+  bash -c '! grep -q "OK: console restarted" <<<"$1"' _ "$own4_out"
+assert_ok "restart: exit 4 never starts our console over the listener" \
+  bash -c '! grep -q start "$1"' _ "$FOREIGN_LOG"
 unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE
 unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
 

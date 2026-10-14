@@ -249,7 +249,8 @@ class InstallServerTest(unittest.TestCase):
     def test_a_binary_that_merely_contains_python_is_not_an_interpreter(self):
         # ipython-wrapper / python-my-tool are not the interpreter running the
         # script: the name must be `python` plus optional digits/dots.
-        for binary in ("ipython-wrapper", "python-my-tool", "mypython"):
+        for binary in ("ipython-wrapper", "python-my-tool", "mypython",
+                       "python-wrapper", "python3-config"):
             command = f"{binary} {self.install}/core/skills/solar-app/scripts/host_server.py"
             self.assertFalse(
                 host_identity.command_is_install_server(command, [str(self.install)]),
@@ -271,6 +272,16 @@ class InstallServerTest(unittest.TestCase):
             self.assertTrue(
                 host_identity.command_is_install_server(command, [str(self.install)]),
                 binary,
+            )
+
+    def test_interpreter_flags_with_a_value_do_not_hide_the_interpreter(self):
+        # `python3 -X dev <script>`: the value of -X must not be read as the
+        # interpreter, or an own hung console launched that way is refused.
+        for flags in ("-X dev", "-W ignore", "-X importtime -u"):
+            command = f"python3 {flags} {self.install}/core/skills/solar-app/scripts/host_server.py"
+            self.assertTrue(
+                host_identity.command_is_install_server(command, [str(self.install)]),
+                flags,
             )
 
 

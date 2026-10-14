@@ -33,9 +33,16 @@ def canonical(path: str) -> str:
 
 # The interpreter that runs the console: ``python``, ``python3.12``, the macOS
 # ``Python`` (Python.app), a universal-build ``python3.12-intel64`` and the
-# Windows ``pythonw``. A binary that merely contains "python"
-# (``ipython-wrapper``) is not it.
-_PYTHON_INTERPRETER = re.compile(r"python(?:w|[\d.]*(?:-\w+)?)?", re.IGNORECASE)
+# Windows ``pythonw``. The platform suffix is restricted to the architecture
+# tags a real build carries, so a wrapper named ``python-my-tool`` or a helper
+# named ``python3-config`` is not mistaken for the interpreter.
+_PYTHON_INTERPRETER = re.compile(
+    r"python(?:w|[\d.]*(?:-(?:intel64|arm64|universal2))?)?", re.IGNORECASE)
+
+# Flags that take their value as the next argv token (``-X dev``, ``-W ignore``).
+# They must be skipped together with that value, or the value looks like the
+# interpreter name and an own console is misread as foreign.
+_FLAGS_WITH_VALUE = ("-X", "-W", "-Q", "--check-hash-based-pycs")
 
 
 def _pid_alive(pid: int) -> bool:
@@ -140,19 +147,39 @@ def _interpreted_script(prefix: str) -> bool:
     (``ipython-wrapper``, ``python-my-tool``) is not the interpreter.
 
     The name is matched case-insensitively and with the platform suffixes an
-    interpreter really carries: macOS runs it as ``Python`` (Python.app) and as
-    ``python3.12-intel64`` on a universal build, and Windows ships ``pythonw``.
+    interpreter really carries: macOS runs it as ``Python`` (Python.app), a
+    universal build as ``python3.12-intel64``, and Windows ships ``pythonw``.
+    Interpreter flags between the name and the script are allowed, including the
+    ones that take a separate value (``python3 -X dev <script>``).
     """
     prefix = prefix.rstrip().rstrip("'\"")
     if not prefix:
         return True
-    tokens = prefix.split()
-    while tokens and tokens[-1].startswith("-"):
-        tokens.pop()
-    if not tokens:
-        return False
-    name = Path(tokens[-1].strip("'\"")).name
-    return _PYTHON_INTERPRETER.fullmatch(name) is not None
+    tokens = [token.strip("'\"") for token in prefix.split()]
+    # The interpreter is the last token that is one, and everything after it must
+    # be flags (with their values) — otherwise the "interpreter" is really an
+    # earlier argument and the script is executed by something else.
+    for index in range(len(tokens) - 1, -1, -1):
+        name = Path(tokens[index]).name
+        if not _PYTHON_INTERPRETER.fullmatch(name):
+            continue
+        if _only_flags_follow(tokens[index + 1:]):
+            return True
+    return False
+
+
+def _only_flags_follow(tokens) -> bool:
+    """True when every token is an interpreter flag (and its value, if any)."""
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not token.startswith("-"):
+            return False
+        if token in _FLAGS_WITH_VALUE:
+            index += 2
+        else:
+            index += 1
+    return True
 
 
 def command_is_install_server(command: str, install_roots) -> bool:

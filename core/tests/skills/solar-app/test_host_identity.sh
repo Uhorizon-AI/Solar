@@ -747,6 +747,25 @@ grep -q "already running (pid $STUB_PID)" <<<"$START_OUT" \
   && pass "start repaired the stale pid file" \
   || fail "start repaired the stale pid file (got $(cat "$SOLAR_HOST_RUNTIME_DIR/host.pid" 2>/dev/null))"
 stop_stub
+# Without lsof the listener cannot be resolved: start must not print the stale,
+# dead pid as if it were the live console.
+start_stub stale-nolsof "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+printf '%s\n' "999999" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+cat >"$TMP/bin/lsof" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$TMP/bin/lsof"
+set +e
+START_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$START_SCRIPT" 2>&1)"
+start_ec=$?
+set -e
+[[ "$start_ec" -eq 0 ]] && pass "start without lsof still exits 0 when the console answers" \
+  || fail "start without lsof still exits 0 when the console answers (ec=$start_ec: $START_OUT)"
+grep -q "pid 999999" <<<"$START_OUT" && fail "start printed the stale dead pid" \
+  || pass "start did not print the stale dead pid"
+stop_stub
+rm -f "$TMP/bin/lsof"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

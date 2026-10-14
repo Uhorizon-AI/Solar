@@ -17,13 +17,19 @@ if [[ -f "$PID_FILE" ]]; then
   if host_health_ok; then
     # The console that answered is our own, but the pid file may be stale: the
     # pid is gone, or it was reused by another live process that is not the
-    # listener. Report the pid that really answers and repair the pid file.
+    # listener. Report the pid that really answers and repair the pid file; when
+    # even the listener cannot be resolved (no lsof), do not print the old pid as
+    # if it were alive.
     live_pid="$(solar_host_port_listener_pids | head -n1 || true)"
     if [[ -n "$live_pid" ]] && [[ "$live_pid" != "$old_pid" ]]; then
       echo "$live_pid" >"$PID_FILE"
       old_pid="$live_pid"
     fi
-    echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
+    if [[ -n "$live_pid" ]]; then
+      echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
+    else
+      echo "Solar Host already running — $SOLAR_APP_BASE_URL"
+    fi
     exit 0
   fi
   # The health check includes identity. Only this runtime's own console may be

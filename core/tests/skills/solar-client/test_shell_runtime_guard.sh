@@ -135,6 +135,36 @@ assert_eq "no flag leaves the effective-equals-global case untouched" "$noflag_e
 assert_eq "unknown guard option aborts" "$bogus_ec" "97"
 assert_eq "unknown guard option is named" "$(grep -c 'unknown solar_test_guard option' "$TMP/bogus.err")" "1"
 
+# The guard and solar_host_runtime_is_temporary duplicate the "temporary runtime"
+# rule by hand. Pin them together: the same environment must get the same answer
+# from both, or SOLAR_APP_PORT_OVERRIDE could be honoured on a real install.
+HOST_LIB="$CORE_ROOT/skills/solar-app/scripts/host_lib.sh"
+host_temp() {
+  env -u SOLAR_GLOBAL_ROOT "$@" \
+    bash -c 'source "$1"; solar_host_load_env; solar_host_runtime_is_temporary && echo yes || echo no' \
+    _ "$HOST_LIB"
+}
+guard_verdict() {
+  # 0 from the guard means the runtime is temporary (compare == distinct).
+  env -u SOLAR_GLOBAL_ROOT "$@" \
+    bash -c 'source "$1"; live="$(solar_test_live_runtime)"; resolved="$(solar_test_resolved_runtime)";
+      l="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$live")";
+      r="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$resolved")";
+      [[ "$r" != "$l" ]] && echo yes || echo no' \
+    _ "$GUARD"
+}
+set +e
+temp_env_temp="$(host_temp SOLAR_RUNTIME_ROOT="$TMP/runtime")"
+temp_guard_temp="$(guard_verdict SOLAR_RUNTIME_ROOT="$TMP/runtime")"
+LIVE_RT="$(env -u SOLAR_RUNTIME_ROOT -u SOLAR_APP_DATA python3 "$CORE_ROOT/skills/solar-paths/scripts/solar_runtime.py" runtime)"
+temp_env_live="$(host_temp SOLAR_RUNTIME_ROOT="$LIVE_RT")"
+temp_guard_live="$(guard_verdict SOLAR_RUNTIME_ROOT="$LIVE_RT")"
+set -e
+assert_eq "temporary runtime agrees between host_lib and the guard" "$temp_env_temp" "$temp_guard_temp"
+assert_eq "live runtime agrees between host_lib and the guard" "$temp_env_live" "$temp_guard_live"
+assert_eq "a temp runtime reads as temporary in both" "$temp_env_temp" "yes"
+assert_eq "the live runtime reads as not temporary in both" "$temp_env_live" "no"
+
 # The service check must not fail open silently: an unresolvable global install
 # is an abort with a reason, never a silent pass. The guard is mirrored so its
 # relative paths land on a stub that refuses to resolve the global install.
