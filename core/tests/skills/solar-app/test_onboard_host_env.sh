@@ -42,10 +42,10 @@ else
   pass "legacy keys removed"
 fi
 
-if grep -q '^SOLAR_APP_HOST=127.0.0.8$' "$WS/.env" && grep -q '^SOLAR_APP_PORT=9000$' "$WS/.env"; then
+if grep -q '^SOLAR_APP_HOST=127.0.0.8$' "$WS/.env" && ! grep -q '^SOLAR_APP_PORT=' "$WS/.env"; then
   pass "host migrated; console port fixed at 9000"
 else
-  fail "expected SOLAR_APP_HOST=127.0.0.8 and SOLAR_APP_PORT=9000"
+  fail "expected SOLAR_APP_HOST=127.0.0.8 and no SOLAR_APP_PORT (the port is not configurable)"
   grep '^SOLAR_APP_' "$WS/.env" >&2 || true
 fi
 
@@ -59,7 +59,7 @@ echo '{"layout":"solar-client-v1.1"}' >"$WS2/.solar/manifest.json"
   export SOLAR_WORKSPACE="$WS2"
   bash "$ONBOARD" >/dev/null
 )
-if grep -q '^SOLAR_APP_HOST=127.0.0.1$' "$WS2/.env" && grep -q '^SOLAR_APP_PORT=9000$' "$WS2/.env"; then
+if grep -q '^SOLAR_APP_HOST=127.0.0.1$' "$WS2/.env" && ! grep -q '^SOLAR_APP_PORT=' "$WS2/.env"; then
   pass "defaults for empty workspace"
 else
   fail "expected defaults 127.0.0.1:9000 on empty onboard"

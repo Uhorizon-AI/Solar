@@ -419,6 +419,70 @@ def test_port_watch_accepts_the_same_program_restarted(harness):
     assert port_watch.new_listeners(baseline, port_watch.snapshot(harness.port)) == frozenset()
 
 
+# Same command line and port, other environment: the identity in /health tells them apart.
+def test_port_watch_detects_a_replacement_with_the_same_command_and_another_identity(harness):
+    import port_watch
+    script = harness.root / "host_server.py"
+    script.write_text(ch.FAKE_CONSOLE.replace("workspace, runtime = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]",
+                                               "workspace, runtime = int(sys.argv[1]), sys.argv[2], os.environ['FAKE_WS'], sys.argv[4]"))
+    argv = [sys.executable, "-u", str(script), str(harness.port), "full", "unused", "/r"]
+
+    def run(workspace):
+        proc = subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                env=dict(os.environ, FAKE_WS=workspace))
+        harness.procs.append(proc)
+        harness.wait_listening(harness.port)
+        return proc
+
+    first = run("/original/workspace")
+    baseline = port_watch.snapshot(harness.port)
+    if baseline is None:
+        pytest.skip("lsof is not available")
+    first.terminate()
+    assert harness.gone(first)
+    run("/original/workspace")  # same command, same identity, new pid: a restart
+    assert port_watch.new_listeners(baseline, port_watch.snapshot(harness.port)) == frozenset()
+    harness.procs[-1].terminate()
+    assert harness.gone(harness.procs[-1])
+    run("/another/workspace")  # same command and port, different environment
+    assert len(port_watch.new_listeners(baseline, port_watch.snapshot(harness.port))) == 1
+
+
+def test_port_watch_treats_an_unreadable_identity_as_a_replacement(harness):
+    import port_watch
+    script = harness.root / "host_server.py"
+    script.write_text(ch.FAKE_CONSOLE)
+    argv = [sys.executable, "-u", str(script), str(harness.port), "drop", "/w", "/r"]  # never answers /health
+
+    def run():
+        proc = subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        harness.procs.append(proc)
+        harness.wait_listening(harness.port)
+        return proc
+
+    first = run()
+    baseline = port_watch.snapshot(harness.port)
+    if baseline is None:
+        pytest.skip("lsof is not available")
+    first.terminate()
+    assert harness.gone(first)
+    run()
+    assert len(port_watch.new_listeners(baseline, port_watch.snapshot(harness.port))) == 1
+
+
+# A console may declare any pid: it is only signalled if it is also the listener.
+def test_a_declared_pid_of_another_host_server_is_never_signalled(harness):
+    victim = harness.spawn("drop", install="this", port=ch.free_port())  # a live host_server.py elsewhere
+    liar = harness.spawn("full", install="other", workspace="/previous/workspace", report_pid=victim.pid)
+    harness.write_pid_file(victim.pid)  # even with the pid file naming the declared pid
+    for script in ("stop_host.sh", "start_host.sh"):
+        result = harness.script(script)
+        assert victim.poll() is None, (script, result.stdout, result.stderr)
+        assert liar.poll() is None, script
+    assert stop_orphans(harness).returncode != 0
+    assert victim.poll() is None and liar.poll() is None
+
+
 def test_port_watch_reports_a_new_listener():
     import port_watch
     port = ch.free_port()

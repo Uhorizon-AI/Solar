@@ -41,7 +41,7 @@ FAKE_CONSOLE = textwrap.dedent('''\
         def do_GET(self):
             payload = {"service": "solar-console", "status": "available", "process_ok": True}
             if mode in ("full", "workspace_only", "runtime_only"):
-                payload["pid"] = os.getpid()
+                payload["pid"] = int(os.environ.get("FAKE_REPORT_PID") or os.getpid())
             if mode in ("full", "nopid", "workspace_only"):
                 payload["workspace"] = workspace
             if mode in ("full", "nopid", "runtime_only"):
@@ -154,7 +154,8 @@ class Harness:
 
     # -- doubles -----------------------------------------------------------
     def spawn(self, mode: str = "full", *, install: str = "other", workspace: str | None = None,
-              runtime: str | None = None, interpreter: str | None = None, port: int | None = None) -> subprocess.Popen:
+              runtime: str | None = None, interpreter: str | None = None, port: int | None = None,
+              report_pid: int | None = None) -> subprocess.Popen:
         """A console double on the harness port.
 
         install="this" puts THIS install's host_server.py path on its command line;
@@ -170,8 +171,9 @@ class Harness:
                 runtime if runtime is not None else self.runtime_phys]
         if install == "this":
             argv.append(self.install_script)
+        env = dict(os.environ, **({"FAKE_REPORT_PID": str(report_pid)} if report_pid else {}))
         proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                stdin=subprocess.DEVNULL, start_new_session=True)
+                                stdin=subprocess.DEVNULL, start_new_session=True, env=env)
         self.procs.append(proc)
         self.wait_listening(port or self.port)
         return proc

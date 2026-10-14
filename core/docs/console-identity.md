@@ -69,14 +69,16 @@ stranded. An answering console is never judged this way.
 
 ## Active workspace switch
 
-`stale_workspace` is not a state of `host_identity.py` (which only returns the six above). It is derived in `solar_host_assess` (`host_lib.sh`) from `mismatch` with only the workspace differing, the runtime equal, and this runtime's pid file pointing at the pid that answered. `check_host.sh` still reports `mismatch` and exits 3.
+`host_identity.assess` returns `mismatch` here, and `check_host.sh` exits 3. The
+derived state `stale_workspace` lives only in `solar_host_assess` (`host_lib.sh`): the
+runtime matches, only the workspace differs, and this runtime's pid file points at the
+pid that answered (also the listener of `SOLAR_APP_HOST:port`). Only the stop paths
+(`stop_host.sh`, `start_host.sh`, the cutover) use it, to stop and replace our own
+console instead of stranding it as `UNTRUSTED`.
 
 The real console re-reads the registry on every request, so `solar app workspace use`
-moves a running console to the new workspace and it stays accepted. If a console of
-this runtime still reports the previous workspace (pid file points at the pid that
-answered, runtime equal), it is state `stale_workspace`: `check_host.sh` exits 3, but
-`stop_host.sh`, `start_host.sh` and the cutover stop and replace it. A differing
-**runtime** is always refused.
+moves a running console to the new workspace and it stays accepted; `stale_workspace`
+is a safety net. A differing **runtime** is always refused.
 
 ## Never kill what is not ours
 

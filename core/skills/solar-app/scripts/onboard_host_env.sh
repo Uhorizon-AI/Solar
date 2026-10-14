@@ -41,7 +41,6 @@ _resolve_host_runtime_dir() {
 }
 
 APP_HOST="$(_resolve_app_host "$ENV_FILE")"
-APP_PORT=9000
 HOST_RUNTIME_DIR="$(_resolve_host_runtime_dir "$ENV_FILE")"
 
 tmp="$(mktemp)"
@@ -64,7 +63,6 @@ fi
   cat "$tmp"
   echo "$BLOCK_HEADER"
   printf 'SOLAR_APP_HOST=%s\n' "$APP_HOST"
-  printf 'SOLAR_APP_PORT=%s\n' "$APP_PORT"
   printf 'SOLAR_HOST_RUNTIME_DIR=%s\n' "$HOST_RUNTIME_DIR"
 } >"$ENV_FILE"
 rm -f "$tmp"

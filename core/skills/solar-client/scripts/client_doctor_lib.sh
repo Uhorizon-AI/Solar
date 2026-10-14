@@ -85,6 +85,8 @@ solar_client_check_ports() {
   local var port pid
   for var in SOLAR_APP_PORT SOLAR_HTTP_PORT; do
     port="${!var:-}"
+    # The console port is fixed (9000) and no longer written to .env.
+    [[ "$var" == SOLAR_APP_PORT && -z "$port" ]] && port=9000
     [[ -n "$port" ]] || continue
     pid="$(_solar_client_port_listener_pid "$port" || true)"
     [[ -n "$pid" ]] || continue

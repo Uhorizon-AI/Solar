@@ -214,6 +214,8 @@ source "$SCRIPT_DIR/client_doctor_lib.sh"
 _port_check_verbose() {
   local var="$1"
   local port="${!var:-}"
+  # The console port is fixed (9000) and no longer written to .env.
+  [[ "$var" == SOLAR_APP_PORT && -z "$port" ]] && port=9000
   [[ -n "$port" ]] || return 0
 
   local pid

@@ -69,8 +69,11 @@ No test starts the real console or occupies port 9000.
   (so before any double exists) and fails the run if a new listener is there at
   the end, compared by address **and command line** per listener: a listener on a new address, or
   on a known address with a different command line (a console replaced by one served
-  from a pytest temp directory), fails the run; the same command line with a new pid
-  (a developer's console restarted by its LaunchAgent) does not. Listeners already present (a developer's live console) are in
+  from a pytest temp directory), fails the run. A new pid is accepted as a restart only with evidence: the same
+  command line **and** the same `workspace`/`runtime` reported by `/health` before
+  and after; if the identity cannot be read, the change is reported. Limit: a
+  replacement that keeps pid, command line, address and identity cannot be told
+  apart from the original (there is no further signal). Listeners already present (a developer's live console) are in
   the baseline and are never touched. Without `lsof` nothing can be observed and
   the check is skipped.
 - Tests that need a server use `core/tests/support/console_harness.py` (the

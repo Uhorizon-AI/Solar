@@ -103,7 +103,7 @@ mode, including the no-flag mode that the system supervisor runs; `ensure_host.s
   runtime's (the runtime pid file points to a live `host_server.py`, or its command
   line holds this install's `host_server.py`). Otherwise it is left running.
 - `solar_host_stop_orphan_listeners` no longer stops "anything that looks like the
-  console": it stops proven-own listeners only and returns non-zero otherwise.
+  console": it stops proven-own listeners only (matched to exactly `SOLAR_APP_HOST:port`, and a reported pid must be that listener) and returns non-zero otherwise.
 - The port stays 9000. Only tests can move it (`SOLAR_APP_TEST_MODE=1` with
   `SOLAR_APP_TEST_PORT`, process environment only).
 

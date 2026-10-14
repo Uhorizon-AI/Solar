@@ -415,8 +415,18 @@ def console_language(workspace=None) -> str:
     return language_tokens.effective_language(data.get("language"))
 
 
+def _with_port(value, port: str):
+    if isinstance(value, dict):
+        return {key: _with_port(item, port) for key, item in value.items()}
+    return value.replace("9000", port) if isinstance(value, str) else value
+
+
 def _copy(language: str) -> dict:
-    return _COPY["es"] if language == "es" else _COPY["en"]
+    """The copy for the language, naming the console's real port (9000 unless a test moved it)."""
+    import host_identity
+    base = _COPY["es"] if language == "es" else _COPY["en"]
+    port = str(host_identity.resolve_port())
+    return base if port == "9000" else _with_port(base, port)
 
 
 def _join(items: list[str], language: str) -> str:

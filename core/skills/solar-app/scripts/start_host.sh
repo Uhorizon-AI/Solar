@@ -43,6 +43,11 @@ case "$HOST_STATE" in
   stale_workspace)
     # Our own console, still serving the workspace that was active before a switch.
     echo "WARN: Solar Host pid $HOST_OBSERVED_PID serves the previous workspace (${HOST_OBSERVED_WORKSPACE}); restarting it on ${SOLAR_WORKSPACE}" >&2
+    if ! solar_host_reported_pid_is_listener "$HOST_OBSERVED_PID"; then
+      HOST_REASON="the pid it reports ($HOST_OBSERVED_PID) is not its listener on ${SOLAR_APP_HOST}:${SOLAR_APP_PORT}"
+      solar_host_explain_refusal
+      exit 3
+    fi
     solar_host_stop_pid "$HOST_OBSERVED_PID" || { solar_host_explain_refusal; exit 3; }
     rm -f "$PID_FILE"
     sleep 0.3

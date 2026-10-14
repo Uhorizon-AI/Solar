@@ -138,6 +138,14 @@ solar_host_pid_is_this_install() {
   return 1
 }
 
+# True when the pid a console reported is really the listener of SOLAR_APP_HOST:port.
+# Without lsof nothing can be cross-checked and the report is accepted.
+solar_host_reported_pid_is_listener() {
+  local pid="$1"
+  command -v lsof >/dev/null 2>&1 || return 0
+  grep -qx "$pid" <<<"$(solar_host_port_listener_pids)"
+}
+
 # The pid recorded for this runtime, if it is alive and still a host_server.py
 # (a recycled pid is rejected). While a console answers and listeners are known,
 # the pid must also be one of them. Args: assessed state.
@@ -152,6 +160,7 @@ solar_host_pidfile_pid() {
     match|stale_workspace)
       # The console names its own pid: the recorded one must be that process.
       [[ -z "${HOST_OBSERVED_PID:-}" || "$pid" == "$HOST_OBSERVED_PID" ]] || return 1
+      [[ -z "${HOST_OBSERVED_PID:-}" ]] || solar_host_reported_pid_is_listener "$pid" || return 1
       ;;
     legacy|partial)
       listeners="$(solar_host_port_listener_pids)"
@@ -217,8 +226,7 @@ solar_host_stop_orphan_listeners() {
       if [[ -z "$candidates" ]]; then
         # A console that reports no pid: the listener on exactly our address.
         candidates="$(solar_host_port_listener_pids)"
-      elif command -v lsof >/dev/null 2>&1 \
-           && ! grep -qx "$candidates" <<<"$(solar_host_port_listener_pids)"; then
+      elif ! solar_host_reported_pid_is_listener "$candidates"; then
         # The reported pid must really be the listener of this address.
         echo "WARN: pid $candidates reported by the console is not its listener on ${SOLAR_APP_HOST}:${SOLAR_APP_PORT}; left untouched" >&2
         candidates=""

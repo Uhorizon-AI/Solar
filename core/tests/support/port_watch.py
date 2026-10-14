@@ -6,7 +6,9 @@ lsof it is ``None`` and every comparison passes (nothing can be observed).
 """
 from __future__ import annotations
 
+import json
 import subprocess
+import urllib.request
 
 PRODUCTION_PORT = 9000
 
@@ -19,8 +21,21 @@ def _args(pid: str) -> str:
         return ""
 
 
-def snapshot(port: int = PRODUCTION_PORT) -> frozenset[tuple[str, str, str]] | None:
-    """Set of (pid, address, command line) listening on the port; None if unobservable."""
+def _identity(address: str) -> str:
+    """workspace|runtime a console on this address reports in /health ('' if it does not say)."""
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"http://{address}/health", timeout=2) as response:
+            payload = json.load(response)
+        if payload.get("service") != "solar-console":
+            return ""
+        return f"{payload.get('workspace', '')}|{payload.get('runtime', '')}"
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def snapshot(port: int = PRODUCTION_PORT) -> frozenset[tuple[str, str, str, str]] | None:
+    """Set of (pid, address, command line, identity) listening on the port; None if unobservable."""
     try:
         listed = subprocess.run(
             ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpn"],
@@ -28,26 +43,35 @@ def snapshot(port: int = PRODUCTION_PORT) -> frozenset[tuple[str, str, str]] | N
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    found: set[tuple[str, str, str]] = set()
+    found: set[tuple[str, str, str, str]] = set()
     pid = ""
     for line in listed.stdout.splitlines():
         if line.startswith("p"):
             pid = line[1:]
         elif line.startswith("n") and pid:
-            found.add((pid, line[1:], _args(pid)))
+            found.add((pid, line[1:], _args(pid), _identity(line[1:])))
     return frozenset(found)
 
 
 def new_listeners(before: frozenset | None, after: frozenset | None) -> frozenset:
     """Listeners now that are not the baseline's.
 
-    A listener is a leak if its address had none in the baseline, or if it runs a
-    different command line than the baseline's listener on that address: a console
-    replaced by one served from another place (the original incident) is caught.
-    The same command line with a new pid is the same program restarted (a
-    developer's console restarted by its LaunchAgent during the run) and is not.
+    Same address and same pid: unchanged. A new pid is accepted as a restart of the
+    same program only with evidence: same command line AND the same workspace and
+    runtime reported by /health, on both sides. A different command line, a different
+    identity, or an identity that cannot be read is treated as a replacement (the
+    original incident: a console served from a pytest temp directory, or by the same
+    command with another environment). Limit: a replacement that keeps pid, command
+    line, address and identity is indistinguishable from the original.
     """
     if before is None or after is None:
         return frozenset()
-    known = {(address, args) for _, address, args in before}
-    return frozenset(entry for entry in after if (entry[1], entry[2]) not in known)
+    leaked = set()
+    for pid, address, args, identity in after:
+        same = [b for b in before if b[1] == address]
+        if any(b[0] == pid and b[2] == args for b in same):
+            continue
+        if identity and any(b[2] == args and b[3] == identity for b in same):
+            continue
+        leaked.add((pid, address, args, identity))
+    return frozenset(leaked)
