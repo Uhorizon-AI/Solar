@@ -215,8 +215,12 @@ with open(dest, "w", encoding="utf-8") as fh:
     json.dump(data, fh)
 PY
   then
-    # No answer: not ours only when the command line is some other install's.
+    # No answer. It is ours when its command line is this install's server, or
+    # when this runtime's pid file names that very listener (the same pid-file
+    # proof host_identity.py accepts on the rest of the paths).
     if solar_host_command_is_install_server "$listener_command"; then
+      echo own
+    elif [[ -n "$pid" ]] && solar_host_pid_file_names "$SOLAR_HOST_PID_FILE" "$pid"; then
       echo own
     else
       echo unproven
@@ -257,6 +261,19 @@ solar_host_pid_looks_like_server() {
 # install check is command_is_install_server in host_identity.py).
 solar_host_command_looks_like_server() {
   [[ "$1" == *host_server.py* ]]
+}
+
+# True when the pid file at $1 names the pid $2 (the live listener) and that pid
+# runs a host_server.py. This is the same pid-file proof host_identity.py uses,
+# reached from a shell path that only needs to know whether the hung listener is
+# ours. Returns non-zero when the file, the pid or the process do not line up.
+solar_host_pid_file_names() {
+  local pid_file="${1-}" wanted="${2-}"
+  [[ -n "$pid_file" && -n "$wanted" && -f "$pid_file" ]] || return 1
+  local held
+  held="$(cat "$pid_file" 2>/dev/null || true)"
+  [[ "$held" == "$wanted" ]] || return 1
+  solar_host_pid_looks_like_server "$wanted"
 }
 
 # Human-readable owner of the port. Never stops anything.

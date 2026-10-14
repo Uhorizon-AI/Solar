@@ -15,7 +15,11 @@ unstoppable=0
 if [[ -f "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
-    if ! solar_host_pid_looks_like_server "$pid"; then
+    if ! kill -0 "$pid" 2>/dev/null; then
+      # The pid is gone: the file is stale, not a reused pid. Dropping it is the
+      # whole job here; there is nothing to leave running.
+      echo "WARN: stale pid $pid in the host pid file (process is gone) — dropping the pid file" >&2
+    elif ! solar_host_pid_looks_like_server "$pid"; then
       echo "WARN: pid $pid in the host pid file is not a live host_server.py (reused pid) — leaving it running" >&2
     elif [[ "$(solar_host_listener_identity "$pid")" == own ]]; then
       solar_host_stop_pid "$pid"

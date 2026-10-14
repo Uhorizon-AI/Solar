@@ -262,6 +262,17 @@ class InstallServerTest(unittest.TestCase):
                 binary,
             )
 
+    def test_the_macos_capital_python_and_platform_suffixes_match(self):
+        # macOS runs the interpreter as `Python` (Python.app) and a universal
+        # build as `python3.12-intel64`; Windows ships `pythonw`. Missing these
+        # would strand an own console as foreign.
+        for binary in ("Python", "Python3", "python3.12-intel64", "pythonw"):
+            command = f"{binary} -u {self.install}/core/skills/solar-app/scripts/host_server.py"
+            self.assertTrue(
+                host_identity.command_is_install_server(command, [str(self.install)]),
+                binary,
+            )
+
 
 class CliTest(unittest.TestCase):
     """The CLI is what every shell script calls; a dispatch bug is a silent bug."""

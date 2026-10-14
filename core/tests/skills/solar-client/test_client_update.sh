@@ -366,8 +366,33 @@ svc_fail_ec=$?
 set -e
 assert_ok "restart: failure returns non-zero" test "$svc_fail_ec" -ne 0
 assert_ok "restart: failure prints the manual command" grep -q -- '--restart' <<<"$svc_fail_out"
-unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
-unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT
+
+# A foreign console on the port makes the console restart fail instead of
+# silently claiming to have restarted it: stop_host.sh exits 3 (nothing was
+# touched) and the `stop && start` chain never starts our console over it.
+FOREIGN_LOG="$TMP/foreign.log"
+FAKE_FOREIGN_STOP="$TMP/foreign-stop.sh"
+FAKE_FOREIGN_START="$TMP/foreign-start.sh"
+printf '#!/usr/bin/env bash\necho stop >>"%s"\nexit 3\n' "$FOREIGN_LOG" >"$FAKE_FOREIGN_STOP"
+printf '#!/usr/bin/env bash\necho start >>"%s"\n' "$FOREIGN_LOG" >"$FAKE_FOREIGN_START"
+chmod +x "$FAKE_FOREIGN_STOP" "$FAKE_FOREIGN_START"
+export SOLAR_CLIENT_HOST_STOP_SCRIPT="$FAKE_FOREIGN_STOP"
+export SOLAR_CLIENT_HOST_START_SCRIPT="$FAKE_FOREIGN_START"
+: >"$SVC_LOG"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="host"
+set +e
+foreign_out="$(solar_client_restart_running_services "$MOCK_INSTALL_ROOT" 2>&1)"
+foreign_ec=$?
+set -e
+assert_ok "restart: a foreign console makes the console restart fail" test "$foreign_ec" -ne 0
+assert_ok "restart: a stopped console is not reported as restarted" \
+  bash -c '! grep -q "OK: console restarted" <<<"$1"' _ "$foreign_out"
+assert_ok "restart: our console was not started over the foreign one" \
+  bash -c '! grep -q start "$1"' _ "$FOREIGN_LOG"
+assert_ok "restart: the diagnosis names the manual command" \
+  bash -c 'grep -q "$1" <<<"$2"' _ "$FAKE_FOREIGN_STOP" "$foreign_out"
+unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE
+unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
 
 # --- detection is scoped to this install (another Solar install may be running) ---
 PS_FILE="$TMP/ps.txt"

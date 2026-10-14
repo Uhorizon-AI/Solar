@@ -31,6 +31,13 @@ def canonical(path: str) -> str:
     return str(Path(path).expanduser().resolve())
 
 
+# The interpreter that runs the console: ``python``, ``python3.12``, the macOS
+# ``Python`` (Python.app), a universal-build ``python3.12-intel64`` and the
+# Windows ``pythonw``. A binary that merely contains "python"
+# (``ipython-wrapper``) is not it.
+_PYTHON_INTERPRETER = re.compile(r"python(?:w|[\d.]*(?:-\w+)?)?", re.IGNORECASE)
+
+
 def _pid_alive(pid: int) -> bool:
     """True when the pid exists.
 
@@ -131,6 +138,10 @@ def _interpreted_script(prefix: str) -> bool:
     must be a ``python`` interpreter (its flags skipped), or the command must be
     the script itself. A binary whose name merely contains "python"
     (``ipython-wrapper``, ``python-my-tool``) is not the interpreter.
+
+    The name is matched case-insensitively and with the platform suffixes an
+    interpreter really carries: macOS runs it as ``Python`` (Python.app) and as
+    ``python3.12-intel64`` on a universal build, and Windows ships ``pythonw``.
     """
     prefix = prefix.rstrip().rstrip("'\"")
     if not prefix:
@@ -141,7 +152,7 @@ def _interpreted_script(prefix: str) -> bool:
     if not tokens:
         return False
     name = Path(tokens[-1].strip("'\"")).name
-    return re.fullmatch(r"python[\d.]*", name) is not None
+    return _PYTHON_INTERPRETER.fullmatch(name) is not None
 
 
 def command_is_install_server(command: str, install_roots) -> bool:

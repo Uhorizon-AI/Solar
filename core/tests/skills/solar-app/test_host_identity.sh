@@ -347,6 +347,22 @@ kill -0 "$HUNG_PID" 2>/dev/null && fail "own hung console was left running" \
   || pass "own hung console was really stopped"
 kill "$HUNG_PID" 2>/dev/null || true
 wait "$HUNG_PID" 2>/dev/null || true
+# (c2) The same hung own console, launched with the macOS capital-P interpreter
+# (Python.app): it must still be recognised as ours.
+sleep 120 & disown 2>/dev/null || true
+HUNG_CAP_PID=$!
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "Python -u $CORE_ROOT/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+run_stop "$HUNG_CAP_PID"
+[[ "$STOP_EC" -eq 0 ]] && pass "own hung console under macOS Python is stopped (return 0)" \
+  || fail "own hung console under macOS Python is stopped (return 0) (ec=$STOP_EC)"
+kill -0 "$HUNG_CAP_PID" 2>/dev/null && fail "own hung console under macOS Python was left running" \
+  || pass "own hung console under macOS Python was really stopped"
+kill "$HUNG_CAP_PID" 2>/dev/null || true
+wait "$HUNG_CAP_PID" 2>/dev/null || true
 # (d) A hung console of another install stays foreign: report, never kill.
 sleep 120 & disown 2>/dev/null || true
 FOREIGN_HUNG_PID=$!
@@ -492,6 +508,21 @@ kill -0 "$INNOCENT_PID" 2>/dev/null && pass "stop left the reused pid running" \
   || fail "stop dropped the stale pid file"
 kill "$INNOCENT_PID" 2>/dev/null || true
 wait "$INNOCENT_PID" 2>/dev/null || true
+# A pid that is simply gone is stale, not reused: the message must not claim it
+# was left running, because there is nothing running to leave.
+printf '%s\n' "999999" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+set +e
+STOP_OUT="$(bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+[[ "$stop_ec" -eq 0 ]] && pass "stop with a dead pid exits 0" \
+  || fail "stop with a dead pid exits 0 (ec=$stop_ec: $STOP_OUT)"
+grep -q "stale pid" <<<"$STOP_OUT" && pass "a dead pid is named stale, not reused" \
+  || { fail "a dead pid is named stale, not reused"; echo "$STOP_OUT" >&2; }
+grep -q "leaving it running" <<<"$STOP_OUT" && fail "a dead pid is said to be left running" \
+  || pass "a dead pid is not said to be left running"
+[[ ! -f "$SOLAR_HOST_RUNTIME_DIR/host.pid" ]] && pass "the dead pid file was dropped" \
+  || fail "the dead pid file was dropped"
 # A live host_server.py named by the pid file is this runtime's console and must
 # be stopped, not merely dropped: the pid file holds a pid, the helper re-checks
 # the identity, and mixing them would silently turn every real stop into a no-op.

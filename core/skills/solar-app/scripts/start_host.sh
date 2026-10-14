@@ -15,12 +15,13 @@ host_health_ok() {
 if [[ -f "$PID_FILE" ]]; then
   old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if host_health_ok; then
-    # The console that answered is our own, but the pid file may be stale (the
-    # pid is gone, or names another process). Report the listener that really
-    # answers, and repair the pid file with it.
-    if [[ -z "$old_pid" ]] || ! kill -0 "$old_pid" 2>/dev/null; then
-      old_pid="$(solar_host_port_listener_pids | head -n1 || true)"
-      [[ -n "$old_pid" ]] && echo "$old_pid" >"$PID_FILE"
+    # The console that answered is our own, but the pid file may be stale: the
+    # pid is gone, or it was reused by another live process that is not the
+    # listener. Report the pid that really answers and repair the pid file.
+    live_pid="$(solar_host_port_listener_pids | head -n1 || true)"
+    if [[ -n "$live_pid" ]] && [[ "$live_pid" != "$old_pid" ]]; then
+      echo "$live_pid" >"$PID_FILE"
+      old_pid="$live_pid"
     fi
     echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
     exit 0
