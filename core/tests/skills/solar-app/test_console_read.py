@@ -304,6 +304,67 @@ def test_health_is_never_served_to_a_non_loopback_client():
     assert b"workspace" not in handler.body and b"runtime" not in handler.body
 
 
+def test_health_route_is_behind_the_loopback_guard():
+    # The guard runs before every route, so /health (which exposes the physical
+    # workspace and runtime paths) is never served to a non-loopback client. This
+    # pins do_GET itself, not only the guard helper.
+    class GuardedHandler(host_server.HostHandler):
+        def __init__(self, client_address, headers):
+            self.client_address = client_address
+            self.headers = headers
+            self.path = "/health"
+            self.sent = []
+
+        def _send(self, body, code, content_type):
+            self.sent.append((code, body))
+
+        def _send_json(self, payload, code=200):
+            import json as _json
+            self.sent.append((code, _json.dumps(payload).encode("utf-8")))
+
+    handler = GuardedHandler(("192.168.1.50", 44444), {"Host": "127.0.0.1:9000"})
+
+    handler.do_GET()
+
+    assert handler.sent and handler.sent[-1][0] == 403
+    assert b"workspace" not in handler.sent[-1][1] and b"runtime" not in handler.sent[-1][1]
+
+
+def test_health_route_reaches_app_http_for_a_loopback_client(monkeypatch, tmp_path):
+    # The mirror of the test above: for a loopback client the guard passes and the
+    # /health route really runs, so the loopback bind is what carries the paths.
+    import app_http
+
+    seen = {}
+
+    def fake_get(handler, path, qs, workspace):
+        seen["path"] = path
+        handler._send_json({"service": "solar-console"})
+
+    monkeypatch.setattr(app_http, "get", fake_get)
+
+    class GuardedHandler(host_server.HostHandler):
+        def __init__(self, client_address, headers):
+            self.client_address = client_address
+            self.headers = headers
+            self.path = "/health"
+            self.sent = []
+
+        def _send(self, body, code, content_type):
+            self.sent.append((code, body))
+
+        def _send_json(self, payload, code=200):
+            import json as _json
+            self.sent.append((code, _json.dumps(payload).encode("utf-8")))
+
+    handler = GuardedHandler(("127.0.0.1", 44444), {"Host": "127.0.0.1:9000"})
+
+    handler.do_GET()
+
+    assert seen.get("path") == "/health"
+    assert handler.sent and handler.sent[-1][0] == 200
+
+
 def test_health_guard_passes_for_a_loopback_client():
     handler = _FakeHandler(("127.0.0.1", 44444), {"Host": "127.0.0.1:9000"})
 

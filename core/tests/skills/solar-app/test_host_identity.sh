@@ -907,6 +907,34 @@ grep -q "lsof was called" "$TMP/live.err" && fail "lsof ran on the healthy path"
 stop_stub
 rm -f "$TMP/bin/lsof"
 
+# --- 16b. Without lsof a no-identity console is not adopted nor killed -------
+# lsof is missing (or fails), so no listener can be enumerated. A console that
+# reports no identity must not fail open: the install-level proof is required,
+# and start_host.sh must not kill anything it cannot prove is ours.
+start_stub nolsof-orphan "{}"
+rm -f "$SOLAR_HOST_RUNTIME_DIR/host.pid"
+cat >"$TMP/bin/lsof" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$TMP/bin/lsof"
+# The ps double describes a host_server.py of another install: no proof of ours.
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 /somewhere/else/core/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
+live_ec=$?
+set -e
+[[ "$live_ec" -ne 0 ]] && pass "without lsof an identity-less console is not adopted" \
+  || fail "without lsof an identity-less console is not adopted (ec=$live_ec)"
+kill -0 "$STUB_PID" 2>/dev/null && pass "the unproven console was left running" \
+  || fail "the unproven console was left running"
+stop_stub
+rm -f "$TMP/bin/lsof" "$TMP/bin/ps"
+
 # --- 17. start_host.sh repairs a stale pid file when the console answers ------
 # The pid file names a dead pid while our own console answers /health: the run
 # must report the real listener, not the dead pid, and repair the pid file.
