@@ -26,8 +26,10 @@ solar status
 The global dispatcher is `core/skills/solar-client/scripts/solar`.
 `app_http.py` serves the console; `app_solar.py` reads its canonical sources.
 `host_registry.py` and `host_workspace_context.py` retain workspace selection.
-The console port is fixed at 9000. The registry and metrics keep their current
-machine-local paths; runtime files remain under `<runtime root>/`.
+The console port is fixed at 9000; `SOLAR_APP_PORT_OVERRIDE` is a test-only hook
+honored only when the runtime is temporary, and is ignored on a real install. The
+registry and metrics keep their current machine-local paths; runtime files remain
+under `<runtime root>/`.
 
 Health requires a fresh source read. Task failures describe the task, not the
 health of Solar. A router start without a recent end is not proof of a live

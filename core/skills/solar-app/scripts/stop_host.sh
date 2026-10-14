@@ -18,18 +18,20 @@ unstoppable=0
 if [[ -f "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
-    live_pid="$(solar_host_port_listener_pids | head -n1 || true)"
+    live_pids="$(solar_host_port_listener_pids || true)"
     if ! kill -0 "$pid" 2>/dev/null; then
       # The pid is gone: the file is stale, not a reused pid. Dropping it is the
       # whole job here; there is nothing to leave running.
       echo "WARN: stale pid $pid in the host pid file (process is gone) — dropping the pid file" >&2
     elif ! solar_host_pid_looks_like_server "$pid"; then
       echo "WARN: pid $pid in the host pid file is not a live host_server.py (reused pid) — leaving it running" >&2
-    elif [[ -n "$live_pid" && "$pid" != "$live_pid" ]]; then
-      # A live own host_server.py that is not the listener: killing it would not
-      # free :$SOLAR_APP_PORT. Drop the file; the port sweep below stops the
-      # process that really listens.
-      echo "WARN: pid $pid in the host pid file is not the listener on :${SOLAR_APP_PORT} (pid ${live_pid}) — leaving it running" >&2
+    elif [[ -n "$live_pids" ]] && ! grep -qx "$pid" <<<"$live_pids"; then
+      # A live own host_server.py that is not one of the port's listeners: killing
+      # it would not free :$SOLAR_APP_PORT. Drop the file; the port sweep below
+      # stops the process that really listens. The whole listener list is checked,
+      # not just the first: with several listeners, a valid pid beyond the first
+      # must not be discarded as "not the listener".
+      echo "WARN: pid $pid in the host pid file is not a listener on :${SOLAR_APP_PORT} — leaving it running" >&2
     elif [[ "$(solar_host_listener_identity "$pid")" == own ]]; then
       solar_host_stop_pid "$pid"
       stopped=1

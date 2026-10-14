@@ -602,13 +602,42 @@ stop_ec=$?
 set -e
 kill -0 "$PIDFILE_NOT_LISTENER" 2>/dev/null && pass "stop left the pid-file process that is not the listener" \
   || fail "stop killed a pid-file process that is not the listener"
-grep -q "not the listener" <<<"$STOP_OUT" && pass "stop says the pid file is not the listener" \
-  || { fail "stop says the pid file is not the listener"; echo "$STOP_OUT" >&2; }
+grep -q "not a listener" <<<"$STOP_OUT" && pass "stop says the pid file is not a listener" \
+  || { fail "stop says the pid file is not a listener"; echo "$STOP_OUT" >&2; }
 kill -0 "$STUB_PID" 2>/dev/null && fail "stop left the real listener running" \
   || pass "stop stopped the real listener through the port sweep"
 kill "$PIDFILE_NOT_LISTENER" 2>/dev/null || true
 wait "$PIDFILE_NOT_LISTENER" 2>/dev/null || true
 stop_stub
+rm -f "$TMP/bin/ps"
+# Two listeners on the port and the pid file names the SECOND one: it is still a
+# listener, so the stop must recognise it and stop it, not discard it because it
+# was not the first pid lsof happened to print.
+sleep 120 & disown 2>/dev/null || true
+SECOND_LISTENER=$!
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+cat >"$TMP/bin/lsof" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "111111"
+printf '%s\n' "$SECOND_LISTENER"
+EOF
+chmod +x "$TMP/bin/lsof"
+printf '%s\n' "$SECOND_LISTENER" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+grep -q "not a listener" <<<"$STOP_OUT" && fail "a valid second listener was discarded as not a listener" \
+  || pass "a valid second listener is not discarded"
+kill -0 "$SECOND_LISTENER" 2>/dev/null && fail "stop left a valid second listener running" \
+  || pass "stop stopped a valid second listener"
+kill "$SECOND_LISTENER" 2>/dev/null || true
+wait "$SECOND_LISTENER" 2>/dev/null || true
+lsof_double
 rm -f "$TMP/bin/ps"
 # A pid file that names a host_server.py of another workspace is not ours: the
 # stop must not kill it just because the command line says host_server.py.
@@ -795,6 +824,22 @@ grep -q "pid 999999" <<<"$START_OUT" && fail "start printed the stale dead pid" 
   || pass "start did not print the stale dead pid"
 stop_stub
 rm -f "$TMP/bin/lsof"
+
+# --- 16. The install roots are exactly the one real layout -------------------
+# <install>/core/skills/solar-app/scripts → <install>. A second, lower level
+# (core/) is not an install: command_is_install_server would look for
+# core/core/skills/..., which never exists.
+ROOTS="$(bash -c 'source "$1"; solar_host_identity_install_roots' _ "$HOST_LIB" | paste -sd, -)"
+WANT_ROOTS="$(cd "$(dirname "$HOST_LIB")/../../../.." && pwd -P)"
+[[ "$ROOTS" == "$WANT_ROOTS" ]] && pass "the install roots are exactly the install root" \
+  || fail "the install roots are exactly the install root (got=$ROOTS want=$WANT_ROOTS)"
+[[ "$(bash -c 'source "$1"; solar_host_identity_install_roots' _ "$HOST_LIB" | grep -c '/core$')" -eq 0 ]] \
+  && pass "the dead core/ candidate is gone" \
+  || fail "the dead core/ candidate is gone"
+# And the root the helper returns is the one that really runs this server.
+SERVER="$WANT_ROOTS/core/skills/solar-app/scripts/host_server.py"
+[[ -f "$SERVER" ]] && pass "the install root resolves this install's host_server.py" \
+  || fail "the install root resolves this install's host_server.py ($SERVER)"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

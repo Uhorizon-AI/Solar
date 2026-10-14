@@ -379,6 +379,20 @@ class CliTest(unittest.TestCase):
         with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
             self.assertEqual(host_identity.port_listener_pids("127.0.0.1", 9000), "")
 
+    def test_port_listener_pids_ignores_non_numeric_output(self):
+        # A warning line on stdout (not a pid) must not raise, and must not be
+        # chosen over a real pid.
+        shown = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="lsof: WARNING: can't stat()\n4242\n",
+        )
+        with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
+            self.assertEqual(host_identity.port_listener_pids("127.0.0.1", 9000), "4242")
+
+    def test_port_listener_pids_returns_empty_when_only_noise(self):
+        shown = subprocess.CompletedProcess(args=[], returncode=0, stdout="lsof: WARNING\n")
+        with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
+            self.assertEqual(host_identity.port_listener_pids("127.0.0.1", 9000), "")
+
 
 if __name__ == "__main__":
     unittest.main()

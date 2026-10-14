@@ -125,21 +125,14 @@ solar_host_identity_runtime() {
   solar_runtime_root
 }
 
-# The install this runtime was started from, as physical paths. Two layouts are
-# possible: the published framework checkout (core/skills/solar-app inside a
-# solar install, two levels up) and a workspace mirror where solar-app sits one
-# level above core/skills/solar-app. Both are returned so the check works in
-# either layout; a level that does not exist is skipped.
-# Stable across the check: it depends only on the script location, not on the
-# environment.
+# The install this runtime was started from, as a physical path. There is one
+# layout: the install root holds core/, and solar-app sits at
+# <install>/core/skills/solar-app, so the root is four levels up from these
+# scripts. Everything is derived from the script location, never the environment.
 solar_host_identity_install_roots() {
   local root
-  # Each level is optional: in a layout without it, `cd` fails and must not abort
-  # the process substitution under `set -e` (that would return fewer roots in
-  # silence). The path is only printed when the level really exists.
-  if root="$(cd "$_HOST_LIB_DIR/../../.." 2>/dev/null && pwd -P)"; then
-    [[ -d "$root" ]] && printf '%s\n' "$root"
-  fi
+  # A layout without that level (an isolated checkout) must not abort the
+  # process substitution under `set -e`; the path is printed only when it exists.
   if root="$(cd "$_HOST_LIB_DIR/../../../.." 2>/dev/null && pwd -P)"; then
     [[ -d "$root" ]] && printf '%s\n' "$root"
   fi
@@ -154,25 +147,15 @@ solar_host_identity_own() {
   local health_file="$1"
   local pid_file="${2-}"
   local listener_pid="${3-}"
-  local pid_value="${4-}"
   local -a roots=()
   while IFS= read -r root; do
     [[ -n "$root" ]] && roots+=(--install-root "$root")
   done < <(solar_host_identity_install_roots)
-  # A caller that already read the pid passes it as the fourth argument, so the
-  # pid file is not read a second time (and is not read at all when the payload
-  # is complete).
-  local -a pid_source=()
-  if [[ -n "$pid_value" ]]; then
-    pid_source=(--pid-value "$pid_value")
-  else
-    pid_source=(--pid-file "$pid_file")
-  fi
   python3 "$_HOST_LIB_DIR/host_identity.py" evaluate \
     --health-file "$health_file" \
     --workspace "$(solar_host_identity_workspace)" \
     --runtime "$(solar_host_identity_runtime)" \
-    "${pid_source[@]}" \
+    --pid-file "$pid_file" \
     --listener-pid "$listener_pid" \
     "${roots[@]+"${roots[@]}"}"
 }

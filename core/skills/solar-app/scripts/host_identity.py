@@ -89,9 +89,10 @@ def port_listener_pids(host: str, port) -> str:
         return ""
     # Numeric order, not text order: "10000" must not come before "999". The
     # shell's `head -n1` over `lsof` sees lsof's own order, so keep numeric order
-    # here to make the two paths choose the same pid.
+    # here to make the two paths choose the same pid. Non-numeric lines (an lsof
+    # warning on stdout) are skipped, never a ValueError.
     pids = sorted(
-        {line.strip() for line in (shown.stdout or "").splitlines() if line.strip()},
+        {line.strip() for line in (shown.stdout or "").splitlines() if line.strip().isdigit()},
         key=int,
     )
     return pids[0] if pids else ""
@@ -104,21 +105,6 @@ def _pid_file_pid(pid_file: str):
     try:
         pid = int(Path(pid_file).read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
-        return None
-    return pid if _pid_alive(pid) else None
-
-
-def _live_pid(value):
-    """Normalise a pid a caller already read: an integer when alive, else ``None``.
-
-    The caller may pass anything it read from a file (a number, empty text, a
-    non-numeric string), so this validates it the same way a fresh read would.
-    """
-    if value is None:
-        return None
-    try:
-        pid = int(str(value).strip())
-    except (TypeError, ValueError):
         return None
     return pid if _pid_alive(pid) else None
 
@@ -244,12 +230,9 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
     process is ours; any one is enough for a console that reports no identity or
     only half of it. ``listener_command`` is only read when the health payload is
     incomplete, so a healthy console never costs a ``ps`` call; when it is empty
-    and ``listener_pid`` is set, the command line is resolved on demand.
-
-    ``pid_file`` may be a callable instead of a path: a caller that already read
-    the pid passes a lambda returning it, and the file is read only when the
-    payload turns out to be incomplete. That keeps the supervisor's frequent path
-    free of both a ``ps`` call and a second read of the pid file.
+    and ``listener_pid`` is set, the command line is resolved on demand. Both
+    ``listener_pid`` and the pid file are read only when the payload turns out
+    incomplete: the supervisor's frequent path pays for neither.
 
     A pid file only proves ownership of the pid it names. When ``listener_pid``
     is also known, it must be the same process: a foreign console on the port
@@ -275,12 +258,7 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
         return resolved_listener["value"]
 
     own = False
-    if callable(pid_file):
-        # The caller already read the pid: the file is not read again, and the
-        # proof is evaluated only now that the payload turned out incomplete.
-        pid_file_pid = _live_pid(pid_file())
-    else:
-        pid_file_pid = _pid_file_pid(pid_file)
+    pid_file_pid = _pid_file_pid(pid_file)
     if pid_file_pid is not None:
         # The pid file must name a live host_server.py, and — when the port's
         # listener is known — it must be that very process. Otherwise a foreign
@@ -336,8 +314,6 @@ def main(argv=None) -> int:
     check.add_argument("--workspace", required=True)
     check.add_argument("--runtime", required=True)
     check.add_argument("--pid-file", default="")
-    check.add_argument("--pid-value", default="",
-                       help="Pid the caller already read; skips re-reading the pid file.")
     check.add_argument("--listener-command", default="")
     check.add_argument("--listener-pid", default="")
     check.add_argument("--host", default="127.0.0.1")
@@ -359,14 +335,9 @@ def main(argv=None) -> int:
     if args.subcommand == "command-is-install-server":
         return 0 if command_is_install_server(args.command, args.install_root) else 1
 
-    # The pid is usually resolved from the file, but a caller that already read
-    # it (stop_host.sh, to avoid a second read) passes --pid-value instead.
-    if args.pid_value.strip():
-        pid_source = (lambda: args.pid_value)
-    else:
-        pid_source = args.pid_file
-    # The listener is resolved with lsof only if the /health payload turns out
-    # incomplete; a healthy console pays neither lsof nor ps.
+    # The pid file is read only when the /health payload turns out incomplete.
+    # The listener is resolved with lsof under the same condition; a healthy
+    # console pays neither lsof nor ps.
     listener_source = args.listener_pid
     if not listener_source and args.port:
         host, port = args.host, args.port
@@ -375,7 +346,7 @@ def main(argv=None) -> int:
         health=_load_health(args.health_file),
         workspace=args.workspace,
         runtime=args.runtime,
-        pid_file=pid_source,
+        pid_file=args.pid_file,
         listener_pid=listener_source,
         listener_command=args.listener_command,
         install_roots=args.install_root,
