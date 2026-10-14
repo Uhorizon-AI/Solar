@@ -37,12 +37,17 @@ def workspace(tmp_path, monkeypatch):
     mock.write_text("#!/bin/sh\nexit 1\n")
     mock.chmod(0o755)
     monkeypatch.setenv("SOLAR_CLIENT_LAUNCHCTL", str(mock))
+    # client_sync.sh ends in the state cutover, which stops and starts the real
+    # services of SOLAR_ROOT (here the repository, which may be the live install).
+    # Simulate "no service running" so nothing is detected, stopped or started.
+    monkeypatch.setenv("SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE", "none")
     return ws
 
 
 def publish(ws):
     # Keep the repository's containment guard on the supported Client path.
-    command = 'source "$1"; solar_test_guard; bash "$2" --codex-only'
+    # --services is opt-in: this path reaches solar_client_state_cutover.
+    command = 'source "$1"; solar_test_guard --services; bash "$2" --codex-only'
     return subprocess.run(["bash", "-c", command, "_", str(CORE / "tests/support/shell_runtime_guard.sh"),
                            str(CORE / "skills/solar-client/scripts/client_sync.sh")],
                           cwd=ws, capture_output=True, text=True, timeout=25)
