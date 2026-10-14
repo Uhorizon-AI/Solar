@@ -9,18 +9,19 @@ stopped=0
 foreign=0
 undetainable=0
 
-# Stop the pid-file process when its pid is really ours; a reused pid is dropped.
+# Stop the pid-file process only when it is this runtime's own console; a reused
+# pid or another workspace's console is dropped, never killed. The pid is the
+# value already read above, so the file is not read a second time.
 if [[ -f "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
-    # The same proof start_host.sh uses: only a live host_server.py is ours.
-    # A pid reused by another program is dropped, never killed. The argument is
-    # the path of the pid file, not the pid value.
-    if solar_host_pid_file_is_own_server "$PID_FILE"; then
+    if ! solar_host_pid_looks_like_server "$pid"; then
+      echo "WARN: pid $pid in the host pid file is not a live host_server.py (reused pid) — leaving it running" >&2
+    elif [[ "$(solar_host_listener_identity "$pid")" == own ]]; then
       solar_host_stop_pid "$pid"
       stopped=1
     else
-      echo "WARN: pid $pid in the host pid file is not a live host_server.py (reused pid) — leaving it running" >&2
+      echo "WARN: pid $pid in the host pid file runs host_server.py but is not this runtime's console — leaving it running" >&2
     fi
   fi
   rm -f "$PID_FILE"

@@ -107,7 +107,10 @@ the diagnosis instead of reporting "Solar Host not running". An own listener tha
 cannot be stopped (ours by identity, but its command line is not `host_server.py`)
 exits 4 with "not host_server.py" instead of a false clean stop. Exit codes:
 `3` foreign console, `4` own-but-not-stoppable console; in both, nothing was
-touched.
+touched and the diagnosis goes to stderr. Consumers (the console restart in
+`solar client update`, the orchestrator) do not branch on the code; they see a
+non-zero and stop, which is what they already did for a foreign console because
+`start_host.sh` refuses to replace it.
 
 Global continuity remains available through its legacy read-only endpoint for
 compatibility; it is not a navigation screen or a summary card. The Channels

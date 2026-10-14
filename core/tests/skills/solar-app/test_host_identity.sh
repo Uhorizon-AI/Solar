@@ -493,14 +493,14 @@ kill -0 "$INNOCENT_PID" 2>/dev/null && pass "stop left the reused pid running" \
 kill "$INNOCENT_PID" 2>/dev/null || true
 wait "$INNOCENT_PID" 2>/dev/null || true
 # A live host_server.py named by the pid file is this runtime's console and must
-# be stopped, not merely dropped: the pid file holds a pid, the helper takes the
-# path, and mixing them would silently turn every real stop into a no-op.
+# be stopped, not merely dropped: the pid file holds a pid, the helper re-checks
+# the identity, and mixing them would silently turn every real stop into a no-op.
 sleep 120 & disown 2>/dev/null || true
 OWN_STOP_PID=$!
 printf '%s\n' "$OWN_STOP_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
-cat >"$TMP/bin/ps" <<'EOF'
+cat >"$TMP/bin/ps" <<EOF
 #!/usr/bin/env bash
-printf '%s\n' "python3 host_server.py"
+printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"
 EOF
 chmod +x "$TMP/bin/ps"
 set +e
@@ -548,6 +548,25 @@ grep -q "not running" <<<"$STOP_OUT" && fail "stop calls a non-stoppable own lis
   || pass "stop does not call a non-stoppable own listener not running"
 kill -0 "$STUB_PID" 2>/dev/null && pass "stop left the non-stoppable own listener running" \
   || fail "stop left the non-stoppable own listener running"
+stop_stub
+rm -f "$TMP/bin/ps"
+# A pid file that names a host_server.py of another workspace is not ours: the
+# stop must not kill it just because the command line says host_server.py.
+start_stub stop-foreign-pid "{\"workspace\":\"$TMP/another-workspace\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+printf '%s\n' "$STUB_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+[[ "$stop_ec" -eq 3 ]] && pass "stop of a pid file from another workspace exits 3" \
+  || fail "stop of a pid file from another workspace exits 3 (ec=$stop_ec: $STOP_OUT)"
+kill -0 "$STUB_PID" 2>/dev/null && pass "stop left another workspace's pid file process running" \
+  || fail "stop left another workspace's pid file process running"
 stop_stub
 rm -f "$TMP/bin/ps"
 # A reused pid plus an own hung console still holding the port: dropping the pid
@@ -657,6 +676,27 @@ kill -0 "$STUB_PID" 2>/dev/null && pass "start left the foreign console running"
   || fail "start left the foreign console running"
 stop_stub
 rm -f "$TMP/bin/ps"
+
+# --- 16. The supervisor's healthy path runs no lsof --------------------------
+# With a complete identity in /health, check_host.sh must resolve no listener:
+# an lsof double that fails the run when used proves the call is lazy.
+start_stub lazy-identity "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+cat >"$TMP/bin/lsof" <<'EOF'
+#!/usr/bin/env bash
+echo "lsof was called on the healthy path" >&2
+exit 1
+EOF
+chmod +x "$TMP/bin/lsof"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
+ec=$?
+set -e
+[[ "$ec" -eq 0 ]] && pass "a healthy console passes --liveness without lsof" \
+  || { fail "a healthy console passes --liveness without lsof (ec=$ec)"; cat "$TMP/live.err" >&2; }
+grep -q "lsof was called" "$TMP/live.err" && fail "lsof ran on the healthy path" \
+  || pass "lsof did not run on the healthy path"
+stop_stub
+rm -f "$TMP/bin/lsof"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

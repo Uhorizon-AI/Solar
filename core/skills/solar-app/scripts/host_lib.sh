@@ -76,8 +76,13 @@ solar_host_runtime_dir() {
 # True when the runtime this shell would use is a temporary one, never the
 # machine's own. Mirrors the guard's rule (solar_test_guard): the resolved
 # runtime must differ from the machine runtime (solar-paths with the test
-# overrides removed), compared on physical paths. The answer is cached in the
-# process: each call shells out twice, and helpers call it repeatedly.
+# overrides removed), compared on physical paths.
+#
+# The answer is cached in this shell, not across processes: each call shells out
+# twice and helpers call it repeatedly, so a second call in the same shell is
+# free. A caller that runs it inside `$(...)` gets a fresh evaluation, because
+# the assignment does not travel back out of the subshell — that is expected, and
+# it is cheap enough to keep the value at each call site that already resolved it.
 _solar_host_temp_runtime=""
 solar_host_runtime_is_temporary() {
   if [[ -n "${_solar_host_temp_runtime:-}" ]]; then
@@ -149,15 +154,25 @@ solar_host_identity_own() {
   local health_file="$1"
   local pid_file="${2-}"
   local listener_pid="${3-}"
+  local pid_value="${4-}"
   local -a roots=()
   while IFS= read -r root; do
     [[ -n "$root" ]] && roots+=(--install-root "$root")
   done < <(solar_host_identity_install_roots)
+  # A caller that already read the pid passes it as the fourth argument, so the
+  # pid file is not read a second time (and is not read at all when the payload
+  # is complete).
+  local -a pid_source=()
+  if [[ -n "$pid_value" ]]; then
+    pid_source=(--pid-value "$pid_value")
+  else
+    pid_source=(--pid-file "$pid_file")
+  fi
   python3 "$_HOST_LIB_DIR/host_identity.py" evaluate \
     --health-file "$health_file" \
     --workspace "$(solar_host_identity_workspace)" \
     --runtime "$(solar_host_identity_runtime)" \
-    --pid-file "$pid_file" \
+    "${pid_source[@]}" \
     --listener-pid "$listener_pid" \
     "${roots[@]+"${roots[@]}"}"
 }
@@ -242,15 +257,6 @@ solar_host_pid_looks_like_server() {
 # install check is command_is_install_server in host_identity.py).
 solar_host_command_looks_like_server() {
   [[ "$1" == *host_server.py* ]]
-}
-
-# True when the pid file at $1 (default: this runtime's own) names a live
-# host_server.py process. A pid that was reused by another program is not ours,
-# and the argument is the path of the pid file, never the pid value itself.
-solar_host_pid_file_is_own_server() {
-  local pid_file="${1:-$SOLAR_HOST_PID_FILE}"
-  [[ -f "$pid_file" ]] || return 1
-  python3 "$_HOST_LIB_DIR/host_identity.py" pid-file-is-own-server --pid-file "$pid_file"
 }
 
 # Human-readable owner of the port. Never stops anything.
