@@ -68,7 +68,7 @@ def test_hung_own_console_under_python_app_is_recognised(harness):
     interpreter.parent.mkdir(parents=True)
     interpreter.symlink_to(shutil.which("python3") or sys.executable)
     hung = harness.spawn("drop", install="this", interpreter=str(interpreter))
-    assert "Python.app" in subprocess.run(["ps", "-p", str(hung.pid), "-o", "args="], capture_output=True,
+    assert "Python.app" in subprocess.run(["ps", "-ww", "-p", str(hung.pid), "-o", "args="], capture_output=True,
                                           text=True).stdout
     result = stop_orphans(harness)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -198,6 +198,38 @@ def test_pid_file_repair_uses_the_pid_the_console_reports(harness):
     assert result.returncode == 0 and "pid file repaired" in result.stdout, result.stdout + result.stderr
     assert int(harness.pid_file().read_text()) == own
     assert decoy.poll() is None
+
+
+# A console that proves its identity but reports no pid is still stoppable and recoverable.
+def test_console_without_a_reported_pid_is_stopped_through_its_listener(harness):
+    console = harness.spawn("nopid", install="other")
+    harness.write_pid_file(console.pid)
+    result = harness.script("stop_host.sh")
+    assert result.returncode == 0 and "OK: Solar Host stopped" in result.stdout, result.stderr
+    assert harness.gone(console)
+
+
+def test_orphan_stop_falls_back_to_the_listener_when_no_pid_is_reported(harness):
+    console = harness.spawn("nopid", install="other")
+    result = stop_orphans(harness)
+    assert result.returncode == 0, result.stderr
+    assert harness.gone(console)
+
+
+def test_start_repairs_the_pid_file_of_a_console_without_a_reported_pid(harness):
+    console = harness.spawn("nopid", install="other")
+    result = harness.script("start_host.sh")
+    assert result.returncode == 0 and "pid file repaired" in result.stdout, result.stdout + result.stderr
+    assert int(harness.pid_file().read_text()) == console.pid
+
+
+def test_a_reported_pid_that_is_not_the_listener_is_not_signalled(harness):
+    console = harness.spawn("full", install="other")
+    decoy = harness.spawn("drop", install="other", port=ch.free_port())
+    harness.fake_lsof((decoy.pid, "127.0.0.1"))  # lsof says the listener is someone else
+    result = stop_orphans(harness)
+    assert result.returncode != 0 and "not its listener" in result.stderr
+    assert console.poll() is None and decoy.poll() is None
 
 
 def test_install_path_match_is_anchored_to_the_whole_argument(harness):
@@ -345,8 +377,46 @@ def test_baseline_is_recorded_before_any_double(harness, console_port_baseline):
     assert harness.baseline is console_port_baseline
     double = harness.spawn("full")
     # The baseline predates the double, so it cannot contain it; the production port is unchanged.
-    assert all(pid != str(double.pid) for pid, _ in console_port_baseline)
+    assert all(pid != str(double.pid) for pid, *_ in console_port_baseline)
     assert port_watch.new_listeners(console_port_baseline, port_watch.snapshot(port_watch.PRODUCTION_PORT)) == frozenset()
+
+
+# 4 (replacement). The same address with another command line is the original incident.
+def test_port_watch_detects_a_console_replaced_by_another_program(harness):
+    import port_watch
+    first = harness.spawn("full", install="other")
+    baseline = port_watch.snapshot(harness.port)
+    if baseline is None:
+        pytest.skip("lsof is not available")
+    assert port_watch.new_listeners(baseline, baseline) == frozenset()
+    first.terminate()
+    assert harness.gone(first)
+    harness.spawn("full", install="other")  # another folder: another command line, same address
+    after = port_watch.snapshot(harness.port)
+    leaked = port_watch.new_listeners(baseline, after)
+    assert len(leaked) == 1
+
+
+def test_port_watch_accepts_the_same_program_restarted(harness):
+    import port_watch
+    script = harness.root / "host_server.py"
+    script.write_text(ch.FAKE_CONSOLE)
+    argv = [sys.executable, "-u", str(script), str(harness.port), "full", "/w", "/r"]
+
+    def run():
+        proc = subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        harness.procs.append(proc)
+        harness.wait_listening(harness.port)
+        return proc
+
+    first = run()
+    baseline = port_watch.snapshot(harness.port)
+    if baseline is None:
+        pytest.skip("lsof is not available")
+    first.terminate()
+    assert harness.gone(first)
+    run()  # new pid, same command line: a LaunchAgent restart
+    assert port_watch.new_listeners(baseline, port_watch.snapshot(harness.port)) == frozenset()
 
 
 def test_port_watch_reports_a_new_listener():

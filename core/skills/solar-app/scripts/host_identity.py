@@ -26,7 +26,6 @@ are adopted (see ``host_lib.sh``); ``match`` is its own proof.
 """
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import subprocess

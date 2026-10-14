@@ -75,11 +75,20 @@ solar_test_guard_services() {
   if [[ "$override" != "__UNSET__" ]]; then
     [[ "$override" == "none" ]] || services="$override"
   elif [[ -n "${SOLAR_CLIENT_PS_OUTPUT_FILE:-}" && -f "${SOLAR_CLIENT_PS_OUTPUT_FILE}" ]]; then
-    # A simulated process table is judged by what it makes the cutover detect.
-    grep -q 'solar-app/scripts/host_server\.py' "$SOLAR_CLIENT_PS_OUTPUT_FILE" && services="host"
-    if grep -qE 'solar-gateway/scripts/run_(http_webhook|websocket)_bridge\.py' "$SOLAR_CLIENT_PS_OUTPUT_FILE"; then
-      services="${services:+$services,}gateway"
-    fi
+    # A simulated process table is judged by what it makes the cutover detect for the
+    # effective install (as given and as a physical path), like the cutover itself.
+    local root phys
+    phys="$(solar_test_effective_install)"
+    for root in "${SOLAR_ROOT:-$phys}" "$phys"; do
+      root="${root%/}"
+      grep -qF "$root/core/skills/solar-app/scripts/host_server.py" "$SOLAR_CLIENT_PS_OUTPUT_FILE" \
+        && [[ ",$services," != *",host,"* ]] && services="${services:+$services,}host"
+      if grep -qF -e "$root/core/skills/solar-gateway/scripts/run_http_webhook_bridge.py" \
+          -e "$root/core/skills/solar-gateway/scripts/run_websocket_bridge.py" "$SOLAR_CLIENT_PS_OUTPUT_FILE" \
+          && [[ ",$services," != *",gateway,"* ]]; then
+        services="${services:+$services,}gateway"
+      fi
+    done
   fi
   if [[ "$override" != "__UNSET__" || -n "${SOLAR_CLIENT_PS_OUTPUT_FILE:-}" && -f "${SOLAR_CLIENT_PS_OUTPUT_FILE:-/nonexistent}" ]]; then
     # A detected service is stopped and started through hooks: they must be set too.

@@ -300,7 +300,7 @@ def port_taken_by_other(port: int | None = None) -> bool:
     for pid in pids:
         try:
             shown = subprocess.run(
-                ["ps", "-p", pid, "-o", "args="],
+                ["ps", "-ww", "-p", pid, "-o", "args="],
                 capture_output=True, text=True, timeout=2, check=False,
             )
         except (OSError, subprocess.TimeoutExpired):

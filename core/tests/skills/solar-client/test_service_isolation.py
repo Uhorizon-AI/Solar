@@ -86,6 +86,14 @@ def test_simulated_ps_file_with_services_needs_the_hooks(tmp_path, line, needle)
     assert ok.returncode == 0, ok.stderr
 
 
+def test_a_ps_file_of_another_install_does_not_need_hooks(tmp_path):
+    ps = tmp_path / "ps.txt"
+    ps.write_text("python3 -u /somewhere/else/core/skills/solar-app/scripts/host_server.py\n")
+    result = run_guard(tmp_path, "--services", SOLAR_CLIENT_PS_OUTPUT_FILE=str(ps),
+                       SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE=str(tmp_path))
+    assert result.returncode == 0, result.stderr
+
+
 def test_global_install_is_compared_on_physical_paths(tmp_path):
     link = tmp_path / "install-link"
     link.symlink_to(CORE.parent)

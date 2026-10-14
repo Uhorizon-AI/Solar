@@ -26,12 +26,17 @@ case "$HOST_STATE" in
     fi
     # The console is ours (identity) but the pid file is missing or stale: repair it
     # with the pid the console reported itself, after checking it is a host_server.py.
-    if [[ -n "$HOST_OBSERVED_PID" ]] && solar_host_pid_looks_like_server "$HOST_OBSERVED_PID"; then
-      echo "$HOST_OBSERVED_PID" >"$PID_FILE"
-      echo "Solar Host already running (pid $HOST_OBSERVED_PID, pid file repaired) — $SOLAR_APP_BASE_URL"
+    recovered="$HOST_OBSERVED_PID"
+    if [[ -z "$recovered" ]]; then
+      # Console without a reported pid: the listener on exactly our address.
+      recovered="$(solar_host_port_listener_pids | head -n1)"
+    fi
+    if [[ -n "$recovered" ]] && solar_host_pid_looks_like_server "$recovered"; then
+      echo "$recovered" >"$PID_FILE"
+      echo "Solar Host already running (pid $recovered, pid file repaired) — $SOLAR_APP_BASE_URL"
     else
       rm -f "$PID_FILE"
-      echo "Solar Host already running (pid not reported by this console) — $SOLAR_APP_BASE_URL"
+      echo "Solar Host already running (pid unknown: no listener could be read) — $SOLAR_APP_BASE_URL"
     fi
     exit 0
     ;;

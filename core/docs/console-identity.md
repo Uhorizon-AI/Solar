@@ -29,7 +29,6 @@ place the rule lives. States:
 | `mismatch` | a reported value differs | never; never stopped |
 | `legacy` | reports neither value (older release) | only after proof of ownership |
 | `partial` | reports one value, equal | only after proof of ownership |
-| `stale_workspace` | runtime matches, only the workspace differs, and this runtime's pid file points at the pid that answered | not reusable (exit 3), but ours: stopped and replaced |
 | `unreachable` | nothing answers on loopback | no |
 | `invalid` | answers, but is not a Solar console | no |
 
@@ -70,6 +69,8 @@ stranded. An answering console is never judged this way.
 
 ## Active workspace switch
 
+`stale_workspace` is not a state of `host_identity.py` (which only returns the six above). It is derived in `solar_host_assess` (`host_lib.sh`) from `mismatch` with only the workspace differing, the runtime equal, and this runtime's pid file pointing at the pid that answered. `check_host.sh` still reports `mismatch` and exits 3.
+
 The real console re-reads the registry on every request, so `solar app workspace use`
 moves a running console to the new workspace and it stays accepted. If a console of
 this runtime still reports the previous workspace (pid file points at the pid that
@@ -84,7 +85,7 @@ answered, runtime equal), it is state `stale_workspace`: `check_host.sh` exits 3
   install path.
 - `solar_host_stop_orphan_listeners` stops proven-own listeners only, reports the
   rest and returns non-zero if nothing was stopped.
-- Listeners are discovered with `lsof` and only on loopback addresses; a listener on
+- Listeners are discovered with `lsof` and matched to exactly `SOLAR_APP_HOST:port` (not any loopback address); a listener on
   a LAN or wildcard address is not the console. Without `lsof` nothing is
   discovered, so an unidentified console is neither adopted nor stopped.
 - The supervisor's healthy path runs no `lsof` and no process inspection.

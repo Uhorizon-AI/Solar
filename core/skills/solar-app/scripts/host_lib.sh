@@ -120,16 +120,16 @@ solar_host_assess() {
 solar_host_pid_looks_like_server() {
   local pid="$1" args
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  args="$(ps -p "$pid" -o args= 2>/dev/null)" || return 1
+  args="$(ps -ww -p "$pid" -o args= 2>/dev/null)" || return 1
   [[ "$args" =~ (^|[[:space:]/])host_server\.py($|[[:space:]]) ]]
 }
 
 # True when the process runs THIS install's host_server.py. Compared as the path
 # the library was loaded from and as its physical path (symlinked installs).
 solar_host_pid_is_this_install() {
-  local pid="$1" args script real
+  local pid="$1" args script
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  args="$(ps -p "$pid" -o args= 2>/dev/null)" || return 1
+  args="$(ps -ww -p "$pid" -o args= 2>/dev/null)" || return 1
   for script in "$_HOST_LIB_DIR/host_server.py" "$(cd -P "$_HOST_LIB_DIR" && pwd -P)/host_server.py"; do
     # Anchored: the whole path must start the command line or follow a space.
     [[ "$args" == "$script" || "$args" == "$script "* || "$args" == *" $script" || "$args" == *" $script "* ]] \
@@ -189,7 +189,7 @@ solar_host_stop_pid() {
 # nothing was stopped, who removes it and how. Never retried automatically.
 solar_host_explain_refusal() {
   local stop_script="$_HOST_LIB_DIR/stop_host.sh" check_script="$_HOST_LIB_DIR/check_host.sh"
-  echo "ERROR: the console on 127.0.0.1:${SOLAR_APP_PORT} is not this workspace's console: ${HOST_REASON}." >&2
+  echo "ERROR: the console on ${SOLAR_APP_HOST}:${SOLAR_APP_PORT} is not this workspace's console: ${HOST_REASON}." >&2
   echo "  expected workspace: ${SOLAR_WORKSPACE}" >&2
   if [[ -n "${HOST_OBSERVED_WORKSPACE:-}${HOST_OBSERVED_RUNTIME:-}" ]]; then
     echo "  console workspace:  ${HOST_OBSERVED_WORKSPACE:-<not reported>}" >&2
@@ -214,6 +214,15 @@ solar_host_stop_orphan_listeners() {
     match|stale_workspace)
       # Identity belongs to the one process that answered, not to every listener.
       candidates="$HOST_OBSERVED_PID"
+      if [[ -z "$candidates" ]]; then
+        # A console that reports no pid: the listener on exactly our address.
+        candidates="$(solar_host_port_listener_pids)"
+      elif command -v lsof >/dev/null 2>&1 \
+           && ! grep -qx "$candidates" <<<"$(solar_host_port_listener_pids)"; then
+        # The reported pid must really be the listener of this address.
+        echo "WARN: pid $candidates reported by the console is not its listener on ${SOLAR_APP_HOST}:${SOLAR_APP_PORT}; left untouched" >&2
+        candidates=""
+      fi
       ;;
     *)
       candidates="$(solar_host_port_listener_pids)"

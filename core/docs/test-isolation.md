@@ -36,7 +36,7 @@ runtime).
 - `solar_test_guard --services` additionally aborts unless service detection is
   disabled or simulated, or the effective install is not the real global install.
   A simulated process table (`SOLAR_CLIENT_PS_OUTPUT_FILE`) is judged by what it
-  makes the cutover detect: if it lists the console or a gateway bridge, the matching
+  makes the cutover detect for the effective install (other installs' lines are ignored): if it lists the console or a gateway bridge, the matching
   stop/start hooks must be set, exactly as for an explicit override list.
 
 **The `--services` check is opt-in and is not automatic.** Some tests call the
@@ -67,8 +67,10 @@ No test starts the real console or occupies port 9000.
 
 - `core/tests/conftest.py` records the listeners on 9000 **before the first test**
   (so before any double exists) and fails the run if a new listener is there at
-  the end, compared by address (a developer's live console restarted by its
-  LaunchAgent during the run keeps its address and is not a leak). Listeners already present (a developer's live console) are in
+  the end, compared by address **and command line** per listener: a listener on a new address, or
+  on a known address with a different command line (a console replaced by one served
+  from a pytest temp directory), fails the run; the same command line with a new pid
+  (a developer's console restarted by its LaunchAgent) does not. Listeners already present (a developer's live console) are in
   the baseline and are never touched. Without `lsof` nothing can be observed and
   the check is skipped.
 - Tests that need a server use `core/tests/support/console_harness.py` (the

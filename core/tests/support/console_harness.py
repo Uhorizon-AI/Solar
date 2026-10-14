@@ -42,9 +42,9 @@ FAKE_CONSOLE = textwrap.dedent('''\
             payload = {"service": "solar-console", "status": "available", "process_ok": True}
             if mode in ("full", "workspace_only", "runtime_only"):
                 payload["pid"] = os.getpid()
-            if mode in ("full", "workspace_only"):
+            if mode in ("full", "nopid", "workspace_only"):
                 payload["workspace"] = workspace
-            if mode in ("full", "runtime_only"):
+            if mode in ("full", "nopid", "runtime_only"):
                 payload["runtime"] = runtime
             body = json.dumps(payload).encode()
             self.send_response(200)
@@ -262,10 +262,10 @@ class Harness:
             text = self.pid_file().read_text().strip()
             if text.isdigit():
                 pids.add(int(text))
-        pids |= {int(pid) for pid, _ in (port_watch.snapshot(self.port) or ())}
+        pids |= {int(pid) for pid, *_ in (port_watch.snapshot(self.port) or ())}
         for pid in pids:
             try:
-                args = subprocess.run(["ps", "-p", str(pid), "-o", "args="], capture_output=True,
+                args = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "args="], capture_output=True,
                                       text=True).stdout
             except OSError:
                 continue
