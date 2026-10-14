@@ -75,8 +75,8 @@
       nav_autonomy: "Autonomy",
       nav_ides: "Apps",
       nav_entry: "Channels",
-      nav_reports: "Dashboards",
-      q_reports: "Where can I work with each planet?",
+      nav_dashboards: "Dashboards",
+      q_dashboards: "Where can I work with each planet?",
       channels_note: "Entry diagnostics only. Conversation history is not available here.",
       nav_requester: "Requester",
       q_summary: "Is the installation healthy, and how long has it been idle?",
@@ -228,8 +228,8 @@
       nav_autonomy: "Autonomía",
       nav_ides: "Apps",
       nav_entry: "Canales",
-      nav_reports: "Dashboards",
-      q_reports: "¿Dónde puedo trabajar con cada planeta?",
+      nav_dashboards: "Dashboards",
+      q_dashboards: "¿Dónde puedo trabajar con cada planeta?",
       channels_note: "Diagnósticos de entrada. Esta pantalla no muestra historial de conversaciones.",
       nav_requester: "Solicitante",
       q_summary: "¿Está sana mi instalación, y desde cuándo no hace nada?",
@@ -344,7 +344,7 @@
     return [
       ["resumen", t("nav_summary"), t("q_summary"), "/api/console/health"],
       ["tareas", t("nav_tasks"), t("q_tasks"), "/api/console/tasks"],
-      ["reportes", t("nav_reports"), t("q_reports"), "/api/console/dashboards"],
+      ["dashboards", t("nav_dashboards"), t("q_dashboards"), "/api/console/dashboards"],
       ["ejecuciones", t("nav_runs"), t("q_runs"), "/api/console/executions"],
       ["autonomia", t("nav_autonomy"), t("q_autonomy"), "/api/console/mandates"],
       ["ides", t("nav_ides"), t("q_ides"), "/api/console/ides"],
@@ -666,7 +666,7 @@
       announce(ui.announce, ui.empty);
     }
     else if (id === "ejecuciones") box.innerHTML = renderExec(data);
-    else if (id === "reportes") box.innerHTML = renderReports(data);
+    else if (id === "dashboards") box.innerHTML = renderDashboards(data);
     else if (id === "autonomia") box.innerHTML = renderMandates(data);
     else if (id === "ides") box.innerHTML = renderIdes(data);
     else if (id === "entrada") box.innerHTML = renderIngress(data);
@@ -1156,7 +1156,18 @@
     return port >= 1 && port <= 65535;
   }
 
-  function renderReports(data) {
+  // A file surface is served by the console itself; the route never carries a
+  // filesystem path, only <planet>/<name>.
+  function safeFileLink(href) {
+    return typeof href === "string" && /^\/dashboards\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(href);
+  }
+
+  function safeDashboardLink(row) {
+    if (row.kind === "file") return safeFileLink(row.href) ? row.href : null;
+    return safeToolLink(row.href) ? row.href : null;
+  }
+
+  function renderDashboards(data) {
     var es = LANG === "es";
     var groups = Object.create(null);
     (data.dashboards || []).forEach(function (row) {
@@ -1166,19 +1177,32 @@
     });
     var rows = Object.keys(groups).sort().map(function (planet) {
       var cards = groups[planet].map(function (row) {
-        var tool = row.kind === "tool";
-        var safe = tool ? safeToolLink(row.href) : typeof row.href === "string" && /^\/reports\/[A-Za-z0-9_-]+\/operations\//.test(row.href);
-        var type = tool ? (es ? "Herramienta" : "Tool") : (es ? "Reporte" : "Report");
-        var detail = tool ? row.description : row.coverage;
-        var mode = row.mode === "interactive" ? (es ? "Interactivo (puede modificar datos en esa herramienta)" : "Interactive (can modify data in that tool)") : (es ? "Solo lectura" : "Read only");
-        var note = tool ? (es ? "El servicio puede requerir arranque manual." : "The service may require a manual start.") : row.next_decision;
-        var start = tool ? '<p class="note">' + esc(es ? "Cómo arrancarlo (copiar):" : "How to start (copy):") + '</p><pre class="dashboard-start"><code>' + esc(row.start_command) + '</code></pre>' : '';
-        return '<article class="card rep"><p class="note">' + esc(type) + ' · ' + esc(mode) + '</p><h3>' + esc(row.title) + '</h3><p>' + esc(detail) + '</p><p>' + esc(note) + '</p>' + start + '<p class="note">' + esc(row.owner) + ' · ' + esc(tool ? row.updated_at : row.period + ' · ' + row.generated_at) + '</p>' + (safe ? '<a href="' + esc(row.href) + '" target="_blank" rel="noopener noreferrer">' + esc(es ? "Abrir ↗" : "Open ↗") + '</a>' : '') + '</article>';
+        var safe = safeDashboardLink(row);
+        var mode = row.mode === "interactive"
+          ? (es ? "Interactivo (puede modificar datos en esa herramienta)" : "Interactive (can modify data in that tool)")
+          : (es ? "Solo lectura" : "Read only");
+        var open = safe ? '<a href="' + esc(row.href) + '" target="_blank" rel="noopener noreferrer">' + esc(es ? "Abrir ↗" : "Open ↗") + '</a>' : '';
+        if (row.kind === "file") {
+          // A generated view has no service and no registration: it is always
+          // available, read only, and belongs to the planet's data. Its freshness
+          // is the file's mtime, not a date the HTML claims.
+          var fresh = row.freshness
+            ? '<p class="note">' + esc(es ? "Última escritura del fichero: " : "File last written: ") + esc(row.freshness) + '</p>'
+            : '';
+          return '<article class="card rep"><p class="note">' + esc(es ? "Vista" : "View") + ' · ' + esc(mode) + '</p><h3>' + esc(row.title) + '</h3><p>' + esc(row.description) + '</p><p>' + esc(es ? "Vista generada por el planeta; los datos permanecen en sus fuentes y la fecha no acredita frescura." : "View generated by the planet; the data stays in its own sources and the date does not prove freshness.") + '</p>' + fresh + '<p class="note">' + esc(row.owner) + ' · ' + esc(row.updated_at) + '</p>' + open + '</article>';
+        }
+        var command = row.registered
+          ? (row.start_command
+              ? '<p class="note">' + esc(es ? "Cómo arrancarlo (copiar):" : "How to start (copy):") + '</p><p class="dashboard-start">' + esc(row.start_command) + '</p>'
+              : '<p class="note">' + esc(es ? "Sin comando de arranque registrado." : "No start command registered.") + '</p>')
+          : '<p class="note">' + esc(es ? "No registrado: regístralo con solar client sync dashboards register" : "Not registered: use solar client sync dashboards register") + '</p>';
+        var state = '<p class="note">' + esc(row.registered ? (es ? "Registrado en este equipo" : "Registered on this machine") : (es ? "Solo declarado aquí" : "Declared here only")) + '</p>';
+        return '<article class="card rep"><p class="note">' + esc(es ? "Herramienta" : "Tool") + ' · ' + esc(mode) + '</p><h3>' + esc(row.title) + '</h3><p>' + esc(row.description) + '</p><p>' + esc(es ? "El servicio puede requerir arranque manual." : "The service may require a manual start.") + '</p>' + state + command + '<p class="note">' + esc(row.owner) + ' · ' + esc(row.updated_at) + '</p>' + open + '</article>';
       }).join("");
       return '<section class="dashboard-group"><h2>' + esc(planet) + '</h2><div class="tiles2">' + cards + '</div></section>';
     }).join("");
-    var errors = (data.errors || []).map(function (row) { return '<p class="note">' + esc(row.planet) + ': ' + esc(row.source) + ' · ' + esc(es ? "índice no disponible" : "index unavailable") + '</p>'; }).join("");
-    return '<p class="note">' + esc(es ? "Herramientas y reportes publicados por cada planeta. Console es de solo lectura. Cada vista se abre en otra pestaña; la fecha de publicación no acredita datos frescos." : "Tools and reports published by each planet. Console is read only. Each view opens in a new tab; publication date does not prove fresh data.") + '</p>' + (rows || '<p>' + esc(es ? "Todavía no hay dashboards publicados." : "No published dashboards yet.") + '</p>') + errors;
+    var errors = (data.errors || []).map(function (row) { return '<p class="note">' + esc(row.id || row.planet) + ': ' + esc(row.source) + ' · ' + esc(row.error || (es ? "índice no disponible" : "index unavailable")) + '</p>'; }).join("");
+    return '<p class="note">' + esc(es ? "Herramientas y vistas declaradas por cada planeta. Console es de solo lectura: nunca arranca ni sondea una herramienta, y el comando de arranque solo se copia." : "Tools and views declared by each planet. Console is read only: it never starts or probes a tool, and the start command is only copied.") + '</p>' + (rows || '<p>' + esc(es ? "Todavía no hay dashboards." : "No dashboards yet.") + '</p>') + errors;
   }
 
   function machineTable(data, selected) {

@@ -149,10 +149,10 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertEqual(columns(media), 3, "three columns up to 1600 px")
         self.assertEqual(columns(css.replace(media, "")), 6, "six columns when wider")
 
-    def test_report_cards_are_styled_for_the_dark_theme(self):
+    def test_dashboard_cards_are_styled_for_the_dark_theme(self):
         css = (ASSETS / "app.css").read_text(encoding="utf-8")
-        self.assertRegex(css, r"\.rep a\{[^}]*color:var\(--info\)", "report links use a theme token, not the browser blue")
-        self.assertRegex(css, r"\.rep (?:h2|h3)[^{]*\{[^}]*font-size:15px", "report titles are not default h2")
+        self.assertRegex(css, r"\.rep a\{[^}]*color:var\(--info\)", "dashboard links use a theme token, not the browser blue")
+        self.assertRegex(css, r"\.rep (?:h2|h3)\{[^}]*font-size:15px", "dashboard titles are not default headings")
 
     def test_filter_bar_styles_keep_the_agreed_rules(self):
         css = (ASSETS / "app.css").read_text(encoding="utf-8")
@@ -399,30 +399,30 @@ async function settled() {
   if (!entry.includes("health refused now")) throw new Error("entrada hid the current health refusal");
   if (entry.includes("Connector ready")) throw new Error("entrada reused a stale gateway");
 
-  page = boot(Object.assign({
-    "/api/console/dashboards": { body: { dashboards: [{ kind: "report", mode: "read_only", title: "Attention", href: "/reports/example/operations/attention.html", owner: "Example", period: "Today", coverage: "Partial", generated_at: "2026-10-11", next_decision: "Review" }], errors: [] } },
-  }, calm));
-  await settled();
-  page.click({ "data-screen": "reportes" });
-  await settled();
-  if (!page.els.health.innerHTML.includes("Attention")) throw new Error("published report missing");
-  // Tool metadata stays inert and only exact local destinations become links.
+  // Tool metadata stays inert: only an exact loopback root becomes a link, and
+  // the start command is shown as text for a registered surface only.
   page = boot(Object.assign({
     "/api/console/dashboards": { body: { dashboards: [
-      {kind:"tool", planet:"example", title:"Triage", href:"http://127.0.0.1:8777/", mode:"interactive", start_command:"python3 server.py <script>", description:"Contacts", owner:"Sales", updated_at:"Today"},
-      {kind:"tool", planet:"example", title:"External", href:"https://example.com/", mode:"read_only", start_command:"echo example", description:"Rejected", owner:"Sales", updated_at:"Today"}
+      { kind: "tool", id: "example:triage", planet: "example", title: "Triage", href: "http://127.0.0.1:8777/", mode: "interactive", registered: true, start_command: "python3 server.py <script>", description: "Contacts", owner: "Sales", updated_at: "Today" },
+      { kind: "tool", id: "example:other", planet: "example", title: "Other", href: "https://example.com/", mode: "read_only", registered: false, start_command: null, description: "Unregistered", owner: "Sales", updated_at: "Today" },
+      { kind: "file", id: "example:attention", planet: "example", title: "Attention", href: "/dashboards/example/attention", mode: "read_only", registered: false, start_command: null, description: "Daily view", owner: "CEO", updated_at: "2026-10-13" }
     ], errors: [] } }
   }, calm));
   await settled();
-  page.click({"data-screen":"reportes"});
+  page.click({ "data-screen": "dashboards" });
   await settled();
   const catalog = page.els.health.innerHTML;
   if (!catalog.includes('rel="noopener noreferrer"') || !catalog.includes('target="_blank"')) throw new Error("unsafe dashboard link");
-  if (!catalog.includes("Interactive (can modify data in that tool)") || !catalog.includes("How to start (copy):")) throw new Error("missing tool instructions");
-  if (catalog.includes('<script>') || !catalog.includes('&lt;script&gt;')) throw new Error("unsafe command text");
-  if (catalog.includes('href="https://example.com/"')) throw new Error("external tool link");
+  if (!catalog.includes("Interactive (can modify data in that tool)")) throw new Error("missing tool mode");
+  if (!catalog.includes("Registered on this machine") || !catalog.includes("Not registered")) throw new Error("missing registration state");
+  if (!catalog.includes("How to start (copy):") || !catalog.includes("python3 server.py")) throw new Error("missing start command");
+  if (catalog.includes("&lt;script&gt;") === false) throw new Error("start command was not escaped");
+  if (catalog.includes('href="https://example.com/"')) throw new Error("non-loopback tool link");
+  // A file surface links to the console's own route and shows no registration text.
+  if (!catalog.includes('href="/dashboards/example/attention"')) throw new Error("missing view link");
+  if (!catalog.includes("View · Read only")) throw new Error("missing view label");
   const nav = page.els.nav.innerHTML;
-  if (!(nav.indexOf('data-screen="tareas"') < nav.indexOf('data-screen="reportes"') && nav.indexOf('data-screen="reportes"') < nav.indexOf('data-screen="ejecuciones"'))) throw new Error("dashboard order");
+  if (!(nav.indexOf('data-screen="tareas"') < nav.indexOf('data-screen="dashboards"') && nav.indexOf('data-screen="dashboards"') < nav.indexOf('data-screen="ejecuciones"'))) throw new Error("dashboard order");
   if (page.els.nav.innerHTML.includes('data-screen="continuidad"')) throw new Error("legacy navigation remained");
 
   const need = (html, text, why) => { if (!html.includes(text)) throw new Error(why + ": missing " + text); };

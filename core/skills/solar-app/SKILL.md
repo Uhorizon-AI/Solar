@@ -2,7 +2,7 @@
 name: solar-app
 description: >
   Read-only Solar console on :9000. Inspect runtime health, async tasks, gateway
-  failures, published operational reports and router executions with injected context.
+  failures, planet dashboards and router executions with injected context.
 ---
 
 # Solar Console
@@ -59,15 +59,15 @@ routes still answer; the page does not call them.
 ## Console data
 
 Read-only routes under `/api/console/`: `health`, `tasks`, `executions`,
-`reports`, `mandates`, `ides`, `ingress`, `requester`, plus the legacy `continuity`
+`dashboards`, `mandates`, `ides`, `ingress`, `requester`, plus the legacy `continuity`
 route, kept for compatibility but not used by the page. `console_data.py`
 answers them. Database rows come from `read_session()` in solar-state. Files
 outside the database (owner, cutover, pass stamp, daily backups, IDE trees,
 gateway stamp, mandate YAML, MCP gate audit) are read through solar-paths.
 `console_data.py` loads `solar-client/scripts/console_language.py`.
-`operation_reports.py` loads `solar-client/scripts/skill_inventory.py` by path
-for its planet exclusions; a missing client file disables only the reports
-routes (`/api/console/reports` and `/reports/…` answer 503), never the console
+`operation_publication.py` loads `solar-client/scripts/skill_inventory.py` by path
+for its planet exclusions; a missing client file disables only the dashboards
+route (`/api/console/dashboards` answers 503), never the console
 startup, because the import happens inside the route.
 A missing file raises ImportError and names that path. These routes
 create no runtime file. Execution channel and `user_id` come from the
@@ -91,25 +91,30 @@ compatibility; it is not a navigation screen or a summary card. The Channels
 screen (formerly External entry) shows entry diagnostics only and does not
 promise conversation history.
 
-## Operational reports
+## Dashboards
 
 The screen formerly called IDEs is named Apps in the navigation, its title, question
 and headings (English and Spanish); its internal id (`ides`) and route
 (`/api/console/ides`) are unchanged, and "IDE" stays only where a path is literally
 an IDE directory.
 
-The navigation shows Dashboards immediately after Tasks (internal id `reportes`).
-`/api/console/dashboards` combines versioned tool catalogs with derived reports;
-links open in new tabs and each entry declares its mode. Tool startup commands
-are copyable text only; the console never starts or probes a tool.
-`/api/console/reports` remains unchanged and reads explicit planet
-publication indexes, respecting Client planet exclusions.
-`/reports/<planet>/<relative-path>` serves only listed HTML or evidence text with
-a restrictive CSP (sandboxed, no scripts, forms, base rewrite or top navigation),
-bounded files and no-store headers. See
-[publication contract](references/operation-reports.md). No report is copied
-into shared state. Source changes require installation and client publication
-before claiming installed acceptance.
+The navigation shows Dashboards immediately after Tasks (internal id `dashboards`).
+`/api/console/dashboards` joins each planet's declared surfaces (its own
+`planets/<planet>/.solar/dashboards.json`) with this machine's registration in the
+`dashboards` block of `.solar/settings.json`. A declared entry is either a `tool`
+(a loopback HTTP root, with a machine registration and an optional copyable start
+command) or a `file` (a read-only HTML view the planet generates, served by the
+console from `GET /dashboards/<planet>/<name>`). Links open in new tabs with
+`rel="noopener noreferrer"`; a registered start command is shown as escaped
+copyable text. The console never starts, probes or mutates a tool, and never
+serves a file that the declaration did not name. See
+`core/skills/solar-client/references/dashboards.md`. Source changes require
+installation and client publication before claiming installed acceptance.
+
+The operational-report contract is retired: `/api/console/reports`, `/reports/…`,
+the navigation id `reportes`, the `report` kind and the
+`operations/leadership/reports/index.json` index no longer exist. A planet that
+publishes a generated view declares it as a `file` dashboard instead.
 
 The Autonomy screen's permission decisions come from the MCP gate audit, which holds
 two rows per call: a `decision` row (with `allowed`) and, after execution, an

@@ -17,6 +17,11 @@ Usage:
   solar client sync codex-agents status [--json]
   solar client sync codex-agents enable|disable
   solar client sync codex-agents preview [--contents] [--json]
+  solar client sync dashboards status|list [--json]
+  solar client sync dashboards seed <planet> [--force]
+  solar client sync dashboards register <planet>:<name> [--start-command CMD]
+  solar client sync dashboards unregister <planet>:<name>
+  solar client sync dashboards enable|disable
   solar client sync exclude-skill list
   solar client sync exclude-skill add <skill>
   solar client sync exclude-skill remove <skill>
@@ -38,6 +43,16 @@ client. "exclude --client codex" keeps a planet or a single agent
 Global "exclude" (no --client) also applies to Codex agents, in addition to
 hiding the planet from every other client. Details:
 core/skills/solar-client/references/codex-agents.md
+
+Dashboards are declared by each planet in its own .solar/dashboards.json
+(what a surface is and where it answers) and registered per machine here
+(which surfaces are active and how to start them). "dashboards register"
+writes .solar/settings.json only: it never starts a tool, never probes a port
+and never reads or edits a planet file. "dashboards seed <planet>" creates or
+validates that planet's declaration and is the only subcommand that writes
+inside a planet. The console joins both, is read only, and shows the start
+command as copyable text. Details:
+core/skills/solar-client/references/dashboards.md
 EOF
 }
 
@@ -65,6 +80,29 @@ if [[ "${1:-}" == "codex-agents" ]]; then
       ;;
     *)
       echo "ERROR: unknown sync codex-agents subcommand: ${1:-}" >&2
+      usage_sync >&2
+      exit 2
+      ;;
+  esac
+fi
+
+# Dashboard registration: settings only, never a tool start or a port probe.
+if [[ "${1:-}" == "dashboards" ]]; then
+  shift
+  solar_resolve_paths --quiet
+  case "${1:-}" in
+    status|list|register|unregister|seed|enable|disable)
+      _db_cmd="$1"
+      shift
+      _db_py="$(solar_client_dashboards_py)" || exit 1
+      exec python3 "$_db_py" --workspace "$SOLAR_WORKSPACE" "$_db_cmd" "$@"
+      ;;
+    -h|--help|"")
+      usage_sync
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown sync dashboards subcommand: ${1:-}" >&2
       usage_sync >&2
       exit 2
       ;;
