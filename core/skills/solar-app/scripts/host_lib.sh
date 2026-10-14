@@ -307,7 +307,7 @@ solar_host_stop_pid() {
 # over 0/1 for the same reason.
 solar_host_stop_orphan_listeners() {
   solar_host_load_env
-  local stopped=0 foreign=0 undetainable=0
+  local stopped=0 foreign=0 unstoppable=0
   local pid identity
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
@@ -323,15 +323,35 @@ solar_host_stop_orphan_listeners() {
       # it and do not label it foreign. Report the concrete reason and flag it so
       # the caller does not report "not running" while the port is still held.
       echo "WARN: listener pid $pid on :$SOLAR_APP_PORT is ours by identity but is not host_server.py — leaving it running" >&2
-      undetainable=1
+      unstoppable=1
       continue
     fi
     solar_host_report_foreign_listener "$pid"
     foreign=1
   done < <(solar_host_port_listener_pids)
   [[ "$foreign" -eq 1 ]] && return 2
-  [[ "$undetainable" -eq 1 ]] && return 4
+  [[ "$unstoppable" -eq 1 ]] && return 4
   [[ "$stopped" -eq 1 ]]
+}
+
+# Interpret the code solar_host_stop_orphan_listeners returned when the port is
+# still held: print the concrete reason and return the exit code the caller must
+# use (3 foreign, 4 own-but-not-stoppable), or 1 when there is nothing to refuse.
+# The message lives here so start_host.sh and stop_host.sh cannot drift apart.
+# The foreign listener itself was already reported by the stopper.
+solar_host_report_port_blocker() {
+  solar_host_load_env
+  case "${1:-}" in
+    2)
+      echo "ERROR: the console port :${SOLAR_APP_PORT} is held by a foreign console; it was not stopped." >&2
+      return 3
+      ;;
+    4)
+      echo "ERROR: the console port :${SOLAR_APP_PORT} is held by an own listener that is not host_server.py; it was not stopped." >&2
+      return 4
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 # Guard for the reuse path: when something holds the console port and it is not

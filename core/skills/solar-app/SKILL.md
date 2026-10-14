@@ -87,7 +87,11 @@ itself.
 The host refuses to bind when `SOLAR_APP_HOST` is not a loopback address.
 
 `/health` reports the console's `workspace` and `runtime` as physical paths and
-with no secrets. `check_host.sh --liveness`, `check_host.sh` without a flag,
+with no secrets. Those are local filesystem paths, served unauthenticated to any
+loopback client: the console binds loopback only (the host refuses to bind when
+`SOLAR_APP_HOST` is not a loopback address), so the exposure is limited to this
+machine, and the paths are the ones an operator already sees in `solar paths`.
+`check_host.sh --liveness`, `check_host.sh` without a flag,
 `ensure_host.sh` and the process recovery in `start_host.sh` compare that pair
 with the expected identity of this runtime and refuse a console of another
 workspace or runtime with an explicit diagnosis. A foreign console is reported

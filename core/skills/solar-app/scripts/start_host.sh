@@ -15,6 +15,13 @@ host_health_ok() {
 if [[ -f "$PID_FILE" ]]; then
   old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if host_health_ok; then
+    # The console that answered is our own, but the pid file may be stale (the
+    # pid is gone, or names another process). Report the listener that really
+    # answers, and repair the pid file with it.
+    if [[ -z "$old_pid" ]] || ! kill -0 "$old_pid" 2>/dev/null; then
+      old_pid="$(solar_host_port_listener_pids | head -n1 || true)"
+      [[ -n "$old_pid" ]] && echo "$old_pid" >"$PID_FILE"
+    fi
     echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
     exit 0
   fi
@@ -60,12 +67,12 @@ if solar_host_port_listener_pids | grep -q .; then
   solar_host_stop_orphan_listeners
   orphan_ec=$?
   set -e
-  if [[ "$orphan_ec" -eq 2 ]]; then
-    exit 3
-  fi
-  if [[ "$orphan_ec" -eq 4 ]]; then
-    echo "ERROR: the console port :${SOLAR_APP_PORT} is held by an own listener that is not host_server.py; it was not stopped." >&2
-    exit 4
+  if [[ "$orphan_ec" -eq 2 || "$orphan_ec" -eq 4 ]]; then
+    set +e
+    solar_host_report_port_blocker "$orphan_ec"
+    blocker_ec=$?
+    set -e
+    exit "$blocker_ec"
   fi
   # Stopping the process does not release the port at the same instant: wait
   # until the listener is really gone before binding, or the bind would fail.

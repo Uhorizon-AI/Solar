@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -127,8 +128,9 @@ def _interpreted_script(prefix: str) -> bool:
     """True when the text before a script path ends at an interpreter boundary.
 
     The console is the script the command executes, so the word before the path
-    must be a ``python*`` interpreter (its flags skipped), or the command must be
-    the script itself. Anything else means the path is a mere argument.
+    must be a ``python`` interpreter (its flags skipped), or the command must be
+    the script itself. A binary whose name merely contains "python"
+    (``ipython-wrapper``, ``python-my-tool``) is not the interpreter.
     """
     prefix = prefix.rstrip().rstrip("'\"")
     if not prefix:
@@ -138,7 +140,8 @@ def _interpreted_script(prefix: str) -> bool:
         tokens.pop()
     if not tokens:
         return False
-    return "python" in Path(tokens[-1].strip("'\"")).name
+    name = Path(tokens[-1].strip("'\"")).name
+    return re.fullmatch(r"python[\d.]*", name) is not None
 
 
 def command_is_install_server(command: str, install_roots) -> bool:
@@ -261,8 +264,17 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
 
 
 def _load_health(path: str) -> dict:
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    """The parsed ``/health`` payload, or ``{}`` when it cannot be read.
+
+    A missing, unreadable or malformed file is not a crash: the policy decides
+    what a console with no usable identity is, and it must still print its
+    ``mismatch:`` line instead of a traceback.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
     if not isinstance(data, dict):
         return {}
     return data

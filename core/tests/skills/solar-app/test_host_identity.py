@@ -246,6 +246,22 @@ class InstallServerTest(unittest.TestCase):
         self.assertTrue(host_identity.command_is_install_server(command, [str(spaced)]))
         self.assertFalse(host_identity.command_is_install_server(command, [str(self.install)]))
 
+    def test_a_binary_that_merely_contains_python_is_not_an_interpreter(self):
+        # ipython-wrapper / python-my-tool are not the interpreter running the
+        # script: the name must be `python` plus optional digits/dots.
+        for binary in ("ipython-wrapper", "python-my-tool", "mypython"):
+            command = f"{binary} {self.install}/core/skills/solar-app/scripts/host_server.py"
+            self.assertFalse(
+                host_identity.command_is_install_server(command, [str(self.install)]),
+                binary,
+            )
+        for binary in ("python3", "python3.12"):
+            command = f"{binary} {self.install}/core/skills/solar-app/scripts/host_server.py"
+            self.assertTrue(
+                host_identity.command_is_install_server(command, [str(self.install)]),
+                binary,
+            )
+
 
 class CliTest(unittest.TestCase):
     """The CLI is what every shell script calls; a dispatch bug is a silent bug."""
@@ -285,6 +301,24 @@ class CliTest(unittest.TestCase):
             "--workspace", "/tmp/ws", "--runtime", "/tmp/rt",
         ])
         self.assertEqual(rc, 0)
+
+    def test_evaluate_subcommand_survives_a_corrupt_health_file(self):
+        # A malformed payload must not raise a traceback: the run still ends with
+        # the `mismatch:` line the contract promises.
+        health = self.root / "health.json"
+        health.write_text("{not json")
+        rc = host_identity.main([
+            "evaluate", "--health-file", str(health),
+            "--workspace", "/tmp/ws", "--runtime", "/tmp/rt",
+        ])
+        self.assertEqual(rc, 1)
+
+    def test_evaluate_subcommand_survives_a_missing_health_file(self):
+        rc = host_identity.main([
+            "evaluate", "--health-file", str(self.root / "absent.json"),
+            "--workspace", "/tmp/ws", "--runtime", "/tmp/rt",
+        ])
+        self.assertEqual(rc, 1)
 
 
 if __name__ == "__main__":
