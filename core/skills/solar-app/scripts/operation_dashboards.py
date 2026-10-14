@@ -97,13 +97,14 @@ def dashboard_file(value):
 
     The path is validated here only for *shape*; the file is resolved inside the
     planet when the console serves it, so a bad declaration never leaks a path
-    and a moved file simply fails to open.
+    and a moved file simply fails to open. The suffix must be exactly `.html`:
+    `x.HTML` would list as a valid entry here but fail to serve, so it is refused.
     """
     if not isinstance(value, str) or not value.strip() or len(value) > MAX_TEXT:
         raise ValueError('Invalid dashboard file')
     rel = Path(value)
     if (rel.is_absolute() or '..' in rel.parts or not rel.parts
-            or rel.parts[0] != FILE_ROOT or rel.suffix.lower() not in FILE_SUFFIXES):
+            or rel.parts[0] != FILE_ROOT or rel.suffix not in FILE_SUFFIXES):
         raise ValueError('Dashboard file must be an HTML page inside operations/')
     return value
 
@@ -173,10 +174,11 @@ def _validated_entry(planet, row, seen):
         raise ValueError('Invalid dashboard name (single safe segment, no dots)')
     if name in seen:
         raise ValueError('Duplicate dashboard name')
-    if row.get('mode') not in MODES:
+    mode = row.get('mode')
+    if not isinstance(mode, str) or mode not in MODES:
         raise ValueError('Invalid dashboard mode')
     kind, value = _dashboard_source(row)
-    if kind == 'file' and row['mode'] != 'read_only':
+    if kind == 'file' and mode != 'read_only':
         raise ValueError('A file view is always read_only')
     return {
         'id': f'{planet.name}:{name}',
@@ -188,14 +190,31 @@ def _validated_entry(planet, row, seen):
         'owner': _bounded_text(row.get('owner'), 'owner'),
         'updated_at': _bounded_text(row.get('updated_at'), 'updated_at'),
         'href': _surface_href(planet.name, name, kind, value),
-        'mode': row['mode'],
+        'mode': mode,
         'file': value if kind == 'file' else None,
     }
 
 
+def _settings_path(workspace):
+    """This machine's dashboard registration, with the same legacy fallback.
+
+    `dashboards.py` reads `.solar/settings.json`, falling back to the pre-migration
+    `.solar/manifest.json`. The console must resolve the same file, or an unmigrated
+    workspace would show a registration in the CLI that the reader cannot see.
+    """
+    solar = Path(workspace).resolve() / '.solar'
+    settings = solar / 'settings.json'
+    if settings.is_file():
+        return settings
+    legacy = solar / 'manifest.json'
+    if legacy.is_file():
+        return legacy
+    return settings
+
+
 def _registration(workspace):
     """Client-side registration block; {} when absent or unreadable."""
-    path = Path(workspace).resolve() / SETTINGS_RELATIVE
+    path = _settings_path(workspace)
     if not path.is_file():
         return {'enabled': True, 'registered': {}}
     data = json.loads(path.read_text(encoding='utf-8'))
@@ -236,17 +255,21 @@ def dashboard_index(workspace):
 
     Three registration states are distinguished for a tool: declared with no
     command, a command with no declaration, and both. A view (`file`) is shown as
-    soon as it is declared and never needs registration.
+    soon as it is declared and never needs registration, so a broken registration
+    block is reported but does not hide the views.
     """
     items, errors = [], []
+    registered, gate = {}, True
     try:
         registration = _registration(workspace)
     except (OSError, ValueError, TypeError):
-        return {'dashboards': items,
-                'errors': [{'planet': '', 'id': '', 'source': 'registration', 'error': INVALID_INDEX}]}
-    if not registration['enabled']:
+        errors.append({'planet': '', 'id': '', 'source': 'registration', 'error': INVALID_INDEX})
+    else:
+        gate = registration['enabled']
+        registered = registration['registered']
+    if not gate:
+        # Disabled: no dashboard at all, views included, and no registration join.
         return {'dashboards': items, 'errors': errors}
-    registered = registration['registered']
     declared_ids = set()
     for planet in published_planets(workspace):
         try:
@@ -261,7 +284,7 @@ def dashboard_index(workspace):
             items.append({**row,
                           'registered': row['id'] in registered,
                           'start_command': command,
-                          'freshness': _freshness(planet, row)})
+                          'freshness': _freshness(planet, row, declared)})
     # A registered id with no matching declaration is a stale registration: it is
     # surfaced rather than silently dropped. Views never appear here.
     for surface in sorted(registered):
@@ -271,31 +294,35 @@ def dashboard_index(workspace):
     return {'dashboards': items, 'errors': errors}
 
 
-def _freshness(planet, row):
+def _freshness(planet, row, declared=None):
     """Filesystem freshness for a `file` view: the file's own mtime, not the HTML.
 
     With a stable name a view is always "the latest". The mtime says when the file
     was written here; it does not prove the underlying data is fresh, which the
-    view and its owner must still state.
+    view and its owner must still state. `declared` lets the caller hand in the
+    rows it already validated, so a planet with N views is O(N), not O(N^2).
     """
     if row['kind'] != 'file':
         return None
     try:
-        target = _declared_file(planet, row['name'])
+        target = _declared_file(planet, row['name'], declared)
         stamp = datetime.fromtimestamp(target.stat().st_mtime).astimezone()
     except (OSError, ValueError, TypeError):
         return None
     return stamp.isoformat(timespec='seconds')
 
 
-def _declared_file(planet, name):
+def _declared_file(planet, name, declared=None):
     """The one declared HTML page for `name`, confined to the planet's operations/.
 
     Re-validates the declaration and re-resolves the file, so a request can only
     reach a page that is declared today. Refuses a symlink hop, a path that leaves
-    `operations/`, an uppercase suffix and anything over the size cap.
+    `operations/`, an uppercase suffix and anything over the size cap. When the
+    caller already holds the validated rows it passes them in; the serving route
+    always re-reads, because its input is untrusted.
     """
-    declared, _ = read_declared(planet)
+    if declared is None:
+        declared, _ = read_declared(planet)
     relative = next((row['file'] for row in declared
                      if row['name'] == name and row['kind'] == 'file'), None)
     if relative is None:

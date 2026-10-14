@@ -116,14 +116,62 @@ class Declarations(DashboardWorkspace):
         self.assertFalse(rows[0]['registered'])
         self.assertFalse(settings.exists())
 
-    def test_invalid_registration_degrades_to_no_tools(self):
+    def test_a_broken_registration_is_reported_and_still_lists_declared_tools(self):
+        # The reader can no longer join the registration, so it reports the error
+        # and degrades to "registered: false" instead of hiding every dashboard.
         self.declare()
         settings = self.workspace / operation_dashboards.SETTINGS_RELATIVE
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(json.dumps({'dashboards': {'registered': [{'id': 'bad'}]}}))
         data = operation_dashboards.dashboard_index(self.workspace)
-        self.assertEqual(data['dashboards'], [])
+        self.assertEqual([row['id'] for row in data['dashboards']], ['example:triage'])
+        self.assertFalse(data['dashboards'][0]['registered'])
         self.assertEqual(data['errors'][0]['source'], 'registration')
+
+    def test_a_broken_registration_still_lists_the_views(self):
+        # A view needs no registration, so a malformed block must not hide it. The
+        # registration error is kept and the view is still published.
+        self.declare_file()
+        settings = self.workspace / operation_dashboards.SETTINGS_RELATIVE
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(json.dumps({'dashboards': {'registered': [{'id': 'bad'}]}}))
+        data = operation_dashboards.dashboard_index(self.workspace)
+        self.assertEqual([row['id'] for row in data['dashboards']], ['example:attention'])
+        self.assertIn('registration', {error['source'] for error in data['errors']})
+
+    def test_a_non_string_mode_isolates_the_entry(self):
+        # `mode: []`/{} used to raise TypeError and discard the whole planet,
+        # valid entries included. The bad one is isolated, the good one lists.
+        path = self.declare()
+        data = json.loads(path.read_text())
+        data['dashboards'].append(dict(name='broken', title='B', description='D', owner='O',
+                                       updated_at='U', url='http://127.0.0.1:1/', mode=[]))
+        path.write_text(json.dumps(data))
+        result = operation_dashboards.dashboard_index(self.workspace)
+        self.assertEqual([row['id'] for row in result['dashboards']], ['example:triage'])
+        self.assertEqual([error['id'] for error in result['errors']], ['example:broken'])
+
+    def test_registration_is_read_from_the_legacy_manifest(self):
+        # An unmigrated workspace keeps registration in manifest.json; the console
+        # must resolve the same file the CLI does, or the two disagree.
+        self.declare()
+        manifest = self.workspace / '.solar/manifest.json'
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps({'dashboards': {'registered': [
+            {'id': 'example:triage', 'start_command': 'run.sh'}]}}))
+        row = self.by_id(operation_dashboards.dashboard_index(self.workspace))['example:triage']
+        self.assertTrue(row['registered'])
+        self.assertEqual(row['start_command'], 'run.sh')
+
+    def test_settings_win_over_the_legacy_manifest(self):
+        self.declare()
+        manifest = self.workspace / '.solar/manifest.json'
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps({'dashboards': {'registered': [
+            {'id': 'example:triage', 'start_command': 'legacy.sh'}]}}))
+        self.register([{'id': 'example:triage', 'start_command': 'current.sh'}])
+        row = self.by_id(operation_dashboards.dashboard_index(self.workspace))['example:triage']
+        self.assertEqual(row['start_command'], 'current.sh')
 
     def test_a_bad_entry_is_isolated_and_reported(self):
         # One invalid entry no longer discards the whole planet: the good one
@@ -239,6 +287,14 @@ class FileSurfaces(DashboardWorkspace):
             with self.subTest(relative=relative):
                 self.declare_file(relative=relative)
                 self.assertTrue(operation_dashboards.dashboard_index(self.workspace)['errors'])
+
+    def test_an_uppercase_html_suffix_is_refused(self):
+        # `.HTML` used to pass `.lower()` here, list as valid, then 404 on open.
+        # The suffix must be exactly `.html`, as `seed` already enforces.
+        self.declare_file(relative='operations/leadership/reports/daily.HTML')
+        self.assertTrue(operation_dashboards.dashboard_index(self.workspace)['errors'])
+        with self.assertRaises(ValueError):
+            operation_dashboards.dashboard_file('operations/leadership/reports/daily.HTML')
 
     def test_the_route_serves_only_a_declared_file(self):
         target = self.declare_file(body='<p>view</p>')

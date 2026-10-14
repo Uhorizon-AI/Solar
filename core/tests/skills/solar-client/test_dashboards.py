@@ -257,6 +257,63 @@ def test_seed_force_overwrites_with_the_template(tmp_path):
     assert json.loads(backup.read_text())["dashboards"] == []
 
 
+def test_seed_force_never_follows_a_planted_backup_symlink(tmp_path):
+    # A symlink left at `dashboards.json.bak` must never become the write target:
+    # the backup is created exclusively, so the link is skipped and its
+    # destination outside the planet is left untouched.
+    write_settings(tmp_path)
+    make_planet(tmp_path)
+    target = declaration_path(tmp_path)
+    target.parent.mkdir(parents=True)
+    target.write_text('{"version": 1, "dashboards": []}')
+    outside = tmp_path / "outside.json"
+    outside.write_text("SECRET")
+    target.with_name(target.name + ".bak").symlink_to(outside)
+    result = run(tmp_path, "seed", "uhorizon", "--force")
+    assert result.returncode == 0, result.stderr
+    assert outside.read_text() == "SECRET"
+    followup = target.with_name(target.name + ".bak.2")
+    assert followup.exists()
+    assert json.loads(followup.read_text())["dashboards"] == []
+
+
+def test_seed_force_adds_a_backup_and_keeps_the_earlier_one(tmp_path):
+    # Repeated --force never replaces an existing backup; it adds the next one.
+    write_settings(tmp_path)
+    make_planet(tmp_path)
+    target = declaration_path(tmp_path)
+    target.parent.mkdir(parents=True)
+    target.write_text('{"version": 1, "dashboards": []}')
+    assert run(tmp_path, "seed", "uhorizon", "--force").returncode == 0
+    first = target.with_name(target.name + ".bak")
+    first_content = first.read_bytes()
+    target.write_text('{"version": 1, "dashboards": [{"name": "only"}]}')
+    assert run(tmp_path, "seed", "uhorizon", "--force").returncode == 0
+    assert first.read_bytes() == first_content
+    second = target.with_name(target.name + ".bak.2")
+    assert second.exists()
+    assert json.loads(second.read_text())["dashboards"] == [{"name": "only"}]
+
+
+def test_register_keeps_the_existing_scope_and_layout(tmp_path):
+    # `register` must never rewrite scope/layout: they are owned by client_lib.sh
+    # and codex_agents.py, and a silent change here would be invisible.
+    write_settings(tmp_path, layout="solar-client-v9.9", scope="planet")
+    result = run(tmp_path, "register", "uhorizon:triage")
+    assert result.returncode == 0, result.stderr
+    data = settings(tmp_path)
+    assert data["layout"] == "solar-client-v9.9"
+    assert data["scope"] == "planet"
+
+
+def test_seed_says_the_template_entries_are_invalid_until_filled(tmp_path):
+    write_settings(tmp_path)
+    make_planet(tmp_path)
+    result = run(tmp_path, "seed", "uhorizon")
+    assert result.returncode == 0, result.stderr
+    assert "valid until filled" in result.stdout or "invalid until filled" in result.stdout
+
+
 def test_a_url_port_with_a_leading_zero_is_refused(tmp_path):
     write_settings(tmp_path)
     make_planet(tmp_path)

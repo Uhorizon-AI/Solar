@@ -130,8 +130,8 @@ def write_config(workspace: Path, cfg: Config) -> None:
         "registered": [{"id": row["id"], "start_command": row["start_command"]}
                        for row in sorted(cfg.registered, key=lambda r: r["id"])],
     }
-    data["scope"] = SOLAR_SCOPE
-    data["layout"] = SOLAR_LAYOUT
+    data.setdefault("scope", SOLAR_SCOPE)
+    data.setdefault("layout", SOLAR_LAYOUT)
     os.makedirs(write_path.parent, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".settings.", suffix=".json", dir=write_path.parent)
     try:
@@ -245,7 +245,8 @@ def cmd_enable(workspace: Path, args) -> int:
         return EXIT_OK
     cfg.enabled = True
     write_config(workspace, cfg)
-    print("OK: dashboards enabled. The console will list declared and registered surfaces.")
+    print("OK: dashboards enabled. The console lists every declared surface; "
+          "a tool also needs its id registered here.")
     return EXIT_OK
 
 
@@ -256,7 +257,8 @@ def cmd_disable(workspace: Path, args) -> int:
         return EXIT_OK
     cfg.enabled = False
     write_config(workspace, cfg)
-    print("OK: dashboards disabled. Registration is kept; the console shows reports only.")
+    print("OK: dashboards disabled. Registration is kept, but the console lists no "
+          "dashboards at all, views included.")
     return EXIT_OK
 
 
@@ -286,6 +288,35 @@ TEMPLATE = """{
 """
 
 
+def _write_backup(target: Path, data: bytes) -> Path:
+    """Write a brand-new backup next to the declaration, with exclusive creation.
+
+    The name is the first free `dashboards.json.bak`, `.bak.2`, `.bak.3`, ...
+    Each candidate is created with `O_CREAT | O_EXCL` (plus `O_NOFOLLOW`): an
+    existing file *or symlink* at that name is skipped, never opened, so a planted
+    `dashboards.json.bak` symlink can never redirect the write outside the planet.
+    An earlier backup is therefore never replaced; a new one is added beside it.
+    """
+    for ordinal in range(1, 1000):
+        suffix = ".bak" if ordinal == 1 else f".bak.{ordinal}"
+        candidate = target.with_name(target.name + suffix)
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o644)
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+        except Exception:
+            try:
+                os.unlink(candidate)
+            except OSError:
+                pass
+            raise
+        return candidate
+    raise Refusal("too many backups already exist next to the declaration")
+
+
 def _has_uncommitted_changes(root: Path, target: Path) -> bool:
     """True when git tracks the file and reports it modified. Missing git is fine."""
     try:
@@ -304,7 +335,7 @@ def _has_uncommitted_changes(root: Path, target: Path) -> bool:
 def cmd_seed(workspace: Path, args) -> int:
     """Create or validate a planet's declaration. The only write inside a planet.
 
-    `--force` never overwrites blind: it writes a timestamped backup next to the
+    `--force` never overwrites blind: it writes a new backup next to the
     file first, and refuses outright when the file has uncommitted git changes
     (unless `--allow-dirty`), so a versioned declaration cannot be lost silently.
     """
@@ -328,8 +359,7 @@ def cmd_seed(workspace: Path, args) -> int:
             if _has_uncommitted_changes(root, target) and not args.allow_dirty:
                 raise Refusal(f"planets/{planet}/{DECLARATION_RELATIVE} has uncommitted changes; "
                               "commit them or pass --allow-dirty")
-            backup = target.with_name(target.name + ".bak")
-            backup.write_bytes(target.read_bytes())
+            backup = _write_backup(target, target.read_bytes())
             _write_declaration(target, TEMPLATE)
             print(f"OK: backed up to planets/{planet}/.solar/{backup.name} and overwrote "
                   f"planets/{planet}/{DECLARATION_RELATIVE} with the template")
@@ -343,9 +373,11 @@ def cmd_seed(workspace: Path, args) -> int:
         return EXIT_OK
     os.makedirs(solar, exist_ok=True)
     _write_declaration(target, TEMPLATE)
-    print(f"OK: created planets/{planet}/{DECLARATION_RELATIVE}")
-    print("Fill in each entry (title, description, owner, updated_at, url, mode), then "
-          f"register it: solar client sync dashboards register {planet}:<name>")
+    print("OK: created planets/{}/{}".format(planet, DECLARATION_RELATIVE))
+    print("The example entries are invalid until filled: they have empty title, description, "
+          "owner and updated_at, so `seed` (without --force) will refuse this file until you "
+          "complete them. Then register it: "
+          f"solar client sync dashboards register {planet}:<name>")
     return EXIT_OK
 
 

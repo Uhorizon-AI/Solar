@@ -116,10 +116,14 @@ solar client sync dashboards seed <planet> --force    # overwrite an existing fi
   it therefore exits 2 naming the missing fields, which is expected.
 - **Present** → validates it against the same shape the console enforces and
   writes nothing. An invalid file exits 2 and is left untouched.
-- **`--force`** with a present file → writes a timestamped backup
-  (`dashboards.json.bak`) next to it first, then overwrites with the template. It
-  refuses when git tracks the file and reports it modified, unless
-  `--allow-dirty` is passed, so a versioned declaration is never lost silently.
+- **`--force`** with a present file → writes a new backup next to it first, then
+  overwrites with the template. The backup is created exclusively
+  (`O_CREAT|O_EXCL|O_NOFOLLOW`), named `dashboards.json.bak`, then `.bak.2`,
+  `.bak.3`, … : a symlink planted at a backup name is skipped, never followed, so
+  the write cannot be redirected outside the planet, and an earlier backup is
+  never replaced. It refuses when git tracks the file and reports it modified,
+  unless `--allow-dirty` is passed, so a versioned declaration is never lost
+  silently.
 - The planet name must be `[A-Za-z0-9_.-]+`, must resolve inside `planets/`, and
   the planet directory must exist. A `.solar` directory or a `dashboards.json`
   that is a symlink is refused (exit 5, nothing written), so the write can never
@@ -177,8 +181,10 @@ The view and its owner still state their own coverage.
 A tool is only a link when its URL is an exact loopback root; a file is only a
 link when its href is `/dashboards/<planet>/<name>`; anything else is listed
 without a link. An unreadable or invalid declaration is reported in `errors` and
-never hides a valid one, and an unreadable or invalid `dashboards` block degrades
-to no tools. The operational-report contract was retired: `/api/console/reports`,
+never hides a valid one. An unreadable or invalid `dashboards` block does not hide
+a view either — it is reported and the reader degrades to `registered: false`;
+only `enabled: false` hides every dashboard, views included. The operational-report
+contract was retired: `/api/console/reports`,
 `/reports/…` and the navigation id `reportes` no longer exist, the navigation id
 is now `dashboards`, and a generated view is published by declaring it as a
 `file` entry — served read only from `/dashboards/<planet>/<name>` under

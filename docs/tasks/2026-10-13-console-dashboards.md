@@ -2,7 +2,7 @@
 
 **Triage level:** standard
 **Date:** 2026-10-13
-**Status:** implemented locally; PR review, installation and human acceptance pending
+**Status:** implemented locally; human acceptance pending
 
 ## Objective
 
@@ -64,18 +64,20 @@ Use solar-app validation commands from SKILL.md, its package validator, and Java
 
 ## Landing order
 
-This change **supersedes** the earlier PR #32 (`feat(console): add planet
-dashboards after Tasks`, commit `6b276e2`), which deliberately kept
-`/api/console/reports`, `/reports/…` and the id `reportes`. That PR is reworked
-into this one rather than merged beside it: the removal of `index.json` and the
-report routes is a breaking change, so the two must not land separately. Until
-the pending `uhorizon` work (stable-name generator plus the three declared views)
-lands, the console shows the planet's empty state and nothing else; framework and
-planet land together in the same window.
+This change is delivered **on PR #32 itself** (`feat/console-dashboards-catalog`,
+on top of `6b276e2`), which it supersedes in place: the removal of `index.json`
+and the report routes is a breaking change, so it must not land as a separate
+commit beside the report version. There is no second branch to close; #32 is
+updated and stays the single PR for this work.
+
+The pending `uhorizon` work (stable-name generator plus the three declared views:
+`attention`, `sales`, `marketing`) is **local and versioned separately**; it is
+not part of this repository and is not committed here. Framework and planet land
+together in the same window, once this change is approved.
 
 ## Completion evidence
 
-- `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-client/test_dashboards.py -q`: 132 passed, 40 subtests passed.
+- `uv run --project core/tests pytest core/tests/skills/solar-app core/tests/skills/solar-client -q`: 132 passed, 40 subtests passed (before this review round; the review regressions below raise the count).
 - `node --check core/skills/solar-app/assets/app.js` and `py_compile` of the app scripts: passed.
 - solar-app skill package validation: passed.
 - Sweep `rg -n 'operation_reports|console/reports|/reports/|kind: ?"report"|reportes' core/`:
@@ -87,3 +89,27 @@ planet land together in the same window.
   fails on pristine `main`).
 - Installation and human acceptance remain pending. The runtime catalog and the
   personal plan are outside this framework PR.
+
+### Review round 2 (Codex + Claude)
+
+- `seed --force` no longer follows a planted `dashboards.json.bak` symlink:
+  `_write_backup` creates a brand-new backup with `O_CREAT|O_EXCL|O_NOFOLLOW`,
+  skipping to `.bak.2`, `.bak.3`, … and never replacing an earlier backup.
+  Regressions: symlink not followed, earlier backup preserved.
+- `mode: []`/`{}` no longer raises `TypeError` and discards the whole planet: the
+  mode is checked with `isinstance(mode, str)` and a single bad entry is isolated
+  with a valid one beside it (regression added).
+- A malformed registration block no longer hides the views: the registration error
+  is kept and declared views are still published (regression added).
+- An uppercase `.HTML` suffix is refused in `dashboard_file`, matching `seed`, so
+  an entry can no longer list as valid and then 404 (regression added).
+- The console reads the registration through `_settings_path`, with the same
+  legacy `manifest.json` fallback as the CLI (regression added).
+- `write_config` no longer rewrites `scope`/`layout`: it uses `setdefault`, so a
+  `register` never silently changes keys owned by `client_lib.sh` (regression
+  added).
+- `_freshness` receives the already-validated rows, so a planet with N views is
+  O(N) instead of O(N²).
+- CLI copy updated: `enable`/`disable` no longer mention reports and state that a
+  disabled block lists no dashboards at all; `seed` says the example entries are
+  invalid until filled.
