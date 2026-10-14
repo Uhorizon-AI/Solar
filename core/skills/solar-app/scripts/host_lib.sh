@@ -104,8 +104,13 @@ solar_host_identity_runtime() {
   solar_runtime_root
 }
 
-# The install this runtime was started from, as physical paths. Stable across
-# the check: it depends only on the script location, not on the environment.
+# The install this runtime was started from, as physical paths. Two layouts are
+# possible: the published framework checkout (core/skills/solar-app inside a
+# solar install, two levels up) and a workspace mirror where solar-app sits one
+# level above core/skills/solar-app. Both are returned so the check works in
+# either layout; everything else resolves to a non-existing path and is skipped.
+# Stable across the check: it depends only on the script location, not on the
+# environment.
 solar_host_identity_install_roots() {
   printf '%s\n' "$(cd "$_HOST_LIB_DIR/../../.." && pwd -P)"
   printf '%s\n' "$(cd "$_HOST_LIB_DIR/../../../.." && pwd -P)"
@@ -113,12 +118,13 @@ solar_host_identity_install_roots() {
 
 # The single identity policy lives in host_identity.py. Everything here calls
 # it, so no reuse path can drift: /health must report this runtime's workspace
-# and runtime, and a console without identity is adopted only with a proof that
-# the process is ours (this runtime's pid file or this install's host_server.py).
+# and runtime, and a console that reports no identity — or only half of it — is
+# adopted only with a proof that the process is ours (this runtime's pid file or
+# this install's host_server.py in the listener command).
 solar_host_identity_own() {
   local health_file="$1"
   local pid_file="${2-}"
-  local listener_command="${3-}"
+  local listener_pid="${3-}"
   local -a roots=()
   while IFS= read -r root; do
     [[ -n "$root" ]] && roots+=(--install-root "$root")
@@ -128,14 +134,35 @@ solar_host_identity_own() {
     --workspace "$(solar_host_identity_workspace)" \
     --runtime "$(solar_host_identity_runtime)" \
     --pid-file "$pid_file" \
-    --listener-command "$listener_command" \
+    --listener-pid "$listener_pid" \
     "${roots[@]+"${roots[@]}"}"
 }
 
-# True when the console on SOLAR_APP_BASE_URL is this runtime's own.
-solar_host_listener_identity_matches() {
+# True when a command line runs this install's host_server.py.
+solar_host_command_is_install_server() {
+  local command="${1-}"
+  [[ -n "$command" ]] || return 1
+  local -a roots=()
+  while IFS= read -r root; do
+    [[ -n "$root" ]] && roots+=(--install-root "$root")
+  done < <(solar_host_identity_install_roots)
+  python3 "$_HOST_LIB_DIR/host_identity.py" command-is-install-server \
+    --command "$command" "${roots[@]+"${roots[@]}"}"
+}
+
+# Tested identity of the console on SOLAR_APP_BASE_URL. Echoes one of:
+#   own        the console is this runtime's own
+#   foreign    the console answered and is another workspace's or runtime's
+#   unproven   nothing answered, or it answered without identity and without a
+#              proof that the process is ours
+# Callers must not flatten "unproven" into "foreign": an own console that is
+# merely hung (no /health, no pid file, but this install's host_server.py in its
+# command line) has to stay recoverable.
+solar_host_listener_identity() {
   solar_host_load_env
-  local health_file listener_command
+  local pid="${1-}" health_file listener_command status
+  [[ -n "$pid" ]] || pid="$(solar_host_port_listener_pids | head -n1 || true)"
+  listener_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   health_file="$(mktemp "${TMPDIR:-/tmp}/solar-host-health.XXXXXX")"
   if ! python3 - "$SOLAR_APP_BASE_URL" "$health_file" <<'PY'
 import json, sys, urllib.request
@@ -149,14 +176,25 @@ with open(dest, "w", encoding="utf-8") as fh:
     json.dump(data, fh)
 PY
   then
+    # No answer: not ours only when the command line is some other install's.
+    if solar_host_command_is_install_server "$listener_command"; then
+      echo own
+    else
+      echo unproven
+    fi
     rm -f "$health_file"
-    return 1
+    return 0
   fi
-  listener_command="$(ps -p "$(solar_host_port_listener_pids | head -n1 || true)" -o command= 2>/dev/null || true)"
-  solar_host_identity_own "$health_file" "$SOLAR_HOST_PID_FILE" "$listener_command"
-  local rc=$?
+  set +e
+  solar_host_identity_own "$health_file" "$SOLAR_HOST_PID_FILE" "$pid" >/dev/null 2>&1
+  status=$?
+  set -e
   rm -f "$health_file"
-  return "$rc"
+  if [[ "$status" -eq 0 ]]; then
+    echo own
+  else
+    echo foreign
+  fi
 }
 
 # PIDs listening on SOLAR_APP_HOST:SOLAR_APP_PORT (orphan recovery when host.pid is missing).
@@ -174,18 +212,20 @@ solar_host_pid_looks_like_server() {
   ps -p "$pid" -o args= 2>/dev/null | grep -q 'host_server\.py'
 }
 
-# True when this runtime's own pid file names a live host_server.py process.
-# A pid that was reused by another program is not ours.
+# True when the pid file at $1 (default: this runtime's own) names a live
+# host_server.py process. A pid that was reused by another program is not ours,
+# and the argument is the path of the pid file, never the pid value itself.
 solar_host_pid_file_is_own_server() {
-  python3 "$_HOST_LIB_DIR/host_identity.py" pid-file-is-own-server \
-    --pid-file "${1:-$SOLAR_HOST_PID_FILE}"
+  local pid_file="${1:-$SOLAR_HOST_PID_FILE}"
+  [[ -f "$pid_file" ]] || return 1
+  python3 "$_HOST_LIB_DIR/host_identity.py" pid-file-is-own-server --pid-file "$pid_file"
 }
 
 # Human-readable owner of the port. Never stops anything.
 solar_host_report_foreign_listener() {
   solar_host_load_env
-  local pid args
-  pid="$(solar_host_port_listener_pids | head -n1 || true)"
+  local pid="${1-}" args
+  [[ -n "$pid" ]] || pid="$(solar_host_port_listener_pids | head -n1 || true)"
   [[ -n "$pid" ]] || return 0
   args="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   {
@@ -214,24 +254,46 @@ solar_host_stop_pid() {
   kill -9 "$pid" 2>/dev/null || true
 }
 
-# Stop listeners of the port only when they are this runtime's own console
-# (they look like host_server.py AND /health reports this workspace and
-# runtime). Anything else is a foreign console: report it and return 2 without
-# killing it. Returns 0 when it stopped a listener, 1 when the port had none.
+# Stop listeners of the port only when they are this runtime's own console.
+# "Own" means the /health payload names this workspace and runtime, or — for a
+# console that reports no identity — a proof that the process is ours (this
+# install's host_server.py in its command line). Anything else, including a
+# listener that cannot be proven either way, is reported and the function
+# returns 2 without killing it. Returns 0 when it stopped a listener, 1 when the
+# port had none.
 solar_host_stop_orphan_listeners() {
   solar_host_load_env
   local stopped=0
-  local pid
+  local pid identity
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
-    if solar_host_pid_looks_like_server "$pid" && solar_host_listener_identity_matches; then
+    identity="$(solar_host_listener_identity "$pid")"
+    if [[ "$identity" == own ]] && solar_host_pid_looks_like_server "$pid"; then
       echo "WARN: stopping orphan Solar Host listener (pid $pid on :$SOLAR_APP_PORT)" >&2
       solar_host_stop_pid "$pid"
       stopped=1
       continue
     fi
-    solar_host_report_foreign_listener
+    solar_host_report_foreign_listener "$pid"
     return 2
   done < <(solar_host_port_listener_pids)
   [[ "$stopped" -eq 1 ]]
+}
+
+# Guard for the reuse path: when something holds the console port and it is not
+# this runtime's own console, report it and return 3. Retrying cannot converge,
+# so every caller (start_host.sh, ensure_host.sh) stops here with the same
+# message. An own hung console (this install's host_server.py in its command
+# line) is not this case: it returns 0 and the caller may recover it. Returns 0 —
+# and does nothing — when the port is free or the listener is provably ours.
+solar_host_refuse_foreign_listener() {
+  solar_host_load_env
+  solar_host_port_listener_pids | grep -q . || return 0
+  local identity
+  identity="$(solar_host_listener_identity)"
+  if [[ "$identity" != own ]]; then
+    solar_host_report_foreign_listener
+    return 3
+  fi
+  return 0
 }

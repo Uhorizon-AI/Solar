@@ -17,25 +17,26 @@ source "$SCRIPT_DIR/host_lib.sh"
 solar_host_load_env
 EXPECTED_WORKSPACE="$(solar_host_identity_workspace)"
 EXPECTED_RUNTIME="$(solar_host_identity_runtime)"
-LISTENER_COMMAND="$(ps -p "$(solar_host_port_listener_pids | head -n1 || true)" -o command= 2>/dev/null || true)"
 INSTALL_ROOTS=()
 while IFS= read -r _root; do
   [[ -n "$_root" ]] && INSTALL_ROOTS+=("$_root")
 done < <(solar_host_identity_install_roots)
+LISTENER_PID="$(solar_host_port_listener_pids | head -n1 || true)"
 python3 - "$SCRIPT_DIR" "$SOLAR_APP_BASE_URL" "${1:-}" "$EXPECTED_WORKSPACE" "$EXPECTED_RUNTIME" \
-  "$SOLAR_HOST_PID_FILE" "$LISTENER_COMMAND" ${INSTALL_ROOTS[@]+"${INSTALL_ROOTS[@]}"} <<'PY'
+  "$SOLAR_HOST_PID_FILE" "$LISTENER_PID" ${INSTALL_ROOTS[@]+"${INSTALL_ROOTS[@]}"} <<'PY'
 import json,sys,time,urllib.request
 from datetime import datetime
-script_dir,base,flag,expected_ws,expected_rt,pid_file,listener_command=sys.argv[1:8]
+script_dir,base,flag,expected_ws,expected_rt,pid_file,listener_pid=sys.argv[1:8]
 install_roots=sys.argv[8:]
 sys.path.insert(0,script_dir)
 import host_identity
 
 def identity(health):
-    reason=host_identity.evaluate(health=health,workspace=expected_ws,runtime=expected_rt,
-                                  pid_file=pid_file,listener_command=listener_command,
+    # The listener command line is only read when the payload is incomplete, so
+    # a healthy console costs no `ps` call on the supervisor's frequent path.
+    return host_identity.evaluate(health=health,workspace=expected_ws,runtime=expected_rt,
+                                  pid_file=pid_file,listener_pid=listener_pid,
                                   install_roots=install_roots)
-    return None if reason is None else reason
 
 result={'available':False,'storage_ok':False,'runtime_status':'unknown','base_url':base,
         'workspace':expected_ws,'runtime':expected_rt}

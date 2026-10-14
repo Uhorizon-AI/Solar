@@ -288,6 +288,38 @@ set -e
 [[ "$own_alive" -ne 0 ]] && pass "own console listener is really stopped" \
   || fail "own console listener is really stopped (pid $OWN_PID still alive)"
 stop_stub
+# (c) An own console that is hung: no /health answer, no pid file, but this
+# install's host_server.py in its command line. It must be recognised as ours
+# and stopped, never abandoned as foreign.
+sleep 120 &
+HUNG_PID=$!
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+run_stop "$HUNG_PID"
+[[ "$STOP_EC" -eq 0 ]] && pass "own hung console is stopped (return 0)" \
+  || fail "own hung console is stopped (return 0) (ec=$STOP_EC)"
+kill -0 "$HUNG_PID" 2>/dev/null && fail "own hung console was left running" \
+  || pass "own hung console was really stopped"
+kill "$HUNG_PID" 2>/dev/null || true
+wait "$HUNG_PID" 2>/dev/null || true
+# (d) A hung console of another install stays foreign: report, never kill.
+sleep 120 &
+FOREIGN_HUNG_PID=$!
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 /somewhere/else/core/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+run_stop "$FOREIGN_HUNG_PID"
+[[ "$STOP_EC" -eq 2 ]] && pass "hung console of another install returns 2" \
+  || fail "hung console of another install returns 2 (ec=$STOP_EC)"
+kill -0 "$FOREIGN_HUNG_PID" 2>/dev/null && pass "hung console of another install was left running" \
+  || fail "hung console of another install was left running"
+kill "$FOREIGN_HUNG_PID" 2>/dev/null || true
+wait "$FOREIGN_HUNG_PID" 2>/dev/null || true
 
 # --- 9. No residue: the stub port has no listener after the stub stops ------
 start_stub residue "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
@@ -367,8 +399,12 @@ set -e
 [[ "$ec" -ne 0 ]] && pass "identity-less console of another install is rejected" \
   || fail "identity-less console of another install is rejected (ec=$ec)"
 stop_stub
+# Drop the ps double: section 12 must see real command lines again.
+rm -f "$TMP/bin/ps"
 
 # --- 12. stop_host.sh never kills what is not a live host_server.py ---------
+# No ps double here: the real command lines must classify the pids, or the test
+# would only be checking its own fake.
 STOP_SCRIPT="$SCRIPTS/stop_host.sh"
 sleep 120 &
 INNOCENT_PID=$!
@@ -387,6 +423,28 @@ kill -0 "$INNOCENT_PID" 2>/dev/null && pass "stop left the reused pid running" \
   || fail "stop dropped the stale pid file"
 kill "$INNOCENT_PID" 2>/dev/null || true
 wait "$INNOCENT_PID" 2>/dev/null || true
+# A live host_server.py named by the pid file is this runtime's console and must
+# be stopped, not merely dropped: the pid file holds a pid, the helper takes the
+# path, and mixing them would silently turn every real stop into a no-op.
+sleep 120 &
+OWN_STOP_PID=$!
+printf '%s\n' "$OWN_STOP_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+[[ "$stop_ec" -eq 0 ]] && pass "stop with this runtime's own server exits 0" \
+  || fail "stop with this runtime's own server exits 0 (ec=$stop_ec: $STOP_OUT)"
+grep -q "OK: Solar Host stopped" <<<"$STOP_OUT" && pass "stop reports the host stopped" \
+  || { fail "stop reports the host stopped"; echo "$STOP_OUT" >&2; }
+kill -0 "$OWN_STOP_PID" 2>/dev/null && fail "stop left the own server running" \
+  || pass "stop really stopped the own server"
+rm -f "$TMP/bin/ps"
 # A foreign listener is reported and the stop exits 3 (no "not running" lie).
 start_stub stop-foreign "{\"workspace\":\"$TMP/another-workspace\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
 set +e
@@ -414,6 +472,35 @@ TEMP_PORT="$(SOLAR_APP_PORT_OVERRIDE=1234 \
   bash -c 'source "$1"; solar_host_load_env; printf "%s" "$SOLAR_APP_PORT"' _ "$HOST_LIB")"
 [[ "$TEMP_PORT" == "1234" ]] && pass "a temporary runtime honors the port override" \
   || fail "a temporary runtime honors the port override (got $TEMP_PORT)"
+
+# --- 14. start_host.sh recovers an own hung console instead of failing ------
+# An own console that answers nothing and holds the port must be stopped so the
+# new process can bind; the run must not end with "port busy" on its own install.
+sleep 120 &
+START_HUNG_PID=$!
+printf '%s\n' "$START_HUNG_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+cat >"$TMP/bin/lsof" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${FAKE_LSOF_PID:-999999}"
+EOF
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/lsof" "$TMP/bin/ps"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" FAKE_LSOF_PID="$START_HUNG_PID" \
+  bash -c 'source "$1"; solar_host_stop_orphan_listeners; echo "ec=$?"' _ "$HOST_LIB" >"$TMP/start-hung.out" 2>&1
+kill -0 "$START_HUNG_PID" 2>/dev/null
+hung_alive=$?
+set -e
+[[ "$hung_alive" -ne 0 ]] && pass "start recovery stopped the own hung console" \
+  || fail "start recovery stopped the own hung console (pid $START_HUNG_PID alive)"
+grep -q "ec=0" "$TMP/start-hung.out" && pass "own hung console stop reports success" \
+  || { fail "own hung console stop reports success"; cat "$TMP/start-hung.out" >&2; }
+kill "$START_HUNG_PID" 2>/dev/null || true
+wait "$START_HUNG_PID" 2>/dev/null || true
+rm -f "$TMP/bin/ps"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

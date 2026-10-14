@@ -11,8 +11,9 @@ if [[ -f "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
     # The same proof start_host.sh uses: only a live host_server.py is ours.
-    # A pid reused by another program is dropped, never killed.
-    if solar_host_pid_file_is_own_server "$pid"; then
+    # A pid reused by another program is dropped, never killed. The argument is
+    # the path of the pid file, not the pid value.
+    if solar_host_pid_file_is_own_server "$PID_FILE"; then
       solar_host_stop_pid "$pid"
       stopped=1
     else

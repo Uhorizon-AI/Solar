@@ -70,23 +70,37 @@ def command_is_install_server(command: str, install_roots) -> bool:
     ``<install>/core/skills/solar-app/scripts/host_server.py``. The absolute
     script path is what makes this precise: a ``host_server.py`` of another
     install is not this runtime's console.
+
+    The script path in the command line is compared on physical paths, like every
+    other identity check: a console started through a symlinked install (or a
+    ``/var`` vs ``/private/var`` temporary directory) must still be recognised.
     """
     if not command or "host_server.py" not in command:
         return False
-    for root in install_roots:
-        if not root:
+    wanted = {
+        canonical(root) + "/core/skills/solar-app/scripts/host_server.py"
+        for root in install_roots if root
+    }
+    if not wanted:
+        return False
+    for token in command.split():
+        if not token.endswith("host_server.py"):
             continue
-        if canonical(root) + "/core/skills/solar-app/scripts/host_server.py" in command:
+        if canonical(token) in wanted:
             return True
     return False
 
 
-def evaluate(*, health, workspace, runtime, pid_file="", listener_command="", install_roots=()):
+def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
+             listener_command="", install_roots=()):
     """Return ``None`` when the console is this runtime's own, else a reason.
 
-    ``health`` is the parsed ``/health`` payload. ``pid_file`` and
-    ``listener_command`` are the two independent proofs that the process is
-    ours; either one is enough for a console that reports no identity.
+    ``health`` is the parsed ``/health`` payload. ``pid_file``,
+    ``listener_command`` and ``listener_pid`` are the independent proofs that the
+    process is ours; any one is enough for a console that reports no identity or
+    only half of it. ``listener_command`` is only read when the health payload is
+    incomplete, so a healthy console never costs a ``ps`` call; when it is empty
+    and ``listener_pid`` is set, the command line is resolved on demand.
     """
     got_ws = str((health or {}).get("workspace") or "")
     got_rt = str((health or {}).get("runtime") or "")
@@ -96,7 +110,15 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_command="", in
         return "another runtime (" + got_rt + ")"
     if got_ws and got_rt:
         return None
-    own = pid_file_own_server(pid_file) or command_is_install_server(listener_command, install_roots)
+    own = pid_file_own_server(pid_file)
+    if not own:
+        command = listener_command
+        if not command and listener_pid:
+            try:
+                command = pid_command(int(str(listener_pid).strip()))
+            except ValueError:
+                command = ""
+        own = command_is_install_server(command, install_roots)
     if own:
         return None
     if not got_ws and not got_rt:
@@ -105,6 +127,11 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_command="", in
         "a console with partial identity (workspace=" + (got_ws or "-")
         + " runtime=" + (got_rt or "-") + ") and no process of this runtime"
     )
+
+
+def command_owned_by_install(command: str, install_roots) -> bool:
+    """Public alias used by the shell to classify a listener's command line."""
+    return command_is_install_server(command, install_roots)
 
 
 def _load_health(path: str) -> dict:
@@ -117,7 +144,10 @@ def _load_health(path: str) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Console identity policy.")
-    sub = parser.add_subparsers(dest="command", required=True)
+    # dest is "subcommand", not "command": the
+    # command-is-install-server subparser has a --command option, and a shared
+    # name would let that option overwrite the subcommand selector.
+    sub = parser.add_subparsers(dest="subcommand", required=True)
 
     check = sub.add_parser("evaluate", help="Decide whether a console is this runtime's own.")
     check.add_argument("--health-file", required=True)
@@ -125,20 +155,29 @@ def main(argv=None) -> int:
     check.add_argument("--runtime", required=True)
     check.add_argument("--pid-file", default="")
     check.add_argument("--listener-command", default="")
+    check.add_argument("--listener-pid", default="")
     check.add_argument("--install-root", action="append", default=[])
 
     own = sub.add_parser("pid-file-is-own-server", help="Is the pid file a live host_server.py?")
     own.add_argument("--pid-file", required=True)
 
+    cmd = sub.add_parser("command-is-install-server",
+                         help="Does a command line run this install's host_server.py?")
+    cmd.add_argument("--command", required=True)
+    cmd.add_argument("--install-root", action="append", default=[])
+
     args = parser.parse_args(argv)
-    if args.command == "pid-file-is-own-server":
+    if args.subcommand == "pid-file-is-own-server":
         return 0 if pid_file_own_server(args.pid_file) else 1
+    if args.subcommand == "command-is-install-server":
+        return 0 if command_is_install_server(args.command, args.install_root) else 1
 
     reason = evaluate(
         health=_load_health(args.health_file),
         workspace=args.workspace,
         runtime=args.runtime,
         pid_file=args.pid_file,
+        listener_pid=args.listener_pid,
         listener_command=args.listener_command,
         install_roots=args.install_root,
     )

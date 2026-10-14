@@ -92,9 +92,18 @@ with no secrets. `check_host.sh --liveness`, `check_host.sh` without a flag,
 with the expected identity of this runtime and refuse a console of another
 workspace or runtime with an explicit diagnosis. A foreign console is reported
 once and never stopped, not even by `solar app start`; the port stays fixed at
-9000 and the console stays read-only and loopback only. A console that answers no
-identity at all is adopted only when this runtime's own pid file names a live
-`host_server.py`.
+9000 and the console stays read-only and loopback only.
+
+The policy itself lives in one place, `host_identity.py`, and every reuse path
+calls it: `check_host.sh`, `host_lib.sh` (listener identity and orphan stopping),
+`start_host.sh` and `stop_host.sh`. A console that reports no identity — or only
+half of it (only `workspace` or only `runtime`) — is adopted only when this
+runtime can prove the process is its own: its own pid file names a live
+`host_server.py`, or the listener's command line is this install's
+`host_server.py` (the legacy console from before `/health` reported a
+`runtime`). `stop_host.sh` uses the same proof before stopping, so a pid reused
+by another program is dropped, never killed, and a foreign listener exits 3 with
+the diagnosis instead of reporting "Solar Host not running".
 
 Global continuity remains available through its legacy read-only endpoint for
 compatibility; it is not a navigation screen or a summary card. The Channels

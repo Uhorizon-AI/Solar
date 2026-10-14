@@ -13,13 +13,15 @@ host_health_ok() {
 
 if [[ -f "$PID_FILE" ]]; then
   old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  if host_health_ok; then
+    echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
+    exit 0
+  fi
+  # The health check includes identity. A pid that no longer runs host_server.py
+  # is a reused pid: never kill it, only drop the pid file. The identity is
+  # evaluated before the pid file is removed, so the pid file still counts as a
+  # proof for a legacy console that reports no identity.
   if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-    if host_health_ok; then
-      echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
-      exit 0
-    fi
-    # The health check includes identity. A pid that no longer runs
-    # host_server.py is a reused pid: never kill it, only drop the pid file.
     if solar_host_pid_looks_like_server "$old_pid"; then
       echo "WARN: stale Solar Host pid $old_pid (health check failed) — stopping" >&2
       solar_host_stop_pid "$old_pid"
@@ -27,6 +29,9 @@ if [[ -f "$PID_FILE" ]]; then
       echo "WARN: pid $old_pid in the host pid file is not host_server.py (reused pid) — leaving it running" >&2
     fi
   fi
+  # Never adopt or stop a console of another workspace or runtime; do it before
+  # the pid file is dropped so the file still counts as a proof of ownership.
+  solar_host_refuse_foreign_listener || exit 3
   rm -f "$PID_FILE"
 fi
 
@@ -41,11 +46,14 @@ if host_health_ok; then
   fi
 fi
 
-# Something holds the port but is not this runtime's console (identity failed
-# above). A console of another workspace or runtime is never stopped: report it
-# once and stop, because retrying here cannot converge.
+# Something still holds the port. If it is this runtime's own hung console (this
+# install's host_server.py, no /health answer), stop it so the new process can
+# bind; anything else is foreign and is reported once, never stopped, because
+# retrying here cannot converge.
 if solar_host_port_listener_pids | grep -q .; then
-  if ! solar_host_listener_identity_matches; then
+  if [[ "$(solar_host_listener_identity)" == own ]]; then
+    solar_host_stop_orphan_listeners || true
+  else
     solar_host_report_foreign_listener
     exit 3
   fi
