@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=host_lib.sh
 source "$SCRIPT_DIR/host_lib.sh"
 solar_host_load_env
-RUNTIME="$(solar_host_runtime_dir)"
 PID_FILE="$SOLAR_HOST_PID_FILE"
+RUNTIME="$(solar_host_runtime_dir)"
 LOG_FILE="$RUNTIME/host.log"
 
 host_health_ok() {

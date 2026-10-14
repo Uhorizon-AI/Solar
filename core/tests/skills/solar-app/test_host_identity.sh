@@ -230,7 +230,7 @@ ec=$?
 set -e
 [[ "$ec" -ne 0 ]] && pass "identity-less console without a pid file is rejected" \
   || fail "identity-less console without a pid file is rejected (ec=$ec)"
-grep -q "without identity and without this runtime" "$TMP/live.err" \
+grep -q "no identity and no process of this runtime" "$TMP/live.err" \
   && pass "diagnosis explains the missing identity and pid file" \
   || { fail "diagnosis explains the missing identity and pid file"; cat "$TMP/live.err" >&2; }
 stop_stub
@@ -297,6 +297,123 @@ stop_stub
 after="$(/usr/sbin/lsof -nP -iTCP:"$STUB_PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u || true)"
 [[ -z "$after" ]] && pass "no new listener left on the stub port" \
   || fail "no new listener left on the stub port (pids=$after)"
+
+# --- 10. Partial identity needs a proof ------------------------------------
+# A console that reports only the runtime must not be adopted on its own.
+start_stub partial "{\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
+ec=$?
+set -e
+[[ "$ec" -ne 0 ]] && pass "partial identity without a proof is rejected" \
+  || fail "partial identity without a proof is rejected (ec=$ec)"
+grep -q "partial identity" "$TMP/live.err" && pass "diagnosis says the identity is partial" \
+  || { fail "diagnosis says the identity is partial"; cat "$TMP/live.err" >&2; }
+# The same console is adopted once this runtime's own pid file proves the process.
+sleep 120 &
+PARTIAL_PID=$!
+printf '%s\n' "$PARTIAL_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
+ec=$?
+set -e
+[[ "$ec" -eq 0 ]] && pass "partial identity with this runtime's pid file is adopted" \
+  || { fail "partial identity with this runtime's pid file is adopted (ec=$ec)"; cat "$TMP/live.err" >&2; }
+rm -f "$SOLAR_HOST_RUNTIME_DIR/host.pid"
+kill "$PARTIAL_PID" 2>/dev/null || true
+wait "$PARTIAL_PID" 2>/dev/null || true
+# A console that reports only the workspace is refused the same way.
+cat >"$TMP/partial.identity.json" <<EOF
+{"workspace":"$SOLAR_WORKSPACE"}
+EOF
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
+ec=$?
+set -e
+[[ "$ec" -ne 0 ]] && pass "workspace-only identity without a proof is rejected" \
+  || fail "workspace-only identity without a proof is rejected (ec=$ec)"
+stop_stub
+
+# --- 11. Legacy console of this install is recovered, not stranded ---------
+# After solar client update the console may still run the code from before
+# /health reported a runtime, with no pid file. Its command line names this
+# install's host_server.py, which is a proof the process is ours: it is adopted
+# instead of leaving the supervisor stuck.
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+rm -f "$SOLAR_HOST_RUNTIME_DIR/host.pid"
+start_stub legacy-install "{}"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
+ec=$?
+set -e
+[[ "$ec" -eq 0 ]] && pass "identity-less console of this install is adopted" \
+  || { fail "identity-less console of this install is adopted (ec=$ec)"; cat "$TMP/live.err" >&2; }
+stop_stub
+# The same console started from another install stays rejected.
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 /somewhere/else/core/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+start_stub legacy-other-install "{}"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
+ec=$?
+set -e
+[[ "$ec" -ne 0 ]] && pass "identity-less console of another install is rejected" \
+  || fail "identity-less console of another install is rejected (ec=$ec)"
+stop_stub
+
+# --- 12. stop_host.sh never kills what is not a live host_server.py ---------
+STOP_SCRIPT="$SCRIPTS/stop_host.sh"
+sleep 120 &
+INNOCENT_PID=$!
+printf '%s\n' "$INNOCENT_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+[[ "$stop_ec" -eq 0 ]] && pass "stop with a reused pid exits 0" \
+  || fail "stop with a reused pid exits 0 (ec=$stop_ec: $STOP_OUT)"
+grep -q "reused pid" <<<"$STOP_OUT" && pass "stop names the reused pid" \
+  || { fail "stop names the reused pid"; echo "$STOP_OUT" >&2; }
+kill -0 "$INNOCENT_PID" 2>/dev/null && pass "stop left the reused pid running" \
+  || fail "stop left the reused pid running"
+[[ ! -f "$SOLAR_HOST_RUNTIME_DIR/host.pid" ]] && pass "stop dropped the stale pid file" \
+  || fail "stop dropped the stale pid file"
+kill "$INNOCENT_PID" 2>/dev/null || true
+wait "$INNOCENT_PID" 2>/dev/null || true
+# A foreign listener is reported and the stop exits 3 (no "not running" lie).
+start_stub stop-foreign "{\"workspace\":\"$TMP/another-workspace\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" FAKE_LSOF_PID="$STUB_PID" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+[[ "$stop_ec" -eq 3 ]] && pass "stop of a foreign console exits 3" \
+  || fail "stop of a foreign console exits 3 (ec=$stop_ec: $STOP_OUT)"
+grep -q "not the console of this runtime" <<<"$STOP_OUT" && pass "stop reports why it refuses" \
+  || { fail "stop reports why it refuses"; echo "$STOP_OUT" >&2; }
+grep -q "not running" <<<"$STOP_OUT" && fail "stop claims a foreign console is not running" \
+  || pass "stop does not claim the foreign console is not running"
+kill -0 "$STUB_PID" 2>/dev/null && pass "stop left the foreign console running" \
+  || fail "stop left the foreign console running"
+stop_stub
+
+# --- 13. The console port override is test-only ----------------------------
+# A real installation keeps 9000 even when the override leaks into the
+# environment; only a temporary runtime honors it.
+LIVE_PORT="$(env -u SOLAR_RUNTIME_ROOT -u SOLAR_APP_DATA SOLAR_APP_PORT_OVERRIDE=1234 \
+  bash -c 'source "$1"; solar_host_load_env; printf "%s" "$SOLAR_APP_PORT"' _ "$HOST_LIB")"
+[[ "$LIVE_PORT" == "9000" ]] && pass "a real runtime ignores the port override" \
+  || fail "a real runtime ignores the port override (got $LIVE_PORT)"
+TEMP_PORT="$(SOLAR_APP_PORT_OVERRIDE=1234 \
+  bash -c 'source "$1"; solar_host_load_env; printf "%s" "$SOLAR_APP_PORT"' _ "$HOST_LIB")"
+[[ "$TEMP_PORT" == "1234" ]] && pass "a temporary runtime honors the port override" \
+  || fail "a temporary runtime honors the port override (got $TEMP_PORT)"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

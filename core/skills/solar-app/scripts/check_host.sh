@@ -6,48 +6,36 @@
 #   --json     : full check, machine readable.
 #   --quiet    : full check, silent.
 #   (no flag)  : full check; this is the mode the system supervisor consumes.
+#
+# Identity (host_identity.py, the single policy): /health must report this
+# runtime's workspace and runtime. A console that reports no identity, or only
+# half of it, is adopted only when this runtime can prove the process is its own
+# (its own pid file, or this install's host_server.py in the listener command).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/host_lib.sh"
 solar_host_load_env
 EXPECTED_WORKSPACE="$(solar_host_identity_workspace)"
 EXPECTED_RUNTIME="$(solar_host_identity_runtime)"
-python3 - "$SOLAR_APP_BASE_URL" "${1:-}" "$EXPECTED_WORKSPACE" "$EXPECTED_RUNTIME" "$SOLAR_HOST_PID_FILE" <<'PY'
-import json,os,sys,time,urllib.request
+LISTENER_COMMAND="$(ps -p "$(solar_host_port_listener_pids | head -n1 || true)" -o command= 2>/dev/null || true)"
+INSTALL_ROOTS=()
+while IFS= read -r _root; do
+  [[ -n "$_root" ]] && INSTALL_ROOTS+=("$_root")
+done < <(solar_host_identity_install_roots)
+python3 - "$SCRIPT_DIR" "$SOLAR_APP_BASE_URL" "${1:-}" "$EXPECTED_WORKSPACE" "$EXPECTED_RUNTIME" \
+  "$SOLAR_HOST_PID_FILE" "$LISTENER_COMMAND" ${INSTALL_ROOTS[@]+"${INSTALL_ROOTS[@]}"} <<'PY'
+import json,sys,time,urllib.request
 from datetime import datetime
-from pathlib import Path
-base,flag,expected_ws,expected_rt,pid_file=sys.argv[1:6]
-canon=lambda p: str(Path(p).expanduser().resolve())
+script_dir,base,flag,expected_ws,expected_rt,pid_file,listener_command=sys.argv[1:8]
+install_roots=sys.argv[8:]
+sys.path.insert(0,script_dir)
+import host_identity
 
-def own_console_pid():
-    try:
-        pid=int(Path(pid_file).read_text().strip())
-    except Exception:
-        return False
-    try:
-        os.kill(pid,0)
-    except Exception:
-        return False
-    try:
-        import subprocess
-        args=subprocess.run(['ps','-p',str(pid),'-o','args='],capture_output=True,text=True).stdout
-    except Exception:
-        return False
-    return 'host_server.py' in args
-
-def identity(data):
-    # None means "this runtime's console". Any other value is a rejection reason.
-    ws=str(data.get('workspace') or '')
-    rt=str(data.get('runtime') or '')
-    if not ws and not rt:
-        return None if own_console_pid() else 'a console without identity and without this runtime\'s pid file'
-    if ws and canon(ws)!=canon(expected_ws):
-        return 'another workspace ('+ws+')'
-    if rt and canon(rt)!=canon(expected_rt):
-        return 'another runtime ('+rt+')'
-    if ws and not rt:
-        return None if own_console_pid() else 'a console without runtime identity and without this runtime\'s pid file'
-    return None
+def identity(health):
+    reason=host_identity.evaluate(health=health,workspace=expected_ws,runtime=expected_rt,
+                                  pid_file=pid_file,listener_command=listener_command,
+                                  install_roots=install_roots)
+    return None if reason is None else reason
 
 result={'available':False,'storage_ok':False,'runtime_status':'unknown','base_url':base,
         'workspace':expected_ws,'runtime':expected_rt}
