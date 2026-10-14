@@ -262,15 +262,22 @@ solar_host_pid_file_names() {
   solar_host_pid_looks_like_server "$wanted"
 }
 
-# Human-readable owner of the port. Never stops anything.
+# Human-readable owner of the port. Never stops anything. ``$2`` is the tested
+# identity ("foreign" or "unproven"): a console that answered as another
+# workspace is foreign; one that did not answer and had no proof is only
+# unproven, and the message must not claim to know more than that.
 solar_host_report_foreign_listener() {
   solar_host_load_env
-  local pid="${1-}" args
+  local pid="${1-}" identity="${2:-foreign}" args
   [[ -n "$pid" ]] || pid="$(solar_host_port_listener_pids | head -n1 || true)"
   [[ -n "$pid" ]] || return 0
   args="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   {
-    echo "ERROR: :$SOLAR_APP_PORT is held by pid $pid, which is not the console of this runtime."
+    if [[ "$identity" == unproven ]]; then
+      echo "ERROR: :$SOLAR_APP_PORT is held by pid $pid, whose identity could not be proven to be this runtime's console."
+    else
+      echo "ERROR: :$SOLAR_APP_PORT is held by pid $pid, which is not the console of this runtime."
+    fi
     [[ -n "$args" ]] && echo "  command: $args"
     echo "  expected workspace: $(solar_host_identity_workspace)"
     echo "  expected runtime:   $(solar_host_identity_runtime)"
@@ -329,7 +336,7 @@ solar_host_stop_orphan_listeners() {
       unstoppable=1
       continue
     fi
-    solar_host_report_foreign_listener "$pid"
+    solar_host_report_foreign_listener "$pid" "$identity"
     foreign=1
   done < <(solar_host_port_listener_pids)
   [[ "$foreign" -eq 1 ]] && return 2
@@ -369,7 +376,10 @@ solar_host_refuse_foreign_listener() {
   local identity
   identity="$(solar_host_listener_identity)"
   if [[ "$identity" != own ]]; then
-    solar_host_report_foreign_listener
+    # Pass the tested identity through: "foreign" (it answered as another
+    # workspace or runtime) and "unproven" (it did not answer and no proof was
+    # found) are different claims, and the message must say which one it is.
+    solar_host_report_foreign_listener "" "$identity"
     return 3
   fi
   return 0

@@ -176,6 +176,29 @@ class EvaluateTest(unittest.TestCase):
         reason = self.evaluate({"workspace": str(self.other_ws)}, listener_command=f"python3 {self.server}")
         self.assertIn("another workspace", reason)
 
+    def test_own_command_beyond_the_first_listener_is_found(self):
+        # The first pid on the port is not the server but the second one is: the
+        # answer must not depend on numeric pid order. Patch pid_command so the
+        # "first" listener resolves to a foreign command and the "second" to the
+        # own one.
+        original = host_identity.pid_command
+        host_identity.pid_command = lambda pid: (
+            f"python3 {self.server}" if pid == 22222 else "python3 /elsewhere/other.py"
+        )
+        try:
+            self.assertIsNone(self.evaluate({}, listener_pids=["11111", "22222"]))
+        finally:
+            host_identity.pid_command = original
+
+    def test_no_listener_is_own_when_none_runs_the_install_server(self):
+        original = host_identity.pid_command
+        host_identity.pid_command = lambda pid: "python3 /elsewhere/other.py"
+        try:
+            reason = self.evaluate({}, listener_pids=["11111", "22222"])
+        finally:
+            host_identity.pid_command = original
+        self.assertIn("no identity and no process", reason)
+
 
 class PidFileTest(unittest.TestCase):
     def setUp(self):
@@ -204,6 +227,22 @@ class PidFileTest(unittest.TestCase):
         # the pid value. A bare number must resolve to "not a pid file", not to
         # a file called "12345".
         self.assertFalse(host_identity.pid_file_own_server("12345"))
+
+    def test_zero_and_negative_pids_are_not_alive(self):
+        # os.kill(0, 0) signals the whole process group and os.kill(-1, 0) every
+        # signalable process, so both would report "alive" without naming one.
+        self.assertFalse(host_identity._pid_alive(0))
+        self.assertFalse(host_identity._pid_alive(-1))
+        self.assertFalse(host_identity._pid_alive(-12345))
+
+    def test_a_pid_file_with_zero_or_negative_is_not_own(self):
+        for value in ("0\n", "-1\n", "\n", "  \n"):
+            pid_file = self.root / "odd.pid"
+            pid_file.write_text(value)
+            self.assertFalse(
+                host_identity.pid_file_own_server(str(pid_file)),
+                repr(value),
+            )
 
 
 class InstallServerTest(unittest.TestCase):

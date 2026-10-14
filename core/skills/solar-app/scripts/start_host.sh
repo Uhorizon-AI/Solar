@@ -16,16 +16,18 @@ if [[ -f "$PID_FILE" ]]; then
   old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if host_health_ok; then
     # The console that answered is our own, but the pid file may be stale: the
-    # pid is gone, or it was reused by another live process that is not the
-    # listener. Report the pid that really answers and repair the pid file; when
-    # even the listener cannot be resolved (no lsof), do not print the old pid as
-    # if it were alive.
-    live_pid="$(solar_host_port_listener_pids | head -n1 || true)"
-    if [[ -n "$live_pid" ]] && [[ "$live_pid" != "$old_pid" ]]; then
+    # pid is gone, or it was reused by another live process that is not a
+    # listener. Repair the pid file only when the pid it holds is not among the
+    # port's listeners; with several listeners, a valid pid beyond the first must
+    # not be overwritten. When no listener can be resolved (no lsof), do not
+    # print the old pid as if it were alive.
+    live_pids="$(solar_host_port_listener_pids || true)"
+    live_pid="$(head -n1 <<<"$live_pids")"
+    if [[ -n "$live_pids" ]] && ! grep -qx "$old_pid" <<<"$live_pids"; then
       echo "$live_pid" >"$PID_FILE"
       old_pid="$live_pid"
     fi
-    if [[ -n "$live_pid" ]]; then
+    if [[ -n "$live_pids" ]]; then
       echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
     else
       echo "Solar Host already running — $SOLAR_APP_BASE_URL"
@@ -55,10 +57,18 @@ if [[ -f "$PID_FILE" ]]; then
 fi
 
 if host_health_ok; then
-  # --liveness already verified the identity, so this listener is our console.
+  # --liveness already verified the identity, so the listeners are our console.
+  # Record the first listener that really is a host_server.py: with several
+  # listeners, the first pid on the port is not necessarily the server.
   recovered_pid=""
-  recovered_pid="$(solar_host_port_listener_pids | head -n1 || true)"
-  if [[ -n "$recovered_pid" ]] && solar_host_pid_looks_like_server "$recovered_pid"; then
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    if solar_host_pid_looks_like_server "$candidate"; then
+      recovered_pid="$candidate"
+      break
+    fi
+  done < <(solar_host_port_listener_pids)
+  if [[ -n "$recovered_pid" ]]; then
     echo "$recovered_pid" >"$PID_FILE"
     echo "Solar Host already running (pid $recovered_pid, recovered pid file) — $SOLAR_APP_BASE_URL"
     exit 0
@@ -88,7 +98,9 @@ if solar_host_port_listener_pids | grep -q .; then
     sleep 0.2
   done
   if solar_host_port_listener_pids | grep -q .; then
-    solar_host_report_foreign_listener
+    # A listener survived the sweep: report it with the identity we can prove, so
+    # the message does not claim "foreign" when it is merely unproven.
+    solar_host_report_foreign_listener "" "$(solar_host_listener_identity)"
     exit 3
   fi
 fi

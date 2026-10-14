@@ -378,6 +378,22 @@ kill -0 "$FOREIGN_HUNG_PID" 2>/dev/null && pass "hung console of another install
   || fail "hung console of another install was left running"
 kill "$FOREIGN_HUNG_PID" 2>/dev/null || true
 wait "$FOREIGN_HUNG_PID" 2>/dev/null || true
+# (d2) A listener whose identity cannot be established: it answered no /health
+# and has no proof either way. The message must say the identity is unproven, not
+# assert it is another workspace's console.
+UNPROVEN_PID=$!
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 algo-que-no-responde.py"
+EOF
+chmod +x "$TMP/bin/ps"
+run_stop "$UNPROVEN_PID"
+[[ "$STOP_EC" -eq 2 ]] && pass "an unproven listener returns 2" \
+  || fail "an unproven listener returns 2 (ec=$STOP_EC)"
+grep -q "could not be proven" "$STOP_LIB_ERR" && pass "an unproven listener says so" \
+  || { fail "an unproven listener says so"; cat "$STOP_LIB_ERR" >&2; }
+kill "$UNPROVEN_PID" 2>/dev/null || true
+wait "$UNPROVEN_PID" 2>/dev/null || true
 # (e) Ours by identity but not host_server.py: it must not be killed, and the
 # caller must learn the port is still held (return 4, not 0/1) so it never says
 # "not running" while the port is busy.
@@ -845,6 +861,29 @@ set -e
   || fail "start without lsof still exits 0 when the console answers (ec=$start_ec: $START_OUT)"
 grep -q "pid 999999" <<<"$START_OUT" && fail "start printed the stale dead pid" \
   || pass "start did not print the stale dead pid"
+stop_stub
+rm -f "$TMP/bin/lsof"
+
+# --- 17b. start_host.sh keeps a valid pid file that is a non-first listener ---
+# Two listeners on the port and the pid file names the second: start must keep
+# that pid, not overwrite it with the first pid lsof prints.
+start_stub start-second "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+cat >"$TMP/bin/lsof" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "111111"
+printf '%s\n' "$STUB_PID"
+EOF
+chmod +x "$TMP/bin/lsof"
+printf '%s\n' "$STUB_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+set +e
+START_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$START_SCRIPT" 2>&1)"
+start_ec=$?
+set -e
+[[ "$start_ec" -eq 0 ]] && pass "start with a non-first listener exits 0" \
+  || fail "start with a non-first listener exits 0 (ec=$start_ec: $START_OUT)"
+[[ "$(cat "$SOLAR_HOST_RUNTIME_DIR/host.pid" 2>/dev/null)" == "$STUB_PID" ]] \
+  && pass "start kept the valid non-first pid in the file" \
+  || fail "start kept the valid non-first pid in the file (got $(cat "$SOLAR_HOST_RUNTIME_DIR/host.pid" 2>/dev/null))"
 stop_stub
 rm -f "$TMP/bin/lsof"
 

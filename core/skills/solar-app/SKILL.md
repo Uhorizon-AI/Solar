@@ -123,10 +123,12 @@ when `/health` answers nothing.
 `ensure_host.sh`, `start_host.sh` and `stop_host.sh` exit non-zero with the
 diagnosis on stderr when the port is held by a console they will not touch:
 
-- **3 — foreign console.** Another workspace's or runtime's console holds
-  `:9000`. Nothing was stopped. `solar client update` runs
-  `stop_host.sh && start_host.sh` for the console, so the update fails at the
-  restart step instead of reporting a restart that did not happen.
+- **3 — foreign or unproven console.** Either another workspace's or runtime's
+  console holds `:9000` (*foreign*), or a listener answered nothing and no proof
+  of ownership was found (*unproven*); the diagnosis says which. Nothing was
+  stopped. `solar client update` runs `stop_host.sh && start_host.sh` for the
+  console, so the update fails at the restart step instead of reporting a
+  restart that did not happen.
 - **4 — own listener that cannot be stopped.** The listener answers as this
   runtime's own but its command line is not `host_server.py`, so Solar will not
   kill it. Nothing was stopped.

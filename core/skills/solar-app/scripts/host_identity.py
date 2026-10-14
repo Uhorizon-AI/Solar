@@ -52,7 +52,13 @@ def _pid_alive(pid: int) -> bool:
     when the process is alive but owned by another user. That is still "alive":
     it is reported alive, and the command-line check that follows decides whether
     it is ours (it never is, for another user's process).
+
+    A pid ``<= 0`` is refused before the syscall: ``os.kill(0, 0)`` signals the
+    caller's whole process group and ``os.kill(-1, 0)`` every process it may
+    signal, so both would report "alive" without naming a process.
     """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
     except PermissionError:
@@ -268,13 +274,19 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
             not listeners or str(pid_file_pid) in listeners
         )
     if not own:
-        command = listener_command
-        if not command and listeners:
+        own = command_is_install_server(listener_command, install_roots)
+    if not own and listeners:
+        # Try every listener: the first pid on the port is not necessarily the
+        # server, so a single `ps` on listeners[0] would make the answer depend on
+        # numeric pid order.
+        for pid in listeners:
             try:
-                command = pid_command(int(listeners[0]))
-            except ValueError:
-                command = ""
-        own = command_is_install_server(command, install_roots)
+                command = pid_command(int(pid))
+            except (ValueError, OSError):
+                continue
+            if command_is_install_server(command, install_roots):
+                own = True
+                break
     if own:
         return None
     if not got_ws and not got_rt:
