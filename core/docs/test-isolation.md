@@ -49,6 +49,13 @@ The third check aborts (exit 97) when all hold:
 - the effective install (`SOLAR_ROOT`, else the resolved global install) and the
   Client's global install resolve to the same physical path.
 
+It also aborts when it cannot resolve either install: a security check does not
+fail open silently.
+
+A defined-but-empty `SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE` counts as pinned,
+exactly as the Client reads it (`${SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE-__UNSET__}`):
+a defined value makes the Client skip service detection, empty included.
+
 The Client's global install is `SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE` when that
 variable is pinned (an empty value means "no global install"), otherwise the
 install `solar-paths` resolves. This is the same resolution production uses, and

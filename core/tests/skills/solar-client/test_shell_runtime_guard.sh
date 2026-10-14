@@ -135,6 +135,29 @@ assert_eq "no flag leaves the effective-equals-global case untouched" "$noflag_e
 assert_eq "unknown guard option aborts" "$bogus_ec" "97"
 assert_eq "unknown guard option is named" "$(grep -c 'unknown solar_test_guard option' "$TMP/bogus.err")" "1"
 
+# The service check must not fail open silently: an unresolvable global install
+# is an abort with a reason, never a silent pass. The guard is mirrored so its
+# relative paths land on a stub that refuses to resolve the global install.
+mkdir -p "$TMP/mirror/tests/support" "$TMP/mirror/skills/solar-paths/scripts"
+cp "$GUARD" "$TMP/mirror/tests/support/guard.sh"
+cp "$(dirname "$GUARD")/../../skills/solar-paths/scripts/solar_runtime.py" \
+  "$TMP/mirror/skills/solar-paths/scripts/solar_runtime.py"
+cat >"$TMP/mirror/skills/solar-paths/scripts/resolve_solar_paths.sh" <<'EOF'
+#!/usr/bin/env bash
+solar_global_install_root() { return 1; }
+EOF
+set +e
+guard_services \
+  SOLAR_ROOT="$TMP/install" \
+  SOLAR_RUNTIME_ROOT="$TMP/runtime" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/launchctl" \
+  bash -c 'source "$1"; solar_test_guard --services' _ "$TMP/mirror/tests/support/guard.sh" \
+  >/dev/null 2>"$TMP/services-failopen.err"
+services_failopen_ec=$?
+set -e
+assert_eq "an unresolvable global install aborts instead of failing open" "$services_failopen_ec" "97"
+assert_eq "the fail-open abort is named" "$(grep -c 'could not resolve the Client' "$TMP/services-failopen.err")" "1"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

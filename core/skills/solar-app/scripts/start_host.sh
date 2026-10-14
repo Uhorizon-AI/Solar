@@ -48,12 +48,23 @@ fi
 
 # Something still holds the port. If it is this runtime's own hung console (this
 # install's host_server.py, no /health answer), stop it so the new process can
-# bind; anything else is foreign and is reported once, never stopped, because
-# retrying here cannot converge.
+# bind; a foreign console is reported once and never stopped, and the run exits 3
+# because retrying here cannot converge.
 if solar_host_port_listener_pids | grep -q .; then
-  if [[ "$(solar_host_listener_identity)" == own ]]; then
-    solar_host_stop_orphan_listeners || true
-  else
+  set +e
+  solar_host_stop_orphan_listeners
+  orphan_ec=$?
+  set -e
+  if [[ "$orphan_ec" -eq 2 ]]; then
+    exit 3
+  fi
+  # Stopping the process does not release the port at the same instant: wait
+  # until the listener is really gone before binding, or the bind would fail.
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    solar_host_port_listener_pids | grep -q . || break
+    sleep 0.2
+  done
+  if solar_host_port_listener_pids | grep -q .; then
     solar_host_report_foreign_listener
     exit 3
   fi

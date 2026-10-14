@@ -31,8 +31,17 @@ def canonical(path: str) -> str:
 
 
 def _pid_alive(pid: int) -> bool:
+    """True when the pid exists.
+
+    ``os.kill(pid, 0)`` raises ``PermissionError`` (a subclass of ``OSError``)
+    when the process is alive but owned by another user. That is still "alive":
+    it is reported alive, and the command-line check that follows decides whether
+    it is ours (it never is, for another user's process).
+    """
     try:
         os.kill(pid, 0)
+    except PermissionError:
+        return True
     except OSError:
         return False
     return True
@@ -71,24 +80,25 @@ def command_is_install_server(command: str, install_roots) -> bool:
     script path is what makes this precise: a ``host_server.py`` of another
     install is not this runtime's console.
 
-    The script path in the command line is compared on physical paths, like every
-    other identity check: a console started through a symlinked install (or a
-    ``/var`` vs ``/private/var`` temporary directory) must still be recognised.
+    The path is matched as a substring of the command line, so an install under
+    ``Application Support`` (a space in the path) still matches. Both spellings
+    of each install are tried — the root as given and its physical form — because
+    a console may be started through a symlink (or a ``/var`` vs
+    ``/private/var`` temporary directory).
     """
     if not command or "host_server.py" not in command:
         return False
-    wanted = {
-        canonical(root) + "/core/skills/solar-app/scripts/host_server.py"
-        for root in install_roots if root
-    }
+    suffix = "/core/skills/solar-app/scripts/host_server.py"
+    wanted = set()
+    for root in install_roots:
+        if not root:
+            continue
+        raw = root.rstrip("/")
+        wanted.add(raw + suffix)
+        wanted.add(canonical(raw) + suffix)
     if not wanted:
         return False
-    for token in command.split():
-        if not token.endswith("host_server.py"):
-            continue
-        if canonical(token) in wanted:
-            return True
-    return False
+    return any(target in command for target in wanted)
 
 
 def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
@@ -101,6 +111,10 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
     only half of it. ``listener_command`` is only read when the health payload is
     incomplete, so a healthy console never costs a ``ps`` call; when it is empty
     and ``listener_pid`` is set, the command line is resolved on demand.
+
+    A pid file only proves ownership of the pid it names. When ``listener_pid``
+    is also known, it must be the same process: a foreign console on the port
+    would otherwise be adopted because an unrelated own pid is alive.
     """
     got_ws = str((health or {}).get("workspace") or "")
     got_rt = str((health or {}).get("runtime") or "")
@@ -110,7 +124,15 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
         return "another runtime (" + got_rt + ")"
     if got_ws and got_rt:
         return None
-    own = pid_file_own_server(pid_file)
+    own = False
+    pid_file_pid = _pid_file_pid(pid_file)
+    if pid_file_pid is not None:
+        # The pid file must name a live host_server.py, and — when the port's
+        # listener is known — it must be that very process. Otherwise a foreign
+        # console on the port would be adopted on an unrelated own pid.
+        own = pid_file_own_server(pid_file) and (
+            not listener_pid or str(pid_file_pid) == str(listener_pid).strip()
+        )
     if not own:
         command = listener_command
         if not command and listener_pid:
@@ -129,9 +151,15 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
     )
 
 
-def command_owned_by_install(command: str, install_roots) -> bool:
-    """Public alias used by the shell to classify a listener's command line."""
-    return command_is_install_server(command, install_roots)
+def _pid_file_pid(pid_file: str):
+    """The pid named by a pid file, when it is a live process, else ``None``."""
+    if not pid_file:
+        return None
+    try:
+        pid = int(Path(pid_file).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if _pid_alive(pid) else None
 
 
 def _load_health(path: str) -> dict:

@@ -86,6 +86,52 @@ class EvaluateTest(unittest.TestCase):
         command = f"python3 {self.server}"
         self.assertIsNone(self.evaluate({}, listener_command=command))
 
+    def test_blank_health_with_an_install_path_containing_spaces_is_own(self):
+        # An install under "Application Support" has spaces: a command line must
+        # not be split on them.
+        spaced = self.root / "Application Support" / "solar"
+        (spaced / "core/skills/solar-app/scripts").mkdir(parents=True)
+        server = spaced / "core/skills/solar-app/scripts/host_server.py"
+        server.write_text("#!/usr/bin/env python3\n")
+        self.assertIsNone(self.evaluate(
+            {}, listener_command=f"python3 {server}", install_roots=[str(spaced)]))
+
+    def test_blank_health_with_the_own_command_in_quotes_is_own(self):
+        # The path is not re-split on spaces: an install under "Application
+        # Support" is one path even when the command line quotes it.
+        spaced = self.root / "Application Support" / "solar"
+        (spaced / "core/skills/solar-app/scripts").mkdir(parents=True)
+        server = spaced / "core/skills/solar-app/scripts/host_server.py"
+        server.write_text("#!/usr/bin/env python3\n")
+        self.assertIsNone(self.evaluate(
+            {}, listener_command=f"python3 {server}", install_roots=[str(spaced)]))
+
+    def test_pid_file_of_another_process_does_not_adopt_a_foreign_listener(self):
+        # The pid file names a live own host_server.py, but the port's listener is
+        # a different process: the pid file must not adopt it.
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        original = host_identity.pid_file_own_server
+        host_identity.pid_file_own_server = lambda path: True
+        try:
+            # listener_pid differs from the pid in the file, and the listener has
+            # no identity, so it must be rejected.
+            reason = self.evaluate({}, pid_file=str(pid_file), listener_pid="424242")
+        finally:
+            host_identity.pid_file_own_server = original
+        self.assertIn("no identity and no process", reason)
+
+    def test_pid_file_matching_the_listener_adopts_it(self):
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        original = host_identity.pid_file_own_server
+        host_identity.pid_file_own_server = lambda path: True
+        try:
+            self.assertIsNone(self.evaluate(
+                {}, pid_file=str(pid_file), listener_pid=str(os.getpid())))
+        finally:
+            host_identity.pid_file_own_server = original
+
     def test_blank_health_with_another_install_command_is_rejected(self):
         command = "python3 /somewhere/else/core/skills/solar-app/scripts/host_server.py"
         self.assertIn("no identity and no process", self.evaluate({}, listener_command=command))

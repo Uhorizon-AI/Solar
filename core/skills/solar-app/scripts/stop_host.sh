@@ -7,6 +7,8 @@ solar_host_load_env
 PID_FILE="$SOLAR_HOST_PID_FILE"
 stopped=0
 foreign=0
+
+# Stop the pid-file process when its pid is really ours; a reused pid is dropped.
 if [[ -f "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
@@ -21,17 +23,20 @@ if [[ -f "$PID_FILE" ]]; then
     fi
   fi
   rm -f "$PID_FILE"
-else
-  set +e
-  solar_host_stop_orphan_listeners
-  listeners_ec=$?
-  set -e
-  case "$listeners_ec" in
-    0) stopped=1 ;;
-    2) foreign=1 ;;
-    *) : ;;
-  esac
 fi
+
+# Whatever the pid file said (or did not), the port may still be held: an own
+# console whose pid file was dropped or reused has to be stopped too, and a
+# foreign console must not be reported as a clean stop.
+set +e
+solar_host_stop_orphan_listeners
+listeners_ec=$?
+set -e
+case "$listeners_ec" in
+  0) stopped=1 ;;
+  2) foreign=1 ;;
+  *) : ;;
+esac
 if [[ "$foreign" -eq 1 ]]; then
   # The listener is another workspace's or runtime's console: it was reported
   # and left running, so this is not a clean stop.

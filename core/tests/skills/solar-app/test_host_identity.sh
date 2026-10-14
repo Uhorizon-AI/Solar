@@ -18,6 +18,9 @@ FAIL=0
 TMP="$(mktemp -d)"
 STUB_PID=""
 STUB_PORT=""
+# Record the machine's real console listeners on 9000 before any stub runs, so a
+# later assert can prove the suite never touched them.
+REAL_9000_BEFORE="$(/usr/sbin/lsof -nP -iTCP:9000 -sTCP:LISTEN -t 2>/dev/null | sort -u || true)"
 cleanup() {
   if [[ -n "$STUB_PID" ]] && kill -0 "$STUB_PID" 2>/dev/null; then
     kill "$STUB_PID" 2>/dev/null || true
@@ -144,6 +147,25 @@ stop_stub() {
     wait "$STUB_PID" 2>/dev/null || true
   fi
   STUB_PID=""
+  # The stub releases the port asynchronously; wait for the port to be free so a
+  # following start does not race with the previous listener.
+  local _i
+  for _i in $(seq 1 25); do
+    [[ -z "$STUB_PORT" ]] && break
+    /usr/sbin/lsof -nP -iTCP:"$STUB_PORT" -sTCP:LISTEN -t >/dev/null 2>&1 || break
+    sleep 0.2
+  done
+}
+
+# Wait until a pid is really gone (kill -0 fails), up to ~2s.
+wait_gone() {
+  local pid="$1"
+  local _i
+  for _i in $(seq 1 20); do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  return 1
 }
 
 liveness() { bash "$SCRIPTS/check_host.sh" --liveness >"$TMP/live.err" 2>&1; }
@@ -207,10 +229,10 @@ cat >"$TMP/bin/python3" <<'EOF'
 exec "$(dirname "${BASH_SOURCE[0]}")/python3-real" "$@"
 EOF
 chmod +x "$TMP/bin/python3"
-sleep 120 &
-OWN_SERVER_PID=$!
-printf '%s\n' "$OWN_SERVER_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
 start_stub legacy-own "{}"
+# The pid file names the listener itself: that is the proof of ownership the
+# identity policy accepts (a pid file of a different process proves nothing).
+printf '%s\n' "$STUB_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
 set +e
 PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
 ec=$?
@@ -218,8 +240,6 @@ set -e
 [[ "$ec" -eq 0 ]] && pass "identity-less console with this runtime's pid file is adopted" \
   || { fail "identity-less console with this runtime's pid file is adopted (ec=$ec)"; cat "$TMP/live.err" >&2; }
 stop_stub
-kill "$OWN_SERVER_PID" 2>/dev/null || true
-wait "$OWN_SERVER_PID" 2>/dev/null || true
 
 # --- 6. Legacy health with no identity and no pid file ----------------------
 rm -f "$SOLAR_HOST_RUNTIME_DIR/host.pid"
@@ -248,14 +268,36 @@ grep -q "console identity mismatch" "$TMP/full.err" \
   || { fail "no-flag diagnosis names the identity mismatch"; cat "$TMP/full.err" >&2; }
 stop_stub
 
+# --- 7b. --json without identity is unavailable, not partial ----------------
+# The fail-open guard for JSON: a mismatch must set available=false with an
+# error that names the identity, never report the console as usable.
+start_stub json-other "{\"workspace\":\"$TMP/another-workspace\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+set +e
+JSON_OUT="$(bash "$SCRIPTS/check_host.sh" --json 2>&1)"
+json_ec=$?
+set -e
+[[ "$json_ec" -ne 0 ]] && pass "--json without identity exits non-zero" \
+  || fail "--json without identity exits non-zero (ec=$json_ec)"
+python3 - "$JSON_OUT" <<'PY' && pass "--json reports available:false with an identity error" \
+  || { fail "--json reports available:false with an identity error"; echo "$JSON_OUT" >&2; }
+import json, sys
+data = json.loads(sys.argv[1])
+ok = data.get("available") is False and str(data.get("error", "")).startswith("console identity mismatch")
+raise SystemExit(0 if ok else 1)
+PY
+stop_stub
+
 # --- 8. solar_host_stop_orphan_listeners never kills a foreign console ------
 # A lsof double names the listener; a ps double makes it look like
 # host_server.py; the stub on the chosen port decides the identity.
-cat >"$TMP/bin/lsof" <<'EOF'
+lsof_double() {
+  cat >"$TMP/bin/lsof" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "${FAKE_LSOF_PID:-999999}"
 EOF
-chmod +x "$TMP/bin/lsof"
+  chmod +x "$TMP/bin/lsof"
+}
+lsof_double
 STOP_LIB_ERR="$TMP/stop-lib.err"
 run_stop() {
   set +e
@@ -320,6 +362,8 @@ kill -0 "$FOREIGN_HUNG_PID" 2>/dev/null && pass "hung console of another install
   || fail "hung console of another install was left running"
 kill "$FOREIGN_HUNG_PID" 2>/dev/null || true
 wait "$FOREIGN_HUNG_PID" 2>/dev/null || true
+# Drop the ps and lsof doubles: later sections must see the real commands.
+rm -f "$TMP/bin/ps" "$TMP/bin/lsof"
 
 # --- 9. No residue: the stub port has no listener after the stub stops ------
 start_stub residue "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
@@ -333,6 +377,13 @@ after="$(/usr/sbin/lsof -nP -iTCP:"$STUB_PORT" -sTCP:LISTEN -t 2>/dev/null | sor
 # --- 10. Partial identity needs a proof ------------------------------------
 # A console that reports only the runtime must not be adopted on its own.
 start_stub partial "{\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+# A ps double makes the stub's pid look like a live host_server.py, which is what
+# the pid file has to prove.
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
 set +e
 PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
 ec=$?
@@ -342,9 +393,9 @@ set -e
 grep -q "partial identity" "$TMP/live.err" && pass "diagnosis says the identity is partial" \
   || { fail "diagnosis says the identity is partial"; cat "$TMP/live.err" >&2; }
 # The same console is adopted once this runtime's own pid file proves the process.
-sleep 120 &
-PARTIAL_PID=$!
-printf '%s\n' "$PARTIAL_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+# The pid file must name the listener itself: a pid file of another process
+# proves nothing about who is on the port.
+printf '%s\n' "$STUB_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
 set +e
 PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
 ec=$?
@@ -352,8 +403,6 @@ set -e
 [[ "$ec" -eq 0 ]] && pass "partial identity with this runtime's pid file is adopted" \
   || { fail "partial identity with this runtime's pid file is adopted (ec=$ec)"; cat "$TMP/live.err" >&2; }
 rm -f "$SOLAR_HOST_RUNTIME_DIR/host.pid"
-kill "$PARTIAL_PID" 2>/dev/null || true
-wait "$PARTIAL_PID" 2>/dev/null || true
 # A console that reports only the workspace is refused the same way.
 cat >"$TMP/partial.identity.json" <<EOF
 {"workspace":"$SOLAR_WORKSPACE"}
@@ -365,6 +414,8 @@ set -e
 [[ "$ec" -ne 0 ]] && pass "workspace-only identity without a proof is rejected" \
   || fail "workspace-only identity without a proof is rejected (ec=$ec)"
 stop_stub
+# Drop the ps double: sections 11 and later install their own.
+rm -f "$TMP/bin/ps"
 
 # --- 11. Legacy console of this install is recovered, not stranded ---------
 # After solar client update the console may still run the code from before
@@ -446,6 +497,7 @@ kill -0 "$OWN_STOP_PID" 2>/dev/null && fail "stop left the own server running" \
   || pass "stop really stopped the own server"
 rm -f "$TMP/bin/ps"
 # A foreign listener is reported and the stop exits 3 (no "not running" lie).
+lsof_double
 start_stub stop-foreign "{\"workspace\":\"$TMP/another-workspace\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
 set +e
 STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" FAKE_LSOF_PID="$STUB_PID" bash "$STOP_SCRIPT" 2>&1)"
@@ -460,6 +512,43 @@ grep -q "not running" <<<"$STOP_OUT" && fail "stop claims a foreign console is n
 kill -0 "$STUB_PID" 2>/dev/null && pass "stop left the foreign console running" \
   || fail "stop left the foreign console running"
 stop_stub
+# A reused pid plus an own hung console still holding the port: dropping the pid
+# file is not a clean stop, the listener has to be stopped too.
+lsof_double
+sleep 120 &
+REUSED_PID=$!
+printf '%s\n' "$REUSED_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+sleep 120 &
+OWN_HUNG_PID=$!
+# The ps double is pid-aware: the pid file holds a reused pid (a plain sleep),
+# while the port's listener is this install's host_server.py.
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+_args="\$*"
+for _a in \$_args; do
+  case "\$_a" in
+    $REUSED_PID) printf '%s\n' "sleep 120"; exit 0 ;;
+    $OWN_HUNG_PID) printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"; exit 0 ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$TMP/bin/lsof" "$TMP/bin/ps"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" FAKE_LSOF_PID="$OWN_HUNG_PID" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+[[ "$stop_ec" -eq 0 ]] && pass "stop with a reused pid still stops an own hung console" \
+  || fail "stop with a reused pid still stops an own hung console (ec=$stop_ec: $STOP_OUT)"
+kill -0 "$OWN_HUNG_PID" 2>/dev/null && fail "own hung console survived the reused-pid stop" \
+  || pass "own hung console was stopped after the reused pid"
+kill -0 "$REUSED_PID" 2>/dev/null && pass "reused pid itself was left running" \
+  || fail "reused pid itself was left running"
+kill "$REUSED_PID" 2>/dev/null || true
+wait "$REUSED_PID" 2>/dev/null || true
+kill "$OWN_HUNG_PID" 2>/dev/null || true
+wait "$OWN_HUNG_PID" 2>/dev/null || true
+rm -f "$TMP/bin/ps"
 
 # --- 13. The console port override is test-only ----------------------------
 # A real installation keeps 9000 even when the override leaks into the
@@ -473,21 +562,25 @@ TEMP_PORT="$(SOLAR_APP_PORT_OVERRIDE=1234 \
 [[ "$TEMP_PORT" == "1234" ]] && pass "a temporary runtime honors the port override" \
   || fail "a temporary runtime honors the port override (got $TEMP_PORT)"
 
+# The suite must not have touched the machine's real console: port 9000 has the
+# same listeners before the suite runs and now (it is recorded at the top of this
+# file, before any stub), and the override is what keeps the stubs away from it.
+REAL_9000_AFTER="$(/usr/sbin/lsof -nP -iTCP:9000 -sTCP:LISTEN -t 2>/dev/null | sort -u || true)"
+[[ "$REAL_9000_AFTER" == "$REAL_9000_BEFORE" ]] && pass "the real console on 9000 is untouched" \
+  || fail "the real console on 9000 changed (before='$REAL_9000_BEFORE' after='$REAL_9000_AFTER')"
+
 # --- 14. start_host.sh recovers an own hung console instead of failing ------
 # An own console that answers nothing and holds the port must be stopped so the
 # new process can bind; the run must not end with "port busy" on its own install.
 sleep 120 &
 START_HUNG_PID=$!
 printf '%s\n' "$START_HUNG_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
-cat >"$TMP/bin/lsof" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "${FAKE_LSOF_PID:-999999}"
-EOF
+lsof_double
 cat >"$TMP/bin/ps" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"
 EOF
-chmod +x "$TMP/bin/lsof" "$TMP/bin/ps"
+chmod +x "$TMP/bin/ps"
 set +e
 PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" FAKE_LSOF_PID="$START_HUNG_PID" \
   bash -c 'source "$1"; solar_host_stop_orphan_listeners; echo "ec=$?"' _ "$HOST_LIB" >"$TMP/start-hung.out" 2>&1

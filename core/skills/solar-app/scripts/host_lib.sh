@@ -76,20 +76,36 @@ solar_host_runtime_dir() {
 # True when the runtime this shell would use is a temporary one, never the
 # machine's own. Mirrors the guard's rule (solar_test_guard): the resolved
 # runtime must differ from the machine runtime (solar-paths with the test
-# overrides removed), compared on physical paths.
+# overrides removed), compared on physical paths. The answer is cached in the
+# process: each call shells out twice, and helpers call it repeatedly.
+_solar_host_temp_runtime=""
 solar_host_runtime_is_temporary() {
-  local live resolved py relaxed
+  if [[ -n "${_solar_host_temp_runtime:-}" ]]; then
+    [[ "$_solar_host_temp_runtime" == yes ]]
+    return
+  fi
+  local live resolved py
   py="$(cd "$_PATHS_SCRIPTS" && pwd)/solar_runtime.py"
-  [[ -f "$py" ]] || return 1
+  if [[ ! -f "$py" ]]; then
+    _solar_host_temp_runtime="no"
+    return 1
+  fi
   if ! live="$(env -u SOLAR_RUNTIME_ROOT -u SOLAR_APP_DATA python3 "$py" runtime 2>/dev/null)"; then
+    _solar_host_temp_runtime="no"
     return 1
   fi
   if ! resolved="$(python3 "$py" runtime 2>/dev/null)"; then
+    _solar_host_temp_runtime="no"
     return 1
   fi
   live="$(solar_canonical_path "$live")"
   resolved="$(solar_canonical_path "$resolved")"
-  [[ "$resolved" != "$live" ]]
+  if [[ "$resolved" != "$live" ]]; then
+    _solar_host_temp_runtime="yes"
+    return 0
+  fi
+  _solar_host_temp_runtime="no"
+  return 1
 }
 
 # Effective identity of the console this machine should serve: physical paths.
@@ -209,7 +225,15 @@ solar_host_port_listener_pids() {
 solar_host_pid_looks_like_server() {
   local pid="$1"
   [[ -n "$pid" ]] || return 1
-  ps -p "$pid" -o args= 2>/dev/null | grep -q 'host_server\.py'
+  # One definition of "runs host_server.py": the same check the identity engine
+  # uses, so this and pid-file ownership cannot drift apart.
+  solar_host_command_looks_like_server "$(ps -p "$pid" -o args= 2>/dev/null || true)"
+}
+
+# True when a command line names host_server.py at all (no install check: the
+# install check is command_is_install_server in host_identity.py).
+solar_host_command_looks_like_server() {
+  [[ "$1" == *host_server.py* ]]
 }
 
 # True when the pid file at $1 (default: this runtime's own) names a live
@@ -258,12 +282,15 @@ solar_host_stop_pid() {
 # "Own" means the /health payload names this workspace and runtime, or — for a
 # console that reports no identity — a proof that the process is ours (this
 # install's host_server.py in its command line). Anything else, including a
-# listener that cannot be proven either way, is reported and the function
-# returns 2 without killing it. Returns 0 when it stopped a listener, 1 when the
-# port had none.
+# listener that cannot be proven either way, is reported and left running.
+#
+# Return contract: 0 when at least one own listener was stopped, 1 when the port
+# had none (or none was own), 2 when a listener was foreign. A foreign listener
+# anywhere in the list wins over having stopped another one, because the caller
+# must not report a clean stop while a foreign console still holds the port.
 solar_host_stop_orphan_listeners() {
   solar_host_load_env
-  local stopped=0
+  local stopped=0 foreign=0
   local pid identity
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
@@ -274,9 +301,16 @@ solar_host_stop_orphan_listeners() {
       stopped=1
       continue
     fi
+    if [[ "$identity" == own ]]; then
+      # Ours by identity, but its command line is not host_server.py: do not kill
+      # it and do not label it foreign. Report the concrete reason and move on.
+      echo "WARN: listener pid $pid on :$SOLAR_APP_PORT is ours by identity but is not host_server.py — leaving it running" >&2
+      continue
+    fi
     solar_host_report_foreign_listener "$pid"
-    return 2
+    foreign=1
   done < <(solar_host_port_listener_pids)
+  [[ "$foreign" -eq 1 ]] && return 2
   [[ "$stopped" -eq 1 ]]
 }
 

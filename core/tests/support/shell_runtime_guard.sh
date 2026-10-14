@@ -83,17 +83,23 @@ solar_test_effective_install() {
 # solar-paths resolves). Never a string match.
 solar_test_guard_services() {
   local effective live
+  # Defined-but-empty counts as pinned, exactly as the Client reads it
+  # (`${SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE-__UNSET__}`): a defined value makes
+  # the Client skip detection, empty included.
   if [[ -n "${SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE+x}" || -n "${SOLAR_CLIENT_PS_OUTPUT_FILE:-}" ]]; then
     return 0
   fi
   if ! effective="$(solar_test_effective_install)"; then
-    return 0
+    echo "ABORT: could not resolve the effective install for the service check." >&2
+    exit 97
   fi
   if ! live="$(solar_test_global_install)"; then
-    return 0
+    echo "ABORT: could not resolve the Client's global install for the service check." >&2
+    exit 97
   fi
   if [[ -z "$effective" || -z "$live" ]]; then
-    return 0
+    echo "ABORT: the service check could not resolve an install to compare (effective='$effective' global='$live')." >&2
+    exit 97
   fi
   effective="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$effective")"
   live="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$live")"
