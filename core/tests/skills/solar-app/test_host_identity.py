@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -719,15 +720,39 @@ class EndpointTest(unittest.TestCase):
     def test_a_listener_on_the_probed_address_matches(self):
         self.assertTrue(host_identity.endpoint_matches("127.0.0.1:9000", "127.0.0.1", 9000))
 
-    def test_loopback_spellings_are_one_address(self):
-        # The probe reaches the same socket through any loopback spelling.
-        for address in ("127.0.0.1:9000", "localhost:9000", "[::1]:9000"):
-            self.assertTrue(
-                host_identity.endpoint_matches(address, "127.0.0.1", 9000), address)
+    def test_loopback_spellings_of_the_same_family_match(self):
+        # `localhost` may resolve to the IPv4 loopback the probe reaches, and
+        # `lsof` prints an IPv4 wildcard bind as `*:9000`: it answers on loopback.
+        self.assertTrue(host_identity.endpoint_matches("127.0.0.1:9000", "127.0.0.1", 9000))
+        self.assertTrue(host_identity.endpoint_matches("localhost:9000", "127.0.0.1", 9000))
+        self.assertTrue(host_identity.endpoint_matches("*:9000", "127.0.0.1", 9000))
+
+    def test_loopback_of_another_family_does_not_match(self):
+        # `[::1]:9000` and `127.0.0.1:9000` are two sockets of different families:
+        # a probe of one never reaches the other, so they must not be collapsed.
+        self.assertFalse(host_identity.endpoint_matches("[::1]:9000", "127.0.0.1", 9000))
+        self.assertFalse(host_identity.endpoint_matches("127.0.0.1:9000", "::1", 9000))
+        # `localhost` names the loopback of both families, so it matches either.
+        self.assertTrue(host_identity.endpoint_matches("localhost:9000", "::1", 9000))
+
+    def test_a_listener_on_another_family_is_other_not_match(self):
+        # Same port, same install, but a different socket: the endpoint verdict
+        # must exclude the listener so its /health answer is never borrowed.
+        stdout = "p111\nn[::1]:9000\np222\nn127.0.0.1:9000\n"
+        with self._lsof(stdout):
+            self.assertEqual(
+                host_identity.listener_endpoint_state("111", "127.0.0.1", 9000), "other")
+            self.assertEqual(
+                host_identity.listener_endpoint_state("222", "127.0.0.1", 9000), "match")
+            self.assertEqual(
+                host_identity.listener_endpoint_state("111", "::1", 9000), "match")
 
     def test_a_wildcard_bind_matches_any_host(self):
-        # `lsof` reports a 0.0.0.0 bind as `*:9000`: it answers on loopback too.
+        # `lsof` reports both wildcards as `*`; a wildcard answers on every local
+        # address, so it matches a probe of either family and of any literal host.
         self.assertTrue(host_identity.endpoint_matches("*:9000", "127.0.0.1", 9000))
+        self.assertTrue(host_identity.endpoint_matches("*:9000", "::1", 9000))
+        self.assertTrue(host_identity.endpoint_matches("0.0.0.0:9000", "127.0.0.2", 9000))
 
     def test_a_listener_on_another_address_does_not_match(self):
         self.assertFalse(host_identity.endpoint_matches("127.0.0.2:9000", "127.0.0.1", 9000))
@@ -780,6 +805,46 @@ class EndpointTest(unittest.TestCase):
                 host_identity.endpoint_verdicts("127.0.0.1", 9000),
                 [("111", "match"), ("222", "other")],
             )
+
+    def test_endpoint_verdicts_marks_a_wildcard_and_a_specific_bind_both_match(self):
+        # A wildcard bind answers on every local address, so with a wildcard and a
+        # specific bind on the same port both are "match": the kernel's SO_REUSEPORT
+        # means either may serve the connection, so the sweep must not treat the
+        # specific bind as the sole owner. This pins that intended behaviour.
+        stdout = "p111\nn*:9000\np222\nn127.0.0.1:9000\n"
+        with self._lsof(stdout):
+            self.assertEqual(
+                host_identity.endpoint_verdicts("127.0.0.1", 9000),
+                [("111", "match"), ("222", "match")],
+            )
+
+    def test_evaluate_port_resolves_only_the_probed_endpoint(self):
+        # The `--port` fallback must resolve the endpoint's listeners, not the whole
+        # port: an own host_server.py on another address must not stand in for the
+        # console the probe reaches.
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        health = root / "health.json"
+        health.write_text("{}")
+        own_server = root / "install/core/skills/solar-app/scripts/host_server.py"
+        own_server.parent.mkdir(parents=True, exist_ok=True)
+        own_server.write_text("#!/usr/bin/env python3\n")
+        original_command = host_identity.pid_command
+        host_identity.pid_command = lambda pid: f"python3 {own_server}"
+        stdout = "p111\nn127.0.0.2:9000\n"
+        try:
+            with self._lsof(stdout):
+                rc = host_identity.main([
+                    "evaluate", "--health-file", str(health),
+                    "--workspace", "/tmp/ws", "--runtime", "/tmp/rt",
+                    "--host", "127.0.0.1", "--port", "9000",
+                    "--install-root", str(root / "install"),
+                ])
+        finally:
+            host_identity.pid_command = original_command
+        # The only listener serves 127.0.0.2, not the probed 127.0.0.1: it must not
+        # be adopted, so the run ends with a mismatch.
+        self.assertEqual(rc, 1)
 
     def test_cli_port_endpoints_prints_pid_and_state(self):
         stdout = "p111\nn127.0.0.1:9000\np222\nn127.0.0.2:9000\n"

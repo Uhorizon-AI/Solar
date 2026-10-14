@@ -1108,6 +1108,81 @@ ON_ENDPOINT_PIDS="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
 rm -f "$TMP/bin/lsof" "$TMP/bin/ps"
 stop_stub
 
+# --- 20. A pid file naming this install's server on another endpoint stays -----
+# Same install, same port, but another address: the pid-file process runs this
+# install's host_server.py yet serves a different socket than SOLAR_APP_BASE_URL
+# reaches. Neither stop nor start may kill it — it is not the console this runtime
+# talks to, and the command-line proof alone must not turn it into "own".
+sleep 120 & disown 2>/dev/null || true
+OTHER_ENDPOINT_PID=$!
+# Write the doubles once a stub gives us the pid that answers on the probed 127.0.0.1.
+write_other_endpoint_doubles() {
+  cat >"$TMP/bin/lsof" <<EOF
+#!/usr/bin/env bash
+# Both forms: the bare pid list and the keyed name field. The pid-file pid lives
+# on 127.0.0.2; the stub that answers /health lives on the probed 127.0.0.1.
+for _arg in "\$@"; do
+  case "\$_arg" in
+    -Fn) printf 'p%s\nn127.0.0.2:%s\np%s\nn127.0.0.1:%s\n' \\
+           "$OTHER_ENDPOINT_PID" "$STUB_PORT" "$STUB_PID" "$STUB_PORT"; exit 0 ;;
+  esac
+done
+printf '%s\n' "$OTHER_ENDPOINT_PID"
+printf '%s\n' "$STUB_PID"
+EOF
+  chmod +x "$TMP/bin/lsof"
+  cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+_args="\$*"
+for _a in \$_args; do
+  case "\$_a" in
+    $OTHER_ENDPOINT_PID|$STUB_PID) printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"; exit 0 ;;
+  esac
+done
+exit 0
+EOF
+  chmod +x "$TMP/bin/ps"
+}
+# (a) stop: the pid file names the other-endpoint server. It must be left running
+# (the command proof must not override the endpoint verdict), the pid file dropped,
+# and the probed-endpoint own console stopped.
+start_stub other-endpoint-own "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+write_other_endpoint_doubles
+printf '%s\n' "$OTHER_ENDPOINT_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+kill -0 "$OTHER_ENDPOINT_PID" 2>/dev/null && pass "stop left the other-endpoint server running" \
+  || fail "stop killed the other-endpoint server"
+grep -q "at another address" <<<"$STOP_OUT" && pass "stop names the other-endpoint pid file" \
+  || { fail "stop names the other-endpoint pid file"; echo "$STOP_OUT" >&2; }
+kill -0 "$STUB_PID" 2>/dev/null && fail "stop left the probed-endpoint own console running" \
+  || pass "stop still stopped the probed-endpoint own console"
+[[ ! -f "$SOLAR_HOST_RUNTIME_DIR/host.pid" ]] && pass "stop dropped the other-endpoint pid file" \
+  || fail "stop dropped the other-endpoint pid file"
+stop_stub
+# (b) start: the pid file names the other-endpoint server while a foreign console
+# holds the probed endpoint. The run must refuse (exit 3) and never stop the
+# other-endpoint server, which no command proof makes "own".
+start_stub other-endpoint-foreign "{\"workspace\":\"$TMP/another-workspace\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+write_other_endpoint_doubles
+printf '%s\n' "$OTHER_ENDPOINT_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+set +e
+START_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$START_SCRIPT" 2>&1)"
+start_ec=$?
+set -e
+kill -0 "$OTHER_ENDPOINT_PID" 2>/dev/null && pass "start left the other-endpoint server running" \
+  || fail "start killed the other-endpoint server"
+grep -q "does not serve" <<<"$START_OUT" && pass "start names why it leaves the other-endpoint pid" \
+  || { fail "start names why it leaves the other-endpoint pid"; echo "$START_OUT" >&2; }
+[[ "$start_ec" -eq 3 ]] && pass "start with a foreign probed endpoint exits 3" \
+  || fail "start with a foreign probed endpoint exits 3 (ec=$start_ec)"
+stop_stub
+kill "$OTHER_ENDPOINT_PID" 2>/dev/null || true
+wait "$OTHER_ENDPOINT_PID" 2>/dev/null || true
+rm -f "$TMP/bin/lsof" "$TMP/bin/ps"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

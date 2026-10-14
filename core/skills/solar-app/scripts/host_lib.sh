@@ -223,13 +223,21 @@ solar_host_listener_identity() {
   # than the probed one, the /health answer — which the probe fetched from
   # SOLAR_APP_BASE_URL — is not this pid's, so it must not be attributed to it.
   # A foreign console on another address would otherwise borrow the answer of our
-  # own console on the probed address and be labelled own and stopped. "unknown"
+  # own console on the probed address and be labelled own and stopped. This is
+  # also a hard exclusion for the command/pid-file proofs below: those prove the
+  # *process* is this install's server, never that it serves the probed socket,
+  # so a process on another address (or another family) must not become "own"
+  # through them either. The caller (the orphan sweep) also skips "other" before
+  # calling this, but the exclusion holds inside this function too, so no direct
+  # caller can stop a listener that does not hold the probed socket. "unknown"
   # (no lsof, or nothing listed) is not "other": the failsafe below still
   # recovers a hung own console.
-  local endpoint_excludes=false
-  [[ "$endpoint_state" == other ]] && endpoint_excludes=true
+  if [[ "$endpoint_state" == other ]]; then
+    echo unproven
+    return 0
+  fi
   health_file="$(mktemp "${TMPDIR:-/tmp}/solar-host-health.XXXXXX")"
-  if [[ "$endpoint_excludes" == true ]] || ! python3 - "$SOLAR_APP_BASE_URL" "$health_file" <<'PY'
+  if ! python3 - "$SOLAR_APP_BASE_URL" "$health_file" <<'PY'
 import json, sys, urllib.request
 base, dest = sys.argv[1:3]
 # A loopback probe must never go through an environment proxy: with http_proxy

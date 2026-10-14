@@ -141,18 +141,50 @@ def port_listener_endpoints(port) -> dict:
     return {pid: addresses for pid, addresses in found.items() if addresses}
 
 
-def _normalize_host(host: str) -> str:
-    """A comparable form of an address host: bracketed and classic loopbacks.
+def _host_families(host: str) -> frozenset:
+    """The socket families ``host`` can name, for endpoint comparison.
 
-    ``::1``, ``[::1]``, ``localhost`` and ``127.0.0.1`` all name the loopback the
-    probe actually reaches, so a listener bound to one of them must match a base
-    URL written with another. A wildcard bind (``*``, ``0.0.0.0``, ``::``)
-    answers on every local address, so it matches any requested host.
+    A probe and a listener address are the same socket only when the families
+    they name intersect; two hosts on different families are different sockets
+    that may belong to different processes.
+
+    ``127.0.0.1`` and ``::1`` are the loopback of two *different* families: they
+    are not the same socket, so they never collapse into one another. ``localhost``
+    is a name that resolves to the loopback of both families, so it names both.
+    A wildcard bind answers on every local address; ``lsof`` prints the IPv4
+    (``0.0.0.0``) and IPv6 (``::``) wildcard as the same ``*``, so the family
+    cannot be recovered from it and the wildcard is kept as matching any host.
+
+    Any other host (``127.0.0.2``, a LAN address, a hostname off the loopback) is
+    its own literal socket.
     """
-    host = (host or "").strip().strip("[]").lower()
-    if host in ("localhost", "127.0.0.1", "::1", "0", "0.0.0.0", "::", "*"):
-        return "loopback"
-    return host
+    host = (host or "").strip().strip("[]").rstrip(".").lower()
+    if not host:
+        return frozenset()
+    if host in ("*", "0.0.0.0", "::", "0"):
+        return frozenset({"any"})
+    if host == "localhost":
+        return frozenset({"ipv4", "ipv6"})
+    if host == "127.0.0.1":
+        return frozenset({"ipv4"})
+    if host == "::1":
+        return frozenset({"ipv6"})
+    return frozenset({"literal:" + host})
+
+
+def _hosts_match(listener_host: str, probe_host: str) -> bool:
+    """True when a listener bound to ``listener_host`` serves a probe of ``probe_host``.
+
+    A wildcard bind (``*``/``0.0.0.0``/``::``) answers on every local address, so
+    it matches any probe host. Otherwise the families must intersect: this is what
+    keeps ``::1`` and ``127.0.0.1`` — two sockets of different families — apart.
+    """
+    families = _host_families(listener_host)
+    if not families:
+        return False
+    if "any" in families:
+        return True
+    return bool(families & _host_families(probe_host))
 
 
 def _endpoint_host(address: str) -> str:
@@ -180,13 +212,14 @@ def endpoint_matches(address: str, host: str, port) -> bool:
     Identity is decided per socket, never per port: with two listeners on the
     same port, the ``/health`` answer a probe returns belongs to the address the
     probe reaches, so a listener on any other address must not be attributed
-    that answer.
+    that answer. Different socket families are different sockets too, so a
+    listener on ``[::1]:port`` does not answer a probe of ``127.0.0.1:port``.
     """
     if not address:
         return False
     if str(_endpoint_port(address)) != str(port):
         return False
-    return _normalize_host(_endpoint_host(address)) == _normalize_host(host)
+    return _hosts_match(_endpoint_host(address), host)
 
 
 def pid_serves_endpoint(pid, host, port) -> bool:
@@ -227,6 +260,14 @@ def endpoint_verdicts(host, port) -> list:
     One ``lsof`` call for the whole port: the shell needs the verdict of every
     listener to decide which socket a probe of ``host:port`` really reaches, and
     a per-pid query would shell out once per listener.
+
+    A wildcard bind answers on every local address, so a wildcard listener and a
+    specific listener on the same port both come back as ``match``: the caller
+    may then sweep both. That is deliberate — the kernel would let a wildcard and
+    a specific bind coexist only with ``SO_REUSEPORT``, where either may serve the
+    connection, so neither can be treated as the sole owner of the probed socket.
+    Marking the specific bind ``match`` and the wildcard ``other`` would let the
+    sweep stop the wildcard and still lose the port to the specific one.
     """
     endpoints = port_listener_endpoints(port)
     verdicts = []
@@ -525,6 +566,8 @@ def main(argv=None) -> int:
     check.add_argument("--listener-command", default="")
     check.add_argument("--port", default="",
                        help="Resolve the listeners with lsof only if the payload is incomplete.")
+    check.add_argument("--host", default="127.0.0.1",
+                       help="The host a probe of --port reaches; only its listeners are resolved.")
     check.add_argument("--install-root", action="append", default=[])
 
     names = sub.add_parser("pid-file-names-listener",
@@ -576,8 +619,12 @@ def main(argv=None) -> int:
             if pid.strip()
         ]
     elif args.port:
+        host = args.host
         port = args.port
-        listener_source = lambda: port_listener_pids(port)
+        # Endpoint-filtered: a probe of host:port only reaches the listener on
+        # that socket, so a listener of the same port on another address (or
+        # another family) is not offered as a proof of ownership.
+        listener_source = lambda: port_listener_pids_on_endpoint(host, port)
     else:
         listener_source = []
     reason = evaluate(

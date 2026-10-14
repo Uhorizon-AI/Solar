@@ -45,9 +45,15 @@ if [[ -f "$PID_FILE" ]]; then
   # handed in, so a pid on another address of the same port is never attributed
   # the answer our own console gave on the probed one.
   if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+    old_endpoint_state="$(solar_host_endpoint_state_for "$old_pid" "$(solar_host_port_endpoints)")"
     if ! solar_host_pid_looks_like_server "$old_pid"; then
       echo "WARN: pid $old_pid in the host pid file is not host_server.py (reused pid) — leaving it running" >&2
-    elif [[ "$(solar_host_listener_identity "$old_pid" "$(solar_host_endpoint_state_for "$old_pid" "$(solar_host_port_endpoints)")")" == own ]]; then
+    elif [[ "$old_endpoint_state" == other ]]; then
+      # It runs this install's host_server.py but listens on another address (or
+      # family), not the socket SOLAR_APP_BASE_URL reaches: stopping it would not
+      # free the probed port and would kill a console on another socket. Leave it.
+      echo "WARN: pid $old_pid runs host_server.py but does not serve :${SOLAR_APP_PORT} on ${SOLAR_APP_HOST} — leaving it running" >&2
+    elif [[ "$(solar_host_listener_identity "$old_pid" "$old_endpoint_state")" == own ]]; then
       echo "WARN: stale Solar Host pid $old_pid (health check failed) — stopping" >&2
       solar_host_stop_pid "$old_pid"
     else
