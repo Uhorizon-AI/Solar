@@ -106,6 +106,156 @@ def port_listener_pids(port) -> list:
     )
 
 
+def port_listener_endpoints(port) -> dict:
+    """``{pid: {"host:port", ...}}`` for the listeners of ``port``, from ``lsof -Fn``.
+
+    Several processes can listen on the *same* port on *different* addresses
+    (``127.0.0.1:9000`` and ``127.0.0.2:9000``): the port number alone does not
+    identify a listener. ``lsof -t`` collapses them to a bare pid list, so this
+    one asks for the name field too and keeps the address each pid actually
+    serves.
+
+    The address is the raw lsof name (``127.0.0.1:9000``, ``*:9000``,
+    ``[::1]:9000``), unmodified: :func:`endpoint_matches` owns the comparison.
+    """
+    try:
+        shown = subprocess.run(
+            ["lsof", "-nP", "-iTCP:" + str(port), "-sTCP:LISTEN", "-Fn"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    found: dict = {}
+    pid = ""
+    for line in (shown.stdout or "").splitlines():
+        if not line:
+            continue
+        kind, value = line[0], line[1:]
+        if kind == "p":
+            pid = value.strip() if value.strip().isdigit() else ""
+        elif kind == "n" and pid:
+            # The trailing state ("(LISTEN)") is not part of the address.
+            address = value.split(" ", 1)[0].strip()
+            if address:
+                found.setdefault(pid, set()).add(address)
+    return {pid: addresses for pid, addresses in found.items() if addresses}
+
+
+def _normalize_host(host: str) -> str:
+    """A comparable form of an address host: bracketed and classic loopbacks.
+
+    ``::1``, ``[::1]``, ``localhost`` and ``127.0.0.1`` all name the loopback the
+    probe actually reaches, so a listener bound to one of them must match a base
+    URL written with another. A wildcard bind (``*``, ``0.0.0.0``, ``::``)
+    answers on every local address, so it matches any requested host.
+    """
+    host = (host or "").strip().strip("[]").lower()
+    if host in ("localhost", "127.0.0.1", "::1", "0", "0.0.0.0", "::", "*"):
+        return "loopback"
+    return host
+
+
+def _endpoint_host(address: str) -> str:
+    """The host of an lsof address (``127.0.0.1:9000`` / ``[::1]:9000`` / ``*:9000``)."""
+    address = (address or "").strip()
+    if address.startswith("["):
+        end = address.find("]")
+        return address[1:end] if end > 0 else address
+    if ":" not in address:
+        return address
+    return address.rsplit(":", 1)[0]
+
+
+def _endpoint_port(address: str) -> str:
+    """The port of an lsof address, or "" when it carries none."""
+    address = (address or "").strip()
+    if ":" not in address:
+        return ""
+    return address.rsplit(":", 1)[1]
+
+
+def endpoint_matches(address: str, host: str, port) -> bool:
+    """True when an lsof address is the ``host:port`` a probe of ``port`` reaches.
+
+    Identity is decided per socket, never per port: with two listeners on the
+    same port, the ``/health`` answer a probe returns belongs to the address the
+    probe reaches, so a listener on any other address must not be attributed
+    that answer.
+    """
+    if not address:
+        return False
+    if str(_endpoint_port(address)) != str(port):
+        return False
+    return _normalize_host(_endpoint_host(address)) == _normalize_host(host)
+
+
+def pid_serves_endpoint(pid, host, port) -> bool:
+    """True when ``pid`` is a listener of ``port`` on the ``host`` a probe reaches."""
+    return listener_endpoint_state(pid, host, port) == "match"
+
+
+def listener_endpoint_state(pid, host, port) -> str:
+    """Where ``pid`` stands with respect to the ``host:port`` a probe reaches.
+
+    ``match``   — ``lsof`` lists the pid and it serves the probed address: the
+                  answer of a probe of that address really belongs to it.
+    ``other``   — ``lsof`` lists the pid but only on *other* addresses of the
+                  port: the answer belongs to a different socket, so the pid must
+                  not be attributed that identity (nor stopped as if it were).
+    ``unknown`` — ``lsof`` listed nothing (missing, failed or timed out) or does
+                  not list this pid: there is no endpoint evidence to gate on, so
+                  the caller keeps its other proofs.
+
+    The distinction matters: turning ``unknown`` into ``other`` would strand a
+    hung own console on a machine without ``lsof``, which the no-``lsof`` failsafe
+    exists to recover.
+    """
+    pid = str(pid).strip()
+    if not pid:
+        return "unknown"
+    endpoints = port_listener_endpoints(port)
+    if not endpoints or pid not in endpoints:
+        return "unknown"
+    if any(endpoint_matches(address, host, port) for address in endpoints[pid]):
+        return "match"
+    return "other"
+
+
+def endpoint_verdicts(host, port) -> list:
+    """``[(pid, "match"|"other")]`` for the listeners of ``port``, in numeric order.
+
+    One ``lsof`` call for the whole port: the shell needs the verdict of every
+    listener to decide which socket a probe of ``host:port`` really reaches, and
+    a per-pid query would shell out once per listener.
+    """
+    endpoints = port_listener_endpoints(port)
+    verdicts = []
+    for pid in sorted(endpoints, key=int):
+        if any(endpoint_matches(address, host, port) for address in endpoints[pid]):
+            verdicts.append((pid, "match"))
+        else:
+            verdicts.append((pid, "other"))
+    return verdicts
+
+
+def port_listener_pids_on_endpoint(host, port) -> list:
+    """Listeners of ``port`` that serve the ``host`` a probe reaches, in numeric order.
+
+    A probe of ``host:port`` only ever reaches the socket bound to that address,
+    so a listener of the same port on a different address must not stand in for
+    it. When ``lsof`` gives no endpoint evidence (missing, failed or a double that
+    only answers ``-t``) every listener of the port is returned: the caller keeps
+    the pre-endpoint behaviour instead of losing the whole list.
+    """
+    endpoints = port_listener_endpoints(port)
+    if not endpoints:
+        return port_listener_pids(port)
+    return [
+        pid for pid in sorted(endpoints, key=int)
+        if any(endpoint_matches(address, host, port) for address in endpoints[pid])
+    ]
+
+
 def _pid_file_pid(pid_file: str):
     """The pid named by a pid file, when it is a live process, else ``None``."""
     if not pid_file:
@@ -217,10 +367,15 @@ def command_is_install_server(command: str, install_roots) -> bool:
     idx = command.find(suffix)
     while idx >= 0:
         start = idx
+        end = idx + len(suffix)
         while start > 0 and command[start - 1] not in " \t'\"":
             start -= 1
-        candidate = command[start:idx + len(suffix)]
-        if canonical(candidate) in wanted and _interpreted_script(command[:start]):
+        candidate = command[start:end]
+        # `_path_end_is_clean` is required here too: without it the suffix matches
+        # inside `host_server.py.backup`/`.old`, so a process running a *different*
+        # file would be adopted and stopped as this install's server.
+        if canonical(candidate) in wanted and _path_end_is_clean(command, end) \
+                and _interpreted_script(command[:start]):
             return True
         idx = command.find(suffix, idx + 1)
     return False
@@ -378,6 +533,18 @@ def main(argv=None) -> int:
     names.add_argument("--pid", required=True)
     names.add_argument("--install-root", action="append", default=[])
 
+    serves = sub.add_parser("pid-serves-endpoint",
+                            help="Does the pid listen on the host:port a probe reaches?")
+    serves.add_argument("--pid", required=True)
+    serves.add_argument("--host", default="127.0.0.1")
+    serves.add_argument("--port", required=True)
+
+    endpoints_parser = sub.add_parser(
+        "port-endpoints",
+        help="Print `pid match|other` for every listener of the port.")
+    endpoints_parser.add_argument("--host", default="127.0.0.1")
+    endpoints_parser.add_argument("--port", required=True)
+
     cmd = sub.add_parser("command-is-install-server",
                          help="Does a command line run this install's host_server.py?")
     cmd.add_argument("--command", required=True)
@@ -387,6 +554,14 @@ def main(argv=None) -> int:
     if args.subcommand == "pid-file-names-listener":
         ok = pid_file_names_listener(args.pid_file, args.pid, args.install_root)
         return 0 if ok else 1
+    if args.subcommand == "pid-serves-endpoint":
+        # 0 match, 1 other address, 2 unknown (no endpoint evidence at all).
+        return {"match": 0, "other": 1, "unknown": 2}[
+            listener_endpoint_state(args.pid, args.host, args.port)]
+    if args.subcommand == "port-endpoints":
+        for listener, state in endpoint_verdicts(args.host, args.port):
+            print(listener + " " + state)
+        return 0
     if args.subcommand == "command-is-install-server":
         return 0 if command_is_install_server(args.command, args.install_root) else 1
 

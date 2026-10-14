@@ -385,6 +385,21 @@ def test_health_body_carries_physical_paths_for_loopback(tmp_path):
     assert payload["runtime"]
 
 
+def test_health_body_carries_exactly_the_five_contract_fields(tmp_path):
+    # /health is served unauthenticated to any loopback client, so its surface is
+    # a contract: adding a field (another path, a token, a pid) must fail here
+    # and be a deliberate decision, not a silent leak. Both list forms are
+    # checked, using the union so this test does not depend on field order.
+    import json as _json
+    import app_http
+
+    handler = _FakeHandler(("127.0.0.1", 44444))
+    app_http.get(handler, "/health", {}, str(tmp_path))
+
+    payload = _json.loads(handler.body.decode("utf-8"))
+    assert set(payload) == {"service", "status", "process_ok", "workspace", "runtime"}
+
+
 def test_health_reports_the_physical_workspace_when_reached_through_a_symlink(tmp_path):
     # The console may be started from a symlinked workspace path. /health must
     # answer with the physical path so a supervisor comparing it with its own

@@ -25,11 +25,11 @@ done < <(solar_host_identity_install_roots)
 # /health payload is incomplete, so a healthy console costs no lsof on the
 # supervisor's frequent path.
 python3 - "$SCRIPT_DIR" "$SOLAR_APP_BASE_URL" "${1:-}" "$EXPECTED_WORKSPACE" "$EXPECTED_RUNTIME" \
-  "$SOLAR_HOST_PID_FILE" "$SOLAR_APP_PORT" ${INSTALL_ROOTS[@]+"${INSTALL_ROOTS[@]}"} <<'PY'
+  "$SOLAR_HOST_PID_FILE" "$SOLAR_APP_PORT" "$SOLAR_APP_HOST" ${INSTALL_ROOTS[@]+"${INSTALL_ROOTS[@]}"} <<'PY'
 import json,sys,time,urllib.request
 from datetime import datetime
-script_dir,base,flag,expected_ws,expected_rt,pid_file,app_port=sys.argv[1:8]
-install_roots=sys.argv[8:]
+script_dir,base,flag,expected_ws,expected_rt,pid_file,app_port,app_host=sys.argv[1:9]
+install_roots=sys.argv[9:]
 sys.path.insert(0,script_dir)
 import host_identity
 
@@ -42,10 +42,12 @@ def _get(url):
 
 def identity(health):
     # The listeners are resolved with lsof only when the payload is incomplete, so
-    # a healthy console costs no `ps` and no `lsof` call.
+    # a healthy console costs no `ps` and no `lsof` call. The endpoint matters: a
+    # probe of `app_host:app_port` only reaches the socket bound to that address,
+    # so a listener of the same port on another address cannot carry this answer.
     return host_identity.evaluate(health=health,workspace=expected_ws,runtime=expected_rt,
                                   pid_file=pid_file,
-                                  listener_pids=lambda: host_identity.port_listener_pids(app_port),
+                                  listener_pids=lambda: host_identity.port_listener_pids_on_endpoint(app_host,app_port),
                                   install_roots=install_roots)
 
 result={'available':False,'storage_ok':False,'runtime_status':'unknown','base_url':base,

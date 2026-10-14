@@ -19,9 +19,11 @@ if [[ -f "$PID_FILE" ]]; then
     # pid is gone, or it was reused by another live process that is not a
     # listener. Repair the pid file only when the pid it holds is not among the
     # port's listeners; with several listeners, a valid pid beyond the first must
-    # not be overwritten. When no listener can be resolved (no lsof), do not
-    # print the old pid as if it were alive.
-    live_pids="$(solar_host_port_listener_pids || true)"
+    # not be overwritten. Only the listeners of the probed socket count: a console
+    # of the same port on another address is not the one that answered. When no
+    # listener can be resolved (no lsof), do not print the old pid as if it were
+    # alive.
+    live_pids="$(solar_host_port_listener_pids_on_endpoint || true)"
     live_pid="$(head -n1 <<<"$live_pids")"
     if [[ -n "$live_pids" ]] && ! grep -qx "$old_pid" <<<"$live_pids"; then
       echo "$live_pid" >"$PID_FILE"
@@ -39,11 +41,13 @@ if [[ -f "$PID_FILE" ]]; then
   # host_server.py that answers as another workspace's console is foreign. Both
   # are dropped with the pid file, never killed. The identity is evaluated before
   # the pid file is removed, so the file still counts as a proof for a legacy
-  # console that reports no identity.
+  # console that reports no identity. The endpoint verdict is resolved once and
+  # handed in, so a pid on another address of the same port is never attributed
+  # the answer our own console gave on the probed one.
   if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
     if ! solar_host_pid_looks_like_server "$old_pid"; then
       echo "WARN: pid $old_pid in the host pid file is not host_server.py (reused pid) — leaving it running" >&2
-    elif [[ "$(solar_host_listener_identity "$old_pid")" == own ]]; then
+    elif [[ "$(solar_host_listener_identity "$old_pid" "$(solar_host_endpoint_state_for "$old_pid" "$(solar_host_port_endpoints)")")" == own ]]; then
       echo "WARN: stale Solar Host pid $old_pid (health check failed) — stopping" >&2
       solar_host_stop_pid "$old_pid"
     else
@@ -59,7 +63,9 @@ fi
 if host_health_ok; then
   # --liveness already verified the identity, so the listeners are our console.
   # Record the first listener that really is a host_server.py: with several
-  # listeners, the first pid on the port is not necessarily the server.
+  # listeners, the first pid on the port is not necessarily the server, and a
+  # listener on another address of the same port is not the console that
+  # answered.
   recovered_pid=""
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
@@ -67,7 +73,7 @@ if host_health_ok; then
       recovered_pid="$candidate"
       break
     fi
-  done < <(solar_host_port_listener_pids)
+  done < <(solar_host_port_listener_pids_on_endpoint)
   if [[ -n "$recovered_pid" ]]; then
     echo "$recovered_pid" >"$PID_FILE"
     echo "Solar Host already running (pid $recovered_pid, recovered pid file) — $SOLAR_APP_BASE_URL"
@@ -78,8 +84,10 @@ fi
 # Something still holds the port. If it is this runtime's own hung console (this
 # install's host_server.py, no /health answer), stop it so the new process can
 # bind; a foreign console is reported once and never stopped, and the run exits 3
-# because retrying here cannot converge.
-if solar_host_port_listener_pids | grep -q .; then
+# because retrying here cannot converge. Only the listeners of the probed socket
+# are swept: a console on another address of the same port does not block the
+# bind, so it neither blocks the run nor gets reported as a foreign console.
+if solar_host_port_listener_pids_on_endpoint | grep -q .; then
   set +e
   solar_host_stop_orphan_listeners
   orphan_ec=$?
@@ -94,13 +102,15 @@ if solar_host_port_listener_pids | grep -q .; then
   # Stopping the process does not release the port at the same instant: wait
   # until the listener is really gone before binding, or the bind would fail.
   for _i in 1 2 3 4 5 6 7 8 9 10; do
-    solar_host_port_listener_pids | grep -q . || break
+    solar_host_port_listener_pids_on_endpoint | grep -q . || break
     sleep 0.2
   done
-  if solar_host_port_listener_pids | grep -q .; then
+  if solar_host_port_listener_pids_on_endpoint | grep -q .; then
     # A listener survived the sweep: report it with the identity we can prove, so
     # the message does not claim "foreign" when it is merely unproven.
-    solar_host_report_foreign_listener "" "$(solar_host_listener_identity)"
+    survivor="$(solar_host_port_listener_pids_on_endpoint | head -n1 || true)"
+    solar_host_report_foreign_listener "$survivor" \
+      "$(solar_host_listener_identity "$survivor" "$(solar_host_endpoint_state_for "$survivor" "$(solar_host_port_endpoints)")")"
     exit 3
   fi
 fi

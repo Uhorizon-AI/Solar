@@ -93,12 +93,25 @@ with no secrets. Those are local filesystem paths, served unauthenticated to any
 loopback client: the console binds loopback only (the host refuses to bind when
 `SOLAR_APP_HOST` is not a loopback address), so the exposure is limited to this
 machine, and the paths are the ones an operator already sees in `solar paths`.
+The body is exactly `service`, `status`, `process_ok`, `workspace` and
+`runtime`: `test_console_read.py` pins that set, so a new field on this
+unauthenticated route is a deliberate decision, never a silent addition.
 `check_host.sh --liveness`, `check_host.sh` without a flag,
 `ensure_host.sh` and the process recovery in `start_host.sh` compare that pair
 with the expected identity of this runtime and refuse a console of another
 workspace or runtime with an explicit diagnosis. A foreign console is reported
 once and never stopped, not even by `solar app start`; the port stays fixed at
 9000 and the console stays read-only and loopback only.
+
+Identity is decided **per socket**, not per port: several processes can listen on
+`:9000` on different addresses (`127.0.0.1:9000` and `127.0.0.2:9000`), and the
+`/health` answer a probe returns belongs to the address that probe reaches. A
+listener on another address of the same port is never attributed that answer, is
+never stopped, and is not reported as a foreign blocker, because it does not hold
+the socket the console binds (`SOLAR_APP_HOST:SOLAR_APP_PORT`). `lsof` supplies
+the address of each listener; when it is missing or lists nothing there is no
+endpoint evidence and the other proofs carry the decision (a machine without
+`lsof` still recovers a hung own console).
 
 The policy itself lives in one place, `host_identity.py`, and every reuse path
 calls it: `check_host.sh`, `host_lib.sh` (listener identity and orphan stopping),
@@ -107,16 +120,11 @@ half of it (only `workspace` or only `runtime`) — is adopted only when this
 runtime can prove the process is its own: its own pid file names a live
 `host_server.py`, or the listener's command line is this install's
 `host_server.py` (the legacy console from before `/health` reported a
-`runtime`). `stop_host.sh` uses the same proof before stopping, so a pid reused
-by another program is dropped, never killed.
-
-The two proofs are not equally strict, by design: the pid-file proof establishes
-**runtime** membership (the pid file lives in this runtime's directory), not
-**install** membership — a `host_server.py` running from another install but
-recorded in this runtime's pid file counts as ours. The command-line proof is
-install-strict (it compares the script against this install's roots). When both
-are available, the identity payload wins; the pid-file proof only fills the gap
-when `/health` answers nothing.
+`runtime`). Both proofs are **install-strict**: the pid file must name a pid that
+runs *this install's* `host_server.py`, and a pid file that names another
+install's server, another process or a non-listener proves nothing. A pid reused
+by another program is dropped, never killed. `stop_host.sh` uses the same proof
+before stopping.
 
 ### Exit codes 3 and 4 (port held by something that is not this console)
 

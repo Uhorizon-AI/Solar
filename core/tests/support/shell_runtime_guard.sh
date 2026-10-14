@@ -156,6 +156,8 @@ solar_test_guard() {
       fi
       ;;
   esac
-  [[ "$with_services" == true ]] && solar_test_guard_services
+  if [[ "$with_services" == true ]]; then
+    solar_test_guard_services
+  fi
   return 0
 }

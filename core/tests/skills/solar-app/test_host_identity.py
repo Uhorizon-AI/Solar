@@ -7,6 +7,7 @@ a caller.
 """
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
@@ -519,6 +520,29 @@ class InstallServerTest(unittest.TestCase):
             command,
         )
 
+    def test_a_suffixed_copy_of_the_server_is_not_our_server(self):
+        # `host_server.py.backup` / `.old` / `.orig` contain the suffix but run a
+        # different file. The fallback branch used to accept them, so a copied or
+        # rotated script would be adopted and stopped as this install's console.
+        for suffix in (".backup", ".old", ".orig", ".bak", ".py2", "~"):
+            command = f"python3 {self.install}/core/skills/solar-app/scripts/host_server.py{suffix}"
+            self.assertFalse(
+                host_identity.command_is_install_server(command, [str(self.install)]),
+                command,
+            )
+
+    def test_a_suffixed_copy_of_a_symlinked_spelling_is_not_our_server(self):
+        # The same guard on the fallback branch that resolves a symlinked
+        # spelling (/var vs /private/var), which is the one that needed the fix.
+        link = self.root / "install-link"
+        link.symlink_to(self.install)
+        for suffix in (".backup", ".old"):
+            command = f"python3 {link}/core/skills/solar-app/scripts/host_server.py{suffix}"
+            self.assertFalse(
+                host_identity.command_is_install_server(command, [str(self.install)]),
+                command,
+            )
+
 
 class CliTest(unittest.TestCase):
     """The CLI is what every shell script calls; a dispatch bug is a silent bug."""
@@ -650,6 +674,134 @@ class CliTest(unittest.TestCase):
             capture_output=True, text=True, check=True,
         ).stdout.split()
         self.assertEqual(from_python, from_shell)
+
+
+class EndpointTest(unittest.TestCase):
+    """The pid↔address binding: a probe of host:port only reaches one socket."""
+
+    def _lsof(self, stdout, returncode=0):
+        shown = subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout)
+        return mock.patch.object(host_identity.subprocess, "run", return_value=shown)
+
+    def test_the_keyed_output_is_parsed_per_pid(self):
+        # `lsof -Fn` prints `p<pid>` then one `n<address>` per socket. Two pids on
+        # the same port must keep their own addresses, never a merged blob.
+        stdout = (
+            "p111\nf5\nn127.0.0.1:9000\n"
+            "p222\nf6\nn127.0.0.2:9000\n"
+        )
+        with self._lsof(stdout):
+            self.assertEqual(
+                host_identity.port_listener_endpoints(9000),
+                {"111": {"127.0.0.1:9000"}, "222": {"127.0.0.2:9000"}},
+            )
+
+    def test_the_trailing_state_is_not_part_of_the_address(self):
+        # Some platforms suffix the state: it must not become part of the address.
+        with self._lsof("p111\nn127.0.0.1:9000 (LISTEN)\n"):
+            self.assertEqual(
+                host_identity.port_listener_endpoints(9000),
+                {"111": {"127.0.0.1:9000"}},
+            )
+
+    def test_a_non_numeric_pid_line_is_ignored(self):
+        # A warning line must not create a bogus pid key.
+        with self._lsof("lsof: WARNING: can't stat()\np111\nn127.0.0.1:9000\n"):
+            self.assertEqual(
+                host_identity.port_listener_endpoints(9000),
+                {"111": {"127.0.0.1:9000"}},
+            )
+
+    def test_no_lsof_output_is_an_empty_map(self):
+        with self._lsof("", returncode=1):
+            self.assertEqual(host_identity.port_listener_endpoints(9000), {})
+
+    def test_a_listener_on_the_probed_address_matches(self):
+        self.assertTrue(host_identity.endpoint_matches("127.0.0.1:9000", "127.0.0.1", 9000))
+
+    def test_loopback_spellings_are_one_address(self):
+        # The probe reaches the same socket through any loopback spelling.
+        for address in ("127.0.0.1:9000", "localhost:9000", "[::1]:9000"):
+            self.assertTrue(
+                host_identity.endpoint_matches(address, "127.0.0.1", 9000), address)
+
+    def test_a_wildcard_bind_matches_any_host(self):
+        # `lsof` reports a 0.0.0.0 bind as `*:9000`: it answers on loopback too.
+        self.assertTrue(host_identity.endpoint_matches("*:9000", "127.0.0.1", 9000))
+
+    def test_a_listener_on_another_address_does_not_match(self):
+        self.assertFalse(host_identity.endpoint_matches("127.0.0.2:9000", "127.0.0.1", 9000))
+
+    def test_a_listener_on_another_port_does_not_match(self):
+        self.assertFalse(host_identity.endpoint_matches("127.0.0.1:9001", "127.0.0.1", 9000))
+
+    def test_an_empty_address_does_not_match(self):
+        self.assertFalse(host_identity.endpoint_matches("", "127.0.0.1", 9000))
+
+    def test_state_is_match_other_or_unknown(self):
+        # Three states, because "no evidence" must not become "someone else's":
+        # without lsof the caller has to keep its other proofs.
+        stdout = "p111\nn127.0.0.1:9000\np222\nn127.0.0.2:9000\n"
+        with self._lsof(stdout):
+            self.assertEqual(
+                host_identity.listener_endpoint_state("111", "127.0.0.1", 9000), "match")
+            self.assertEqual(
+                host_identity.listener_endpoint_state("222", "127.0.0.1", 9000), "other")
+            self.assertEqual(
+                host_identity.listener_endpoint_state("333", "127.0.0.1", 9000), "unknown")
+        with self._lsof("", returncode=1):
+            self.assertEqual(
+                host_identity.listener_endpoint_state("111", "127.0.0.1", 9000), "unknown")
+
+    def test_only_the_listeners_of_the_probed_endpoint_are_returned(self):
+        # The regression Codex asked for: with a listener on another address of
+        # the same port, only the one on the probed address is returned.
+        stdout = "p222\nn127.0.0.2:9000\np111\nn127.0.0.1:9000\n"
+        with self._lsof(stdout):
+            self.assertEqual(
+                host_identity.port_listener_pids_on_endpoint("127.0.0.1", 9000),
+                ["111"],
+            )
+
+    def test_without_endpoint_evidence_every_listener_is_returned(self):
+        # `lsof` missing or a double that only answers `-t`: the caller must keep
+        # the pre-endpoint behaviour, not lose the whole list.
+        with self._lsof("", returncode=1):
+            with mock.patch.object(host_identity, "port_listener_pids", return_value=["4", "7"]):
+                self.assertEqual(
+                    host_identity.port_listener_pids_on_endpoint("127.0.0.1", 9000),
+                    ["4", "7"],
+                )
+
+    def test_endpoint_verdicts_lists_every_listener(self):
+        stdout = "p222\nn127.0.0.2:9000\np111\nn127.0.0.1:9000\n"
+        with self._lsof(stdout):
+            self.assertEqual(
+                host_identity.endpoint_verdicts("127.0.0.1", 9000),
+                [("111", "match"), ("222", "other")],
+            )
+
+    def test_cli_port_endpoints_prints_pid_and_state(self):
+        stdout = "p111\nn127.0.0.1:9000\np222\nn127.0.0.2:9000\n"
+        with self._lsof(stdout), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(host_identity.main(
+                ["port-endpoints", "--host", "127.0.0.1", "--port", "9000"]), 0)
+        self.assertEqual(out.getvalue().splitlines(), ["111 match", "222 other"])
+
+    def test_cli_pid_serves_endpoint_exit_codes(self):
+        # 0 match, 1 other, 2 unknown: three distinct codes so the shell can tell
+        # "another address" from "no evidence".
+        stdout = "p111\nn127.0.0.1:9000\np222\nn127.0.0.2:9000\n"
+        with self._lsof(stdout):
+            self.assertEqual(host_identity.main(
+                ["pid-serves-endpoint", "--pid", "111", "--host", "127.0.0.1",
+                 "--port", "9000"]), 0)
+            self.assertEqual(host_identity.main(
+                ["pid-serves-endpoint", "--pid", "222", "--host", "127.0.0.1",
+                 "--port", "9000"]), 1)
+            self.assertEqual(host_identity.main(
+                ["pid-serves-endpoint", "--pid", "333", "--host", "127.0.0.1",
+                 "--port", "9000"]), 2)
 
 
 if __name__ == "__main__":

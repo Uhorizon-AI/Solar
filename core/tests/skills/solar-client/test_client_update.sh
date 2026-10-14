@@ -409,6 +409,94 @@ assert_ok "restart: exit 4 never starts our console over the listener" \
 unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE
 unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
 
+# --- the real stop_host.sh, with a foreign console on the port ---------------
+# The chain above used fakes. This case runs the *real* stop_host.sh from the
+# install against a real listener that answers as another workspace's console, so
+# the contract `solar client update` depends on (`stop && start`, exit 3 = do not
+# touch the port) is pinned at the consumer, not only in test_host_identity.sh.
+FOREIGN_WS="$TMP/foreign-consumer-ws"
+mkdir -p "$FOREIGN_WS" "$FOREIGN_WS/sun" "$FOREIGN_WS/.solar"
+printf '%s\n' '{"layout":"solar-client-v1.2","core_source":"global"}' >"$FOREIGN_WS/.solar/settings.json"
+FOREIGN_PORT_FILE="$TMP/foreign-consumer.port"
+FOREIGN_IDENT="$TMP/foreign-consumer.identity.json"
+printf '%s' "{\"workspace\":\"$TMP/a-different-workspace\",\"runtime\":\"$TMP/a-different-runtime\"}" >"$FOREIGN_IDENT"
+: >"$FOREIGN_PORT_FILE"
+python3 - "$FOREIGN_IDENT" "$FOREIGN_PORT_FILE" >/dev/null 2>&1 <<'PY' &
+import http.server, json, signal, sys
+ident_path, port_path = sys.argv[1], sys.argv[2]
+
+def stop(signum, frame):
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        try:
+            with open(ident_path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except Exception:
+            payload = {}
+        payload.update({"service": "solar-console", "process_ok": True})
+        body = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+with open(port_path, "w", encoding="utf-8") as fh:
+    fh.write(str(server.server_address[1]))
+try:
+    server.serve_forever()
+finally:
+    server.server_close()
+PY
+FOREIGN_CONSUMER_PID=$!
+FOREIGN_CONSUMER_PORT=""
+for _i in $(seq 1 50); do
+  FOREIGN_CONSUMER_PORT="$(cat "$FOREIGN_PORT_FILE" 2>/dev/null || true)"
+  [[ -n "$FOREIGN_CONSUMER_PORT" ]] && break
+  sleep 0.1
+done
+if [[ -n "$FOREIGN_CONSUMER_PORT" ]]; then
+  : >"$FOREIGN_LOG"
+  export SOLAR_CLIENT_HOST_STOP_SCRIPT="$CORE_ROOT/skills/solar-app/scripts/stop_host.sh"
+  printf '#!/usr/bin/env bash\necho start >>"%s"\n' "$FOREIGN_LOG" >"$FAKE_FOREIGN_START"
+  chmod +x "$FAKE_FOREIGN_START"
+  export SOLAR_CLIENT_HOST_START_SCRIPT="$FAKE_FOREIGN_START"
+  export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="host"
+  set +e
+  real_foreign_out="$(
+    cd "$FOREIGN_WS" || exit 1
+    SOLAR_WORKSPACE="$FOREIGN_WS" \
+    SOLAR_APP_PORT_OVERRIDE="$FOREIGN_CONSUMER_PORT" \
+    SOLAR_APP_HOST="127.0.0.1" \
+    solar_client_restart_running_services "$MOCK_INSTALL_ROOT" 2>&1
+  )"
+  real_foreign_ec=$?
+  set -e
+  assert_ok "real stop_host.sh: a foreign console fails the console restart" \
+    test "$real_foreign_ec" -ne 0
+  assert_ok "real stop_host.sh: a foreign console is not reported as restarted" \
+    bash -c '! grep -q "OK: console restarted" <<<"$1"' _ "$real_foreign_out"
+  assert_ok "real stop_host.sh: our console is not started over the foreign one" \
+    bash -c '! grep -q start "$1"' _ "$FOREIGN_LOG"
+  assert_ok "real stop_host.sh: the foreign console was left running" \
+    kill -0 "$FOREIGN_CONSUMER_PID"
+  kill "$FOREIGN_CONSUMER_PID" 2>/dev/null || true
+  wait "$FOREIGN_CONSUMER_PID" 2>/dev/null || true
+else
+  echo "SKIP: the foreign consumer stub did not report a port" >&2
+fi
+unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE
+unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT
+
 # --- detection is scoped to this install (another Solar install may be running) ---
 PS_FILE="$TMP/ps.txt"
 INSTALL_A="$TMP/install-a"

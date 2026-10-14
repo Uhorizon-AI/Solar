@@ -1030,6 +1030,84 @@ IDENTITY_OUT="$(HTTP_PROXY="http://127.0.0.1:1" http_proxy="http://127.0.0.1:1" 
   || fail "listener identity is own despite a bogus proxy (got '$IDENTITY_OUT')"
 stop_stub
 
+# --- 19. A listener of the same port on another address is not our console ----
+# The regression Codex asked for. `lsof -t` returns both pids, so the port looks
+# busy, but the /health answer a probe of 127.0.0.1:$PORT returns belongs to the
+# listener on *that* address, never to a listener of the same port on another
+# one. A host_server.py of another install sitting on 127.0.0.2 must not be
+# labelled own (and stopped) just because our own console answers on 127.0.0.1.
+#
+# The port number cannot be bound twice on loopback here (macOS only assigns
+# 127.0.0.1), so the two addresses come from an lsof double that answers `-t` and
+# `-Fn`: the double names 111111 on 127.0.0.2 and 222222 on 127.0.0.1, the very
+# split the real lsof reports on a machine that can bind both.
+start_stub endpoint-own "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+cat >"$TMP/bin/lsof" <<EOF
+#!/usr/bin/env bash
+# Both forms the policy uses: the bare pid list and the keyed name field.
+for arg in "\$@"; do
+  case "\$arg" in
+    -Fn) printf 'p111111\nn127.0.0.2:%s\np222222\nn127.0.0.1:%s\n' "$STUB_PORT" "$STUB_PORT"; exit 0 ;;
+  esac
+done
+printf '%s\n' "111111"
+printf '%s\n' "222222"
+EOF
+chmod +x "$TMP/bin/lsof"
+# The command line of 111111 is another install's host_server.py: no proof of
+# ours. If the answer of the /health probe (which reports OUR identity) were
+# attributed to it, it would be labelled own and stopped. Every other pid is this
+# install's own server.
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == *111111* ]]; then
+  printf '%s\n' "python3 /somewhere/else/core/skills/solar-app/scripts/host_server.py"
+else
+  printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"
+fi
+EOF
+chmod +x "$TMP/bin/ps"
+OTHER_IDENTITY="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  bash -c 'source "$1"; solar_host_listener_identity "$2"' _ "$HOST_LIB" "111111" 2>/dev/null || true)"
+[[ "$OTHER_IDENTITY" != "own" ]] && pass "a listener on another address does not borrow the /health answer" \
+  || fail "a listener on another address does not borrow the /health answer (got '$OTHER_IDENTITY')"
+# The listener on the probed address is the one that may use the answer: it is
+# our own console answering there.
+ON_ENDPOINT_IDENTITY="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  bash -c 'source "$1"; solar_host_listener_identity "$2"' _ "$HOST_LIB" "222222" 2>/dev/null || true)"
+[[ "$ON_ENDPOINT_IDENTITY" == "own" ]] && pass "the listener on the probed address is the console that answered" \
+  || fail "the listener on the probed address is the console that answered (got '$ON_ENDPOINT_IDENTITY')"
+# Only the probed endpoint's listeners are swept: the other address is not in the
+# way, so it is neither stopped nor reported as a foreign blocker.
+set +e
+SWEEP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  bash -c 'source "$1"; solar_host_stop_orphan_listeners; echo "ec=$?"' _ "$HOST_LIB" 2>&1)"
+set -e
+grep -q "111111" <<<"$SWEEP_OUT" && fail "the other address was swept or reported as a blocker" \
+  || pass "the other address was neither swept nor reported as a blocker"
+grep -q "WARN: stopping orphan Solar Host listener (pid 222222" <<<"$SWEEP_OUT" \
+  && pass "the listener on the probed address was the one stopped" \
+  || { fail "the listener on the probed address was the one stopped"; echo "$SWEEP_OUT" >&2; }
+# The helper that gates start_host.sh returns only the probed endpoint's pid.
+ON_ENDPOINT_PIDS="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  bash -c 'source "$1"; solar_host_port_listener_pids_on_endpoint' _ "$HOST_LIB" 2>/dev/null | paste -sd, -)"
+[[ "$ON_ENDPOINT_PIDS" == "222222" ]] && pass "only the probed endpoint's listeners are listed" \
+  || fail "only the probed endpoint's listeners are listed (got '$ON_ENDPOINT_PIDS')"
+# And with no endpoint evidence at all (a double that only answers -t), every
+# listener comes back: the fallback must not hide the port's listeners.
+cat >"$TMP/bin/lsof" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "111111"
+printf '%s\n' "222222"
+EOF
+chmod +x "$TMP/bin/lsof"
+ON_ENDPOINT_PIDS="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  bash -c 'source "$1"; solar_host_port_listener_pids_on_endpoint' _ "$HOST_LIB" 2>/dev/null | paste -sd, -)"
+[[ "$ON_ENDPOINT_PIDS" == "111111,222222" ]] && pass "without endpoint evidence every listener is listed" \
+  || fail "without endpoint evidence every listener is listed (got '$ON_ENDPOINT_PIDS')"
+rm -f "$TMP/bin/lsof" "$TMP/bin/ps"
+stop_stub
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]
