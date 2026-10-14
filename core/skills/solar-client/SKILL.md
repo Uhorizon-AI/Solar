@@ -65,9 +65,37 @@ stay the only editable source. Roles published by earlier versions as
 
   Global `exclude add <planet>` (no `--client`) is a wider decision: it hides the planet
   from every other client too.
-- Planet and agent names may use only `[A-Za-z0-9._-]`, must start with a letter or
+- Planet and agent names may use only `[A-Za-z0-9_.-]`, must start with a letter or
   digit and are at most 64 characters each; other names are rejected with a reason,
   never rewritten. `:` in file names is not portable to Windows (known limit).
+
+## Dashboards
+
+A planet **declares** its surfaces in its own `planets/<planet>/.solar/dashboards.json`
+(what a tool is and where it answers: name, title, description, owner, `updated_at`,
+loopback `url`, `mode` of `read_only` or `interactive`). The declaration lives in the
+planet's own `.solar/`, not in `operations/` and not in the Client-managed workspace
+`.solar/`; a planet that `.gitignore`s `.solar/` cannot version it. This machine
+**registers** the declared ids in the `dashboards` block of `.solar/settings.json`
+(which are active here and the machine-specific start command, if any). The console
+joins both, is read only and shows the start command as copyable text; it never starts
+or probes a tool.
+
+```bash
+solar client sync dashboards status [--json]
+solar client sync dashboards list [--json]
+solar client sync dashboards seed <planet> [--force]
+solar client sync dashboards register <planet>:<name> [--start-command CMD]
+solar client sync dashboards unregister <planet>:<name>
+solar client sync dashboards enable | disable
+```
+
+`register` writes settings only: it never starts a tool, never probes a port and never
+reads or edits a planet file. `seed` is the only subcommand that writes inside a planet:
+it creates the declaration if absent, validates an existing one without writing, and
+overwrites only with `--force`; a symlinked `.solar` or declaration is refused. `disable`
+hides tool declarations from the console and keeps the registration. Detail:
+[references/dashboards.md](references/dashboards.md).
 - Codex must trust the project and a new Codex session is needed to see new or changed
   roles. Publishing a role grants no authority. ChatGPT Chat/Work are not covered, and
   sessions started from a nested repository are not verified.
@@ -105,6 +133,7 @@ bash core/tests/skills/solar-paths/test_solar_paths_py.sh
 bash core/tests/skills/solar-client/test_sync_clients_prune.sh
 bash core/tests/skills/solar-client/test_sync_exclude.sh
 bash core/tests/skills/solar-client/test_sync_codex_agents.sh
+uv run --project core/tests pytest core/tests/skills/solar-client/test_dashboards.py -q
 uv run --project core/tests pytest core/tests/skills/solar-client/test_codex_agents.py -q
 python3 -m py_compile core/skills/solar-client/scripts/codex_agents.py
 bash core/tests/skills/solar-client/test_client_language.sh
@@ -137,6 +166,11 @@ solar client sync exclude remove <planet>
 solar client sync exclude list|add|remove --client codex [<planet>|<planet>:<agent>]
 solar client sync codex-agents status [--json]
 solar client sync codex-agents preview [--contents] [--json]
+solar client sync dashboards status|list [--json]
+solar client sync dashboards seed <planet> [--force]
+solar client sync dashboards register <planet>:<name> [--start-command CMD]
+solar client sync dashboards unregister <planet>:<name>
+solar client sync dashboards enable|disable
 solar client bundle create|verify
 solar client language
 solar client language set en|es

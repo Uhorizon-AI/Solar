@@ -128,7 +128,7 @@ dl.kv{margin:0}
 .task-markdown pre{background:var(--panel2);padding:8px;border-radius:4px}
 .task-markdown blockquote{border-left:3px solid var(--line);padding-left:10px;color:var(--muted)}
 .task-markdown :is(th,td){border:1px solid var(--line);padding:3px 8px;text-align:left}
-.rep h2{font-family:'Montserrat',sans-serif;font-size:15px;font-weight:700;margin:0 0 6px}
+.rep h3{font-family:'Montserrat',sans-serif;font-size:15px;font-weight:700;margin:0 0 6px}
 .rep p{margin:4px 0}
 .rep a{color:var(--info);text-decoration:underline}
 .h3{font-family:'Montserrat',sans-serif;font-size:14px;font-weight:700;margin:0}
@@ -185,3 +185,6 @@ dl.kv{margin:0}
   .vtitle{font-size:18px}
   .day .v,.dlabels{display:none}
 }
+
+.dashboard-group{margin-top:20px}.dashboard-group>h2{font-size:16px;margin:0 0 10px}
+.dashboard-start{white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;font-size:12px}

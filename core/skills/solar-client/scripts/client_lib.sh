@@ -356,6 +356,16 @@ solar_client_codex_agents_py() {
   printf '%s\n' "$helper"
 }
 
+# Dashboard registration helper; ships next to this file.
+solar_client_dashboards_py() {
+  local helper="${SOLAR_DASHBOARDS_PY:-$_CLIENT_LIB_SCRIPT_DIR/dashboards.py}"
+  if [[ ! -f "$helper" ]]; then
+    printf 'ERROR: dashboard registration helper is missing: %s. It ships inside the solar-client skill (scripts/dashboards.py).\n' "$helper" >&2
+    return 1
+  fi
+  printf '%s\n' "$helper"
+}
+
 # Effective console language: en when the key is missing or not Spanish.
 solar_client_read_language() {
   local workspace="$1"

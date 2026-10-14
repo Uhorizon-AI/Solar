@@ -2,7 +2,14 @@
 
 **Triage level:** standard
 **Date:** 2026-10-12
-**Status:** pending_review
+**Status:** superseded by `docs/tasks/2026-10-13-console-dashboards.md`
+
+> **Superseded.** This spec describes `core/skills/solar-app/scripts/operation_reports.py`,
+> `GET /api/console/reports`, `/reports/<planet>/…` and the
+> `operations/leadership/reports/index.json` index. None of them exist: the whole
+> report concept was retired and replaced by planet dashboards
+> (`docs/tasks/2026-10-13-console-dashboards.md`, PR 32). Kept only as a record of
+> the channels/Continuity/Apps rename, which still stands.
 
 Based on `main` at v0.41.0 (after the task detail and the status filters); it ships after that release, under `[Unreleased]` in the changelog. Independent of the task-detail work (`docs/tasks/2026-10-12-console-task-context.md`). This change is based on `main` and does not touch the task-detail route, `runtime_views` or the MCP.
 

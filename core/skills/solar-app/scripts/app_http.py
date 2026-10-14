@@ -5,7 +5,7 @@ import logging
 import app_solar
 import console_data
 import solar_state
-import operation_reports
+import operation_dashboards
 from task_markdown import render_markdown
 
 LOGGER = logging.getLogger("solar.app")
@@ -13,30 +13,30 @@ ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 
 def get(handler, path, qs, workspace):
-    if path.startswith('/reports/'):
+    if path.startswith('/dashboards/'):
         try:
-            body, mime = operation_reports.published_file(workspace, path)
-        except operation_reports.PublicationUnavailable:
-            handler._send_json({'error': 'Published report unavailable'}, 503)
+            body, mime = operation_dashboards.published_dashboard_file(workspace, path)
+        except operation_dashboards.PublicationUnavailable:
+            handler._send_json({'error': 'Dashboard unavailable'}, 503)
             return
         except (OSError, ValueError, TypeError):
-            handler._send_json({'error': 'Published report unavailable'}, 404)
+            handler._send_json({'error': 'Dashboard unavailable'}, 404)
             return
         handler.send_response(200)
         handler.send_header('Content-Type', mime)
         handler.send_header('Content-Length', str(len(body)))
-        handler.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox; base-uri 'none'; form-action 'none'")
+        handler.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox")
         handler.send_header('X-Content-Type-Options', 'nosniff')
         handler.send_header('Cache-Control', 'no-store')
         handler.send_header('Referrer-Policy', 'no-referrer')
         handler.end_headers()
         handler.wfile.write(body)
         return
-    if path == '/api/console/reports':
+    if path == '/api/console/dashboards':
         try:
-            handler._send_json(operation_reports.report_index(workspace))
+            handler._send_json(operation_dashboards.dashboard_index(workspace))
         except (OSError, ValueError, TypeError):
-            handler._send_json({'error': 'Report publication settings unavailable', 'refused': True}, 503)
+            handler._send_json({'error': 'Dashboard settings unavailable', 'refused': True}, 503)
         return
     if path in ("/", "/dashboard"):
         handler.send_response(302)
