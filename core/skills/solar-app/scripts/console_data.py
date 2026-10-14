@@ -282,9 +282,11 @@ def _checks(*, stamp, db_readable: bool, port_foreign: bool, launchagent: dict, 
     ]
 
 
-def port_taken_by_other(port: int = 9000) -> bool:
+def port_taken_by_other(port: int | None = None) -> bool:
     """True when something other than this console is listening on the port."""
     import subprocess
+    import host_identity
+    port = host_identity.resolve_port() if port is None else port
     try:
         listed = subprocess.run(
             ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],

@@ -10,6 +10,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+import host_identity  # noqa: E402
 import host_registry as reg  # noqa: E402
 
 _mounted: str | None = None
@@ -51,7 +52,10 @@ def load_workspace_env(ws: Path | str) -> None:
     global _managed_env_keys  # noqa: PLW0603
     ws_path = Path(ws).resolve()
     _clear_workspace_env()
-    retired_ports = {"SOLAR_APP_PORT", "SOLAR_HOST_PORT", "SOLAR_INTERFACE_PORT"}
+    # A workspace .env can never move the console port: the retired port keys and the
+    # test-only override are ignored here (see host_identity.resolve_port).
+    retired_ports = {"SOLAR_APP_PORT", "SOLAR_HOST_PORT", "SOLAR_INTERFACE_PORT",
+                     "SOLAR_APP_TEST_MODE", "SOLAR_APP_TEST_PORT"}
     for key, val in parse_workspace_env_file(ws_path).items():
         if key in retired_ports:
             continue
@@ -60,7 +64,7 @@ def load_workspace_env(ws: Path | str) -> None:
     os.environ["SOLAR_WORKSPACE"] = str(ws_path)
     _managed_env_keys.add("SOLAR_WORKSPACE")
     _apply_legacy_app_env()
-    os.environ["SOLAR_APP_PORT"] = "9000"
+    os.environ["SOLAR_APP_PORT"] = str(host_identity.resolve_port())
     _managed_env_keys.add("SOLAR_APP_PORT")
 
 

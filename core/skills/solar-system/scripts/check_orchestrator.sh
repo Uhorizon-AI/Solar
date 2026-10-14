@@ -306,6 +306,13 @@ if feature_active "host"; then
       echo "  status: HEALTHY"
       echo "  url:    ${SOLAR_APP_BASE_URL:-http://127.0.0.1:9000}"
       ;;
+    3)
+      # The console answers but is not this workspace's and runtime's console
+      # (or reports no identity). Never counted as healthy.
+      echo "  status: UNTRUSTED"
+      echo "  detail: $host_out"
+      verdict="$(worst_severity "$verdict" "DOWN")"
+      ;;
     *)
       echo "  status: DOWN"
       echo "  detail: $host_out"
