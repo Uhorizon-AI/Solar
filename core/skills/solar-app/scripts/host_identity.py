@@ -238,8 +238,8 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
     the process is ours; any one is enough for a console that reports no identity
     or only half of it. ``listener_command`` is only read when the health payload
     is incomplete, so a healthy console never costs a ``ps`` call; when it is
-    empty and ``listener_pids`` is set, the command line is resolved on demand
-    from the first listener. Both ``listener_pids`` and the pid file are read only
+    empty and ``listener_pids`` is set, the command lines are resolved on demand
+    from each listener. Both ``listener_pids`` and the pid file are read only
     when the payload turns out incomplete: the supervisor's frequent path pays for
     neither.
 
@@ -254,6 +254,13 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
     """
     got_ws = str((health or {}).get("workspace") or "")
     got_rt = str((health or {}).get("runtime") or "")
+    # A relative path (an old console) cannot be compared: `resolve()` would
+    # anchor it to the verifier's cwd and report a false "another workspace".
+    # A non-absolute path is treated as no identity at all.
+    if got_ws and not Path(got_ws).expanduser().is_absolute():
+        got_ws = ""
+    if got_rt and not Path(got_rt).expanduser().is_absolute():
+        got_rt = ""
     if got_ws and canonical(got_ws) != canonical(workspace):
         return "another workspace (" + got_ws + ")"
     if got_rt and canonical(got_rt) != canonical(runtime):
@@ -267,22 +274,25 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
     own = False
     pid_file_pid = _pid_file_pid(pid_file)
     if pid_file_pid is not None:
+        # One rule for both branches: the pid file's process must be this
+        # install's own host_server.py. ``pid_file_own_server`` alone only checks
+        # the "host_server.py" substring, so a reused pid running another
+        # install's server would be adopted; the install-level proof is required
+        # whether or not the port's listeners could be enumerated.
+        pid_file_own = pid_file_own_server("", pid=pid_file_pid) and command_is_install_server(
+            pid_command(pid_file_pid), install_roots
+        )
         if listeners:
             # The pid file must name a live host_server.py, and it must be one of
             # the port's listeners. A pid that is not the first listener is still
             # a listener.
-            own = pid_file_own_server("", pid=pid_file_pid) and (
-                str(pid_file_pid) in listeners
-            )
+            own = pid_file_own and str(pid_file_pid) in listeners
         else:
             # No listener could be enumerated (lsof missing or timed out). The
             # pid file alone only proves runtime membership, which would let a
-            # foreign console on the port be adopted on an unrelated own pid. So
-            # demand the strict, install-level proof instead: the pid file's
-            # process must be this install's own host_server.py.
-            own = pid_file_own_server("", pid=pid_file_pid) and command_is_install_server(
-                pid_command(pid_file_pid), install_roots
-            )
+            # foreign console on the port be adopted on an unrelated own pid, so
+            # the install-level proof above is what carries the decision.
+            own = pid_file_own
     if not own:
         own = command_is_install_server(listener_command, install_roots)
     if not own and listeners:
@@ -305,6 +315,25 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
         "a console with partial identity (workspace=" + (got_ws or "-")
         + " runtime=" + (got_rt or "-") + ") and no process of this runtime"
     )
+
+
+def pid_file_names_listener(pid_file: str, wanted, install_roots=()) -> bool:
+    """True when the pid file names ``wanted`` and that pid is this install's server.
+
+    One implementation for the shell's hung-listener path: the file must hold
+    exactly the pid under test, and that pid must run this install's own
+    ``host_server.py``. A pid file of another process proves nothing, and a
+    ``host_server.py`` of another install is not this runtime's console.
+    """
+    try:
+        held = Path(pid_file).read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return False
+    if not wanted or held != str(wanted).strip():
+        return False
+    if not pid_file_own_server("", pid=_pid_file_pid(pid_file)):
+        return False
+    return command_is_install_server(pid_command(int(held)), install_roots)
 
 
 def _load_health(path: str) -> dict:
@@ -346,6 +375,12 @@ def main(argv=None) -> int:
     own = sub.add_parser("pid-file-is-own-server", help="Is the pid file a live host_server.py?")
     own.add_argument("--pid-file", required=True)
 
+    names = sub.add_parser("pid-file-names-listener",
+                           help="Does the pid file name this install's listener?")
+    names.add_argument("--pid-file", required=True)
+    names.add_argument("--pid", required=True)
+    names.add_argument("--install-root", action="append", default=[])
+
     cmd = sub.add_parser("command-is-install-server",
                          help="Does a command line run this install's host_server.py?")
     cmd.add_argument("--command", required=True)
@@ -354,6 +389,9 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.subcommand == "pid-file-is-own-server":
         return 0 if pid_file_own_server(args.pid_file) else 1
+    if args.subcommand == "pid-file-names-listener":
+        ok = pid_file_names_listener(args.pid_file, args.pid, args.install_root)
+        return 0 if ok else 1
     if args.subcommand == "command-is-install-server":
         return 0 if command_is_install_server(args.command, args.install_root) else 1
 

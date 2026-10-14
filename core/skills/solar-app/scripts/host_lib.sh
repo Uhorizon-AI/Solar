@@ -189,8 +189,12 @@ solar_host_listener_identity() {
   if ! python3 - "$SOLAR_APP_BASE_URL" "$health_file" <<'PY'
 import json, sys, urllib.request
 base, dest = sys.argv[1:3]
+# A loopback probe must never go through an environment proxy: with http_proxy
+# set, urlopen would route it through the proxy and could fail (or reach
+# something that is not the console), turning a healthy console into unproven.
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 try:
-    with urllib.request.urlopen(base + "/health", timeout=3) as response:
+    with opener.open(base + "/health", timeout=3) as response:
         data = json.load(response)
 except Exception:
     raise SystemExit(1)
@@ -256,16 +260,17 @@ solar_host_command_looks_like_server() {
 }
 
 # True when the pid file at $1 names the pid $2 (the live listener) and that pid
-# runs a host_server.py. This is the same pid-file proof host_identity.py uses,
-# reached from a shell path that only needs to know whether the hung listener is
-# ours. Returns non-zero when the file, the pid or the process do not line up.
+# runs this install's own host_server.py. The rule lives in host_identity.py
+# (single policy); this is only the shell wrapper around it.
 solar_host_pid_file_names() {
   local pid_file="${1-}" wanted="${2-}"
   [[ -n "$pid_file" && -n "$wanted" && -f "$pid_file" ]] || return 1
-  local held
-  held="$(cat "$pid_file" 2>/dev/null || true)"
-  [[ "$held" == "$wanted" ]] || return 1
-  solar_host_pid_looks_like_server "$wanted"
+  local -a roots=()
+  while IFS= read -r root; do
+    [[ -n "$root" ]] && roots+=(--install-root "$root")
+  done < <(solar_host_identity_install_roots)
+  python3 "$_HOST_LIB_DIR/host_identity.py" pid-file-names-listener \
+    --pid-file "$pid_file" --pid "$wanted" "${roots[@]+"${roots[@]}"}"
 }
 
 # Human-readable owner of the port. Never stops anything. ``$2`` is the tested

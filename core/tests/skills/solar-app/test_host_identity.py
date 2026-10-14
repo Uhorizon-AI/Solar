@@ -127,12 +127,15 @@ class EvaluateTest(unittest.TestCase):
         pid_file = self.root / "host.pid"
         pid_file.write_text(str(os.getpid()))
         original = host_identity.pid_file_own_server
+        original_command = host_identity.pid_command
         host_identity.pid_file_own_server = lambda path, pid=None: True
+        host_identity.pid_command = lambda pid: f"python3 {self.server}"
         try:
             self.assertIsNone(self.evaluate(
                 {}, pid_file=str(pid_file), listener_pids=[str(os.getpid())]))
         finally:
             host_identity.pid_file_own_server = original
+            host_identity.pid_command = original_command
 
     def test_pid_file_matching_a_second_listener_is_adopted(self):
         # Several listeners on the port and the pid file names one that is not
@@ -140,13 +143,35 @@ class EvaluateTest(unittest.TestCase):
         pid_file = self.root / "host.pid"
         pid_file.write_text(str(os.getpid()))
         original = host_identity.pid_file_own_server
+        original_command = host_identity.pid_command
         host_identity.pid_file_own_server = lambda path, pid=None: True
+        host_identity.pid_command = lambda pid: f"python3 {self.server}"
         try:
             self.assertIsNone(self.evaluate(
                 {}, pid_file=str(pid_file),
                 listener_pids=["424242", str(os.getpid())]))
         finally:
             host_identity.pid_file_own_server = original
+            host_identity.pid_command = original_command
+
+    def test_pid_file_of_another_install_is_rejected_even_with_listeners(self):
+        # The pid file names a live host_server.py of ANOTHER install and that pid
+        # is one of the port's listeners: the "host_server.py" substring is not
+        # enough, so it must be rejected. Both branches of the pid-file rule make
+        # the same install-level check.
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        original = host_identity.pid_file_own_server
+        original_command = host_identity.pid_command
+        host_identity.pid_file_own_server = lambda path, pid=None: True
+        host_identity.pid_command = lambda pid: "python3 /somewhere/else/core/skills/solar-app/scripts/host_server.py"
+        try:
+            reason = self.evaluate(
+                {}, pid_file=str(pid_file), listener_pids=[str(os.getpid())])
+        finally:
+            host_identity.pid_file_own_server = original
+            host_identity.pid_command = original_command
+        self.assertIn("no identity and no process", reason)
 
     def test_pid_file_without_listeners_needs_the_install_proof(self):
         # lsof failed (or is missing): no listener could be enumerated. An own
@@ -168,6 +193,24 @@ class EvaluateTest(unittest.TestCase):
         finally:
             host_identity.pid_file_own_server = original_pid_file
             host_identity.pid_command = original_command
+
+    def test_relative_identity_path_is_treated_as_no_identity(self):
+        # An old console may report a relative path. `resolve()` would anchor it
+        # to this process's cwd and could report a false "another workspace"; a
+        # non-absolute path must be treated as no identity at all. Only the bad
+        # field is dropped, so the other half still counts as partial identity.
+        reason = self.evaluate({"workspace": "ws", "runtime": "runtime"})
+        self.assertIn("no identity and no process", reason)
+        self.assertNotIn("another workspace", reason)
+
+        partial = self.evaluate({"workspace": "ws", "runtime": str(self.rt)})
+        self.assertIn("partial identity", partial)
+        self.assertNotIn("another workspace", partial)
+
+    def test_relative_workspace_with_the_own_command_is_adopted(self):
+        command = f"python3 {self.server}"
+        self.assertIsNone(self.evaluate(
+            {"workspace": "ws", "runtime": "runtime"}, listener_command=command))
 
     def test_blank_health_with_another_install_command_is_rejected(self):
         command = "python3 /somewhere/else/core/skills/solar-app/scripts/host_server.py"
@@ -264,6 +307,82 @@ class PidFileTest(unittest.TestCase):
                 host_identity.pid_file_own_server(str(pid_file)),
                 repr(value),
             )
+
+
+class PidFileNameListenerTest(unittest.TestCase):
+    """The single implementation of the pid-file-names-listener proof."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.install = self.root / "install"
+        (self.install / "core/skills/solar-app/scripts").mkdir(parents=True)
+        self.server = self.install / "core/skills/solar-app/scripts/host_server.py"
+        self.server.write_text("#!/usr/bin/env python3\n")
+        self.other_install = self.root / "other-install"
+        (self.other_install / "core/skills/solar-app/scripts").mkdir(parents=True)
+        self.other_server = self.other_install / "core/skills/solar-app/scripts/host_server.py"
+        self.other_server.write_text("#!/usr/bin/env python3\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _stub(self, command):
+        original_pid_file = host_identity.pid_file_own_server
+        original_command = host_identity.pid_command
+        host_identity.pid_file_own_server = lambda path, pid=None: True
+        host_identity.pid_command = lambda pid: command
+        return original_pid_file, original_command
+
+    def test_names_this_installs_listener(self):
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        originals = self._stub(f"python3 {self.server}")
+        try:
+            self.assertTrue(host_identity.pid_file_names_listener(
+                str(pid_file), os.getpid(), [str(self.install)]))
+        finally:
+            host_identity.pid_file_own_server, host_identity.pid_command = originals
+
+    def test_a_pid_of_another_install_is_not_a_listener(self):
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        originals = self._stub(f"python3 {self.other_server}")
+        try:
+            self.assertFalse(host_identity.pid_file_names_listener(
+                str(pid_file), os.getpid(), [str(self.install)]))
+        finally:
+            host_identity.pid_file_own_server, host_identity.pid_command = originals
+
+    def test_a_pid_file_naming_a_different_pid_is_not_a_listener(self):
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        originals = self._stub(f"python3 {self.server}")
+        try:
+            self.assertFalse(host_identity.pid_file_names_listener(
+                str(pid_file), os.getpid() + 1, [str(self.install)]))
+        finally:
+            host_identity.pid_file_own_server, host_identity.pid_command = originals
+
+    def test_missing_pid_file_is_not_a_listener(self):
+        self.assertFalse(host_identity.pid_file_names_listener(
+            str(self.root / "absent.pid"), os.getpid(), [str(self.install)]))
+
+    def test_cli_pid_file_names_listener_exit_codes(self):
+        pid_file = self.root / "host.pid"
+        pid_file.write_text(str(os.getpid()))
+        originals = self._stub(f"python3 {self.server}")
+        try:
+            self.assertEqual(host_identity.main([
+                "pid-file-names-listener", "--pid-file", str(pid_file),
+                "--pid", str(os.getpid()), "--install-root", str(self.install),
+            ]), 0)
+            self.assertEqual(host_identity.main([
+                "pid-file-names-listener", "--pid-file", str(pid_file),
+                "--pid", str(os.getpid() + 1), "--install-root", str(self.install),
+            ]), 1)
+        finally:
+            host_identity.pid_file_own_server, host_identity.pid_command = originals
 
 
 class InstallServerTest(unittest.TestCase):
@@ -446,16 +565,23 @@ class CliTest(unittest.TestCase):
         pid_file = self.root / "host.pid"
         pid_file.write_text(str(os.getpid()))
         original = host_identity.pid_file_own_server
+        original_command = host_identity.pid_command
+        own_server = self.root / "install/core/skills/solar-app/scripts/host_server.py"
+        own_server.parent.mkdir(parents=True, exist_ok=True)
+        own_server.write_text("#!/usr/bin/env python3\n")
         host_identity.pid_file_own_server = lambda path, pid=None: True
+        host_identity.pid_command = lambda pid: f"python3 {own_server}"
         try:
             rc = host_identity.main([
                 "evaluate", "--health-file", str(health),
                 "--workspace", "/tmp/ws", "--runtime", "/tmp/rt",
                 "--pid-file", str(pid_file),
                 "--listener-pids", "424242,%d" % os.getpid(),
+                "--install-root", str(self.root / "install"),
             ])
         finally:
             host_identity.pid_file_own_server = original
+            host_identity.pid_command = original_command
         self.assertEqual(rc, 0)
 
     def test_port_listener_pids_returns_the_list_in_numeric_order(self):

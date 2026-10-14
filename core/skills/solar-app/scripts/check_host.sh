@@ -33,6 +33,13 @@ install_roots=sys.argv[8:]
 sys.path.insert(0,script_dir)
 import host_identity
 
+# A loopback probe must never go through an environment proxy: with http_proxy
+# set, urlopen would route it through the proxy and could fail (or reach
+# something that is not the console).
+_opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def _get(url):
+    return _opener.open(url,timeout=3)
+
 def identity(health):
     # The listeners are resolved with lsof only when the payload is incomplete, so
     # a healthy console costs no `ps` and no `lsof` call.
@@ -45,7 +52,7 @@ result={'available':False,'storage_ok':False,'runtime_status':'unknown','base_ur
         'workspace':expected_ws,'runtime':expected_rt}
 try:
     if flag == '--liveness':
-        with urllib.request.urlopen(base+'/health',timeout=3) as response:
+        with _get(base+'/health') as response:
             data=json.load(response)
         if response.status != 200 or not data.get('process_ok'):
             raise ValueError('Console process unavailable')
@@ -53,15 +60,15 @@ try:
         if reason:
             raise ValueError('console identity mismatch: '+reason)
         sys.exit(0)
-    with urllib.request.urlopen(base+'/app',timeout=3) as response:
+    with _get(base+'/app') as response:
         if response.status!=200 or b'id="health"' not in response.read():
             raise ValueError('Console page unavailable')
-    with urllib.request.urlopen(base+'/api/runtime/health',timeout=3) as response:
+    with _get(base+'/api/runtime/health') as response:
         data=json.load(response)
     checked=datetime.fromisoformat(data['checked_at']).timestamp()
     if data.get('service')!='solar-console' or not data.get('storage_ok') or not 0<=time.time()-checked<=120:
         raise ValueError('Storage access has not been verified recently')
-    with urllib.request.urlopen(base+'/health',timeout=3) as response:
+    with _get(base+'/health') as response:
         health=json.load(response)
     reason=identity(health)
     if reason:

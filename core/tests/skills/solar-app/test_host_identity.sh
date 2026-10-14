@@ -221,7 +221,7 @@ stop_stub
 # ours, so a safe local process (this shell's own child) stands in for the
 # "live host_server.py" the pid file points at. Nothing here can signal a
 # foreign process.
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "python3 host_server.py"\n' >"$TMP/bin/ps"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "python3 %s/skills/solar-app/scripts/host_server.py"\n' "$CORE_ROOT" >"$TMP/bin/ps"
 chmod +x "$TMP/bin/ps"
 ln -sfn "$REAL_PYTHON" "$TMP/bin/python3-real"
 cat >"$TMP/bin/python3" <<'EOF'
@@ -243,6 +243,13 @@ stop_stub
 
 # --- 6. Legacy health with no identity and no pid file ----------------------
 rm -f "$SOLAR_HOST_RUNTIME_DIR/host.pid"
+# A ps double that is a host_server.py but NOT this install's: it is the
+# "no proof" case (the pid-file/install proof must fail).
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
 start_stub legacy-orphan "{}"
 set +e
 PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" liveness
@@ -427,8 +434,8 @@ after="$(/usr/sbin/lsof -nP -iTCP:"$STUB_PORT" -sTCP:LISTEN -t 2>/dev/null | sor
 # --- 10. Partial identity needs a proof ------------------------------------
 # A console that reports only the runtime must not be adopted on its own.
 start_stub partial "{\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
-# A ps double makes the stub's pid look like a live host_server.py, which is what
-# the pid file has to prove.
+# No proof yet: the ps double is a host_server.py but of no install of ours, so
+# neither the command-line proof nor the pid file can adopt the console.
 cat >"$TMP/bin/ps" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "python3 host_server.py"
@@ -442,6 +449,12 @@ set -e
   || fail "partial identity without a proof is rejected (ec=$ec)"
 grep -q "partial identity" "$TMP/live.err" && pass "diagnosis says the identity is partial" \
   || { fail "diagnosis says the identity is partial"; cat "$TMP/live.err" >&2; }
+# Now the ps double *is* this install's server, so the pid file can prove it.
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
 # The same console is adopted once this runtime's own pid file proves the process.
 # The pid file must name the listener itself: a pid file of another process
 # proves nothing about who is on the port.
@@ -476,7 +489,13 @@ rm -f "$SOLAR_HOST_RUNTIME_DIR/host.pid"
 # Drop the lsof double: later sections must see the real listener list again
 # (section 12 classifies real command lines with the real lsof).
 rm -f "$TMP/bin/lsof"
-# A console that reports only the workspace is refused the same way.
+# A console that reports only the workspace is refused the same way: the ps
+# double is not this install's server, so no proof is available.
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
 cat >"$TMP/partial.identity.json" <<EOF
 {"workspace":"$SOLAR_WORKSPACE"}
 EOF
@@ -678,6 +697,48 @@ kill "$SECOND_LISTENER" 2>/dev/null || true
 wait "$SECOND_LISTENER" 2>/dev/null || true
 lsof_double
 rm -f "$TMP/bin/ps"
+# An own valid pid file AND a second own orphan listener on the port: stopping
+# must drop the pid-file process and then still sweep the port, so both die. A
+# pid file present is not a reason to skip the orphan sweep.
+sleep 120 & disown 2>/dev/null || true
+OWN_PIDFILE_PID=$!
+start_stub stop-sweep "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+ORPHAN_PID="$STUB_PID"
+printf '%s\n' "$OWN_PIDFILE_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+_args="\$*"
+for _a in \$_args; do
+  case "\$_a" in
+    $OWN_PIDFILE_PID) printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"; exit 0 ;;
+    $ORPHAN_PID) printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"; exit 0 ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$TMP/bin/ps"
+cat >"$TMP/bin/lsof" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "$OWN_PIDFILE_PID"
+printf '%s\n' "$ORPHAN_PID"
+EOF
+chmod +x "$TMP/bin/lsof"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+[[ "$stop_ec" -eq 0 ]] && pass "stop with a valid own pid file and an orphan listener exits 0" \
+  || fail "stop with a valid own pid file and an orphan listener exits 0 (ec=$stop_ec: $STOP_OUT)"
+kill -0 "$OWN_PIDFILE_PID" 2>/dev/null && fail "stop left the own pid-file process running" \
+  || pass "stop stopped the own pid-file process"
+kill -0 "$ORPHAN_PID" 2>/dev/null && fail "stop skipped the orphan listener sweep with a pid file present" \
+  || pass "stop swept the orphan listener after the pid file"
+[[ ! -f "$SOLAR_HOST_RUNTIME_DIR/host.pid" ]] && pass "stop dropped the own pid file" \
+  || fail "stop dropped the own pid file"
+kill "$OWN_PIDFILE_PID" 2>/dev/null || true
+wait "$OWN_PIDFILE_PID" 2>/dev/null || true
+stop_stub
+rm -f "$TMP/bin/ps" "$TMP/bin/lsof"
 # A pid file that names a host_server.py of another workspace is not ours: the
 # stop must not kill it just because the command line says host_server.py.
 start_stub stop-foreign-pid "{\"workspace\":\"$TMP/another-workspace\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
@@ -902,6 +963,24 @@ WANT_ROOTS="$(cd "$(dirname "$HOST_LIB")/../../../.." && pwd -P)"
 SERVER="$WANT_ROOTS/core/skills/solar-app/scripts/host_server.py"
 [[ -f "$SERVER" ]] && pass "the install root resolves this install's host_server.py" \
   || fail "the install root resolves this install's host_server.py ($SERVER)"
+
+# --- 18. A loopback probe ignores an environment proxy ----------------------
+# With http_proxy set, routing the /health probe through the proxy would fail (or
+# reach a non-console) and a healthy own console would be read as unproven. The
+# probe must go direct.
+start_stub proxy-identity "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+set +e
+HTTP_PROXY="http://127.0.0.1:1" http_proxy="http://127.0.0.1:1" \
+  HTTPS_PROXY="http://127.0.0.1:1" https_proxy="http://127.0.0.1:1" liveness
+ec=$?
+set -e
+[[ "$ec" -eq 0 ]] && pass "a healthy console passes --liveness with a bogus proxy set" \
+  || { fail "a healthy console passes --liveness with a bogus proxy set (ec=$ec)"; cat "$TMP/live.err" >&2; }
+IDENTITY_OUT="$(HTTP_PROXY="http://127.0.0.1:1" http_proxy="http://127.0.0.1:1" \
+  bash -c 'source "$1"; solar_host_listener_identity "$2"' _ "$HOST_LIB" "$STUB_PID" 2>/dev/null || true)"
+[[ "$IDENTITY_OUT" == "own" ]] && pass "listener identity is own despite a bogus proxy" \
+  || fail "listener identity is own despite a bogus proxy (got '$IDENTITY_OUT')"
+stop_stub
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
