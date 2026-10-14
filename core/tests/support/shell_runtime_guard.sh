@@ -120,8 +120,15 @@ solar_test_guard() {
     esac
   done
   local live resolved lc
-  live="$(solar_test_live_runtime)"
-  resolved="$(solar_test_resolved_runtime)"
+  # `|| exit 97` is required: a bare `$(...)` would only leave the subshell, and
+  # the guard would carry on with an empty value (a fail-open). Empty results
+  # abort too: `realpath ""` is the cwd, so comparing two empty values would pass.
+  live="$(solar_test_live_runtime)" || exit 97
+  resolved="$(solar_test_resolved_runtime)" || exit 97
+  if [[ -z "$live" || -z "$resolved" ]]; then
+    echo "ABORT: the guard could not resolve the runtime to compare (live='$live' resolved='$resolved')." >&2
+    exit 97
+  fi
   live="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$live")"
   resolved="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$resolved")"
   if [[ "$resolved" == "$live" ]]; then

@@ -267,3 +267,58 @@ def test_main_refuses_a_non_loopback_host(monkeypatch, capsys):
     monkeypatch.setattr(host_server, "ThreadingHTTPServer", refuse)
     assert host_server.main() == 1
     assert "loopback" in capsys.readouterr().err
+
+
+class _FakeHandler:
+    """Just enough of the handler for the client guard and a route call."""
+
+    def __init__(self, client_address, headers=None):
+        self.client_address = client_address
+        self.headers = headers or {}
+        self.sent = []
+
+    def _send(self, body, code, content_type):
+        self.sent.append((code, body))
+
+    def _send_json(self, payload, code=200):
+        import json as _json
+        self.sent.append((code, _json.dumps(payload).encode("utf-8")))
+
+    @property
+    def code(self):
+        return self.sent[-1][0] if self.sent else None
+
+    @property
+    def body(self):
+        return self.sent[-1][1] if self.sent else b""
+
+
+def test_health_is_never_served_to_a_non_loopback_client():
+    # /health exposes absolute workspace and runtime paths, which contain the
+    # user name. The client guard runs before every route, so a non-loopback
+    # client is refused before app_http can build that body.
+    handler = _FakeHandler(("192.168.1.50", 44444), {"Host": "127.0.0.1:9000"})
+
+    assert host_server.HostHandler._work_guard(handler) is False
+    assert handler.code == 403
+    assert b"workspace" not in handler.body and b"runtime" not in handler.body
+
+
+def test_health_guard_passes_for_a_loopback_client():
+    handler = _FakeHandler(("127.0.0.1", 44444), {"Host": "127.0.0.1:9000"})
+
+    assert host_server.HostHandler._work_guard(handler) is True
+    assert handler.sent == []
+
+
+def test_health_body_carries_physical_paths_for_loopback(tmp_path):
+    import json as _json
+    import app_http
+
+    handler = _FakeHandler(("127.0.0.1", 44444))
+    app_http.get(handler, "/health", {}, str(tmp_path))
+
+    payload = _json.loads(handler.body.decode("utf-8"))
+    # Physical paths: no symlink, no `~`, no relative tail.
+    assert payload["workspace"] == str(tmp_path)
+    assert payload["runtime"]

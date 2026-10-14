@@ -188,6 +188,36 @@ set -e
 assert_eq "an unresolvable global install aborts instead of failing open" "$services_failopen_ec" "97"
 assert_eq "the fail-open abort is named" "$(grep -c 'could not resolve the Client' "$TMP/services-failopen.err")" "1"
 
+# The guard must fail closed when only ONE of the two runtime resolutions fails:
+# if the failed one leaks an empty value out of its subshell, the two results
+# differ and the test would be let through. Break only the resolved runtime.
+mkdir -p "$TMP/half/tests/support" "$TMP/half/skills/solar-paths/scripts"
+cp "$GUARD" "$TMP/half/tests/support/guard.sh"
+cp "$(dirname "$GUARD")/../../skills/solar-paths/scripts/solar_runtime.py" \
+  "$TMP/half/skills/solar-paths/scripts/solar_runtime.py"
+cat >"$TMP/half/skills/solar-paths/scripts/solar_runtime.py" <<'EOF'
+#!/usr/bin/env python3
+import os, sys
+# Only the "resolved" call (with the test override present) fails; the live call
+# (env -u SOLAR_RUNTIME_ROOT) answers normally.
+if os.environ.get("SOLAR_RUNTIME_ROOT"):
+    sys.exit(1)
+print("/tmp/solar-live-runtime")
+EOF
+chmod +x "$TMP/half/skills/solar-paths/scripts/solar_runtime.py"
+set +e
+env -u SOLAR_APP_DATA -u SOLAR_CLIENT_LAUNCHCTL \
+  SOLAR_RUNTIME_ROOT="$TMP/runtime" \
+  bash -c 'source "$1"; solar_test_guard' _ "$TMP/half/tests/support/guard.sh" \
+  >/dev/null 2>"$TMP/half-failopen.err"
+half_ec=$?
+set -e
+assert_eq "only the resolved runtime failing aborts (no fail-open)" "$half_ec" "97"
+assert_eq "the half-failure abort names the unresolved runtime" \
+  "$(grep -c 'could not resolve' "$TMP/half-failopen.err")" "1"
+assert_eq "the half-failure is not mistaken for a live-runtime match" \
+  "$(grep -c 'would use the live Solar runtime' "$TMP/half-failopen.err")" "0"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

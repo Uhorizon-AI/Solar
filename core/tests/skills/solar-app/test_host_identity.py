@@ -284,6 +284,26 @@ class InstallServerTest(unittest.TestCase):
                 flags,
             )
 
+    def test_joined_and_repeated_flags_stay_flags(self):
+        # `-Xdev` carries its value in the same token and `-W ignore -u` chains
+        # two flags: neither may push an argument past the interpreter, and the
+        # list must not be trimmable without a test breaking.
+        for flags in ("-Xdev", "-Wignore", "-Xdev -u", "-W ignore -u", "-u -X dev"):
+            command = f"python3 {flags} {self.install}/core/skills/solar-app/scripts/host_server.py"
+            self.assertTrue(
+                host_identity.command_is_install_server(command, [str(self.install)]),
+                flags,
+            )
+
+    def test_a_real_argument_after_the_interpreter_is_not_the_interpreter(self):
+        # If a non-flag argument sits between the interpreter-looking token and
+        # the script, that token is not executing the script: refuse it.
+        command = f"something python3 arg {self.install}/core/skills/solar-app/scripts/host_server.py"
+        self.assertFalse(
+            host_identity.command_is_install_server(command, [str(self.install)]),
+            command,
+        )
+
 
 class CliTest(unittest.TestCase):
     """The CLI is what every shell script calls; a dispatch bug is a silent bug."""
