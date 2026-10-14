@@ -39,7 +39,7 @@ class DashboardWorkspace(unittest.TestCase):
         block = {'registered': rows}
         if enabled is not None:
             block['enabled'] = enabled
-        settings = self.workspace / operation_dashboards.SETTINGS_RELATIVE
+        settings = self.workspace / Path('.solar/settings.json')
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(json.dumps({'layout': 'solar-client-v1.2', 'dashboards': block}))
 
@@ -110,7 +110,7 @@ class Declarations(DashboardWorkspace):
 
     def test_absent_block_still_lists_declared_tools_without_touching_settings(self):
         self.declare()
-        settings = self.workspace / operation_dashboards.SETTINGS_RELATIVE
+        settings = self.workspace / Path('.solar/settings.json')
         rows = operation_dashboards.dashboard_index(self.workspace)['dashboards']
         self.assertEqual([r['kind'] for r in rows], ['tool'])
         self.assertFalse(rows[0]['registered'])
@@ -120,7 +120,7 @@ class Declarations(DashboardWorkspace):
         # The reader can no longer join the registration, so it reports the error
         # and degrades to "registered: false" instead of hiding every dashboard.
         self.declare()
-        settings = self.workspace / operation_dashboards.SETTINGS_RELATIVE
+        settings = self.workspace / Path('.solar/settings.json')
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(json.dumps({'dashboards': {'registered': [{'id': 'bad'}]}}))
         data = operation_dashboards.dashboard_index(self.workspace)
@@ -132,7 +132,7 @@ class Declarations(DashboardWorkspace):
         # A view needs no registration, so a malformed block must not hide it. The
         # registration error is kept and the view is still published.
         self.declare_file()
-        settings = self.workspace / operation_dashboards.SETTINGS_RELATIVE
+        settings = self.workspace / Path('.solar/settings.json')
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(json.dumps({'dashboards': {'registered': [{'id': 'bad'}]}}))
         data = operation_dashboards.dashboard_index(self.workspace)
@@ -243,7 +243,7 @@ class Declarations(DashboardWorkspace):
     def test_declaration_and_settings_are_never_written(self):
         path = self.declare()
         self.register([{'id': 'example:triage', 'start_command': 'x'}])
-        settings = self.workspace / operation_dashboards.SETTINGS_RELATIVE
+        settings = self.workspace / Path('.solar/settings.json')
         before = (path.read_bytes(), settings.read_bytes())
         operation_dashboards.dashboard_index(self.workspace)
         self.assertEqual(before, (path.read_bytes(), settings.read_bytes()))

@@ -123,7 +123,9 @@ solar client sync dashboards seed <planet> --force    # overwrite an existing fi
   the write cannot be redirected outside the planet, and an earlier backup is
   never replaced. It refuses when git tracks the file and reports it modified,
   unless `--allow-dirty` is passed, so a versioned declaration is never lost
-  silently.
+  silently. Those backups land inside the planet (`planets/<planet>/.solar/`), so
+  a planet that version-controls its `.solar/` should add `.solar/*.bak*` to its
+  `.gitignore`; otherwise they are ordinary files an operator can delete by hand.
 - The planet name must be `[A-Za-z0-9_.-]+`, must resolve inside `planets/`, and
   the planet directory must exist. A `.solar` directory or a `dashboards.json`
   that is a symlink is refused (exit 5, nothing written), so the write can never

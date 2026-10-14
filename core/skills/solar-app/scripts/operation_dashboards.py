@@ -27,7 +27,6 @@ from operation_publication import PublicationUnavailable  # re-exported for the 
 # its surfaces next to itself. The workspace `.solar/` stays Client-managed and
 # is never read as a declaration source.
 DASHBOARDS_RELATIVE = '.solar/dashboards.json'
-SETTINGS_RELATIVE = '.solar/settings.json'
 MAX_SURFACES = 30
 # A surface `name` is a single URL-safe segment with **no dots**: `.` and `..`
 # can never be a name, and the name is the stable identity, unique per planet and
