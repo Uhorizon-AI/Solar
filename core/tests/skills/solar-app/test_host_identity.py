@@ -112,7 +112,7 @@ class EvaluateTest(unittest.TestCase):
         pid_file = self.root / "host.pid"
         pid_file.write_text(str(os.getpid()))
         original = host_identity.pid_file_own_server
-        host_identity.pid_file_own_server = lambda path: True
+        host_identity.pid_file_own_server = lambda path, pid=None: True
         try:
             # listener_pid differs from the pid in the file, and the listener has
             # no identity, so it must be rejected.
@@ -125,7 +125,7 @@ class EvaluateTest(unittest.TestCase):
         pid_file = self.root / "host.pid"
         pid_file.write_text(str(os.getpid()))
         original = host_identity.pid_file_own_server
-        host_identity.pid_file_own_server = lambda path: True
+        host_identity.pid_file_own_server = lambda path, pid=None: True
         try:
             self.assertIsNone(self.evaluate(
                 {}, pid_file=str(pid_file), listener_pid=str(os.getpid())))
@@ -215,6 +215,36 @@ class InstallServerTest(unittest.TestCase):
     def test_unrelated_command_does_not_match(self):
         self.assertFalse(host_identity.command_is_install_server("python3 other.py", [str(self.install)]))
         self.assertFalse(host_identity.command_is_install_server("", [str(self.install)]))
+
+    def test_the_path_merely_mentioned_as_an_argument_is_not_own(self):
+        # A foreign script that takes our script path as an argument is not our
+        # console: the interpreter must be running host_server.py itself.
+        command = f"python3 otro.py {self.install}/core/skills/solar-app/scripts/host_server.py"
+        self.assertFalse(host_identity.command_is_install_server(command, [str(self.install)]))
+
+    def test_an_interpreter_with_flags_still_matches(self):
+        # start_host.sh runs `python3 -u <script>`; the flags must not hide it.
+        command = f"python3 -u {self.install}/core/skills/solar-app/scripts/host_server.py"
+        self.assertTrue(host_identity.command_is_install_server(command, [str(self.install)]))
+
+    def test_a_quoted_script_path_matches(self):
+        command = f"python3 '{self.install}/core/skills/solar-app/scripts/host_server.py'"
+        self.assertTrue(host_identity.command_is_install_server(command, [str(self.install)]))
+
+    def test_a_symlinked_install_matches_on_physical_paths(self):
+        link = self.root / "install-link"
+        link.symlink_to(self.install)
+        command = f"python3 {link}/core/skills/solar-app/scripts/host_server.py"
+        self.assertTrue(host_identity.command_is_install_server(command, [str(self.install)]))
+
+    def test_a_spaced_install_still_matches_bit_for_bit(self):
+        # The "Application Support" layout has spaces: the exact spelling branch
+        # is the only one that may carry it.
+        spaced = self.root / "Application Support" / "solar"
+        (spaced / "core/skills/solar-app/scripts").mkdir(parents=True)
+        command = f"python3 {spaced}/core/skills/solar-app/scripts/host_server.py"
+        self.assertTrue(host_identity.command_is_install_server(command, [str(spaced)]))
+        self.assertFalse(host_identity.command_is_install_server(command, [str(self.install)]))
 
 
 class CliTest(unittest.TestCase):

@@ -333,7 +333,7 @@ stop_stub
 # (c) An own console that is hung: no /health answer, no pid file, but this
 # install's host_server.py in its command line. It must be recognised as ours
 # and stopped, never abandoned as foreign.
-sleep 120 &
+sleep 120 & disown 2>/dev/null || true
 HUNG_PID=$!
 cat >"$TMP/bin/ps" <<EOF
 #!/usr/bin/env bash
@@ -348,7 +348,7 @@ kill -0 "$HUNG_PID" 2>/dev/null && fail "own hung console was left running" \
 kill "$HUNG_PID" 2>/dev/null || true
 wait "$HUNG_PID" 2>/dev/null || true
 # (d) A hung console of another install stays foreign: report, never kill.
-sleep 120 &
+sleep 120 & disown 2>/dev/null || true
 FOREIGN_HUNG_PID=$!
 cat >"$TMP/bin/ps" <<'EOF'
 #!/usr/bin/env bash
@@ -362,6 +362,24 @@ kill -0 "$FOREIGN_HUNG_PID" 2>/dev/null && pass "hung console of another install
   || fail "hung console of another install was left running"
 kill "$FOREIGN_HUNG_PID" 2>/dev/null || true
 wait "$FOREIGN_HUNG_PID" 2>/dev/null || true
+# (e) Ours by identity but not host_server.py: it must not be killed, and the
+# caller must learn the port is still held (return 4, not 0/1) so it never says
+# "not running" while the port is busy.
+start_stub own-not-server "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 algo-que-no-es-el-server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+run_stop "$STUB_PID"
+[[ "$STOP_EC" -eq 4 ]] && pass "own listener that is not host_server.py returns 4" \
+  || fail "own listener that is not host_server.py returns 4 (ec=$STOP_EC)"
+grep -q "ours by identity but is not host_server.py" "$STOP_LIB_ERR" \
+  && pass "the non-stoppable own listener is named" \
+  || { fail "the non-stoppable own listener is named"; cat "$STOP_LIB_ERR" >&2; }
+kill -0 "$STUB_PID" 2>/dev/null && pass "the non-stoppable own listener was left running" \
+  || fail "the non-stoppable own listener was left running"
+stop_stub
 # Drop the ps and lsof doubles: later sections must see the real commands.
 rm -f "$TMP/bin/ps" "$TMP/bin/lsof"
 
@@ -457,7 +475,7 @@ rm -f "$TMP/bin/ps"
 # No ps double here: the real command lines must classify the pids, or the test
 # would only be checking its own fake.
 STOP_SCRIPT="$SCRIPTS/stop_host.sh"
-sleep 120 &
+sleep 120 & disown 2>/dev/null || true
 INNOCENT_PID=$!
 printf '%s\n' "$INNOCENT_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
 set +e
@@ -477,7 +495,7 @@ wait "$INNOCENT_PID" 2>/dev/null || true
 # A live host_server.py named by the pid file is this runtime's console and must
 # be stopped, not merely dropped: the pid file holds a pid, the helper takes the
 # path, and mixing them would silently turn every real stop into a no-op.
-sleep 120 &
+sleep 120 & disown 2>/dev/null || true
 OWN_STOP_PID=$!
 printf '%s\n' "$OWN_STOP_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
 cat >"$TMP/bin/ps" <<'EOF'
@@ -512,13 +530,33 @@ grep -q "not running" <<<"$STOP_OUT" && fail "stop claims a foreign console is n
 kill -0 "$STUB_PID" 2>/dev/null && pass "stop left the foreign console running" \
   || fail "stop left the foreign console running"
 stop_stub
+# An own listener that is ours by identity yet not host_server.py is not stopped
+# and the stop must not claim success: exit 4, and no "not running".
+start_stub stop-undetainable "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 algo-que-no-es-el-server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" FAKE_LSOF_PID="$STUB_PID" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+[[ "$stop_ec" -eq 4 ]] && pass "stop of a non-stoppable own listener exits 4" \
+  || fail "stop of a non-stoppable own listener exits 4 (ec=$stop_ec: $STOP_OUT)"
+grep -q "not running" <<<"$STOP_OUT" && fail "stop calls a non-stoppable own listener not running" \
+  || pass "stop does not call a non-stoppable own listener not running"
+kill -0 "$STUB_PID" 2>/dev/null && pass "stop left the non-stoppable own listener running" \
+  || fail "stop left the non-stoppable own listener running"
+stop_stub
+rm -f "$TMP/bin/ps"
 # A reused pid plus an own hung console still holding the port: dropping the pid
 # file is not a clean stop, the listener has to be stopped too.
 lsof_double
-sleep 120 &
+sleep 120 & disown 2>/dev/null || true
 REUSED_PID=$!
 printf '%s\n' "$REUSED_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
-sleep 120 &
+sleep 120 & disown 2>/dev/null || true
 OWN_HUNG_PID=$!
 # The ps double is pid-aware: the pid file holds a reused pid (a plain sleep),
 # while the port's listener is this install's host_server.py.
@@ -572,7 +610,7 @@ REAL_9000_AFTER="$(/usr/sbin/lsof -nP -iTCP:9000 -sTCP:LISTEN -t 2>/dev/null | s
 # --- 14. start_host.sh recovers an own hung console instead of failing ------
 # An own console that answers nothing and holds the port must be stopped so the
 # new process can bind; the run must not end with "port busy" on its own install.
-sleep 120 &
+sleep 120 & disown 2>/dev/null || true
 START_HUNG_PID=$!
 printf '%s\n' "$START_HUNG_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
 lsof_double
@@ -593,6 +631,31 @@ grep -q "ec=0" "$TMP/start-hung.out" && pass "own hung console stop reports succ
   || { fail "own hung console stop reports success"; cat "$TMP/start-hung.out" >&2; }
 kill "$START_HUNG_PID" 2>/dev/null || true
 wait "$START_HUNG_PID" 2>/dev/null || true
+rm -f "$TMP/bin/ps"
+
+# --- 15. start_host.sh never kills a host_server.py of another workspace ------
+# The pid file names a live host_server.py, but its /health answers as another
+# workspace: reading "host_server.py" is not enough to kill it.
+START_SCRIPT="$SCRIPTS/start_host.sh"
+start_stub start-foreign-pid "{\"workspace\":\"$TMP/another-workspace\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+printf '%s\n' "$STUB_PID" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+cat >"$TMP/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "python3 host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+set +e
+START_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash "$START_SCRIPT" 2>&1)"
+start_ec=$?
+set -e
+[[ "$start_ec" -eq 3 ]] && pass "start of a foreign console exits 3" \
+  || fail "start of a foreign console exits 3 (ec=$start_ec: $START_OUT)"
+grep -q "not this runtime's console" <<<"$START_OUT" \
+  && pass "start names the foreign pid file process" \
+  || { fail "start names the foreign pid file process"; echo "$START_OUT" >&2; }
+kill -0 "$STUB_PID" 2>/dev/null && pass "start left the foreign console running" \
+  || fail "start left the foreign console running"
+stop_stub
 rm -f "$TMP/bin/ps"
 
 echo ""

@@ -7,6 +7,7 @@ solar_host_load_env
 PID_FILE="$SOLAR_HOST_PID_FILE"
 stopped=0
 foreign=0
+undetainable=0
 
 # Stop the pid-file process when its pid is really ours; a reused pid is dropped.
 if [[ -f "$PID_FILE" ]]; then
@@ -35,12 +36,19 @@ set -e
 case "$listeners_ec" in
   0) stopped=1 ;;
   2) foreign=1 ;;
+  4) undetainable=1 ;;
   *) : ;;
 esac
 if [[ "$foreign" -eq 1 ]]; then
   # The listener is another workspace's or runtime's console: it was reported
   # and left running, so this is not a clean stop.
   exit 3
+fi
+if [[ "$undetainable" -eq 1 ]]; then
+  # The port is held by something that is ours by identity yet not stoppable by
+  # this script: reporting "not running" would be a lie. Exit 4 with the reason.
+  echo "ERROR: the console port :${SOLAR_APP_PORT} is held by an own listener that is not host_server.py; it was not stopped." >&2
+  exit 4
 fi
 if [[ "$stopped" -eq 1 ]]; then
   echo "OK: Solar Host stopped"

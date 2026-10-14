@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=host_lib.sh
 source "$SCRIPT_DIR/host_lib.sh"
 solar_host_load_env
-PID_FILE="$SOLAR_HOST_PID_FILE"
 RUNTIME="$(solar_host_runtime_dir)"
+PID_FILE="$SOLAR_HOST_PID_FILE"
 LOG_FILE="$RUNTIME/host.log"
 
 host_health_ok() {
@@ -17,16 +18,20 @@ if [[ -f "$PID_FILE" ]]; then
     echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
     exit 0
   fi
-  # The health check includes identity. A pid that no longer runs host_server.py
-  # is a reused pid: never kill it, only drop the pid file. The identity is
-  # evaluated before the pid file is removed, so the pid file still counts as a
-  # proof for a legacy console that reports no identity.
+  # The health check includes identity. Only this runtime's own console may be
+  # stopped here: a pid that no longer runs host_server.py is a reused pid, and a
+  # host_server.py that answers as another workspace's console is foreign. Both
+  # are dropped with the pid file, never killed. The identity is evaluated before
+  # the pid file is removed, so the file still counts as a proof for a legacy
+  # console that reports no identity.
   if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-    if solar_host_pid_looks_like_server "$old_pid"; then
+    if ! solar_host_pid_looks_like_server "$old_pid"; then
+      echo "WARN: pid $old_pid in the host pid file is not host_server.py (reused pid) — leaving it running" >&2
+    elif [[ "$(solar_host_listener_identity "$old_pid")" == own ]]; then
       echo "WARN: stale Solar Host pid $old_pid (health check failed) — stopping" >&2
       solar_host_stop_pid "$old_pid"
     else
-      echo "WARN: pid $old_pid in the host pid file is not host_server.py (reused pid) — leaving it running" >&2
+      echo "WARN: pid $old_pid in the host pid file runs host_server.py but is not this runtime's console — leaving it running" >&2
     fi
   fi
   # Never adopt or stop a console of another workspace or runtime; do it before
@@ -57,6 +62,10 @@ if solar_host_port_listener_pids | grep -q .; then
   set -e
   if [[ "$orphan_ec" -eq 2 ]]; then
     exit 3
+  fi
+  if [[ "$orphan_ec" -eq 4 ]]; then
+    echo "ERROR: the console port :${SOLAR_APP_PORT} is held by an own listener that is not host_server.py; it was not stopped." >&2
+    exit 4
   fi
   # Stopping the process does not release the port at the same instant: wait
   # until the listener is really gone before binding, or the bind would fail.

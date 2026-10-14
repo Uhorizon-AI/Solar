@@ -59,31 +59,67 @@ def pid_command(pid: int) -> str:
     return shown.stdout or ""
 
 
-def pid_file_own_server(pid_file: str) -> bool:
-    """True when this runtime's own pid file names a live ``host_server.py``."""
+def _pid_file_pid(pid_file: str):
+    """The pid named by a pid file, when it is a live process, else ``None``."""
     if not pid_file:
-        return False
+        return None
     try:
         pid = int(Path(pid_file).read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
+        return None
+    return pid if _pid_alive(pid) else None
+
+
+def pid_file_own_server(pid_file: str, pid=None) -> bool:
+    """True when this runtime's own pid file names a live ``host_server.py``.
+
+    ``pid`` is the value already resolved by :func:`_pid_file_pid`: a caller that
+    needs the pid too passes it in, so the file is read once and cannot change
+    between the two reads.
+    """
+    if not pid_file:
         return False
-    if not _pid_alive(pid):
+    if pid is None:
+        pid = _pid_file_pid(pid_file)
+    if pid is None:
         return False
     return "host_server.py" in pid_command(pid)
+
+
+def _path_end_is_clean(command: str, end: int) -> bool:
+    """True when nothing extends the path past ``end`` (a boundary or the end)."""
+    return end >= len(command) or command[end].isspace() or command[end] in "'\""
+
+
+def _interpreted_script(prefix: str) -> bool:
+    """True when the text before a script path ends at an interpreter boundary.
+
+    The console is the script the command executes, so the word before the path
+    must be a ``python*`` interpreter (its flags skipped), or the command must be
+    the script itself. Anything else means the path is a mere argument.
+    """
+    prefix = prefix.rstrip().rstrip("'\"")
+    if not prefix:
+        return True
+    tokens = prefix.split()
+    while tokens and tokens[-1].startswith("-"):
+        tokens.pop()
+    if not tokens:
+        return False
+    return "python" in Path(tokens[-1].strip("'\"")).name
 
 
 def command_is_install_server(command: str, install_roots) -> bool:
     """True when a command line runs ``host_server.py`` from one of these installs.
 
-    ``start_host.sh`` starts the console as
-    ``<install>/core/skills/solar-app/scripts/host_server.py``. The absolute
-    script path is what makes this precise: a ``host_server.py`` of another
-    install is not this runtime's console.
+    ``start_host.sh`` runs ``python3 -u <install>/core/skills/solar-app/scripts/host_server.py``.
+    The absolute script path is what makes this precise: a ``host_server.py`` of
+    another install is not this runtime's console. The path must be the word the
+    interpreter executes — a file that merely mentions the path as an argument
+    (``python3 otro.py .../host_server.py``) is not this runtime's console.
 
-    The path is matched as a substring of the command line, so an install under
-    ``Application Support`` (a space in the path) still matches. Both spellings
-    of each install are tried — the root as given and its physical form — because
-    a console may be started through a symlink (or a ``/var`` vs
+    Both spellings of each install are tried — the root as given and its physical
+    form — because a console may be started through a symlink (or a ``/var`` vs
     ``/private/var`` temporary directory).
     """
     if not command or "host_server.py" not in command:
@@ -95,10 +131,29 @@ def command_is_install_server(command: str, install_roots) -> bool:
             continue
         raw = root.rstrip("/")
         wanted.add(raw + suffix)
-        wanted.add(canonical(raw) + suffix)
+        wanted.add(canonical(raw + suffix))
     if not wanted:
         return False
-    return any(target in command for target in wanted)
+    # Exact spelling first: this is the only branch that handles a path with a
+    # space ("Application Support"), because it needs no tokenisation.
+    for target in wanted:
+        start = command.find(target)
+        if start >= 0 and _path_end_is_clean(command, start + len(target)) \
+                and _interpreted_script(command[:start]):
+            return True
+    # Fallback for a symlinked spelling (/var vs /private/var): slice the path at
+    # the whitespace before it, which is safe because this branch never carries a
+    # path with a space.
+    idx = command.find(suffix)
+    while idx >= 0:
+        start = idx
+        while start > 0 and command[start - 1] not in " \t'\"":
+            start -= 1
+        candidate = command[start:idx + len(suffix)]
+        if canonical(candidate) in wanted and _interpreted_script(command[:start]):
+            return True
+        idx = command.find(suffix, idx + 1)
+    return False
 
 
 def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
@@ -129,8 +184,9 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
     if pid_file_pid is not None:
         # The pid file must name a live host_server.py, and — when the port's
         # listener is known — it must be that very process. Otherwise a foreign
-        # console on the port would be adopted on an unrelated own pid.
-        own = pid_file_own_server(pid_file) and (
+        # console on the port would be adopted on an unrelated own pid. The pid
+        # already resolved is passed in, so the file is read only once.
+        own = pid_file_own_server(pid_file, pid=pid_file_pid) and (
             not listener_pid or str(pid_file_pid) == str(listener_pid).strip()
         )
     if not own:
@@ -149,17 +205,6 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pid="",
         "a console with partial identity (workspace=" + (got_ws or "-")
         + " runtime=" + (got_rt or "-") + ") and no process of this runtime"
     )
-
-
-def _pid_file_pid(pid_file: str):
-    """The pid named by a pid file, when it is a live process, else ``None``."""
-    if not pid_file:
-        return None
-    try:
-        pid = int(Path(pid_file).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return None
-    return pid if _pid_alive(pid) else None
 
 
 def _load_health(path: str) -> dict:

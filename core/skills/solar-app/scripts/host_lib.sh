@@ -124,12 +124,20 @@ solar_host_identity_runtime() {
 # possible: the published framework checkout (core/skills/solar-app inside a
 # solar install, two levels up) and a workspace mirror where solar-app sits one
 # level above core/skills/solar-app. Both are returned so the check works in
-# either layout; everything else resolves to a non-existing path and is skipped.
+# either layout; a level that does not exist is skipped.
 # Stable across the check: it depends only on the script location, not on the
 # environment.
 solar_host_identity_install_roots() {
-  printf '%s\n' "$(cd "$_HOST_LIB_DIR/../../.." && pwd -P)"
-  printf '%s\n' "$(cd "$_HOST_LIB_DIR/../../../.." && pwd -P)"
+  local root
+  # Each level is optional: in a layout without it, `cd` fails and must not abort
+  # the process substitution under `set -e` (that would return fewer roots in
+  # silence). The path is only printed when the level really exists.
+  if root="$(cd "$_HOST_LIB_DIR/../../.." 2>/dev/null && pwd -P)"; then
+    [[ -d "$root" ]] && printf '%s\n' "$root"
+  fi
+  if root="$(cd "$_HOST_LIB_DIR/../../../.." 2>/dev/null && pwd -P)"; then
+    [[ -d "$root" ]] && printf '%s\n' "$root"
+  fi
 }
 
 # The single identity policy lives in host_identity.py. Everything here calls
@@ -285,12 +293,15 @@ solar_host_stop_pid() {
 # listener that cannot be proven either way, is reported and left running.
 #
 # Return contract: 0 when at least one own listener was stopped, 1 when the port
-# had none (or none was own), 2 when a listener was foreign. A foreign listener
-# anywhere in the list wins over having stopped another one, because the caller
-# must not report a clean stop while a foreign console still holds the port.
+# had none (or none was own), 2 when a listener was foreign, 4 when the port is
+# held by a listener that is ours by identity but cannot be stopped (its command
+# line is not host_server.py). A foreign listener anywhere in the list wins over
+# having stopped another one, because the caller must not report a clean stop
+# while a foreign console still holds the port; a non-stoppable own listener wins
+# over 0/1 for the same reason.
 solar_host_stop_orphan_listeners() {
   solar_host_load_env
-  local stopped=0 foreign=0
+  local stopped=0 foreign=0 undetainable=0
   local pid identity
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
@@ -303,14 +314,17 @@ solar_host_stop_orphan_listeners() {
     fi
     if [[ "$identity" == own ]]; then
       # Ours by identity, but its command line is not host_server.py: do not kill
-      # it and do not label it foreign. Report the concrete reason and move on.
+      # it and do not label it foreign. Report the concrete reason and flag it so
+      # the caller does not report "not running" while the port is still held.
       echo "WARN: listener pid $pid on :$SOLAR_APP_PORT is ours by identity but is not host_server.py — leaving it running" >&2
+      undetainable=1
       continue
     fi
     solar_host_report_foreign_listener "$pid"
     foreign=1
   done < <(solar_host_port_listener_pids)
   [[ "$foreign" -eq 1 ]] && return 2
+  [[ "$undetainable" -eq 1 ]] && return 4
   [[ "$stopped" -eq 1 ]]
 }
 

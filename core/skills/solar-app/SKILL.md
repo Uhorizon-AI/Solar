@@ -103,7 +103,11 @@ runtime can prove the process is its own: its own pid file names a live
 `host_server.py` (the legacy console from before `/health` reported a
 `runtime`). `stop_host.sh` uses the same proof before stopping, so a pid reused
 by another program is dropped, never killed, and a foreign listener exits 3 with
-the diagnosis instead of reporting "Solar Host not running".
+the diagnosis instead of reporting "Solar Host not running". An own listener that
+cannot be stopped (ours by identity, but its command line is not `host_server.py`)
+exits 4 with "not host_server.py" instead of a false clean stop. Exit codes:
+`3` foreign console, `4` own-but-not-stoppable console; in both, nothing was
+touched.
 
 Global continuity remains available through its legacy read-only endpoint for
 compatibility; it is not a navigation screen or a summary card. The Channels
