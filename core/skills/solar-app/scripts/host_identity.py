@@ -117,19 +117,16 @@ def _pid_file_pid(pid_file: str):
     return pid if _pid_alive(pid) else None
 
 
-def pid_file_own_server(pid_file: str, pid=None) -> bool:
-    """True when this runtime's own pid file names a live ``host_server.py``.
+def pid_is_host_server(pid) -> bool:
+    """True when a live pid's command line runs a ``host_server.py``.
 
-    ``pid`` is the value already resolved by :func:`_pid_file_pid`: a caller that
-    needs the pid too passes it in, so the file is read once and cannot change
-    between the two reads. When it is provided, the path is not required.
+    This is the substring prefilter only: it says the process runs *some*
+    ``host_server.py``, never that the server is this install's own. That second
+    question is ``command_is_install_server``, and every caller that kills or
+    adopts combines both.
     """
-    if pid is None:
-        if not pid_file:
-            return False
-        pid = _pid_file_pid(pid_file)
-        if pid is None:
-            return False
+    if not pid:
+        return False
     return "host_server.py" in pid_command(pid)
 
 
@@ -275,11 +272,11 @@ def evaluate(*, health, workspace, runtime, pid_file="", listener_pids=(),
     pid_file_pid = _pid_file_pid(pid_file)
     if pid_file_pid is not None:
         # One rule for both branches: the pid file's process must be this
-        # install's own host_server.py. ``pid_file_own_server`` alone only checks
+        # install's own host_server.py. ``pid_is_host_server`` alone only matches
         # the "host_server.py" substring, so a reused pid running another
         # install's server would be adopted; the install-level proof is required
         # whether or not the port's listeners could be enumerated.
-        pid_file_own = pid_file_own_server("", pid=pid_file_pid) and command_is_install_server(
+        pid_file_own = pid_is_host_server(pid_file_pid) and command_is_install_server(
             pid_command(pid_file_pid), install_roots
         )
         if listeners:
@@ -324,16 +321,19 @@ def pid_file_names_listener(pid_file: str, wanted, install_roots=()) -> bool:
     exactly the pid under test, and that pid must run this install's own
     ``host_server.py``. A pid file of another process proves nothing, and a
     ``host_server.py`` of another install is not this runtime's console.
+
+    The pid is resolved once with :func:`_pid_file_pid` and compared with
+    ``wanted``, so a file rewritten between two reads cannot make the two checks
+    disagree.
     """
-    try:
-        held = Path(pid_file).read_text(encoding="utf-8").strip()
-    except (OSError, ValueError):
+    if not wanted:
         return False
-    if not wanted or held != str(wanted).strip():
+    pid = _pid_file_pid(pid_file)
+    if pid is None or str(pid) != str(wanted).strip():
         return False
-    if not pid_file_own_server("", pid=_pid_file_pid(pid_file)):
-        return False
-    return command_is_install_server(pid_command(int(held)), install_roots)
+    return pid_is_host_server(pid) and command_is_install_server(
+        pid_command(pid), install_roots
+    )
 
 
 def _load_health(path: str) -> dict:
@@ -372,9 +372,6 @@ def main(argv=None) -> int:
                        help="Resolve the listeners with lsof only if the payload is incomplete.")
     check.add_argument("--install-root", action="append", default=[])
 
-    own = sub.add_parser("pid-file-is-own-server", help="Is the pid file a live host_server.py?")
-    own.add_argument("--pid-file", required=True)
-
     names = sub.add_parser("pid-file-names-listener",
                            help="Does the pid file name this install's listener?")
     names.add_argument("--pid-file", required=True)
@@ -387,8 +384,6 @@ def main(argv=None) -> int:
     cmd.add_argument("--install-root", action="append", default=[])
 
     args = parser.parse_args(argv)
-    if args.subcommand == "pid-file-is-own-server":
-        return 0 if pid_file_own_server(args.pid_file) else 1
     if args.subcommand == "pid-file-names-listener":
         ok = pid_file_names_listener(args.pid_file, args.pid, args.install_root)
         return 0 if ok else 1

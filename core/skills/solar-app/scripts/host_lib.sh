@@ -80,12 +80,14 @@ solar_host_runtime_dir() {
 #
 # The answer is cached in this shell, not across processes: each call shells out
 # twice and helpers call it repeatedly, so a second call in the same shell is
-# free. A caller that runs it inside `$(...)` gets a fresh evaluation, because
-# the assignment does not travel back out of the subshell — that is expected, and
-# it is cheap enough to keep the value at each call site that already resolved it.
+# free. The cache is keyed on the runtime inputs it depends on, so a caller that
+# changes SOLAR_RUNTIME_ROOT (or SOLAR_APP_DATA) mid-shell gets a fresh answer
+# instead of the stale one.
 _solar_host_temp_runtime=""
+_solar_host_temp_runtime_key=""
 solar_host_runtime_is_temporary() {
-  if [[ -n "${_solar_host_temp_runtime:-}" ]]; then
+  local key="${SOLAR_RUNTIME_ROOT:-}|${SOLAR_APP_DATA:-}"
+  if [[ -n "${_solar_host_temp_runtime:-}" && "$key" == "$_solar_host_temp_runtime_key" ]]; then
     [[ "$_solar_host_temp_runtime" == yes ]]
     return
   fi
@@ -93,18 +95,22 @@ solar_host_runtime_is_temporary() {
   py="$(cd "$_PATHS_SCRIPTS" && pwd)/solar_runtime.py"
   if [[ ! -f "$py" ]]; then
     _solar_host_temp_runtime="no"
+    _solar_host_temp_runtime_key="$key"
     return 1
   fi
   if ! live="$(env -u SOLAR_RUNTIME_ROOT -u SOLAR_APP_DATA python3 "$py" runtime 2>/dev/null)"; then
     _solar_host_temp_runtime="no"
+    _solar_host_temp_runtime_key="$key"
     return 1
   fi
   if ! resolved="$(python3 "$py" runtime 2>/dev/null)"; then
     _solar_host_temp_runtime="no"
+    _solar_host_temp_runtime_key="$key"
     return 1
   fi
   live="$(solar_canonical_path "$live")"
   resolved="$(solar_canonical_path "$resolved")"
+  _solar_host_temp_runtime_key="$key"
   if [[ "$resolved" != "$live" ]]; then
     _solar_host_temp_runtime="yes"
     return 0
@@ -248,13 +254,17 @@ solar_host_port_listener_pids() {
 solar_host_pid_looks_like_server() {
   local pid="$1"
   [[ -n "$pid" ]] || return 1
-  # One definition of "runs host_server.py": the same check the identity engine
-  # uses, so this and pid-file ownership cannot drift apart.
+  # Substring prefilter only: it says the process runs *some* host_server.py,
+  # never that the server is this install's own (that is
+  # command_is_install_server, in host_identity.py). It is never enough on its
+  # own to kill or adopt a process — every caller combines it with an identity
+  # check — and it mirrors ``pid_is_host_server`` so the two cannot drift.
   solar_host_command_looks_like_server "$(ps -p "$pid" -o args= 2>/dev/null || true)"
 }
 
-# True when a command line names host_server.py at all (no install check: the
-# install check is command_is_install_server in host_identity.py).
+# True when a command line names host_server.py at all. This is the same lax
+# prefilter as host_identity.pid_is_host_server; it is NOT a proof of ownership
+# and the install check is command_is_install_server in host_identity.py.
 solar_host_command_looks_like_server() {
   [[ "$1" == *host_server.py* ]]
 }

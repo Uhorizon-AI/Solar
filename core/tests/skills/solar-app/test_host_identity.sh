@@ -807,6 +807,26 @@ TEMP_PORT="$(SOLAR_APP_PORT_OVERRIDE=1234 \
   bash -c 'source "$1"; solar_host_load_env; printf "%s" "$SOLAR_APP_PORT"' _ "$HOST_LIB")"
 [[ "$TEMP_PORT" == "1234" ]] && pass "a temporary runtime honors the port override" \
   || fail "a temporary runtime honors the port override (got $TEMP_PORT)"
+# The "is this a temporary runtime?" answer is cached per shell, but the cache is
+# keyed on the runtime inputs: changing the runtime mid-shell must recompute, or
+# a stale "no" would keep ignoring the override after the runtime turned
+# temporary (and a stale "yes" would leak it into a real runtime).
+LIVE_RUNTIME="$(env -u SOLAR_RUNTIME_ROOT -u SOLAR_APP_DATA \
+  python3 "$SCRIPTS/../../solar-paths/scripts/solar_runtime.py" runtime 2>/dev/null || true)"
+if [[ -n "$LIVE_RUNTIME" ]]; then
+  FLIP_PORT="$(SOLAR_APP_PORT_OVERRIDE=1234 \
+    bash -c 'source "$1"
+      SOLAR_RUNTIME_ROOT="$2"
+      solar_host_load_env
+      printf "%s " "$SOLAR_APP_PORT"
+      SOLAR_RUNTIME_ROOT="$3" SOLAR_APP_DATA="$4"
+      solar_host_load_env
+      printf "%s" "$SOLAR_APP_PORT"' _ "$HOST_LIB" "$LIVE_RUNTIME" "$SOLAR_RUNTIME_ROOT" "$SOLAR_APP_DATA")"
+  [[ "$FLIP_PORT" == "9000 1234" ]] && pass "the temporary-runtime cache flips when the runtime changes" \
+    || fail "the temporary-runtime cache flips when the runtime changes (got '$FLIP_PORT')"
+else
+  pass "the temporary-runtime cache flips when the runtime changes (skipped: no live runtime)"
+fi
 
 # The suite must not have touched the machine's real console: port 9000 has the
 # same listeners before the suite runs and now (it is recorded at the top of this
