@@ -1,6 +1,7 @@
 """Read-only routes for the existing status, activity and execution log views."""
 from pathlib import Path
 import logging
+import os
 
 import app_solar
 import host_identity
@@ -61,7 +62,7 @@ def get(handler, path, qs, workspace):
     if path == "/health":
         # Identity: the physical workspace and runtime this console serves. See host_identity.
         handler._send_json({"service": "solar-console", "status": "available", "process_ok": True,
-                            **host_identity.local_identity(workspace)})
+                            **host_identity.local_identity(workspace), "pid": os.getpid()})
         return
     if path == "/api/app/activity":
         value = lambda key, default='': qs.get(key, [default])[0]
@@ -109,7 +110,7 @@ def get(handler, path, qs, workspace):
     if path in ("/api/app/bootstrap", "/api/app/logs", "/api/async/jobs", "/api/runtime/health"):
         data = app_solar.snapshot(Path(workspace))
         if path == "/api/runtime/health":
-            payload = {"service": "solar-console", **data["health"], "workspace": str(workspace), "runtime": host_identity.local_identity(workspace)["runtime"], "solar_root": data["solar_root"]}
+            payload = {"service": "solar-console", **data["health"], **host_identity.local_identity(workspace), "solar_root": data["solar_root"]}
             handler._send_json(payload, 200 if payload["storage_ok"] else 503)
         elif path == "/api/async/jobs":
             handler._send_json({"jobs": data["tasks"], "checked_at": data["checked_at"]})

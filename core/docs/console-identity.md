@@ -11,9 +11,10 @@ workspace and this runtime**. A process that merely responds, or merely has
 | Field | Meaning |
 |---|---|
 | `workspace` | the workspace the console serves |
-| `runtime` | the framework runtime root of the console process |
+| `runtime` | the framework runtime root of the console process (resolved once at start) |
+| `pid` | the console's own process id (`/health` only) |
 
-Nothing else is added: no tokens, secrets or file contents. The callers compute the
+`/api/runtime/health` reports the same `workspace` and `runtime` in the same canonical form. Nothing else is added: no tokens, secrets or file contents. The callers compute the
 same two values from their own environment and compare physical paths, so a
 symlinked path and its target are one identity.
 
@@ -28,6 +29,7 @@ place the rule lives. States:
 | `mismatch` | a reported value differs | never; never stopped |
 | `legacy` | reports neither value (older release) | only after proof of ownership |
 | `partial` | reports one value, equal | only after proof of ownership |
+| `stale_workspace` | runtime matches, only the workspace differs, and this runtime's pid file points at the pid that answered | not reusable (exit 3), but ours: stopped and replaced |
 | `unreachable` | nothing answers on loopback | no |
 | `invalid` | answers, but is not a Solar console | no |
 
@@ -35,6 +37,8 @@ Applied by: `check_host.sh` (with `--liveness`, `--json`, `--quiet` **and with n
 flag**, the mode the system supervisor runs), `ensure_host.sh`, `start_host.sh`,
 `stop_host.sh` and `solar_host_stop_orphan_listeners`. The probe ignores any proxy
 configured in the environment.
+
+`solar status` reads the same JSON and shows the `error` as the host detail.
 
 `check_host.sh` exit codes: `0` usable, `1` unavailable, `3` the console answers but
 its identity is not accepted. The JSON form never fails open: it reports
@@ -55,8 +59,23 @@ shown to be this runtime's by one of:
    `Python.app`).
 
 A console that cannot answer at all (hung) is recovered by the same two proofs.
-Residual risk: for a hung process the runtime cannot be read, so a hung console of
-this install serving a different runtime is recognised by install path only.
+The install-path comparison is anchored to the whole command-line argument, so
+`/other/prefix/<this install path>/host_server.py` is not this install.
+
+Residual risk: a hung process cannot be asked what it serves, so a hung console of
+**another workspace served by the same install** (or another runtime) is recognised
+by install path only and can be stopped. The pid file is the stronger proof and is
+preferred; install path exists so that a console left without a pid file is not
+stranded. An answering console is never judged this way.
+
+## Active workspace switch
+
+The real console re-reads the registry on every request, so `solar app workspace use`
+moves a running console to the new workspace and it stays accepted. If a console of
+this runtime still reports the previous workspace (pid file points at the pid that
+answered, runtime equal), it is state `stale_workspace`: `check_host.sh` exits 3, but
+`stop_host.sh`, `start_host.sh` and the cutover stop and replace it. A differing
+**runtime** is always refused.
 
 ## Never kill what is not ours
 

@@ -11,11 +11,11 @@ python3 - "$SOLAR_APP_BASE_URL" "${1:-}" "$SCRIPT_DIR" "$SOLAR_WORKSPACE" <<'PY'
 import json,sys,time,urllib.request
 from datetime import datetime
 base,flag,scripts,workspace=sys.argv[1:]
-sys.path.insert(0,scripts)
-import host_identity
 code=1
 identity={'state':'unreachable'}
 try:
+    sys.path.insert(0,scripts)
+    import host_identity
     identity=host_identity.assess(base,host_identity.local_identity(workspace))
     if identity['state']!='match':
         code=3 if identity['state'] in ('mismatch','legacy','partial') else 1

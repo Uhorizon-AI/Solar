@@ -31,7 +31,14 @@ def snapshot(port: int = PRODUCTION_PORT) -> frozenset[tuple[str, str]] | None:
 
 
 def new_listeners(before: frozenset | None, after: frozenset | None) -> frozenset:
-    """Listeners present now that were not there in the baseline."""
+    """Listeners present now on an address that had none in the baseline.
+
+    Compared by address, not pid: a developer's live console restarted during the
+    run (new pid, same address) is not a leak. Limitation: a second process on an
+    address that already had a listener cannot appear (the port is taken), so
+    nothing is missed except a replacement that happened to keep the address.
+    """
     if before is None or after is None:
         return frozenset()
-    return after - before
+    known = {address for _, address in before}
+    return frozenset(entry for entry in after if entry[1] not in known)

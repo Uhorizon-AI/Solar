@@ -71,22 +71,28 @@ solar_test_effective_install() {
 # install must not be the real global install. Never exits the caller's shell on
 # its own: returns 97 after printing the reason; solar_test_guard exits.
 solar_test_guard_services() {
-  local override="${SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE-__UNSET__}" effective global
+  local override="${SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE-__UNSET__}" effective global services=""
   if [[ "$override" != "__UNSET__" ]]; then
-    # A listed service is stopped and started through hooks: they must be set too.
-    if [[ ",$override," == *",host,"* ]] \
-      && [[ -z "${SOLAR_CLIENT_HOST_STOP_SCRIPT:-}" || -z "${SOLAR_CLIENT_HOST_START_SCRIPT:-}" ]]; then
-      echo "ABORT: simulated 'host' service needs SOLAR_CLIENT_HOST_STOP_SCRIPT and SOLAR_CLIENT_HOST_START_SCRIPT." >&2
-      return 97
+    [[ "$override" == "none" ]] || services="$override"
+  elif [[ -n "${SOLAR_CLIENT_PS_OUTPUT_FILE:-}" && -f "${SOLAR_CLIENT_PS_OUTPUT_FILE}" ]]; then
+    # A simulated process table is judged by what it makes the cutover detect.
+    grep -q 'solar-app/scripts/host_server\.py' "$SOLAR_CLIENT_PS_OUTPUT_FILE" && services="host"
+    if grep -qE 'solar-gateway/scripts/run_(http_webhook|websocket)_bridge\.py' "$SOLAR_CLIENT_PS_OUTPUT_FILE"; then
+      services="${services:+$services,}gateway"
     fi
-    if [[ ",$override," == *",gateway,"* ]] \
-      && [[ -z "${SOLAR_CLIENT_GATEWAY_STOP_SCRIPT:-}" || -z "${SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT:-}" ]]; then
-      echo "ABORT: simulated 'gateway' service needs SOLAR_CLIENT_GATEWAY_STOP_SCRIPT and SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT." >&2
-      return 97
-    fi
-    return 0
   fi
-  if [[ -n "${SOLAR_CLIENT_PS_OUTPUT_FILE:-}" && -f "${SOLAR_CLIENT_PS_OUTPUT_FILE}" ]]; then
+  if [[ "$override" != "__UNSET__" || -n "${SOLAR_CLIENT_PS_OUTPUT_FILE:-}" && -f "${SOLAR_CLIENT_PS_OUTPUT_FILE:-/nonexistent}" ]]; then
+    # A detected service is stopped and started through hooks: they must be set too.
+    if [[ ",$services," == *",host,"* ]] \
+      && [[ -z "${SOLAR_CLIENT_HOST_STOP_SCRIPT:-}" || -z "${SOLAR_CLIENT_HOST_START_SCRIPT:-}" ]]; then
+      echo "ABORT: a simulated 'host' service needs SOLAR_CLIENT_HOST_STOP_SCRIPT and SOLAR_CLIENT_HOST_START_SCRIPT." >&2
+      return 97
+    fi
+    if [[ ",$services," == *",gateway,"* ]] \
+      && [[ -z "${SOLAR_CLIENT_GATEWAY_STOP_SCRIPT:-}" || -z "${SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT:-}" ]]; then
+      echo "ABORT: a simulated 'gateway' service needs SOLAR_CLIENT_GATEWAY_STOP_SCRIPT and SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT." >&2
+      return 97
+    fi
     return 0
   fi
   effective="$(solar_test_effective_install)"

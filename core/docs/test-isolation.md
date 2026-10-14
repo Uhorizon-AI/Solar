@@ -35,6 +35,9 @@ runtime).
   `launchctl` is the system binary. Unconditional, as before.
 - `solar_test_guard --services` additionally aborts unless service detection is
   disabled or simulated, or the effective install is not the real global install.
+  A simulated process table (`SOLAR_CLIENT_PS_OUTPUT_FILE`) is judged by what it
+  makes the cutover detect: if it lists the console or a gateway bridge, the matching
+  stop/start hooks must be set, exactly as for an explicit override list.
 
 **The `--services` check is opt-in and is not automatic.** Some tests call the
 guard before they set `SOLAR_ROOT`, and many set `SOLAR_ROOT` to the repository
@@ -64,7 +67,8 @@ No test starts the real console or occupies port 9000.
 
 - `core/tests/conftest.py` records the listeners on 9000 **before the first test**
   (so before any double exists) and fails the run if a new listener is there at
-  the end. Listeners that were already present (a developer's live console) are in
+  the end, compared by address (a developer's live console restarted by its
+  LaunchAgent during the run keeps its address and is not a leak). Listeners already present (a developer's live console) are in
   the baseline and are never touched. Without `lsof` nothing can be observed and
   the check is skipped.
 - Tests that need a server use `core/tests/support/console_harness.py` (the

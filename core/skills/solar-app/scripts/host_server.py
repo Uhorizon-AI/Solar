@@ -145,6 +145,7 @@ def main() -> int:
         return 1
     ws = _active_workspace()
     configure_logging()
+    host_identity.freeze_runtime()
 
     server = ThreadingHTTPServer((host, PORT), HostHandler)
     print(f"Solar Host listening on http://{host}:{PORT} (workspace={ws})")

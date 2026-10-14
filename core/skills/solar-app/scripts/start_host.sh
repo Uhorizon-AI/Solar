@@ -24,18 +24,23 @@ case "$HOST_STATE" in
       echo "Solar Host already running (pid $pidfile_pid) — $SOLAR_APP_BASE_URL"
       exit 0
     fi
-    # The console is ours (identity) but the pid file is missing or stale: repair it.
-    recovered="$(solar_host_port_listener_pids | while IFS= read -r p; do
-      if solar_host_pid_looks_like_server "$p"; then echo "$p"; break; fi
-    done)"
-    if [[ -n "$recovered" ]]; then
-      echo "$recovered" >"$PID_FILE"
-      echo "Solar Host already running (pid $recovered, pid file repaired) — $SOLAR_APP_BASE_URL"
+    # The console is ours (identity) but the pid file is missing or stale: repair it
+    # with the pid the console reported itself, after checking it is a host_server.py.
+    if [[ -n "$HOST_OBSERVED_PID" ]] && solar_host_pid_looks_like_server "$HOST_OBSERVED_PID"; then
+      echo "$HOST_OBSERVED_PID" >"$PID_FILE"
+      echo "Solar Host already running (pid $HOST_OBSERVED_PID, pid file repaired) — $SOLAR_APP_BASE_URL"
     else
       rm -f "$PID_FILE"
-      echo "Solar Host already running (pid unknown: no listener could be read) — $SOLAR_APP_BASE_URL"
+      echo "Solar Host already running (pid not reported by this console) — $SOLAR_APP_BASE_URL"
     fi
     exit 0
+    ;;
+  stale_workspace)
+    # Our own console, still serving the workspace that was active before a switch.
+    echo "WARN: Solar Host pid $HOST_OBSERVED_PID serves the previous workspace (${HOST_OBSERVED_WORKSPACE}); restarting it on ${SOLAR_WORKSPACE}" >&2
+    solar_host_stop_pid "$HOST_OBSERVED_PID" || { solar_host_explain_refusal; exit 3; }
+    rm -f "$PID_FILE"
+    sleep 0.3
     ;;
   mismatch|invalid)
     solar_host_explain_refusal

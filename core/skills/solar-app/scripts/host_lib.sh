@@ -44,7 +44,8 @@ solar_host_load_env() {
     export SOLAR_HTTP_PORT="${_gw:-8787}"
   fi
   export SOLAR_APP_HOST="${SOLAR_APP_HOST:-127.0.0.1}"
-  SOLAR_APP_PORT="$(python3 "$_HOST_LIB_DIR/host_identity.py" port)"
+  # Production fallback if the resolver cannot run: the port is 9000 unless a test moves it.
+  SOLAR_APP_PORT="$(python3 "$_HOST_LIB_DIR/host_identity.py" port 2>/dev/null || echo 9000)"
   export SOLAR_APP_PORT
   export SOLAR_APP_BASE_URL="http://${SOLAR_APP_HOST}:${SOLAR_APP_PORT}"
   # Host state is machine state: it lives under the framework runtime root,
@@ -81,23 +82,39 @@ solar_host_runtime_dir() {
 # before each signal) and ownership was shown by identity, by this runtime's pid
 # file, or by this install's script path.
 
-# PIDs listening on a LOOPBACK address of SOLAR_APP_PORT. Empty without lsof: no
+# PIDs listening on exactly SOLAR_APP_HOST:SOLAR_APP_PORT (the address the probe uses). Empty without lsof: no
 # caller may then adopt or stop an unidentified console. Listeners on another
-# address (LAN or wildcard) are not this console and are never returned.
+# address (another loopback address, LAN or wildcard) is not this console and is never returned.
 solar_host_port_listener_pids() {
   solar_host_load_env
-  python3 "$_HOST_LIB_DIR/host_identity.py" listeners "$SOLAR_APP_PORT"
+  python3 "$_HOST_LIB_DIR/host_identity.py" listeners "$SOLAR_APP_PORT" "$SOLAR_APP_HOST"
 }
 
-# Sets HOST_STATE, HOST_REASON, HOST_OBSERVED_WORKSPACE, HOST_OBSERVED_RUNTIME.
+# Sets HOST_STATE, HOST_REASON, HOST_OBSERVED_WORKSPACE, HOST_OBSERVED_RUNTIME and
+# HOST_OBSERVED_PID (the pid the console itself reports; empty for older consoles).
 # Requires solar_host_load_env. Never exits non-zero.
+#
+# One extra state: stale_workspace. The runtime matches and only the workspace differs
+# (the active workspace was switched with `solar app workspace use` while the console
+# ran) AND this runtime's pid file points at the very pid that answered. That console
+# is ours: it is not reusable (check_host still exits 3) but it is stopped and replaced.
 solar_host_assess() {
-  local line
+  local line differing="" recorded=""
   line="$(python3 "$_HOST_LIB_DIR/host_identity.py" assess --base-url "$SOLAR_APP_BASE_URL" \
     --workspace "$SOLAR_WORKSPACE" 2>/dev/null || true)"
-  IFS=$'\t' read -r HOST_STATE HOST_REASON HOST_OBSERVED_WORKSPACE HOST_OBSERVED_RUNTIME <<<"$line" || true
+  IFS=$'\t' read -r HOST_STATE HOST_REASON HOST_OBSERVED_WORKSPACE HOST_OBSERVED_RUNTIME \
+    HOST_OBSERVED_PID differing <<<"$line" || true
   HOST_STATE="${HOST_STATE:-unreachable}"
   HOST_REASON="${HOST_REASON:-console unreachable}"
+  HOST_OBSERVED_PID="${HOST_OBSERVED_PID:-}"
+  if [[ "$HOST_STATE" == "mismatch" && "$differing" == "workspace" && -n "$HOST_OBSERVED_PID" \
+        && -f "$SOLAR_HOST_PID_FILE" ]]; then
+    recorded="$(tr -d '[:space:]' <"$SOLAR_HOST_PID_FILE" 2>/dev/null || true)"
+    if [[ "$recorded" == "$HOST_OBSERVED_PID" ]] && solar_host_pid_looks_like_server "$recorded"; then
+      HOST_STATE="stale_workspace"
+      HOST_REASON="this runtime's console still serves the previous workspace"
+    fi
+  fi
 }
 
 solar_host_pid_looks_like_server() {
@@ -114,7 +131,9 @@ solar_host_pid_is_this_install() {
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   args="$(ps -p "$pid" -o args= 2>/dev/null)" || return 1
   for script in "$_HOST_LIB_DIR/host_server.py" "$(cd -P "$_HOST_LIB_DIR" && pwd -P)/host_server.py"; do
-    [[ "$args" == *"$script" || "$args" == *"$script "* ]] && return 0
+    # Anchored: the whole path must start the command line or follow a space.
+    [[ "$args" == "$script" || "$args" == "$script "* || "$args" == *" $script" || "$args" == *" $script "* ]] \
+      && return 0
   done
   return 1
 }
@@ -130,7 +149,11 @@ solar_host_pidfile_pid() {
   kill -0 "$pid" 2>/dev/null || return 1
   solar_host_pid_looks_like_server "$pid" || return 1
   case "$state" in
-    match|legacy|partial)
+    match|stale_workspace)
+      # The console names its own pid: the recorded one must be that process.
+      [[ -z "${HOST_OBSERVED_PID:-}" || "$pid" == "$HOST_OBSERVED_PID" ]] || return 1
+      ;;
+    legacy|partial)
       listeners="$(solar_host_port_listener_pids)"
       if [[ -n "$listeners" ]] && ! grep -qx "$pid" <<<"$listeners"; then
         return 1
@@ -185,8 +208,17 @@ solar_host_explain_refusal() {
 solar_host_stop_orphan_listeners() {
   solar_host_load_env
   solar_host_assess
-  local stopped=0 pid proof pidfile_pid
+  local stopped=0 pid proof pidfile_pid candidates
   pidfile_pid="$(solar_host_pidfile_pid "$HOST_STATE" || true)"
+  case "$HOST_STATE" in
+    match|stale_workspace)
+      # Identity belongs to the one process that answered, not to every listener.
+      candidates="$HOST_OBSERVED_PID"
+      ;;
+    *)
+      candidates="$(solar_host_port_listener_pids)"
+      ;;
+  esac
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
     if ! solar_host_pid_looks_like_server "$pid"; then
@@ -196,6 +228,7 @@ solar_host_stop_orphan_listeners() {
     proof=""
     case "$HOST_STATE" in
       match) proof="identity" ;;
+      stale_workspace) proof="pid file and identity" ;;
       mismatch|invalid) ;;
       *)
         if [[ "$pid" == "$pidfile_pid" ]]; then
@@ -211,6 +244,6 @@ solar_host_stop_orphan_listeners() {
     fi
     echo "WARN: stopping Solar Host listener (pid $pid on :$SOLAR_APP_PORT, ownership: $proof)" >&2
     solar_host_stop_pid "$pid" && stopped=1
-  done < <(solar_host_port_listener_pids)
+  done <<<"$candidates"
   [[ "$stopped" -eq 1 ]]
 }

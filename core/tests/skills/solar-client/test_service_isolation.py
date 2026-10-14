@@ -70,6 +70,22 @@ def test_simulated_services_need_their_hooks(tmp_path):
     assert gateway.returncode == 97 and "GATEWAY" in gateway.stderr
 
 
+@pytest.mark.parametrize("line,needle", [
+    (f"python3 -u {HOST_SERVER}", "HOST_STOP_SCRIPT"),
+    (f"python3 {CORE}/skills/solar-gateway/scripts/run_http_webhook_bridge.py", "GATEWAY_STOP_SCRIPT"),
+    (f"python3 {CORE}/skills/solar-gateway/scripts/run_websocket_bridge.py", "GATEWAY_STOP_SCRIPT"),
+])
+def test_simulated_ps_file_with_services_needs_the_hooks(tmp_path, line, needle):
+    ps = tmp_path / "ps.txt"
+    ps.write_text(line + "\n")
+    result = run_guard(tmp_path, "--services", SOLAR_CLIENT_PS_OUTPUT_FILE=str(ps))
+    assert result.returncode == 97 and needle in result.stderr, result.stderr
+    ok = run_guard(tmp_path, "--services", SOLAR_CLIENT_PS_OUTPUT_FILE=str(ps),
+                   SOLAR_CLIENT_HOST_STOP_SCRIPT="/x", SOLAR_CLIENT_HOST_START_SCRIPT="/x",
+                   SOLAR_CLIENT_GATEWAY_STOP_SCRIPT="/x", SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT="/x")
+    assert ok.returncode == 0, ok.stderr
+
+
 def test_global_install_is_compared_on_physical_paths(tmp_path):
     link = tmp_path / "install-link"
     link.symlink_to(CORE.parent)
@@ -117,7 +133,9 @@ def sync_env(tmp_path, monkeypatch):
         hook.write_text(f"#!/bin/sh\necho host-{name} >> '{log}'\n")
         hook.chmod(0o755)
     env = {k: v for k, v in os.environ.items() if not k.startswith("SOLAR_")}
-    env.update(SOLAR_ROOT=str(CORE.parent), SOLAR_WORKSPACE=str(ws), SOLAR_APP_DATA=str(tmp_path / "app-data"),
+    # Pinned, so the outcome never depends on how this machine resolves its global install.
+    env.update(SOLAR_ROOT=str(CORE.parent), SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE=str(CORE.parent),
+               SOLAR_WORKSPACE=str(ws), SOLAR_APP_DATA=str(tmp_path / "app-data"),
                SOLAR_RUNTIME_ROOT=str(tmp_path / "runtime"), SOLAR_CLIENT_LAUNCHCTL=str(launchctl),
                SOLAR_CLIENT_HOST_STOP_SCRIPT=str(tmp_path / "host-stop.sh"),
                SOLAR_CLIENT_HOST_START_SCRIPT=str(tmp_path / "host-start.sh"),

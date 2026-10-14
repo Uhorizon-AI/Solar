@@ -73,9 +73,22 @@ def resolve_port(env: dict[str, str] | None = None) -> int:
     return PRODUCTION_PORT
 
 
+_FROZEN: dict[str, str] = {}
+
+
+def runtime_root() -> str:
+    """Physical runtime root of this process (fixed once the console calls ``freeze_runtime``)."""
+    return _FROZEN.get("runtime") or str(solar_runtime.runtime_root())
+
+
+def freeze_runtime() -> None:
+    """The console's runtime does not change while it runs: resolve it once, not per /health."""
+    _FROZEN["runtime"] = str(solar_runtime.runtime_root())
+
+
 def local_identity(workspace: str | os.PathLike[str]) -> dict[str, str]:
     """Identity of this process: the workspace it serves and its runtime root."""
-    return {"workspace": canonical(workspace), "runtime": str(solar_runtime.runtime_root())}
+    return {"workspace": canonical(workspace), "runtime": runtime_root()}
 
 
 def compare(payload: object, expected: dict[str, str]) -> tuple[str, list[str]]:
@@ -108,7 +121,7 @@ def fetch_health(base_url: str, timeout: float = 3.0):
 
 def assess(base_url: str, expected: dict[str, str], timeout: float = 3.0) -> dict:
     """Probe the console and decide. Returns state, reason, observed identity."""
-    result = {"state": "unreachable", "reason": "", "expected": expected, "observed": {}}
+    result = {"state": "unreachable", "reason": "", "expected": expected, "observed": {}, "differing": []}
     try:
         status, payload = fetch_health(base_url, timeout)
     except (OSError, urllib.error.URLError, ValueError) as exc:
@@ -122,6 +135,11 @@ def assess(base_url: str, expected: dict[str, str], timeout: float = 3.0) -> dic
     result["observed"] = {key: payload[key] for key in IDENTITY_KEYS
                           if isinstance(payload.get(key), str) and payload[key].strip()}
     state, differing = compare(payload, expected)
+    # The pid the console itself reports binds this answer to one process: callers
+    # act on that pid, never on "every listener of the port".
+    if isinstance(payload.get("pid"), int) and payload["pid"] > 0:
+        result["observed"]["pid"] = str(payload["pid"])
+    result["differing"] = differing
     result["state"] = state
     result["reason"] = {
         "match": "console identity verified (workspace and runtime)",
@@ -133,12 +151,16 @@ def assess(base_url: str, expected: dict[str, str], timeout: float = 3.0) -> dic
     return result
 
 
-def loopback_listener_pids(port: int) -> list[str]:
-    """PIDs listening on a loopback address of the port. Empty without lsof.
+def loopback_listener_pids(port: int, host: str = "127.0.0.1") -> list[str]:
+    """PIDs listening on exactly the console's address (``host``) and port.
 
-    A listener bound to another address (a LAN address or the wildcard) is not
-    this console: Solar listens on loopback only.
+    Empty without lsof. A listener on another address, a different loopback
+    address (127.0.0.2, ::1 when the host is 127.0.0.1), a LAN address or the
+    wildcard is not this console and is never returned. ``localhost`` accepts
+    127.0.0.1 and ::1.
     """
+    host = (host or "127.0.0.1").strip().strip("[]")
+    accepted = {"127.0.0.1", "::1"} if host == "localhost" else {host}
     try:
         listed = subprocess.run(
             ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpn"],
@@ -152,40 +174,41 @@ def loopback_listener_pids(port: int) -> list[str]:
         if line.startswith("p") and line[1:].isdigit():
             current = line[1:]
         elif line.startswith("n") and current:
-            host = line[1:].rsplit(":", 1)[0].strip("[]")
-            try:
-                loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
-            except ValueError:
-                loopback = False
-            if loopback and current not in pids:
+            address = line[1:].rsplit(":", 1)[0].strip("[]")
+            if address in accepted and current not in pids:
                 pids.append(current)
     return pids
 
 
 def _main(argv: list[str]) -> int:
+    usage = ("usage: host_identity.py port | assess --base-url URL [--workspace PATH] | "
+             "listeners PORT [HOST]")
     if not argv:
-        print("usage: host_identity.py port | assess --base-url URL [--workspace PATH] | listeners PORT",
-              file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
     if cmd == "port":
         print(resolve_port())
         return 0
     if cmd == "listeners":
-        print("\n".join(loopback_listener_pids(int(rest[0]))))
+        if not rest or not rest[0].isdigit():
+            print(usage, file=sys.stderr)
+            return 2
+        print("\n".join(loopback_listener_pids(int(rest[0]), rest[1] if len(rest) > 1 else "127.0.0.1")))
         return 0
     if cmd == "assess":
         args = dict(zip(rest[::2], rest[1::2]))
         workspace = args.get("--workspace") or os.environ.get("SOLAR_WORKSPACE", "")
-        if not workspace:
-            print("error\tSOLAR_WORKSPACE is not set")
+        if "--base-url" not in args or not workspace:
+            print(usage, file=sys.stderr)
             return 2
         result = assess(args["--base-url"], local_identity(workspace))
         observed = result["observed"]
-        print("\t".join([result["state"], result["reason"],
-                         observed.get("workspace", ""), observed.get("runtime", "")]))
+        print("\t".join([result["state"], result["reason"], observed.get("workspace", ""),
+                         observed.get("runtime", ""), observed.get("pid", ""),
+                         ",".join(result["differing"])]))
         return 0 if result["state"] == ACCEPTED else 1
-    print("unknown command: " + cmd, file=sys.stderr)
+    print(usage, file=sys.stderr)
     return 2
 
 

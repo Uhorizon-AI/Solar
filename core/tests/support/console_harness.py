@@ -30,7 +30,7 @@ STATE_PY = CORE / "skills" / "solar-state" / "scripts" / "solar_state.py"
 SYSTEM_SCRIPTS = CORE / "skills" / "solar-system" / "scripts"
 
 FAKE_CONSOLE = textwrap.dedent('''\
-    import json, socketserver, sys
+    import json, os, socketserver, sys
     from http.server import BaseHTTPRequestHandler, HTTPServer
     port, mode, workspace, runtime = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 
@@ -40,6 +40,8 @@ FAKE_CONSOLE = textwrap.dedent('''\
 
         def do_GET(self):
             payload = {"service": "solar-console", "status": "available", "process_ok": True}
+            if mode in ("full", "workspace_only", "runtime_only"):
+                payload["pid"] = os.getpid()
             if mode in ("full", "workspace_only"):
                 payload["workspace"] = workspace
             if mode in ("full", "runtime_only"):
@@ -71,16 +73,9 @@ def free_port() -> int:
 
 
 def alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    # A zombie child still answers kill -0.
-    try:
-        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-        return state != "Z"
-    except (OSError, IndexError):
-        return True
+    """Running, not a zombie (ps works on Linux and macOS; /proc does not exist on macOS)."""
+    state = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
 
 
 def wait_dead(pid: int, seconds: float = 8.0) -> bool:
@@ -249,15 +244,17 @@ class Harness:
                 os.kill(pid, sig)
             except OSError:
                 return
-            wait_dead(pid, 2.0)
+            if wait_dead(pid, 2.0):
+                return
 
     def cleanup(self) -> None:
         for proc in self.procs:
-            self._terminate(proc.pid)
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                pass
+            if proc.poll() is None:  # known children: poll() also reaps, no zombie wait
+                self._terminate(proc.pid)
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
         # A console started through start_host.sh: only the recorded pid and the
         # listeners of this harness's private port, and only host_server.py ones.
         pids = set()

@@ -94,7 +94,7 @@ def test_stop_host_ignores_a_recycled_pid(harness):
 
 
 def test_stop_host_refuses_a_foreign_console(harness):
-    foreign = harness.spawn("full", install="this", workspace="/somewhere/else")
+    foreign = harness.spawn("full", install="this", runtime="/somewhere/else")
     harness.write_pid_file(foreign.pid)
     result = harness.script("stop_host.sh")
     assert result.returncode == 3 and "NOT stopped" in result.stderr
@@ -112,23 +112,108 @@ def test_start_recovers_an_own_hung_console(harness):
     assert serves_this_runtime(harness)
 
 
-# 23. start never kills a host_server.py of another workspace
-@pytest.mark.parametrize("state", ["answering-other-workspace", "answering-other-runtime", "hung-other-install"])
+# 23. start never kills a host_server.py of another workspace or runtime
+@pytest.mark.parametrize("state", ["other-workspace", "other-runtime-with-pid-file", "hung-other-install"])
 def test_start_never_kills_another_workspaces_console(harness, state):
-    if state == "answering-other-workspace":
+    if state == "other-workspace":
+        # Another workspace and nothing from this runtime pointing at it: not ours.
         other = harness.spawn("full", install="this", workspace="/somewhere/else")
-    elif state == "answering-other-runtime":
+    elif state == "other-runtime-with-pid-file":
+        # A pid file never overrides a runtime mismatch: the runtime is the machine's, not a hint.
         other = harness.spawn("full", install="this", runtime="/somewhere/else")
+        harness.write_pid_file(other.pid)
     else:
         other = harness.spawn("drop", install="other")
-    if state != "hung-other-install":
-        # Even a pid file that points at it: identity says it serves another workspace/runtime.
-        # (A pid file is proof for a console that cannot answer; it never overrides a mismatch.)
-        harness.write_pid_file(other.pid)
     result = harness.script("start_host.sh")
     assert result.returncode == 3, result.stdout + result.stderr
     assert other.poll() is None
     assert "Automatic checks will not retry" in result.stderr or "cannot be shown" in result.stderr
+
+
+def switch_active_workspace(harness):
+    second = harness.root / "ws2"
+    (second / "sun").mkdir(parents=True)
+    (second / ".solar").mkdir()
+    (second / ".solar" / "settings.json").write_text('{"layout":"solar-client-v1.1","core_source":"global"}')
+    for command in ("add", "use"):
+        subprocess.run([sys.executable, str(SCRIPTS / "host_registry.py"), command, str(second)],
+                       env=harness.env(), check=True, capture_output=True)
+    return second
+
+
+# The active workspace is switched while this runtime's console runs. The real console
+# re-reads the registry on every request, so it follows the switch and stays accepted.
+def test_the_running_console_follows_an_active_workspace_switch(harness):
+    pid = harness.start_real_console()
+    switch_active_workspace(harness)
+    assert harness.script("check_host.sh", "--liveness").returncode == 0
+    assert harness.script("stop_host.sh").returncode == 0 and harness.gone(pid)
+
+
+# Safety net for a console that still reports the previous workspace (same runtime, this
+# runtime's pid file points at the very pid that answered): it is ours, so it can be stopped
+# and replaced; a bare `mismatch` would strand it as UNTRUSTED and block the cutover.
+def test_our_console_on_a_previous_workspace_is_stopped_and_replaced(harness):
+    stale = harness.spawn("full", install="other", workspace="/previous/workspace")
+    harness.write_pid_file(stale.pid)
+    assert harness.script("check_host.sh", "--liveness").returncode == 3  # not reusable as is
+    result = harness.script("ensure_host.sh")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert harness.gone(stale)
+    assert harness.script("check_host.sh", "--liveness").returncode == 0
+
+
+def test_stop_host_stops_our_console_on_a_previous_workspace(harness):
+    stale = harness.spawn("full", install="other", workspace="/previous/workspace")
+    harness.write_pid_file(stale.pid)
+    result = harness.script("stop_host.sh")
+    assert result.returncode == 0 and "OK: Solar Host stopped" in result.stdout, result.stderr
+    assert harness.gone(stale)
+
+
+def test_a_previous_workspace_console_without_our_pid_file_is_left_alone(harness):
+    other = harness.spawn("full", install="this", workspace="/previous/workspace")
+    result = harness.script("stop_host.sh")
+    assert result.returncode == 3 and other.poll() is None
+
+
+# Identity belongs to the pid that answered, not to every listener of the port.
+def test_orphan_stop_ignores_listeners_on_other_addresses(harness):
+    own = harness.start_real_console()
+    stranger = harness.spawn("drop", install="this", port=ch.free_port())  # host_server.py-named, not on our port
+    harness.fake_lsof((own, "127.0.0.1"), (stranger.pid, "127.0.0.2"), (stranger.pid, "::1"))
+    assert harness.lib("solar_host_port_listener_pids").stdout.split() == [str(own)]
+    result = stop_orphans(harness)
+    assert result.returncode == 0, result.stderr
+    assert harness.gone(own)
+    assert stranger.poll() is None
+
+
+def test_pid_file_repair_uses_the_pid_the_console_reports(harness):
+    own = harness.start_real_console()
+    decoy = harness.spawn("drop", install="other", port=ch.free_port())
+    harness.pid_file().unlink()
+    harness.fake_lsof((decoy.pid, "127.0.0.1"), (own, "127.0.0.1"))  # the decoy comes first
+    result = harness.script("start_host.sh")
+    assert result.returncode == 0 and "pid file repaired" in result.stdout, result.stdout + result.stderr
+    assert int(harness.pid_file().read_text()) == own
+    assert decoy.poll() is None
+
+
+def test_install_path_match_is_anchored_to_the_whole_argument(harness):
+    # /other/prefix + this install's path must not count as this install.
+    folder = harness.root / "other-prefix"
+    script = folder.joinpath(*Path(harness.install_script).parts[1:])
+    script.parent.mkdir(parents=True)
+    script.write_text(ch.FAKE_CONSOLE)
+    proc = subprocess.Popen([sys.executable, "-u", str(script), str(harness.port), "drop", "/w", "/r"],
+                            start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    harness.procs.append(proc)
+    harness.wait_listening(harness.port)
+    result = harness.lib(f"solar_host_pid_is_this_install {proc.pid} && echo yes || echo no")
+    assert result.stdout.strip() == "no"
+    assert harness.lib(f"solar_host_stop_orphan_listeners").returncode != 0
+    assert proc.poll() is None
 
 
 def test_foreign_console_diagnostic_names_who_removes_it_and_how(harness):
