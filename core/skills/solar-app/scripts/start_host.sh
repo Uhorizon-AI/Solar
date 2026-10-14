@@ -19,26 +19,37 @@ if [[ -f "$PID_FILE" ]]; then
       echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
       exit 0
     fi
-    echo "WARN: stale Solar Host pid $old_pid (health check failed) — stopping" >&2
-    solar_host_stop_pid "$old_pid"
+    # The health check includes identity. A pid that no longer runs
+    # host_server.py is a reused pid: never kill it, only drop the pid file.
+    if solar_host_pid_looks_like_server "$old_pid"; then
+      echo "WARN: stale Solar Host pid $old_pid (health check failed) — stopping" >&2
+      solar_host_stop_pid "$old_pid"
+    else
+      echo "WARN: pid $old_pid in the host pid file is not host_server.py (reused pid) — leaving it running" >&2
+    fi
   fi
   rm -f "$PID_FILE"
 fi
 
 if host_health_ok; then
-  orphan_pid=""
-  orphan_pid="$(solar_host_port_listener_pids | head -n1 || true)"
-  if [[ -n "$orphan_pid" ]] && solar_host_pid_looks_like_server "$orphan_pid"; then
-    echo "$orphan_pid" >"$PID_FILE"
-    echo "Solar Host already running (orphan pid $orphan_pid, recovered pid file) — $SOLAR_APP_BASE_URL"
+  # --liveness already verified the identity, so this listener is our console.
+  recovered_pid=""
+  recovered_pid="$(solar_host_port_listener_pids | head -n1 || true)"
+  if [[ -n "$recovered_pid" ]] && solar_host_pid_looks_like_server "$recovered_pid"; then
+    echo "$recovered_pid" >"$PID_FILE"
+    echo "Solar Host already running (pid $recovered_pid, recovered pid file) — $SOLAR_APP_BASE_URL"
     exit 0
   fi
 fi
 
+# Something holds the port but is not this runtime's console (identity failed
+# above). A console of another workspace or runtime is never stopped: report it
+# once and stop, because retrying here cannot converge.
 if solar_host_port_listener_pids | grep -q .; then
-  echo "WARN: port :$SOLAR_APP_PORT in use — stopping orphan host_server listeners" >&2
-  solar_host_stop_orphan_listeners || true
-  sleep 0.3
+  if ! solar_host_listener_identity_matches; then
+    solar_host_report_foreign_listener
+    exit 3
+  fi
 fi
 
 export SOLAR_CLI="$SOLAR_WORKSPACE/core/skills/solar-client/scripts/solar"

@@ -59,7 +59,8 @@ def get(handler, path, qs, workspace):
         return
     if path == "/health":
         handler._send_json({"service": "solar-console", "status": "available", "process_ok": True,
-                            "workspace": str(workspace)})
+                            "workspace": str(workspace),
+                            "runtime": str(app_solar.solar_runtime.runtime_root())})
         return
     if path == "/api/app/activity":
         value = lambda key, default='': qs.get(key, [default])[0]

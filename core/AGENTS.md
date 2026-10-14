@@ -115,4 +115,4 @@ After modifying any skill under `core/skills/`, validate before marking complete
 
 ## Core skills tests policy (required)
 
-Do not add `tests/` inside `core/skills/<name>/` — keep skill packages lean. Add tests under `core/tests/skills/<skill-name>/` using `unittest` or `pytest`. Each test folder may include a `conftest.py` to add the skill's scripts to `sys.path`. Run tests before considering a skill change complete: `uv run --project core/tests pytest core/tests/skills/<skill-name> -q`.
+Do not add `tests/` inside `core/skills/<name>/` — keep skill packages lean. Add tests under `core/tests/skills/<skill-name>/` using `unittest` or `pytest`. Each test folder may include a `conftest.py` to add the skill's scripts to `sys.path`. Run tests before considering a skill change complete: `uv run --project core/tests pytest core/tests/skills/<skill-name> -q`. Shell tests must isolate the machine runtime and the service manager; `core/docs/test-isolation.md` is the required isolation guide.

@@ -86,6 +86,16 @@ router is a fault when the state refuses, and quiet time is not a fault by
 itself.
 The host refuses to bind when `SOLAR_APP_HOST` is not a loopback address.
 
+`/health` reports the console's `workspace` and `runtime` as physical paths and
+with no secrets. `check_host.sh --liveness`, `check_host.sh` without a flag,
+`ensure_host.sh` and the process recovery in `start_host.sh` compare that pair
+with the expected identity of this runtime and refuse a console of another
+workspace or runtime with an explicit diagnosis. A foreign console is reported
+once and never stopped, not even by `solar app start`; the port stays fixed at
+9000 and the console stays read-only and loopback only. A console that answers no
+identity at all is adopted only when this runtime's own pid file names a live
+`host_server.py`.
+
 Global continuity remains available through its legacy read-only endpoint for
 compatibility; it is not a navigation screen or a summary card. The Channels
 screen (formerly External entry) shows entry diagnostics only and does not

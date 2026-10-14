@@ -63,6 +63,78 @@ assert_eq "runtime pointed at the solar-paths default aborts" "$live_path_ec" "9
 assert_eq "temp runtime and a test double pass" "$ok_ec" "0"
 assert_eq "SOLAR_APP_DATA away from home passes" "$app_ec" "0"
 
+# --- Opt-in --services check (state-cutover containment) --------------------
+# Two fixture installs, so the realpath comparison runs without touching any
+# real install: a validated root only needs core/skills/solar-client/scripts/solar.
+mkdir -p "$TMP/install/core/skills/solar-client/scripts" "$TMP/other/core/skills/solar-client/scripts"
+: >"$TMP/install/core/skills/solar-client/scripts/solar"
+: >"$TMP/other/core/skills/solar-client/scripts/solar"
+chmod +x "$TMP/install/core/skills/solar-client/scripts/solar" "$TMP/other/core/skills/solar-client/scripts/solar"
+
+guard_services() {
+  env -u SOLAR_APP_DATA -u SOLAR_GLOBAL_ROOT -u SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE \
+    -u SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE -u SOLAR_CLIENT_PS_OUTPUT_FILE "$@"
+}
+
+set +e
+guard_services \
+  SOLAR_ROOT="$TMP/install" \
+  SOLAR_RUNTIME_ROOT="$TMP/runtime" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/launchctl" \
+  bash -c 'source "$1"; solar_test_guard --services' _ "$GUARD" >/dev/null 2>"$TMP/services-live.err"
+services_live_ec=$?
+guard_services \
+  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none \
+  SOLAR_ROOT="$TMP/install" \
+  SOLAR_RUNTIME_ROOT="$TMP/runtime" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/launchctl" \
+  bash -c 'source "$1"; solar_test_guard --services' _ "$GUARD" >/dev/null 2>"$TMP/services-none.err"
+services_none_ec=$?
+guard_services \
+  SOLAR_CLIENT_PS_OUTPUT_FILE="$TMP/ps.txt" \
+  SOLAR_ROOT="$TMP/install" \
+  SOLAR_RUNTIME_ROOT="$TMP/runtime" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/launchctl" \
+  bash -c 'source "$1"; solar_test_guard --services' _ "$GUARD" >/dev/null 2>"$TMP/services-ps.err"
+services_ps_ec=$?
+guard_services \
+  SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE="$TMP/other" \
+  SOLAR_ROOT="$TMP/install" \
+  SOLAR_RUNTIME_ROOT="$TMP/runtime" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/launchctl" \
+  bash -c 'source "$1"; solar_test_guard --services' _ "$GUARD" >/dev/null 2>"$TMP/services-other.err"
+services_other_ec=$?
+guard_services \
+  SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE="$TMP/install" \
+  SOLAR_ROOT="$TMP/install" \
+  SOLAR_RUNTIME_ROOT="$TMP/runtime" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/launchctl" \
+  bash -c 'source "$1"; solar_test_guard --services' _ "$GUARD" >/dev/null 2>"$TMP/services-pinned.err"
+services_pinned_ec=$?
+guard_services \
+  SOLAR_ROOT="$TMP/install" \
+  SOLAR_RUNTIME_ROOT="$TMP/runtime" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/launchctl" \
+  bash -c 'source "$1"; solar_test_guard' _ "$GUARD" >/dev/null 2>"$TMP/noflag.err"
+noflag_ec=$?
+guard_services \
+  SOLAR_ROOT="$TMP/install" \
+  SOLAR_RUNTIME_ROOT="$TMP/runtime" \
+  SOLAR_CLIENT_LAUNCHCTL="$TMP/launchctl" \
+  bash -c 'source "$1"; solar_test_guard --bogus' _ "$GUARD" >/dev/null 2>"$TMP/bogus.err"
+bogus_ec=$?
+set -e
+
+assert_eq "--services on the resolved global install aborts" "$services_live_ec" "97"
+assert_eq "--services names the live global install" "$(grep -c 'live global install' "$TMP/services-live.err")" "1"
+assert_eq "--services with the service override passes" "$services_none_ec" "0"
+assert_eq "--services with a PS output file passes" "$services_ps_ec" "0"
+assert_eq "--services on an install other than the pinned global passes" "$services_other_ec" "0"
+assert_eq "--services when the override pins the global at the same install aborts" "$services_pinned_ec" "97"
+assert_eq "no flag leaves the effective-equals-global case untouched" "$noflag_ec" "0"
+assert_eq "unknown guard option aborts" "$bogus_ec" "97"
+assert_eq "unknown guard option is named" "$(grep -c 'unknown solar_test_guard option' "$TMP/bogus.err")" "1"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

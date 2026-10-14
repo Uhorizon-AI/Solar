@@ -32,6 +32,9 @@ def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(home))
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+    # Kept outside the env dict on purpose: it pins service detection for the
+    # cutover this test reaches, and must not leak into the fake MCP config.toml.
+    monkeypatch.setenv("SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE", "none")
     monkeypatch.chdir(ws)
     mock = tmp_path / "launchctl"
     mock.write_text("#!/bin/sh\nexit 1\n")
@@ -41,8 +44,10 @@ def workspace(tmp_path, monkeypatch):
 
 
 def publish(ws):
-    # Keep the repository's containment guard on the supported Client path.
-    command = 'source "$1"; solar_test_guard; bash "$2" --codex-only'
+    # A full client_sync.sh run reaches solar_client_state_cutover, so the guard
+    # also asks for the service-detection check (--services) on top of its two
+    # unconditional ones.
+    command = 'source "$1"; solar_test_guard --services; bash "$2" --codex-only'
     return subprocess.run(["bash", "-c", command, "_", str(CORE / "tests/support/shell_runtime_guard.sh"),
                            str(CORE / "skills/solar-client/scripts/client_sync.sh")],
                           cwd=ws, capture_output=True, text=True, timeout=25)

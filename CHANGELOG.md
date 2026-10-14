@@ -6,6 +6,19 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Console identity: `GET /health` now reports `workspace` and `runtime` (physical paths, no secrets), and `check_host.sh`, `ensure_host.sh` and `start_host.sh` compare that pair with the expected identity of the machine's own runtime. A console of another workspace or runtime is refused with an explicit diagnosis and is never stopped; a console without identity is adopted only when this runtime's own pid file names a live `host_server.py`.
+- `solar_test_guard --services`: an opt-in third check for shell tests that reach `solar_client_state_cutover`. It aborts (exit 97) when the test's effective install resolves to the live global install without pinning service detection, compared on `realpath`, never as a string.
+- `core/docs/test-isolation.md`: the required isolation guide for shell tests, covering the runtime and `launchctl` checks, the opt-in service check, the `SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE` and `SOLAR_CLIENT_PS_OUTPUT_FILE` hooks (and that they do not cover the LaunchAgent step) and the resource rules.
+
+### Changed
+- `SOLAR_APP_PORT` is fixed at 9000, now expressed as `SOLAR_APP_PORT_OVERRIDE:-9000`. The override exists only so a test can keep its stub off the machine's real console port.
+- `solar_host_stop_orphan_listeners` stops a listener only when it looks like `host_server.py` **and** its `/health` reports this runtime's workspace and runtime; anything else is reported as a foreign console and left running.
+- `start_host.sh` no longer sweeps the port with `solar_host_stop_orphan_listeners`: a foreign console is reported and the run exits 3, and a reused pid in the pid file is dropped instead of killed.
+
+### Fixed
+- `test_discovery_profile.py` pins `SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none` and passes `solar_test_guard --services`, so its full `client_sync.sh` run can no longer reach the state cutover against the machine's real services.
+
 ## [0.45.0] - 2026-10-14
 
 ### Added
