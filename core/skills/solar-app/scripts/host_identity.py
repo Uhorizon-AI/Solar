@@ -87,7 +87,13 @@ def port_listener_pids(host: str, port) -> str:
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
-    pids = sorted({line.strip() for line in (shown.stdout or "").splitlines() if line.strip()})
+    # Numeric order, not text order: "10000" must not come before "999". The
+    # shell's `head -n1` over `lsof` sees lsof's own order, so keep numeric order
+    # here to make the two paths choose the same pid.
+    pids = sorted(
+        {line.strip() for line in (shown.stdout or "").splitlines() if line.strip()},
+        key=int,
+    )
     return pids[0] if pids else ""
 
 

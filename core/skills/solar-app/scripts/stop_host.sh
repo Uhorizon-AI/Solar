@@ -9,18 +9,27 @@ stopped=0
 foreign=0
 unstoppable=0
 
-# Stop the pid-file process only when it is this runtime's own console; a reused
-# pid or another workspace's console is dropped, never killed. The pid is the
-# value already read above, so the file is not read a second time.
+# Stop the pid-file process only when it is this runtime's own console AND it is
+# the process that actually listens on the port. A reused pid, another workspace's
+# console, or a live own pid that is not the listener is dropped, never killed:
+# killing the pid file while another process holds :9000 would leave the port
+# occupied by the process nobody stopped. The pid is the value already read
+# above, so the file is not read a second time.
 if [[ -f "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
+    live_pid="$(solar_host_port_listener_pids | head -n1 || true)"
     if ! kill -0 "$pid" 2>/dev/null; then
       # The pid is gone: the file is stale, not a reused pid. Dropping it is the
       # whole job here; there is nothing to leave running.
       echo "WARN: stale pid $pid in the host pid file (process is gone) — dropping the pid file" >&2
     elif ! solar_host_pid_looks_like_server "$pid"; then
       echo "WARN: pid $pid in the host pid file is not a live host_server.py (reused pid) — leaving it running" >&2
+    elif [[ -n "$live_pid" && "$pid" != "$live_pid" ]]; then
+      # A live own host_server.py that is not the listener: killing it would not
+      # free :$SOLAR_APP_PORT. Drop the file; the port sweep below stops the
+      # process that really listens.
+      echo "WARN: pid $pid in the host pid file is not the listener on :${SOLAR_APP_PORT} (pid ${live_pid}) — leaving it running" >&2
     elif [[ "$(solar_host_listener_identity "$pid")" == own ]]; then
       solar_host_stop_pid "$pid"
       stopped=1

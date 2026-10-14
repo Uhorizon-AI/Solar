@@ -108,6 +108,14 @@ runtime can prove the process is its own: its own pid file names a live
 `runtime`). `stop_host.sh` uses the same proof before stopping, so a pid reused
 by another program is dropped, never killed.
 
+The two proofs are not equally strict, by design: the pid-file proof establishes
+**runtime** membership (the pid file lives in this runtime's directory), not
+**install** membership — a `host_server.py` running from another install but
+recorded in this runtime's pid file counts as ours. The command-line proof is
+install-strict (it compares the script against this install's roots). When both
+are available, the identity payload wins; the pid-file proof only fills the gap
+when `/health` answers nothing.
+
 ### Exit codes 3 and 4 (port held by something that is not this console)
 
 `ensure_host.sh`, `start_host.sh` and `stop_host.sh` exit non-zero with the

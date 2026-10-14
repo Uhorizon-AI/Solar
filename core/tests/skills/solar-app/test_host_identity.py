@@ -8,10 +8,12 @@ a caller.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parents[3] / "skills" / "solar-app" / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -361,6 +363,21 @@ class CliTest(unittest.TestCase):
             "--workspace", "/tmp/ws", "--runtime", "/tmp/rt",
         ])
         self.assertEqual(rc, 1)
+
+    def test_port_listener_pids_returns_the_lowest_numerically(self):
+        # `lsof -t` can print several pids; the first must be the numerically
+        # lowest, so the Python path and the shell's `head -n1` agree even when a
+        # shorter pid ("999") sits lexicographically after a longer one ("10000").
+        shown = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="10000\n999\n1002\n",
+        )
+        with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
+            self.assertEqual(host_identity.port_listener_pids("127.0.0.1", 9000), "999")
+
+    def test_port_listener_pids_is_empty_without_a_listener(self):
+        shown = subprocess.CompletedProcess(args=[], returncode=1, stdout="")
+        with mock.patch.object(host_identity.subprocess, "run", return_value=shown):
+            self.assertEqual(host_identity.port_listener_pids("127.0.0.1", 9000), "")
 
 
 if __name__ == "__main__":

@@ -581,6 +581,35 @@ kill -0 "$STUB_PID" 2>/dev/null && pass "stop left the non-stoppable own listene
   || fail "stop left the non-stoppable own listener running"
 stop_stub
 rm -f "$TMP/bin/ps"
+# A pid file that names a live own host_server.py which is NOT the port listener:
+# killing it would not free the port and the real listener would stay. The stop
+# must leave the pid-file process running, drop the file, and then stop the real
+# listener via the port sweep.
+sleep 120 & disown 2>/dev/null || true
+PIDFILE_NOT_LISTENER=$!
+cat >"$TMP/bin/ps" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "python3 $CORE_ROOT/skills/solar-app/scripts/host_server.py"
+EOF
+chmod +x "$TMP/bin/ps"
+start_stub stop-other-listener "{\"workspace\":\"$SOLAR_WORKSPACE\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"
+# The pid file points at PIDFILE_NOT_LISTENER, but lsof reports the stub, so they
+# differ: the stop must not kill the pid-file pid.
+printf '%s\n' "$PIDFILE_NOT_LISTENER" >"$SOLAR_HOST_RUNTIME_DIR/host.pid"
+set +e
+STOP_OUT="$(PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" FAKE_LSOF_PID="$STUB_PID" bash "$STOP_SCRIPT" 2>&1)"
+stop_ec=$?
+set -e
+kill -0 "$PIDFILE_NOT_LISTENER" 2>/dev/null && pass "stop left the pid-file process that is not the listener" \
+  || fail "stop killed a pid-file process that is not the listener"
+grep -q "not the listener" <<<"$STOP_OUT" && pass "stop says the pid file is not the listener" \
+  || { fail "stop says the pid file is not the listener"; echo "$STOP_OUT" >&2; }
+kill -0 "$STUB_PID" 2>/dev/null && fail "stop left the real listener running" \
+  || pass "stop stopped the real listener through the port sweep"
+kill "$PIDFILE_NOT_LISTENER" 2>/dev/null || true
+wait "$PIDFILE_NOT_LISTENER" 2>/dev/null || true
+stop_stub
+rm -f "$TMP/bin/ps"
 # A pid file that names a host_server.py of another workspace is not ours: the
 # stop must not kill it just because the command line says host_server.py.
 start_stub stop-foreign-pid "{\"workspace\":\"$TMP/another-workspace\",\"runtime\":\"$SOLAR_RUNTIME_ROOT\"}"

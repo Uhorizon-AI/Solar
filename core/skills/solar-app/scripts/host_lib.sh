@@ -246,7 +246,7 @@ solar_host_port_listener_pids() {
   if ! command -v lsof >/dev/null 2>&1; then
     return 0
   fi
-  lsof -nP -iTCP:"$SOLAR_APP_PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u || true
+  lsof -nP -iTCP:"$SOLAR_APP_PORT" -sTCP:LISTEN -t 2>/dev/null | sort -n -u || true
 }
 
 solar_host_pid_looks_like_server() {
