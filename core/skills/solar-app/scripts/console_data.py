@@ -349,7 +349,7 @@ _COPY = {
         "feature_many": "{labels} have failed",
         "fault": {
             "database": "the state database cannot be read",
-            "port": "another process is using port 9000",
+            "port": "another process is using port {port}",
             "launchagent": "there is no recent LaunchAgent pass",
             "router": "the router cannot be read",
             "gateway": "the gateway is not healthy",
@@ -360,7 +360,7 @@ _COPY = {
         },
         "missing": {
             "database": "the state database",
-            "port": "port 9000",
+            "port": "port {port}",
             "system": "the system result",
             "router": "the router",
             "launchagent": "the LaunchAgent pass",
@@ -384,7 +384,7 @@ _COPY = {
         "feature_many": "han fallado {labels}",
         "fault": {
             "database": "la base de estado no se puede leer",
-            "port": "el puerto 9000 lo usa otro proceso",
+            "port": "el puerto {port} lo usa otro proceso",
             "launchagent": "no hay una pasada reciente del LaunchAgent",
             "router": "el router no se puede leer",
             "gateway": "el gateway no está sano",
@@ -395,7 +395,7 @@ _COPY = {
         },
         "missing": {
             "database": "la base de estado",
-            "port": "el puerto 9000",
+            "port": "el puerto {port}",
             "system": "el resultado del sistema",
             "router": "el router",
             "launchagent": "la pasada del LaunchAgent",
@@ -418,15 +418,14 @@ def console_language(workspace=None) -> str:
 def _with_port(value, port: str):
     if isinstance(value, dict):
         return {key: _with_port(item, port) for key, item in value.items()}
-    return value.replace("9000", port) if isinstance(value, str) else value
+    return value.replace("{port}", port) if isinstance(value, str) else value
 
 
 def _copy(language: str) -> dict:
     """The copy for the language, naming the console's real port (9000 unless a test moved it)."""
     import host_identity
     base = _COPY["es"] if language == "es" else _COPY["en"]
-    port = str(host_identity.resolve_port())
-    return base if port == "9000" else _with_port(base, port)
+    return _with_port(base, str(host_identity.resolve_port()))
 
 
 def _join(items: list[str], language: str) -> str:

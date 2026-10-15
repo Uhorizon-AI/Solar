@@ -2,6 +2,14 @@
 (function () {
   "use strict";
 
+  // The port this page was served from (9000 unless a test moved it); 80/443 when the host names none.
+  function consolePort() {
+    var host = (typeof location !== "undefined" && location.host) || "";
+    var match = host.match(/:(\d+)$/);
+    if (match) return match[1];
+    return typeof location !== "undefined" && location.protocol === "https:" ? "443" : "80";
+  }
+
   var TZ = "Europe/Madrid";
   var LANG = "en";
   var COPY = {
@@ -96,7 +104,7 @@
       r_system: "A system feature has failed.",
       r_router: "The router is unknown because the state refuses.",
       r_gateway: "The gateway is not healthy.",
-      c_database: "Database", c_port: "Port " + ((typeof location !== "undefined" && location.port) || "9000"), c_system: "System", c_router: "Router",
+      c_database: "Database", c_port: "Port " + consolePort(), c_system: "System", c_router: "Router",
       c_launchagent: "LaunchAgent", c_gateway: "Gateway",
       no_channel: "no channel", other_channel: "Other",
       mode_global: "Global", mode_portable: "Portable copy",
@@ -249,7 +257,7 @@
       r_system: "Una función del sistema ha fallado.",
       r_router: "El router es desconocido porque el estado se niega.",
       r_gateway: "El gateway no está sano.",
-      c_database: "Base", c_port: "Puerto " + ((typeof location !== "undefined" && location.port) || "9000"), c_system: "Sistema", c_router: "Router",
+      c_database: "Base", c_port: "Puerto " + consolePort(), c_system: "Sistema", c_router: "Router",
       c_launchagent: "LaunchAgent", c_gateway: "Gateway",
       no_channel: "sin canal", other_channel: "Otro",
       mode_global: "Global", mode_portable: "Copia portable",
