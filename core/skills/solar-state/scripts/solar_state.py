@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -72,6 +73,7 @@ TRANSITIONS = (
     ("draft", "planned"), ("draft", "queued"), ("draft", "cancelled"), ("draft", "archived"),
     ("planned", "queued"), ("planned", "draft"), ("planned", "cancelled"), ("planned", "archived"),
     ("queued", "active"), ("queued", "error"), ("queued", "cancelled"),
+    ("queued", "draft"),         # approval withdrawn: task.return_to_draft
     ("active", "completed"), ("active", "error"), ("active", "cancelled"),
     ("active", "queued"),        # a parent goes back to wait for its subtasks
     ("completed", "queued"),     # recurring task, next run
@@ -199,6 +201,12 @@ MIGRATIONS: tuple[str, ...] = (
            json_extract(row, '$.duration_ms') AS duration_ms,
            json_extract(row, '$.channel') AS channel
     FROM audit;
+    """,
+    # v5: an approved task can be returned to draft. The table is seeded once, by v1,
+    # and every gate reads the table: without this row an existing base would refuse it.
+    # Idempotent, and it never touches `tasks`.
+    """
+    INSERT OR IGNORE INTO transitions (from_status, to_status) VALUES ('queued', 'draft')
     """,
 )
 
@@ -805,23 +813,171 @@ def scheduled_now(scheduled_time: Optional[str], weekdays: Optional[str],
 
 # What a human approves when a task is queued: the instructions and everything
 # that decides what runs, where, and when. Runtime bookkeeping (run counters,
-# claims, appended results) is deliberately outside it.
+# claims, appended results) is deliberately outside it. So is the title: it is a
+# label, and renaming a task is not a new approval.
 MATERIAL_KEYS = (
-    "title", "object", "scope", "effect", "priority", "provider", "planet", "agent",
+    "object", "scope", "effect", "priority", "provider", "planet", "agent",
     "responsibility", "agent_contract", "notify_when", "origin_channel", "origin_chat_id",
     "resources", "cleanup_required", "cleanup_timeout",
     "scheduled_time", "scheduled_weekdays", "scheduled_timezone",
     "recurring", "recurring_min_interval", "recurring_max_runs",
 )
 
+# What an approval leaves in the frontmatter. `approved_definition` is the
+# snapshot: the definition text exactly as it was approved.
+APPROVAL_KEYS = ("approved_digest", "approved_at", "approved_row_version", "approved_definition")
+# A digest written by this contract starts with this. One without it (or none at all)
+# was made by the old algorithm (title + raw body) or never made: the claim refuses it.
+DIGEST_PREFIX = "v2:"
+# Level-2 sections the runtime appends to the body. They are not instructions.
+RUNTIME_SECTIONS = ("## Delivery", "## Subtask results", "## Execution Error", "## Result")
 
-def material_digest(pairs: list[list[str]], body: str) -> str:
-    """Digest of the material content of a task at one moment."""
+_LOG = logging.getLogger("solar_state")
+
+
+def definition_text(body: str, title: Optional[str] = None) -> str:
+    """The editable instructions of a task, in one canonical form.
+
+    `_body` in solar-mcp writes `\n# {title}\n\n{instructions}\n`. The `# {title}`
+    line is a label, so it is dropped when it is the first line and equals the
+    stored title: renaming rewrites it together with the title and leaves the
+    definition as it was. Leading blank lines and trailing whitespace are removed.
+    """
+    text = body.lstrip("\r\n")
+    if title:
+        first, sep, rest = text.partition("\n")
+        if sep and first.rstrip("\r") == f"# {title}":
+            text = rest
+        elif not sep and first.rstrip("\r") == f"# {title}":
+            text = ""
+    return text.lstrip("\r\n").rstrip()
+
+
+def _split_runtime_blocks(text: str) -> tuple[str, str]:
+    """(text without runtime blocks, the blocks). A block runs from its heading to the
+    next `## ` heading or the end, so a `## Result` the author wrote does not swallow
+    what follows it."""
+    kept: list[str] = []
+    taken: list[str] = []
+    skipping = False
+    for line in text.splitlines(keepends=True):
+        if line.startswith("## "):
+            skipping = line.rstrip() in RUNTIME_SECTIONS
+        (taken if skipping else kept).append(line)
+    return "".join(kept), "".join(taken)
+
+
+def definition_body(body: str, title: Optional[str] = None) -> str:
+    """`definition_text` without the sections the runtime appended after a run.
+
+    The fallback when no snapshot was approved. A change that sits only under a
+    runtime heading does not ask for a new approval: that is the stated limit of
+    this reading, and the reason approval stores a snapshot.
+    """
+    return definition_text(_split_runtime_blocks(definition_text(body, title))[0])
+
+
+def _after_snapshot(text: str, snapshot: Optional[str]) -> Optional[str]:
+    """What follows the snapshot in `text`, when that is nothing but runtime sections."""
+    if snapshot is None or not text.startswith(snapshot):
+        return None
+    rest = text[len(snapshot):]
+    if rest[:1] not in ("", "\n") or _split_runtime_blocks(rest)[0].strip():
+        return None
+    return rest
+
+
+def runtime_tail(body: str, title: Optional[str] = None, snapshot: Optional[str] = None) -> str:
+    """What the runtime appended after the definition: results, delivery, errors."""
+    text = definition_text(body, title)
+    rest = _after_snapshot(text, snapshot)
+    return (rest if rest is not None else _split_runtime_blocks(text)[1]).strip("\n")
+
+
+def current_definition(body: str, title: Optional[str] = None,
+                       snapshot: Optional[str] = None) -> str:
+    """The definition a claim compares with the approval.
+
+    With a snapshot the boundary is known: when the body is that text followed by
+    nothing but runtime sections, the definition is the snapshot itself. Anything
+    else is read as `definition_body`, which then differs from the snapshot.
+    """
+    if _after_snapshot(definition_text(body, title), snapshot) is not None:
+        return snapshot
+    return definition_body(body, title)
+
+
+def material_digest(pairs: list[list[str]], body: str, *, definition: Optional[str] = None) -> str:
+    """Digest of the material content of a task at one moment: the material fields and
+    the definition. `definition` is given when the caller already holds it (a snapshot);
+    otherwise it is read from `body` as it stands."""
     import hashlib
     material = {key: value_of(_get_pair(pairs, key)) for key in MATERIAL_KEYS}
-    payload = json.dumps(dict(fields=material, body=body), sort_keys=True,
+    if definition is None:
+        definition = definition_text(body, value_of(_get_pair(pairs, "title")))
+    payload = json.dumps(dict(fields=material, definition=definition), sort_keys=True,
                          ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return DIGEST_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def current_digest(pairs: list[list[str]], body: str) -> str:
+    """Digest of the task as a claim reads it now (snapshot if one was approved)."""
+    title = value_of(_get_pair(pairs, "title"))
+    snapshot = value_of(_get_pair(pairs, "approved_definition"))
+    return material_digest(pairs, body, definition=current_definition(body, title, snapshot))
+
+
+def approval_state(pairs: list[list[str]], body: str) -> Optional[str]:
+    """None when the stored approval covers this content, else why not:
+    `absent` (no digest), `legacy` (made by the old algorithm), `mismatch`."""
+    stored = value_of(_get_pair(pairs, "approved_digest"))
+    if not stored:
+        return "absent"
+    if not stored.startswith(DIGEST_PREFIX):
+        return "legacy"
+    return None if stored == current_digest(pairs, body) else "mismatch"
+
+
+def _approval_fields(conn, task_id: str, pairs: list[list[str]], body: str,
+                     row_version: int) -> dict:
+    """What approving writes. The snapshot is the definition as it stands; a task that
+    already ran carries runtime sections in its body, which are not part of it."""
+    title = value_of(_get_pair(pairs, "title"))
+    ran = conn.execute("SELECT 1 FROM task_events WHERE task_id = ? AND to_status = 'active' "
+                       "LIMIT 1", (task_id,)).fetchone() is not None
+    snapshot = definition_body(body, title) if ran else definition_text(body, title)
+    return {
+        "approved_digest": json.dumps(material_digest(pairs, body, definition=snapshot)),
+        "approved_at": json.dumps(_now()),
+        "approved_row_version": str(row_version),
+        "approved_definition": json.dumps(snapshot),
+    }
+
+
+def _audit(conn, event: str, **row) -> None:
+    row = dict(event=event, ts=_now(), **row)
+    conn.execute("INSERT INTO audit (ts, event, router_id, row) VALUES (?, ?, ?, ?)",
+                 (row["ts"], event, None, json.dumps(row, ensure_ascii=True)))
+
+
+def _approval_gate(conn, task_id: str, row_version: int, pairs: list[list[str]],
+                   body: str) -> Optional[str]:
+    """The claim's check, inside its transaction. None: the approval covers what is
+    stored. Otherwise the reason, recorded once per version of the row in `audit`
+    (a worker polls every minute) and logged every time."""
+    reason = approval_state(pairs, body)
+    if reason is None:
+        return None
+    _LOG.warning("approval_digest_mismatch task=%s reason=%s row_version=%s",
+                 task_id, reason, row_version)
+    seen = conn.execute(
+        "SELECT 1 FROM audit WHERE event = 'approval_digest_mismatch' "
+        "AND json_extract(row, '$.task_id') = ? AND json_extract(row, '$.row_version') = ? "
+        "AND json_extract(row, '$.reason') = ? LIMIT 1", (task_id, row_version, reason)).fetchone()
+    if not seen:
+        _audit(conn, "approval_digest_mismatch", task_id=task_id, reason=reason,
+               row_version=row_version)
+    return reason
 
 
 def _recurring_ready(pairs: list[list[str]], now_epoch: float) -> bool:
@@ -956,6 +1112,12 @@ class Session:
         elif not declared:
             _set_pair(pairs, "id", " " + json.dumps(task_id, ensure_ascii=False))
         _set_pair(pairs, "status", f" {status}")
+        if status == "queued":
+            # Creating a task already queued is the caller's own approval (the queue
+            # scripts, and a parent's subtasks). It is recorded like any other, so the
+            # claim finds a digest that covers exactly this content.
+            for key, value in _approval_fields(self.conn, task_id, pairs, body, 1).items():
+                _set_pair(pairs, key, f" {value}")
         self._insert(task_id, status, pairs, body, actor)
         return task_id
 
@@ -1061,21 +1223,13 @@ class Session:
         New work is approved from draft. A task already in planned, including
         one that was there before this verb existed, uses the same move.
 
-        With `expected_row_version` the approval is checked against the exact
-        stored task, in one transaction, and records what was approved
-        (`approved_digest`, `approved_at`, `approved_row_version`). A task that
-        revises another is refused while that other can still run.
+        The approval records what was approved (`approved_digest`, `approved_at`,
+        `approved_row_version` and the `approved_definition` snapshot), with or
+        without `expected_row_version`: the claim refuses a task that has no
+        approval covering its content. With the version the approval is also
+        checked against the exact stored task, and a task that revises another is
+        refused while that other can still run.
         """
-        if expected_row_version is None:
-            row = self.conn.execute(
-                "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
-            if row is None:
-                raise TransitionRefused(f"no task {task_id}")
-            before = tuple(row)
-            came = self.task_transition(task_id, "queued", expected_from=("draft", "planned"),
-                                        actor=actor or "approve")
-            self._unchanged_scope(task_id, before)
-            return came
         with _transaction(self.conn) as conn:
             row = conn.execute(
                 "SELECT status, frontmatter, body, row_version, object, scope, effect "
@@ -1086,7 +1240,7 @@ class Session:
                 raise TransitionRefused(f"{task_id} is {row['status']}, not draft/planned")
             _check_version(task_id, row["row_version"], expected_row_version)
             pairs = json.loads(row["frontmatter"])
-            source_id = _field(pairs, "revises_task_id")
+            source_id = _field(pairs, "revises_task_id") if expected_row_version is not None else None
             if source_id:
                 source = conn.execute("SELECT status, frontmatter FROM tasks WHERE id = ?",
                                       (source_id,)).fetchone()
@@ -1096,29 +1250,64 @@ class Session:
                             source["status"] == "completed" and repeats):
                         raise TransitionRefused(
                             f"{task_id} revises {source_id}, which can still run; archive or cancel it first")
-            digest = material_digest(pairs, row["body"])
-            came = _move(conn, task_id, "queued", actor or "approve", fields={
-                "approved_digest": json.dumps(digest),
-                "approved_at": json.dumps(_now()),
-                "approved_row_version": str(row["row_version"]),
-            })
+            came = _move(conn, task_id, "queued", actor or "approve",
+                         fields=_approval_fields(conn, task_id, pairs, row["body"],
+                                                 row["row_version"]))
             after = conn.execute("SELECT object, scope, effect FROM tasks WHERE id = ?",
                                  (task_id,)).fetchone()
             if tuple(after) != (row["object"], row["scope"], row["effect"]):
                 raise StateError(f"{task_id}: object, scope or effect changed")
         return came
 
+    def task_return_to_draft(self, task_id: str, *, expected_row_version: int,
+                             actor: Optional[str] = None,
+                             reason: str = "return_to_draft") -> dict:
+        """queued -> draft, withdrawing the approval, in one transaction.
+
+        The id, the body, the schedule and the run counters stay. Only the
+        `approved_*` fields go; their values are kept in `audit`
+        (`task_approval_withdrawn`) next to the status event. It does not queue
+        or run anything: the task needs a new approval to be claimed again.
+        """
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter, row_version FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            if row["status"] != "queued":
+                raise TransitionRefused(f"{task_id} is {row['status']}, not queued")
+            _check_version(task_id, row["row_version"], expected_row_version)
+            withdrawn = self._withdraw_approval(conn, task_id, json.loads(row["frontmatter"]),
+                                                reason, actor)
+            _move(conn, task_id, "draft", actor or "return_to_draft", drop=APPROVAL_KEYS)
+            version = conn.execute("SELECT row_version FROM tasks WHERE id = ?",
+                                   (task_id,)).fetchone()[0]
+        return dict(task_id=task_id, from_status="queued", status="draft",
+                    row_version=version, withdrawn=withdrawn)
+
+    @staticmethod
+    def _withdraw_approval(conn, task_id: str, pairs: list[list[str]], reason: str,
+                           actor: Optional[str]) -> dict:
+        """Record the approval that is about to be dropped. The caller drops the fields."""
+        withdrawn = {key: value_of(_get_pair(pairs, key)) for key in APPROVAL_KEYS
+                     if _get_pair(pairs, key) is not None and key != "approved_definition"}
+        _audit(conn, "task_approval_withdrawn", task_id=task_id, reason=reason, actor=actor,
+               **withdrawn)
+        return withdrawn
+
     def task_update(self, task_id: str, *, expected_row_version: int,
                     allowed_status: Iterable[str], fields: Optional[dict] = None,
                     body: Optional[str] = None, to_status: Optional[str] = None,
                     actor: Optional[str] = None) -> dict:
-        """Edit a task that is not yet approved, in one transaction.
+        """Edit a task that is not yet approved, or rename one that is, in one transaction.
 
-        Refuses a status outside `allowed_status` (an active or queued task keeps
-        the instructions it was approved with) and a task that changed since the
-        caller read it. Never activates: `to_status` may only be a move the
-        transition table allows, and the caller names it. Returns the new
-        `row_version` and the material digest.
+        Refuses a status outside `allowed_status` (an active task keeps the
+        instructions it started with) and a task that changed since the caller
+        read it. Never activates: `to_status` may only be a move the transition
+        table allows, and the caller names it. A queued task keeps its place and
+        its approval while the edit leaves the approved digest as it was (a
+        rename); an edit that changes what was approved is refused until the
+        task is returned to draft. Returns the new `row_version` and the digest.
         """
         allowed = set(allowed_status)
         with _transaction(self.conn) as conn:
@@ -1130,14 +1319,22 @@ class Session:
             if current not in allowed:
                 raise TransitionRefused(f"{task_id} is {current}, not {'/'.join(sorted(allowed))}")
             _check_version(task_id, row["row_version"], expected_row_version)
+            before = json.loads(row["frontmatter"])
             pairs = json.loads(row["frontmatter"])
             for key, value in (fields or {}).items():
                 if key in ("status", "id"):
                     raise StateError(f"{key} is not set directly; use a transition")
+                if key in APPROVAL_KEYS:
+                    raise StateError(f"{key} is written by an approval, not set")
                 _check_field(key, str(value))
                 _set_pair(pairs, key, f" {value}" if value != "" else "")
             new_body = row["body"] if body is None else body
             status = current
+            if current == "queued" and (
+                    current_digest(pairs, new_body) != current_digest(before, row["body"])):
+                raise TransitionRefused(
+                    f"{task_id} is queued and this edit changes what was approved; "
+                    "return it to draft first")
             if to_status and to_status != current:
                 if not conn.execute("SELECT 1 FROM transitions WHERE from_status = ? AND to_status = ?",
                                     (current, to_status)).fetchone():
@@ -1146,6 +1343,10 @@ class Session:
                 _set_pair(pairs, "status", f" {status}")
                 conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                              "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, status, actor))
+            old_title, new_title = (value_of(_get_pair(p, "title")) for p in (before, pairs))
+            if old_title != new_title:
+                _audit(conn, "task_renamed", task_id=task_id, actor=actor, status=status,
+                       from_title=old_title, to_title=new_title)
             _write_task(conn, task_id, status, pairs, new_body, insert=False)
             version = conn.execute("SELECT row_version FROM tasks WHERE id = ?",
                                    (task_id,)).fetchone()[0]
@@ -1267,15 +1468,28 @@ class Session:
 
     def task_claim(self, task_id: str, worker: str) -> bool:
         """queued -> active, atomically. True: it is yours. False: it exists and is no
-        longer queued (someone else got it). A task that does not exist raises."""
-        if self.conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)).fetchone() is None:
-            raise StateError(f"no task {task_id}")
-        try:
-            self.task_transition(task_id, "active", expected_from="queued", actor=worker,
-                                 claimed_by=worker, claimed_at=_now())
-        except TransitionRefused:
-            return False
-        return True
+        longer queued (someone else got it), or its approval does not cover what is
+        stored (`task_claim_detail` says which). A task that does not exist raises."""
+        return self.task_claim_detail(task_id, worker)["claimed"]
+
+    def task_claim_detail(self, task_id: str, worker: str) -> dict:
+        """`task_claim` with the reason it was refused: `not_queued`, or the
+        `approval_digest_mismatch` reason (`absent`, `legacy`, `mismatch`). The
+        refusal changes nothing in the task, so a recurring one keeps its cadence."""
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter, body, row_version FROM tasks "
+                               "WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                raise StateError(f"no task {task_id}")
+            if row["status"] != "queued":
+                return dict(claimed=False, reason="not_queued")
+            reason = _approval_gate(conn, task_id, row["row_version"],
+                                    json.loads(row["frontmatter"]), row["body"])
+            if reason:
+                return dict(claimed=False, reason=reason)
+            _move(conn, task_id, "active", worker,
+                  extra={"claimed_by": worker, "claimed_at": _now()})
+        return dict(claimed=True, reason=None)
 
     def task_status(self, task_id: str) -> Optional[str]:
         """The status column. It replaced the directory the task file used to sit in."""
@@ -1346,8 +1560,9 @@ class Session:
 
         Order is priority (high, then normal, then low), then `created`, then id.
         A queued task with a cancellation request is cancelled and skipped. A
-        task waiting on another, a recurring task still inside its interval, or
-        one outside its schedule window is left queued. `exclude` skips ids the
+        task waiting on another, a recurring task still inside its interval, one
+        outside its schedule window, or one whose approval does not cover what is
+        stored (`approval_digest_mismatch`) is left queued. `exclude` skips ids the
         caller already tried (a hook blocked them and they were released).
         Returns the claimed task, or None when nothing is ready. Hooks are not
         run here.
@@ -1358,7 +1573,8 @@ class Session:
         claimed: Optional[str] = None
         with _transaction(self.conn) as conn:
             rows = list(conn.execute(
-                "SELECT id, priority, created, frontmatter FROM tasks WHERE status = 'queued'"))
+                "SELECT id, priority, created, frontmatter, body, row_version FROM tasks "
+                "WHERE status = 'queued'"))
             rows.sort(key=lambda row: (
                 -_PRIORITY_RANK.get(row["priority"] or "", 0), row["created"] or "", row["id"]))
             for row in rows:
@@ -1377,6 +1593,8 @@ class Session:
                 if not scheduled_now(_field(pairs, "scheduled_time"),
                                      _field(pairs, "scheduled_weekdays"), moment,
                                      _field(pairs, "scheduled_timezone")):
+                    continue
+                if _approval_gate(conn, task_id, row["row_version"], pairs, row["body"]):
                     continue
                 _move(conn, task_id, "active", worker,
                       extra={"claimed_by": worker, "claimed_at": _now()})
@@ -1951,6 +2169,9 @@ def _cli(argv: list[str]) -> int:
     claim = task.add_parser("claim")
     claim.add_argument("id")
     claim.add_argument("--worker", required=True)
+    draft = task.add_parser("return-to-draft", help="queued -> draft, approval withdrawn")
+    draft.add_argument("id")
+    draft.add_argument("--expected-row-version", type=int, required=True)
     nxt = task.add_parser("claim-next")
     nxt.add_argument("--worker", required=True)
     nxt.add_argument("--exclude", default="", help="comma-separated ids to skip")
@@ -2044,9 +2265,13 @@ def _cli(argv: list[str]) -> int:
                     came = s.task_transition(args.id, args.to, args.expected_from, actor=args.actor)
                     _print(dict(id=args.id, from_status=came, to_status=args.to))
                 elif args.cmd == "claim":
-                    won = s.task_claim(args.id, args.worker)
-                    _print(dict(id=args.id, claimed=won))
-                    return 0 if won else 3
+                    result = s.task_claim_detail(args.id, args.worker)
+                    _print(dict(id=args.id, **{k: v for k, v in result.items()
+                                               if v is not None}))
+                    return 0 if result["claimed"] else 3
+                elif args.cmd == "return-to-draft":
+                    _print(s.task_return_to_draft(args.id, expected_row_version=args.expected_row_version,
+                                                  actor="cli"))
                 elif args.cmd == "claim-next":
                     excluded = [part for part in args.exclude.split(",") if part]
                     task = s.task_claim_next(args.worker, exclude=excluded)
