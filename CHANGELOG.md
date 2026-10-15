@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-10-15
+
 ### Added
 - Console identity: `GET /health` and `/api/runtime/health` now report the physical `workspace` and `runtime` of the console. `core/skills/solar-app/scripts/host_identity.py` is the single decision point (`match`, `mismatch`, `legacy`, `partial`, `unreachable`, `invalid`), compared on physical paths, and it is applied by `check_host.sh` (with and without flag), `ensure_host.sh`, `start_host.sh`, `stop_host.sh` and `solar_host_stop_orphan_listeners`. Contract: `core/docs/console-identity.md`.
 - `solar_test_guard --services` (opt-in) aborts a test whose service detection is real and whose effective install is the real global install; the LaunchAgent still needs a `launchctl` double. Contract: `core/docs/test-isolation.md`.
