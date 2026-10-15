@@ -42,12 +42,15 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 The agent uses `solar_search` to read tasks and `solar_execute` operations to change them. Each operation asks for client approval and writes only through `solar-state`. If the runtime format is not `sqlite`, the operation refuses. They do not change the task's object, scope or effect.
 
 - `task.create` — a draft (or a draft revision of another task with `revises_task_id`). Queuing is `task.approve`, never an option of create
-- `task.update` / `task.schedule` — edit or schedule a draft or planned task under `expected_row_version`. They never queue, and a queued, active or finished task cannot be edited: prepare a revision
-- `task.approve` — a draft, or a task already planned, to the queue, for the exact stored version. Refuses an A3 mandate. There is no separate plan operation
+- `task.update` / `task.schedule` — edit or schedule a draft or planned task under `expected_row_version`. They never queue. A queued task can only be renamed (it keeps its id, place and approval); any other change to it is refused until `task.return_to_draft`. An active or finished task cannot be edited: prepare a revision
+- `task.return_to_draft` — a queued task back to draft under `expected_row_version`. The approval is withdrawn, so the worker cannot claim it; id, body, schedule, counters and history stay. It needs `task.approve` to queue again
+- `task.approve` — a draft, or a task already planned, to the queue, for the exact stored version. Records the approved digest and a snapshot of the definition. Refuses an A3 mandate. There is no separate plan operation
 - `task.requeue` — error back to the queue
 - `task.cancel` — a queued task becomes cancelled; an active task stays active and the request is recorded
 - `task.archive` — retire a task keeping its row, body and events; a queued recurrence is cancelled in the same step
 - `solar_search` with `scope=tasks` — list, or read one task (`view`: `detail`, `instructions`, `config`, `status`, `result`, `error`, `history`)
+
+**Approval at claim.** A claim (`claim-next`, `claim`, `activate.sh`) takes a queued task only when its approval covers what is stored: the material fields (not the title) and the definition (the body without the `# {title}` heading and without the runtime sections `## Delivery`, `## Subtask results`, `## Execution Error`, `## Result`). Otherwise the task stays `queued`, the next candidate is tried, and `approval_digest_mismatch` is recorded in `audit` with the reason `absent`, `legacy` (digest of the old algorithm) or `mismatch`. A task in that state is approved again with `task.approve`; nothing is converted automatically. `activate.sh` fails when its claim is refused, and a recurring task's `recurring_last_run` is stamped only after a winning claim.
 
 Contracts and migration from the previous tool names: `solar_docs id=operation:<name>` and `core/docs/mcp-tool-migration.md`.
 

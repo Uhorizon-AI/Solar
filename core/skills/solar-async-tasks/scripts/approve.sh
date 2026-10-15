@@ -13,5 +13,6 @@ if [[ -z "$TASK_ID" ]]; then
     exit 1
 fi
 
-state task approve "$TASK_ID" >/dev/null
+# Records the approval (digest and definition snapshot) the claim checks.
+state task approve "$TASK_ID" >/dev/null || exit 1
 echo "Task $TASK_ID approved and queued."

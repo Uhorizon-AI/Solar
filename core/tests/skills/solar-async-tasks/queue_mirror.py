@@ -110,7 +110,14 @@ def seed(task_root: Path) -> None:
                     continue
                 if task_id in present:
                     continue
-                store.task_import(text, status=status, source_name=path.stem)
+                if status == "queued":
+                    # A fixture in queued/ stands for work somebody approved: the claim
+                    # refuses a queued row that carries no approval, as it does for an
+                    # imported legacy one. Import it as the draft it was, then approve it.
+                    store.task_import(text, status="draft", source_name=path.stem)
+                    store.task_approve(task_id, actor="fixture")
+                else:
+                    store.task_import(text, status=status, source_name=path.stem)
                 present.add(task_id)
         plans = task_root / "subtasks"
         if plans.is_dir():
