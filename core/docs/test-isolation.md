@@ -81,9 +81,6 @@ No test starts the real console or occupies port 9000.
   the check is skipped.
 - Tests that need a server use `core/tests/support/console_harness.py` (the
   `harness` fixture in `core/tests/skills/solar-app/conftest.py`): a temporary
-  workspace, runtime and app-data directory, and a private free port selected with
-  `SOLAR_APP_TEST_MODE=1` plus `SOLAR_APP_TEST_PORT=<port>`. The override is
-  honoured only with both variables in the **process** environment, never selects
-  9000, and cannot be set from a workspace `.env`; production always uses 9000.
+  workspace, runtime and app-data directory, and a private free port. The console port is 9000. A test can move it only with SOLAR_APP_TEST_MODE=1 and SOLAR_APP_TEST_PORT both in the process environment (never from a .env, never to 9000).
 - Teardown signals only the processes the harness started and the `host_server.py`
   listeners of its own private port. It never removes directories; pytest owns them.

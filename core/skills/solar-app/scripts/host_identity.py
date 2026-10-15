@@ -56,7 +56,7 @@ def canonical(path: str | os.PathLike[str]) -> str:
 
 
 def resolve_port(env: dict[str, str] | None = None) -> int:
-    """The console port. Fixed at 9000 except for tests.
+    """The console port is 9000. A test can move it only with SOLAR_APP_TEST_MODE=1 and SOLAR_APP_TEST_PORT both in the process environment (never from a .env, never to 9000).
 
     The override needs BOTH ``SOLAR_APP_TEST_MODE=1`` and ``SOLAR_APP_TEST_PORT``
     in the process environment, and it can never select 9000 itself. Workspace

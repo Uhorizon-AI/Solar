@@ -2,7 +2,8 @@
 (function () {
   "use strict";
 
-  // The port this page was served from (9000 unless a test moved it); 80/443 when the host names none.
+  // The port of the host that served this page; 80/443 when location.host names none (proxies).
+  // (Console port rule: 9000, movable only by tests, see core/docs/console-identity.md.)
   function consolePort() {
     var host = (typeof location !== "undefined" && location.host) || "";
     var match = host.match(/:(\d+)$/);

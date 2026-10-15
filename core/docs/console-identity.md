@@ -103,13 +103,11 @@ is a safety net. A differing **runtime** is always refused.
 `3`; nothing retries in a loop. The diagnostic says what the console serves, that it
 was not reused or stopped, and that whoever owns it removes it by hand: confirm its
 identity with `check_host.sh --json`, then run `stop_host.sh` as its owner (its
-workspace and runtime) or find the pid with `lsof -nP -iTCP:9000 -sTCP:LISTEN` and
+workspace and runtime) or find the pid with `lsof -nP -iTCP:${SOLAR_APP_PORT:-9000} -sTCP:LISTEN` and
 stop it manually.
 
 ## Port
 
-The console port is 9000 and cannot be changed by configuration. Tests alone can
-move it with `SOLAR_APP_TEST_MODE=1` and `SOLAR_APP_TEST_PORT` in the process
-environment (see `test-isolation.md`).
+The console port is 9000. A test can move it only with SOLAR_APP_TEST_MODE=1 and SOLAR_APP_TEST_PORT both in the process environment (never from a .env, never to 9000). (See `test-isolation.md`.)
 
 The console stays read-only and listens on loopback only.

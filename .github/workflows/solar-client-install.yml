@@ -83,6 +83,7 @@ jobs:
           bash core/tests/skills/solar-paths/test_resolve_solar_paths.sh
           bash core/tests/skills/solar-client/test_client_update.sh
           bash core/tests/skills/solar-client/test_sync_codex_agents.sh
+          bash core/tests/skills/solar-client/test_doctor_port.sh
           uv run --project core/tests pytest core/tests/skills/solar-client/test_codex_agents.py -q
 
   install-ubuntu-informative:

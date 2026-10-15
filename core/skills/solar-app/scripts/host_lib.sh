@@ -44,7 +44,8 @@ solar_host_load_env() {
     export SOLAR_HTTP_PORT="${_gw:-8787}"
   fi
   export SOLAR_APP_HOST="${SOLAR_APP_HOST:-127.0.0.1}"
-  # Production fallback if the resolver cannot run: the port is 9000 unless a test moves it.
+  # The console port is 9000. A test can move it only with SOLAR_APP_TEST_MODE=1 and SOLAR_APP_TEST_PORT both in the process environment (never from a .env, never to 9000).
+  # Resolver failure falls back to 9000.
   SOLAR_APP_PORT="$(python3 "$_HOST_LIB_DIR/host_identity.py" port 2>/dev/null || echo 9000)"
   export SOLAR_APP_PORT
   export SOLAR_APP_BASE_URL="http://${SOLAR_APP_HOST}:${SOLAR_APP_PORT}"
