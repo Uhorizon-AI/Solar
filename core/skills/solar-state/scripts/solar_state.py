@@ -229,6 +229,10 @@ class TransitionRefused(StateError):
     """The task is not where the caller expected, or the move is not allowed."""
 
 
+class ApprovedContentChanged(TransitionRefused):
+    """An edit would change what a queued task was approved with."""
+
+
 class TaskChanged(StateError):
     """The task changed after the caller read it (optimistic lock on `row_version`)."""
 
@@ -927,6 +931,14 @@ def current_digest(pairs: list[list[str]], body: str) -> str:
     return material_digest(pairs, body, definition=current_definition(body, title, snapshot))
 
 
+def task_digest(status: str, pairs: list[list[str]], body: str) -> str:
+    """The digest a reader should compare: what approving would record for a task still
+    being prepared, what a claim would compute for one that was approved."""
+    if status in ("draft", "planned"):
+        return material_digest(pairs, body)
+    return current_digest(pairs, body)
+
+
 def approval_state(pairs: list[list[str]], body: str) -> Optional[str]:
     """None when the stored approval covers this content, else why not:
     `absent` (no digest), `legacy` (made by the old algorithm), `mismatch`."""
@@ -1332,7 +1344,7 @@ class Session:
             status = current
             if current == "queued" and (
                     current_digest(pairs, new_body) != current_digest(before, row["body"])):
-                raise TransitionRefused(
+                raise ApprovedContentChanged(
                     f"{task_id} is queued and this edit changes what was approved; "
                     "return it to draft first")
             if to_status and to_status != current:
@@ -1351,7 +1363,7 @@ class Session:
             version = conn.execute("SELECT row_version FROM tasks WHERE id = ?",
                                    (task_id,)).fetchone()[0]
         return dict(task_id=task_id, status=status, row_version=version,
-                    digest=material_digest(pairs, new_body))
+                    digest=task_digest(status, pairs, new_body))
 
     def task_archive(self, task_id: str, *, expected_row_version: int, reason: str,
                      actor: Optional[str] = None) -> dict:

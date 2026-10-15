@@ -102,9 +102,10 @@ Operations (each is gated on its own name, arguments and authority):
 | Operation | Authority | Passes when / does |
 |---|---|---|
 | `task.create` | A2 | Native confirmation or an exact-call approval. Stores a **draft**. `revises_task_id` copies configuration, schedule, execution restrictions (`origin_channel`), notification destination and resource hooks from another task and leaves it untouched. Cannot queue |
-| `task.update` | A2 | Same. Edits a draft or planned task under `expected_row_version`. A planned task returns to draft. Refused for queued, active and finished tasks |
-| `task.schedule` | A2 | Same. Time, ISO weekdays, an explicit IANA zone and recurrence for a draft or planned task. Never queues. Refuses an interval that would skip a run after a clock change |
+| `task.update` | A2 | Same. Edits a draft or planned task under `expected_row_version`. A planned task returns to draft. A queued task can only be renamed: it keeps id, place and approval; any other change is refused (`task_not_editable`) until `task.return_to_draft`. Refused for active (`task_active_immutable`) and finished tasks |
+| `task.schedule` | A2 | Same. Time, ISO weekdays, an explicit IANA zone and recurrence for a draft or planned task (a queued task is first returned to draft). Never queues. Refuses an interval that would skip a run after a clock change |
 | `task.approve` | A2 | Same. The only operation that queues: the exact stored task at `expected_row_version`. Refuses an A3 mandate and a revision whose source can still run |
+| `task.return_to_draft` | A2 | Same, bound to `expected_row_version`. `queued` → `draft`: the approval is withdrawn (digest kept in the audit), the worker can no longer claim the task, id, body, schedule, counters and history stay. Needs `task.approve` to queue again |
 | `task.cancel` | A2 | Same, bound to `expected_row_version`. Cancels a queued task, or records the request for an active one |
 | `task.requeue` | A2 | Same, bound to `expected_row_version`. Moves an error task back to the queue and drops its `## Execution Error` section |
 | `task.archive` | A2 | Same. Archives keeping the row, body and events. A queued recurrence is cancelled first, in the same step. Refused while active, while another task waits on it, or while subtasks run |

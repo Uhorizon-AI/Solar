@@ -102,7 +102,7 @@ TOOLS = {
     "solar_execute": dict(
         description=(
             "Run one registered operation: task.create, task.update, task.schedule, task.approve, "
-            "task.cancel, task.requeue, task.archive, telegram.send, action.run. Each has its own "
+            "task.return_to_draft, task.cancel, task.requeue, task.archive, telegram.send, action.run. Each has its own "
             "strict arguments, authority and approval; see solar_docs id=operation:<name>. "
             "Mutations ask the user for native confirmation of this exact operation and arguments: "
             "omit approval_id. Editing or scheduling never queues a task; only task.approve does."),
