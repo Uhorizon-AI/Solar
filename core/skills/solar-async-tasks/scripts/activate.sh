@@ -92,7 +92,9 @@ except Exception: print("unknown")')"
 fi
 
 # The claim stamped recurring_last_run itself (same transaction), so a failure after it
-# cannot leave an active task without its interval.
+# cannot leave an active task without its interval. Do not move this stamp before the claim,
+# and do not align it with start_next.sh: there the hooks run after the claim and may release
+# it, here they run before it, so the claim is the first point at which a run really starts.
 state task unset "$TASK_ID" blocked_by_task_ids >/dev/null
 
 echo "✅ Activated task: [$TASK_ID] $TITLE"

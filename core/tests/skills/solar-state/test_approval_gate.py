@@ -699,3 +699,59 @@ def test_the_console_survives_an_unreadable_frontmatter(ready):
         tasks = {t["id"]: t for t in runtime_views.console_tasks(store)["tasks"]}
     assert tasks[good]["revises_task_id"] is None and tasks[broken]["revises_task_id"] is None
     assert tasks[broken]["approval_digest_mismatch"]["reason"] == "absent"
+
+
+_IMPORTED = ('---\nid: "{id}"\ntitle: "Imp"\nstatus: {status}\n---\n\n# Imp\n\nSteps.\n\n'
+             '## Result\n\nout\n\n## Findings\n\nf\n\n### Detail\n\nd\n\n## Delivery\n\nsent\n')
+_RESULTS = "## Result\n\nout\n\n## Findings\n\nf\n\n### Detail\n\nd\n\n## Delivery\n\nsent"
+
+
+def test_an_imported_task_returned_to_draft_keeps_its_results_through_edits(ready):
+    with solar_state.session() as store:
+        store.task_import(_IMPORTED.format(id="ret", status="queued"))
+        store.task_return_to_draft("ret", expected_row_version=store.task_get("ret")["row_version"])
+        assert fm(store, "ret")["definition_snapshot"] == "Steps."
+        for number in (1, 2):
+            store.task_update("ret", expected_row_version=store.task_get("ret")["row_version"],
+                              allowed_status=("draft",), definition=f"\n# Imp\n\nNew {number}.\n")
+            assert _RESULTS in store.task_get("ret")["body"]
+        store.task_approve("ret")
+        assert fm(store, "ret")["approved_definition"] == "New 2."
+        assert store.task_claim_detail("ret", "w")["claimed"] is True
+
+
+def test_an_imported_task_approved_before_the_edit_keeps_its_results(ready):
+    with solar_state.session() as store:
+        # As a draft, then approved, then edited: approving must not fold the results in.
+        store.task_import(_IMPORTED.format(id="app", status="draft"))
+        store.task_set("app", "recurring", "true")
+        store.task_approve("app")
+        assert fm(store, "app")["approved_definition"] == "Steps."
+        assert store.task_claim_detail("app", "w")["claimed"] is True
+        store.task_complete("app")
+        for number in (1, 2):
+            store.task_update("app", expected_row_version=store.task_get("app")["row_version"],
+                              allowed_status=("draft", "planned", "queued"),
+                              definition=f"\n# Imp\n\nNew {number}.\n")
+            assert _RESULTS in store.task_get("app")["body"]
+            store.task_approve("app")
+            assert store.task_claim_detail("app", "w")["claimed"] is True
+            store.task_complete("app")
+
+
+def test_the_boundary_survives_losing_only_the_approval_fields(ready):
+    """A manual clean-up that drops the digest and the approved snapshot, but not the boundary."""
+    results = "## Result\n\nok\n\n## Findings\n\nf\n"
+    with solar_state.session() as store:
+        task_id = queued(store, recurring="true")
+        store.task_claim_next("w")
+        store.task_set_body(task_id, store.task_get(task_id)["body"].rstrip() + "\n\n" + results)
+        store.task_complete(task_id)
+        store.task_unset(task_id, "approved_digest")
+        store.task_unset(task_id, "approved_definition")
+        assert "definition_snapshot" in fm(store, task_id)
+        for number in (1, 2):
+            store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
+                              allowed_status=("draft", "planned", "queued"),
+                              definition=f"\n# T\n\nNew {number}.\n")
+            assert results.strip() in store.task_get(task_id)["body"]

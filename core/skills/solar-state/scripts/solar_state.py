@@ -970,6 +970,32 @@ def approval_state(pairs: list[list[str]], body: str) -> Optional[str]:
     return None if stored == current_digest(pairs, body) else "mismatch"
 
 
+def _definition_head(body: str, title: Optional[str] = None) -> str:
+    """The definition up to the first runtime heading: where results begin when nothing
+    recorded the boundary (an import, or a task that ran before it was recorded)."""
+    lines = definition_text(body, title).splitlines(keepends=True)
+    stop = next((i for i, line in enumerate(lines) if _is_runtime_heading(line)), len(lines))
+    return definition_text("".join(lines[:stop]))
+
+
+def _record_boundary(pairs: list[list[str]], body: str) -> None:
+    """Write the boundary before an approval is withdrawn or recreated, so the results
+    already in the body keep their place apart from the instructions."""
+    if _get_pair(pairs, BOUNDARY_KEY) is None and _get_pair(pairs, "approved_definition") is None:
+        head = _definition_head(body, value_of(_get_pair(pairs, "title")))
+        _set_pair(pairs, BOUNDARY_KEY, " " + json.dumps(head))
+
+
+def _was_imported(conn, task_id: str) -> bool:
+    row = conn.execute("SELECT actor FROM task_events WHERE task_id = ? ORDER BY seq LIMIT 1",
+                       (task_id,)).fetchone()
+    return row is not None and row[0] == "import"
+
+
+def _get_pair_value(pairs: list[list[str]], key: str) -> str:
+    return (_get_pair(pairs, key) or "").strip()
+
+
 def _boundary(pairs: list[list[str]]) -> Optional[str]:
     """The definition text this body is known to begin with, if the system recorded it."""
     for key in (BOUNDARY_KEY, "approved_definition"):
@@ -992,8 +1018,8 @@ def _approval_fields(conn, task_id: str, pairs: list[list[str]], body: str,
     known = _boundary(pairs)
     if known is not None and _after_snapshot(text, known) is not None:
         snapshot = known                    # the results already in the body are not instructions
-    elif _has_run(conn, task_id):
-        snapshot = definition_body(body, title)
+    elif _has_run(conn, task_id) or _was_imported(conn, task_id):
+        snapshot = _definition_head(body, title)       # what the body already holds is results
     else:
         snapshot = text
     return {
@@ -1321,16 +1347,19 @@ class Session:
         or run anything: the task needs a new approval to be claimed again.
         """
         with _transaction(self.conn) as conn:
-            row = conn.execute("SELECT status, frontmatter, row_version FROM tasks WHERE id = ?",
+            row = conn.execute("SELECT status, frontmatter, body, row_version FROM tasks WHERE id = ?",
                                (task_id,)).fetchone()
             if row is None:
                 raise TransitionRefused(f"no task {task_id}")
             if row["status"] != "queued":
                 raise TransitionRefused(f"{task_id} is {row['status']}, not queued")
             _check_version(task_id, row["row_version"], expected_row_version)
-            withdrawn = self._withdraw_approval(conn, task_id, json.loads(row["frontmatter"]),
-                                                reason, actor)
-            _move(conn, task_id, "draft", actor or "return_to_draft", drop=APPROVAL_KEYS)
+            pairs = json.loads(row["frontmatter"])
+            withdrawn = self._withdraw_approval(conn, task_id, pairs, reason, actor)
+            _record_boundary(pairs, row["body"])
+            _move(conn, task_id, "draft", actor or "return_to_draft", drop=APPROVAL_KEYS,
+                  fields={BOUNDARY_KEY: _get_pair_value(pairs, BOUNDARY_KEY)}
+                  if _get_pair(pairs, BOUNDARY_KEY) is not None else None)
             version = conn.execute("SELECT row_version FROM tasks WHERE id = ?",
                                    (task_id,)).fetchone()[0]
         return dict(task_id=task_id, from_status="queued", status="draft",
@@ -1398,7 +1427,8 @@ class Session:
                 # body), keeps what the runtime wrote after its instructions. A draft that
                 # never ran has no such content: its sections are the author's.
                 known = _boundary(before)
-                if self._has_run(conn, task_id) or current not in ("draft", "planned") or known is not None:
+                if (self._has_run(conn, task_id) or current not in ("draft", "planned")
+                        or known is not None or _was_imported(conn, task_id)):
                     tail = runtime_tail(row["body"], value_of(_get_pair(before, "title")), known)
                     if tail:
                         if any(_is_runtime_heading(line) for line in received.splitlines()):
@@ -1417,6 +1447,8 @@ class Session:
             if current == "queued" and (after != current_digest(before, row["body"])
                                         or approval_state(before, row["body"]) is not None):
                 withdrawn = self._withdraw_approval(conn, task_id, before, "material_edit", actor)
+                if _get_pair(pairs, BOUNDARY_KEY) is None:
+                    _record_boundary(pairs, row["body"])
                 for key in APPROVAL_KEYS:
                     _drop_pair(pairs, key)
                 to_status = "draft"

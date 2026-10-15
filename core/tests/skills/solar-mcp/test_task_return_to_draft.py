@@ -253,13 +253,37 @@ def test_the_approval_text_shows_the_executor_and_its_command(solar_env):
         store.task_set(task_id, "local_command", '"bash planets/x/skills/y/scripts/run.sh"')
         store.task_set(task_id, "local_timeout", "120")
     args = dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"])
+    text, _ = approval_text.render("task.return_to_draft", args, seconds=60, lang="en")
+    assert "Executor: local" in text and "bash planets/x/skills/y/scripts/run.sh" in text
+    assert "Local timeout: 120" in text
+    es, _ = approval_text.render("task.return_to_draft", args, seconds=60, lang="es")
+    assert "Comando local" in es
     plain = approved_task("Plain")
-    for name in ("task.return_to_draft", "task.cancel"):
-        pass
-    text, _ = approval_text.render("task.approve", args, seconds=60, lang="en")
-    # task.approve needs a draft; the context rows are what matter here.
-    assert "Executor" in text and "bash planets/x/skills/y/scripts/run.sh" in text and "120" in text
-    text, _ = approval_text.render("task.return_to_draft", args, seconds=60, lang="es")
-    assert "Comando local" in text
-    other, _ = approval_text.render("task.approve", dict(task_id=plain, expected_row_version=1), seconds=60, lang="en")
+    other, _ = approval_text.render("task.return_to_draft", dict(
+        task_id=plain, expected_row_version=stored(plain)["row_version"]), seconds=60, lang="en")
     assert "Executor" not in other
+
+
+def test_the_rename_text_does_not_promise_an_approval_the_task_lacks(solar_env):
+    import approval_text
+    task_id = approved_task()
+    args = dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"], title="New name")
+    valid, _ = approval_text.render("task.update", args, seconds=60, lang="en")
+    assert "only the title changes" in valid
+    with solar_state.session() as store:
+        store.task_set(task_id, "approved_digest", '"' + "a" * 64 + '"')        # legacy
+    args["expected_row_version"] = stored(task_id)["row_version"]
+    invalid, _ = approval_text.render("task.update", args, seconds=60, lang="en")
+    assert "only the title changes" not in invalid and "approval is withdrawn" in invalid
+    out = run("task.update", args)
+    assert out["status"] == "draft"
+
+
+def test_a_revision_copies_no_approval_or_boundary_from_its_source(solar_env):
+    task_id = approved_task("Source", "Original steps.")
+    with solar_state.session() as store:
+        store.task_set(task_id, "definition_snapshot", '"Original steps."')
+    assert "definition_snapshot" in values(task_id) and "approved_definition" in values(task_id)
+    made = run("task.create", dict(title="Revision", instructions="Different steps.", revises_task_id=task_id))
+    copied = values(made["id"])
+    assert not {k for k in copied if k.startswith("approved_")} and "definition_snapshot" not in copied

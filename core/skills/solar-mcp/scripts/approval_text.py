@@ -201,7 +201,8 @@ def _facts(task_id: str) -> dict | None:
         body = task["body"] or ""
         instructions = body[len(heading):] if body.startswith(heading) else body
         return dict(title=title, status=task["status"], row_version=task["row_version"],
-                    values=values, priority=task["priority"], object=task["object"] or "",
+                    values=values, priority=task["priority"],
+                    approval=solar_state.approval_state(task["frontmatter"], task["body"]), object=task["object"] or "",
                     scope=task["scope"] or "", effect=task["effect"] or "",
                     recurring=str(values.get("recurring") or "").lower() == "true",
                     instructions=instructions.strip("\n").rstrip(), schedule=task_views._schedule(values))
@@ -426,7 +427,8 @@ def _update(copy, args):
     if status == "active":
         effect = copy["edit_active"]
     elif status == "queued":
-        effect = copy["update_queued_material" if material else "update_queued_rename"]
+        # A queued task whose approval does not cover it goes to draft on any edit.
+        effect = copy["update_queued_material" if material or facts["approval"] else "update_queued_rename"]
     elif status not in ("draft", "planned"):
         effect = copy["edit_closed"].format(status=status)
     else:
