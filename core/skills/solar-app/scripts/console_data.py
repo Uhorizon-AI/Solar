@@ -422,7 +422,9 @@ def _with_port(value, port: str):
 
 
 def _copy(language: str) -> dict:
-    """The copy for the language, naming the console's real port (9000 unless a test moved it)."""
+    """The copy for the language, naming the console's real port. The port is 9000; a test can move it only with
+    SOLAR_APP_TEST_MODE=1 and SOLAR_APP_TEST_PORT both in the process environment
+    (never from a .env, never to 9000)."""
     import host_identity
     base = _COPY["es"] if language == "es" else _COPY["en"]
     return _with_port(base, str(host_identity.resolve_port()))

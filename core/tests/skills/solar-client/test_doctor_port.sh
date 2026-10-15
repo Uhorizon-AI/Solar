@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The console port is no longer written to .env. The doctor must assume 9000 when
-# SOLAR_APP_PORT is unset, must not abort (set -e) in any of its port checks, and must
-# report what it finds. lsof is a test double: nothing here touches a real port.
+# SOLAR_APP_PORT is unset, must not abort under set -e in _port_check_verbose (the real
+# function of client_doctor.sh), and must report what it finds. solar_client_check_ports
+# (what solar status consumes) is asserted on its status and message. lsof is a test
+# double: nothing here touches a real port.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SCRIPTS="$ROOT/skills/solar-client/scripts"
@@ -57,9 +59,9 @@ grep -q reached-end <<<"$out" && pass "survives an unset SOLAR_APP_PORT with no 
 grep -qx 9000 "$FAKE_LSOF_LOG" && pass "assumes 9000 when the key is unset" || fail "never asked about 9000: $(cat "$FAKE_LSOF_LOG")"
 
 # 2. A host_server.py on the console port is reported as Solar App.
-cp "$(command -v python3)" "$TMP/py" 2>/dev/null || ln -s "$(command -v python3)" "$TMP/py"
+# The interpreter is run in place: a copied python3 does not start on macOS (/usr/bin/python3).
 printf 'import time\ntime.sleep(60)\n' >"$TMP/host_server.py"
-"$TMP/py" "$TMP/host_server.py" & PIDS+=("$!")
+python3 "$TMP/host_server.py" & PIDS+=("$!")
 export FAKE_LSOF_PID="${PIDS[0]}"
 sleep 0.3
 out="$(run_verbose_check)" || fail "aborted with a Solar console listening: $out"
