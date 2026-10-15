@@ -21,17 +21,17 @@ def _args(pid: str) -> str:
         return ""
 
 
-_IDENTITY_CACHE: dict[tuple[str, str], str] = {}
+_IDENTITY_CACHE: dict[tuple[str, str, str], str] = {}
 
 
-def _identity(pid: str, address: str) -> str:
+def _identity(pid: str, address: str, args: str = "") -> str:
     """workspace|runtime a console reports in /health ('' unless it reports BOTH).
 
     Read over HTTP from the very address that is listening; a listener that does not
     answer, is not a console, or reports no (or partial) identity yields '' and so
-    never counts as verified. Cached per (pid, address): one request per listener.
+    never counts as verified. Cached per (pid, address, command line), so a reused pid never inherits an old answer.
     """
-    key = (pid, address)
+    key = (pid, address, args)
     if key not in _IDENTITY_CACHE:
         value = ""
         try:
@@ -62,7 +62,8 @@ def snapshot(port: int = PRODUCTION_PORT) -> frozenset[tuple[str, str, str, str]
         if line.startswith("p"):
             pid = line[1:]
         elif line.startswith("n") and pid:
-            found.add((pid, line[1:], _args(pid), _identity(pid, line[1:])))
+            args = _args(pid)
+            found.add((pid, line[1:], args, _identity(pid, line[1:], args)))
     return frozenset(found)
 
 

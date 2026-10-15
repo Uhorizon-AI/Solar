@@ -495,6 +495,18 @@ def test_port_watch_identity_needs_both_fields(harness):
     assert port_watch._identity(str(proc.pid), f"127.0.0.1:{harness.port}") != ""
 
 
+def test_port_watch_identity_cache_is_keyed_by_command_line():
+    import port_watch
+    address = f"127.0.0.1:{ch.free_port()}"  # nothing listens here
+    port_watch._IDENTITY_CACHE[("4242", address, "python old-console")] = "/w|/r"
+    try:
+        assert port_watch._identity("4242", address, "python old-console") == "/w|/r"
+        # The same pid with another command line (a reused pid) never inherits that answer.
+        assert port_watch._identity("4242", address, "python another-program") == ""
+    finally:
+        port_watch._IDENTITY_CACHE.clear()
+
+
 def test_port_watch_does_not_verify_consoles_that_report_no_identity(harness):
     import port_watch
     script = harness.root / "host_server.py"

@@ -72,7 +72,7 @@ No test starts the real console or occupies port 9000.
   from a pytest temp directory), fails the run. A new pid is accepted as a restart only with evidence: the same
   command line **and** the same `workspace`/`runtime` reported by `/health` before
   and after. The identity is read over HTTP from the very address that is listening
-  (cached per pid and address, one request each) and only counts if BOTH fields are
+  (cached per pid, address and command line, one request each) and only counts if BOTH fields are
   reported; a listener that does not answer, is not a console, or reports no or partial
   identity cannot verify a restart, so its change is reported. Limit: a
   replacement that keeps pid, command line, address and reported identity is

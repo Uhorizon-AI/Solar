@@ -530,7 +530,7 @@
         badge + "</button>";
     });
     $("nav").innerHTML = html;
-    $("host").textContent = location.host || "127.0.0.1:9000";
+    $("host").textContent = location.host || ("127.0.0.1:" + consolePort());
     $("updated").textContent = healthStamp ? (t("updated") + fmt(healthStamp, true)) : t("updated_empty");
   }
 
@@ -1400,7 +1400,7 @@
     var httpAddr = stamp.http_host && stamp.http_port ? stamp.http_host + ":" + stamp.http_port : t("no_data");
     return '<div class="note">' + esc(t("channels_note")) + '</div><div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("http_channels")) + "</div>" +
       '<div class="row hd" style="grid-template-columns:180px 200px minmax(0,1fr)"><div>' + esc(t("channel")) + "</div><div>" + esc(t("address")) + "</div><div>" + esc(t("scope")) + "</div></div>" +
-      '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("console")) + '</div><div class="mono">' + esc(location.host || "127.0.0.1:9000") + "</div><div>" + pill("ok", "✓", t("local_only")) + "</div></div>" +
+      '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("console")) + '</div><div class="mono">' + esc(location.host || ("127.0.0.1:" + consolePort())) + "</div><div>" + pill("ok", "✓", t("local_only")) + "</div></div>" +
       '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("gateway_http")) + '</div><div class="mono">' + esc(httpAddr) + "</div><div>" + pill("ok", "✓", t("local_tunnel")) + "</div></div>" +
       '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("websocket")) + '</div><div class="mono">' + esc(stamp.ws_port ? t("port_word") + stamp.ws_port : t("no_data")) + "</div><div>" + pill("info", "?", t("pass_port")) + "</div></div></div>" +
       '<div class="tiles2"><div class="card" style="display:flex;flex-direction:column;gap:10px"><div class="h3">' + esc(t("telegram")) + '</div><div class="kv" style="grid-template-columns:170px minmax(0,1fr)">' +
