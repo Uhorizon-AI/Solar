@@ -265,3 +265,29 @@ def test_console_task_detail_missing_id_and_no_mutation(ready):
         runtime_views.console_task_detail(store, task_id, full=True)
         assert store.task_export(task_id) == before
         assert store.conn.total_changes == 0
+
+
+def test_console_tasks_project_revisions_and_the_approval_mismatch(ready):
+    with st.session(ready, auto_backup=False) as store:
+        source = store.task_create([("title", '"v1"')], "\n# v1\n\nOld steps.\n")
+        revision = store.task_create(
+            [("title", '"v2"'), ("revises_task_id", json.dumps(source))], "\n# v2\n\nNew steps.\n")
+        plain = store.task_create([("title", '"plain"')], "\n# plain\n")
+        stuck = store.task_create([("title", '"stuck"')], "\n# stuck\n\nx\n")
+        store.task_approve(stuck)
+        store.task_set_body(stuck, "\n# stuck\n\nsomething else\n")
+        assert store.task_claim_next("w") is None
+    with st.read_session(ready) as store:
+        by_id = {t["id"]: t for t in runtime_views.console_tasks(store)["tasks"]}
+    assert by_id[revision]["revises_task_id"] == source
+    assert by_id[source]["revises_task_id"] is None and by_id[plain]["revises_task_id"] is None
+    assert by_id[stuck]["approval_digest_mismatch"]["reason"] == "mismatch"
+    assert "approval_digest_mismatch" not in by_id[plain]
+    # Approved again, the mark goes away: it described an earlier version of the row.
+    with st.session(ready, auto_backup=False) as store:
+        store.task_return_to_draft(stuck, expected_row_version=store.task_get(stuck)["row_version"])
+        store.task_approve(stuck)
+    with st.read_session(ready) as store:
+        data = runtime_views.console_tasks(store)
+    assert "approval_digest_mismatch" not in {t["id"]: t for t in data["tasks"]}[stuck]
+    assert ["queued", "draft"] in data["transitions"]

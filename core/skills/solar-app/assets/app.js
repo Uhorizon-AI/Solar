@@ -131,7 +131,11 @@
       f_toolbar: "Filter tasks by status", f_task: "task", f_tasks: "tasks", f_recurring: "↻ Recurring",
       f_no_error: "No tasks in error", f_no_error_hint: "Nothing needs retrying.",
       f_no_error_rec: "No recurring tasks in error", f_no_error_rec_hint: "Nothing recurring needs retrying.", f_next: "Next pending: ",
-      all_tasks: "All", subtasks: "subtasks",
+      all_tasks: "All", subtasks: "subtasks", versions: "versions", earlier_versions: "Earlier versions",
+      revises: "Revises", approval: "Approval", not_approved: "Approval needed",
+      mm_absent: "no approval is recorded for it", mm_legacy: "it was approved under an older rule",
+      mm_mismatch: "it changed after it was approved",
+      mm_text: "The worker will not start this task: ", mm_fix: ". Approve it again to queue it.",
       no_provider: "no provider", no_tasks: "No tasks.", showing: "Showing ", of: " of ",
       col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "Created", col_requester: "Requester",
       state_machine: "State machine", no_history: "No history.", detail: "Detail", recurring: "recurring",
@@ -284,7 +288,11 @@
       f_toolbar: "Filtrar tareas por estado", f_task: "tarea", f_tasks: "tareas", f_recurring: "↻ Recurrentes",
       f_no_error: "No hay tareas con error", f_no_error_hint: "Nada que reintentar.",
       f_no_error_rec: "No hay tareas recurrentes con error", f_no_error_rec_hint: "Nada recurrente que reintentar.", f_next: "Siguiente pendiente: ",
-      all_tasks: "Todas", subtasks: "subtareas",
+      all_tasks: "Todas", subtasks: "subtareas", versions: "versiones", earlier_versions: "Versiones anteriores",
+      revises: "Revisa", approval: "Aprobación", not_approved: "Falta aprobación",
+      mm_absent: "no tiene aprobación registrada", mm_legacy: "se aprobó con una regla anterior",
+      mm_mismatch: "cambió después de aprobarse",
+      mm_text: "El worker no arrancará esta tarea: ", mm_fix: ". Apruébala de nuevo para ponerla en cola.",
       no_provider: "sin proveedor", no_tasks: "Sin tareas.", showing: "Mostrando ", of: " de ",
       col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Creada", col_requester: "Solicitante",
       state_machine: "Máquina de estados", no_history: "Sin historia.", detail: "Detalle", recurring: "recurrente",
@@ -881,7 +889,38 @@
       if (ui.recurring && !task.recurring) return false;
       return !activeFilter.statuses || activeFilter.statuses.indexOf(task.status) >= 0;
     }
-    var roots = tasks.filter(function (task) { return !task.parent_id || !byId[task.parent_id]; }).slice().sort(function (a, b) {
+    // One row per logical task. A finished older version that a newer task revises
+    // (revises_task_id, never a similar title) is folded under the newest version in
+    // that chain and listed in its detail. A version that can still run, or that has
+    // subtasks of its own, stays a row of its own.
+    var successors = {};
+    tasks.forEach(function (task) {
+      var source = task.revises_task_id;
+      if (source && source !== task.id && byId[source]) (successors[source] = successors[source] || []).push(task);
+    });
+    function newestFirst(a, b) { return String(b.created_at || "").localeCompare(String(a.created_at || "")) || String(a.id).localeCompare(String(b.id)); }
+    function headOf(task) {
+      var seen = {}, current = task;
+      while (current && !seen[current.id]) {
+        seen[current.id] = true;
+        var next = (successors[current.id] || []).slice().sort(newestFirst)[0];
+        if (!next) return current === task ? null : current;
+        current = next;
+      }
+      return null;
+    }
+    var FOLDS = { completed: true, cancelled: true, archived: true };
+    var folded = {}, versions = {}, headId = {};
+    tasks.forEach(function (task) {
+      if (!FOLDS[task.status] || (kids[task.id] || []).length) return;
+      var head = headOf(task);
+      if (!head) return;
+      folded[task.id] = true;
+      headId[task.id] = head.id;
+      (versions[head.id] = versions[head.id] || []).push(task);
+    });
+    Object.keys(versions).forEach(function (id) { versions[id].sort(newestFirst); });
+    var roots = tasks.filter(function (task) { return !folded[task.id] && (!task.parent_id || !byId[task.parent_id]); }).slice().sort(function (a, b) {
       return ((b.status === "active") - (a.status === "active")) || (RANK[a.status] - RANK[b.status]) || String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
     });
     var planned = [];
@@ -900,7 +939,9 @@
       }
     });
     var visibleIds = planned.map(function (row) { return row[0].id; });
-    if (visibleIds.indexOf(ui.task) < 0) ui.task = visibleIds[0] || null;
+    // An older version opened from its newer one's detail stays selected while that one is listed.
+    var keepFolded = folded[ui.task] && visibleIds.indexOf(headId[ui.task]) >= 0;
+    if (visibleIds.indexOf(ui.task) < 0 && !keepFolded) ui.task = visibleIds[0] || null;
     var rows = planned.map(function (row) {
       var task = row[0], level = row[1], nKids = row[2], dim = row[3];
       var spec = ts(task.status);
@@ -908,14 +949,16 @@
       return '<div class="row trow pick ' + cls + '" data-task="' + esc(task.id) + '">' +
         "<div>" + pill(spec.tone, spec.glyph, spec.label) + "</div>" +
         '<div class="w100" style="min-width:0;padding-left:' + (level ? 18 : 0) + 'px"><div class="trunc">' + (level ? "└ " : "") + esc(task.title || task.id) + "</div>" +
-        '<div class="mono muted" style="font-size:10.5px">' + esc(String(task.id).slice(0, 8)) + (task.recurring ? ' <span class="rmark" role="img" aria-label="' + esc(t("recurring")) + '">↻</span>' : "") + (nKids ? " · " + nKids + " " + t("subtasks") : "") + "</div></div>" +
+        '<div class="mono muted" style="font-size:10.5px">' + esc(String(task.id).slice(0, 8)) + (task.recurring ? ' <span class="rmark" role="img" aria-label="' + esc(t("recurring")) + '">↻</span>' : "") + (nKids ? " · " + nKids + " " + t("subtasks") : "") +
+        ((versions[task.id] || []).length ? " · " + versions[task.id].length + " " + t("versions") : "") +
+        (task.approval_digest_mismatch ? ' <span class="pill warn">⚠ ' + esc(t("not_approved")) + "</span>" : "") + "</div></div>" +
         '<div class="' + (task.provider ? "" : "note") + '">' + esc(task.provider || t("no_provider")) + "</div>" +
         '<div class="opt ' + (task.channel ? "" : "note") + '">' + esc(channelLabel(task.channel)) + "</div>" +
         '<div class="opt note">' + esc(fmtDay(task.created_at)) + "</div>" +
         '<div class="opt req" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
     });
     var selected = ui.task ? byId[ui.task] : null;
-    var detail = selected ? taskDetail(selected, byId, kids, history) : "<div></div>";
+    var detail = selected ? taskDetail(selected, byId, kids, history, versions[selected.id] || []) : "<div></div>";
     var empty = "";
     var emptyTitle = "";
     if (!visible) {
@@ -943,7 +986,7 @@
       (ui.machine ? "true" : "false") + '">' + (ui.machine ? "▾ " : "▸ ") + esc(t("state_machine")) + "</button>" + machine + "</div>";
   }
 
-  function taskDetail(task, byId, kids, history) {
+  function taskDetail(task, byId, kids, history, olderVersions) {
     var spec = ts(task.status);
     var children = (kids[task.id] || []).map(function (id) { return byId[id]; }).filter(Boolean);
     // The endpoint lists events oldest first (ts, seq); the detail shows the newest on top.
@@ -958,6 +1001,14 @@
       return '<div class="row pick" style="grid-template-columns:auto minmax(0,1fr);padding:6px 4px;min-height:36px" data-task="' + esc(child.id) + '">' +
         pill(childSpec.tone, childSpec.glyph, "") + "<span>" + esc(child.title || child.id) + "</span></div>";
     }).join("");
+    var versionHtml = (olderVersions || []).map(function (old) {
+      var oldSpec = ts(old.status);
+      return '<div class="row pick" style="grid-template-columns:auto minmax(0,1fr);padding:6px 4px;min-height:36px" data-task="' + esc(old.id) + '">' +
+        pill(oldSpec.tone, oldSpec.glyph, oldSpec.label) + "<span>" + esc(old.title || old.id) + ' <span class="note">' + esc(fmtDay(old.created_at)) + "</span></span></div>";
+    }).join("");
+    var mismatch = task.approval_digest_mismatch;
+    var mismatchHtml = mismatch ? '<div class="card" style="padding:8px 10px">' + pill("warn", "⚠", t("not_approved")) + '<div class="note" style="margin-top:6px">' +
+      esc(t("mm_text") + (t("mm_" + mismatch.reason) === "mm_" + mismatch.reason ? mismatch.reason : t("mm_" + mismatch.reason)) + t("mm_fix")) + "</div></div>" : "";
     return '<div class="card sticky" style="display:flex;flex-direction:column;gap:12px"><div class="lbl">' + esc(t("detail")) + '</div><div style="font-weight:600">' +
       esc(task.title || task.id) + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">' + pill(spec.tone, spec.glyph, spec.label) +
       '<span class="tag' + (task.recurring ? "" : " gap-hide") + '">↻ ' + esc(t("recurring")) + "</span></div>" +
@@ -966,7 +1017,10 @@
       kv(t("col_channel"), channelLabel(task.channel), task.channel ? "" : "note") +
       kv(t("parent"), task.parent_id ? String(task.parent_id).slice(0, 8) : t("root"), task.parent_id ? "mono" : "note") +
       '<div class="k">' + esc(t("col_requester")) + '</div><div><span class="gap">' + t("gap") + "</span></div></div>" +
+      (task.revises_task_id && byId[task.revises_task_id] ? '<div class="kv" style="grid-template-columns:88px minmax(0,1fr)">' + kv(t("revises"), String(task.revises_task_id).slice(0, 8), "mono") + "</div>" : "") +
+      mismatchHtml +
       (children.length ? '<div><div class="lbl" style="margin-bottom:4px">' + esc(t("subtasks")) + " (" + children.length + ")</div>" + kidHtml + "</div>" : "") +
+      (versionHtml ? '<div><div class="lbl" style="margin-bottom:4px">' + esc(t("earlier_versions")) + " (" + olderVersions.length + ")</div>" + versionHtml + "</div>" : "") +
       taskContext(task) + '<div><div class="lbl" style="margin-bottom:8px">' + esc(t("history")) + '</div><div class="tl">' + lines + "</div></div></div>";
   }
 
