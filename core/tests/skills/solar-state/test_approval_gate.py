@@ -267,17 +267,95 @@ def test_edit_queued_preserves_run_count_and_last_run(ready):
         assert store.task_claim(task_id, "w") is True
 
 
-def test_a_queued_edit_that_changes_the_approved_content_is_refused_here(ready):
+def test_material_edit_invalidates_approval_keeps_counters(ready):
+    stamp = "2026-10-01T00:00:00Z"
+    with solar_state.session() as store:
+        task_id = queued(store, recurring="true", recurring_min_interval="86400",
+                         recurring_run_count="2", recurring_last_run=json.dumps(stamp),
+                         recurring_max_runs="9")
+        approved = fm(store, task_id)["approved_digest"]
+        rows = len(store.task_list())
+        allowed = ("draft", "planned", "queued")
+        for change in (dict(fields={"object": '"x"'}), dict(fields={"scheduled_time": '"17:00"'}),
+                       dict(fields={"resources": '"db"'}),
+                       dict(definition="\n# T\n\nOther steps.\n")):
+            version = store.task_get(task_id)["row_version"]
+            out = store.task_update(task_id, expected_row_version=version, allowed_status=allowed,
+                                    actor="test", **change)
+            values = fm(store, task_id)
+            assert out["status"] == "draft" and out["returned_to_draft"] is True
+            assert not set(solar_state.APPROVAL_KEYS) & set(values), change
+            assert values["recurring_run_count"] == "2" and values["recurring_last_run"] == stamp
+            assert values["recurring_max_runs"] == "9" and len(store.task_list()) == rows
+            assert store.task_claim_next("w") is None and store.task_claim(task_id, "w") is False
+            withdrawn = audit(store, "task_approval_withdrawn")[-1]
+            assert withdrawn["approved_digest"] == approved and withdrawn["reason"] == "material_edit"
+            assert [e[0] for e in store.conn.execute(
+                "SELECT to_status FROM task_events WHERE task_id = ? ORDER BY seq DESC LIMIT 2",
+                (task_id,))] == ["draft", "queued"]
+            # Approved again, it queues with a digest of the new content only.
+            store.task_approve(task_id, expected_row_version=out["row_version"])
+            assert fm(store, task_id)["approved_digest"] != approved
+            approved = fm(store, task_id)["approved_digest"]
+
+
+def test_a_stale_version_or_a_claim_beats_a_material_edit(ready):
     with solar_state.session() as store:
         task_id = queued(store)
         version = store.task_get(task_id)["row_version"]
-        with pytest.raises(TransitionRefused, match="return it to draft"):
-            store.task_update(task_id, expected_row_version=version,
+        with pytest.raises(TaskChanged):
+            store.task_update(task_id, expected_row_version=version + 1, allowed_status=("queued",),
+                              fields={"object": '"x"'})
+        assert store.task_claim(task_id, "w") is True
+        with pytest.raises(TransitionRefused):
+            store.task_update(task_id, expected_row_version=version + 1, allowed_status=("queued",),
+                              fields={"object": '"x"'})
+        with pytest.raises(TransitionRefused, match="not queued"):
+            store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
                               allowed_status=("queued",), fields={"object": '"x"'})
+        assert store.task_status(task_id) == "active"
+        assert "object" not in fm(store, task_id)
         with pytest.raises(solar_state.StateError):
-            store.task_update(task_id, expected_row_version=version, allowed_status=("queued",),
-                              fields={"approved_digest": '"v2:00"'})
-        assert store.task_get(task_id)["row_version"] == version
+            store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
+                              allowed_status=("active",), fields={"approved_digest": '"v2:0"'})
+
+
+def test_editing_the_instructions_keeps_what_earlier_runs_wrote(ready):
+    with solar_state.session() as store:
+        task_id = queued(store, recurring="true", recurring_min_interval="3600")
+        store.task_claim_next("w")
+        store.task_set_body(task_id, store.task_get(task_id)["body"].rstrip()
+                            + "\n\n## Result\n\nfirst run output\n\n## Delivery\n\nsent\n")
+        assert store.task_complete(task_id) == "queued"
+        out = store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
+                                allowed_status=("queued",), definition="\n# T\n\nNew steps.\n")
+        body = store.task_get(task_id)["body"]
+        assert out["status"] == "draft"
+        assert "New steps." in body and "Body." not in body
+        assert "first run output" in body and "## Delivery" in body
+        assert solar_state.definition_body(body, "T") == "New steps."
+        store.task_approve(task_id)
+        assert fm(store, task_id)["approved_definition"] == "New steps."
+        assert store.task_claim_detail(task_id, "w")["claimed"] is True
+
+
+def test_a_never_run_draft_keeps_an_authors_result_section_on_edit(ready):
+    with solar_state.session() as store:
+        task_id = store.task_create([("title", '"T"')], "\n# T\n\nA.\n\n## Result\n\nreturn bullets\n")
+        store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
+                          allowed_status=("draft",), definition="\n# T\n\nB.\n")
+        assert store.task_get(task_id)["body"] == "\n# T\n\nB.\n"
+
+
+def test_renaming_a_queued_error_is_not_possible_and_a_rename_never_requeues(ready):
+    with solar_state.session() as store:
+        task_id = queued(store)
+        store.task_claim_next("w")
+        store.task_fail(task_id, "\n## Execution Error\n\nboom\n")
+        with pytest.raises(TransitionRefused):
+            store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
+                              allowed_status=("draft", "planned", "queued"), fields={"title": '"New"'})
+        assert store.task_status(task_id) == "error"
 
 
 # --------------------------------------------------------------------------
@@ -418,3 +496,37 @@ def test_transitions_constant_matches_the_seeded_table(ready):
     with solar_state.session() as store:
         table = {tuple(r) for r in store.conn.execute("SELECT from_status, to_status FROM transitions")}
     assert table == set(solar_state.TRANSITIONS) and ("queued", "draft") in table
+
+
+def test_claim_vs_material_edit_one_winner(ready):
+    for _ in range(12):
+        with solar_state.session() as store:
+            task_id = queued(store)
+            version = store.task_get(task_id)["row_version"]
+        outcome = {}
+        barrier = threading.Barrier(2)
+
+        def claim():
+            with solar_state.session() as store:
+                barrier.wait()
+                outcome["claim"] = store.task_claim(task_id, "w")
+
+        def edit():
+            with solar_state.session() as store:
+                barrier.wait()
+                try:
+                    outcome["edit"] = store.task_update(
+                        task_id, expected_row_version=version, fields={"object": '"x"'},
+                        allowed_status=("draft", "planned", "queued"))["status"]
+                except (TransitionRefused, TaskChanged) as exc:
+                    outcome["edit"] = exc
+
+        threads = [threading.Thread(target=claim), threading.Thread(target=edit)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        edited = outcome["edit"] == "draft"
+        assert outcome["claim"] != edited
+        with solar_state.session() as store:
+            # Whoever won, a claim never got content its approval does not cover.
+            assert store.task_status(task_id) == ("draft" if edited else "active")
+            assert ("object" in fm(store, task_id)) is edited

@@ -128,17 +128,60 @@ def test_renaming_a_queued_error_does_not_requeue_it(solar_env):
     assert stored(task_id)["status"] == "error" and "boom" in stored(task_id)["body"]
 
 
-def test_any_other_edit_of_a_queued_task_is_refused_until_it_is_returned_to_draft(solar_env):
-    task_id = approved_task()
-    version = stored(task_id)["row_version"]
-    approved = values(task_id)["approved_digest"]
+def recurring_task():
+    """A recurring draft with run history, approved the way the MCP flow does."""
+    made = new_task("Weekly", "Do the work.")
+    with solar_state.session() as store:
+        for key, value in (("recurring", "true"), ("recurring_min_interval", "86400"),
+                           ("recurring_run_count", "3"), ("recurring_last_run", '"2026-10-01T00:00:00Z"')):
+            store.task_set(made["id"], key, value)
+    return made["id"]
+
+
+def reapprove(task_id):
+    status = stored(task_id)["status"]
+    if status == "draft":
+        run("task.approve", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"]))
+
+
+def test_a_material_edit_of_a_queued_task_returns_it_to_draft_without_a_new_row(solar_env):
+    task_id = recurring_task()
+    rows = row_count()
     for operation, extra in (("task.update", dict(instructions="Swapped after approval.")),
                              ("task.update", dict(effect="wider")),
                              ("task.schedule", dict(scheduled_time="17:00", scheduled_timezone="Europe/Madrid",
                                                     scheduled_weekdays=[5]))):
-        refuse(operation, dict(task_id=task_id, expected_row_version=version, **extra), "task_not_editable")
-    after = stored(task_id)
-    assert after["row_version"] == version and values(task_id)["approved_digest"] == approved
+        reapprove(task_id)
+        assert stored(task_id)["status"] == "queued"
+        approved = values(task_id)["approved_digest"]
+        out = run(operation, dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"], **extra))
+        assert out["status"] == "draft" and out["needs_approval"] is True and out["activated"] is False
+        assert out["returned_to_draft"] is True and row_count() == rows
+        current = values(task_id)
+        assert not any(key.startswith("approved_") for key in current)
+        assert current["recurring_run_count"] == "3" and current["recurring_last_run"] == "2026-10-01T00:00:00Z"
+        with solar_state.session() as store:
+            assert store.task_claim_next("w") is None
+            assert store.audit_rows("task_approval_withdrawn")[-1]["approved_digest"] == approved
+
+
+def test_a_stale_version_is_refused_for_a_queued_edit(solar_env):
+    task_id = approved_task()
+    version = stored(task_id)["row_version"]
+    refuse("task.update", dict(task_id=task_id, expected_row_version=version + 1, effect="x"), "task_changed")
+    assert stored(task_id)["status"] == "queued" and "approved_digest" in values(task_id)
+
+
+def test_an_active_or_finished_task_is_still_not_edited(solar_env):
+    task_id = approved_task()
+    with solar_state.session() as store:
+        store.task_claim(task_id, "w")
+    refuse("task.update", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"],
+                               title="Renamed"), "task_active_immutable")
+    with solar_state.session() as store:
+        store.task_complete(task_id)
+    refuse("task.update", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"],
+                               title="Renamed"), "task_not_editable")
 
 
 def test_a_local_executor_task_is_not_revised_and_rename_adds_no_permission(solar_env):
@@ -167,7 +210,7 @@ def test_the_rename_approval_text_says_nothing_is_requeued(solar_env):
     assert "only the title changes" in text
     text, _ = approval_text.render("task.update", dict(task_id=task_id, expected_row_version=version,
                                                        instructions="Other."), seconds=60, lang="en")
-    assert "Return it to draft first" in text
+    assert "returns to draft, its approval is withdrawn" in text
     text, _ = approval_text.render("task.return_to_draft", dict(task_id=task_id, expected_row_version=version),
                                    seconds=60, lang="en")
     assert "approval is withdrawn" in text and "Return task to draft" in text

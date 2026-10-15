@@ -154,13 +154,15 @@ def _do_task_create(arguments: dict) -> dict:
     return result
 
 
-def _edit(task_id: str, expected: int, fields: dict, body: Optional[str], operation: str) -> dict:
+def _edit(task_id: str, expected: int, fields: dict, body: Optional[str], operation: str,
+          definition: Optional[str] = None) -> dict:
     """Shared edit path: one transaction, never activates.
 
     A draft or planned task is rewritten (planned goes back to draft). A queued
     task keeps its place and its approval while the edit leaves the approved
-    digest as it was, which is a rename; any other change to it is refused
-    until the task is returned to draft. An active task is never edited.
+    digest as it was, which is a rename; any other change sends it to draft and
+    withdraws the approval in the same transaction, so the worker cannot claim
+    the new content. An active task is never edited, and finished ones are not.
     """
     import solar_state
 
@@ -178,17 +180,11 @@ def _edit(task_id: str, expected: int, fields: dict, body: Optional[str], operat
                 "approved; prepare a revision with task.create and revises_task_id.")
         fields = dict(fields, updated=json.dumps(_now_iso()))
         # A planned task was reviewed as it stood: any change sends it back to draft.
-        try:
-            result = store.task_update(
-                task_id, expected_row_version=expected,
-                allowed_status=("draft", "planned", "queued"), fields=fields, body=body,
-                to_status="draft" if task["status"] == "planned" else None,
-                actor=_actor(operation))
-        except solar_state.ApprovedContentChanged as exc:
-            raise OperationError(
-                "task_not_editable",
-                f"{exc}. Use task.return_to_draft, edit it and approve it again, or prepare a "
-                "revision with task.create and revises_task_id.") from None
+        result = store.task_update(
+            task_id, expected_row_version=expected,
+            allowed_status=("draft", "planned", "queued"), fields=fields, body=body,
+            definition=definition, to_status="draft" if task["status"] == "planned" else None,
+            actor=_actor(operation))
     result.update(activated=False, needs_approval=result["status"] != "queued")
     return result
 
@@ -207,15 +203,17 @@ def _do_task_update(arguments: dict) -> dict:
     if "priority" in changes:
         fields["priority"] = changes["priority"]
     body = None
+    definition = None
     title = changes.get("title", old_title)
     if "instructions" in changes:
-        body = _body(title, changes["instructions"])
+        # Replaces the instructions only: what earlier runs appended stays in the body.
+        definition = _body(title, changes["instructions"])
     elif "title" in changes:
         heading = f"\n# {old_title}\n"
         if current["body"].startswith(heading):
             body = f"\n# {title}\n" + current["body"][len(heading):]
     return _edit(arguments["task_id"], arguments["expected_row_version"], fields, body,
-                 "task.update")
+                 "task.update", definition=definition)
 
 
 def _do_task_schedule(arguments: dict) -> dict:
@@ -406,18 +404,19 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         effects="Writes one draft row. " + _APPROVED_ONLY + " revises_task_id copies "
                 "configuration and schedule from that task and leaves it untouched."),
     Operation(
-        "task.update", A2, "Edit the content of a draft or planned task, or rename a queued one.",
+        "task.update", A2, "Edit the content of a draft, planned or queued task.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION, title=_TITLE,
                   instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500), effect=LINE(500),
                   priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
                   responsibility=SLUG), required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable",
                 "no_changes"),
-        effects="Rewrites the draft. A planned task returns to draft. A queued task can only be "
-                "renamed: it keeps its place and its approval, and any other change is refused "
-                "until it is returned to draft. " + _APPROVED_ONLY),
+        effects="Rewrites the draft. A planned task returns to draft. A queued task that is only "
+                "renamed keeps its place and its approval; any other change returns it to draft and "
+                "withdraws the approval. Results, delivery and errors of earlier runs are kept. "
+                + _APPROVED_ONLY),
     Operation(
-        "task.schedule", A2, "Set the schedule and recurrence of a draft or planned task.",
+        "task.schedule", A2, "Set the schedule and recurrence of a draft, planned or queued task.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION, scheduled_time=_TIME,
                   scheduled_weekdays={"type": "array", "items": _WEEKDAY, "minItems": 1,
                                       "maxItems": 7, "uniqueItems": True},
@@ -428,7 +427,8 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable",
                 "no_changes", "schedule_invalid"),
-        effects="Stores the schedule. " + _APPROVED_ONLY),
+        effects="Stores the schedule. A queued task returns to draft and loses its approval; run "
+                "counters and the last run time are kept. " + _APPROVED_ONLY),
     Operation(
         "task.approve", A2, "Move a draft or planned task to the queue.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION),

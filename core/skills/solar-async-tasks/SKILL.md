@@ -42,7 +42,7 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 The agent uses `solar_search` to read tasks and `solar_execute` operations to change them. Each operation asks for client approval and writes only through `solar-state`. If the runtime format is not `sqlite`, the operation refuses. They do not change the task's object, scope or effect.
 
 - `task.create` — a draft (or a draft revision of another task with `revises_task_id`). Queuing is `task.approve`, never an option of create
-- `task.update` / `task.schedule` — edit or schedule a draft or planned task under `expected_row_version`. They never queue. A queued task can only be renamed (it keeps its id, place and approval); any other change to it is refused until `task.return_to_draft`. An active or finished task cannot be edited: prepare a revision
+- `task.update` / `task.schedule` — edit or schedule a draft or planned task under `expected_row_version`. They never queue. A queued task that is only renamed keeps its id, place and approval; any other change returns it to draft and withdraws the approval. Results, delivery and errors of earlier runs stay in the body, outside the definition. An active task is immutable and a finished one is not edited: prepare a revision
 - `task.return_to_draft` — a queued task back to draft under `expected_row_version`. The approval is withdrawn, so the worker cannot claim it; id, body, schedule, counters and history stay. It needs `task.approve` to queue again
 - `task.approve` — a draft, or a task already planned, to the queue, for the exact stored version. Records the approved digest and a snapshot of the definition. Refuses an A3 mandate. There is no separate plan operation
 - `task.requeue` — error back to the queue

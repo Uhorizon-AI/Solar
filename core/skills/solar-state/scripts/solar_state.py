@@ -229,10 +229,6 @@ class TransitionRefused(StateError):
     """The task is not where the caller expected, or the move is not allowed."""
 
 
-class ApprovedContentChanged(TransitionRefused):
-    """An edit would change what a queued task was approved with."""
-
-
 class TaskChanged(StateError):
     """The task changed after the caller read it (optimistic lock on `row_version`)."""
 
@@ -950,14 +946,18 @@ def approval_state(pairs: list[list[str]], body: str) -> Optional[str]:
     return None if stored == current_digest(pairs, body) else "mismatch"
 
 
+def _has_run(conn, task_id: str) -> bool:
+    return conn.execute("SELECT 1 FROM task_events WHERE task_id = ? AND to_status = 'active' "
+                        "LIMIT 1", (task_id,)).fetchone() is not None
+
+
 def _approval_fields(conn, task_id: str, pairs: list[list[str]], body: str,
                      row_version: int) -> dict:
     """What approving writes. The snapshot is the definition as it stands; a task that
     already ran carries runtime sections in its body, which are not part of it."""
     title = value_of(_get_pair(pairs, "title"))
-    ran = conn.execute("SELECT 1 FROM task_events WHERE task_id = ? AND to_status = 'active' "
-                       "LIMIT 1", (task_id,)).fetchone() is not None
-    snapshot = definition_body(body, title) if ran else definition_text(body, title)
+    snapshot = (definition_body(body, title) if _has_run(conn, task_id)
+                else definition_text(body, title))
     return {
         "approved_digest": json.dumps(material_digest(pairs, body, definition=snapshot)),
         "approved_at": json.dumps(_now()),
@@ -1297,6 +1297,8 @@ class Session:
         return dict(task_id=task_id, from_status="queued", status="draft",
                     row_version=version, withdrawn=withdrawn)
 
+    _has_run = staticmethod(_has_run)
+
     @staticmethod
     def _withdraw_approval(conn, task_id: str, pairs: list[list[str]], reason: str,
                            actor: Optional[str]) -> dict:
@@ -1309,18 +1311,26 @@ class Session:
 
     def task_update(self, task_id: str, *, expected_row_version: int,
                     allowed_status: Iterable[str], fields: Optional[dict] = None,
-                    body: Optional[str] = None, to_status: Optional[str] = None,
-                    actor: Optional[str] = None) -> dict:
-        """Edit a task that is not yet approved, or rename one that is, in one transaction.
+                    body: Optional[str] = None, definition: Optional[str] = None,
+                    to_status: Optional[str] = None, actor: Optional[str] = None) -> dict:
+        """Edit a task in one transaction. Refuses a status outside `allowed_status`
+        (an active task keeps the instructions it started with) and a task that
+        changed since the caller read it. Never activates: `to_status` may only be
+        a move the transition table allows, and the caller names it.
 
-        Refuses a status outside `allowed_status` (an active task keeps the
-        instructions it started with) and a task that changed since the caller
-        read it. Never activates: `to_status` may only be a move the transition
-        table allows, and the caller names it. A queued task keeps its place and
-        its approval while the edit leaves the approved digest as it was (a
-        rename); an edit that changes what was approved is refused until the
-        task is returned to draft. Returns the new `row_version` and the digest.
+        A queued task keeps its place and its approval while the edit leaves the
+        approved digest as it was (a rename). An edit that changes what was approved
+        sends it to draft in the same transaction and withdraws the approval
+        (`task_approval_withdrawn` in `audit`): the worker cannot claim it until it
+        is approved again. Run counters, `recurring_last_run` and the runtime
+        sections already in the body are not touched.
+
+        `body` replaces the whole body. `definition` replaces the instructions only
+        and keeps what the runtime appended after earlier runs. Returns the new
+        `row_version`, the status and the digest.
         """
+        if body is not None and definition is not None:
+            raise StateError("pass the whole body or the definition, not both")
         allowed = set(allowed_status)
         with _transaction(self.conn) as conn:
             row = conn.execute("SELECT status, frontmatter, body, row_version FROM tasks "
@@ -1341,12 +1351,21 @@ class Session:
                 _check_field(key, str(value))
                 _set_pair(pairs, key, f" {value}" if value != "" else "")
             new_body = row["body"] if body is None else body
-            status = current
+            if definition is not None:
+                new_body = definition
+                if self._has_run(conn, task_id):
+                    tail = runtime_tail(row["body"], value_of(_get_pair(before, "title")),
+                                        value_of(_get_pair(before, "approved_definition")))
+                    if tail:
+                        new_body = definition.rstrip("\n") + "\n\n" + tail + "\n"
+            withdrawn = None
             if current == "queued" and (
                     current_digest(pairs, new_body) != current_digest(before, row["body"])):
-                raise ApprovedContentChanged(
-                    f"{task_id} is queued and this edit changes what was approved; "
-                    "return it to draft first")
+                withdrawn = self._withdraw_approval(conn, task_id, before, "material_edit", actor)
+                for key in APPROVAL_KEYS:
+                    _drop_pair(pairs, key)
+                to_status = "draft"
+            status = current
             if to_status and to_status != current:
                 if not conn.execute("SELECT 1 FROM transitions WHERE from_status = ? AND to_status = ?",
                                     (current, to_status)).fetchone():
@@ -1363,7 +1382,9 @@ class Session:
             version = conn.execute("SELECT row_version FROM tasks WHERE id = ?",
                                    (task_id,)).fetchone()[0]
         return dict(task_id=task_id, status=status, row_version=version,
-                    digest=task_digest(status, pairs, new_body))
+                    digest=task_digest(status, pairs, new_body),
+                    returned_to_draft=withdrawn is not None,
+                    approval_withdrawn=withdrawn is not None)
 
     def task_archive(self, task_id: str, *, expected_row_version: int, reason: str,
                      actor: Optional[str] = None) -> dict:
