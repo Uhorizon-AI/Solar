@@ -16,10 +16,12 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import host_client_actions as client_actions  # noqa: E402
+import host_identity  # noqa: E402
 import host_registry as reg  # noqa: E402
 import host_workspace_context as ctx  # noqa: E402
 
-PORT = 9000
+# 9000 in production; tests may move it (see host_identity.resolve_port).
+PORT = host_identity.resolve_port()
 
 
 LOGGER = logging.getLogger("solar.app")
@@ -143,6 +145,7 @@ def main() -> int:
         return 1
     ws = _active_workspace()
     configure_logging()
+    host_identity.freeze_runtime()
 
     server = ThreadingHTTPServer((host, PORT), HostHandler)
     print(f"Solar Host listening on http://{host}:{PORT} (workspace={ws})")

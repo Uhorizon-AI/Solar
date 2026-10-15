@@ -6,6 +6,25 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Console identity: `GET /health` and `/api/runtime/health` now report the physical `workspace` and `runtime` of the console. `core/skills/solar-app/scripts/host_identity.py` is the single decision point (`match`, `mismatch`, `legacy`, `partial`, `unreachable`, `invalid`), compared on physical paths, and it is applied by `check_host.sh` (with and without flag), `ensure_host.sh`, `start_host.sh`, `stop_host.sh` and `solar_host_stop_orphan_listeners`. Contract: `core/docs/console-identity.md`.
+- `solar_test_guard --services` (opt-in) aborts a test whose service detection is real and whose effective install is the real global install; the LaunchAgent still needs a `launchctl` double. Contract: `core/docs/test-isolation.md`.
+- Test-only port override `SOLAR_APP_TEST_MODE=1` + `SOLAR_APP_TEST_PORT` (process environment only; never selects 9000, ignored in a workspace `.env`). A suite-wide guard records the listeners on :9000 before the first test and fails the run if a new one remains.
+
+### Changed
+- **Behaviour:** a console that answers but serves another workspace or runtime, or reports no or partial identity, no longer satisfies `check_host.sh` (exit `3`, `--json` gives `available: false` naming the identity) or the system supervisor, which prints `status: UNTRUSTED` and counts the host as DOWN. `ensure_host.sh` and `start_host.sh` refuse it with a diagnostic (who removes it and how) and do not retry. After upgrading, an older console that predates identity is replaced on the next `ensure_host.sh`/`start_host.sh` if it is provably this runtime's (runtime pid file or this install's `host_server.py` path); otherwise it is left running and reported.
+- `solar_host_stop_orphan_listeners` no longer stops any listener that merely looks like the console: it stops proven-own listeners only, reports the rest and returns non-zero. `solar_host_stop_pid` signals only a live `host_server.py`. Listeners are matched to exactly `SOLAR_APP_HOST:port` (another loopback address, a LAN address or the wildcard is not this console); without `lsof` an unidentified console is neither adopted nor stopped. `stop_host.sh` ignores a stale or recycled pid file.
+- The loopback health probe ignores proxies configured in the environment. `/health` also reports the console's `pid`; stop and pid-file repair act on that pid (never on every listener of the port), and listeners are matched to exactly `SOLAR_APP_HOST:port`. A console of this runtime that still reports a previous workspace (`stale_workspace`) is stopped and replaced rather than stranded as `UNTRUSTED`; a differing runtime is always refused.
+- Known limit: a hung console of another workspace served by the same install is recognised by install path only and can be stopped (the runtime pid file is the strong proof); an answering console is never judged that way. See `core/docs/console-identity.md`.
+- The console port is no longer written to `.env`: `onboard_host_env.sh` and `client_init.sh` stop emitting `SOLAR_APP_PORT` (the key was already ignored); the doctor assumes 9000. The shipped `workspace.env.example` no longer lists it either. The console copy and the port label name the real port (`{port}` placeholders; the label falls back to 80/443 by protocol), which only differs under the test override.
+- A pid reported by a console is signalled only if it is also the listener of `SOLAR_APP_HOST:port` (when `lsof` exists), on every stop path.
+- `solar status` shows the reason (`error`) when the console answers but is not this one, instead of a bare DOWN.
+- `solar_test_guard --services` also judges a simulated process table (`SOLAR_CLIENT_PS_OUTPUT_FILE`): detected host/gateway services need their stop/start hooks.
+- `test_discovery_profile.py` simulates "no service running" and calls the guard with `--services`, so a full sync can no longer stop or start the services of the install it runs from.
+
+### Fixed
+- A test suite could stop or replace the real console and leave it served from a pytest temporary directory, and the supervisor accepted any console that merely responded.
+
 ## [0.45.0] - 2026-10-14
 
 ### Added

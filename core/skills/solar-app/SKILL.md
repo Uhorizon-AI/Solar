@@ -26,7 +26,7 @@ solar status
 The global dispatcher is `core/skills/solar-client/scripts/solar`.
 `app_http.py` serves the console; `app_solar.py` reads its canonical sources.
 `host_registry.py` and `host_workspace_context.py` retain workspace selection.
-The console port is fixed at 9000. The registry and metrics keep their current
+The console port is 9000 (only tests can move it; see Console identity). The registry and metrics keep their current
 machine-local paths; runtime files remain under `<runtime root>/`.
 
 Health requires a fresh source read. Task failures describe the task, not the
@@ -85,6 +85,29 @@ pass, unless that stamp recorded a feature failure. The
 router is a fault when the state refuses, and quiet time is not a fault by
 itself.
 The host refuses to bind when `SOLAR_APP_HOST` is not a loopback address.
+
+## Console identity
+
+`GET /health` and `/api/runtime/health` report the physical `workspace` and
+`runtime` the console serves. A console is reused only if both match the caller's
+(`host_identity.py`, the single decision point). `check_host.sh` applies it in every
+mode, including the no-flag mode that the system supervisor runs; `ensure_host.sh`,
+`start_host.sh` and `stop_host.sh` apply the same rule.
+
+- Exit `3` from `check_host.sh`: the console answers but belongs to another workspace
+  or runtime, or reports no (or partial) identity. The supervisor shows
+  `status: UNTRUSTED` and counts it as DOWN. `--json` reports `available: false`.
+- A foreign console is never stopped or reused: `start_host.sh` and `ensure_host.sh`
+  print who it serves and how its owner removes it, exit `3`, and do not retry.
+- An older console without identity is replaced only if it is shown to be this
+  runtime's (the runtime pid file points to a live `host_server.py`, or its command
+  line holds this install's `host_server.py`). Otherwise it is left running.
+- `solar_host_stop_orphan_listeners` no longer stops "anything that looks like the
+  console": it stops proven-own listeners only (matched to exactly `SOLAR_APP_HOST:port`, and a reported pid must be that listener) and returns non-zero otherwise.
+- The port stays 9000. Only tests can move it (`SOLAR_APP_TEST_MODE=1` with
+  `SOLAR_APP_TEST_PORT`, process environment only).
+
+Contract: `core/docs/console-identity.md`. Test isolation: `core/docs/test-isolation.md`.
 
 Global continuity remains available through its legacy read-only endpoint for
 compatibility; it is not a navigation screen or a summary card. The Channels

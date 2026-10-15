@@ -2,6 +2,15 @@
 (function () {
   "use strict";
 
+  // The port of the host that served this page; 80/443 when location.host names none (proxies).
+  // (Console port rule: 9000, movable only by tests, see core/docs/console-identity.md.)
+  function consolePort() {
+    var host = (typeof location !== "undefined" && location.host) || "";
+    var match = host.match(/:(\d+)$/);
+    if (match) return match[1];
+    return typeof location !== "undefined" && location.protocol === "https:" ? "443" : "80";
+  }
+
   var TZ = "Europe/Madrid";
   var LANG = "en";
   var COPY = {
@@ -96,7 +105,7 @@
       r_system: "A system feature has failed.",
       r_router: "The router is unknown because the state refuses.",
       r_gateway: "The gateway is not healthy.",
-      c_database: "Database", c_port: "Port 9000", c_system: "System", c_router: "Router",
+      c_database: "Database", c_port: "Port " + consolePort(), c_system: "System", c_router: "Router",
       c_launchagent: "LaunchAgent", c_gateway: "Gateway",
       no_channel: "no channel", other_channel: "Other",
       mode_global: "Global", mode_portable: "Portable copy",
@@ -249,7 +258,7 @@
       r_system: "Una función del sistema ha fallado.",
       r_router: "El router es desconocido porque el estado se niega.",
       r_gateway: "El gateway no está sano.",
-      c_database: "Base", c_port: "Puerto 9000", c_system: "Sistema", c_router: "Router",
+      c_database: "Base", c_port: "Puerto " + consolePort(), c_system: "Sistema", c_router: "Router",
       c_launchagent: "LaunchAgent", c_gateway: "Gateway",
       no_channel: "sin canal", other_channel: "Otro",
       mode_global: "Global", mode_portable: "Copia portable",
@@ -522,7 +531,7 @@
         badge + "</button>";
     });
     $("nav").innerHTML = html;
-    $("host").textContent = location.host || "127.0.0.1:9000";
+    $("host").textContent = location.host || ("127.0.0.1:" + consolePort());
     $("updated").textContent = healthStamp ? (t("updated") + fmt(healthStamp, true)) : t("updated_empty");
   }
 
@@ -1392,7 +1401,7 @@
     var httpAddr = stamp.http_host && stamp.http_port ? stamp.http_host + ":" + stamp.http_port : t("no_data");
     return '<div class="note">' + esc(t("channels_note")) + '</div><div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("http_channels")) + "</div>" +
       '<div class="row hd" style="grid-template-columns:180px 200px minmax(0,1fr)"><div>' + esc(t("channel")) + "</div><div>" + esc(t("address")) + "</div><div>" + esc(t("scope")) + "</div></div>" +
-      '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("console")) + '</div><div class="mono">' + esc(location.host || "127.0.0.1:9000") + "</div><div>" + pill("ok", "✓", t("local_only")) + "</div></div>" +
+      '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("console")) + '</div><div class="mono">' + esc(location.host || ("127.0.0.1:" + consolePort())) + "</div><div>" + pill("ok", "✓", t("local_only")) + "</div></div>" +
       '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("gateway_http")) + '</div><div class="mono">' + esc(httpAddr) + "</div><div>" + pill("ok", "✓", t("local_tunnel")) + "</div></div>" +
       '<div class="row" style="grid-template-columns:180px 200px minmax(0,1fr)"><div style="font-weight:500">' + esc(t("websocket")) + '</div><div class="mono">' + esc(stamp.ws_port ? t("port_word") + stamp.ws_port : t("no_data")) + "</div><div>" + pill("info", "?", t("pass_port")) + "</div></div></div>" +
       '<div class="tiles2"><div class="card" style="display:flex;flex-direction:column;gap:10px"><div class="h3">' + esc(t("telegram")) + '</div><div class="kv" style="grid-template-columns:170px minmax(0,1fr)">' +

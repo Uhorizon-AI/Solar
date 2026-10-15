@@ -95,6 +95,7 @@ UNIT_MANIFEST="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_manifest
 UNIT_BUNDLE="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_bundle.sh"
 UNIT_SYNC_EXCLUDE="$INSTALL_ROOT/core/tests/skills/solar-client/test_sync_exclude.sh"
 UNIT_SYNC_CODEX_AGENTS="$INSTALL_ROOT/core/tests/skills/solar-client/test_sync_codex_agents.sh"
+UNIT_DOCTOR_PORT="$INSTALL_ROOT/core/tests/skills/solar-client/test_doctor_port.sh"
 if [[ -f "$UNIT_RESOLVE" ]]; then
   bash "$UNIT_RESOLVE" >/dev/null 2>&1 && pass "unit: test_resolve_solar_paths.sh" || fail "unit: test_resolve_solar_paths.sh"
 else
@@ -129,6 +130,11 @@ if [[ -f "$UNIT_SYNC_CODEX_AGENTS" ]]; then
   bash "$UNIT_SYNC_CODEX_AGENTS" >/dev/null 2>&1 && pass "unit: test_sync_codex_agents.sh" || fail "unit: test_sync_codex_agents.sh"
 else
   fail "missing test_sync_codex_agents.sh"
+fi
+if [[ -f "$UNIT_DOCTOR_PORT" ]]; then
+  bash "$UNIT_DOCTOR_PORT" >/dev/null 2>&1 && pass "unit: test_doctor_port.sh" || fail "unit: test_doctor_port.sh"
+else
+  skip "test_doctor_port.sh not found"
 fi
 
 echo "=== Workspace conflict (exported vs cwd) ==="

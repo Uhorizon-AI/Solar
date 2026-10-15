@@ -73,7 +73,6 @@ gateway_port() {
   echo "$((8787 + h % 500))"
 }
 
-HOST_PORT=9000
 HTTP_PORT="$(gateway_port)"
 
 mkdir -p "$WORKSPACE/sun/preferences" "$WORKSPACE/sun/daily-log" "$WORKSPACE/planets" "$WORKSPACE/.solar"
@@ -177,7 +176,6 @@ if [[ ! -f "$WORKSPACE/.env.example" ]]; then
   {
     echo ""
     echo "# Assigned by solar client init (override as needed)"
-    echo "SOLAR_APP_PORT=$HOST_PORT"
     echo "SOLAR_HTTP_PORT=$HTTP_PORT"
   } >> "$WORKSPACE/.env.example"
 fi

@@ -12,34 +12,91 @@ host_health_ok() {
   bash "$SCRIPT_DIR/check_host.sh" --liveness >/dev/null 2>&1
 }
 
-if [[ -f "$PID_FILE" ]]; then
-  old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-    if host_health_ok; then
-      echo "Solar Host already running (pid $old_pid) — $SOLAR_APP_BASE_URL"
+# One decision, from the identity policy (host_identity.py), before anything is
+# started or stopped. A process is only ever stopped when it is a host_server.py
+# AND provably this runtime's console (see host_lib.sh). No retry loop.
+solar_host_assess
+pidfile_pid="$(solar_host_pidfile_pid "$HOST_STATE" || true)"
+
+case "$HOST_STATE" in
+  match)
+    if [[ -n "$pidfile_pid" ]]; then
+      echo "Solar Host already running (pid $pidfile_pid) — $SOLAR_APP_BASE_URL"
       exit 0
     fi
-    echo "WARN: stale Solar Host pid $old_pid (health check failed) — stopping" >&2
-    solar_host_stop_pid "$old_pid"
-  fi
-  rm -f "$PID_FILE"
-fi
-
-if host_health_ok; then
-  orphan_pid=""
-  orphan_pid="$(solar_host_port_listener_pids | head -n1 || true)"
-  if [[ -n "$orphan_pid" ]] && solar_host_pid_looks_like_server "$orphan_pid"; then
-    echo "$orphan_pid" >"$PID_FILE"
-    echo "Solar Host already running (orphan pid $orphan_pid, recovered pid file) — $SOLAR_APP_BASE_URL"
+    # The console is ours (identity) but the pid file is missing or stale: repair it
+    # with the pid the console reported itself, after checking it is a host_server.py.
+    recovered="$HOST_OBSERVED_PID"
+    if [[ -z "$recovered" ]]; then
+      # Console without a reported pid: the listener on exactly our address.
+      recovered="$(solar_host_port_listener_pids | head -n1)"
+    fi
+    if [[ -n "$recovered" ]] && solar_host_pid_looks_like_server "$recovered"; then
+      echo "$recovered" >"$PID_FILE"
+      echo "Solar Host already running (pid $recovered, pid file repaired) — $SOLAR_APP_BASE_URL"
+    else
+      rm -f "$PID_FILE"
+      echo "Solar Host already running (pid unknown: no listener could be read) — $SOLAR_APP_BASE_URL"
+    fi
     exit 0
-  fi
-fi
-
-if solar_host_port_listener_pids | grep -q .; then
-  echo "WARN: port :$SOLAR_APP_PORT in use — stopping orphan host_server listeners" >&2
-  solar_host_stop_orphan_listeners || true
-  sleep 0.3
-fi
+    ;;
+  stale_workspace)
+    # Our own console, still serving the workspace that was active before a switch.
+    echo "WARN: Solar Host pid $HOST_OBSERVED_PID serves the previous workspace (${HOST_OBSERVED_WORKSPACE}); restarting it on ${SOLAR_WORKSPACE}" >&2
+    if ! solar_host_reported_pid_is_listener "$HOST_OBSERVED_PID"; then
+      HOST_REASON="the pid it reports ($HOST_OBSERVED_PID) is not its listener on ${SOLAR_APP_HOST}:${SOLAR_APP_PORT}"
+      solar_host_explain_refusal
+      exit 3
+    fi
+    solar_host_stop_pid "$HOST_OBSERVED_PID" || { solar_host_explain_refusal; exit 3; }
+    rm -f "$PID_FILE"
+    sleep 0.3
+    ;;
+  mismatch|invalid)
+    solar_host_explain_refusal
+    exit 3
+    ;;
+  legacy|partial)
+    # Older console without (full) identity: it is replaced only if shown to be
+    # ours, by this runtime's pid file or by this install's script path.
+    adopted=0
+    while IFS= read -r p; do
+      [[ -z "$p" ]] && continue
+      solar_host_pid_looks_like_server "$p" || continue
+      if [[ "$p" == "$pidfile_pid" ]] || solar_host_pid_is_this_install "$p"; then
+        echo "WARN: adopting Solar Host pid $p that reports no full identity; replacing it with a console that does" >&2
+        solar_host_stop_pid "$p" && adopted=1
+      fi
+    done < <(solar_host_port_listener_pids)
+    if [[ "$adopted" -ne 1 ]]; then
+      solar_host_explain_refusal
+      echo "  Ownership of that console could not be shown (no pid file for this runtime, and not this install's host_server.py)." >&2
+      exit 3
+    fi
+    rm -f "$PID_FILE"
+    sleep 0.3
+    ;;
+  *)
+    # Nothing usable answers. A recorded pid that is still a host_server.py is a hung
+    # or half-started console of this runtime; a stale file is just removed.
+    if [[ -n "$pidfile_pid" ]]; then
+      echo "WARN: Solar Host pid $pidfile_pid does not answer — stopping" >&2
+      solar_host_stop_pid "$pidfile_pid" || true
+    fi
+    rm -f "$PID_FILE"
+    if [[ -n "$(solar_host_port_listener_pids)" ]]; then
+      echo "WARN: port :$SOLAR_APP_PORT is held by a process that does not answer — stopping it only if it is this install's console" >&2
+      solar_host_stop_orphan_listeners || true
+      sleep 0.3
+      if [[ -n "$(solar_host_port_listener_pids)" ]]; then
+        HOST_REASON="the port is held by a process that cannot be shown to be this console"
+        HOST_OBSERVED_WORKSPACE="" HOST_OBSERVED_RUNTIME=""
+        solar_host_explain_refusal
+        exit 3
+      fi
+    fi
+    ;;
+esac
 
 export SOLAR_CLI="$SOLAR_WORKSPACE/core/skills/solar-client/scripts/solar"
 if [[ ! -f "$SOLAR_CLI" ]] && [[ -f "$(solar_core_dir)/skills/solar-client/scripts/solar" ]]; then
