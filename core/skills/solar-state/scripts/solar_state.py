@@ -828,6 +828,10 @@ MATERIAL_KEYS = (
 # What an approval leaves in the frontmatter. `approved_definition` is the
 # snapshot: the definition text exactly as it was approved.
 APPROVAL_KEYS = ("approved_digest", "approved_at", "approved_row_version", "approved_definition")
+# Where the definition ends and the results begin, kept apart from the approval: it
+# survives an approval being withdrawn, so the results stay separate from the instructions
+# through any number of edits. The approval's own snapshot is `approved_definition`.
+BOUNDARY_KEY = "definition_snapshot"
 # A digest written by this contract starts with this. One without it (or none at all)
 # was made by the old algorithm (title + raw body) or never made: the claim refuses it.
 DIGEST_PREFIX = "v2:"
@@ -905,7 +909,13 @@ def runtime_tail(body: str, title: Optional[str] = None, snapshot: Optional[str]
     """What the runtime appended after the definition: results, delivery, errors."""
     text = definition_text(body, title)
     rest = _after_snapshot(text, snapshot)
-    return (rest if rest is not None else _split_runtime_blocks(text)[1]).strip("\n")
+    if rest is None:
+        # No known boundary (an import): keep everything from the first runtime heading on.
+        # Keeping too much costs nothing; dropping a result cannot be undone.
+        lines = text.splitlines(keepends=True)
+        start = next((i for i, line in enumerate(lines) if _is_runtime_heading(line)), len(lines))
+        rest = "".join(lines[start:])
+    return rest.strip("\n")
 
 
 def current_definition(body: str, title: Optional[str] = None,
@@ -960,6 +970,14 @@ def approval_state(pairs: list[list[str]], body: str) -> Optional[str]:
     return None if stored == current_digest(pairs, body) else "mismatch"
 
 
+def _boundary(pairs: list[list[str]]) -> Optional[str]:
+    """The definition text this body is known to begin with, if the system recorded it."""
+    for key in (BOUNDARY_KEY, "approved_definition"):
+        if _get_pair(pairs, key) is not None:
+            return value_of(_get_pair(pairs, key))
+    return None
+
+
 def _has_run(conn, task_id: str) -> bool:
     return conn.execute("SELECT 1 FROM task_events WHERE task_id = ? AND to_status = 'active' "
                         "LIMIT 1", (task_id,)).fetchone() is not None
@@ -970,13 +988,20 @@ def _approval_fields(conn, task_id: str, pairs: list[list[str]], body: str,
     """What approving writes. The snapshot is the definition as it stands; a task that
     already ran carries runtime sections in its body, which are not part of it."""
     title = value_of(_get_pair(pairs, "title"))
-    snapshot = (definition_body(body, title) if _has_run(conn, task_id)
-                else definition_text(body, title))
+    text = definition_text(body, title)
+    known = _boundary(pairs)
+    if known is not None and _after_snapshot(text, known) is not None:
+        snapshot = known                    # the results already in the body are not instructions
+    elif _has_run(conn, task_id):
+        snapshot = definition_body(body, title)
+    else:
+        snapshot = text
     return {
         "approved_digest": json.dumps(material_digest(pairs, body, definition=snapshot)),
         "approved_at": json.dumps(_now()),
         "approved_row_version": str(row_version),
         "approved_definition": json.dumps(snapshot),
+        BOUNDARY_KEY: json.dumps(snapshot),
     }
 
 
@@ -1372,21 +1397,25 @@ class Session:
                 # A task that ran, or that was queued (an import brings its results in the
                 # body), keeps what the runtime wrote after its instructions. A draft that
                 # never ran has no such content: its sections are the author's.
-                if self._has_run(conn, task_id) or current not in ("draft", "planned"):
-                    tail = runtime_tail(row["body"], value_of(_get_pair(before, "title")),
-                                        value_of(_get_pair(before, "approved_definition")))
+                known = _boundary(before)
+                if self._has_run(conn, task_id) or current not in ("draft", "planned") or known is not None:
+                    tail = runtime_tail(row["body"], value_of(_get_pair(before, "title")), known)
                     if tail:
                         if any(_is_runtime_heading(line) for line in received.splitlines()):
                             raise StateError(
                                 f"{task_id}: the instructions of a task with recorded results "
                                 "cannot contain a section named " + ", ".join(RUNTIME_SECTIONS))
                         new_body = definition.rstrip("\n") + "\n\n" + tail + "\n"
+                _set_pair(pairs, BOUNDARY_KEY, " " + json.dumps(received))
             withdrawn = None
             # The digest of what the caller sent, before the results are put back: a section
             # named like a runtime one in the new instructions is still an instruction.
             after = (material_digest(pairs, new_body, definition=received)
                      if received is not None else current_digest(pairs, new_body))
-            if current == "queued" and after != current_digest(before, row["body"]):
+            # An approval that does not cover the stored content (absent, legacy, mismatch)
+            # is not kept through an edit either: the task goes to draft and is approved again.
+            if current == "queued" and (after != current_digest(before, row["body"])
+                                        or approval_state(before, row["body"]) is not None):
                 withdrawn = self._withdraw_approval(conn, task_id, before, "material_edit", actor)
                 for key in APPROVAL_KEYS:
                     _drop_pair(pairs, key)
@@ -1533,7 +1562,10 @@ class Session:
         for row in self.conn.execute(
                 "SELECT id, title, frontmatter, body FROM tasks WHERE status = 'queued' "
                 "ORDER BY created, id"):
-            reason = approval_state(json.loads(row["frontmatter"]), row["body"])
+            try:
+                reason = approval_state(json.loads(row["frontmatter"]), row["body"])
+            except ValueError:
+                reason = "absent"          # a record that cannot be read carries no approval
             if reason:
                 found.append(dict(id=row["id"], title=row["title"], reason=reason))
         return found
@@ -1565,7 +1597,7 @@ class Session:
             pairs = json.loads(row["frontmatter"])
             stamp = {}
             if stamp_last_run and str(_field(pairs, "recurring") or "").lower() == "true":
-                stamp = {"recurring_last_run": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                stamp = {"recurring_last_run": _now()}
             _move(conn, task_id, "active", worker, fields=stamp,
                   extra={"claimed_by": worker, "claimed_at": _now()})
         return dict(claimed=True, reason=None)

@@ -31,7 +31,7 @@ claim transaction, after block, schedule and recurrence, before `queued -> activ
   (`mismatch`): the task stays `queued`, the next candidate is tried and
   `approval_digest_mismatch` is written to `audit` (once per task, reason and row version), to the
   log and to the console. Nothing is converted: approve it again with `task.approve`.
-  `solar state task list-unapproved` lists them.
+  `python3 core/skills/solar-state/scripts/solar_state.py task list-unapproved` lists them.
 
 ## Decisions and limits
 
@@ -45,6 +45,10 @@ claim transaction, after block, schedule and recurrence, before `queued -> activ
 - **Runtime sections.** Text placed under a runtime heading after the first result is not
   protected. `task.update` refuses new instructions that reuse those section names while results
   are recorded, and treats them as an instruction change otherwise.
-- **Edits.** A queued task keeps its approval only when the digest is unchanged (a rename). Any
+- **Where the results begin.** `definition_snapshot` records the definition the body starts with. It is
+  kept when an approval is withdrawn, so results (with headings of their own) stay apart from the
+  instructions through any number of edits and approvals. `approved_definition`, bound by the
+  digest, is what the claim compares.
+- **Edits.** A queued task keeps its approval only when the digest is unchanged (a rename) and the approval is valid; a queued task whose approval is absent, legacy or mismatching goes to draft on any edit. Any
   other edit returns it to draft in the same transaction and withdraws `approved_*`
   (`task_approval_withdrawn` in `audit`). Counters and `recurring_last_run` are kept.

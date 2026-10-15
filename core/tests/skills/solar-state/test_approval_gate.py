@@ -636,15 +636,66 @@ def test_list_unapproved_names_what_the_worker_will_not_take(ready):
     assert shown.returncode == 0 and {r["id"] for r in json.loads(shown.stdout)} == set(found)
 
 
-def test_a_rename_does_not_hide_that_the_worker_still_refuses_the_task(ready):
-    import runtime_views
+def test_renaming_a_task_whose_approval_is_not_valid_returns_it_to_draft(ready):
     with solar_state.session() as store:
         task_id = queued(store)
         _legacy(store, task_id)
-        store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
-                          allowed_status=("queued",), fields={"title": '"Renamed"'},
-                          body=BODY.replace("# T", "# Renamed"))
-        assert store.task_status(task_id) == "queued"
+        out = store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
+                                allowed_status=("queued",), fields={"title": '"Renamed"'},
+                                body=BODY.replace("# T", "# Renamed"))
+        assert out["status"] == "draft" and out["returned_to_draft"] is True
+        assert not set(solar_state.APPROVAL_KEYS) & set(fm(store, task_id))
+
+
+def test_results_stay_apart_from_the_instructions_through_successive_edits(ready):
+    results = ("## Subtask results\n\n## Findings\n\nfirst\n\n### Detail\n\nx\n\n"
+               "## Result\n\nok\n\n## Resumen\n\nmore\n\n## Delivery\n\nsent\n")
+    for approve_between in (False, True):
+        with solar_state.session() as store:
+            task_id = queued(store, f"R{int(approve_between)}", recurring="true",
+                             recurring_min_interval="3600")
+            assert store.task_claim(task_id, "w") is True
+            store.task_set_body(task_id, store.task_get(task_id)["body"].rstrip() + "\n\n" + results)
+            assert store.task_complete(task_id) == "queued"
+            title = store.task_get(task_id)["title"]
+            for number in (1, 2, 3):
+                store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
+                                  allowed_status=("draft", "planned", "queued"),
+                                  definition=f"\n# {title}\n\nSteps v{number}.\n")
+                body = store.task_get(task_id)["body"]
+                assert results.strip() in body, (approve_between, number)
+                assert f"Steps v{number}." in body and f"Steps v{number - 1}." not in body
+                if approve_between or number == 3:
+                    store.task_approve(task_id)
+                    assert fm(store, task_id)["approved_definition"] == f"Steps v{number}."
+                    assert store.task_claim_detail(task_id, "w")["claimed"] is True
+                    store.task_complete(task_id)
+                    assert results.strip() in store.task_get(task_id)["body"]
+
+
+def test_an_imported_task_keeps_its_results_through_two_edits_as_a_draft(ready):
+    document = ('---\nid: "imp3"\ntitle: "Imp"\nstatus: queued\n---\n\n# Imp\n\nSteps.\n\n'
+                '## Result\n\nout\n\n## Findings\n\nf\n')
+    with solar_state.session() as store:
+        store.task_import(document)
+        for number in (1, 2):
+            store.task_update("imp3", expected_row_version=store.task_get("imp3")["row_version"],
+                              allowed_status=("draft", "planned", "queued"),
+                              definition=f"\n# Imp\n\nNew {number}.\n")
+            assert "## Findings\n\nf" in store.task_get("imp3")["body"]
+        store.task_approve("imp3")
+        assert fm(store, "imp3")["approved_definition"] == "New 2."
+        assert store.task_claim_detail("imp3", "w")["claimed"] is True
+
+
+def test_the_console_survives_an_unreadable_frontmatter(ready):
+    import runtime_views
+    with solar_state.session() as store:
+        good = queued(store, "Good")
+        broken = queued(store, "Broken")
+        store.conn.execute("UPDATE tasks SET frontmatter = 'not json' WHERE id = ?", (broken,))
+        assert {r["id"]: r["reason"] for r in store.tasks_unapproved()} == {broken: "absent"}
     with solar_state.read_session() as store:
-        item = next(t for t in runtime_views.console_tasks(store)["tasks"] if t["id"] == task_id)
-    assert item["approval_digest_mismatch"]["reason"] == "legacy"
+        tasks = {t["id"]: t for t in runtime_views.console_tasks(store)["tasks"]}
+    assert tasks[good]["revises_task_id"] is None and tasks[broken]["revises_task_id"] is None
+    assert tasks[broken]["approval_digest_mismatch"]["reason"] == "absent"

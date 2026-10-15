@@ -57,6 +57,7 @@ COPY = {
         update_planned="the task returns to draft and must be approved again. Nothing is queued or run.",
         update_draft="the stored draft is rewritten. Nothing is queued or run.",
         edit_active="refused: a running task keeps the instructions it started with.",
+        executor="Executor", local_command="Local command", local_timeout="Local timeout",
         update_queued_rename="only the title changes. The task keeps its place in the queue and its approval; nothing is run.",
         update_queued_material="this changes what was approved. The task returns to draft, its approval is withdrawn and a worker will not take it until it is approved again. Results of earlier runs and the run count are kept. Nothing is run.",
         draft_head="Return task to draft",
@@ -106,6 +107,7 @@ COPY = {
         update_planned="la tarea vuelve a borrador y debe aprobarse de nuevo. No se encola ni se ejecuta nada.",
         update_draft="se reescribe el borrador guardado. No se encola ni se ejecuta nada.",
         edit_active="se rechaza: una tarea en ejecución conserva las instrucciones con las que empezó.",
+        executor="Ejecutor", local_command="Comando local", local_timeout="Límite de tiempo local",
         update_queued_rename="solo cambia el título. La tarea conserva su sitio en la cola y su aprobación; no se ejecuta nada.",
         update_queued_material="esto cambia lo aprobado. La tarea vuelve a borrador, se retira su aprobación y ningún worker la tomará hasta que se apruebe de nuevo. Se conservan los resultados de ejecuciones anteriores y el contador de ejecuciones. No se ejecuta nada.",
         draft_head="Devolver tarea a borrador",
@@ -496,6 +498,13 @@ def _context_rows(copy: dict, facts: dict) -> list:
     if schedule.get("time") and schedule["time"] != "now":
         rows.append((copy["time"], f"{_days(copy, schedule['weekdays'])} {schedule['time']} "
                                    f"({schedule.get('timezone') or '—'})"))
+    # A local executor runs this command instead of a provider: what is approved includes it.
+    values = facts.get("values") or {}
+    if values.get("executor") and str(values["executor"]).lower() != "provider":
+        rows.append((copy["executor"], _line(str(values["executor"]), _VALUE)))
+        for key in ("local_command", "local_timeout"):
+            if values.get(key):
+                rows.append((copy[key], _line(str(values[key]), _VALUE)))
     if facts["recurring"]:
         rows.append((copy["repeats"], _repeats(copy, True, schedule.get("recurring_min_interval"),
                                                schedule.get("recurring_max_runs"))))

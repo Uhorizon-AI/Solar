@@ -253,3 +253,25 @@ def test_error_does_not_record_a_result_path(tmp_path: Path):
     task = _write_task(task_root, local_command=f"bash {rel}")
     assert _run_executor(task, workspace).returncode == 1
     assert "result_path:" not in (task_root / "error" / "local-task.md").read_text(encoding="utf-8")
+
+
+def test_a_recurring_local_task_passes_the_claim_again_after_it_ran(tmp_path: Path):
+    """The executor keys are approved fields: nothing the runtime does may rewrite them."""
+    import solar_state
+    workspace, script = _workspace_with_script(tmp_path, "#!/bin/bash\necho ok\nexit 0\n")
+    task_root = tmp_path / "sun" / "runtime" / "async-tasks"
+    task_root.mkdir(parents=True)
+    env = env_for(task_root, {**os.environ, "SOLAR_WORKSPACE": str(workspace)})
+    rel = script.relative_to(workspace).as_posix()
+    with solar_state.session() as store:
+        task_id = store.task_create(
+            [("title", '"Local"'), ("executor", "local"), ("local_command", f'"bash {rel}"'),
+             ("recurring", "true"), ("recurring_min_interval", "3600")],
+            "\n# Local\n\nx\n", status="queued")
+        assert store.task_claim_next("w")["id"] == task_id
+    proc = subprocess.run([sys.executable, str(EXECUTE), task_id, "/nonexistent/router.py"],
+                          capture_output=True, text=True, env=env, check=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    with solar_state.session() as store:
+        assert store.task_complete(task_id) == "queued"      # what complete.sh does next
+        assert store.task_claim_detail(task_id, "w") == dict(claimed=True, reason=None)

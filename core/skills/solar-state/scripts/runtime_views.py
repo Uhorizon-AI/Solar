@@ -439,8 +439,9 @@ def console_tasks(store):
     rows = store.conn.execute(
         "SELECT id, status, title, provider, origin_channel, created, updated, "
         "completed_at, recurring, parent_task_id, "
-        "(SELECT json_extract(j.value, '$[1]') FROM json_each(tasks.frontmatter) AS j "
-        " WHERE json_extract(j.value, '$[0]') = 'revises_task_id') AS revises "
+        "CASE WHEN json_valid(tasks.frontmatter) THEN "
+        " (SELECT json_extract(j.value, '$[1]') FROM json_each(tasks.frontmatter) AS j "
+        "  WHERE json_extract(j.value, '$[0]') = 'revises_task_id') END AS revises "
         "FROM tasks ORDER BY updated DESC, id"
     ).fetchall()
     for row in rows:

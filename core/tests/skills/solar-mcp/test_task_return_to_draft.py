@@ -243,3 +243,23 @@ def test_changing_the_executor_of_an_approved_task_is_not_covered_by_its_approva
         store.task_set(task_id, "local_command", '"bash other.sh"')
         assert store.task_claim_next("w") is None
         assert store.task_claim_detail(task_id, "w")["reason"] == "mismatch"
+
+
+def test_the_approval_text_shows_the_executor_and_its_command(solar_env):
+    import approval_text
+    task_id = approved_task()
+    with solar_state.session() as store:
+        store.task_set(task_id, "executor", "local")
+        store.task_set(task_id, "local_command", '"bash planets/x/skills/y/scripts/run.sh"')
+        store.task_set(task_id, "local_timeout", "120")
+    args = dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"])
+    plain = approved_task("Plain")
+    for name in ("task.return_to_draft", "task.cancel"):
+        pass
+    text, _ = approval_text.render("task.approve", args, seconds=60, lang="en")
+    # task.approve needs a draft; the context rows are what matter here.
+    assert "Executor" in text and "bash planets/x/skills/y/scripts/run.sh" in text and "120" in text
+    text, _ = approval_text.render("task.return_to_draft", args, seconds=60, lang="es")
+    assert "Comando local" in text
+    other, _ = approval_text.render("task.approve", dict(task_id=plain, expected_row_version=1), seconds=60, lang="en")
+    assert "Executor" not in other
