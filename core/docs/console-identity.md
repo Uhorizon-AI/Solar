@@ -87,6 +87,11 @@ is a safety net. A differing **runtime** is always refused.
   install path.
 - `solar_host_stop_orphan_listeners` stops proven-own listeners only, reports the
   rest and returns non-zero if nothing was stopped.
+- A pid that a console reports about itself is never trusted on its own: on every stop
+  path (pid file, orphan stop, workspace-switch replacement in `start_host.sh`) it must
+  also be the listener of `SOLAR_APP_HOST:port` (`solar_host_reported_pid_is_listener`,
+  when `lsof` exists) before any signal. A console that declares another process's pid
+  is reported and nobody is signalled.
 - Listeners are discovered with `lsof` and matched to exactly `SOLAR_APP_HOST:port` (not any loopback address); a listener on
   a LAN or wildcard address is not the console. Without `lsof` nothing is
   discovered, so an unidentified console is neither adopted nor stopped.

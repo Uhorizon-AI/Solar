@@ -483,6 +483,62 @@ def test_a_declared_pid_of_another_host_server_is_never_signalled(harness):
     assert victim.poll() is None and liar.poll() is None
 
 
+def test_port_watch_identity_needs_both_fields(harness):
+    import port_watch
+    for mode in ("legacy", "workspace_only", "runtime_only"):
+        proc = harness.spawn(mode, install="other")
+        address = f"127.0.0.1:{harness.port}"
+        assert port_watch._identity(str(proc.pid), address) == "", mode
+        proc.terminate()
+        assert harness.gone(proc)
+    proc = harness.spawn("full", install="other")
+    assert port_watch._identity(str(proc.pid), f"127.0.0.1:{harness.port}") != ""
+
+
+def test_port_watch_does_not_verify_consoles_that_report_no_identity(harness):
+    import port_watch
+    script = harness.root / "host_server.py"
+    script.write_text(ch.FAKE_CONSOLE)
+    argv = [sys.executable, "-u", str(script), str(harness.port), "legacy", "/w", "/r"]
+
+    def run():
+        proc = subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        harness.procs.append(proc)
+        harness.wait_listening(harness.port)
+        return proc
+
+    first = run()
+    baseline = port_watch.snapshot(harness.port)
+    if baseline is None:
+        pytest.skip("lsof is not available")
+    first.terminate()
+    assert harness.gone(first)
+    run()  # same command, new pid, and no identity to prove it is the same program
+    assert len(port_watch.new_listeners(baseline, port_watch.snapshot(harness.port))) == 1
+
+
+def test_a_lying_pid_is_not_signalled_by_the_orphan_stop_without_a_pid_file(harness):
+    victim = harness.spawn("drop", install="this", port=ch.free_port())
+    for mode, kwargs in (("match", {}), ("stale", {"workspace": "/previous/workspace"})):
+        liar = harness.spawn("full", install="other", report_pid=victim.pid, **kwargs)
+        result = stop_orphans(harness)
+        assert result.returncode != 0, (mode, result.stderr)
+        if mode == "match":  # the cross-check; without a pid file the other case is a plain mismatch
+            assert "not its listener" in result.stderr, result.stderr
+        assert victim.poll() is None and liar.poll() is None, mode
+        liar.terminate()
+        assert harness.gone(liar)
+
+
+def test_a_lying_pid_is_not_signalled_when_the_identity_matches(harness):
+    victim = harness.spawn("drop", install="this", port=ch.free_port())
+    liar = harness.spawn("full", install="other", report_pid=victim.pid)  # match, but declares another pid
+    harness.write_pid_file(victim.pid)
+    for script in ("stop_host.sh", "start_host.sh"):
+        harness.script(script)
+        assert victim.poll() is None and liar.poll() is None, script
+
+
 def test_port_watch_reports_a_new_listener():
     import port_watch
     port = ch.free_port()

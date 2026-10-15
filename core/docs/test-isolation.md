@@ -71,9 +71,12 @@ No test starts the real console or occupies port 9000.
   on a known address with a different command line (a console replaced by one served
   from a pytest temp directory), fails the run. A new pid is accepted as a restart only with evidence: the same
   command line **and** the same `workspace`/`runtime` reported by `/health` before
-  and after; if the identity cannot be read, the change is reported. Limit: a
-  replacement that keeps pid, command line, address and identity cannot be told
-  apart from the original (there is no further signal). Listeners already present (a developer's live console) are in
+  and after. The identity is read over HTTP from the very address that is listening
+  (cached per pid and address, one request each) and only counts if BOTH fields are
+  reported; a listener that does not answer, is not a console, or reports no or partial
+  identity cannot verify a restart, so its change is reported. Limit: a
+  replacement that keeps pid, command line, address and reported identity is
+  indistinguishable from the original; nothing else is observable. Listeners already present (a developer's live console) are in
   the baseline and are never touched. Without `lsof` nothing can be observed and
   the check is skipped.
 - Tests that need a server use `core/tests/support/console_harness.py` (the

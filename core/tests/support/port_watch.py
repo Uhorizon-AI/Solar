@@ -21,17 +21,30 @@ def _args(pid: str) -> str:
         return ""
 
 
-def _identity(address: str) -> str:
-    """workspace|runtime a console on this address reports in /health ('' if it does not say)."""
-    try:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(f"http://{address}/health", timeout=2) as response:
-            payload = json.load(response)
-        if payload.get("service") != "solar-console":
-            return ""
-        return f"{payload.get('workspace', '')}|{payload.get('runtime', '')}"
-    except (OSError, ValueError, AttributeError):
-        return ""
+_IDENTITY_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _identity(pid: str, address: str) -> str:
+    """workspace|runtime a console reports in /health ('' unless it reports BOTH).
+
+    Read over HTTP from the very address that is listening; a listener that does not
+    answer, is not a console, or reports no (or partial) identity yields '' and so
+    never counts as verified. Cached per (pid, address): one request per listener.
+    """
+    key = (pid, address)
+    if key not in _IDENTITY_CACHE:
+        value = ""
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(f"http://{address}/health", timeout=2) as response:
+                payload = json.load(response)
+            workspace, runtime = payload.get("workspace"), payload.get("runtime")
+            if payload.get("service") == "solar-console" and workspace and runtime:
+                value = f"{workspace}|{runtime}"
+        except (OSError, ValueError, AttributeError):
+            pass
+        _IDENTITY_CACHE[key] = value
+    return _IDENTITY_CACHE[key]
 
 
 def snapshot(port: int = PRODUCTION_PORT) -> frozenset[tuple[str, str, str, str]] | None:
@@ -49,7 +62,7 @@ def snapshot(port: int = PRODUCTION_PORT) -> frozenset[tuple[str, str, str, str]
         if line.startswith("p"):
             pid = line[1:]
         elif line.startswith("n") and pid:
-            found.add((pid, line[1:], _args(pid), _identity(line[1:])))
+            found.add((pid, line[1:], _args(pid), _identity(pid, line[1:])))
     return frozenset(found)
 
 
