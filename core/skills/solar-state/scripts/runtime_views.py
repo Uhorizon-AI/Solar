@@ -426,34 +426,6 @@ def console_task_detail(store, task_id, full=False):
     return result
 
 
-def _revises_task_id(frontmatter):
-    """The task a revision replaces, read from the frontmatter it is stored in."""
-    if not frontmatter:
-        return None
-    try:
-        pairs = json.loads(frontmatter)
-    except (TypeError, ValueError):
-        return None
-    for key, rest in pairs:
-        if key == 'revises_task_id':
-            return solar_state.value_of(rest) or None
-    return None
-
-
-def _approval_mismatches(store):
-    """The last `approval_digest_mismatch` recorded for each task."""
-    found = {}
-    for row in store.conn.execute(
-            "SELECT ts, json_extract(row, '$.task_id') AS task_id, "
-            "json_extract(row, '$.reason') AS reason, "
-            "json_extract(row, '$.row_version') AS row_version "
-            "FROM audit WHERE event = 'approval_digest_mismatch' ORDER BY seq"):
-        if row['task_id']:
-            found[row['task_id']] = dict(reason=row['reason'], row_version=row['row_version'],
-                                         ts=row['ts'])
-    return found
-
-
 def console_tasks(store):
     """Every task, including archived and planned, plus history and subtasks.
 
@@ -461,11 +433,14 @@ def console_tasks(store):
     """
     tasks = []
     by_status = {}
-    mismatches = _approval_mismatches(store)
+    # What the worker will refuse is read from the stored approval itself, so a queued
+    # task shows it right after an upgrade, before any poll, and a rename does not hide it.
+    unapproved = {row['id']: row['reason'] for row in store.tasks_unapproved()}
     rows = store.conn.execute(
         "SELECT id, status, title, provider, origin_channel, created, updated, "
-        "completed_at, recurring, parent_task_id, row_version, "
-        "CASE WHEN instr(frontmatter, 'revises_task_id') > 0 THEN frontmatter END AS revision_frontmatter "
+        "completed_at, recurring, parent_task_id, "
+        "(SELECT json_extract(j.value, '$[1]') FROM json_each(tasks.frontmatter) AS j "
+        " WHERE json_extract(j.value, '$[0]') = 'revises_task_id') AS revises "
         "FROM tasks ORDER BY updated DESC, id"
     ).fetchall()
     for row in rows:
@@ -474,13 +449,10 @@ def console_tasks(store):
             channel=row['origin_channel'], created_at=row['created'], updated_at=row['updated'],
             completed_at=row['completed_at'], recurring=bool(row['recurring']),
             parent_id=row['parent_task_id'],
-            revises_task_id=_revises_task_id(row['revision_frontmatter']),
+            revises_task_id=solar_state.value_of(row['revises']) or None,
         )
-        # A queued task the worker keeps refusing: shown while that is still true of this
-        # version of the row. Editing or approving it again makes the mark disappear.
-        mark = mismatches.get(row['id'])
-        if row['status'] == 'queued' and mark and mark['row_version'] == row['row_version']:
-            item['approval_digest_mismatch'] = dict(reason=mark['reason'], at=mark['ts'])
+        if row['id'] in unapproved:
+            item['approval_digest_mismatch'] = dict(reason=unapproved[row['id']])
         tasks.append(item)
         bucket = by_status.setdefault(item['status'], {'n': 0, 'recurring': 0})
         bucket['n'] += 1

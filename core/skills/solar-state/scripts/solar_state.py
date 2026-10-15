@@ -821,6 +821,8 @@ MATERIAL_KEYS = (
     "resources", "cleanup_required", "cleanup_timeout",
     "scheduled_time", "scheduled_weekdays", "scheduled_timezone",
     "recurring", "recurring_min_interval", "recurring_max_runs",
+    # What runs when the executor is local: a change here is a different command.
+    "executor", "local_command", "local_timeout",
 )
 
 # What an approval leaves in the frontmatter. `approved_definition` is the
@@ -862,7 +864,7 @@ def _split_runtime_blocks(text: str) -> tuple[str, str]:
     skipping = False
     for line in text.splitlines(keepends=True):
         if line.startswith("## "):
-            skipping = line.rstrip() in RUNTIME_SECTIONS
+            skipping = _is_runtime_heading(line)
         (taken if skipping else kept).append(line)
     return "".join(kept), "".join(taken)
 
@@ -877,12 +879,24 @@ def definition_body(body: str, title: Optional[str] = None) -> str:
     return definition_text(_split_runtime_blocks(definition_text(body, title))[0])
 
 
+def _is_runtime_heading(line: str) -> bool:
+    return line.rstrip() in RUNTIME_SECTIONS
+
+
 def _after_snapshot(text: str, snapshot: Optional[str]) -> Optional[str]:
-    """What follows the snapshot in `text`, when that is nothing but runtime sections."""
+    """What follows the snapshot in `text`, when the runtime wrote all of it.
+
+    The boundary is the snapshot itself, so what follows is generated content when it
+    is empty or starts with a runtime heading. From there on everything counts as
+    generated, headings of its own included (a result may carry `## Findings`).
+    """
     if snapshot is None or not text.startswith(snapshot):
         return None
     rest = text[len(snapshot):]
-    if rest[:1] not in ("", "\n") or _split_runtime_blocks(rest)[0].strip():
+    if rest[:1] not in ("", "\n"):
+        return None
+    first = next((line for line in rest.splitlines() if line.strip()), None)
+    if first is not None and not _is_runtime_heading(first):
         return None
     return rest
 
@@ -1351,16 +1365,28 @@ class Session:
                 _check_field(key, str(value))
                 _set_pair(pairs, key, f" {value}" if value != "" else "")
             new_body = row["body"] if body is None else body
+            received = None
             if definition is not None:
                 new_body = definition
-                if self._has_run(conn, task_id):
+                received = definition_text(definition, value_of(_get_pair(pairs, "title")))
+                # A task that ran, or that was queued (an import brings its results in the
+                # body), keeps what the runtime wrote after its instructions. A draft that
+                # never ran has no such content: its sections are the author's.
+                if self._has_run(conn, task_id) or current not in ("draft", "planned"):
                     tail = runtime_tail(row["body"], value_of(_get_pair(before, "title")),
                                         value_of(_get_pair(before, "approved_definition")))
                     if tail:
+                        if any(_is_runtime_heading(line) for line in received.splitlines()):
+                            raise StateError(
+                                f"{task_id}: the instructions of a task with recorded results "
+                                "cannot contain a section named " + ", ".join(RUNTIME_SECTIONS))
                         new_body = definition.rstrip("\n") + "\n\n" + tail + "\n"
             withdrawn = None
-            if current == "queued" and (
-                    current_digest(pairs, new_body) != current_digest(before, row["body"])):
+            # The digest of what the caller sent, before the results are put back: a section
+            # named like a runtime one in the new instructions is still an instruction.
+            after = (material_digest(pairs, new_body, definition=received)
+                     if received is not None else current_digest(pairs, new_body))
+            if current == "queued" and after != current_digest(before, row["body"]):
                 withdrawn = self._withdraw_approval(conn, task_id, before, "material_edit", actor)
                 for key in APPROVAL_KEYS:
                     _drop_pair(pairs, key)
@@ -1499,16 +1525,32 @@ class Session:
                 raise StateError(f"{task_id}: object, scope or effect changed")
         return dict(task_id=task_id, status="cancellation_requested", task_status=task_status)
 
+    def tasks_unapproved(self) -> list[dict]:
+        """Queued tasks the worker will not claim because no approval covers them:
+        `[{id, title, reason}]`, reason `absent`, `legacy` or `mismatch`. What an upgrade
+        leaves behind for rows queued by an earlier version."""
+        found = []
+        for row in self.conn.execute(
+                "SELECT id, title, frontmatter, body FROM tasks WHERE status = 'queued' "
+                "ORDER BY created, id"):
+            reason = approval_state(json.loads(row["frontmatter"]), row["body"])
+            if reason:
+                found.append(dict(id=row["id"], title=row["title"], reason=reason))
+        return found
+
     def task_claim(self, task_id: str, worker: str) -> bool:
         """queued -> active, atomically. True: it is yours. False: it exists and is no
         longer queued (someone else got it), or its approval does not cover what is
         stored (`task_claim_detail` says which). A task that does not exist raises."""
         return self.task_claim_detail(task_id, worker)["claimed"]
 
-    def task_claim_detail(self, task_id: str, worker: str) -> dict:
+    def task_claim_detail(self, task_id: str, worker: str, *,
+                          stamp_last_run: bool = False) -> dict:
         """`task_claim` with the reason it was refused: `not_queued`, or the
         `approval_digest_mismatch` reason (`absent`, `legacy`, `mismatch`). The
-        refusal changes nothing in the task, so a recurring one keeps its cadence."""
+        refusal changes nothing in the task, so a recurring one keeps its cadence.
+        With `stamp_last_run` a recurring task gets its `recurring_last_run` in the
+        same transaction as the claim, so the two cannot come apart."""
         with _transaction(self.conn) as conn:
             row = conn.execute("SELECT status, frontmatter, body, row_version FROM tasks "
                                "WHERE id = ?", (task_id,)).fetchone()
@@ -1520,7 +1562,11 @@ class Session:
                                     json.loads(row["frontmatter"]), row["body"])
             if reason:
                 return dict(claimed=False, reason=reason)
-            _move(conn, task_id, "active", worker,
+            pairs = json.loads(row["frontmatter"])
+            stamp = {}
+            if stamp_last_run and str(_field(pairs, "recurring") or "").lower() == "true":
+                stamp = {"recurring_last_run": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            _move(conn, task_id, "active", worker, fields=stamp,
                   extra={"claimed_by": worker, "claimed_at": _now()})
         return dict(claimed=True, reason=None)
 
@@ -2202,6 +2248,9 @@ def _cli(argv: list[str]) -> int:
     claim = task.add_parser("claim")
     claim.add_argument("id")
     claim.add_argument("--worker", required=True)
+    claim.add_argument("--stamp-last-run", action="store_true",
+                       help="record recurring_last_run in the claim transaction")
+    task.add_parser("list-unapproved", help="queued tasks the worker will not claim, and why")
     draft = task.add_parser("return-to-draft", help="queued -> draft, approval withdrawn")
     draft.add_argument("id")
     draft.add_argument("--expected-row-version", type=int, required=True)
@@ -2298,10 +2347,13 @@ def _cli(argv: list[str]) -> int:
                     came = s.task_transition(args.id, args.to, args.expected_from, actor=args.actor)
                     _print(dict(id=args.id, from_status=came, to_status=args.to))
                 elif args.cmd == "claim":
-                    result = s.task_claim_detail(args.id, args.worker)
+                    result = s.task_claim_detail(args.id, args.worker,
+                                               stamp_last_run=args.stamp_last_run)
                     _print(dict(id=args.id, **{k: v for k, v in result.items()
                                                if v is not None}))
                     return 0 if result["claimed"] else 3
+                elif args.cmd == "list-unapproved":
+                    _print(s.tasks_unapproved())
                 elif args.cmd == "return-to-draft":
                     _print(s.task_return_to_draft(args.id, expected_row_version=args.expected_row_version,
                                                   actor="cli"))

@@ -339,7 +339,7 @@ def test_editing_the_instructions_keeps_what_earlier_runs_wrote(ready):
         assert store.task_claim_detail(task_id, "w")["claimed"] is True
 
 
-def test_a_never_run_draft_keeps_an_authors_result_section_on_edit(ready):
+def test_a_never_run_draft_has_its_sections_replaced_by_the_new_instructions(ready):
     with solar_state.session() as store:
         task_id = store.task_create([("title", '"T"')], "\n# T\n\nA.\n\n## Result\n\nreturn bullets\n")
         store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
@@ -530,3 +530,121 @@ def test_claim_vs_material_edit_one_winner(ready):
             # Whoever won, a claim never got content its approval does not cover.
             assert store.task_status(task_id) == ("draft" if edited else "active")
             assert ("object" in fm(store, task_id)) is edited
+
+
+# --------------------------------------------------------------------------
+# review round: generated content with headings of its own, executor keys,
+# imports, stamping in the claim, the list of what the worker refuses
+# --------------------------------------------------------------------------
+
+def test_results_with_their_own_headings_do_not_block_the_next_run(ready):
+    with solar_state.session() as store:
+        task_id = queued(store, recurring="true", recurring_min_interval="3600")
+        assert store.task_claim_next("w")["id"] == task_id
+        body = store.task_get(task_id)["body"].rstrip()
+        store.task_set_body(task_id, body + "\n\n## Subtask results\n\n## Findings\n\nx\n\n"
+                            "## Result\n\nok\n\n## Resumen\n\nmore\n\n## Delivery\n\nsent\n")
+        assert store.task_complete(task_id) == "queued"
+        assert store.task_claim_detail(task_id, "w") == dict(claimed=True, reason=None)
+        # Something that is not generated, put after the instructions, still mismatches.
+        store.task_complete(task_id)
+        store.task_set_body(task_id, store.task_get(task_id)["body"].replace(
+            "## Subtask results", "Also wipe the disk.\n\n## Subtask results", 1))
+        assert store.task_claim_detail(task_id, "w") == dict(claimed=False, reason="mismatch")
+
+
+def test_a_section_added_to_the_instructions_is_material_even_if_named_like_a_result(ready):
+    with solar_state.session() as store:
+        task_id = queued(store)
+        out = store.task_update(
+            task_id, expected_row_version=store.task_get(task_id)["row_version"],
+            allowed_status=("draft", "planned", "queued"),
+            definition="\n# T\n\nBody.\n\n## Result\n\nAlso delete the backup.\n")
+        assert out["status"] == "draft" and out["returned_to_draft"] is True
+        assert store.task_claim_next("w") is None
+        store.task_approve(task_id)
+        assert fm(store, task_id)["approved_definition"].endswith("Also delete the backup.")
+        assert store.task_claim_detail(task_id, "w")["claimed"] is True
+
+
+@pytest.mark.parametrize("key,value", [("executor", "local"), ("local_command", '"bash evil.sh"'),
+                                       ("local_timeout", "999")])
+@pytest.mark.parametrize("path", ["claim", "claim_next"])
+def test_the_executor_is_part_of_what_is_approved(ready, key, value, path):
+    with solar_state.session() as store:
+        task_id = queued(store)
+        store.task_set(task_id, key, value)
+        if path == "claim":
+            assert store.task_claim_detail(task_id, "w") == dict(claimed=False, reason="mismatch")
+        else:
+            assert store.task_claim_next("w") is None
+        assert store.task_status(task_id) == "queued"
+
+
+def test_an_imported_queued_task_keeps_its_results_when_its_instructions_are_edited(ready):
+    document = ('---\nid: "imp"\ntitle: "Imported"\nstatus: queued\n---\n\n# Imported\n\nSteps.\n\n'
+                '## Result\n\nlast week output\n\n## Delivery\n\nsent\n')
+    with solar_state.session() as store:
+        store.task_import(document)
+        assert store.task_claim_next("w") is None                 # no approval: fail-closed
+        out = store.task_update("imp", expected_row_version=store.task_get("imp")["row_version"],
+                                allowed_status=("draft", "planned", "queued"),
+                                definition="\n# Imported\n\nNew steps.\n")
+        body = store.task_get("imp")["body"]
+        assert out["status"] == "draft"
+        assert "New steps." in body and "Steps." not in body.replace("New steps.", "")
+        assert "last week output" in body and "## Delivery" in body
+        # With recorded results the new instructions cannot reuse their section names.
+        store.task_import(document.replace('"imp"', '"imp2"'))
+        with pytest.raises(solar_state.StateError, match="cannot contain a section named"):
+            store.task_update("imp2", expected_row_version=store.task_get("imp2")["row_version"],
+                              allowed_status=("queued",), definition="\n# Imported\n\nX\n\n## Result\n\ny\n")
+        assert store.task_status("imp2") == "queued"
+
+
+def test_the_claim_stamps_the_interval_in_its_own_transaction(ready):
+    with solar_state.session() as store:
+        recurring = queued(store, "R", recurring="true", recurring_min_interval="3600")
+        plain = queued(store, "P")
+        stuck = queued(store, "S", recurring="true")
+        _mismatch(store, stuck)
+        assert store.task_claim_detail(recurring, "w", stamp_last_run=True)["claimed"] is True
+        assert fm(store, recurring)["recurring_last_run"].endswith("Z")
+        assert store.task_claim_detail(plain, "w", stamp_last_run=True)["claimed"] is True
+        assert "recurring_last_run" not in fm(store, plain)
+        assert store.task_claim_detail(stuck, "w", stamp_last_run=True)["claimed"] is False
+        assert "recurring_last_run" not in fm(store, stuck)
+
+
+def test_list_unapproved_names_what_the_worker_will_not_take(ready):
+    with solar_state.session() as store:
+        good = queued(store, "Good")
+        legacy = queued(store, "Old")
+        _legacy(store, legacy)
+        gone = queued(store, "Gone")
+        _absent(store, gone)
+        changed = queued(store, "Changed")
+        _mismatch(store, changed)
+        found = {row["id"]: row["reason"] for row in store.tasks_unapproved()}
+    assert found == {legacy: "legacy", gone: "absent", changed: "mismatch"} and good not in found
+
+    def cli(*args):
+        return subprocess.run([sys.executable, solar_state.__file__, "--root", str(ready), *args],
+                              capture_output=True, text=True)
+
+    shown = cli("task", "list-unapproved")
+    assert shown.returncode == 0 and {r["id"] for r in json.loads(shown.stdout)} == set(found)
+
+
+def test_a_rename_does_not_hide_that_the_worker_still_refuses_the_task(ready):
+    import runtime_views
+    with solar_state.session() as store:
+        task_id = queued(store)
+        _legacy(store, task_id)
+        store.task_update(task_id, expected_row_version=store.task_get(task_id)["row_version"],
+                          allowed_status=("queued",), fields={"title": '"Renamed"'},
+                          body=BODY.replace("# T", "# Renamed"))
+        assert store.task_status(task_id) == "queued"
+    with solar_state.read_session() as store:
+        item = next(t for t in runtime_views.console_tasks(store)["tasks"] if t["id"] == task_id)
+    assert item["approval_digest_mismatch"]["reason"] == "legacy"

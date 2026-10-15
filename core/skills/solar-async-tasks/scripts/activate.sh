@@ -76,7 +76,7 @@ rm -f "$export_file"
 WORKER="activate-$$"
 # The claim decides. A refusal (another worker got it, or its approval does not cover
 # what is stored) stops here: nothing is stamped, released or reported as activated.
-if ! CLAIM_JSON="$(state task claim "$TASK_ID" --worker "$WORKER")"; then
+if ! CLAIM_JSON="$(state task claim "$TASK_ID" --worker "$WORKER" --stamp-last-run)"; then
     REASON="$(printf '%s' "$CLAIM_JSON" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("reason") or "unknown")
 except Exception: print("unknown")')"
@@ -91,10 +91,8 @@ except Exception: print("unknown")')"
     exit 1
 fi
 
-# The interval only counts runs that started, so it is stamped after a winning claim.
-if [[ "$(task_field "$TASK_ID" "recurring")" == "true" ]]; then
-    state task set "$TASK_ID" recurring_last_run "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
-fi
+# The claim stamped recurring_last_run itself (same transaction), so a failure after it
+# cannot leave an active task without its interval.
 state task unset "$TASK_ID" blocked_by_task_ids >/dev/null
 
 echo "✅ Activated task: [$TASK_ID] $TITLE"
