@@ -16,6 +16,7 @@ import pytest
 import solar_state
 from solar_state import (StateBusy, StateUnavailable, TransitionRefused, cutover,
                          parse_task_document, render_task_document, session)
+from reservation_tokens import token_of
 
 _SCRIPT = Path(solar_state.__file__)
 # SHA-256 of MIGRATIONS[0] as released in 1a02d6b.
@@ -137,7 +138,7 @@ def test_approve_cancel_and_requeue_keep_scope(ready):
         assert "disk full" in approved["body"]
 
         s.task_transition(draft, "active")
-        s.task_transition(draft, "error")
+        s.task_transition(draft, "error", token=token_of(s, draft))
         assert s.task_requeue(draft) == "error"
         requeued = s.task_get(draft)
         assert requeued["status"] == "queued"
@@ -191,7 +192,7 @@ def test_transitions_follow_the_table(ready):
         with pytest.raises(TransitionRefused, match="is queued, not planned"):
             s.task_transition(tid, "cancelled", expected_from="planned")
         assert s.task_transition(tid, "active") == "queued"
-        s.task_transition(tid, "completed")
+        s.task_transition(tid, "completed", token=token_of(s, tid))
         s.task_transition(tid, "archived")
         with pytest.raises(TransitionRefused):
             s.task_transition(tid, "queued")
@@ -267,8 +268,11 @@ def _claim_many(root, ids, worker, barrier, out):
     with solar_state.session(root, auto_backup=False) as s:
         for tid in ids:
             barrier.wait()
-            if s.task_claim(tid, worker):
+            claim = s.task_claim_detail(tid, worker)
+            if claim["claimed"]:
                 won.append(tid)
+                # One slot: the winner finishes before the next round starts.
+                s.task_complete(tid, token=claim["token"])
     out.put((worker, won))
 
 
@@ -700,6 +704,8 @@ def test_claim_next_takes_the_highest_priority_and_only_one(ready):
         assert claimed["id"] == high
         assert claimed["status"] == "active"
         assert claimed["claimed_by"] == "worker-a"
+        assert s.task_claim_next("worker-b", now=moment) is None      # one slot, held by worker-a
+        s.task_complete(high, token=token_of(s, high))
         again = s.task_claim_next("worker-b", now=moment)
         assert again["id"] == low
         assert s.task_status(later) == "queued"
@@ -722,7 +728,7 @@ def test_a_released_claim_is_skipped_until_the_next_pass(ready):
         s.task_create([("title", '"b"')], status="queued", task_id="b")
         first = s.task_claim_next("worker")
         assert first["id"] == "a"
-        s.task_release("a", "worker")
+        s.task_release("a", "worker", token=token_of(s, "a"))
         assert s.task_status("a") == "queued"
         second = s.task_claim_next("worker", exclude=["a"])
         assert second["id"] == "b"
@@ -732,14 +738,14 @@ def test_complete_sets_the_stamp_and_recurring_comes_back_or_archives(ready):
     with session(ready, auto_backup=False) as s:
         s.task_create([("title", '"once"')], status="queued", task_id="once")
         s.task_claim("once", "w")
-        assert s.task_complete("once") == "completed"
+        assert s.task_complete("once", token=token_of(s, "once")) == "completed"
         assert s.task_field("once", "completed_at")
 
         s.task_create([("title", '"loop"'), ("recurring", "true"),
                        ("recurring_run_count", "1"), ("recurring_max_runs", "3")],
                       status="queued", task_id="loop")
         s.task_claim("loop", "w")
-        assert s.task_complete("loop") == "queued"
+        assert s.task_complete("loop", token=token_of(s, "loop")) == "queued"
         assert s.task_field("loop", "recurring_run_count") == "2"
         assert s.task_status("loop") == "queued"
 
@@ -747,7 +753,7 @@ def test_complete_sets_the_stamp_and_recurring_comes_back_or_archives(ready):
                        ("recurring_run_count", "2"), ("recurring_max_runs", "3")],
                       status="queued", task_id="last")
         s.task_claim("last", "w")
-        assert s.task_complete("last") == "archived"
+        assert s.task_complete("last", token=token_of(s, "last")) == "archived"
         assert s.task_status("last") == "archived"
 
 
@@ -759,7 +765,7 @@ def test_complete_cancelled_and_status_is_the_column(ready):
         assert s.task_find_origin("req-1") == "c"
         assert s.task_status("missing") is None
         s.task_claim("c", "w")
-        assert s.task_complete("c", cancelled=True) == "cancelled"
+        assert s.task_complete("c", cancelled=True, token=token_of(s, "c")) == "cancelled"
         assert s.task_status("c") == "cancelled"
 
 

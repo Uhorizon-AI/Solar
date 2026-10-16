@@ -66,6 +66,9 @@ RUNNING_MARKERS = (
     "create.sh", "task_lib.sh", "start_next.sh", "activate.sh", "complete.sh",
     "approve.sh", "requeue_from_error.sh", "task_cancel.py",
     "reconcile_router_audit.sh", "continuity_cli.py", "delegation_ctl.py",
+    # The resident supervisor (a later delivery) and its launcher and drain. Listed now so
+    # that the check for running executions already sees them when they exist.
+    "supervisor.py", "launch_supervisor.sh", "stop_supervisor.sh",
 )
 DEFAULT_WAIT_SEC = 300.0
 
@@ -317,6 +320,7 @@ def _build_base(root: Path, c: Census, work: Path) -> tuple[Path, list[str], lis
                 shutil.copy2(root / "async-tasks" / "logs" / name, logs_dir / name)
             warnings = _import(session, root, c)
             problems = _verify(session, root, c, logs_dir)
+            problems += _check_async_records(session.conn, initial=True)
             session.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:
             session.conn.close()
@@ -441,7 +445,7 @@ def _is_stamp(stamp: str) -> bool:
 
 
 def _upgrade_older_schema(path: Path, cut: "st.Cutover",
-                          before: Callable[[], None] = lambda: None) -> None:
+                          before: Callable[[], None] = lambda: None) -> Optional[dict]:
     """A base the cutover already built, behind this code by one or more schema versions.
 
     Every release that adds a migration meets this base on `solar client update`: the
@@ -461,17 +465,17 @@ def _upgrade_older_schema(path: Path, cut: "st.Cutover",
         try:
             version = st._schema_version(conn)
             if not 0 < version < st.SCHEMA_VERSION:
-                return
+                return None
             intact = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         finally:
             conn.close()
     except sqlite3.Error:
-        return      # not ours to report: the check that follows refuses an unreadable base
+        return None     # not ours to report: the check that follows refuses an unreadable base
     if not intact:
-        return
+        return None
     before()
     try:
-        cut.upgrade_schema()
+        return cut.upgrade_schema()
     except (sqlite3.Error, st.StateError) as exc:
         raise CutoverRefused(
             f"base schema v{version} could not be upgraded to v{st.SCHEMA_VERSION} ({exc}): "
@@ -479,12 +483,8 @@ def _upgrade_older_schema(path: Path, cut: "st.Cutover",
             "nothing was changed, refusing to move files") from None
 
 
-def _check_migrated_base(base: Path, cut: Optional["st.Cutover"] = None,
-                         quiet: Callable[[], None] = lambda: None) -> str:
-    """Before trusting STATE_FORMAT=sqlite: the marker, the base and its schema.
-
-    With `cut`, a base that is only behind in schema is upgraded first, after `quiet()`.
-    A missing marker or base is refused at once, without waiting."""
+def _read_stamp(base: Path) -> str:
+    """The migration marker's stamp, or a refusal: a base is trusted only with its marker."""
     marker = _marker(base)
     if not marker.is_file():
         raise CutoverRefused("format says sqlite but there is no migration marker: refusing to move files")
@@ -497,11 +497,59 @@ def _check_migrated_base(base: Path, cut: Optional["st.Cutover"] = None,
     if not _is_stamp(stamp):
         raise CutoverRefused(f"migration stamp {stamp!r} is not one this cutover writes: "
                              "refusing to move files")
-    path = st.db_path(base)
-    if not path.is_file():
+    if not st.db_path(base).is_file():
         raise CutoverRefused("format says sqlite but the base is missing: refusing to move files")
+    return stamp
+
+
+# What the reservation migration adds to a base, and what each must hold.
+ASYNC_TABLES = ("async_policy", "execution_reservations", "reservation_scopes",
+                "reservation_resources", "task_authorizations", "claim_waits")
+
+
+def _check_async_records(conn: sqlite3.Connection, *, initial: bool) -> list[str]:
+    """Problems in what the reservation migration owns. Right after a base is brought to this
+    schema (`initial`) the policy must be the initial one: revision 0, capacity 1. Later it
+    is whatever was applied, but still a valid single row."""
+    problems = []
+    rows = conn.execute("SELECT revision, global_capacity, provider_capacity, exclusive_wait_seconds, "
+                        "enabled_reader_profiles FROM async_policy").fetchall()
+    if len(rows) != 1:
+        return [f"the execution policy has {len(rows)} rows, expected 1"]
+    revision, capacity, providers, wait, profiles = rows[0]
+    try:
+        json.loads(providers), json.loads(profiles)
+    except (TypeError, ValueError):
+        problems.append("the execution policy holds unreadable JSON")
+    if initial and (revision, capacity) != (0, 1):
+        problems.append(f"the initial execution policy is revision {revision}, capacity {capacity}; "
+                        "expected revision 0, capacity 1")
+    if not 1 <= capacity <= st.CAPACITY_MAX or wait < 1:
+        problems.append("the execution policy is out of range")
+    if initial:
+        held = conn.execute("SELECT COUNT(*) FROM execution_reservations").fetchone()[0]
+        if held:
+            problems.append(f"a freshly migrated base holds {held} reservations")
+    orphans = conn.execute(
+        "SELECT COUNT(*) FROM execution_reservations r LEFT JOIN tasks t ON t.id = r.task_id "
+        "WHERE t.id IS NULL OR t.status != 'active'").fetchone()[0]
+    if orphans:
+        problems.append(f"{orphans} reservations do not belong to an active task")
+    return problems
+
+
+def _check_migrated_base(base: Path, cut: Optional["st.Cutover"] = None,
+                         quiet: Callable[[], None] = lambda: None) -> str:
+    """Before trusting STATE_FORMAT=sqlite: the marker, the base and its schema.
+
+    With `cut`, a base that is only behind in schema is upgraded first, after `quiet()`.
+    A missing marker or base is refused at once, without waiting. A base that was just
+    brought to this schema must also hold the initial execution policy and no reservation."""
+    stamp = _read_stamp(base)
+    path = st.db_path(base)
+    upgraded = None
     if cut is not None:
-        _upgrade_older_schema(path, cut, quiet)
+        upgraded = _upgrade_older_schema(path, cut, quiet)
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     except sqlite3.Error as exc:
@@ -515,9 +563,13 @@ def _check_migrated_base(base: Path, cut: Optional["st.Cutover"] = None,
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         missing = {"tasks", "task_links", "task_events", "audit", "audit_source", "continuity",
                    "delegation_events", "delegation_streams", "subtask_plans",
-                   "cancellation_requests", "statuses", "transitions"} - tables
+                   "cancellation_requests", "statuses", "transitions", *ASYNC_TABLES} - tables
         if missing:
             raise CutoverRefused(f"the base is missing tables: {', '.join(sorted(missing))}")
+        problems = _check_async_records(conn, initial=upgraded is not None)
+        if problems:
+            raise CutoverRefused("the execution records of the base are not valid:\n- "
+                                 + "\n- ".join(problems))
     except sqlite3.Error as exc:
         raise CutoverRefused(f"the base is unreadable ({exc})") from None
     finally:
@@ -778,13 +830,79 @@ def _legacy_files_in_place(base: Path) -> bool:
     return any(path.is_file() for path in singles)
 
 
+PRE_UPDATE_KEEP = 5
+
+
+def _emit(events: Optional[Path], name: str, **details) -> None:
+    """One line in the update's event log (JSON, appended): the proof of the order of phases."""
+    if events is None:
+        return
+    events.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(dict(event=name, ts=st._now(), pid=os.getpid(), **details), sort_keys=True)
+    with open(events, "a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def _pre_apply_check(base: Path) -> int:
+    """What must hold before the code is replaced: the marker, a base that reads and passes its
+    integrity check, and a schema this code can take (never one from a newer release).
+    Returns the base's schema version."""
+    _read_stamp(base)
+    try:
+        conn = sqlite3.connect(f"file:{st.db_path(base)}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise CutoverRefused(f"the base is unreadable ({exc}): the code was not replaced") from None
+    try:
+        version = st._schema_version(conn)
+        if version > st.SCHEMA_VERSION:
+            raise CutoverRefused(f"base schema v{version} is newer than the target code "
+                                 f"(v{st.SCHEMA_VERSION}): the code was not replaced")
+        if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise CutoverRefused("the base does not pass its integrity check: the code was not replaced")
+        return version
+    except sqlite3.Error as exc:
+        raise CutoverRefused(f"the base is unreadable ({exc}): the code was not replaced") from None
+    finally:
+        conn.close()
+
+
+def _pre_apply_backup(base: Path, version: int) -> Path:
+    """A consistent copy of the base taken under the lock, before anything is replaced."""
+    conn = sqlite3.connect(f"file:{st.db_path(base)}?mode=ro", uri=True)
+    try:
+        folder = st.backup_dir(base, "pre-update")
+        copy = st._backup_to(conn, folder, f"state-v{version}-pre-update-{_stamp()}.sqlite")
+        st._rotate(folder, PRE_UPDATE_KEEP)
+        return copy
+    finally:
+        conn.close()
+
+
+def _legacy_children(cut: "st.Cutover") -> list[dict]:
+    session = cut.session()
+    try:
+        return session.legacy_children()
+    finally:
+        session.conn.close()
+
+
 def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
             lister: Callable[[], list[tuple[int, str]]] = list_processes,
-            _fail_at: Optional[str] = None) -> dict:
-    """Files -> base. The caller has stopped what Solar starts (step 1)."""
+            _fail_at: Optional[str] = None,
+            apply: Optional[Callable[[], None]] = None,
+            events: Optional[Path] = None) -> dict:
+    """Files -> base, or an older base -> this schema. The caller has stopped what Solar
+    starts (step 1).
+
+    `apply` is the update's code replacement. It runs under the same exclusive lock as the
+    migration, after the check that nothing runs and a backup of the base, so no claim can
+    start between the check and the change, and the new code never meets the old schema
+    outside this lock. `events` receives one line per phase. solar-state imports nothing
+    from the client: what `apply` does is the client's business."""
     _allowed()
     base = st._root(root)
     fail = _failer(_fail_at)
+    events = Path(events) if events else None
 
     with st.cutover(base, timeout=wait) as cut:
         if st.read_format(base) == st.FORMAT_SQLITE:
@@ -793,11 +911,26 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
             # An upgrade in place waits for quiet first; a broken base is refused at once.
             # Without an upgrade nothing has waited yet, so the wait happens here, once.
             waited = []
+            pre_update = None
+            _emit(events, "cutover-lock")
+            if apply is not None:
+                version = _pre_apply_check(base)
+                _wait_until_quiet(base, wait, lister)
+                waited.append(True)
+                _emit(events, "quiet-verified")
+                pre_update = _pre_apply_backup(base, version)
+                _emit(events, "backup", path=str(pre_update))
+                fail("after-backup")
+                _emit(events, "apply-start")
+                apply()
+                _emit(events, "apply-done")
+                fail("after-apply")
 
             def quiet_first() -> None:
                 _wait_until_quiet(base, wait, lister)
                 waited.append(True)
             stamp = _check_migrated_base(base, cut, quiet_first)
+            _emit(events, "migrated-and-validated")
             if not waited:
                 _wait_until_quiet(base, wait, lister)
             # No live file is not proof the move finished, and neither is one
@@ -813,7 +946,8 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
                 # recreated in the old places are still put away.
                 moved = _move_old_files(base, stamp)
                 _record_move(base, stamp)
-                return dict(already=True, moved=moved,
+                return dict(already=True, moved=moved, pre_update_backup=str(pre_update or ""),
+                            legacy_children=_legacy_children(cut),
                             caught_up={"tasks": 0, "logs": 0, "audit": 0,
                                        "mandate_events": 0, "warnings": []})
             session = cut.session()
@@ -823,7 +957,9 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
                 session.conn.close()
             moved = _move_old_files(base, stamp)
             _record_move(base, stamp)
-            return dict(already=True, moved=moved, caught_up=added)
+            return dict(already=True, moved=moved, caught_up=added,
+                        pre_update_backup=str(pre_update or ""),
+                        legacy_children=_legacy_children(cut))
 
         _wait_until_quiet(base, wait, lister)
         stamp = _stamp()
@@ -839,6 +975,12 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
                 (backup / rel).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, backup / rel)
         fail("after-copy")
+        if apply is not None:
+            _emit(events, "backup", path=str(backup))
+            _emit(events, "apply-start")
+            apply()
+            _emit(events, "apply-done")
+            fail("after-apply")
 
         _drop_base(base)  # a base left by an earlier attempt is never trusted
         work = base / ".state-import"
@@ -856,6 +998,7 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
         shutil.rmtree(work, ignore_errors=True)
         fail("after-place")
 
+        _emit(events, "migrated-and-validated")
         _write_marker(_marker(base), json.dumps({"stamp": stamp, "sources": _format_sources(base)}))
         cut.set_format(st.FORMAT_SQLITE)
         fail("after-format")
@@ -863,7 +1006,8 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
         _record_move(base, stamp)
         return dict(already=False, stamp=stamp, tasks=c.counts(), logs=len(c.logs),
                     audit=len(c.audit), mandate_events=sum(map(len, c.events.values())),
-                    backup=str(backup), moved=moved, warnings=warnings)
+                    backup=str(backup), moved=moved, warnings=warnings,
+                    legacy_children=_legacy_children(cut))
 
 
 def _undo_placed(base: Path) -> None:
@@ -1018,11 +1162,32 @@ def rollback(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
                     audit=len(lines), backup=str(backup))
 
 
+def _hook_runner(path: str) -> Callable[[], None]:
+    def run() -> None:
+        code = subprocess.run([path], check=False).returncode
+        if code != 0:
+            raise CutoverRefused(
+                f"the apply hook failed (exit {code}): the code may be partly replaced and nothing "
+                "was migrated; services stay stopped and the maintenance barrier stays held")
+    return run
+
+
+def _legacy_note(result: dict) -> Optional[str]:
+    """Stderr, not stdout: the first stdout line and the JSON after it are a published shape."""
+    legacy = result.get("legacy_children") or []
+    if not legacy:
+        return None
+    blocked = sum(1 for child in legacy if not child["executable"])
+    return (f"Legacy subtasks without a derived authorization: {len(legacy)} "
+            f"({blocked} not executable until approved again). Nothing was backfilled.")
+
+
 def _summary(cmd: str, result: dict) -> Optional[str]:
     """One readable line for a terminal. `rehearse`'s output is unchanged: a
     test parses its stdout as JSON, and it is meant for scripting, not a human
     watching an update run."""
     if cmd == "migrate":
+        note = ""
         if result.get("already"):
             moved = result.get("moved") or []
             added = sum(v for v in (result.get("caught_up") or {}).values() if isinstance(v, int))
@@ -1055,13 +1220,20 @@ def _cli(argv: list[str]) -> int:
     for name in ("migrate", "rollback"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--wait", type=float, default=DEFAULT_WAIT_SEC)
+        if name == "migrate":
+            cmd.add_argument("--apply-hook", default=None,
+                             help="executable that replaces the code, run under the cutover lock")
+            cmd.add_argument("--events-file", default=None,
+                             help="append one JSON line per phase to this file")
     args = parser.parse_args(argv)
     root = Path(args.root) if args.root else None
     try:
         if args.cmd == "rehearse":
             result = rehearse(root)
         elif args.cmd == "migrate":
-            result = migrate(root, wait=args.wait)
+            hook = args.apply_hook
+            result = migrate(root, wait=args.wait, events=args.events_file,
+                             apply=_hook_runner(hook) if hook else None)
         else:
             result = rollback(root, wait=args.wait)
     except st.StateError as exc:
@@ -1071,6 +1243,8 @@ def _cli(argv: list[str]) -> int:
     summary = _summary(args.cmd, result)
     if summary:
         print(summary)
+    if args.cmd == "migrate" and _legacy_note(result):
+        print(_legacy_note(result), file=sys.stderr)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("ok", True) else 2
 
