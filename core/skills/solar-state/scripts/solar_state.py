@@ -2225,16 +2225,23 @@ class Cutover:
             if existed and current < SCHEMA_VERSION:
                 backup = _backup_to(conn, backup_dir(self.root, "pre-migration"),
                                     f"state-v{current}-to-v{SCHEMA_VERSION}-{_stamp()}.sqlite")
-            for version in range(current + 1, SCHEMA_VERSION + 1):
+            try:
+                # All versions in one transaction (user_version is part of it): a migration
+                # that fails leaves the base exactly as it was.
                 with _transaction(conn):
-                    # Statement by statement: executescript() would COMMIT mid-transaction.
-                    for statement in _statements(MIGRATIONS[version - 1]):
-                        conn.execute(statement)
-                    if version == 1:
-                        conn.executemany("INSERT INTO statuses (name) VALUES (?)",
-                                         [(s,) for s in STATUSES])
-                        conn.executemany("INSERT INTO transitions VALUES (?, ?)", TRANSITIONS)
-                    conn.execute(f"PRAGMA user_version = {version}")
+                    for version in range(current + 1, SCHEMA_VERSION + 1):
+                        # Statement by statement: executescript() would COMMIT mid-transaction.
+                        for statement in _statements(MIGRATIONS[version - 1]):
+                            conn.execute(statement)
+                        if version == 1:
+                            conn.executemany("INSERT INTO statuses (name) VALUES (?)",
+                                             [(s,) for s in STATUSES])
+                            conn.executemany("INSERT INTO transitions VALUES (?, ?)", TRANSITIONS)
+                        conn.execute(f"PRAGMA user_version = {version}")
+            except BaseException:
+                if backup is not None:
+                    Path(backup).unlink(missing_ok=True)    # a copy of a base nothing changed
+                raise
             return dict(from_version=current, to_version=SCHEMA_VERSION,
                         backup=str(backup) if backup else None)
         finally:
