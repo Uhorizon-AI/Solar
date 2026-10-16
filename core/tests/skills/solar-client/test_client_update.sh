@@ -461,7 +461,7 @@ assert_ok "update from the published updater exits 0" test "$up_ec" -eq 0
 assert_ok "update moved the install to the new version" \
   test "$(git -C "$INSTALL_UP" rev-parse HEAD)" = "$(git -C "$INSTALL_UP" rev-parse v0.0.2)"
 assert_ok "published updater migrated through the new restart" \
-  grep -qx "migrate --root $TMP/runtime-copy" "$PUBLISHED_MARK"
+  grep -q "^migrate --root $TMP/runtime-copy " "$PUBLISHED_MARK"
 [[ "$up_ec" -eq 0 ]] || echo "$up_out" >&2
 unset SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_CUTOVER_ROOT SOLAR_CLIENT_LAUNCHCTL
 unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_CUTOVER_DONE
@@ -570,7 +570,7 @@ export SOLAR_CLIENT_HOST_STOP_SCRIPT="$FAKE_HOST_STOP"
 export SOLAR_CLIENT_HOST_START_SCRIPT="$FAKE_HOST_START"
 export SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT="$FAKE_SVC_SETUP"
 cut_out="$(solar_client_state_cutover "$MOCK_INSTALL_ROOT" auto 2>&1)"
-assert_ok "cutover migrates the given root" grep -qx "migrate --root $TMP/runtime-copy" "$CUT_LOG"
+assert_ok "cutover migrates the given root" grep -q "^migrate --root $TMP/runtime-copy " "$CUT_LOG"
 assert_ok "cutover stops before it migrates" grep -q 'stopping console' <<<"$cut_out"
 order="$(grep -nE 'host-stop|gateway-stop|host-start|gateway --restart|launchctl bootout|launchctl bootstrap' "$SVC_LOG" | tr '\n' ' ')"
 assert_ok "cutover order is stop then start" bash -c '[[ "$1" == *host-stop* && "$1" == *host-start* ]]' _ "$order"
@@ -644,6 +644,8 @@ mark_fail=$?
 set -e
 assert_ok "a failed migrate returns non-zero" test "$mark_fail" -ne 0
 assert_ok "a failed migrate leaves no marker" test ! -f "$MARK_RT/state-cutover.json"
+assert_ok "a failed migrate keeps the maintenance barrier" test -f "$MARK_RT/maintenance.json"
+rm -f "$MARK_RT/maintenance.json" "$MARK_RT/update-events.jsonl"
 python3 - <<PY
 import json
 from pathlib import Path
@@ -671,6 +673,25 @@ import json
 from pathlib import Path
 Path("$PORT_RT/state-cutover.json").write_text(json.dumps({"identity": "chk-1", "format": "sqlite"}) + "\n")
 PY
+# A marker from an earlier release names no schema: it never lets the stop, cutover and start be skipped.
+cat >"$TMP/marker-cutover.py" <<EOF
+#!/usr/bin/env python3
+import pathlib, sys
+pathlib.Path("$MARK_LOG").write_text(" ".join(sys.argv[1:]))
+raise SystemExit(0)
+EOF
+chmod +x "$TMP/marker-cutover.py"
+: >"$MARK_LOG"
+old_out="$(solar_client_state_cutover "$MARK_INSTALL" auto 2>&1)"
+assert_ok "a marker without a schema number does not skip the cutover" grep -q migrate "$MARK_LOG"
+assert_ok "a marker without a schema number still stops services" bash -c '! grep -q "not stopping" <<<"$1"' _ "$old_out"
+EXPECTED_SCHEMA="$(python3 -c "import sys; sys.path.insert(0, '$CORE_ROOT/skills/solar-state/scripts'); import solar_state; print(solar_state.SCHEMA_VERSION)")"
+python3 - <<PY
+import json
+from pathlib import Path
+Path("$PORT_RT/state-cutover.json").write_text(json.dumps({"identity": "chk-1", "format": "sqlite", "schema_version": $EXPECTED_SCHEMA}) + "\n")
+PY
+assert_ok "the cutover writes the schema in the marker" bash -c 'python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get(\"schema_version\") else 1)" "$1"' _ "$PORT_RT/state-cutover.json"
 : >"$MARK_LOG"
 port_out="$(solar_client_state_cutover "$MARK_INSTALL" auto 2>&1)"
 assert_ok "the same bundle checksum does not cut over" test ! -s "$MARK_LOG"
@@ -785,7 +806,7 @@ git -C "$PORT_OK_INSTALL" add -A && git -C "$PORT_OK_INSTALL" commit -q -m "v1" 
 printf '%s\n' 'NEW' >"$PORT_OK_INSTALL/core/.portable-marker"
 git -C "$PORT_OK_INSTALL" add -A && git -C "$PORT_OK_INSTALL" commit -q -m "v2" && git -C "$PORT_OK_INSTALL" tag v0.0.2
 git -C "$PORT_OK_INSTALL" checkout -q v0.0.1
-printf '#!/usr/bin/env python3\nimport sys\nraise SystemExit(0)\n' >"$TMP/portable-ok-cutover.py"
+cp "$CORE_ROOT/tests/support/cutover_stub.py" "$TMP/portable-ok-cutover.py"
 printf '#!/usr/bin/env bash\ncase "$1" in print) exit 1 ;; *) echo "$*" >>"%s"; exit 1 ;; esac\n' "$PORT_OK_LOG" >"$TMP/portable-ok-launch.sh"
 chmod +x "$TMP/portable-ok-cutover.py" "$TMP/portable-ok-launch.sh"
 : >"$PORT_OK_LOG"
@@ -1015,7 +1036,7 @@ rm -rf "$PORT_NG_INSTALL/core/skills/solar-client/scripts/__pycache__" \
   "$PORT_NG_INSTALL/core/skills/solar-state/scripts/__pycache__"
 printf '%s\n' 'FROM_GLOBAL' >"$PORT_NG_INSTALL/core/skills/solar-client/FROM_GLOBAL"
 printf '%s\n' 'leftover' >"$PORT_NG_INSTALL/core/LEFTOVER"
-printf '#!/usr/bin/env python3\nimport sys\nraise SystemExit(0)\n' >"$TMP/portable-nongit-cutover.py"
+cp "$CORE_ROOT/tests/support/cutover_stub.py" "$TMP/portable-nongit-cutover.py"
 printf '#!/usr/bin/env bash\ncase "$1" in print) exit 1 ;; *) echo "$*" >>"%s"; exit 1 ;; esac\n' "$PORT_NG_LOG" >"$TMP/portable-nongit-launch.sh"
 chmod +x "$TMP/portable-nongit-cutover.py" "$TMP/portable-nongit-launch.sh"
 : >"$PORT_NG_LOG"
@@ -1096,7 +1117,7 @@ git -C "$TRAP_GLOBAL" add -A && git -C "$TRAP_GLOBAL" commit -q -m "v0.27.1 upda
 git -C "$TRAP_GLOBAL" checkout -q v0.0.1
 printf '#!/usr/bin/env bash\ncase "$1" in print) exit 1 ;; *) echo "$*" >>"%s"; exit 1 ;; esac\n' "$TRAP_LOG" \
   >"$TMP/trapped-launch.sh"
-printf '#!/usr/bin/env python3\nimport sys\nraise SystemExit(0)\n' >"$TMP/trapped-cutover.py"
+cp "$CORE_ROOT/tests/support/cutover_stub.py" "$TMP/trapped-cutover.py"
 chmod +x "$TMP/trapped-launch.sh" "$TMP/trapped-cutover.py"
 : >"$TRAP_LOG"
 trap_head_before="$(git -C "$TRAP_GLOBAL" rev-parse HEAD)"

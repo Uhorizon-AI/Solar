@@ -17,6 +17,7 @@ TARGET_TAG=""
 CHANNEL=""
 REINSTALL_LAUNCHAGENT=false
 RESTART_SERVICES=auto
+RESUME=false
 
 usage() {
   cat <<'EOF'
@@ -37,11 +38,17 @@ SOLAR_AI_PROVIDER_PRIORITY in the workspace .env (gemini→agy) before apply.
 The first router run after a legacy updater performs the same one-time migration.
 --repair only touches .solar/settings.json (migrates legacy manifest.json).
 
-When the installed version changes, the runtime is migrated into state.sqlite
-(stop, cutover, start) and the long-running services that were already running
-are started again so they load the new code. Nothing that was stopped gets
-started. --check does not migrate. --no-restart migrates and leaves services
-stopped. The async-tasks worker needs no restart.
+The target version is first prepared and checked in a staging copy; the live install is
+not touched until the update runs. The sequence then runs from the staged copy
+(client_update_staged.sh): a maintenance barrier refuses every claim and launcher, the
+ticks are paused, the async work drains (a timeout of 120 seconds aborts the update before
+anything is replaced), the other services stop, and under the exclusive state lock the
+runtime is backed up, the code is replaced and the schema is migrated and validated. Only
+then are the services that were running started again, the code and schema verified, the
+ticks resumed and the barrier released. A failure keeps the barrier and the services
+stopped; --resume continues the same operation, never a new one.
+--check does not migrate, stop or write anything. --no-restart does everything up to the
+migration and leaves services and ticks stopped, with the barrier held, until --resume.
 
 On macOS, after a successful update, reports LaunchAgent SOLAR_ROOT binding (read-only
 status). Use --reinstall-launchagent on a real update (not with --check) to rewrite
@@ -65,7 +72,10 @@ Options:
                        After update completes, reinstall macOS LaunchAgent when
                        SOLAR_ROOT binding is stale and restart transport gateway.
                        Incompatible with --check (read-only).
-  --no-restart         Do not restart running services after the update
+  --no-restart         Do not restart running services after the update; ticks and
+                       dispatch stay suspended until --resume
+  --resume             Continue an update that was interrupted, failed or was left
+                       held by --no-restart: same operation, recorded phase
   --restart            Restart running services even if the version did not change
   --yes, -y            Proceed if SOLAR_ROOT git working tree is dirty
   -h, --help           Show help
@@ -107,6 +117,7 @@ while [[ $# -gt 0 ]]; do
     --backup) FORCE_BACKUP=true; shift ;;
     --reinstall-launchagent) REINSTALL_LAUNCHAGENT=true; shift ;;
     --no-restart) RESTART_SERVICES=never; shift ;;
+    --resume) RESUME=true; shift ;;
     --restart) RESTART_SERVICES=always; shift ;;
     --yes|-y) AUTO_YES=true; shift ;;
     --workspace|--home)
@@ -119,6 +130,11 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [[ "$RESUME" == true && ( "$CHECK_ONLY" == true || "$REPAIR_ONLY" == true || "$REINSTALL_LAUNCHAGENT" == true ) ]]; then
+  echo "ERROR: --resume continues an interrupted update; do not combine it with --check, --repair or --reinstall-launchagent" >&2
+  exit 2
+fi
 
 if [[ "$CHECK_ONLY" == true && "$REINSTALL_LAUNCHAGENT" == true ]]; then
   echo "ERROR: --check is read-only; do not combine with --reinstall-launchagent" >&2
@@ -169,6 +185,7 @@ fi
 
 if [[ "$CHECK_ONLY" == true ]]; then
   solar_client_update_check_report "$INSTALL_ROOT" "$SOLAR_WORKSPACE"
+  solar_client_maintenance_report
   # --check is always read-only (combination with --reinstall-launchagent rejected above).
   solar_client_report_launchagent_binding "$INSTALL_ROOT" false
   exit 0
@@ -176,6 +193,33 @@ fi
 
 if ! solar_client_claim_workspace "$SOLAR_WORKSPACE" false "$INSTALL_ROOT" >/dev/null; then
   echo "ERROR: this runtime refused workspace $SOLAR_WORKSPACE. Install, settings and services were left unchanged." >&2
+  exit 1
+fi
+
+if [[ "$RESUME" == true ]]; then
+  if ! solar_client_maintenance_held; then
+    echo "No update is in progress: nothing to resume."
+    exit 0
+  fi
+  solar_client_maintenance_report
+  # Before the code was replaced the staged copy has the target; afterwards the install has it.
+  _resume_stage="$(solar_client_maintenance_field staging)"
+  _resume_entry="$_resume_stage/core/skills/solar-client/scripts/client_update_staged.sh"
+  case "$(solar_client_maintenance_field phase)" in
+    cutover-done|held-no-restart|restarting|restart-failed) _resume_entry="$INSTALL_ROOT/core/skills/solar-client/scripts/client_update_staged.sh" ;;
+  esac
+  if [[ ! -f "$_resume_entry" ]]; then
+    echo "ERROR: the entrypoint to resume with is gone ($_resume_entry). Nothing was changed; the barrier stays." >&2
+    exit 1
+  fi
+  exec bash "$_resume_entry" --resume --install-root "$INSTALL_ROOT" --workspace "$SOLAR_WORKSPACE" \
+    --runtime-root "$(solar_runtime_root)" --restart-mode "$RESTART_SERVICES"
+fi
+
+if solar_client_maintenance_held; then
+  solar_client_maintenance_report >&2
+  echo "ERROR: another update is in progress or was interrupted. Resume it with: solar client update --resume" >&2
+  echo "       Nothing was changed." >&2
   exit 1
 fi
 
@@ -206,6 +250,7 @@ if [[ -f "$SOLAR_WORKSPACE/.env" && -f "$_MIGRATE_ENV_AGY" ]]; then
 fi
 
 DID_BACKUP=false
+APPLY_MODE=git
 if [[ "$use_git" == true ]]; then
   if [[ -z "$TARGET_TAG" ]]; then
     TARGET_TAG="$(solar_client_resolve_stable_release_tag)" || {
@@ -226,8 +271,10 @@ if [[ "$use_git" == true ]]; then
     fi
     echo "      use --backup to force an rsync snapshot"
   fi
-  solar_client_apply_git_update "$INSTALL_ROOT" "$TARGET_TAG" "$AUTO_YES"
+  BUNDLE_SCRIPT=""
+  FROM_DEV_ARG=true
 else
+  APPLY_MODE=bundle
   BUNDLE_SCRIPT="$INSTALL_ROOT/core/skills/solar-client/scripts/package_solar_bundle.sh"
   if [[ ! -f "$BUNDLE_SCRIPT" ]]; then
     echo "ERROR: bundle script not found: $BUNDLE_SCRIPT" >&2
@@ -236,80 +283,28 @@ else
   backup_path="$(solar_client_backup_install_core "$INSTALL_ROOT" "$cur_ver" "$SOLAR_WORKSPACE")"
   echo "OK: backup core/ at $backup_path"
   DID_BACKUP=true
-  tag_arg=""
-  [[ -n "$TARGET_TAG" ]] && tag_arg="$TARGET_TAG"
-  if [[ "$FROM_DEV" == true && -z "$tag_arg" ]]; then
-    solar_client_apply_bundle_update "$INSTALL_ROOT" true "" "$BUNDLE_SCRIPT"
-  else
-    solar_client_apply_bundle_update "$INSTALL_ROOT" false "$tag_arg" "$BUNDLE_SCRIPT"
-  fi
+  FROM_DEV_ARG="$FROM_DEV"
 fi
 
-if [[ "$DID_BACKUP" == true ]]; then
-  solar_client_rotate_backups "$INSTALL_ROOT" 5 "$SOLAR_WORKSPACE"
-fi
-
-read -r new_ver new_commit < <(solar_client_git_identity "$INSTALL_ROOT")
-echo ""
-echo "OK: update complete — $new_ver (${new_commit:0:12})"
-
-if ! solar_client_paths_equal "$INSTALL_ROOT" "$SOLAR_WORKSPACE"; then
-  echo "HINT: run solar client upgrade in SOLAR_WORKSPACE if install has IDE artifacts"
-fi
-
-echo ""
-export SOLAR_ROOT="$INSTALL_ROOT" SOLAR_WORKSPACE
-SOLAR_CLIENT_GATEWAY_RESTARTED=false
-solar_client_report_launchagent_binding "$INSTALL_ROOT" "$REINSTALL_LAUNCHAGENT"
-
-restart_failed=0
-version_changed=false
-# This process loaded client_lib.sh from the previous install. Reload the one just
-# installed so the restart below follows the new version's rules, not the old ones.
-NEW_CLIENT_LIB="$INSTALL_ROOT/core/skills/solar-client/scripts/client_lib.sh"
-if [[ -f "$NEW_CLIENT_LIB" ]]; then
-  # shellcheck source=/dev/null
-  source "$NEW_CLIENT_LIB"
-fi
-# A bundle install has no git identity to compare: the rsync just replaced core/.
-if [[ "$use_git" != true || "$cur_ver $cur_commit" != "$new_ver $new_commit" ]]; then
-  version_changed=true
-fi
-echo ""
-export SOLAR_CLIENT_CUTOVER_DONE=1
-if [[ "$PORTABLE_UPDATE" == true ]]; then
-  echo "Regenerating the workspace bundle from the global install"
-  _bundle_script="$INSTALL_ROOT/core/skills/solar-client/scripts/client_bundle.sh"
-  if [[ ! -f "$_bundle_script" ]]; then
-    echo "ERROR: bundle script missing in the global install ($INSTALL_ROOT). Services were not stopped." >&2
-    exit 1
-  fi
-  if ! (
-    cd "$SOLAR_WORKSPACE"
-    SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE="$INSTALL_ROOT" \
-      SOLAR_ROOT="$INSTALL_ROOT" \
-      bash "$_bundle_script" create
-  ); then
-    echo "ERROR: the global install was updated, but the workspace bundle was not regenerated. Services were not stopped." >&2
-    exit 1
-  fi
-fi
-if ! solar_client_state_cutover "$INSTALL_ROOT" "$RESTART_SERVICES"; then
-  restart_failed=1
-fi
-case "$RESTART_SERVICES" in
-  never)
-    echo "Services: left stopped after the state cutover (--no-restart)."
-    ;;
-esac
-
-echo "Next steps (per workspace):"
-echo "  cd \"$SOLAR_WORKSPACE\""
-echo "  solar client sync"
-echo "  solar client doctor"
-
-if [[ "$restart_failed" -ne 0 ]]; then
-  echo "" >&2
-  echo "ERROR: update applied, but a running service could not be restarted (see above)." >&2
+# Prepare and check the target beside the install. Nothing of the live install changes here.
+UPDATE_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/solar-update-staging.XXXXXX")"
+echo "Staging the target version in $UPDATE_STAGING"
+if ! STAGE_ROOT="$(solar_client_stage_update "$INSTALL_ROOT" "$APPLY_MODE" "$TARGET_TAG" "$UPDATE_STAGING" "$AUTO_YES" "$BUNDLE_SCRIPT" "$FROM_DEV_ARG")"; then
+  echo "ERROR: the target version could not be prepared. The install, the runtime and the services were left unchanged." >&2
+  rm -rf "$UPDATE_STAGING"
   exit 1
 fi
+echo "OK: staged and checked: $STAGE_ROOT"
+echo ""
+
+STAGED_ARGS=(--install-root "$INSTALL_ROOT" --workspace "$SOLAR_WORKSPACE" --runtime-root "$(solar_runtime_root)"
+  --stage-root "$STAGE_ROOT" --mode "$APPLY_MODE" --target "$TARGET_TAG"
+  --apply-hook "$UPDATE_STAGING/apply-hook.sh" --restart-mode "$RESTART_SERVICES"
+  --from-version "$cur_ver" --from-commit "$cur_commit")
+[[ "$DID_BACKUP" == true ]] && STAGED_ARGS+=(--did-backup)
+[[ "$REINSTALL_LAUNCHAGENT" == true ]] && STAGED_ARGS+=(--reinstall-launchagent)
+[[ "$PORTABLE_UPDATE" == true ]] && STAGED_ARGS+=(--portable)
+
+# From here the TARGET version's own entrypoint runs the sequence; this (possibly old) updater
+# never replaces code or stops a service itself.
+exec bash "$STAGE_ROOT/core/skills/solar-client/scripts/client_update_staged.sh" "${STAGED_ARGS[@]}"

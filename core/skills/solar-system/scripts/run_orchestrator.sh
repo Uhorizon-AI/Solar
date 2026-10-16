@@ -90,6 +90,17 @@ if ! acquire_lock; then
 fi
 trap release_lock EXIT INT TERM
 
+# An update holds a maintenance barrier in the runtime while it replaces code and schema. A tick
+# started by hand (the LaunchAgent is paused by the update itself) must not restart a service
+# the update stopped or start work on a half-updated runtime: it does nothing and says so.
+STATE_PY="$(solar_system_skill_script solar-state solar_state.py)"
+if [[ "$(python3 "$STATE_PY" maintenance 2>/dev/null | python3 -c 'import json,sys
+try: print("held" if json.load(sys.stdin).get("held") else "free")
+except Exception: print("free")')" == "held" ]]; then
+  echo "⏸️  Skipping tick: an update holds the maintenance barrier (resume it with: solar client update --resume)."
+  exit 0
+fi
+
 FEATURES="$(normalize_csv "${SOLAR_SYSTEM_FEATURES:-}")"
 if [[ -z "$FEATURES" ]]; then
   echo "⏸️  No Solar system features enabled (SOLAR_SYSTEM_FEATURES is empty)."
