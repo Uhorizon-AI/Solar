@@ -440,30 +440,36 @@ def _is_stamp(stamp: str) -> bool:
             and stamp[:8].isdigit() and stamp[9:21].isdigit())
 
 
-def _upgrade_older_schema(path: Path, cut: "st.Cutover") -> None:
+def _upgrade_older_schema(path: Path, cut: "st.Cutover",
+                          before: Callable[[], None] = lambda: None) -> None:
     """A base the cutover already built, behind this code by one or more schema versions.
 
     Every release that adds a migration meets this base on `solar client update`: the
     format is already sqlite, so the build step that creates the schema never runs. The
-    caller has waited until nothing else uses the base. The upgrade is the cutover's own:
-    a copy first, then every missing version in one transaction.
+    upgrade is the cutover's own: a copy first, then every missing version in one
+    transaction.
 
-    Only a readable base that passes its integrity check is upgraded. Anything else
-    (unreadable, damaged, empty, or ahead of this code) is left as it is for
-    `_check_migrated_base` to refuse. The check of the tables runs after the upgrade, so
-    that refusal can come once the base is at the new version; the copy is then the way back.
+    The version is read first, so a base that is up to date costs nothing here. Only a
+    behind base that passes its integrity check is upgraded, and `before` (wait until
+    nothing else uses the base) runs only then. Anything else (unreadable, damaged, empty,
+    or ahead of this code) is left as it is for `_check_migrated_base` to refuse. The check
+    of the tables runs after the upgrade, so that refusal can come once the base is at the
+    new version; the copy is then the way back.
     """
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
             version = st._schema_version(conn)
+            if not 0 < version < st.SCHEMA_VERSION:
+                return
             intact = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         finally:
             conn.close()
     except sqlite3.Error:
         return      # not ours to report: the check that follows refuses an unreadable base
-    if not intact or not 0 < version < st.SCHEMA_VERSION:
+    if not intact:
         return
+    before()
     try:
         cut.upgrade_schema()
     except (sqlite3.Error, st.StateError) as exc:
@@ -473,10 +479,12 @@ def _upgrade_older_schema(path: Path, cut: "st.Cutover") -> None:
             "nothing was changed, refusing to move files") from None
 
 
-def _check_migrated_base(base: Path, cut: Optional["st.Cutover"] = None) -> str:
+def _check_migrated_base(base: Path, cut: Optional["st.Cutover"] = None,
+                         quiet: Callable[[], None] = lambda: None) -> str:
     """Before trusting STATE_FORMAT=sqlite: the marker, the base and its schema.
 
-    With `cut`, a base that is only behind in schema is upgraded first."""
+    With `cut`, a base that is only behind in schema is upgraded first, after `quiet()`.
+    A missing marker or base is refused at once, without waiting."""
     marker = _marker(base)
     if not marker.is_file():
         raise CutoverRefused("format says sqlite but there is no migration marker: refusing to move files")
@@ -493,7 +501,7 @@ def _check_migrated_base(base: Path, cut: Optional["st.Cutover"] = None) -> str:
     if not path.is_file():
         raise CutoverRefused("format says sqlite but the base is missing: refusing to move files")
     if cut is not None:
-        _upgrade_older_schema(path, cut)
+        _upgrade_older_schema(path, cut, quiet)
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     except sqlite3.Error as exc:
@@ -782,9 +790,9 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
         if st.read_format(base) == st.FORMAT_SQLITE:
             # The format already changed. Finish an interrupted move, or leave
             # a finished one alone. The base is not a photo of migration day.
-            # Quiet first: the check may upgrade the schema in place.
+            # An upgrade in place waits for quiet first; a broken base is refused at once.
+            stamp = _check_migrated_base(base, cut, lambda: _wait_until_quiet(base, wait, lister))
             _wait_until_quiet(base, wait, lister)
-            stamp = _check_migrated_base(base, cut)
             # No live file is not proof the move finished, and neither is one
             # file already aside. `moved` is the record. Without it, every
             # original source — the list in the marker, or the pre-state copy

@@ -2227,7 +2227,9 @@ class Cutover:
                                     f"state-v{current}-to-v{SCHEMA_VERSION}-{_stamp()}.sqlite")
             try:
                 # All versions in one transaction (user_version is part of it): a migration
-                # that fails leaves the base exactly as it was.
+                # that fails leaves the base exactly as it was. The same loop builds a new
+                # base, so a migration that cannot run inside a transaction (VACUUM, a
+                # PRAGMA that commits) breaks that too; a test pins it.
                 with _transaction(conn):
                     for version in range(current + 1, SCHEMA_VERSION + 1):
                         # Statement by statement: executescript() would COMMIT mid-transaction.

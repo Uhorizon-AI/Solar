@@ -106,7 +106,9 @@ python3 "$SCRIPT_DIR/../../solar-state/scripts/solar_state.py" status   # says w
    old files.
 5. **Schema migrations run only inside a cutover**, with a copy of the base
    first, once nothing else is running. A session never upgrades under other
-   readers. **A released migration never changes**: v1 is pinned by a test; changes go in a new version.
+   readers. **A released migration never changes**: v1 is pinned by a test;
+   changes go in a new version. A migration runs inside a transaction, so it
+   uses no `VACUUM` or committing `PRAGMA`.
 6. **What comes in verbatim goes out verbatim.** A task's frontmatter is
    stored as `[key, text after the colon]` in order, and the columns are a
    projection of it, rewritten in the same transaction. Audit lines, mandate
@@ -136,11 +138,12 @@ SOLAR_STATE_ALLOW_CUTOVER=1 python3 scripts/solar_state_cutover.py rollback
   stay. The audit, continuity and mandate streams are renamed
   `*.migrated-<stamp>`. The originals are also copied to `pre-state-<stamp>/`.
   Killed at any step, running it again completes it. A run that finds
-  `STATE_FORMAT=sqlite` waits until nothing runs, then checks the marker and
-  the base. A base that is only behind in schema is upgraded in one transaction
-  (backup in `pre-migration/`, removed if the upgrade fails); an unreadable,
-  damaged or newer base is refused, and a base whose version number does not
-  match its content cannot be upgraded and is refused too.
+  `STATE_FORMAT=sqlite` checks the marker and the base first; a missing marker
+  or base is refused at once. A base that is only behind in schema is upgraded
+  once nothing runs (up to the wait limit if sessions are alive), in one
+  transaction (backup in `pre-migration/`, removed if the upgrade fails). An
+  unreadable, damaged or newer base is refused, and so is a base whose version
+  number does not match its content.
   The move is finished only once `state-migration.json` records `moved`, or,
   without that field, once every original source is aside. That list is the
   one recorded in the marker, or, for an older marker, the files in

@@ -397,7 +397,7 @@ def test_a_base_several_versions_behind_is_brought_to_the_current_one(runtime):
     assert [path.name.startswith(f"state-v1-to-v{st.SCHEMA_VERSION}-") for path in _backups(runtime)] == [True]
 
 
-def test_a_failing_migration_leaves_the_base_and_the_files_as_they_were(runtime, monkeypatch):
+def test_a_failing_migration_leaves_the_base_as_it_was(runtime, monkeypatch):
     cut.migrate(runtime, lister=quiet)
     _v1_base(runtime)
     before = _schema(runtime)
@@ -423,31 +423,71 @@ def test_an_upgrade_that_raises_is_a_refusal_and_moves_nothing(runtime, monkeypa
     assert (runtime / "async-tasks" / "completed" / "parent-task.md").is_file()   # nothing moved
 
 
+class _Watched:
+    """A read-only connection that counts the integrity checks and can report damage."""
+    def __init__(self, conn, seen, damaged=False):
+        self._conn, self._seen, self._damaged = conn, seen, damaged
+
+    def execute(self, sql, *args):
+        if sql == "PRAGMA integrity_check":
+            self._seen.append(sql)
+            if self._damaged:
+                return self._conn.execute("SELECT 'row 1 missing from index'")
+        return self._conn.execute(sql, *args)
+
+    def close(self):
+        self._conn.close()
+
+
 def test_a_base_that_fails_its_integrity_check_is_not_upgraded(runtime, monkeypatch):
     cut.migrate(runtime, lister=quiet)
     _downgrade(runtime, st.SCHEMA_VERSION - 1)
-    upgraded = []
-    monkeypatch.setattr(st.Cutover, "upgrade_schema", lambda self: upgraded.append(1))
-
-    class Damaged:
-        """A read-only connection whose integrity check reports damage."""
-        def __init__(self, conn):
-            self._conn = conn
-
-        def execute(self, sql, *args):
-            if sql == "PRAGMA integrity_check":
-                return self._conn.execute("SELECT 'row 1 missing from index'")
-            return self._conn.execute(sql, *args)
-
-        def close(self):
-            self._conn.close()
-
+    upgraded, checks = [], []
     real = sqlite3.connect
-    monkeypatch.setattr(cut.sqlite3, "connect", lambda *a, **k: Damaged(real(*a, **k)))
-    with pytest.raises(cut.CutoverRefused, match="schema"):
-        cut.migrate(runtime, lister=quiet)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(st.Cutover, "upgrade_schema", lambda self: upgraded.append(1))
+        m.setattr(cut.sqlite3, "connect",
+                  lambda *a, **k: _Watched(real(*a, **k), checks, damaged=True))
+        with pytest.raises(cut.CutoverRefused, match="schema"):
+            cut.migrate(runtime, lister=quiet)
     assert upgraded == [] and _schema(runtime)[0] == st.SCHEMA_VERSION - 1
+
+
+def test_a_base_that_is_up_to_date_is_not_integrity_checked_by_the_upgrade_step(runtime, monkeypatch):
+    cut.migrate(runtime, lister=quiet)
+    checks = []
+    real = sqlite3.connect
+    with monkeypatch.context() as m:
+        m.setattr(cut.sqlite3, "connect", lambda *a, **k: _Watched(real(*a, **k), checks))
+        cut._upgrade_older_schema(st.db_path(runtime), object())    # never reaches the cutover
+    assert checks == []
+
+
+def test_a_broken_base_is_refused_without_waiting_for_the_runtime_to_go_quiet(runtime):
+    cut.migrate(runtime, lister=quiet)
+    (runtime / cut.MARKER_NAME).unlink()
+
+    def busy():
+        raise AssertionError("waited before refusing a base that has no marker")
+    with pytest.raises(cut.CutoverRefused, match="marker"):
+        cut.migrate(runtime, lister=busy)
+
+
+def test_the_upgrade_waits_for_quiet_before_it_changes_the_base(runtime):
+    cut.migrate(runtime, lister=quiet)
+    _downgrade(runtime, st.SCHEMA_VERSION - 1)
+    with pytest.raises(cut.CutoverRefused, match="still running"):
+        cut.migrate(runtime, wait=0.1, lister=lambda: [(4242, "python3 execute_active.py")])
+    assert _schema(runtime)[0] == st.SCHEMA_VERSION - 1
+
+
+def test_no_migration_needs_to_run_outside_a_transaction():
+    """`upgrade_schema` applies every version in one transaction, a new base included."""
+    for number, migration in enumerate(st.MIGRATIONS, 1):
+        for statement in st._statements(migration):
+            head = statement.lstrip().split(None, 1)[0].upper()
+            assert head not in {"VACUUM", "PRAGMA", "BEGIN", "COMMIT", "ROLLBACK", "ATTACH"}, \
+                f"migration v{number} has a {head} statement that cannot run in a transaction"
 
 
 def test_a_base_ahead_of_this_code_is_still_refused(runtime):
