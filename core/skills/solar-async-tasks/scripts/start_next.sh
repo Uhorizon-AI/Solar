@@ -3,6 +3,9 @@
 # Claim the next ready task. Eligibility (priority, dependencies, schedule,
 # recurring interval, a pending cancellation) is decided inside solar-state.
 # Resource hooks run after the claim; a hook that blocks releases the task.
+# The claim also takes the task's reservation (capacity, provider limit, access). The
+# execution token it returns goes to the caller in the file named by SOLAR_CLAIM_FILE, as
+# JSON {"task_id", "token"}, so the executor can be bound to this exact task and claim.
 
 set -euo pipefail
 
@@ -16,8 +19,13 @@ while true; do
     claimed_json="$(state task claim-next --worker "$WORKER" --exclude "$EXCLUDE")"
     TASK_ID="$(printf '%s' "$claimed_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id") or "")')"
     TITLE="$(printf '%s' "$claimed_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title") or "")')"
+    TOKEN="$(printf '%s' "$claimed_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token") or "")')"
     if [[ -z "$TASK_ID" ]]; then
         echo "⏸️  No tasks ready to start"
+        waiting="$(printf '%s' "$claimed_json" | python3 -c 'import json,sys
+rows = json.load(sys.stdin).get("waiting") or []
+print(", ".join("%s (%s)" % (r.get("id") or "-", r.get("reason")) for r in rows[:5]))')"
+        [[ -n "$waiting" ]] && echo "   Waiting: $waiting"
         exit 0
     fi
 
@@ -40,7 +48,7 @@ while true; do
     rm -f "$export_file"
 
     if [[ "$hook_failed" == "true" ]]; then
-        state task release "$TASK_ID" --worker "$WORKER" >/dev/null
+        state task release "$TASK_ID" --worker "$WORKER" --token "$TOKEN" >/dev/null
         EXCLUDE="${EXCLUDE:+$EXCLUDE,}$TASK_ID"
         continue
     fi
@@ -53,6 +61,11 @@ while true; do
     fi
     state task unset "$TASK_ID" blocked_by_task_ids >/dev/null
 
+    if [[ -n "${SOLAR_CLAIM_FILE:-}" ]]; then
+        printf '%s' "$claimed_json" | python3 -c 'import json,sys
+data = json.load(sys.stdin)
+json.dump({"task_id": data["id"], "token": data["token"]}, open(sys.argv[1], "w"))' "$SOLAR_CLAIM_FILE"
+    fi
     echo "✅ Started task: [$TASK_ID] $TITLE"
     exit 0
 done

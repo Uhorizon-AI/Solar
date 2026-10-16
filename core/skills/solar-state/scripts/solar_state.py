@@ -29,8 +29,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import logging
 import os
+import posixpath
 import re
 import sqlite3
 import sys
@@ -65,6 +67,9 @@ BACKUP_DIR = "state-backups"
 DAILY_KEEP = 7
 DAILY_MAX_AGE_SEC = 24 * 3600
 DEFAULT_LOCK_TIMEOUT = float(os.environ.get("SOLAR_STATE_LOCK_TIMEOUT", "30"))
+MAINTENANCE_NAME = "maintenance.json"
+CAPACITY_MAX = 5
+LEASE_SECONDS = int(os.environ.get("SOLAR_TASK_LEASE_SECONDS", "300"))
 
 STATUSES = ("draft", "planned", "queued", "active", "completed", "error", "archived", "cancelled")
 
@@ -208,6 +213,67 @@ MIGRATIONS: tuple[str, ...] = (
     """
     INSERT OR IGNORE INTO transitions (from_status, to_status) VALUES ('queued', 'draft')
     """,
+    # v6: execution reservations. One policy row (applied configuration, initial capacity 1),
+    # one reservation per active task with its execution token and lease, what each reservation
+    # holds (scopes, resources), the provenance of a derived authorization, and the clock of an
+    # exclusive task that waits for the others to drain. No row of `tasks` is touched.
+    """
+    CREATE TABLE async_policy (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        revision INTEGER NOT NULL,
+        global_capacity INTEGER NOT NULL CHECK (global_capacity BETWEEN 1 AND 5),
+        provider_capacity TEXT NOT NULL,
+        exclusive_wait_seconds INTEGER NOT NULL CHECK (exclusive_wait_seconds >= 1),
+        enabled_reader_profiles TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        applied_by TEXT,
+        proposal_digest TEXT
+    );
+    INSERT INTO async_policy (id, revision, global_capacity, provider_capacity,
+                              exclusive_wait_seconds, enabled_reader_profiles, applied_at, applied_by)
+    VALUES (1, 0, 1, '{}', 60, '[]', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 'migration');
+    CREATE TABLE execution_reservations (
+        token TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+        worker TEXT,
+        provider TEXT NOT NULL DEFAULT '',
+        access_class TEXT NOT NULL CHECK (access_class IN ('exclusive', 'declared')),
+        policy_revision INTEGER NOT NULL,
+        handoff INTEGER NOT NULL DEFAULT 0,
+        claimed_at TEXT NOT NULL,
+        heartbeat_at TEXT NOT NULL,
+        lease_expires_at TEXT NOT NULL,
+        owner_pid INTEGER,
+        owner_started TEXT
+    );
+    CREATE TABLE reservation_scopes (
+        token TEXT NOT NULL REFERENCES execution_reservations(token) ON DELETE CASCADE ON UPDATE CASCADE,
+        path TEXT NOT NULL,
+        mode TEXT NOT NULL CHECK (mode IN ('read', 'write')),
+        PRIMARY KEY (token, path, mode)
+    );
+    CREATE TABLE reservation_resources (
+        token TEXT NOT NULL REFERENCES execution_reservations(token) ON DELETE CASCADE ON UPDATE CASCADE,
+        name TEXT NOT NULL,
+        PRIMARY KEY (token, name)
+    );
+    CREATE TABLE task_authorizations (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+        kind TEXT NOT NULL CHECK (kind IN ('derived')),
+        parent_id TEXT NOT NULL,
+        parent_digest TEXT NOT NULL,
+        manifest_digest TEXT NOT NULL,
+        child_key TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        UNIQUE (parent_id, child_key)
+    );
+    CREATE TABLE claim_waits (
+        task_id TEXT PRIMARY KEY,
+        first_blocked_at TEXT NOT NULL,
+        reason TEXT,
+        drain_started_at TEXT
+    )
+    """,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -235,6 +301,18 @@ class TaskChanged(StateError):
 
 class FormatError(StateError):
     """A task document that does not follow the frontmatter contract."""
+
+
+class StaleToken(TransitionRefused):
+    """The execution token is missing or is not the one of the current reservation."""
+
+
+class PolicyInvalid(StateError):
+    """A proposed execution policy is refused; the applied one stays."""
+
+
+class ProposalChanged(PolicyInvalid):
+    """The proposal is not the document that was approved (its digest differs)."""
 
 
 # ---------------------------------------------------------------------------
@@ -823,7 +901,16 @@ MATERIAL_KEYS = (
     "recurring", "recurring_min_interval", "recurring_max_runs",
     # What runs when the executor is local: a change here is a different command.
     "executor", "local_command", "local_timeout",
+    # Concurrency contract. These five are covered only when a task declares them: a task
+    # without them hashes exactly as it did before, so no standing approval changes. Absence
+    # means "legacy": the task runs exclusive and unrestricted, as it always did.
+    "access_policy", "subtask_policy", "execution_profile",
+    "review_input_digest", "review_input_manifest",
 )
+OPTIONAL_MATERIAL_KEYS = frozenset({
+    "access_policy", "subtask_policy", "execution_profile",
+    "review_input_digest", "review_input_manifest",
+})
 
 # What an approval leaves in the frontmatter. `approved_definition` is the
 # snapshot: the definition text exactly as it was approved.
@@ -941,7 +1028,15 @@ def material_digest(pairs: list[list[str]], body: str, *, definition: Optional[s
     the definition. `definition` is given when the caller already holds it (a snapshot);
     otherwise it is read from `body` as it stands."""
     import hashlib
-    material = {key: value_of(_get_pair(pairs, key)) for key in MATERIAL_KEYS}
+    material = {}
+    for key in MATERIAL_KEYS:
+        raw = _get_pair(pairs, key)
+        if key in OPTIONAL_MATERIAL_KEYS:
+            if raw is None:
+                continue          # not declared: not part of the snapshot (see MATERIAL_KEYS)
+            material[key] = _canonical_material(key, value_of(raw))
+        else:
+            material[key] = value_of(raw)
     if definition is None:
         definition = definition_text(body, value_of(_get_pair(pairs, "title")))
     payload = json.dumps(dict(fields=material, definition=definition), sort_keys=True,
@@ -1017,6 +1112,7 @@ def _approval_fields(conn, task_id: str, pairs: list[list[str]], body: str,
                      row_version: int) -> dict:
     """What approving writes. The snapshot is the definition as it stands; a task that
     already ran carries runtime sections in its body, which are not part of it."""
+    validate_material(pairs)
     title = value_of(_get_pair(pairs, "title"))
     text = definition_text(body, title)
     known = _boundary(pairs)
@@ -1086,8 +1182,11 @@ def _blocked(conn: sqlite3.Connection, pairs: list[list[str]]) -> bool:
 def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optional[str],
           *, rewrite_body: Optional[Callable[[str], str]] = None,
           fields: Optional[dict] = None, drop: Iterable[str] = (),
-          extra: Optional[dict] = None) -> str:
-    """One allowed transition. The caller already holds the transaction."""
+          extra: Optional[dict] = None, handoff: bool = False) -> str:
+    """One allowed transition. The caller already holds the transaction.
+
+    Becoming active takes a reservation (and is refused when it does not fit); leaving
+    `active` gives it back. No path changes the status around this."""
     row = conn.execute("SELECT status, frontmatter, body FROM tasks WHERE id = ?",
                        (task_id,)).fetchone()
     if row is None:
@@ -1104,6 +1203,10 @@ def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optiona
         _check_field(key, str(value))
         _set_pair(pairs, key, f" {value}" if value != "" else "")
     _set_pair(pairs, "status", f" {to_status}")
+    if to_status == "active" and current != "active":
+        _reserve(conn, task_id, pairs, (extra or {}).get("claimed_by") or actor, handoff=handoff)
+    elif current == "active" and to_status != "active":
+        conn.execute("DELETE FROM execution_reservations WHERE task_id = ?", (task_id,))
     _write_task(conn, task_id, to_status, pairs, body, insert=False, extra=extra)
     conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                  "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, to_status, actor))
@@ -1141,6 +1244,10 @@ def _write_task(conn, task_id: str, status: str, pairs, body: str, *, insert: bo
         marks = ", ".join("?" for _ in cols)
         conn.execute(f"INSERT INTO tasks ({names}) VALUES ({marks})", list(cols.values()))
     else:
+        if status != "queued":
+            # A wait only describes a queued task: whatever path takes it out of the queue
+            # (cancel, back to draft, archive, ...) ends it, so its clock cannot outlive it.
+            conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (task_id,))
         sets = ", ".join(f"{name} = ?" for name in cols)
         conn.execute(f"UPDATE tasks SET {sets}, row_version = row_version + 1 WHERE id = ?",
                      [*cols.values(), task_id])
@@ -1155,6 +1262,568 @@ def _task_dict(row: sqlite3.Row) -> dict:
     data = dict(row)
     data["frontmatter"] = json.loads(data["frontmatter"])
     return data
+
+
+# ---------------------------------------------------------------------------
+# Concurrency contract: access declarations, execution policy, reservations
+# ---------------------------------------------------------------------------
+
+_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+ACCESS_MODES = ("read", "write")
+_ACCESS_KEYS = frozenset({"version", "mode", "scopes", "resources"})
+_SUBTASK_KEYS = frozenset({"version", "max_children", "providers", "templates", "object",
+                           "scope", "effect", "max_access"})
+_TEMPLATE_KEYS = frozenset({"key", "title", "instructions", "inputs"})
+_POLICY_KEYS = frozenset({"schema_version", "revision", "global_capacity", "provider_capacity",
+                          "exclusive_wait_seconds", "enabled_reader_profiles"})
+POLICY_SCHEMA_VERSION = 1
+SUBTASK_MAX_CHILDREN = 5
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _load_json_object(raw: Any, what: str) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        raise FormatError(f"{what} must be a JSON object")
+    try:
+        value = json.loads(raw)
+    except ValueError as exc:
+        raise FormatError(f"{what} is not valid JSON: {exc}") from None
+    if not isinstance(value, dict):
+        raise FormatError(f"{what} must be a JSON object")
+    return value
+
+
+def _closed(value: dict, allowed: frozenset, what: str) -> None:
+    extra = sorted(set(value) - allowed)
+    if extra:
+        raise FormatError(f"{what} has unknown keys: {', '.join(extra)}")
+
+
+def _slug_list(value: Any, what: str, *, maximum: int, minimum: int = 0) -> list[str]:
+    if not isinstance(value, list) or not minimum <= len(value) <= maximum:
+        raise FormatError(f"{what} must be a list of {minimum} to {maximum} names")
+    for item in value:
+        if not isinstance(item, str) or not _SLUG_RE.match(item):
+            raise FormatError(f"{what}: {item!r} is not a valid name")
+    return sorted(set(value))
+
+
+def parse_access_policy(raw: Any) -> Optional[dict]:
+    """The access a task declares, validated and in canonical form.
+
+    None: nothing declared. That is the legacy task, and it runs exclusive. A value that
+    is declared and wrong raises `FormatError`: it is never read as "no access" or as a
+    reader. Scopes are absolute paths, normalized lexically (symlinks are resolved again
+    at claim time, so an alias made later is still the same scope).
+    """
+    if raw is None:
+        return None
+    data = _load_json_object(raw, "access_policy")
+    _closed(data, _ACCESS_KEYS, "access_policy")
+    if data.get("version") != 1 or not _is_int(data.get("version")):
+        raise FormatError("access_policy.version must be 1")
+    mode = data.get("mode")
+    if mode not in ACCESS_MODES:
+        raise FormatError(f"access_policy.mode must be one of {', '.join(ACCESS_MODES)}")
+    scopes = data.get("scopes", [])
+    if not isinstance(scopes, list) or len(scopes) > 32:
+        raise FormatError("access_policy.scopes must be a list of at most 32 paths")
+    clean = set()
+    for item in scopes:
+        if not isinstance(item, str) or not item.startswith("/") or "\x00" in item:
+            raise FormatError(f"access_policy scope {item!r} must be an absolute path")
+        clean.add(posixpath.normpath(item))
+    if mode == "write" and not clean:
+        raise FormatError("access_policy: a writer must name at least one scope")
+    resources = _slug_list(data.get("resources", []), "access_policy.resources", maximum=32)
+    return dict(version=1, mode=mode, scopes=sorted(clean), resources=resources)
+
+
+def parse_subtask_policy(raw: Any) -> Optional[dict]:
+    """The bounded subtask policy a parent's approval carries, in canonical form.
+
+    None when not declared: a parent without it authorizes no new children. A worker
+    that materializes children enforces it; this function only fixes its shape."""
+    if raw is None:
+        return None
+    data = _load_json_object(raw, "subtask_policy")
+    _closed(data, _SUBTASK_KEYS, "subtask_policy")
+    if data.get("version") != 1 or not _is_int(data.get("version")):
+        raise FormatError("subtask_policy.version must be 1")
+    count = data.get("max_children")
+    if not _is_int(count) or not 1 <= count <= SUBTASK_MAX_CHILDREN:
+        raise FormatError(f"subtask_policy.max_children must be 1 to {SUBTASK_MAX_CHILDREN}")
+    providers = _slug_list(data.get("providers"), "subtask_policy.providers", maximum=8, minimum=1)
+    templates = data.get("templates")
+    if not isinstance(templates, list) or not 1 <= len(templates) <= count:
+        raise FormatError("subtask_policy.templates must list 1 to max_children templates")
+    seen: set[str] = set()
+    cleaned = []
+    for template in templates:
+        if not isinstance(template, dict):
+            raise FormatError("subtask_policy.templates entries must be objects")
+        _closed(template, _TEMPLATE_KEYS, "subtask_policy template")
+        key = template.get("key")
+        if not isinstance(key, str) or not _SLUG_RE.match(key) or key in seen:
+            raise FormatError(f"subtask_policy template key {key!r} is invalid or repeated")
+        seen.add(key)
+        for name in ("title", "instructions"):
+            if not isinstance(template.get(name), str) or not template[name].strip():
+                raise FormatError(f"subtask_policy template {key}: {name} is required")
+        inputs = template.get("inputs", [])
+        if (not isinstance(inputs, list) or len(inputs) > 32
+                or any(not isinstance(i, str) or not _HEX64_RE.match(i) for i in inputs)):
+            raise FormatError(f"subtask_policy template {key}: inputs are sha256 digests")
+        cleaned.append(dict(key=key, title=template["title"], instructions=template["instructions"],
+                            inputs=sorted(set(inputs))))
+    scope = {}
+    for name in ("object", "scope", "effect"):
+        value = data.get(name)
+        if not isinstance(value, str) or not value.strip() or len(value) > 500:
+            raise FormatError(f"subtask_policy.{name} is required (at most 500 characters)")
+        scope[name] = value
+    access = parse_access_policy(data.get("max_access"))
+    if access is None:
+        raise FormatError("subtask_policy.max_access is required")
+    return dict(version=1, max_children=count, providers=providers,
+                templates=sorted(cleaned, key=lambda t: t["key"]), max_access=access, **scope)
+
+
+def canonical_policy_text(key: str, raw: Any) -> str:
+    """The one stored spelling of `access_policy` / `subtask_policy` (raises when invalid)."""
+    parser = parse_access_policy if key == "access_policy" else parse_subtask_policy
+    parsed = parser(raw)
+    if parsed is None:
+        raise FormatError(f"{key} is empty")
+    return _canonical_json(parsed)
+
+
+def _canonical_material(key: str, value: Optional[str]) -> Optional[str]:
+    """What the digest holds for an optional key: the policies in canonical JSON. A value
+    that does not validate is hashed as written; approval and claim refuse it separately."""
+    if key in ("access_policy", "subtask_policy") and value is not None:
+        try:
+            return canonical_policy_text(key, value)
+        except FormatError:
+            return value
+    return value
+
+
+def validate_material(pairs: list[list[str]]) -> None:
+    """Refuse an approval whose new material keys do not validate."""
+    for key in ("access_policy", "subtask_policy"):
+        raw = _get_pair(pairs, key)
+        if raw is not None:
+            canonical_policy_text(key, value_of(raw))
+    profile = _get_pair(pairs, "execution_profile")
+    if profile is not None and not _SLUG_RE.match(value_of(profile) or ""):
+        raise FormatError("execution_profile must be a profile name")
+    digest = _get_pair(pairs, "review_input_digest")
+    if digest is not None and not _HEX64_RE.match(value_of(digest) or ""):
+        raise FormatError("review_input_digest must be a sha256 digest")
+    manifest = _get_pair(pairs, "review_input_manifest")
+    if manifest is not None and not (value_of(manifest) or "").strip():
+        raise FormatError("review_input_manifest must reference the manifest")
+
+
+# -- execution policy (the applied configuration) ---------------------------------
+
+def config_path(root=None) -> Path:
+    """The readable proposal. Editing it activates nothing: only an applied revision counts."""
+    return _root(root) / "async-tasks" / "config" / "async-execution.json"
+
+
+def validate_policy_document(doc: Any, current_revision: int) -> dict:
+    """A proposal, checked in full and returned in canonical form. Raises `PolicyInvalid`."""
+    if not isinstance(doc, dict):
+        raise PolicyInvalid("the configuration must be a JSON object")
+    extra = sorted(set(doc) - _POLICY_KEYS)
+    if extra:
+        raise PolicyInvalid(f"unknown keys: {', '.join(extra)}")
+    if doc.get("schema_version") != POLICY_SCHEMA_VERSION or not _is_int(doc.get("schema_version")):
+        raise PolicyInvalid(f"schema_version must be {POLICY_SCHEMA_VERSION}")
+    revision = doc.get("revision")
+    if not _is_int(revision) or revision <= current_revision:
+        raise PolicyInvalid(f"revision must be an integer above the applied revision {current_revision}")
+    cap = doc.get("global_capacity")
+    if not _is_int(cap) or not 1 <= cap <= CAPACITY_MAX:
+        raise PolicyInvalid(f"global_capacity must be an integer from 1 to {CAPACITY_MAX}")
+    providers = doc.get("provider_capacity", {})
+    if not isinstance(providers, dict):
+        raise PolicyInvalid("provider_capacity must map a provider to a positive integer")
+    lowered: dict[str, int] = {}
+    for name, limit in providers.items():
+        if not isinstance(name, str) or not _SLUG_RE.match(name):
+            raise PolicyInvalid(f"provider_capacity: {name!r} is not a provider name")
+        if not _is_int(limit) or not 1 <= limit <= CAPACITY_MAX:
+            raise PolicyInvalid(f"provider_capacity.{name} must be an integer from 1 to {CAPACITY_MAX}")
+        # A task's provider is compared in lowercase: a limit kept as "Codex" would never apply.
+        if name.lower() in lowered:
+            raise PolicyInvalid(f"provider_capacity names {name.lower()!r} twice")
+        lowered[name.lower()] = limit
+    wait = doc.get("exclusive_wait_seconds", 60)
+    if not _is_int(wait) or not 1 <= wait <= 86400:
+        raise PolicyInvalid("exclusive_wait_seconds must be an integer from 1 to 86400")
+    try:
+        profiles = _slug_list(doc.get("enabled_reader_profiles", []), "enabled_reader_profiles",
+                              maximum=16)
+    except FormatError as exc:
+        raise PolicyInvalid(str(exc)) from None
+    return dict(schema_version=POLICY_SCHEMA_VERSION, revision=revision, global_capacity=cap,
+                provider_capacity={k: lowered[k] for k in sorted(lowered)},
+                exclusive_wait_seconds=wait, enabled_reader_profiles=profiles)
+
+
+def policy_digest(doc: dict) -> str:
+    """sha256 of the canonical document: what an approval of an apply is bound to."""
+    return hashlib.sha256(_canonical_json(doc).encode("utf-8")).hexdigest()
+
+
+def read_proposal(root=None) -> dict:
+    """The proposal file as found: `{present, document, error}`. Never raises."""
+    path = config_path(root)
+    if not path.is_file():
+        return dict(present=False, document=None, error=None, path=str(path))
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return dict(present=True, document=None, error=f"unreadable: {exc}", path=str(path))
+    return dict(present=True, document=document, error=None, path=str(path))
+
+
+def write_proposal(document: dict, root=None) -> Path:
+    path = config_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    tmp.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
+def _policy_row(conn) -> dict:
+    row = conn.execute("SELECT * FROM async_policy WHERE id = 1").fetchone()
+    if row is None:
+        raise StateUnavailable("the execution policy row is missing: the schema migration is incomplete")
+    data = dict(row)
+    data["provider_capacity"] = json.loads(data["provider_capacity"])
+    data["enabled_reader_profiles"] = json.loads(data["enabled_reader_profiles"])
+    return data
+
+
+# -- maintenance barrier ------------------------------------------------------------
+
+def maintenance_path(root=None) -> Path:
+    return _root(root) / MAINTENANCE_NAME
+
+
+def maintenance_state(root=None) -> Optional[dict]:
+    """The barrier an update holds, or None. It lives outside the schema, under the control
+    of the client. An unreadable file counts as a barrier: claims fail closed."""
+    path = maintenance_path(root)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return dict(unreadable=True)
+    return data if isinstance(data, dict) else dict(unreadable=True)
+
+
+# -- what a task asks for, what the others hold --------------------------------------
+
+class _Access:
+    """A task's claim on the machine: exclusive, or declared scopes and resources."""
+
+    def __init__(self, *, exclusive: bool, scopes=(), resources=(), provider: str = "",
+                 invalid: Optional[str] = None, task_id: Optional[str] = None,
+                 token: Optional[str] = None):
+        self.exclusive = exclusive
+        self.scopes = list(scopes)            # [(resolved path, mode)]
+        self.resources = frozenset(resources)
+        self.provider = provider
+        self.invalid = invalid
+        self.task_id = task_id
+        self.token = token
+
+
+def _resolve_scope(path: str) -> str:
+    return os.path.realpath(path).casefold()
+
+
+def _overlaps(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    a, b = left.rstrip("/") + "/", right.rstrip("/") + "/"
+    return a.startswith(b) or b.startswith(a)
+
+
+# Profiles whose confinement has a verified implementation, per provider. Naming a profile in the
+# applied policy is not enough to run next to other tasks: the executor must really enforce it.
+# Empty until the delivery that implements `text_only_review_v1` (claude only); until then every
+# task stays exclusive even when the policy lists the name.
+VERIFIED_PROFILES: dict[str, frozenset] = {}
+
+
+def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
+               profiles: Iterable[str] = ()) -> _Access:
+    """What the task asks for. A declaration alone never makes a task concurrent: the providers
+    still run with their own permissions, so the declaration is trusted only for an
+    `execution_profile` that the applied policy lists in `enabled_reader_profiles` (it starts empty)
+    AND that `VERIFIED_PROFILES` says the task's provider enforces (empty for now).
+    Any other task, declared or not, keeps running alone."""
+    provider = (_field(pairs, "provider") or "").strip().lower()
+    resources = set(_csv(_field(pairs, "resources")))
+    raw = _get_pair(pairs, "access_policy")
+    if raw is None:
+        return _Access(exclusive=True, resources=resources, provider=provider, task_id=task_id)
+    try:
+        policy = parse_access_policy(value_of(raw))
+    except FormatError as exc:
+        return _Access(exclusive=True, resources=resources, provider=provider,
+                       invalid=str(exc), task_id=task_id)
+    resources |= set(policy["resources"])
+    profile = (_field(pairs, "execution_profile") or "").strip()
+    if (not profile or profile not in set(profiles)
+            or provider not in VERIFIED_PROFILES.get(profile, frozenset())):
+        return _Access(exclusive=True, resources=resources, provider=provider, task_id=task_id)
+    scopes = [(_resolve_scope(path), policy["mode"]) for path in policy["scopes"]]
+    return _Access(exclusive=False, scopes=scopes, resources=resources, provider=provider,
+                   task_id=task_id)
+
+
+def _occupancy(conn, ignore_task: Optional[str] = None) -> list[_Access]:
+    """Everything that holds a place right now: the reservations, and any active task
+    that has none (it predates them), which counts as exclusive."""
+    held = []
+    for row in conn.execute("SELECT token, task_id, provider, access_class FROM execution_reservations"):
+        if row["task_id"] == ignore_task:
+            continue
+        scopes = [(_resolve_scope(r[0]), r[1]) for r in conn.execute(
+            "SELECT path, mode FROM reservation_scopes WHERE token = ?", (row["token"],))]
+        resources = [r[0] for r in conn.execute(
+            "SELECT name FROM reservation_resources WHERE token = ?", (row["token"],))]
+        held.append(_Access(exclusive=row["access_class"] == "exclusive", scopes=scopes,
+                            resources=resources, provider=row["provider"],
+                            task_id=row["task_id"], token=row["token"]))
+    for row in conn.execute("SELECT id, frontmatter FROM tasks WHERE status = 'active' "
+                            "AND id NOT IN (SELECT task_id FROM execution_reservations)"):
+        if row["id"] != ignore_task:
+            held.append(_Access(exclusive=True, task_id=row["id"],
+                                provider=(_field(json.loads(row["frontmatter"]), "provider")
+                                          or "").strip().lower()))
+    return held
+
+
+def _admission(access: _Access, held: list[_Access], policy: dict) -> Optional[str]:
+    """None when the task may start next to what is running, else the reason it waits."""
+    if access.exclusive:
+        return "exclusive_needs_idle" if held else None
+    if any(item.exclusive for item in held):
+        return "blocked_by_exclusive"
+    if len(held) >= policy["global_capacity"]:
+        return "global_capacity"
+    limit = policy["provider_capacity"].get(access.provider) if access.provider else None
+    if limit is not None and sum(1 for item in held if item.provider == access.provider) >= limit:
+        return "provider_capacity"
+    for item in held:
+        shared = access.resources & item.resources
+        if shared:
+            return f"resource:{sorted(shared)[0]}"
+        for path, mode in access.scopes:
+            for other_path, other_mode in item.scopes:
+                if (mode == "write" or other_mode == "write") and _overlaps(path, other_path):
+                    return "scope_conflict"
+    return None
+
+
+def _lease_expiry(seconds: int = LEASE_SECONDS) -> str:
+    return datetime.fromtimestamp(time.time() + seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _reserve(conn, task_id: str, pairs: list[list[str]], worker: Optional[str],
+             *, handoff: bool = False) -> str:
+    """Take the place for a task that is becoming active. Raises when it does not fit:
+    every way into `active` is checked here, whoever asked."""
+    if maintenance_state(_db_root(conn)) is not None:
+        raise TransitionRefused(f"{task_id} cannot start: maintenance is in progress")
+    policy = _policy_row(conn)
+    access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
+    if access.invalid:
+        raise TransitionRefused(f"{task_id} cannot start: access_policy_invalid ({access.invalid})")
+    reason = _admission(access, _occupancy(conn, ignore_task=task_id), policy)
+    if reason:
+        raise TransitionRefused(f"{task_id} cannot start now: {reason}")
+    return _reserve_with(conn, task_id, pairs, worker, uuid.uuid4().hex, handoff=handoff,
+                         access=access, policy=policy)
+
+
+def _reserve_with(conn, task_id: str, pairs: list[list[str]], worker: Optional[str], token: str, *,
+                  handoff: bool, access: Optional[_Access] = None,
+                  policy: Optional[dict] = None) -> str:
+    policy = policy or _policy_row(conn)
+    access = access or _access_of(pairs, task_id, policy["enabled_reader_profiles"])
+    now = _now()
+    conn.execute(
+        "INSERT INTO execution_reservations (token, task_id, worker, provider, access_class, "
+        "policy_revision, handoff, claimed_at, heartbeat_at, lease_expires_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (token, task_id, worker, access.provider, "exclusive" if access.exclusive else "declared",
+         policy["revision"], 1 if handoff else 0, now, now, _lease_expiry()))
+    for path, mode in access.scopes:
+        conn.execute("INSERT OR IGNORE INTO reservation_scopes (token, path, mode) VALUES (?, ?, ?)",
+                     (token, path, mode))
+    for name in sorted(access.resources):
+        conn.execute("INSERT OR IGNORE INTO reservation_resources (token, name) VALUES (?, ?)",
+                     (token, name))
+    conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (task_id,))
+    return token
+
+
+def _db_root(conn) -> Path:
+    """The runtime directory of the open base (the folder of `state.sqlite`)."""
+    for row in conn.execute("PRAGMA database_list"):
+        if row[1] == "main" and row[2]:
+            return Path(row[2]).parent
+    return solar_runtime.runtime_root()
+
+
+def _check_token(conn, task_id: str, token: Optional[str]) -> None:
+    """The current reservation's token is the only proof of ownership. A task with no
+    reservation (active before they existed) needs none."""
+    row = conn.execute("SELECT token FROM execution_reservations WHERE task_id = ?",
+                       (task_id,)).fetchone()
+    if row is None:
+        return
+    if not token:
+        raise StaleToken(f"{task_id} is reserved: its execution token is required")
+    if token != row["token"]:
+        raise StaleToken(f"{task_id}: that execution token is not the current one")
+
+
+class IdentityUnknown(Exception):
+    """The process table could not be asked (denied, timed out, failed): its answer is unknown."""
+
+
+def _process_identity(pid: int) -> Optional[str]:
+    """Start time of a process as `ps` prints it; None only when `ps` answers that it is not
+    running. Any failure to ask raises `IdentityUnknown`: nobody may be replaced on a guess."""
+    import subprocess
+    try:
+        done = subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))], capture_output=True,
+                              text=True, check=False, timeout=10)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise IdentityUnknown(f"cannot ask the process table about {pid}: {exc}") from None
+    out = done.stdout.strip()
+    if out:
+        return out
+    if done.returncode == 1 and not done.stderr.strip():
+        return None
+    raise IdentityUnknown(f"the process table answered {done.returncode} for {pid}: "
+                          f"{done.stderr.strip()[:120]}")
+
+
+def _provenance_problem(conn, task_id: str) -> Optional[str]:
+    """A derived task needs its parent's authorization to still stand."""
+    row = conn.execute("SELECT parent_id FROM task_authorizations WHERE task_id = ?",
+                       (task_id,)).fetchone()
+    if row is None:
+        return None
+    parent = conn.execute("SELECT status FROM tasks WHERE id = ?", (row["parent_id"],)).fetchone()
+    if parent is None or parent["status"] not in ("queued", "active", "completed"):
+        return "parent_revoked"
+    if conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?",
+                    (row["parent_id"],)).fetchone():
+        return "parent_revoked"
+    return None
+
+
+def _claim_order(row) -> tuple:
+    return (-_PRIORITY_RANK.get(row["priority"] or "", 0), row["created"] or "", row["id"])
+
+
+def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual: bool) -> Optional[str]:
+    """Why a queued task cannot be claimed for reasons of its own, or None.
+
+    The worker's selection rules (the recurring interval and the schedule window) are not
+    applied when a person starts a task by name (`manual`). Everything else is revalidated
+    at every claim, inside its transaction."""
+    task_id = row["id"]
+    if conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?", (task_id,)).fetchone():
+        return "cancellation_requested"
+    if _blocked(conn, pairs):
+        return "blocked_by_dependency"
+    if not manual:
+        if not _recurring_ready(pairs, moment.timestamp()):
+            return "recurring_interval"
+        if not scheduled_now(_field(pairs, "scheduled_time"), _field(pairs, "scheduled_weekdays"),
+                             moment, _field(pairs, "scheduled_timezone")):
+            return "outside_schedule"
+    reason = _approval_gate(conn, task_id, row["row_version"], pairs, row["body"])
+    if reason:
+        return reason
+    problem = _provenance_problem(conn, task_id)
+    if problem:
+        return problem
+    if _access_of(pairs, task_id).invalid:
+        return "access_policy_invalid"
+    return None
+
+
+def _drain_target(conn, policy: dict, moment: datetime, exclude: Optional[str] = None) -> Optional[str]:
+    """The exclusive task that has waited long enough and now holds the line: from here on
+    nothing else starts until the running tasks drain and it does. The first one in claim
+    order wins, so priority among exclusives is kept. A task that is not eligible for
+    other reasons (dependencies, schedule, approval) never becomes the target."""
+    waits = {r["task_id"]: r for r in conn.execute("SELECT * FROM claim_waits")}
+    if not waits:
+        return None
+    now_epoch = moment.timestamp()
+    marks = ",".join("?" for _ in waits)
+    rows = list(conn.execute(
+        f"SELECT id, status, priority, created, frontmatter, body, row_version FROM tasks "
+        f"WHERE status = 'queued' AND id IN ({marks})", list(waits)))
+    rows.sort(key=_claim_order)
+    for row in rows:
+        if row["id"] == exclude:
+            continue
+        if now_epoch - _epoch(waits[row["id"]]["first_blocked_at"]) < policy["exclusive_wait_seconds"]:
+            continue
+        pairs = json.loads(row["frontmatter"])
+        if _access_of(pairs, profiles=policy["enabled_reader_profiles"]).exclusive and _eligibility(conn, row, pairs, moment, manual=False) is None:
+            return row["id"]
+    return None
+
+
+def _note_wait(conn, task_id: str, access: _Access, reason: str, policy: dict, *,
+               target: Optional[str], held: Optional[list] = None) -> None:
+    """An exclusive task that cannot start starts its clock; once it is the drain target the
+    reason is recorded, once, so starvation can be seen."""
+    if not access.exclusive:
+        return
+    conn.execute("INSERT OR IGNORE INTO claim_waits (task_id, first_blocked_at, reason) "
+                 "VALUES (?, ?, ?)", (task_id, _now(), reason))
+    conn.execute("UPDATE claim_waits SET reason = ? WHERE task_id = ?", (reason, task_id))
+    if target == task_id:
+        row = conn.execute("SELECT first_blocked_at, drain_started_at FROM claim_waits "
+                           "WHERE task_id = ?", (task_id,)).fetchone()
+        if row and not row["drain_started_at"]:
+            conn.execute("UPDATE claim_waits SET drain_started_at = ? WHERE task_id = ?",
+                         (_now(), task_id))
+            _audit(conn, "exclusive_drain_started", task_id=task_id,
+                   first_blocked_at=row["first_blocked_at"],
+                   exclusive_wait_seconds=policy["exclusive_wait_seconds"],
+                   holding=sorted(item.task_id for item in (held if held is not None
+                                                            else _occupancy(conn)) if item.task_id))
 
 
 # ---------------------------------------------------------------------------
@@ -1269,9 +1938,13 @@ class Session:
                         actor: Optional[str] = None,
                         rewrite_body: Optional[Callable[[str], str]] = None,
                         expected_row_version: Optional[int] = None,
+                        token: Optional[str] = None,
                         **columns: Any) -> str:
         """Move a task. Refuses a move the table does not allow, or a task that is
         no longer where the caller saw it. Returns the status it came from.
+
+        Moving to `active` takes a reservation like a claim does (and is refused when it
+        does not fit); moving out of `active` needs the reservation's `token`.
 
         `rewrite_body`, when given, runs on the stored body inside this same
         transaction, so a status change and a body edit commit together or not
@@ -1288,6 +1961,10 @@ class Session:
             if allowed_from is not None and current not in allowed_from:
                 raise TransitionRefused(f"{task_id} is {current}, not {'/'.join(sorted(allowed_from))}")
             _check_version(task_id, row["row_version"], expected_row_version)
+            if current == "active" and conn.execute(
+                    "SELECT 1 FROM transitions WHERE from_status = ? AND to_status = ?",
+                    (current, to_status)).fetchone():
+                _check_token(conn, task_id, token)      # an illegal move is refused as one first
             return _move(conn, task_id, to_status, actor, rewrite_body=rewrite_body,
                          extra=columns or None)
 
@@ -1608,34 +2285,57 @@ class Session:
     def task_claim(self, task_id: str, worker: str) -> bool:
         """queued -> active, atomically. True: it is yours. False: it exists and is no
         longer queued (someone else got it), or its approval does not cover what is
-        stored (`task_claim_detail` says which). A task that does not exist raises."""
+        stored, or it does not fit next to what runs (`task_claim_detail` says which). A
+        task that does not exist raises."""
         return self.task_claim_detail(task_id, worker)["claimed"]
 
     def task_claim_detail(self, task_id: str, worker: str, *,
                           stamp_last_run: bool = False) -> dict:
-        """`task_claim` with the reason it was refused: `not_queued`, or the
-        `approval_digest_mismatch` reason (`absent`, `legacy`, `mismatch`). The
-        refusal changes nothing in the task, so a recurring one keeps its cadence.
-        With `stamp_last_run` a recurring task gets its `recurring_last_run` in the
-        same transaction as the claim, so the two cannot come apart."""
+        """`task_claim` with the reason it was refused: `not_queued`, the
+        `approval_digest_mismatch` reason (`absent`, `legacy`, `mismatch`), or what keeps it
+        from starting (`maintenance`, `cancellation_requested`, `blocked_by_dependency`,
+        `parent_revoked`, `access_policy_invalid`, `drain_barrier` and the capacity reasons
+        of the reservation). A claim that is refused changes nothing in the task, so a
+        recurring one keeps its cadence. Claimed, it returns the execution `token` that
+        completing, releasing and cleaning up need.
+
+        This is the manual activation: it applies the same approval, dependency,
+        cancellation and reservation rules as the worker. The schedule window and the
+        recurring interval are the worker's selection rules and are not applied to a
+        task a person starts by name. With `stamp_last_run` a recurring task gets its
+        `recurring_last_run` in the same transaction as the claim."""
         with _transaction(self.conn) as conn:
-            row = conn.execute("SELECT status, frontmatter, body, row_version FROM tasks "
-                               "WHERE id = ?", (task_id,)).fetchone()
+            row = conn.execute("SELECT id, status, frontmatter, body, row_version, priority, "
+                               "created FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if row is None:
                 raise StateError(f"no task {task_id}")
             if row["status"] != "queued":
                 return dict(claimed=False, reason="not_queued")
-            reason = _approval_gate(conn, task_id, row["row_version"],
-                                    json.loads(row["frontmatter"]), row["body"])
+            if maintenance_state(self.root) is not None:
+                return dict(claimed=False, reason="maintenance")
+            pairs = json.loads(row["frontmatter"])
+            moment = datetime.now()
+            reason = _eligibility(conn, row, pairs, moment, manual=True)
             if reason:
                 return dict(claimed=False, reason=reason)
-            pairs = json.loads(row["frontmatter"])
+            policy = _policy_row(conn)
+            target = _drain_target(conn, policy, moment, exclude=task_id)
+            access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
+            if target:
+                _note_wait(conn, task_id, access, "drain_barrier", policy, target=None)
+                return dict(claimed=False, reason="drain_barrier")
+            reason = _admission(access, _occupancy(conn), policy)
+            if reason:
+                _note_wait(conn, task_id, access, reason, policy, target=None)
+                return dict(claimed=False, reason=reason)
             stamp = {}
             if stamp_last_run and str(_field(pairs, "recurring") or "").lower() == "true":
                 stamp = {"recurring_last_run": _now()}
             _move(conn, task_id, "active", worker, fields=stamp,
-                  extra={"claimed_by": worker, "claimed_at": _now()})
-        return dict(claimed=True, reason=None)
+                  extra={"claimed_by": worker, "claimed_at": _now()}, handoff=True)
+            token = conn.execute("SELECT token FROM execution_reservations WHERE task_id = ?",
+                                 (task_id,)).fetchone()[0]
+        return dict(claimed=True, reason=None, token=token)
 
     def task_status(self, task_id: str) -> Optional[str]:
         """The status column. It replaced the directory the task file used to sit in."""
@@ -1683,8 +2383,9 @@ class Session:
                         body, insert=False)
 
     def task_record(self, task_id: str, *, pid: Optional[int] = None,
-                    log_path: Optional[str] = None) -> None:
-        """Remember the worker pid or the log path. Neither is a status change."""
+                    log_path: Optional[str] = None, token: Optional[str] = None) -> None:
+        """Remember the worker pid or the log path. Neither is a status change. Recording
+        a pid claims to own the execution, so it needs the reservation's `token`."""
         extra = {}
         if pid is not None:
             extra["pid"] = pid
@@ -1697,6 +2398,8 @@ class Session:
                                (task_id,)).fetchone()
             if row is None:
                 raise StateError(f"no task {task_id}")
+            if pid is not None:
+                _check_token(conn, task_id, token)
             _write_task(conn, task_id, row["status"], json.loads(row["frontmatter"]),
                         row["body"], insert=False, extra=extra)
 
@@ -1708,21 +2411,40 @@ class Session:
         A queued task with a cancellation request is cancelled and skipped. A
         task waiting on another, a recurring task still inside its interval, one
         outside its schedule window, or one whose approval does not cover what is
-        stored (`approval_digest_mismatch`) is left queued. `exclude` skips ids the
-        caller already tried (a hook blocked them and they were released).
-        Returns the claimed task, or None when nothing is ready. Hooks are not
-        run here.
+        stored (`approval_digest_mismatch`) is left queued. So is a task that does
+        not fit next to what runs: the global capacity, a provider limit, a scope
+        that a writer shares, a resource held, or an unknown (legacy) task, which
+        runs alone. `exclude` skips ids the caller already tried (a hook blocked
+        them and they were released). Returns the claimed task with its execution
+        `token`, or None when nothing could start; `task_claim_next_detail` says why.
+        Hooks are not run here.
         """
+        result = self.task_claim_next_detail(worker, exclude=exclude, now=now)
+        task = result["task"]
+        if task is not None:
+            task["token"] = result["token"]
+        return task
+
+    def task_claim_next_detail(self, worker: str, *, exclude: Iterable[str] = (),
+                               now: Optional[datetime] = None) -> dict:
+        """`task_claim_next` with what it learned: `{task, token, waiting}` where
+        `waiting` lists `{id, reason}` for the eligible tasks that did not start."""
         moment = now or datetime.now()
         now_epoch = moment.timestamp()
         skipped = set(exclude)
         claimed: Optional[str] = None
+        waiting: list[dict] = []
         with _transaction(self.conn) as conn:
+            if maintenance_state(self.root) is not None:
+                return dict(task=None, token=None, waiting=[dict(id=None, reason="maintenance")])
+            policy = _policy_row(conn)
             rows = list(conn.execute(
-                "SELECT id, priority, created, frontmatter, body, row_version FROM tasks "
+                "SELECT id, status, priority, created, frontmatter, body, row_version FROM tasks "
                 "WHERE status = 'queued'"))
-            rows.sort(key=lambda row: (
-                -_PRIORITY_RANK.get(row["priority"] or "", 0), row["created"] or "", row["id"]))
+            rows.sort(key=_claim_order)
+            target = _drain_target(conn, policy, moment)
+            held = _occupancy(conn)
+            ineligible: set[str] = set()
             for row in rows:
                 task_id = row["id"]
                 if conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?",
@@ -1732,24 +2454,36 @@ class Session:
                 if task_id in skipped:
                     continue
                 pairs = json.loads(row["frontmatter"])
-                if _blocked(conn, pairs):
+                if _eligibility(conn, row, pairs, moment, manual=False):
+                    ineligible.add(task_id)
                     continue
-                if not _recurring_ready(pairs, now_epoch):
+                access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
+                if target and task_id != target:
+                    waiting.append(dict(id=task_id, reason="drain_barrier"))
+                    _note_wait(conn, task_id, access, "drain_barrier", policy, target=None)
                     continue
-                if not scheduled_now(_field(pairs, "scheduled_time"),
-                                     _field(pairs, "scheduled_weekdays"), moment,
-                                     _field(pairs, "scheduled_timezone")):
-                    continue
-                if _approval_gate(conn, task_id, row["row_version"], pairs, row["body"]):
-                    continue
-                _move(conn, task_id, "active", worker,
-                      extra={"claimed_by": worker, "claimed_at": _now()})
-                claimed = task_id
-                break
-        return self.task_get(claimed) if claimed else None
+                reason = _admission(access, held, policy)
+                if reason is None:
+                    _move(conn, task_id, "active", worker,
+                          extra={"claimed_by": worker, "claimed_at": _now()})
+                    claimed = task_id
+                    break
+                waiting.append(dict(id=task_id, reason=reason))
+                _note_wait(conn, task_id, access, reason, policy, target=target, held=held)
+            # A wait only counts while the task stays eligible: dependencies, schedule or approval
+            # that stopped holding reset its clock, whether or not this pass claimed something.
+            # Tasks the pass never reached keep theirs.
+            queued_now = {row["id"] for row in rows}
+            for wait in conn.execute("SELECT task_id FROM claim_waits").fetchall():
+                if wait[0] in ineligible or wait[0] not in queued_now:
+                    conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (wait[0],))
+            token = (conn.execute("SELECT token FROM execution_reservations WHERE task_id = ?",
+                                  (claimed,)).fetchone()[0] if claimed else None)
+        return dict(task=self.task_get(claimed) if claimed else None, token=token, waiting=waiting)
 
-    def task_release(self, task_id: str, worker: str) -> None:
-        """Give back a task this worker just claimed, when a hook blocked it."""
+    def task_release(self, task_id: str, worker: str, token: Optional[str] = None) -> None:
+        """Give back a task this worker just claimed, when a hook blocked it. The
+        reservation goes with it; a stale `token` is refused."""
         with _transaction(self.conn) as conn:
             row = conn.execute("SELECT status, claimed_by FROM tasks WHERE id = ?",
                                (task_id,)).fetchone()
@@ -1758,11 +2492,12 @@ class Session:
             if row["status"] != "active" or row["claimed_by"] != worker:
                 raise TransitionRefused(
                     f"{task_id} is not claimed by {worker}")
+            _check_token(conn, task_id, token)
             _move(conn, task_id, "queued", worker,
                   extra={"claimed_by": None, "claimed_at": None})
 
     def task_complete(self, task_id: str, *, actor: Optional[str] = None,
-                      cancelled: bool = False) -> str:
+                      cancelled: bool = False, token: Optional[str] = None) -> str:
         """Finish an active task. Returns the status it landed in.
 
         A cancellation becomes `cancelled`. Otherwise the task is `completed`
@@ -1779,6 +2514,7 @@ class Session:
                 raise TransitionRefused(f"no task {task_id}")
             if row["status"] != "active":
                 raise TransitionRefused(f"{task_id} is {row['status']}, not active")
+            _check_token(conn, task_id, token)
             if cancelled:
                 _move(conn, task_id, "cancelled", who)
                 return "cancelled"
@@ -1804,7 +2540,7 @@ class Session:
             return "queued"
 
     def task_fail(self, task_id: str, suffix: str, *, actor: Optional[str] = None,
-                  fields: Optional[dict] = None) -> None:
+                  fields: Optional[dict] = None, token: Optional[str] = None) -> None:
         """Move a task to error and append `suffix` to its body, together."""
         def rewrite(body: str) -> str:
             text = body.rstrip("\n")
@@ -1815,9 +2551,16 @@ class Session:
             row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if row is None:
                 raise TransitionRefused(f"no task {task_id}")
+            if row["status"] == "active":
+                _check_token(conn, task_id, token)
+            elif token:
+                # The execution that token belonged to is over (the task finished, or went back
+                # to the queue for its next run): it cannot fail what it no longer owns.
+                raise StaleToken(f"{task_id} is {row['status']}: that execution token has ended")
             _move(conn, task_id, "error", actor or "fail", rewrite_body=rewrite, fields=fields)
 
-    def task_await(self, task_id: str, child_ids: Iterable[str]) -> None:
+    def task_await(self, task_id: str, child_ids: Iterable[str],
+                   token: Optional[str] = None) -> None:
         """Park an active parent until the named children are terminal."""
         seen: list[str] = []
         for child in child_ids:
@@ -1832,6 +2575,7 @@ class Session:
                 raise TransitionRefused(f"no task {task_id}")
             if row["status"] != "active":
                 raise TransitionRefused(f"{task_id} is {row['status']}, not active")
+            _check_token(conn, task_id, token)
             _move(conn, task_id, "queued", "await",
                   fields={"blocked_by_task_ids": quoted})
 
@@ -1872,6 +2616,209 @@ class Session:
         return [dict(r) for r in self.conn.execute(
             "SELECT child_id, subtask_key FROM task_links WHERE parent_id = ? ORDER BY child_id",
             (parent_id,))]
+
+    # -- reservations ------------------------------------------------------
+
+    def reservations(self) -> list[dict]:
+        """Every reservation with what it holds. Active tasks that have none (they predate
+        reservations) are listed with `token: None` and count as exclusive."""
+        out = []
+        for row in self.conn.execute("SELECT * FROM execution_reservations ORDER BY claimed_at, task_id"):
+            item = dict(row)
+            item["scopes"] = [dict(path=r[0], mode=r[1]) for r in self.conn.execute(
+                "SELECT path, mode FROM reservation_scopes WHERE token = ? ORDER BY path, mode",
+                (row["token"],))]
+            item["resources"] = [r[0] for r in self.conn.execute(
+                "SELECT name FROM reservation_resources WHERE token = ? ORDER BY name", (row["token"],))]
+            out.append(item)
+        for row in self.conn.execute("SELECT id FROM tasks WHERE status = 'active' AND id NOT IN "
+                                     "(SELECT task_id FROM execution_reservations) ORDER BY id"):
+            out.append(dict(token=None, task_id=row[0], access_class="exclusive", scopes=[],
+                            resources=[], legacy_active=True))
+        return out
+
+    def reservation_for(self, task_id: str) -> Optional[dict]:
+        return next((r for r in self.reservations() if r["task_id"] == task_id), None)
+
+    def reservation_attach(self, task_id: str, token: str, *, pid: Optional[int] = None) -> None:
+        """The executor says it owns this reservation: its pid and start time are what a
+        later recovery checks before it decides the owner is gone."""
+        pid = os.getpid() if pid is None else int(pid)
+        with _transaction(self.conn) as conn:
+            self._require_reserved(conn, task_id, token)
+            conn.execute("UPDATE execution_reservations SET owner_pid = ?, owner_started = ?, "
+                         "heartbeat_at = ?, lease_expires_at = ?, handoff = 0 WHERE task_id = ?",
+                         (pid, _process_identity(pid), _now(), _lease_expiry(), task_id))
+
+    def reservation_heartbeat(self, task_id: str, token: str) -> None:
+        with _transaction(self.conn) as conn:
+            self._require_reserved(conn, task_id, token)
+            conn.execute("UPDATE execution_reservations SET heartbeat_at = ?, lease_expires_at = ? "
+                         "WHERE task_id = ?", (_now(), _lease_expiry(), task_id))
+
+    @staticmethod
+    def _require_reserved(conn, task_id: str, token: Optional[str]) -> None:
+        if conn.execute("SELECT 1 FROM execution_reservations WHERE task_id = ?",
+                        (task_id,)).fetchone() is None:
+            raise StaleToken(f"{task_id} holds no reservation")
+        _check_token(conn, task_id, token)
+
+    def task_adopt(self, task_id: str, worker: str, *,
+                   identity: Callable[[int], Optional[str]] = _process_identity) -> dict:
+        """Take over an active task nobody is running, with a new token.
+
+        Allowed only when the previous owner cannot be running it: a manual activation no
+        executor has attached to yet, or a lease that expired whose recorded process is gone
+        (or is no longer the process that started). A lease that expired with its process
+        still alive is not adoptable: it is reported as `owner_alive` and left alone. An
+        active task that predates reservations has no owner to wait for. The old token stops
+        working the moment this commits.
+        """
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            if row["status"] != "active":
+                return dict(adopted=False, reason="not_active")
+            if maintenance_state(self.root) is not None:
+                return dict(adopted=False, reason="maintenance")
+            res = conn.execute("SELECT * FROM execution_reservations WHERE task_id = ?",
+                               (task_id,)).fetchone()
+            token = uuid.uuid4().hex
+            if res is None:
+                pairs = json.loads(row["frontmatter"])
+                policy = _policy_row(conn)
+                access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
+                if access.invalid:
+                    return dict(adopted=False, reason="access_policy_invalid")
+                reason = _admission(access, _occupancy(conn, ignore_task=task_id), policy)
+                if reason:
+                    return dict(adopted=False, reason=reason)
+                _reserve_with(conn, task_id, pairs, worker, token, handoff=False)
+            else:
+                unattached = bool(res["handoff"]) and res["owner_pid"] is None
+                expired = _epoch(res["lease_expires_at"]) <= time.time()
+                if not unattached:
+                    if not expired:
+                        return dict(adopted=False, reason="lease_valid")
+                    if res["owner_pid"] is not None:
+                        try:
+                            alive = identity(res["owner_pid"])
+                        except IdentityUnknown:
+                            return dict(adopted=False, reason="owner_unverifiable")
+                        if alive and (res["owner_started"] is None or alive == res["owner_started"]):
+                            return dict(adopted=False, reason="owner_alive")
+                conn.execute("UPDATE execution_reservations SET token = ?, worker = ?, handoff = 0, "
+                             "owner_pid = NULL, owner_started = NULL, heartbeat_at = ?, "
+                             "lease_expires_at = ? WHERE task_id = ?",
+                             (token, worker, _now(), _lease_expiry(), task_id))
+            conn.execute("UPDATE tasks SET claimed_by = ? WHERE id = ?", (worker, task_id))
+            _audit(conn, "task_adopted", task_id=task_id, worker=worker,
+                   previous_token_ended=res is not None)
+        return dict(adopted=True, reason=None, token=token)
+
+    # -- execution policy --------------------------------------------------
+
+    def async_policy(self) -> dict:
+        """The applied configuration: what every claim reads, in its own transaction."""
+        return _policy_row(self.conn)
+
+    def async_policy_apply(self, document: Any, *, actor: Optional[str] = None,
+                           expected_digest: Optional[str] = None) -> dict:
+        """Apply a validated revision to the runtime's policy, in one transaction. A
+        proposal that does not validate is refused and the applied one stays. With
+        `expected_digest` the document must be exactly the one that was approved."""
+        with _transaction(self.conn) as conn:
+            current = _policy_row(conn)
+            normalized = validate_policy_document(document, current["revision"])
+            digest = policy_digest(normalized)
+            if expected_digest is not None and digest != expected_digest:
+                raise ProposalChanged("the proposal is not the one that was approved "
+                                      "(its digest changed); nothing was applied")
+            conn.execute(
+                "UPDATE async_policy SET revision = ?, global_capacity = ?, provider_capacity = ?, "
+                "exclusive_wait_seconds = ?, enabled_reader_profiles = ?, applied_at = ?, "
+                "applied_by = ?, proposal_digest = ? WHERE id = 1",
+                (normalized["revision"], normalized["global_capacity"],
+                 json.dumps(normalized["provider_capacity"], sort_keys=True),
+                 normalized["exclusive_wait_seconds"],
+                 json.dumps(normalized["enabled_reader_profiles"]), _now(), actor, digest))
+            _audit(conn, "async_policy_applied", actor=actor, revision=normalized["revision"],
+                   previous_revision=current["revision"],
+                   global_capacity=normalized["global_capacity"],
+                   previous_global_capacity=current["global_capacity"], digest=digest)
+            applied = _policy_row(conn)
+        return dict(applied, digest=digest)
+
+    def async_policy_status(self) -> dict:
+        """Applied revision, the proposal file and what would change. Reads only."""
+        applied = self.async_policy()
+        proposal = read_proposal(self.root)
+        status = dict(applied=applied, proposal=dict(present=proposal["present"],
+                                                    path=proposal["path"], error=proposal["error"]),
+                      pending=False, differences={}, applies=False)
+        document = proposal["document"]
+        if document is None:
+            return status
+        try:
+            normalized = validate_policy_document(document, applied["revision"])
+            status["applies"] = True
+            status["proposal"]["digest"] = policy_digest(normalized)
+        except PolicyInvalid as exc:
+            status["proposal"]["error"] = str(exc)
+            normalized = None
+        if isinstance(document, dict):
+            for key in ("global_capacity", "provider_capacity", "exclusive_wait_seconds",
+                        "enabled_reader_profiles"):
+                if key in document and document[key] != applied[key]:
+                    status["differences"][key] = dict(applied=applied[key], proposed=document[key])
+            status["pending"] = bool(status["differences"]) or (
+                _is_int(document.get("revision")) and document["revision"] > applied["revision"])
+        return status
+
+    # -- provenance of a derived authorization -------------------------------
+
+    def authorization_record(self, child_id: str, parent_id: str, child_key: str, *,
+                             parent_digest: str, manifest_digest: str) -> bool:
+        """Record that `child_id` was authorized by `parent_id`'s approved definition.
+        The same record again is a no-op (True means it was written now); another manifest
+        for the same parent and key is refused."""
+        with _transaction(self.conn) as conn:
+            for task in (child_id, parent_id):
+                if conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task,)).fetchone() is None:
+                    raise StateError(f"no task {task}")
+            same = conn.execute("SELECT * FROM task_authorizations WHERE parent_id = ? AND child_key = ?",
+                                (parent_id, child_key)).fetchone()
+            if same is not None:
+                if (same["task_id"], same["manifest_digest"], same["parent_digest"]) != (
+                        child_id, manifest_digest, parent_digest):
+                    raise StateError(f"{parent_id}/{child_key} was authorized with other content")
+                return False
+            conn.execute("INSERT INTO task_authorizations (task_id, kind, parent_id, parent_digest, "
+                         "manifest_digest, child_key, recorded_at) VALUES (?, 'derived', ?, ?, ?, ?, ?)",
+                         (child_id, parent_id, parent_digest, manifest_digest, child_key, _now()))
+        return True
+
+    def legacy_children(self) -> list[dict]:
+        """Subtasks created before derived authorizations existed: every task that names a
+        parent (the frontmatter or a link) and has no authorization record. Read-only: nothing
+        is backfilled from `parent_task_id`. `executable` says whether the child can be
+        claimed today under its own approval; one that cannot stays out of the queue until a
+        person approves it again."""
+        recorded = {r[0] for r in self.conn.execute("SELECT task_id FROM task_authorizations")}
+        linked = {r[0]: r[1] for r in self.conn.execute("SELECT child_id, parent_id FROM task_links")}
+        found = []
+        for task in self.task_list():
+            pairs = task["frontmatter"]
+            parent = _field(pairs, "parent_task_id") or linked.get(task["id"])
+            if not parent or task["id"] in recorded:
+                continue
+            approval = approval_state(pairs, task["body"]) or "valid"
+            found.append(dict(id=task["id"], parent_id=parent, status=task["status"],
+                              approval=approval,
+                              executable=task["status"] == "queued" and approval == "valid"))
+        return found
 
     # -- audit -------------------------------------------------------------
 
@@ -2321,6 +3268,8 @@ def _cli(argv: list[str]) -> int:
     move.add_argument("to", choices=STATUSES)
     move.add_argument("--from", dest="expected_from", default=None)
     move.add_argument("--actor", default=None)
+    move.add_argument("--token", default=os.environ.get("SOLAR_TASK_TOKEN") or None,
+                      help="execution token, needed to move an active task out of active")
     claim = task.add_parser("claim")
     claim.add_argument("id")
     claim.add_argument("--worker", required=True)
@@ -2333,19 +3282,35 @@ def _cli(argv: list[str]) -> int:
     nxt = task.add_parser("claim-next")
     nxt.add_argument("--worker", required=True)
     nxt.add_argument("--exclude", default="", help="comma-separated ids to skip")
+    token_default = os.environ.get("SOLAR_TASK_TOKEN") or None
     release = task.add_parser("release")
     release.add_argument("id")
     release.add_argument("--worker", required=True)
+    release.add_argument("--token", default=token_default)
     done = task.add_parser("complete")
     done.add_argument("id")
     done.add_argument("--cancelled", action="store_true")
+    done.add_argument("--token", default=token_default)
     fail = task.add_parser("fail")
     fail.add_argument("id")
     fail.add_argument("--suffix", default="")
     fail.add_argument("--field", action="append", default=[], metavar="KEY=VALUE")
+    fail.add_argument("--token", default=token_default)
     waiting = task.add_parser("await")
     waiting.add_argument("id")
     waiting.add_argument("--child", action="append", default=[])
+    waiting.add_argument("--token", default=token_default)
+    task.add_parser("reservations", help="what is running and what each holds")
+    task.add_parser("legacy-children", help="subtasks without a derived authorization record")
+    adopt = task.add_parser("adopt", help="take over an active task nobody runs, with a new token")
+    adopt.add_argument("id")
+    adopt.add_argument("--worker", required=True)
+    for name in ("attach", "heartbeat"):
+        sub_cmd = task.add_parser(name)
+        sub_cmd.add_argument("id")
+        sub_cmd.add_argument("--token", default=token_default, required=token_default is None)
+        if name == "attach":
+            sub_cmd.add_argument("--pid", type=int, default=None)
     task.add_parser("status").add_argument("id")
     field = task.add_parser("field")
     field.add_argument("id")
@@ -2370,6 +3335,12 @@ def _cli(argv: list[str]) -> int:
     rows.add_argument("--event", default=None)
     rows.add_argument("--limit", type=int, default=None)
 
+    policy = sub.add_parser("async-policy").add_subparsers(dest="cmd", required=True)
+    policy.add_parser("status", help="applied revision, proposal file and differences")
+    policy_apply = policy.add_parser("apply", help="apply the proposal file as a new revision")
+    policy_apply.add_argument("--digest", default=None, help="digest the approval was bound to")
+    sub.add_parser("maintenance", help="the update barrier, if one is held")
+
     cont = sub.add_parser("continuity").add_subparsers(dest="cmd", required=True)
     cont.add_parser("get")
     cont.add_parser("put", help="the whole JSON document on stdin")
@@ -2387,6 +3358,9 @@ def _cli(argv: list[str]) -> int:
                 _print(owner_record(root))
             elif args.cmd == "replace-id":
                 _print(replace_owner_id(args.id, root=root))
+            return 0
+        if args.area == "maintenance":
+            _print(dict(held=maintenance_state(root) is not None, state=maintenance_state(root)))
             return 0
         with session(root) as s:
             if args.area == "backup":
@@ -2420,7 +3394,8 @@ def _cli(argv: list[str]) -> int:
                     s.task_set(args.id, args.key, args.value)
                     _print(dict(id=args.id, key=args.key))
                 elif args.cmd == "transition":
-                    came = s.task_transition(args.id, args.to, args.expected_from, actor=args.actor)
+                    came = s.task_transition(args.id, args.to, args.expected_from, actor=args.actor,
+                                             token=args.token)
                     _print(dict(id=args.id, from_status=came, to_status=args.to))
                 elif args.cmd == "claim":
                     result = s.task_claim_detail(args.id, args.worker,
@@ -2435,15 +3410,17 @@ def _cli(argv: list[str]) -> int:
                                                   actor="cli"))
                 elif args.cmd == "claim-next":
                     excluded = [part for part in args.exclude.split(",") if part]
-                    task = s.task_claim_next(args.worker, exclude=excluded)
+                    result = s.task_claim_next_detail(args.worker, exclude=excluded)
+                    task = result["task"]
                     _print(dict(id=task["id"] if task else None,
                                 title=task["title"] if task else None,
-                                claimed=task is not None))
+                                claimed=task is not None, token=result["token"],
+                                waiting=result["waiting"]))
                 elif args.cmd == "release":
-                    s.task_release(args.id, args.worker)
+                    s.task_release(args.id, args.worker, token=args.token)
                     _print(dict(id=args.id, status="queued"))
                 elif args.cmd == "complete":
-                    landed = s.task_complete(args.id, cancelled=args.cancelled)
+                    landed = s.task_complete(args.id, cancelled=args.cancelled, token=args.token)
                     _print(dict(id=args.id, status=landed))
                 elif args.cmd == "fail":
                     fields = []
@@ -2452,11 +3429,25 @@ def _cli(argv: list[str]) -> int:
                         if not sep:
                             parser.error(f"--field expects KEY=VALUE, got {item!r}")
                         fields.append((key, value))
-                    s.task_fail(args.id, args.suffix, fields=dict(fields))
+                    s.task_fail(args.id, args.suffix, fields=dict(fields), token=args.token)
                     _print(dict(id=args.id, status="error"))
                 elif args.cmd == "await":
-                    s.task_await(args.id, args.child)
+                    s.task_await(args.id, args.child, token=args.token)
                     _print(dict(id=args.id, status="queued"))
+                elif args.cmd == "reservations":
+                    _print(s.reservations())
+                elif args.cmd == "legacy-children":
+                    _print(s.legacy_children())
+                elif args.cmd == "adopt":
+                    result = s.task_adopt(args.id, args.worker)
+                    _print(dict(id=args.id, **result))
+                    return 0 if result["adopted"] else 3
+                elif args.cmd == "attach":
+                    s.reservation_attach(args.id, args.token, pid=args.pid)
+                    _print(dict(id=args.id))
+                elif args.cmd == "heartbeat":
+                    s.reservation_heartbeat(args.id, args.token)
+                    _print(dict(id=args.id))
                 elif args.cmd == "status":
                     status = s.task_status(args.id)
                     if status is None:
@@ -2490,6 +3481,13 @@ def _cli(argv: list[str]) -> int:
                     _print(dict(seq=s.audit_append(json.loads(sys.stdin.read()))))
                 else:
                     _print(s.audit_rows(args.event, args.limit))
+            elif args.area == "async-policy":
+                if args.cmd == "status":
+                    _print(s.async_policy_status())
+                else:
+                    proposal = read_proposal(root)
+                    _print(s.async_policy_apply(proposal["document"], actor="cli",
+                                                expected_digest=args.digest))
             elif args.area == "continuity":
                 if args.cmd == "get":
                     _print(s.continuity_get())

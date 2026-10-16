@@ -6,6 +6,19 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Execution reservations (schema v6, applied only by the cutover, with a backup first): taking a place and becoming `active` are one transaction for `task_claim`, `task_claim_next`, `activate.sh`, the worker and the generic move to `active`. Global capacity (initially `1`), provider limits, declared access (`access_policy`: read/write, canonical scopes with parent/child overlap and symlink aliases, exclusive resources), tasks that declare nothing run alone, and a drain barrier so a stream of readers cannot starve an exclusive task after `exclusive_wait_seconds`. Contract: `core/docs/execution-reservations.md`.
+- Execution token: the claim returns it; completing, releasing, failing, awaiting and recording a pid need it, with a lease and heartbeat; `execute_active.sh --task <id> --token <token>` runs exactly the claimed task and `--once` only takes over an execution nobody runs. `start_next.sh` writes the claim to `$SOLAR_CLAIM_FILE`.
+- Versioned execution configuration: operations `async_execution.propose` and `async_execution.apply` (A2) prepare `<runtime>/async-tasks/config/async-execution.json` and apply a validated revision to the runtime's policy in one transaction; editing the file activates nothing. `solar_state.py async-policy status|apply`.
+- Material keys `access_policy`, `subtask_policy`, `execution_profile`, `review_input_digest` and `review_input_manifest`, covered by the digest only when declared (the digest stays `v2:`; no standing approval changes). `task.create`/`task.update` accept `access_policy`.
+- Update sequence with a maintenance barrier: the target is staged and checked first, then `client_update_staged.sh` runs maintenance, drain, stop, cutover (backup, code replacement and migration under one exclusive lock), restart, verification and release. `solar client update --resume` continues an interrupted update; `--no-restart` holds the barrier; `--check` writes nothing. `async-supervisor` is a detected and drained service and `supervisor.py` is a running marker for the cutover. The migration result lists legacy subtasks (no record is backfilled).
+
+### Changed
+- **Behaviour:** an update no longer replaces the code before it stops anything; a failed update keeps the services stopped and the barrier held until `solar client update --resume`. A release older than this one cannot give that order: run `client_update_staged.sh` with explicit paths for the first installation (see `core/docs/execution-reservations.md`). The cutover marker also records the schema; a marker without it never lets an update skip the stop and cutover.
+- **Behaviour:** `activate.sh` and `task_claim` revalidate dependencies and a pending cancellation, and refuse when the task does not fit (capacity, access, maintenance). With the initial capacity `1` the worker stays sequential.
+- **Behaviour:** a declared `access_policy` makes a task concurrent only when its `execution_profile` is in the policy's `enabled_reader_profiles` (empty at first); every other task still runs alone, so raising the capacity changes nothing until a confined profile is enabled. Enabling is not enough either: the profile needs a verified implementation for the provider (`VERIFIED_PROFILES`, empty in this delivery), so every task still runs alone until the profile is delivered.
+- **Behaviour:** `complete.sh`, `task_complete`, `task_release`, `task_fail`, `task_await` and a transition out of `active` refuse a missing or stale execution token (`StaleToken`) while the task holds a reservation.
+
 ## [0.47.1] - 2026-10-16
 
 ### Fixed

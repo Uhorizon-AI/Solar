@@ -57,6 +57,7 @@ esac
 
 TITLE="$(task_field "$TASK_ID" "title")"
 export_file="$(task_export_tmp "$TASK_ID")"
+HOOKS_RAN=0
 if [[ "$(task_field "$TASK_ID" "cleanup_required")" == "true" ]]; then
     resources="$(task_field "$TASK_ID" "resources")"
     for resource in $(parse_resources "$resources"); do
@@ -68,6 +69,7 @@ if [[ "$(task_field "$TASK_ID" "cleanup_required")" == "true" ]]; then
                 echo "Error: pre-start hook blocked activation (resource busy): $TASK_ID" >&2
                 exit 1
             fi
+            HOOKS_RAN=1
         fi
     done
 fi
@@ -80,9 +82,32 @@ if ! CLAIM_JSON="$(state task claim "$TASK_ID" --worker "$WORKER" --stamp-last-r
     REASON="$(printf '%s' "$CLAIM_JSON" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("reason") or "unknown")
 except Exception: print("unknown")')"
+    # The hooks above took the task's resources for this attempt. When the claim is refused
+    # because the task does not fit or is not ready (capacity, access, a pending cancellation...),
+    # the on_error hooks force-release them. When the task is no longer queued, another executor
+    # claimed it and its resources are theirs: nothing is released.
+    case "$REASON" in
+        not_queued|unknown) ;;
+        *)
+            if [[ "$HOOKS_RAN" == 1 ]]; then
+                export_file="$(task_export_tmp "$TASK_ID")"
+                for resource in $(parse_resources "$(task_field "$TASK_ID" "resources")"); do
+                    error_hook="$HOOKS_DIR/${resource}/on_error.sh"
+                    [[ -x "$error_hook" ]] && { "$error_hook" "$export_file" || true; }
+                done
+                rm -f "$export_file"
+            fi
+            ;;
+    esac
     case "$REASON" in
         absent|legacy|mismatch)
             echo "Error: approval_digest_mismatch (reason=$REASON): the approval of $TASK_ID does not cover its current content. Approve it again with task.approve." >&2
+            ;;
+        global_capacity|provider_capacity|scope_conflict|resource:*|exclusive_needs_idle|blocked_by_exclusive|drain_barrier|maintenance)
+            echo "Error: Task $TASK_ID cannot start now (reason=$REASON); it stays queued. Capacity, access and the execution policy are shared with the worker." >&2
+            ;;
+        blocked_by_dependency|cancellation_requested|parent_revoked|access_policy_invalid)
+            echo "Error: Task $TASK_ID was not started (reason=$REASON); it stays queued." >&2
             ;;
         *)
             echo "Error: Task $TASK_ID was not claimed (reason=$REASON); it is no longer queued." >&2
@@ -97,4 +122,5 @@ fi
 # it, here they run before it, so the claim is the first point at which a run really starts.
 state task unset "$TASK_ID" blocked_by_task_ids >/dev/null
 
+# The reservation is taken; the worker runs the task (it takes the execution over by token).
 echo "✅ Activated task: [$TASK_ID] $TITLE"

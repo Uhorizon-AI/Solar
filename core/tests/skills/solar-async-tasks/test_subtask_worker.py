@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from queue_mirror import env_for, mirror, seed, task_id_of
+from reservation_tokens import token_of
 
 SCRIPTS = Path(__file__).resolve().parents[3] / "skills/solar-async-tasks/scripts"
 EXECUTE = SCRIPTS / "execute_active.py"
@@ -525,6 +526,8 @@ def test_the_object_reaches_the_child_in_its_prompt(tmp_path):
     sys.path.insert(0, str(SCRIPTS.parent.parent / "solar-state" / "scripts"))
     import solar_state
     with solar_state.session() as store:
+        # What execute_active.sh does when the parent asks to wait: it gives its place back.
+        store.task_await("parent-0001-aaaa", [child_id], token=token_of(store, "parent-0001-aaaa"))
         store.task_claim(child_id, worker="test")
 
     router = tmp_path / "router_recorder.py"

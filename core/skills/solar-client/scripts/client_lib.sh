@@ -1543,8 +1543,9 @@ solar_client_report_launchagent_binding() {
 # Long-running services of THIS install that are running: "gateway" (transport
 # bridges) and "host" (console on :9000). A process counts only if its command
 # line holds this install's script path (fixed-string match), so services of
-# another Solar install on the machine are never mistaken for ours. The
-# async-tasks worker is not listed: it starts fresh on every orchestrator tick.
+# another Solar install on the machine are never mistaken for ours. "async-supervisor" is the
+# resident async-tasks supervisor. The one-shot worker is not listed: it starts fresh on
+# every orchestrator tick, and the update waits for it through the drain.
 # Args: install_root.
 # Test hooks: SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE ("gateway,host", or "none");
 # SOLAR_CLIENT_PS_OUTPUT_FILE (file with `ps -axo command=` lines).
@@ -1575,6 +1576,12 @@ solar_client_running_services() {
   if grep -qF -e "${install_root%/}/core/skills/solar-app/scripts/host_server.py" \
       -e "${resolved%/}/core/skills/solar-app/scripts/host_server.py" <<<"$commands"; then
     echo host
+  fi
+  # The resident async supervisor, identified by this install's script path in its command
+  # line (the runtime and process identity it records belong to the supervisor itself).
+  if grep -qF -e "${install_root%/}/core/skills/solar-async-tasks/scripts/supervisor.py" \
+      -e "${resolved%/}/core/skills/solar-async-tasks/scripts/supervisor.py" <<<"$commands"; then
+    echo async-supervisor
   fi
 }
 
@@ -1678,31 +1685,53 @@ solar_client_cutover_identity() {
   printf '%s\n' "$commit"
 }
 
+# The marker lets a repeated update skip the stop/cutover/start. It counts only when it names
+# this code identity AND the schema this code expects: a marker written by an earlier release
+# (no schema number, or an older one) never lets the stop, the cutover and the start be skipped.
+# Args: runtime identity [install_root]
 solar_client_cutover_marker_matches() {
   local runtime="$1"
   local identity="$2"
+  local install_root="${3:-${SOLAR_ROOT:-}}"
+  local expected=""
   [[ -n "$identity" ]] || return 1
   [[ -f "$runtime/state-cutover.json" ]] || return 1
-  python3 - <<'PY' "$runtime/state-cutover.json" "$runtime/STATE_FORMAT" "$identity"
+  [[ -n "$install_root" ]] && expected="$(solar_client_expected_schema "$install_root")"
+  python3 - <<'PY' "$runtime/state-cutover.json" "$runtime/STATE_FORMAT" "$identity" "$expected"
 import json, sys
-marker, fmt_path, identity = sys.argv[1:4]
+marker, fmt_path, identity, expected = sys.argv[1:5]
 try:
     data = json.load(open(marker, encoding="utf-8"))
     fmt = open(fmt_path, encoding="utf-8").read().strip()
 except Exception:
     sys.exit(1)
-sys.exit(0 if isinstance(data, dict) and data.get("identity") == identity and fmt == "sqlite" else 1)
+if not isinstance(data, dict) or data.get("identity") != identity or fmt != "sqlite":
+    sys.exit(1)
+if expected and str(data.get("schema_version")) != expected:
+    sys.exit(1)
+sys.exit(0)
 PY
 }
 
+# Args: runtime identity [install_root]. Records the code identity and the schema it runs on.
 solar_client_write_cutover_marker() {
   local runtime="$1"
   local identity="$2"
+  local install_root="${3:-${SOLAR_ROOT:-}}"
+  local expected="" code_version=""
   [[ -n "$identity" ]] || return 0
-  python3 - <<'PY' "$runtime/state-cutover.json" "$identity"
+  if [[ -n "$install_root" ]]; then
+    expected="$(solar_client_expected_schema "$install_root")"
+    read -r code_version _ < <(solar_client_git_identity "$install_root")
+  fi
+  python3 - <<'PY' "$runtime/state-cutover.json" "$identity" "$expected" "$code_version"
 import json, os, sys
-dest, identity = sys.argv[1:3]
+dest, identity, schema, code_version = sys.argv[1:5]
 payload = {"identity": identity, "format": "sqlite"}
+if schema:
+    payload["schema_version"] = int(schema)
+if code_version:
+    payload["code_version"] = code_version
 tmp = dest + ".tmp"
 with open(tmp, "w", encoding="utf-8") as fh:
     json.dump(payload, fh)
@@ -1734,18 +1763,492 @@ solar_client_cutover_preflight() {
   return 0
 }
 
-# Stop what Solar starts, migrate the runtime, then start what was running.
-# A failed migration leaves those services stopped. restart_mode "never" migrates
-# and does not start them. Args: install_root [restart_mode].
-# Test hooks: SOLAR_CLIENT_CUTOVER_SCRIPT, SOLAR_CLIENT_CUTOVER_ROOT,
-# SOLAR_CLIENT_GATEWAY_STOP_SCRIPT, SOLAR_CLIENT_LAUNCHCTL, and the restart hooks.
+# ---------------------------------------------------------------------------
+# Staging: the target version is prepared and checked beside the live install, which stays
+# exactly as it is. The update then runs from the staged copy (client_update_staged.sh), so
+# the old updater never replaces code before services stop.
+# ---------------------------------------------------------------------------
+
+# A staged tree is usable only when its own updater, library and state helpers are there and
+# parse. Args: stage_root (the directory that holds core/)
+solar_client_validate_staged() {
+  local stage_root="$1" file
+  for file in core/skills/solar-client/scripts/client_update_staged.sh \
+      core/skills/solar-client/scripts/client_lib.sh; do
+    if [[ ! -f "$stage_root/$file" ]]; then
+      echo "ERROR: the staged version has no $file: it cannot run the update sequence" >&2
+      return 1
+    fi
+    if ! bash -n "$stage_root/$file" 2>/dev/null; then
+      echo "ERROR: the staged $file does not parse" >&2
+      return 1
+    fi
+  done
+  solar_client_cutover_preflight "$stage_root"
+}
+
+# Write the hook that replaces the live code. It runs under the cutover's exclusive lock and
+# touches nothing else. Args: hook_path install_root mode target commit stage_root
+solar_client_write_apply_hook() {
+  local hook="$1" install_root="$2" mode="$3" target="$4" commit="$5" stage_root="$6"
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'set -euo pipefail'
+    printf 'INSTALL=%q\nTARGET=%q\nCOMMIT=%q\nSTAGE=%q\n' "$install_root" "$target" "$commit" "$stage_root"
+    if [[ "$mode" == git ]]; then
+      cat <<'HOOK'
+if [[ "$(git -C "$INSTALL" rev-parse -q --verify "$TARGET^{commit}" 2>/dev/null || true)" == "$COMMIT" ]]; then
+  git -C "$INSTALL" checkout --quiet "$TARGET"
+else
+  git -C "$INSTALL" checkout --quiet --detach "$COMMIT"
+fi
+if [[ "$(git -C "$INSTALL" rev-parse HEAD)" != "$COMMIT" ]]; then
+  echo "ERROR: the install is not at the staged commit after the checkout" >&2
+  exit 1
+fi
+HOOK
+    else
+      cat <<'HOOK'
+mkdir -p "$INSTALL/core"
+rsync -a --delete --exclude '.venv' --exclude '__pycache__' --exclude 'node_modules' \
+  "$STAGE/core/" "$INSTALL/core/"
+HOOK
+    fi
+  } >"$hook"
+  chmod +x "$hook"
+}
+
+# Prepare the target beside the install. Prints the stage root (the directory that holds core/)
+# and writes <staging>/apply-hook.sh. The live install's files are not changed (a git fetch
+# only brings refs and objects). Args: install_root mode(git|bundle) target staging yes
+#   bundle mode also: bundle_script from_dev(true|false)
+solar_client_stage_update() {
+  local install_root="$1" mode="$2" target="$3" staging="$4" yes="${5:-false}"
+  local bundle_script="${6:-}" from_dev="${7:-true}" stage_root commit
+  mkdir -p "$staging"
+  if [[ "$mode" == git ]]; then
+    if ! git -C "$install_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      echo "ERROR: SOLAR_ROOT is not a git repository: $install_root" >&2
+      return 1
+    fi
+    if ! solar_client_git_clean "$install_root"; then
+      echo "WARN: SOLAR_ROOT has uncommitted changes" >&2
+      if [[ "$yes" != true ]]; then
+        echo "ERROR: re-run with --yes to update anyway" >&2
+        return 1
+      fi
+    fi
+    if [[ -z "$target" ]]; then
+      echo "ERROR: git update requires an explicit ref (stable release or --ref)" >&2
+      return 1
+    fi
+    solar_client_git_fetch "$install_root" >&2
+    if ! commit="$(git -C "$install_root" rev-parse "$target^{commit}" 2>/dev/null)"; then
+      echo "ERROR: tag/ref not found after fetch: $target" >&2
+      return 1
+    fi
+    stage_root="$staging/tree"
+    rm -rf "$stage_root"
+    git clone --quiet --shared --no-checkout "$install_root" "$stage_root" >&2
+    git -C "$stage_root" checkout --quiet --detach "$commit" >&2
+  else
+    if [[ ! -f "$bundle_script" ]]; then
+      echo "ERROR: bundle script not found: $bundle_script" >&2
+      return 1
+    fi
+    stage_root="$staging/bundle"
+    rm -rf "$stage_root"
+    local -a bundle_args=(--output "$stage_root" --force)
+    if [[ "$from_dev" == true && -z "$target" ]]; then
+      bundle_args+=(--from-dev)
+    else
+      bundle_args+=(--from-tag "$target")
+    fi
+    bash "$bundle_script" "${bundle_args[@]}" >&2
+    commit=""
+  fi
+  solar_client_validate_staged "$stage_root" || return 1
+  solar_client_write_apply_hook "$staging/apply-hook.sh" "$install_root" "$mode" "$target" "$commit" "$stage_root"
+  printf '%s\n' "$stage_root"
+}
+
+# ---------------------------------------------------------------------------
+# Maintenance barrier and update events.
+#
+# An update holds <runtime>/maintenance.json from before anything stops until the new code,
+# the new schema and the services it restarted are verified. It lives outside the schema and
+# under the control of the client: every claim of solar-state, and every launcher, refuses to
+# start work while it exists. It records the phase, the versions and the services that were
+# running, so a crashed update can be resumed (`solar client update --resume`). It is never
+# released by age: only the operation that took it, or a person resuming it, releases it.
+# ---------------------------------------------------------------------------
+
+solar_client_maintenance_file() {
+  printf '%s/maintenance.json\n' "$(solar_runtime_root)"
+}
+
+solar_client_update_events_file() {
+  printf '%s\n' "${SOLAR_CLIENT_UPDATE_EVENTS_FILE:-$(solar_runtime_root)/update-events.jsonl}"
+}
+
+# One line of JSON per phase, in the order they happened. Args: event [key=value ...]
+solar_client_update_event() {
+  local events
+  events="$(solar_client_update_events_file)"
+  python3 - "$events" "$@" <<'PY'
+import json, os, sys, time
+path, event, *pairs = sys.argv[1:]
+row = {"event": event, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "pid": os.getppid()}
+for pair in pairs:
+    key, _, value = pair.partition("=")
+    row[key] = value
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(row, sort_keys=True) + "\n")
+PY
+}
+
+# Take the barrier. Fails (3) when one is already held: an unfinished update is resumed or
+# diagnosed, never overwritten.
+# Args: operation install_root from_identity to_identity services launchagent_loaded staging apply_hook
+solar_client_maintenance_begin() {
+  python3 - "$(solar_client_maintenance_file)" "$$" "$@" <<'PY'
+import json, os, sys, time
+path, pid, op, install, frm, to, services, loaded, staging, hook = sys.argv[1:11]
+payload = {"operation": op, "install_root": install, "phase": "maintenance", "from": frm, "to": to,
+           "services": [s for s in services.split(",") if s], "launchagent_loaded": loaded == "true",
+           "staging": staging, "apply_hook": hook, "updater_pid": int(pid),
+           "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+os.makedirs(os.path.dirname(path), exist_ok=True)
+try:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+except FileExistsError:
+    sys.exit(3)
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, sort_keys=True)
+    fh.write("\n")
+PY
+}
+
+# Record how far the operation got. Atomic replace; the barrier stays held.
+solar_client_maintenance_phase() {
+  python3 - "$(solar_client_maintenance_file)" "$1" <<'PY'
+import json, os, sys
+path, phase = sys.argv[1:3]
+with open(path, encoding="utf-8") as fh:
+    data = json.load(fh)
+data["phase"] = phase
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, sort_keys=True)
+    fh.write("\n")
+os.replace(tmp, path)
+PY
+}
+
+# One field of the barrier ("services" joined with commas). Empty when there is none.
+solar_client_maintenance_field() {
+  python3 - "$(solar_client_maintenance_file)" "$1" <<'PY'
+import json, sys
+path, field = sys.argv[1:3]
+try:
+    value = json.load(open(path, encoding="utf-8")).get(field, "")
+except Exception:
+    value = ""
+if isinstance(value, list):
+    value = ",".join(str(v) for v in value)
+elif isinstance(value, bool):
+    value = "true" if value else "false"
+print(value)
+PY
+}
+
+solar_client_maintenance_held() {
+  [[ -e "$(solar_client_maintenance_file)" ]]
+}
+
+# Release only a barrier this operation took. Args: operation
+solar_client_maintenance_release() {
+  local file
+  file="$(solar_client_maintenance_file)"
+  [[ -e "$file" ]] || return 0
+  if [[ "$(solar_client_maintenance_field operation)" != "$1" ]]; then
+    echo "ERROR: the maintenance barrier belongs to another operation; not releasing it" >&2
+    return 1
+  fi
+  rm -f "$file"
+}
+
+# What the barrier says, for a person. Reads only.
+solar_client_maintenance_report() {
+  solar_client_maintenance_held || return 0
+  local file
+  file="$(solar_client_maintenance_file)"
+  python3 - "$file" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    print("Update in progress: the maintenance barrier is unreadable; do not delete it, ask for help")
+    raise SystemExit(0)
+print(f"Update in progress: phase={data.get('phase')} from={data.get('from')} to={data.get('to')} "
+      f"since {data.get('started_at')}")
+print("  Claims and launchers are refused until it finishes. Run: solar client update --resume")
+PY
+}
+
+# ---------------------------------------------------------------------------
+# Draining the async-tasks side before anything is replaced.
+# ---------------------------------------------------------------------------
+
+# True (0) while anything of this install's async-tasks (a worker, an executor, the resident
+# supervisor) or a tick of the orchestrator is running. Prints what it saw.
+# Hooks: SOLAR_CLIENT_ASYNC_BUSY_COMMAND (exit 0 = busy), SOLAR_CLIENT_PS_OUTPUT_FILE.
+solar_client_async_busy() {
+  local install_root="$1"
+  if [[ -n "${SOLAR_CLIENT_ASYNC_BUSY_COMMAND:-}" ]]; then
+    bash -c "$SOLAR_CLIENT_ASYNC_BUSY_COMMAND" && { echo "simulated async activity"; return 0; }
+    return 1
+  fi
+  local resolved commands root found=""
+  resolved="$(_resolve_abs "$install_root" 2>/dev/null || echo "$install_root")"
+  if [[ -n "${SOLAR_CLIENT_PS_OUTPUT_FILE:-}" ]]; then
+    commands="$(cat "$SOLAR_CLIENT_PS_OUTPUT_FILE")"
+  elif [[ -n "${SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE-}" ]]; then
+    return 1      # services are simulated and no process table was given: nothing to look at
+  else
+    commands="$(ps -axo pid=,command= 2>/dev/null || true)"
+  fi
+  for root in "${install_root%/}" "${resolved%/}"; do
+    found+="$(grep -F -e "$root/core/skills/solar-async-tasks/scripts/" \
+      -e "$root/core/skills/solar-system/scripts/run_orchestrator.sh" <<<"$commands" || true)"
+  done
+  [[ -n "$found" ]] || return 1
+  printf '%s\n' "$found" | head -5
+  return 0
+}
+
+# The adapter that lets the old executors finish. The one-shot worker has no drain request:
+# the ticks are already paused, so it is waited for. The resident supervisor (when one runs)
+# is asked to drain through its own stop script and never killed. No uncertain owner is
+# stopped, killed or retried: a timeout ends the update here.
+# Args: install_root [timeout_seconds]
+solar_client_drain_async() {
+  local install_root="$1"
+  local timeout="${2:-${SOLAR_CLIENT_DRAIN_TIMEOUT:-120}}"
+  local stop_script service seen_supervisor=false waited=0
+  stop_script="${SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT:-${install_root}/core/skills/solar-async-tasks/scripts/stop_supervisor.sh}"
+  while IFS= read -r service; do
+    [[ "$service" == "async-supervisor" ]] && seen_supervisor=true
+  done < <(solar_client_running_services "$install_root")
+  solar_client_update_event drain-start "timeout=$timeout" "supervisor=$seen_supervisor"
+  if [[ "$seen_supervisor" == true ]]; then
+    if [[ ! -f "$stop_script" ]]; then
+      echo "ERROR: the async supervisor is running and this install has no way to drain it ($stop_script). Nothing was changed." >&2
+      solar_client_update_event drain-refused "reason=no_supervisor_stop"
+      return 1
+    fi
+    echo "Drain: asking the async supervisor to finish its executions"
+    if ! bash "$stop_script" --drain --timeout "$timeout"; then
+      echo "ERROR: the async supervisor did not drain. Nothing was replaced; the maintenance barrier stays." >&2
+      solar_client_update_event drain-timeout "reason=supervisor"
+      return 1
+    fi
+  fi
+  local started=$SECONDS
+  while solar_client_async_busy "$install_root" >/dev/null; do
+    waited=$((SECONDS - started))
+    if [[ "$waited" -ge "$timeout" ]]; then
+      echo "ERROR: async-tasks were still running after ${timeout}s:" >&2
+      solar_client_async_busy "$install_root" | sed 's/^/  /' >&2 || true
+      echo "Nothing was replaced and no work was stopped. The maintenance barrier stays; finish or cancel the work and run: solar client update --resume" >&2
+      solar_client_update_event drain-timeout "reason=executions" "waited=$waited"
+      return 1
+    fi
+    sleep "${SOLAR_CLIENT_DRAIN_POLL:-1}"
+  done
+  waited=$((SECONDS - started))
+  solar_client_update_event drain-done "waited=$waited"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Verification after the new code and schema are in place.
+# ---------------------------------------------------------------------------
+
+# The schema number the code of this install expects (empty when it cannot be read).
+solar_client_expected_schema() {
+  local state_py
+  state_py="$(solar_client_state_py "$1")"
+  [[ -f "$state_py" ]] || return 0
+  python3 - "$state_py" <<'PY' 2>/dev/null || true
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("solar_state_probe", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules["solar_state_probe"] = module
+spec.loader.exec_module(module)
+print(module.SCHEMA_VERSION)
+PY
+}
+
+# Code identity and schema, before anything is started or the barrier lifted. A runtime with
+# no state base has nothing to verify. Hook: SOLAR_CLIENT_READINESS_COMMAND (exit 0 = ready).
+# Args: install_root expected_identity("version commit" or empty)
+solar_client_update_readiness() {
+  local install_root="$1" expected="${2:-}" runtime state_py status
+  if [[ -n "${SOLAR_CLIENT_READINESS_COMMAND:-}" ]]; then
+    bash -c "$SOLAR_CLIENT_READINESS_COMMAND"
+    return $?
+  fi
+  if [[ -n "$expected" ]]; then
+    local current
+    read -r current_ver current_commit < <(solar_client_git_identity "$install_root")
+    current="$current_ver $current_commit"
+    if [[ "$current_commit" != unknown && "$current" != "$expected" ]]; then
+      echo "ERROR: the installed code is '$current', the update expected '$expected'" >&2
+      return 1
+    fi
+  fi
+  runtime="$(solar_runtime_root)"
+  [[ -f "$runtime/state.sqlite" ]] || return 0
+  state_py="$(solar_client_state_py "$install_root")"
+  status="$(python3 "$state_py" --root "$runtime" status 2>&1)" || {
+    echo "ERROR: the state is not ready: $status" >&2
+    return 1
+  }
+  if ! python3 -c 'import json,sys
+info = json.loads(sys.argv[1])
+raise SystemExit(0 if info.get("ready") and info.get("schema") == info.get("expected_schema") else 1)' "$status"; then
+    echo "ERROR: the state is not ready for this code: $status" >&2
+    return 1
+  fi
+  return 0
+}
+
+# One process drives an update at a time. The barrier says WHAT is in progress and survives a
+# crash; this lock says that a process is driving it NOW, for the whole sequence, so a
+# `--resume` (or a second update, or a sync) cannot run next to the original. The lock names the
+# process and its start time; a lock whose process is gone is taken over, a lock whose owner
+# cannot be verified (now, or when it was written) is respected. Exit 3: another process holds it.
+solar_client_operation_lock_file() {
+  printf '%s/maintenance.lock\n' "$(solar_runtime_root)"
+}
+
+solar_client_operation_lock_acquire() {
+  python3 - "$(solar_client_operation_lock_file)" "$$" <<'PY'
+import json, os, subprocess, sys
+
+path, pid = sys.argv[1], int(sys.argv[2])
+
+
+def start_of(number):
+    """Start time as ps prints it; None when the process is not running; '?' when unknown."""
+    try:
+        done = subprocess.run(["ps", "-o", "lstart=", "-p", str(number)], capture_output=True,
+                              text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+    if done.stdout.strip():
+        return done.stdout.strip()
+    return None if done.returncode == 1 and not done.stderr.strip() else "?"
+
+
+def create():
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"pid": pid, "start": start_of(pid)}, fh)
+        fh.write("\n")
+
+
+os.makedirs(os.path.dirname(path), exist_ok=True)
+try:
+    create()
+    sys.exit(0)
+except FileExistsError:
+    pass
+try:
+    text = open(path, encoding="utf-8").read()
+    owner = json.loads(text)
+    owner_pid = int(owner["pid"])
+except (OSError, ValueError, KeyError, TypeError):
+    print("the operation lock is unreadable", file=sys.stderr)
+    sys.exit(3)
+alive = start_of(owner_pid)
+recorded = owner.get("start")
+# A recorded start that is unknown ("?") proves nothing about who the pid is now: while any
+# process holds that pid the lock is respected. Only a known, different start (pid reuse) or a
+# pid nobody runs lets it go.
+if alive == "?" or (alive is not None and (recorded in (None, "?") or alive == recorded)):
+    print(f"pid {owner_pid}", file=sys.stderr)
+    sys.exit(3)
+# The owner is gone (or the pid belongs to another process now): take the lock over. One taker
+# at a time: the operating system's file lock on the guard file, held until this process ends. A
+# taker that dies releases it by itself, so no guard is ever left behind, and nobody removes a
+# guard another taker holds (the guard file is never deleted). The lock is replaced only if it is
+# still the one that was judged stale.
+import fcntl
+guard = path + ".takeover"
+guard_fd = os.open(guard, os.O_RDWR | os.O_CREAT, 0o644)
+try:
+    fcntl.flock(guard_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    print("another process is taking the lock over", file=sys.stderr)
+    sys.exit(3)
+try:
+    if open(path, encoding="utf-8").read() != text:
+        sys.exit(3)
+    os.unlink(path)
+    create()
+except (FileExistsError, FileNotFoundError, OSError):
+    sys.exit(3)
+PY
+}
+
+# Release the lock only when this shell owns it.
+solar_client_operation_lock_release() {
+  python3 - "$(solar_client_operation_lock_file)" "$$" <<'PY'
+import json, os, sys
+path, pid = sys.argv[1], int(sys.argv[2])
+try:
+    if json.load(open(path, encoding="utf-8")).get("pid") == pid:
+        os.unlink(path)
+except (OSError, ValueError, AttributeError):
+    pass
+PY
+}
+
 solar_client_state_cutover() {
+  local rc held
+  if ! held="$(solar_client_operation_lock_acquire 2>&1)"; then
+    echo "ERROR: another update process is driving the runtime (${held:-unknown}). Nothing was changed;" >&2
+    echo "       wait for it to end, or run: solar client update --resume once it has stopped." >&2
+    return 1
+  fi
+  _solar_client_state_cutover_locked "$@"
+  rc=$?
+  solar_client_operation_lock_release
+  return "$rc"
+}
+
+# Stop what Solar starts, migrate the runtime, then start what was running, all under a
+# maintenance barrier. Order: barrier, ticks paused, drain, services stopped, cutover (which
+# applies the code first when an apply hook is given), services started, readiness, ticks
+# resumed, barrier released. A failure keeps the services stopped and the barrier held.
+# restart_mode "never" migrates and leaves everything stopped, the barrier held, until
+# `solar client update --resume`. Args: install_root [restart_mode] [apply_hook] [resume]
+# (Called through solar_client_state_cutover, which holds the operation lock.)
+# Test hooks: SOLAR_CLIENT_CUTOVER_SCRIPT, SOLAR_CLIENT_CUTOVER_ROOT,
+# SOLAR_CLIENT_GATEWAY_STOP_SCRIPT, SOLAR_CLIENT_LAUNCHCTL, SOLAR_CLIENT_DRAIN_TIMEOUT,
+# SOLAR_CLIENT_ASYNC_BUSY_COMMAND, SOLAR_CLIENT_READINESS_COMMAND and the restart hooks.
+_solar_client_state_cutover_locked() {
   local install_root="$1"
   local restart_mode="${2:-auto}"
+  local apply_hook="${3:-}"
+  local resume="${4:-}"
   local state_skill="solar-state"
   local cutover_py gateway_stop stop_script start_script setup_script
   local services=" " service failed=0 launchagent_was_loaded=false
-  local launchagent_label plist
+  local launchagent_label plist operation phase
   cutover_py="${SOLAR_CLIENT_CUTOVER_SCRIPT:-${install_root}/core/skills/${state_skill}/scripts/solar_state_cutover.py}"
   gateway_stop="${SOLAR_CLIENT_GATEWAY_STOP_SCRIPT:-${install_root}/core/skills/solar-gateway/scripts/stop_transport_gateway.sh}"
   stop_script="${SOLAR_CLIENT_HOST_STOP_SCRIPT:-${install_root}/core/skills/solar-app/scripts/stop_host.sh}"
@@ -1767,62 +2270,128 @@ solar_client_state_cutover() {
   fi
   runtime="$(solar_runtime_root)"
   identity="$(solar_client_cutover_identity "$workspace" "$install_root")"
-  if solar_client_cutover_marker_matches "$runtime" "$identity"; then
+  # The helper of the version being installed runs the cutover, from the staged copy, while the
+  # live code is still the old one. Once the code is replaced the live one is the same helper.
+  if [[ -z "${SOLAR_CLIENT_CUTOVER_SCRIPT:-}" && -n "${SOLAR_CLIENT_UPDATE_STAGING:-}" \
+      && -f "${SOLAR_CLIENT_UPDATE_STAGING}/core/skills/${state_skill}/scripts/solar_state_cutover.py" ]]; then
+    cutover_py="${SOLAR_CLIENT_UPDATE_STAGING}/core/skills/${state_skill}/scripts/solar_state_cutover.py"
+  fi
+  if [[ -z "$apply_hook" && -z "$resume" ]] && solar_client_cutover_marker_matches "$runtime" "$identity" "$install_root"; then
     echo "State: cutover already applied for this install; not stopping services"
     return 0
   fi
 
-  while IFS= read -r service; do
-    [[ -n "$service" ]] && services+="$service "
-  done < <(solar_client_running_services "$install_root")
-
-  if [[ "$(uname -s)" == "Darwin" || -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
-    if [[ -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
-      if bash "$SOLAR_CLIENT_LAUNCHCTL" print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1; then
-        launchagent_was_loaded=true
-        echo "State: stopping LaunchAgent ${launchagent_label}"
-        bash "$SOLAR_CLIENT_LAUNCHCTL" bootout "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
-      fi
-    elif launchctl print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1; then
-      launchagent_was_loaded=true
-      echo "State: stopping LaunchAgent ${launchagent_label}"
-      launchctl bootout "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
+  read -r target_ver target_commit < <(solar_client_git_identity "$install_root")
+  operation="update-$$-$(date +%s)"
+  if [[ -n "$resume" ]]; then
+    if ! solar_client_maintenance_held; then
+      echo "State: no update is in progress; nothing to resume"
+      return 0
     fi
-  fi
-  if [[ "$services" == *" host "* && -f "$stop_script" ]]; then
-    echo "State: stopping console"
-    bash "$stop_script" || true
-  fi
-  if [[ "$services" == *" gateway "* && -f "$gateway_stop" ]]; then
-    echo "State: stopping transport gateway"
-    bash "$gateway_stop" || true
+    operation="$(solar_client_maintenance_field operation)"
+    phase="$(solar_client_maintenance_field phase)"
+    while IFS= read -r service; do
+      [[ -n "$service" ]] && services+="$service "
+    done < <(solar_client_maintenance_field services | tr ',' '\n')
+    [[ "$(solar_client_maintenance_field launchagent_loaded)" == true ]] && launchagent_was_loaded=true
+    [[ -n "$apply_hook" ]] || apply_hook="$(solar_client_maintenance_field apply_hook)"
+    echo "State: resuming update $operation at phase $phase"
+    solar_client_update_event resume "phase=$phase" "operation=$operation"
+  else
+    while IFS= read -r service; do
+      [[ -n "$service" ]] && services+="$service "
+    done < <(solar_client_running_services "$install_root")
+    if [[ "$(uname -s)" == "Darwin" || -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
+      if [[ -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
+        bash "$SOLAR_CLIENT_LAUNCHCTL" print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 && launchagent_was_loaded=true
+      elif launchctl print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1; then
+        launchagent_was_loaded=true
+      fi
+    fi
+    local from_ver from_commit staging
+    read -r from_ver from_commit < <(solar_client_git_identity "$install_root")
+    staging="${SOLAR_CLIENT_UPDATE_STAGING:-}"
+    if ! solar_client_maintenance_begin "$operation" "$install_root" "$from_ver $from_commit" \
+        "${SOLAR_CLIENT_UPDATE_TARGET_IDENTITY:-$target_ver $target_commit}" \
+        "$(printf '%s' "$services" | xargs | tr ' ' ',')" "$launchagent_was_loaded" "$staging" "$apply_hook"; then
+      echo "ERROR: another update holds the maintenance barrier." >&2
+      solar_client_maintenance_report >&2 || true
+      echo "Nothing was stopped. Resume it with: solar client update --resume" >&2
+      return 1
+    fi
+    echo "State: maintenance barrier taken; claims and launchers are refused until the update ends"
+    solar_client_update_event maintenance "operation=$operation" "services=${services# }"
+    phase=maintenance
   fi
 
-  echo "State: migrating the runtime"
-  local -a cutover_args=(migrate)
-  if [[ -n "${SOLAR_CLIENT_CUTOVER_ROOT:-}" ]]; then
-    cutover_args+=(--root "$SOLAR_CLIENT_CUTOVER_ROOT")
+  # Each step is skipped on a resume that already got past it.
+  if [[ "$phase" == maintenance ]]; then
+    if [[ "$launchagent_was_loaded" == true ]]; then
+      echo "State: pausing LaunchAgent ${launchagent_label}"
+      if [[ -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
+        bash "$SOLAR_CLIENT_LAUNCHCTL" bootout "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
+      else
+        launchctl bootout "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
+      fi
+    fi
+    solar_client_update_event ticks-paused
+    solar_client_maintenance_phase ticks-paused
+    phase=ticks-paused
   fi
-  if ! SOLAR_STATE_ALLOW_CUTOVER=1 python3 "$cutover_py" "${cutover_args[@]}"; then
-    echo "ERROR: state migration failed. Stopped services were not started." >&2
-    return 1
+  if [[ "$phase" == ticks-paused ]]; then
+    if ! solar_client_drain_async "$install_root"; then
+      echo "ERROR: the async work did not drain. Nothing was replaced." >&2
+      return 1
+    fi
+    solar_client_maintenance_phase drained
+    phase=drained
   fi
+  if [[ "$phase" == drained ]]; then
+    if [[ "$services" == *" host "* && -f "$stop_script" ]]; then
+      echo "State: stopping console"
+      bash "$stop_script" || true
+    fi
+    if [[ "$services" == *" gateway "* && -f "$gateway_stop" ]]; then
+      echo "State: stopping transport gateway"
+      bash "$gateway_stop" || true
+    fi
+    solar_client_update_event services-stopped
+    solar_client_maintenance_phase stopped
+    phase=stopped
+  fi
+
+  if [[ "$phase" == stopped || "$phase" == cutover-started ]]; then
+    echo "State: migrating the runtime"
+    solar_client_maintenance_phase cutover-started
+    local -a cutover_args=(migrate)
+    if [[ -n "${SOLAR_CLIENT_CUTOVER_ROOT:-}" ]]; then
+      cutover_args+=(--root "$SOLAR_CLIENT_CUTOVER_ROOT")
+    fi
+    cutover_args+=(--events-file "$(solar_client_update_events_file)")
+    [[ -n "$apply_hook" ]] && cutover_args+=(--apply-hook "$apply_hook")
+    if ! SOLAR_STATE_ALLOW_CUTOVER=1 python3 "$cutover_py" "${cutover_args[@]}"; then
+      echo "ERROR: state migration failed. Stopped services were not started; the maintenance barrier stays." >&2
+      echo "       Evidence: $(solar_client_update_events_file). Backups: $runtime/state-backups/" >&2
+      solar_client_update_event cutover-failed
+      return 1
+    fi
+    solar_client_update_event cutover-done
+    solar_client_maintenance_phase cutover-done
+    phase=cutover-done
+  fi
+
   if [[ "$restart_mode" == "never" ]]; then
-    echo "State: migrated. Services left stopped (--no-restart)."
-    solar_client_write_cutover_marker "$runtime" "$identity"
+    echo "State: migrated. Services and ticks left stopped (--no-restart); the maintenance barrier stays."
+    echo "       Start them with: solar client update --resume"
+    solar_client_maintenance_phase held-no-restart
+    solar_client_update_event held-no-restart
+    solar_client_write_cutover_marker "$runtime" "$(solar_client_cutover_identity "$workspace" "$install_root")" "$install_root"
     return 0
   fi
 
-  if [[ "$launchagent_was_loaded" == true ]]; then
-    plist="${HOME}/Library/LaunchAgents/${launchagent_label}.plist"
-    echo "State: starting LaunchAgent ${launchagent_label}"
-    if [[ -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
-      bash "$SOLAR_CLIENT_LAUNCHCTL" bootstrap "gui/${UID}" "$plist" || failed=1
-    elif [[ -f "$plist" ]]; then
-      launchctl bootstrap "gui/${UID}" "$plist" || failed=1
-      launchctl kickstart -k "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
-    fi
-  fi
+  solar_client_maintenance_phase restarting
+  solar_client_update_event restart-start
+  # Services first; the ticks come back only after the code and schema were verified.
   if [[ "$services" == *" gateway "* && -f "$setup_script" ]]; then
     echo "State: starting transport gateway"
     bash "$setup_script" --restart || failed=1
@@ -1831,10 +2400,45 @@ solar_client_state_cutover() {
     echo "State: starting console"
     bash "$start_script" || failed=1
   fi
-  if [[ "$failed" -eq 0 ]]; then
-    solar_client_write_cutover_marker "$runtime" "$identity"
+  if [[ "$services" == *" async-supervisor "* ]]; then
+    echo "State: the async supervisor is started again by the next tick (ensure), after the release"
   fi
-  return "$failed"
+  if [[ "$failed" -eq 0 ]]; then
+    solar_client_update_event readiness-check
+    if solar_client_update_readiness "$install_root" "${SOLAR_CLIENT_UPDATE_TARGET_IDENTITY:-$(solar_client_maintenance_field to)}"; then
+      solar_client_update_event readiness-ok
+    else
+      failed=1
+      solar_client_update_event readiness-failed
+    fi
+  fi
+  if [[ "$failed" -ne 0 ]]; then
+    solar_client_maintenance_phase restart-failed
+    echo "ERROR: restart or readiness failed. The ticks stay paused and the maintenance barrier stays." >&2
+    return 1
+  fi
+  if [[ "$launchagent_was_loaded" == true ]]; then
+    plist="${HOME}/Library/LaunchAgents/${launchagent_label}.plist"
+    echo "State: resuming LaunchAgent ${launchagent_label}"
+    if [[ -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
+      bash "$SOLAR_CLIENT_LAUNCHCTL" bootstrap "gui/${UID}" "$plist" || failed=1
+    elif [[ -f "$plist" ]]; then
+      launchctl bootstrap "gui/${UID}" "$plist" || failed=1
+      launchctl kickstart -k "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
+    fi
+    solar_client_update_event ticks-resumed
+  fi
+  if [[ "$failed" -ne 0 ]]; then
+    solar_client_maintenance_phase restart-failed
+    echo "ERROR: the LaunchAgent could not be resumed. The maintenance barrier stays." >&2
+    return 1
+  fi
+  # The identity of the code that is installed now, not the one the update started from.
+  solar_client_write_cutover_marker "$runtime" "$(solar_client_cutover_identity "$workspace" "$install_root")" "$install_root"
+  solar_client_update_event release "operation=$operation"
+  solar_client_maintenance_release "$operation" || return 1
+  echo "State: update verified; maintenance barrier released"
+  return 0
 }
 
 # After an update, Python services keep the old code in memory until restarted.

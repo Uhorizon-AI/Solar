@@ -151,7 +151,7 @@ Resolve paths first (`resolve_solar_paths.sh` + `solar_paths.py`, in `solar-path
 ```bash
 solar client init
 solar client update [options]
-# common: --check | --repair | --ref/--tag | --bundle | --reinstall-launchagent | --no-restart | --restart
+# common: --check | --repair | --ref/--tag | --bundle | --reinstall-launchagent | --no-restart | --restart | --resume
 # --check is read-only (incompatible with --reinstall-launchagent; never restarts services,
 #   so --restart / --no-restart do not apply to it)
 solar client upgrade [--check|--restructure]
@@ -202,12 +202,18 @@ update (not with `--check`): it rewrites the plist and restarts the transport
 gateway; if gateway restart fails after a successful LaunchAgent reinstall, the
 command exits non-zero.
 
-When the installed version changes, a real update restarts the long-running
-services that are already running (transport gateway, console on :9000) so they
-load the new code; nothing that is stopped gets started, and the async-tasks
-worker needs no restart. `--no-restart` skips this; `--restart` forces it even
-when the version did not change. If a restart fails, the update still applies,
-the manual command is printed and the command exits non-zero.
+A real update prepares the target version in a staging copy first (the live install is not
+touched), then runs the target's own `client_update_staged.sh`: a maintenance barrier refuses every
+claim and launcher, the ticks are paused, the async work drains (120 s; a timeout aborts before
+anything is replaced), the console and gateway stop, and under the exclusive state lock the
+runtime is backed up, the code is replaced and the schema migrated and validated. Only then are
+the services that were running started, the code and schema verified, the ticks resumed and the
+barrier released (`async-supervisor` is among the services detected and drained). A failure keeps
+the services stopped and the barrier held; `solar client update --resume` continues the same
+operation. `--no-restart` stops after the migration and holds the barrier until `--resume`;
+`--check` writes nothing. `solar client sync` takes the same barrier. A first installation from
+a release older than this one runs the staged entrypoint by hand with explicit paths. Details:
+`core/docs/execution-reservations.md`.
 
 `solar status` maps orchestrator `HEALTHY|PARTIAL|DOWN` → `OK|WARN|FAIL`. On WARN/FAIL, the `system` line points to `check_orchestrator.sh` for detail (no inline remediations).
 

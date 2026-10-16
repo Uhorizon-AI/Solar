@@ -21,10 +21,13 @@ done
 ensure_dirs
 
 run_cycle() {
-    local out_start out_exec
-    out_start=$("$SCRIPT_DIR/start_next.sh" 2>&1)
+    local out_start out_exec claim_file claimed_id claimed_token
+    claim_file="$(mktemp "${TMPDIR:-/tmp}/solar-claim.XXXXXX")"
+    : >"$claim_file"
+    out_start=$(SOLAR_CLAIM_FILE="$claim_file" "$SCRIPT_DIR/start_next.sh" 2>&1)
     local ret_start=$?
     if [[ $ret_start -ne 0 ]]; then
+        rm -f "$claim_file"
         log_msg "start_next.sh failed (exit $ret_start): $out_start"
         return $ret_start
     fi
@@ -33,7 +36,21 @@ run_cycle() {
         echo "$out_start"
     fi
 
-    out_exec=$("$SCRIPT_DIR/execute_active.sh" --once 2>&1)
+    # The executor takes exactly the task that was claimed, with its token. Without a claim
+    # (nothing started now) it looks for an active task nobody runs: a manual activation, or
+    # one whose owner is gone; execute_active.sh decides that through the reservation.
+    claimed_id=""
+    claimed_token=""
+    if [[ -s "$claim_file" ]]; then
+        claimed_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$claim_file")"
+        claimed_token="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$claim_file")"
+    fi
+    rm -f "$claim_file"
+    if [[ -n "$claimed_id" ]]; then
+        out_exec=$("$SCRIPT_DIR/execute_active.sh" --task "$claimed_id" --token "$claimed_token" 2>&1)
+    else
+        out_exec=$("$SCRIPT_DIR/execute_active.sh" --once 2>&1)
+    fi
     local ret_exec=$?
     if [[ $ret_exec -ne 0 ]]; then
         log_msg "execute_active.sh failed (exit $ret_exec): $out_exec"

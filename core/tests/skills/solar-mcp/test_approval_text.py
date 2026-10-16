@@ -11,6 +11,7 @@ import mcp_approve
 import mcp_server
 import operations
 from mcp_helpers import new_task, run, stored
+from reservation_tokens import token_of
 
 
 def text(operation, arguments, lang="en"):
@@ -393,7 +394,8 @@ def test_requeue_shows_what_would_run_again(solar_env):
         run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
         with solar_state.session() as store:
             store.task_transition(made["id"], "active", expected_from="queued", actor="t", claimed_by="w", claimed_at="2026-01-01T00:00:00Z")
-            store.task_transition(made["id"], "error", expected_from="active", actor="t")
+            store.task_transition(made["id"], "error", expected_from="active", actor="t",
+                                  token=token_of(store, made["id"]))
         return made, text("task.requeue", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
     first_task, first = errored("Read the finance folder", "Writes one report.")
     _, second = errored("Delete old backups", "Removes files.")

@@ -37,6 +37,13 @@ None
 | `delegation_events`, `delegation_streams` | The `events` and `shadow` streams of each A3 mandate; a stream exists even when empty |
 | `subtask_plans` | The children a parent declared, JSON verbatim |
 | `cancellation_requests` | Pending cancellation requests |
+| `async_policy` | The applied execution configuration: capacity (initially 1), provider limits, exclusive wait. Every claim reads it |
+| `execution_reservations`, `reservation_scopes`, `reservation_resources` | One place per active task: its execution token, lease, owner process, scopes and resources |
+| `task_authorizations`, `claim_waits` | Provenance of a derived (subtask) authorization; the clock of an exclusive task that waits to start |
+
+Taking a place and becoming `active` are one transaction, with the same rules for every entry
+point, and completing, releasing or failing an active task needs its execution token. Contract:
+`core/docs/execution-reservations.md`.
 
 Not here, on purpose: the mandates themselves (YAML that Louis writes in
 `sun/delegations/`), execution logs (files; a task keeps the path), and state
@@ -104,8 +111,9 @@ python3 "$SCRIPT_DIR/../../solar-state/scripts/solar_state.py" status   # says w
    value, a missing base or an older schema refuses with `StateUnavailable`
    (only a cutover upgrades a base, see 5). It never falls back to reading the
    old files.
-5. **Schema migrations run only inside a cutover**, with a copy of the base
-   first, once nothing else is running. A session never upgrades under other
+5. **Schema migrations run only inside a cutover** (`cutover()`, exclusive lock,
+   owner checked), with a copy of the base first, once nothing else is running;
+   an update may replace the code under that same lock (`migrate --apply-hook`). A session never upgrades under other
    readers. **A released migration never changes**: v1 is pinned by a test;
    changes go in a new version. A migration runs inside a transaction, so it
    uses no `VACUUM`, `PRAGMA`, `ATTACH` or transaction control.

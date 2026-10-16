@@ -61,6 +61,20 @@ Compared on **physical paths** (`realpath`), never on strings:
 
 When both are the same directory and detection is real, the guard aborts.
 
+## Update-sequence tests
+
+`core/tests/skills/solar-client/test_update_sequence.py` runs the real `client_update.sh`,
+`client_update_staged.sh` and cutover helper against a temporary git install, workspace and
+runtime, calling `solar_test_guard --services` first. Services, the LaunchAgent, the supervisor
+stop and the async work are doubles that write their steps into the update's own event log
+(`SOLAR_CLIENT_UPDATE_EVENTS_FILE`), so the order is asserted from one file. Hooks added for
+this: `SOLAR_CLIENT_ASYNC_BUSY_COMMAND` (exit 0 = async work running),
+`SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT`, `SOLAR_CLIENT_DRAIN_TIMEOUT`, `SOLAR_CLIENT_DRAIN_POLL`,
+`SOLAR_CLIENT_READINESS_COMMAND`. A shell test that stubs `SOLAR_CLIENT_CUTOVER_SCRIPT` for a
+full update uses `core/tests/support/cutover_stub.py`, which runs the apply hook like the real
+helper. Never run the shell tests with `SOLAR_ROOT` pointing at a working tree you care about:
+some of them prune an install.
+
 ## The console port
 
 No test starts the real console or occupies port 9000.

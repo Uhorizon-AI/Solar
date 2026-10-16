@@ -10,6 +10,7 @@ import pytest
 
 import solar_state
 from solar_state import TaskChanged, TransitionRefused, scheduled_now
+from reservation_tokens import token_of
 
 MADRID = "Europe/Madrid"
 
@@ -224,7 +225,7 @@ def test_archive_keeps_the_row_the_body_and_every_event(ready):
     with solar_state.session() as store:
         task_id = make(store, status="queued", recurring="true")
         store.task_claim_next("w")
-        store.task_complete(task_id)     # recurring: back to queued
+        store.task_complete(task_id, token=token_of(store, task_id))     # recurring: back to queued
         version = store.task_get(task_id)["row_version"]
         events_before = store.conn.execute(
             "SELECT COUNT(*) FROM task_events WHERE task_id = ?", (task_id,)).fetchone()[0]
@@ -313,7 +314,7 @@ def test_cancel_and_requeue_honour_an_expected_version(ready):
         assert not store.cancellation_requested(queued)
         failed = make(store, status="queued")
         store.task_claim_next("w", exclude=[queued])
-        store.task_fail(failed, "boom")
+        store.task_fail(failed, "boom", token=token_of(store, failed))
         version = store.task_get(failed)["row_version"]
         with pytest.raises(TaskChanged):
             store.task_requeue(failed, expected_row_version=version + 1)
