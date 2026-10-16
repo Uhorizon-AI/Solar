@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-10-16
+
 ### Added
 - Execution reservations (schema v6, applied only by the cutover, with a backup first): taking a place and becoming `active` are one transaction for `task_claim`, `task_claim_next`, `activate.sh`, the worker and the generic move to `active`. Global capacity (initially `1`), provider limits, declared access (`access_policy`: read/write, canonical scopes with parent/child overlap and symlink aliases, exclusive resources), tasks that declare nothing run alone, and a drain barrier so a stream of readers cannot starve an exclusive task after `exclusive_wait_seconds`. Contract: `core/docs/execution-reservations.md`.
 - Execution token: the claim returns it; completing, releasing, failing, awaiting and recording a pid need it, with a lease and heartbeat; `execute_active.sh --task <id> --token <token>` runs exactly the claimed task and `--once` only takes over an execution nobody runs. `start_next.sh` writes the claim to `$SOLAR_CLAIM_FILE`.
