@@ -66,5 +66,19 @@ PY
 PASS=$((PASS + 1))
 assert_ok "orchestrator writes the stamp" grep -q 'write_pass_stamp.sh' "$ORCH"
 
+# The vocabulary: every result a consumer already knows, plus the two the supervisor adds.
+for state in ok failed skipped deprecated ignored starting blocked; do
+  assert_ok "feature result '$state' is accepted" bash "$WRITER" --feature "async-tasks=$state" --gateway-json null
+  assert_ok "feature result '$state' is stored as written" python3 - "$STAMP" "$state" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["features"] == {"async-tasks": sys.argv[2]}, data
+PY
+done
+assert_ok "an unknown result is still refused" bash -c '! bash "$1" --feature async-tasks=maybe --gateway-json null 2>/dev/null' _ "$WRITER"
+before="$(cat "$STAMP")"
+bash "$WRITER" --feature async-tasks=maybe --gateway-json null 2>/dev/null || true
+assert_ok "a refused result leaves the previous stamp intact" test "$(cat "$STAMP")" = "$before"
+
 echo "$PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

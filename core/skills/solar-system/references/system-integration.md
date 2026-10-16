@@ -13,7 +13,7 @@
 
 Supported `SOLAR_SYSTEM_FEATURES` tokens (orchestrator tick only):
 
-- `async-tasks` -> `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh`
+- `async-tasks` -> `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` (observes the resident supervisor and starts one candidate when none is alive; exit `0` ready, `10` starting, `20` blocked, `1` failed; see `core/docs/async-supervisor.md`)
 - `transport-gateway` -> `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
 - `host` -> `ensure_host.sh` (read-only Solar console on `:9000`)
 
