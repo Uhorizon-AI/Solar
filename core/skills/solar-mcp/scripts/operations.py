@@ -77,7 +77,9 @@ _COPIED = ("priority", "provider", "planet", "agent", "responsibility", "agent_c
            "object", "scope", "effect", "notify_when", "origin_channel", "origin_chat_id",
            "resources", "cleanup_required", "cleanup_timeout",
            "scheduled_time", "scheduled_weekdays", "scheduled_timezone", "recurring",
-           "recurring_min_interval", "recurring_max_runs")
+           "recurring_min_interval", "recurring_max_runs",
+           # What a revision may touch stays what its source declared; evidence digests do not carry over.
+           "access_policy", "execution_profile")
 _TEXT_FIELDS = ("title", "object", "scope", "effect", "provider", "planet", "agent",
                 "responsibility")
 
@@ -97,6 +99,16 @@ def _fm(value) -> str:
     if isinstance(value, int):
         return str(value)
     return json.dumps(value, ensure_ascii=False)
+
+
+def _access_text(declared: dict) -> str:
+    """The canonical stored spelling of an access declaration, or a refusal that says why."""
+    import solar_state
+
+    try:
+        return solar_state.canonical_policy_text("access_policy", dict(declared, version=1))
+    except solar_state.FormatError as exc:
+        raise OperationError("access_policy_invalid", str(exc)) from None
 
 
 def _body(title: str, instructions: str) -> str:
@@ -136,6 +148,8 @@ def _do_task_create(arguments: dict) -> dict:
         merged.setdefault("priority", "normal")
         if "priority" in arguments:
             merged["priority"] = arguments["priority"]
+        if "access_policy" in arguments:
+            merged["access_policy"] = _access_text(arguments["access_policy"])
         fields += list(merged.items())
         if source_id:
             fields.append(("revises_task_id", json.dumps(source_id)))
@@ -202,6 +216,8 @@ def _do_task_update(arguments: dict) -> dict:
     fields = {key: _fm(value) for key, value in changes.items() if key in _TEXT_FIELDS}
     if "priority" in changes:
         fields["priority"] = changes["priority"]
+    if "access_policy" in changes:
+        fields["access_policy"] = _access_text(changes["access_policy"])
     body = None
     definition = None
     title = changes.get("title", old_title)
@@ -264,6 +280,50 @@ def _do_task_approve(arguments: dict) -> dict:
     stored = {key: solar_state.value_of(rest) for key, rest in task["frontmatter"]}
     return dict(approved=True, id=task_id, from_status=came, to_status="queued",
                 approved_digest=stored.get("approved_digest"), row_version=task["row_version"])
+
+
+def _do_async_propose(arguments: dict) -> dict:
+    import solar_state
+
+    with solar_state.session() as store:
+        applied = store.async_policy()
+        document = dict(
+            schema_version=solar_state.POLICY_SCHEMA_VERSION, revision=applied["revision"] + 1,
+            global_capacity=arguments["global_capacity"],
+            provider_capacity=({item["provider"]: item["limit"] for item in arguments["provider_limits"]}
+                               if "provider_limits" in arguments else applied["provider_capacity"]),
+            exclusive_wait_seconds=arguments.get("exclusive_wait_seconds",
+                                                 applied["exclusive_wait_seconds"]),
+            enabled_reader_profiles=sorted(arguments.get("enabled_reader_profiles",
+                                                         applied["enabled_reader_profiles"])))
+        normalized = solar_state.validate_policy_document(document, applied["revision"])
+        path = solar_state.write_proposal(normalized, store.root)
+    return dict(proposed=True, revision=normalized["revision"], path=str(path),
+                proposal_digest=solar_state.policy_digest(normalized), applied=False,
+                next="Apply it with async_execution.apply using this revision and digest.")
+
+
+def _do_async_apply(arguments: dict) -> dict:
+    import solar_state
+
+    with solar_state.session() as store:
+        proposal = solar_state.read_proposal(store.root)
+        if not proposal["present"]:
+            raise OperationError("proposal_missing", "There is no proposal file; prepare one with "
+                                 "async_execution.propose.")
+        document = proposal["document"]
+        if (not isinstance(document, dict) or document.get("revision") != arguments["revision"]):
+            raise OperationError("proposal_changed", "The proposal file is not the revision that was approved.")
+        try:
+            applied = store.async_policy_apply(document, actor=_actor("async_execution.apply"),
+                                               expected_digest=arguments["proposal_digest"])
+        except solar_state.PolicyInvalid as exc:
+            code = "proposal_changed" if "digest" in str(exc) else "policy_invalid"
+            raise OperationError(code, str(exc)) from None
+    return dict(applied=True, revision=applied["revision"], global_capacity=applied["global_capacity"],
+                provider_capacity=applied["provider_capacity"],
+                exclusive_wait_seconds=applied["exclusive_wait_seconds"],
+                enabled_reader_profiles=applied["enabled_reader_profiles"])
 
 
 def _do_task_return_to_draft(arguments: dict) -> dict:
@@ -392,25 +452,37 @@ _TIME = {"type": "string", "maxLength": 5, "pattern": r"([01]\d|2[0-3]):[0-5]\d"
 _ZONE = {"type": "string", "minLength": 3, "maxLength": 64, "pattern": r"[A-Za-z0-9_+/-]+",
          "description": "IANA zone, e.g. Europe/Madrid."}
 _APPROVED_ONLY = "Does not queue or run anything."
+_SCOPE = {"type": "string", "minLength": 1, "maxLength": 1000, "pattern": r"/[^\x00-\x1f\x7f]*",
+          "description": "Absolute path."}
+_ACCESS = _obj(dict(
+    mode={"type": "string", "enum": ["read", "write"]},
+    scopes={"type": "array", "items": _SCOPE, "maxItems": 32, "uniqueItems": True,
+            "description": "Files or folders the task touches. A writer needs at least one."},
+    resources={"type": "array", "items": SLUG, "maxItems": 32, "uniqueItems": True,
+               "description": "Resources held exclusively while it runs, e.g. a browser session."}),
+    required=("mode",))
+_CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 
 OPERATIONS: dict[str, Operation] = {op.name: op for op in (
     Operation(
         "task.create", A2, "Create a draft task, or a draft revision of an existing task.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),
                   effect=LINE(500), priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
-                  responsibility=SLUG, revises_task_id=TASK_ID),
+                  responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS),
              required=("title", "instructions")),
-        errors=("task_not_found", "revision_unsupported"),
+        errors=("task_not_found", "revision_unsupported", "access_policy_invalid"),
         effects="Writes one draft row. " + _APPROVED_ONLY + " revises_task_id copies "
-                "configuration and schedule from that task and leaves it untouched."),
+                "configuration, schedule and access declaration from that task and leaves it untouched. "
+                "access_policy declares what the task reads or writes; a task that declares nothing runs alone."),
     Operation(
         "task.update", A2, "Edit the content of a draft, planned or queued task.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION, title=_TITLE,
                   instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500), effect=LINE(500),
                   priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
-                  responsibility=SLUG), required=("task_id", "expected_row_version")),
+                  responsibility=SLUG, access_policy=_ACCESS),
+             required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable",
-                "no_changes"),
+                "no_changes", "access_policy_invalid"),
         effects="Rewrites the draft. A planned task returns to draft. A queued task that is only "
                 "renamed keeps its place and its approval; any other change returns it to draft and "
                 "withdraws the approval. Results, delivery and errors of earlier runs are kept. "
@@ -466,6 +538,31 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                 "archived in one step. Refused while the task is active, while another task waits "
                 "on it, or while its subtasks run."),
     Operation(
+        "async_execution.propose", A2,
+        "Prepare the next revision of the async execution configuration (capacity and limits) as a readable file.",
+        _obj(dict(global_capacity=_CAPACITY,
+                  provider_limits={"type": "array", "maxItems": 16, "items": _obj(
+                      dict(provider=SLUG, limit=_CAPACITY), required=("provider", "limit"))},
+                  exclusive_wait_seconds={"type": "integer", "minimum": 1, "maximum": 86400},
+                  enabled_reader_profiles={"type": "array", "items": SLUG, "maxItems": 16,
+                                           "uniqueItems": True}),
+             required=("global_capacity",)),
+        errors=("policy_invalid", "state_unavailable"),
+        effects="Writes <runtime>/async-tasks/config/async-execution.json with the next revision. "
+                "The file is only a proposal: nothing changes until async_execution.apply applies it. "
+                "Fields not named keep the applied values."),
+    Operation(
+        "async_execution.apply", A2,
+        "Apply a prepared revision of the async execution configuration to the runtime.",
+        _obj(dict(revision={"type": "integer", "minimum": 1, "maximum": 1_000_000},
+                  proposal_digest={"type": "string", "minLength": 64, "maxLength": 64,
+                                   "pattern": r"[0-9a-f]{64}"}),
+             required=("revision", "proposal_digest")),
+        errors=("proposal_missing", "proposal_changed", "policy_invalid", "state_unavailable"),
+        effects="Replaces the applied policy in one transaction if the file still holds exactly the "
+                "approved revision and digest and validates; otherwise the applied policy stays. Every "
+                "claim reads the applied revision. Lowering the capacity never stops a running task."),
+    Operation(
         "telegram.send", A2, "Send one Telegram message as the Solar runtime.",
         _obj(dict(text={"type": "string", "minLength": 1, "maxLength": 4096},
                   chat_id={"type": "string", "maxLength": 33, "pattern": r"-?\d{1,20}|@[A-Za-z0-9_]{5,32}"},
@@ -491,6 +588,8 @@ HANDLERS: dict[str, Callable[[dict], dict]] = {
     "task.cancel": _do_task_cancel,
     "task.requeue": _do_task_requeue,
     "task.archive": _do_task_archive,
+    "async_execution.propose": _do_async_propose,
+    "async_execution.apply": _do_async_apply,
     "telegram.send": _do_telegram_send,
     "action.run": _do_action_run,
 }
@@ -504,6 +603,8 @@ def error_code(exc: Exception) -> str:
         return exc.code
     if isinstance(exc, solar_state.TaskChanged):
         return "task_changed"
+    if isinstance(exc, solar_state.PolicyInvalid):
+        return "policy_invalid"
     if isinstance(exc, solar_state.TransitionRefused):
         return "task_state_refused"
     if isinstance(exc, solar_state.StateUnavailable):

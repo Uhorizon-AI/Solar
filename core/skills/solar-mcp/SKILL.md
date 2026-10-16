@@ -101,7 +101,7 @@ Operations (each is gated on its own name, arguments and authority):
 
 | Operation | Authority | Passes when / does |
 |---|---|---|
-| `task.create` | A2 | Native confirmation or an exact-call approval. Stores a **draft**. `revises_task_id` copies configuration, schedule, execution restrictions (`origin_channel`), notification destination and resource hooks from another task and leaves it untouched. Cannot queue |
+| `task.create` | A2 | Native confirmation or an exact-call approval. Stores a **draft**. `access_policy` (`mode` read/write, absolute `scopes`, exclusive `resources`) declares what the task touches; a task that declares nothing runs alone (`task.update` takes it too, and changing it withdraws the approval). `revises_task_id` copies configuration, schedule, execution restrictions (`origin_channel`), notification destination and resource hooks from another task and leaves it untouched. Cannot queue |
 | `task.update` | A2 | Same. Edits a draft or planned task under `expected_row_version`. A planned task returns to draft. A queued task that is only renamed keeps id, place and approval; any other change returns it to draft and withdraws the approval in the same transaction (results of earlier runs and run counters stay). Refused for active (`task_active_immutable`) and finished (`task_not_editable`) tasks |
 | `task.schedule` | A2 | Same. Time, ISO weekdays, an explicit IANA zone and recurrence for a draft, planned or queued task (a queued task returns to draft, counters kept). Never queues. Refuses an interval that would skip a run after a clock change |
 | `task.approve` | A2 | Same. The only operation that queues: the exact stored task at `expected_row_version`. Refuses an A3 mandate and a revision whose source can still run |
@@ -109,6 +109,8 @@ Operations (each is gated on its own name, arguments and authority):
 | `task.cancel` | A2 | Same, bound to `expected_row_version`. Cancels a queued task, or records the request for an active one |
 | `task.requeue` | A2 | Same, bound to `expected_row_version`. Moves an error task back to the queue and drops its `## Execution Error` section |
 | `task.archive` | A2 | Same. Archives keeping the row, body and events. A queued recurrence is cancelled first, in the same step. Refused while active, while another task waits on it, or while subtasks run |
+| `async_execution.propose` | A2 | Same. Writes `<runtime>/async-tasks/config/async-execution.json` with the next revision (capacity 1 to 5, provider limits, exclusive wait, reader profiles; unnamed fields keep the applied values) and returns its digest. A proposal only: nothing changes until it is applied |
+| `async_execution.apply` | A2 | Same, for one exact `revision` and `proposal_digest`. Applies that revision to the runtime's policy in one transaction if the file still holds exactly it and it validates; otherwise the applied policy stays. Every claim, manual or worker, reads the applied revision. A provider task never prepares or applies it |
 | `telegram.send` | A2 | Same, for one exact text and an explicit `chat_id`. Sending outside the machine is never implicit |
 | `action.run` | A3 | The skill and action are registered **and** the mandate registered for that skill is live. A skill registered without a mandate is refused; a caller-supplied mandate is only accepted if it equals the registered one |
 

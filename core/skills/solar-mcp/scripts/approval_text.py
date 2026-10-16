@@ -86,6 +86,16 @@ COPY = {
         missing="refused: the task was not found.",
         changed="This task changed after it was read, so this approval will be refused.",
         unreadable="The task could not be read, so the effect below could not be verified.",
+        access="Access", access_none="not declared: the task runs alone, with nothing else active",
+        access_read="reads", access_write="writes", access_resources="holds exclusively",
+        async_propose_head="Prepare the async execution configuration",
+        async_apply_head="Apply the async execution configuration",
+        async_capacity="Simultaneous tasks", async_providers="Limit per provider",
+        async_wait="Wait before an exclusive task closes the line", async_profiles="Reader profiles",
+        async_revision="Revision", async_kept="(as applied now)",
+        async_propose_effect="writes a proposal file. Nothing changes until it is applied.",
+        async_apply_effect="replaces the applied configuration with the prepared revision, only if the file still holds exactly this revision. Running tasks are never stopped; a lower capacity only limits new starts.",
+        seconds="{n} seconds",
     ),
     "es": dict(
         approve_title="Aprobar esta acción",
@@ -136,6 +146,16 @@ COPY = {
         missing="se rechaza: no se encontró la tarea.",
         changed="La tarea cambió después de leerla, así que esta aprobación será rechazada.",
         unreadable="No se pudo leer la tarea, así que no se pudo verificar el efecto de abajo.",
+        access="Acceso", access_none="sin declarar: la tarea se ejecuta sola, sin nada más activo",
+        access_read="lee", access_write="escribe", access_resources="reserva en exclusiva",
+        async_propose_head="Preparar la configuración de ejecución async",
+        async_apply_head="Aplicar la configuración de ejecución async",
+        async_capacity="Tareas simultáneas", async_providers="Límite por proveedor",
+        async_wait="Espera antes de que una tarea exclusiva cierre la cola", async_profiles="Perfiles de lector",
+        async_revision="Revisión", async_kept="(como está aplicada ahora)",
+        async_propose_effect="escribe un archivo de propuesta. No cambia nada hasta que se aplique.",
+        async_apply_effect="sustituye la configuración aplicada por la revisión preparada, solo si el archivo conserva exactamente esta revisión. Nunca detiene tareas en curso; una capacidad menor solo limita los nuevos arranques.",
+        seconds="{n} segundos",
     ),
 }
 
@@ -276,6 +296,23 @@ def _days(copy: dict, weekdays) -> str:
 # one renderer per operation
 # ---------------------------------------------------------------------------
 
+def _access_text(copy: dict, value) -> str:
+    """What a stored or proposed access declaration means, for a person."""
+    import solar_state
+
+    if value in (None, ""):
+        return copy["access_none"]
+    try:
+        policy = solar_state.parse_access_policy(value)
+    except solar_state.FormatError:
+        return _line(value, _VALUE)
+    text = copy["access_write" if policy["mode"] == "write" else "access_read"] + ": " + (
+        ", ".join(_line(path) for path in policy["scopes"]) or "—")
+    if policy["resources"]:
+        text += "; " + copy["access_resources"] + ": " + ", ".join(policy["resources"])
+    return _line(text, 2 * _VALUE)
+
+
 def _archive(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
@@ -307,6 +344,8 @@ def _create(copy, args):
     for key in ("object", "scope", "effect", "priority", "provider", "planet", "agent", "responsibility"):
         if key in args:
             rows.append((key, _line(args[key], _VALUE)))
+    if "access_policy" in args:
+        rows.append((copy["access"], _access_text(copy, dict(args["access_policy"], version=1))))
     rows.append((copy["instructions"], _excerpt(copy, args["instructions"])))
     rows.append((copy["effect"], copy["revise_effect" if source else "create_effect"]))
     return _head(copy, copy["revise_head" if source else "create_head"], rows, notes)
@@ -420,6 +459,11 @@ def _update(copy, args):
             material = material or key != "title"
             before, after = _pair(old, args[key])
             lines.append(f"{key}: {before or copy['none']} → {after}")
+    if "access_policy" in args:
+        new_access = _access_text(copy, dict(args["access_policy"], version=1))
+        if new_access != _access_text(copy, facts["values"].get("access_policy")):
+            material = True
+            lines.append(f"{copy['access']}: {_access_text(copy, facts['values'].get('access_policy'))} → {new_access}")
     if "instructions" in args and args["instructions"].rstrip() != facts["instructions"]:
         material = True
         lines.append(copy["instructions"] + ":")
@@ -508,6 +552,7 @@ def _context_rows(copy: dict, facts: dict) -> list:
         for key in ("local_command", "local_timeout"):
             if values.get(key):
                 rows.append((copy[key], _line(str(values[key]), _VALUE)))
+    rows.append((copy["access"], _access_text(copy, values.get("access_policy"))))
     if facts["recurring"]:
         rows.append((copy["repeats"], _repeats(copy, True, schedule.get("recurring_min_interval"),
                                                schedule.get("recurring_max_runs"))))
@@ -557,6 +602,50 @@ def _telegram(copy, args):
     return _head(copy, copy["send_head"], rows, [], [copy["message"] + ":", _quote(_verbatim(args["text"]))])
 
 
+def _applied_policy() -> dict | None:
+    import solar_state
+
+    try:
+        with solar_state.read_session() as store:
+            return store.async_policy()
+    except Exception:  # noqa: BLE001 - the prompt must still appear
+        return None
+
+
+def _async_propose(copy, args):
+    applied = _applied_policy() or {}
+    kept = copy["async_kept"]
+    providers = (", ".join(f"{item['provider']}: {item['limit']}" for item in args["provider_limits"]) or copy["none"]
+                 if "provider_limits" in args else
+                 (", ".join(f"{k}: {v}" for k, v in sorted((applied.get("provider_capacity") or {}).items()))
+                  or copy["none"]) + " " + kept)
+    wait = (copy["seconds"].format(n=args["exclusive_wait_seconds"]) if "exclusive_wait_seconds" in args
+            else copy["seconds"].format(n=applied.get("exclusive_wait_seconds", 60)) + " " + kept)
+    profiles = (", ".join(args["enabled_reader_profiles"]) or copy["none"]) if "enabled_reader_profiles" in args \
+        else (", ".join(applied.get("enabled_reader_profiles") or []) or copy["none"]) + " " + kept
+    rows = [(copy["async_capacity"], f"{applied.get('global_capacity', '?')} → {args['global_capacity']}"),
+            (copy["async_providers"], providers), (copy["async_wait"], wait),
+            (copy["async_profiles"], profiles), (copy["effect"], copy["async_propose_effect"])]
+    return _head(copy, copy["async_propose_head"], rows, [])
+
+
+def _async_apply(copy, args):
+    import solar_state
+
+    proposal = solar_state.read_proposal()
+    document = proposal["document"] if isinstance(proposal["document"], dict) else {}
+    applied = _applied_policy() or {}
+    rows = [(copy["async_revision"], f"{applied.get('revision', '?')} → {args['revision']}"),
+            (copy["async_capacity"], f"{applied.get('global_capacity', '?')} → {document.get('global_capacity', '?')}"),
+            (copy["async_providers"], ", ".join(f"{k}: {v}" for k, v in sorted(
+                (document.get("provider_capacity") or {}).items())) or copy["none"]),
+            (copy["async_wait"], copy["seconds"].format(n=document.get("exclusive_wait_seconds", "?"))),
+            (copy["async_profiles"], ", ".join(document.get("enabled_reader_profiles") or []) or copy["none"]),
+            (copy["effect"], copy["async_apply_effect"])]
+    notes = [] if document.get("revision") == args["revision"] else ["changed"]
+    return _head(copy, copy["async_apply_head"], rows, notes)
+
+
 # Defence in depth: a renderer that fails (or a future operation without one) must not print
 # identifiers or versions; today only action.run and forced failures reach the fallback.
 _INTERNAL = {"task_id", "expected_row_version", "approval_id", "revises_task_id"}
@@ -573,6 +662,7 @@ def _generic(copy, name, args):
 RENDERERS = {"task.archive": _archive, "task.create": _create, "task.update": _update,
              "task.schedule": _schedule, "task.approve": _approve, "task.cancel": _cancel,
              "task.requeue": _requeue, "task.return_to_draft": _return_to_draft,
+             "async_execution.propose": _async_propose, "async_execution.apply": _async_apply,
              "telegram.send": _telegram}
 
 

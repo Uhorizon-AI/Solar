@@ -14,6 +14,7 @@ import pytest
 import solar_state
 import task_views
 from mcp_helpers import execute, run, search, stored
+from reservation_tokens import token_of
 
 MADRID = "Europe/Madrid"
 TITLE = "Marketing: Weekly AI News"
@@ -142,7 +143,7 @@ def test_the_queue_runs_it_at_17_local_on_both_sides_of_a_clock_change(solar_env
         assert store.task_claim_next("w", now=at(2027, 3, 26, 14, 0)) is None        # 15:00 local
         assert store.task_claim_next("w", now=at(2027, 3, 26, 16, 1))["id"] == made["id"]  # 17:01 CET
         store.task_set(made["id"], "recurring_last_run", json.dumps("2027-03-26T16:12:00Z"))
-        store.task_complete(made["id"])
+        store.task_complete(made["id"], token=token_of(store, made["id"]))
         assert store.task_get(made["id"])["status"] == "queued"
         # The next Friday the clock reads CEST: 15:01Z is 17:01 local. One week minus an hour has passed.
         assert store.task_claim_next("w", now=at(2027, 4, 2, 16, 1)) is None         # 18:01 local: too late

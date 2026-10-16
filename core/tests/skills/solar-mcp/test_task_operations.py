@@ -9,6 +9,7 @@ import pytest
 import mcp_server
 import solar_state
 from mcp_helpers import execute, new_task, run, search, stored
+from reservation_tokens import token_of
 
 MADRID = "Europe/Madrid"
 
@@ -79,13 +80,13 @@ def test_finished_tasks_keep_what_was_approved(solar_env, status):
         if status != "queued":
             store.task_claim_next("w")
             if status == "completed":
-                store.task_complete(task_id)
+                store.task_complete(task_id, token=token_of(store, task_id))
             elif status == "error":
-                store.task_fail(task_id, "\n## Execution Error\n\nboom\n")
+                store.task_fail(task_id, "\n## Execution Error\n\nboom\n", token=token_of(store, task_id))
             elif status == "cancelled":
-                store.task_complete(task_id, cancelled=True)
+                store.task_complete(task_id, cancelled=True, token=token_of(store, task_id))
             else:
-                store.task_complete(task_id, cancelled=True)
+                store.task_complete(task_id, cancelled=True, token=token_of(store, task_id))
                 store.task_transition(task_id, "archived", expected_from="cancelled")
         version = store.task_get(task_id)["row_version"]
     for operation, extra in (("task.update", dict(instructions="Hijacked.")),
@@ -259,7 +260,7 @@ def test_requeue_moves_an_error_back_and_drops_the_error(solar_env):
     with solar_state.session() as store:
         task_id = store.task_create([("title", '"T"')], "\n# T\n\nSteps.\n", status="queued")
         store.task_claim_next("w")
-        store.task_fail(task_id, "\n## Execution Error\n\nboom\n")
+        store.task_fail(task_id, "\n## Execution Error\n\nboom\n", token=token_of(store, task_id))
         assert "Execution Error" in store.task_get(task_id)["body"]
     out = run("task.requeue", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"]))
     task = stored(task_id)

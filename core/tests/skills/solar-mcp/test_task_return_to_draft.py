@@ -8,6 +8,7 @@ import operations
 import solar_state
 from mcp_helpers import call, execute, new_task, run, search, stored
 from test_task_operations import refuse
+from reservation_tokens import token_of
 
 
 def approved_task(title="Weekly", instructions="Do the work.", **extra):
@@ -121,7 +122,7 @@ def test_renaming_a_queued_error_does_not_requeue_it(solar_env):
     with solar_state.session() as store:
         task_id = store.task_create([("title", '"Boom"')], "\n# Boom\n\nSteps.\n", status="queued")
         store.task_claim_next("w")
-        store.task_fail(task_id, "\n## Execution Error\n\nboom\n")
+        store.task_fail(task_id, "\n## Execution Error\n\nboom\n", token=token_of(store, task_id))
     body, error = execute("task.update", dict(task_id=task_id, title="Renamed",
                                               expected_row_version=stored(task_id)["row_version"]))
     assert error and body["code"] == "task_not_editable"
@@ -179,7 +180,7 @@ def test_an_active_or_finished_task_is_still_not_edited(solar_env):
     refuse("task.update", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"],
                                title="Renamed"), "task_active_immutable")
     with solar_state.session() as store:
-        store.task_complete(task_id)
+        store.task_complete(task_id, token=token_of(store, task_id))
     refuse("task.update", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"],
                                title="Renamed"), "task_not_editable")
 
