@@ -530,34 +530,71 @@ def test_a_lock_left_by_a_dead_process_is_taken_over_but_an_unverifiable_one_is_
     assert rig.marker() == "NEW" and rig.barrier() is None and not lock.exists()
 
 
-def _stale_lock_and_guard(rig, guard_owner):
+def _stale_lock_and_guard(rig, guard_text=None):
     rig.runtime_state(5)
     no_supervisor = dict(SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host", SOLAR_CLIENT_DRAIN_TIMEOUT="1")
     assert rig.update("--ref", "v0.0.2", "--yes", env_extra=no_supervisor).returncode != 0
     rig.busy.unlink()
     lock = rig.rt / "maintenance.lock"
     lock.write_text(json.dumps(dict(pid=dead_pid(), start="Thu Jan  1 00:00:00 1970")))
-    (rig.rt / "maintenance.lock.takeover").write_text(json.dumps(guard_owner))
+    if guard_text is not None:
+        (rig.rt / "maintenance.lock.takeover").write_text(guard_text)
     return no_supervisor
 
 
-def test_a_takeover_guard_left_by_a_killed_taker_does_not_close_the_lock_for_good(rig):
-    env = _stale_lock_and_guard(rig, dict(pid=dead_pid(), start="Thu Jan  1 00:00:00 1970"))
+def test_a_guard_file_left_by_a_killed_taker_does_not_close_the_lock_for_good(rig):
+    """The guard is an operating-system file lock: a taker that died holds nothing, whatever
+    the file it left behind says."""
+    env = _stale_lock_and_guard(rig, json.dumps(dict(pid=dead_pid(), start="?")))
     resumed = rig.update("--resume", env_extra=env)
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
-    assert rig.marker() == "NEW" and not (rig.rt / "maintenance.lock.takeover").exists()
+    assert rig.marker() == "NEW"
 
 
-def test_a_takeover_guard_of_a_live_taker_is_respected(rig):
-    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+def test_a_takeover_guard_held_by_a_live_taker_is_respected(rig):
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import fcntl, os, sys, time\n"
+         "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\n"
+         "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+         "print('held', flush=True)\n"
+         "time.sleep(60)\n", str(rig.rt / "maintenance.lock.takeover")],
+        stdout=subprocess.PIPE, text=True)
     try:
-        env = _stale_lock_and_guard(rig, dict(pid=holder.pid, start="?"))
+        assert holder.stdout.readline().strip() == "held"
+        env = _stale_lock_and_guard(rig)
         refused = rig.update("--resume", env_extra=env)
         assert refused.returncode != 0 and "another update process is driving" in refused.stderr
-        assert (rig.rt / "maintenance.lock.takeover").exists() and rig.marker() == "OLD"
+        assert rig.marker() == "OLD"
     finally:
         holder.kill()
         holder.wait()
+
+
+def test_two_simultaneous_recoverers_of_a_stale_lock_have_one_winner(tmp_path):
+    """Both judge the same lock stale at the same moment: one takes it, the other is refused,
+    and nobody removes a lock that belongs to the winner."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    lock = runtime / "maintenance.lock"
+    script = (
+        'source "$LIB"; while [ ! -f "$GO" ]; do :; done; '
+        'if solar_client_operation_lock_acquire 2>/dev/null; then echo "won $$"; sleep 4; else echo lost; fi')
+    env = dict(os.environ, LIB=str(SCRIPTS / "client_lib.sh"), GO=str(tmp_path / "go"),
+               SOLAR_RUNTIME_ROOT=str(runtime))
+    for _ in range(5):
+        (tmp_path / "go").unlink(missing_ok=True)
+        lock.write_text(json.dumps(dict(pid=dead_pid(), start="Thu Jan  1 00:00:00 1970")))
+        procs = [subprocess.Popen(["bash", "-c", script], env=env, stdout=subprocess.PIPE, text=True)
+                 for _ in range(2)]
+        time.sleep(1)
+        (tmp_path / "go").write_text("")
+        time.sleep(2)
+        owner = json.loads(lock.read_text())["pid"]            # still the winner's, mid-sleep
+        results = [p.communicate(timeout=30)[0].split() for p in procs]
+        winners = [r for r in results if r and r[0] == "won"]
+        assert len(winners) == 1 and sorted(r[0] for r in results) == ["lost", "won"], results
+        assert str(owner) == winners[0][1]
 
 
 def test_a_lock_written_without_a_verifiable_start_is_not_stolen_from_a_live_owner(rig):

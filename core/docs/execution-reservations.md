@@ -134,7 +134,10 @@ A failure keeps the services stopped and the barrier held; `solar client update 
 the same operation from its recorded phase. One process drives it at a time: an operation lock
 (`<runtime>/maintenance.lock`, the pid and start time of the driver) is held for the whole sequence,
 so a `--resume`, a second update or a sync is refused while the original is alive. A lock whose
-process is gone is taken over; one whose owner cannot be verified is respected. `--no-restart` stops after step 4 and holds the
+process is gone is taken over; one whose owner cannot be verified, now or when the lock was
+written, is respected. Only one process takes a stale lock over at a time: it holds an
+operating-system file lock on `maintenance.lock.takeover`, which the system releases if the process
+dies (the file is never removed, so nobody can take another taker's guard away). `--no-restart` stops after step 4 and holds the
 barrier until `--resume`. `--check` writes nothing. The event log (`<runtime>/update-events.jsonl`)
 records the order. `solar client sync` uses the same barrier and order without a code replacement.
 
