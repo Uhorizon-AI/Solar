@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -322,6 +323,188 @@ def test_a_sqlite_format_is_not_trusted_blindly(runtime, breakage):
     with pytest.raises(cut.CutoverRefused, match="refusing|schema"):
         cut.migrate(runtime, lister=quiet)
     assert (runtime / "async-tasks" / "completed" / "parent-task.md").is_file()   # nothing moved
+
+
+def _downgrade(runtime: Path, to: int) -> None:
+    """The base a release behind this code would have left: schema `to`, without what the
+    last migration added. That only models a v4 while the last migration (v5) merely
+    inserts rows, so it is checked: a later migration with DDL needs its own downgrade."""
+    assert all(statement.lstrip().upper().startswith("INSERT")
+               for statement in st._statements(st.MIGRATIONS[-1])), \
+        "the last migration changes the structure: model the older base with _v1_base or a real dump"
+    conn = sqlite3.connect(st.db_path(runtime))
+    conn.execute("DELETE FROM transitions WHERE from_status = 'queued' AND to_status = 'draft'")
+    conn.execute(f"PRAGMA user_version = {to}")
+    conn.commit()
+    conn.close()
+
+
+def _v1_base(runtime: Path) -> None:
+    """Replace the base with one at schema v1, the first migration and its seed only."""
+    path = st.db_path(runtime)
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
+    conn = sqlite3.connect(path)
+    for statement in st._statements(st.MIGRATIONS[0]):
+        conn.execute(statement)
+    conn.executemany("INSERT INTO statuses (name) VALUES (?)", [(name,) for name in st.STATUSES])
+    conn.executemany("INSERT INTO transitions VALUES (?, ?)", st.TRANSITIONS)
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+
+def _schema(runtime: Path) -> tuple:
+    conn = sqlite3.connect(st.db_path(runtime))
+    try:
+        return (st._schema_version(conn),
+                {row[0] for row in conn.execute("SELECT name FROM sqlite_master")},
+                set(conn.execute("SELECT from_status, to_status FROM transitions")))
+    finally:
+        conn.close()
+
+
+def _backups(runtime: Path) -> list:
+    return list(runtime.rglob("state-v*-to-v*.sqlite"))
+
+
+def test_a_migrated_base_behind_in_schema_is_upgraded_not_refused(runtime):
+    """`solar client update` after a release that adds a migration: format already sqlite."""
+    cut.migrate(runtime, lister=quiet)
+    _downgrade(runtime, st.SCHEMA_VERSION - 1)
+    assert ("queued", "draft") not in _schema(runtime)[2]
+    assert cut.migrate(runtime, lister=quiet)["already"] is True
+    version, _, transitions = _schema(runtime)
+    assert version == st.SCHEMA_VERSION and ("queued", "draft") in transitions
+    conn = sqlite3.connect(st.db_path(runtime))
+    try:
+        assert conn.execute("SELECT count(*) FROM tasks").fetchone()[0] > 0     # rows kept
+    finally:
+        conn.close()
+    assert len(_backups(runtime)) == 1
+    assert cut.migrate(runtime, lister=quiet)["already"] is True    # a second run changes nothing
+    assert len(_backups(runtime)) == 1
+
+
+def test_a_base_several_versions_behind_is_brought_to_the_current_one(runtime):
+    cut.migrate(runtime, lister=quiet)
+    _v1_base(runtime)
+    assert _schema(runtime)[0] == 1
+    assert cut.migrate(runtime, lister=quiet)["already"] is True
+    version, tables, transitions = _schema(runtime)
+    assert version == st.SCHEMA_VERSION and ("queued", "draft") in transitions
+    assert {"tasks", "task_events", "audit", "continuity"} <= tables
+    assert [path.name.startswith(f"state-v1-to-v{st.SCHEMA_VERSION}-") for path in _backups(runtime)] == [True]
+
+
+def test_a_failing_migration_leaves_the_base_as_it_was(runtime, monkeypatch):
+    cut.migrate(runtime, lister=quiet)
+    _v1_base(runtime)
+    before = _schema(runtime)
+    broken = st.MIGRATIONS[:-1] + ("CREATE TABLE half_done (x); THIS IS NOT SQL",)
+    monkeypatch.setattr(st, "MIGRATIONS", broken)
+    with pytest.raises(cut.CutoverRefused, match="could not be upgraded"):
+        cut.migrate(runtime, lister=quiet)
+    assert _schema(runtime) == before           # no version applied, not even the ones before the bad one
+    assert _backups(runtime) == []              # and no copy of a base nothing changed was left
+
+
+@pytest.mark.parametrize("error", [st.StateError("boom"), sqlite3.OperationalError("boom")])
+def test_an_upgrade_that_raises_is_a_refusal_and_moves_nothing(runtime, monkeypatch, error):
+    with pytest.raises(RuntimeError):
+        cut.migrate(runtime, lister=quiet, _fail_at="after-format")
+    _downgrade(runtime, st.SCHEMA_VERSION - 1)
+
+    def boom(self):
+        raise error
+    monkeypatch.setattr(st.Cutover, "upgrade_schema", boom)
+    with pytest.raises(cut.CutoverRefused, match="could not be upgraded"):
+        cut.migrate(runtime, lister=quiet)
+    assert (runtime / "async-tasks" / "completed" / "parent-task.md").is_file()   # nothing moved
+
+
+class _Watched:
+    """A read-only connection that counts the integrity checks and can report damage."""
+    def __init__(self, conn, seen, damaged=False):
+        self._conn, self._seen, self._damaged = conn, seen, damaged
+
+    def execute(self, sql, *args):
+        if sql == "PRAGMA integrity_check":
+            self._seen.append(sql)
+            if self._damaged:
+                return self._conn.execute("SELECT 'row 1 missing from index'")
+        return self._conn.execute(sql, *args)
+
+    def close(self):
+        self._conn.close()
+
+
+def test_a_base_that_fails_its_integrity_check_is_not_upgraded(runtime, monkeypatch):
+    cut.migrate(runtime, lister=quiet)
+    _downgrade(runtime, st.SCHEMA_VERSION - 1)
+    upgraded, checks = [], []
+    real = sqlite3.connect
+    with monkeypatch.context() as m:
+        m.setattr(st.Cutover, "upgrade_schema", lambda self: upgraded.append(1))
+        m.setattr(cut.sqlite3, "connect",
+                  lambda *a, **k: _Watched(real(*a, **k), checks, damaged=True))
+        with pytest.raises(cut.CutoverRefused, match="schema"):
+            cut.migrate(runtime, lister=quiet)
+    assert checks, "the integrity check never ran"
+    assert upgraded == [] and _schema(runtime)[0] == st.SCHEMA_VERSION - 1
+
+
+class _Untouched:
+    """A cutover that fails the test if anything calls it."""
+    def __getattr__(self, name):
+        raise AssertionError(f"the cutover was used ({name}) for a base that needed nothing")
+
+
+def test_a_base_that_is_up_to_date_is_not_integrity_checked_by_the_upgrade_step(runtime, monkeypatch):
+    cut.migrate(runtime, lister=quiet)
+    checks = []
+    real = sqlite3.connect
+    with monkeypatch.context() as m:
+        m.setattr(cut.sqlite3, "connect", lambda *a, **k: _Watched(real(*a, **k), checks))
+        cut._upgrade_older_schema(st.db_path(runtime), _Untouched())
+    assert checks == []
+
+
+def test_a_broken_base_is_refused_without_waiting_for_the_runtime_to_go_quiet(runtime):
+    cut.migrate(runtime, lister=quiet)
+    (runtime / cut.MARKER_NAME).unlink()
+
+    def busy():
+        raise AssertionError("waited before refusing a base that has no marker")
+    with pytest.raises(cut.CutoverRefused, match="marker"):
+        cut.migrate(runtime, lister=busy)
+
+
+def test_the_upgrade_waits_for_quiet_before_it_changes_the_base(runtime):
+    cut.migrate(runtime, lister=quiet)
+    _downgrade(runtime, st.SCHEMA_VERSION - 1)
+    with pytest.raises(cut.CutoverRefused, match="still running"):
+        cut.migrate(runtime, wait=0.1, lister=lambda: [(4242, "python3 execute_active.py")])
+    assert _schema(runtime)[0] == st.SCHEMA_VERSION - 1
+
+
+def test_no_migration_needs_to_run_outside_a_transaction():
+    """`upgrade_schema` applies every version in one transaction, a new base included."""
+    for number, migration in enumerate(st.MIGRATIONS, 1):
+        for statement in st._statements(migration):
+            head = statement.lstrip().split(None, 1)[0].upper()
+            assert head not in {"VACUUM", "PRAGMA", "BEGIN", "COMMIT", "ROLLBACK", "ATTACH"}, \
+                f"migration v{number} has a {head} statement that cannot run in a transaction"
+
+
+def test_a_base_ahead_of_this_code_is_still_refused(runtime):
+    cut.migrate(runtime, lister=quiet)
+    conn = sqlite3.connect(st.db_path(runtime))
+    conn.execute(f"PRAGMA user_version = {st.SCHEMA_VERSION + 1}")
+    conn.commit()
+    conn.close()
+    with pytest.raises(cut.CutoverRefused, match="schema"):
+        cut.migrate(runtime, lister=quiet)
 
 
 def test_a_resumed_migration_brings_in_what_old_code_wrote_meanwhile(runtime):
