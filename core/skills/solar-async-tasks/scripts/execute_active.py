@@ -19,6 +19,8 @@ import pathlib
 import re
 import shlex
 import subprocess
+import threading
+import time
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -42,6 +44,47 @@ _LOCAL_SCRIPT_PATTERNS = (
     re.compile(r"^solar/core/skills/[^/]+/scripts/.+"),
     re.compile(r"^core/skills/[^/]+/scripts/.+"),
 )
+
+
+def _token() -> Optional[str]:
+    """The execution token this executor was started with (the claim's reservation)."""
+    return os.environ.get("SOLAR_TASK_TOKEN") or None
+
+
+HEARTBEAT_SECONDS = 30
+
+
+def _own_reservation(task_id: str) -> None:
+    """Say this process owns the reservation, and keep its lease alive while it runs. A
+    reservation the token no longer matches (someone took the execution over) stops the run:
+    this process must not finish what it no longer owns."""
+    token = _token()
+    if not token:
+        # Started by hand, outside the worker: the same rule as `execute_active.sh --once`.
+        # The execution is taken over through the reservation or it is not run.
+        with solar_state.session() as store:
+            taken = store.task_adopt(task_id, f"execute-active-{os.getpid()}")
+        if not taken["adopted"]:
+            print(f"Not running {task_id}: another executor holds it ({taken['reason']})",
+                  file=sys.stderr, flush=True)
+            raise SystemExit(75)
+        token = taken["token"]
+        os.environ["SOLAR_TASK_TOKEN"] = token
+    with solar_state.session() as store:
+        store.reservation_attach(task_id, token)
+
+    def beat() -> None:
+        while True:
+            time.sleep(HEARTBEAT_SECONDS)
+            try:
+                with solar_state.session() as store:
+                    store.reservation_heartbeat(task_id, token)
+            except solar_state.StaleToken:
+                os._exit(75)         # the execution belongs to someone else now
+            except solar_state.StateError:
+                continue             # busy or unavailable for a moment: the next beat retries
+
+    threading.Thread(target=beat, name="reservation-heartbeat", daemon=True).start()
 
 
 def _field(task_id: str, key: str) -> str:
@@ -874,7 +917,7 @@ def mark_task_error(
         f"- error: {error_text}\n"
     )
     with solar_state.session() as store:
-        store.task_fail(task_id, suffix)
+        store.task_fail(task_id, suffix, token=_token())
     write_log(log_file, task_id, title, "error", provider_used, "", error_text, error_code)
     print(f"❌ Task execution failed: {task_id}", flush=True)
     print(f"   Log: {log_file}", flush=True)
@@ -902,9 +945,11 @@ def main() -> int:
     global _CANCEL_CHECK, _START_HOOK
     _CANCEL_CHECK = lambda: _cancel_requested(task_id)
 
+    _own_reservation(task_id)
+
     def record_pid(pid):
         with solar_state.session() as store:
-            store.task_record(task_id, pid=pid)
+            store.task_record(task_id, pid=pid, token=_token())
 
     _START_HOOK = record_pid
     if _CANCEL_CHECK():

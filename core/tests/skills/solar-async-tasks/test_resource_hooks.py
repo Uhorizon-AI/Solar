@@ -14,6 +14,7 @@ sys.path.insert(0, str(STATE))
 import solar_state  # noqa: E402
 
 from queue_mirror import env_for  # noqa: E402
+from reservation_tokens import token_of
 
 
 def _queued(title: str) -> str:
@@ -30,6 +31,11 @@ def _queued(title: str) -> str:
             f"\n# {title}\n",
             status="queued",
         )
+
+
+def _token(task_id: str) -> str:
+    with solar_state.session() as store:
+        return token_of(store, task_id)
 
 
 def test_installed_hooks_lock_release_and_fail_closed(tmp_path: Path):
@@ -56,7 +62,7 @@ def test_installed_hooks_lock_release_and_fail_closed(tmp_path: Path):
 
     finished = subprocess.run(
         ["bash", str(SCRIPTS / "complete.sh"), task_id],
-        env=env, text=True, capture_output=True, timeout=30,
+        env={**env, "SOLAR_TASK_TOKEN": _token(task_id)}, text=True, capture_output=True, timeout=30,
     )
     assert finished.returncode == 0, finished.stderr
     assert not lock.exists()
@@ -72,7 +78,7 @@ def test_installed_hooks_lock_release_and_fail_closed(tmp_path: Path):
     assert lock.is_file()
     failed = subprocess.run(
         ["bash", str(SCRIPTS / "complete.sh"), failed_id],
-        env=env, text=True, capture_output=True, timeout=30,
+        env={**env, "SOLAR_TASK_TOKEN": _token(failed_id)}, text=True, capture_output=True, timeout=30,
     )
     assert failed.returncode == 1, failed.stdout + failed.stderr
     assert "Running on_error hook" in failed.stdout

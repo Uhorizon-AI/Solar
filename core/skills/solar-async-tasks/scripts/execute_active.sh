@@ -9,9 +9,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
 
-MODE="${1:---once}" # --once | --all
-if [[ "$MODE" != "--once" && "$MODE" != "--all" ]]; then
-    echo "Usage: $0 [--once|--all]" >&2
+# --task <id> --token <token>: run exactly that claimed task (what the worker does).
+# --once | --all: look for active tasks nobody is running (a manual activation, or one whose
+# owner is gone) and take them over through the reservation; a task that another executor
+# holds is never touched.
+MODE="--once"
+ONLY_TASK=""
+ONLY_TOKEN=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --once|--all) MODE="$1"; shift ;;
+        --task) ONLY_TASK="${2:-}"; shift 2 ;;
+        --token) ONLY_TOKEN="${2:-}"; shift 2 ;;
+        *) echo "Usage: $0 [--once|--all] | --task <id> --token <token>" >&2; exit 1 ;;
+    esac
+done
+if [[ -n "$ONLY_TASK" && -z "$ONLY_TOKEN" ]] || [[ -z "$ONLY_TASK" && -n "$ONLY_TOKEN" ]]; then
+    echo "Usage: --task and --token go together" >&2
     exit 1
 fi
 
@@ -35,8 +49,12 @@ cleanup_old_logs
 
 run_one_task() {
     local task_id="$1"
+    local token="$2"
     local title ret
     local child_id_array=()
+
+    # Every call below (executor, complete, await) proves ownership with this token.
+    export SOLAR_TASK_TOKEN="$token"
 
     title="$(task_field "$task_id" "title")"
     echo "▶ Executing task: [$task_id] $title" >&2
@@ -87,6 +105,13 @@ run_one_task() {
     return 1
 }
 
+if [[ -n "$ONLY_TASK" ]]; then
+    if run_one_task "$ONLY_TASK" "$ONLY_TOKEN"; then
+        exit 0
+    fi
+    exit 1
+fi
+
 ACTIVE_IDS=()
 while IFS= read -r task_id; do
     [[ -n "$task_id" ]] && ACTIVE_IDS+=("$task_id")
@@ -100,12 +125,26 @@ if [[ ${#ACTIVE_IDS[@]} -eq 0 ]]; then
 fi
 
 failures=0
+ran=0
 for task_id in "${ACTIVE_IDS[@]}"; do
-    if ! run_one_task "$task_id"; then
+    # Take the execution over with a new token, or leave it to whoever holds it.
+    if ! adopted="$(state task adopt "$task_id" --worker "execute-active-$$" 2>/dev/null)"; then
+        reason="$(printf '%s' "$adopted" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("reason") or "unknown")
+except Exception: print("unknown")')"
+        echo "⏸️  Not taking over [$task_id]: $reason" >&2
+        continue
+    fi
+    token="$(printf '%s' "$adopted" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+    ran=$((ran + 1))
+    if ! run_one_task "$task_id" "$token"; then
         failures=$((failures + 1))
     fi
     [[ "$MODE" == "--once" ]] && break
 done
+if [[ $ran -eq 0 ]]; then
+    echo "⏸️  No active tasks to take over"
+fi
 
 if [[ $failures -gt 0 ]]; then
     exit 1

@@ -14,6 +14,7 @@ sys.path.insert(0, str(STATE))
 import solar_state  # noqa: E402
 
 from queue_mirror import env_for  # noqa: E402
+from reservation_tokens import token_of
 
 
 def _env(tmp_path: Path) -> dict:
@@ -92,7 +93,7 @@ def test_activate_fails_when_the_task_was_taken_meanwhile(tmp_path):
     done = _script(env, "activate.sh", task_id)
     assert done.returncode == 0 and "already active" in done.stdout    # the existing, explicit case
     with solar_state.session() as store:
-        store.task_release(task_id, "someone-else")
+        store.task_release(task_id, "someone-else", token=token_of(store, task_id))
         store.task_set(task_id, "approved_digest", '"' + "0" * 64 + '"')
     done = _script(env, "activate.sh", task_id)
     assert done.returncode != 0 and "reason=legacy" in done.stderr

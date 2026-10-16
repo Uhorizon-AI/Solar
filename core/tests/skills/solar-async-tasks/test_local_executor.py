@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import execute_active as ea  # noqa: E402
 from queue_mirror import env_for, mirror, runtime_of, seed  # noqa: E402
+from reservation_tokens import token_of
 
 
 def _workspace_with_script(tmp_path: Path, body: str = "#!/bin/bash\nexit 0\n") -> tuple[Path, Path]:
@@ -268,10 +269,14 @@ def test_a_recurring_local_task_passes_the_claim_again_after_it_ran(tmp_path: Pa
             [("title", '"Local"'), ("executor", "local"), ("local_command", f'"bash {rel}"'),
              ("recurring", "true"), ("recurring_min_interval", "3600")],
             "\n# Local\n\nx\n", status="queued")
-        assert store.task_claim_next("w")["id"] == task_id
+        claimed = store.task_claim_next("w")
+        assert claimed["id"] == task_id
+    # execute_active.sh hands the executor the claim's token; so does this test.
     proc = subprocess.run([sys.executable, str(EXECUTE), task_id, "/nonexistent/router.py"],
-                          capture_output=True, text=True, env=env, check=False)
+                          capture_output=True, text=True, check=False,
+                          env={**env, "SOLAR_TASK_TOKEN": claimed["token"]})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     with solar_state.session() as store:
-        assert store.task_complete(task_id) == "queued"      # what complete.sh does next
-        assert store.task_claim_detail(task_id, "w") == dict(claimed=True, reason=None)
+        assert store.task_complete(task_id, token=claimed["token"]) == "queued"   # what complete.sh does next
+        again = store.task_claim_detail(task_id, "w")
+        assert again["claimed"] is True and again["reason"] is None
