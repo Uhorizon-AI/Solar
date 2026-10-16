@@ -450,7 +450,14 @@ def test_a_base_that_fails_its_integrity_check_is_not_upgraded(runtime, monkeypa
                   lambda *a, **k: _Watched(real(*a, **k), checks, damaged=True))
         with pytest.raises(cut.CutoverRefused, match="schema"):
             cut.migrate(runtime, lister=quiet)
+    assert checks, "the integrity check never ran"
     assert upgraded == [] and _schema(runtime)[0] == st.SCHEMA_VERSION - 1
+
+
+class _Untouched:
+    """A cutover that fails the test if anything calls it."""
+    def __getattr__(self, name):
+        raise AssertionError(f"the cutover was used ({name}) for a base that needed nothing")
 
 
 def test_a_base_that_is_up_to_date_is_not_integrity_checked_by_the_upgrade_step(runtime, monkeypatch):
@@ -459,7 +466,7 @@ def test_a_base_that_is_up_to_date_is_not_integrity_checked_by_the_upgrade_step(
     real = sqlite3.connect
     with monkeypatch.context() as m:
         m.setattr(cut.sqlite3, "connect", lambda *a, **k: _Watched(real(*a, **k), checks))
-        cut._upgrade_older_schema(st.db_path(runtime), object())    # never reaches the cutover
+        cut._upgrade_older_schema(st.db_path(runtime), _Untouched())
     assert checks == []
 
 

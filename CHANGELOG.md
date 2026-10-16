@@ -7,7 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Fixed
-- `solar client update` no longer stops with `CutoverRefused: base schema v4, this code speaks v5` on a runtime already migrated to sqlite: the cutover now upgrades a base that is only behind in schema, and a failed upgrade changes nothing. **To recover a runtime left at v4 by v0.47.0, update to the release with this fix and run `solar client update` again.**
+- `solar client update` no longer stops with `CutoverRefused: base schema v4, this code speaks v5` on an already-migrated base: the cutover now upgrades a base that is only behind in schema, and a failed upgrade changes nothing. **To recover a runtime left at v4 by v0.47.0, update to the release with this fix and run `solar client update` again.**
 
 ## [0.47.0] - 2026-10-16
 

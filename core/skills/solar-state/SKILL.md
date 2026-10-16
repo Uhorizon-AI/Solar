@@ -108,7 +108,7 @@ python3 "$SCRIPT_DIR/../../solar-state/scripts/solar_state.py" status   # says w
    first, once nothing else is running. A session never upgrades under other
    readers. **A released migration never changes**: v1 is pinned by a test;
    changes go in a new version. A migration runs inside a transaction, so it
-   uses no `VACUUM` or committing `PRAGMA`.
+   uses no `VACUUM`, `PRAGMA`, `ATTACH` or transaction control.
 6. **What comes in verbatim goes out verbatim.** A task's frontmatter is
    stored as `[key, text after the colon]` in order, and the columns are a
    projection of it, rewritten in the same transaction. Audit lines, mandate

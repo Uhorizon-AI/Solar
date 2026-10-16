@@ -791,8 +791,15 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
             # The format already changed. Finish an interrupted move, or leave
             # a finished one alone. The base is not a photo of migration day.
             # An upgrade in place waits for quiet first; a broken base is refused at once.
-            stamp = _check_migrated_base(base, cut, lambda: _wait_until_quiet(base, wait, lister))
-            _wait_until_quiet(base, wait, lister)
+            # Without an upgrade nothing has waited yet, so the wait happens here, once.
+            waited = []
+
+            def quiet_first() -> None:
+                _wait_until_quiet(base, wait, lister)
+                waited.append(True)
+            stamp = _check_migrated_base(base, cut, quiet_first)
+            if not waited:
+                _wait_until_quiet(base, wait, lister)
             # No live file is not proof the move finished, and neither is one
             # file already aside. `moved` is the record. Without it, every
             # original source — the list in the marker, or the pre-state copy
