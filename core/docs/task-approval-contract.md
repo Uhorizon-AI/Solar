@@ -14,6 +14,12 @@ Material fields: `solar_state.MATERIAL_KEYS`, including `executor`, `local_comma
 `local_timeout` (a different command is a different task). Not material: run counters,
 `recurring_last_run`, claims, notification status.
 
+Five keys cover the concurrency contract: `access_policy`, `subtask_policy`, `execution_profile`,
+`review_input_digest`, `review_input_manifest`. They are part of the digest only when the task
+declares them, so a task without them keeps its `v2:` digest and its approval; the digest version
+did not change and nothing needs re-approving. The two policies are validated JSON and are hashed
+in canonical form; an invalid one refuses the approval. See `core/docs/execution-reservations.md`.
+
 **Definition** = the body without a first line `# {title}` that equals the stored title, with
 leading blank lines and trailing whitespace removed. Renaming rewrites the title and that
 heading together, so it does not change the digest.
