@@ -31,6 +31,7 @@ ROUTES = (
     "/api/console/tasks",
     "/api/console/task-detail?task_id=",
     "/api/console/executions",
+    "/api/console/capacity",
     "/api/console/dashboards",
     "/api/console/mandates",
     "/api/console/ides",

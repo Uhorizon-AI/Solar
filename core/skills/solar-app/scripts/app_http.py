@@ -95,6 +95,7 @@ def get(handler, path, qs, workspace):
         "/api/console/health": console_data.health,
         "/api/console/tasks": console_data.tasks,
         "/api/console/executions": console_data.executions,
+        "/api/console/capacity": console_data.capacity,
         "/api/console/continuity": console_data.continuity,
         "/api/console/mandates": console_data.mandates,
         "/api/console/ides": console_data.ides,

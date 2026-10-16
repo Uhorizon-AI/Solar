@@ -6,6 +6,17 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Resident async-tasks supervisor (`supervisor.py`, one per workspace/runtime): the only holder of the atomic lock `<runtime>/async-tasks/.locks/supervisor.lock` (resolved through solar-paths, bound to the workspace owner), it claims through the same reservations as every other entry point and dispatches each claim by id and token to its own executor in its own process group. Executions are collected with wait/poll, a free place is filled within one second of one ending (or on `SIGUSR1`) without waiting for the 60 s tick, and a place is forgotten only after the executor's process group is proved gone. At start it reconciles processes and leases: live owners from a previous supervisor are adopted, an owner it cannot identify stays blocked, an executor lost without finishing is failed (never run again), and a group it cannot prove is its own is never killed. Cancellation stops only that execution's group; a failed cleanup blocks the affected resource and nothing else; lowering the capacity never stops a running execution. Contract: `core/docs/async-supervisor.md`.
+- `launch_supervisor.sh` (detached `Popen(start_new_session=True)`, stdin null, output to the supervisor's log, no inherited pipes) and `stop_supervisor.sh --drain [--timeout N]` (the contract the update's drain already expected: stop dispatching, collect, exit; never removes the lock, never kills by pid).
+- `/api/console/capacity` and a card on the executions screen: places used and free, tasks running at once, why each queued task waits (dependency, resource, provider, capacity, recovery), the supervisor's published state, and the applied configuration revision with the differences a pending proposal would make. `Session.queue_waits()` (read only) backs it.
+- Pass-stamp results `starting` and `blocked`.
+
+### Changed
+- **Behaviour:** `ensure_async_tasks.sh` no longer runs `run_worker.sh --once`. It observes the supervisor's identity (pid and start time; it never takes the lock or writes its pid), starts one candidate when none is alive, waits at most 5 seconds for the handshake and answers with a JSON object and the exit code `0` ready, `10` starting, `20` blocked, `1` failed. `check_async_tasks.sh` observes the same identity with the same codes. A held maintenance barrier answers `20` (it used to exit 0 with a message). The previous design's machine guard (`/tmp/solar-async-tasks-worker.lock`) is only read, never written or removed: a worker still running delays the supervisor (`10`, then `20` after 120 s).
+- **Behaviour:** `run_worker.sh` is no longer a production entry point and refuses to run without `--diagnostic`; it still goes through the same reservations.
+- **Behaviour:** `run_orchestrator.sh` maps ensure's answer to the stamp: `0` → `ok`, `10` → `starting` (not a failure), `20` → `blocked` and `1` → `failed` (both count as a failure and ask for attention). The gateway and the host are processed in every case. `write_pass_stamp.sh` accepts `ok|failed|skipped|deprecated|ignored|starting|blocked`; the console treats `blocked` like `failed` and `starting` as neither a fault nor a success; `check_orchestrator.sh` reports the supervisor by state and no longer suggests removing `supervisor*.lock`.
+
 ## [0.48.0] - 2026-10-16
 
 ### Added

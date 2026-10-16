@@ -2777,6 +2777,55 @@ class Session:
                 _is_int(document.get("revision")) and document["revision"] > applied["revision"])
         return status
 
+    def queue_waits(self, now: Optional[datetime] = None) -> list[dict]:
+        """Why each queued task is not running yet, in claim order: `{id, reason}` where `reason`
+        is what a claim would answer now (`blocked_by_dependency`, `global_capacity`,
+        `provider_capacity`, `scope_conflict`, `resource:<name>`, `exclusive_needs_idle`,
+        `blocked_by_exclusive`, `drain_barrier`, `maintenance`, ...) or None when it would start on
+        the next pass. Reads only: nothing is claimed, stamped or audited, so a read session may
+        ask it (the console does)."""
+        moment = now or datetime.now()
+        conn = self.conn
+        if maintenance_state(self.root) is not None:
+            return [dict(id=row["id"], reason="maintenance") for row in conn.execute(
+                "SELECT id FROM tasks WHERE status = 'queued' ORDER BY created, id")]
+        policy = _policy_row(conn)
+        held = _occupancy(conn)
+        target = _drain_target(conn, policy, moment)
+        rows = list(conn.execute("SELECT id, priority, created, frontmatter, body FROM tasks "
+                                 "WHERE status = 'queued'"))
+        rows.sort(key=_claim_order)
+        out = []
+        for row in rows:
+            task_id = row["id"]
+            pairs = json.loads(row["frontmatter"])
+            reason: Optional[str] = None
+            if conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?", (task_id,)).fetchone():
+                reason = "cancellation_requested"
+            elif _blocked(conn, pairs):
+                reason = "blocked_by_dependency"
+            elif not _recurring_ready(pairs, moment.timestamp()):
+                reason = "recurring_interval"
+            elif not scheduled_now(_field(pairs, "scheduled_time"), _field(pairs, "scheduled_weekdays"),
+                                   moment, _field(pairs, "scheduled_timezone")):
+                reason = "outside_schedule"
+            elif approval_state(pairs, row["body"]):
+                reason = "approval_digest_mismatch"
+            elif _provenance_problem(conn, task_id):
+                reason = _provenance_problem(conn, task_id)
+            else:
+                access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
+                if access.invalid:
+                    reason = "access_policy_invalid"
+                elif target and task_id != target:
+                    reason = "drain_barrier"
+                else:
+                    reason = _admission(access, held, policy)
+                    if reason is None:
+                        held = held + [access]       # it would start: the next one is judged beside it
+            out.append(dict(id=task_id, reason=reason))
+        return out
+
     # -- provenance of a derived authorization -------------------------------
 
     def authorization_record(self, child_id: str, parent_id: str, child_key: str, *,

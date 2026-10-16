@@ -58,7 +58,11 @@ routes still answer; the page does not call them.
 
 ## Console data
 
-Read-only routes under `/api/console/`: `health`, `tasks`, `executions`,
+Read-only routes under `/api/console/`: `health`, `tasks`, `executions`, `capacity`
+(places used and free, tasks running at once, why each queued task waits — dependency, resource,
+provider, capacity, recovery —, the supervisor's published state and blocked executions, and the applied
+configuration revision with the differences a pending proposal would make; shown on the executions
+screen),
 `dashboards`, `mandates`, `ides`, `ingress`, `requester`, plus the legacy `continuity`
 route, kept for compatibility but not used by the page. `console_data.py`
 answers them. Database rows come from `read_session()` in solar-state. Files
