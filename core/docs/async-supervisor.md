@@ -69,9 +69,9 @@ otherwise 20. A held maintenance barrier answers 20 without starting anything.
 * **Failed cleanup.** A group that cannot be proven gone leaves the execution counted and visible as
   `blocked: cleanup_failed`. While its reservation stands the claim already refuses what conflicts. When the executor
   had already given the reservation back, what the execution held (capacity, resources, writer scopes, or the whole
-  machine when it ran alone) is written to `async-tasks/supervisor/cleanup-holds.json`, which **every claim reads**
+  machine when it ran alone) stays in `async-tasks/supervisor/cleanup-holds.json`, which **every claim reads**
   (`solar_state.cleanup_holds`): the supervisor, `activate.sh`, the diagnostic worker and an adoption are all refused
-  until the supervisor verifies the cleanup and removes the hold (it survives a restart; an unreadable file holds the
+  until the supervisor verifies **all** the groups of the execution (the executor's and the command's) and removes the hold (it survives a restart; an unreadable file holds the
   whole machine). Other resources are not touched.
 * **The command's own group.** The router runs the command or provider in a process group of its own, apart from the
   executor's. The pid the executor records for the task (not the one an earlier run left) names it: when the supervisor
@@ -132,13 +132,19 @@ Observation thresholds only (they cannot name an owner or a lock): `SOLAR_SUPERV
 
 ## Known limit (follow-up before PR 4)
 
-The executor gives its reservation back in the same transaction that moves the task out of `active`, a few milliseconds
-before its process ends, and the supervisor can only verify the end afterwards. In that gap a conflicting manual
-activation (or any claim) can be admitted. With the applied capacity `1` and `VERIFIED_PROFILES` empty nothing can run
-next to anything else, so it has no effect today; it must be closed before 3/5 are enabled. Proposal: a deferred release
-in solar-state — the executor marks the execution `ending` and the reservation is released only by the supervisor (or by
-`task_adopt`) after the group is proved gone, with the cleanup holds above moving from a file into the schema (a
-migration owned by that follow-up). Tracked in Uhorizon-AI/Solar#39.
+The executor gives its reservation back in the same transaction that moves the task out of `active`, before its process
+ends. That gap is closed without changing the schema: from its dispatch the supervisor lists every execution it runs in
+`async-tasks/supervisor/cleanup-holds.json` (`while_reserved`, with the process groups of the executor and of its command).
+While the reservation stands it is the reservation that counts; the instant it is released, the entry takes over in the
+same transaction, so no claim (manual activation included) is admitted until the supervisor has proved **every** group gone
+and removed the entry. After a restart, entries of executions that ended with nobody to verify them become
+`blocked: cleanup_unverified` and are cleared once their groups are empty.
+
+What remains is that this state lives in a file read by `solar_state` rather than in the schema: it is written only by the
+supervisor, so a runtime with no supervisor ever started again keeps its entries until one runs. Proposal for the follow-up
+(Uhorizon-AI/Solar#39, before 3/5 are enabled): a deferred release in solar-state — the executor marks the execution `ending`
+and the reservation is released only by the supervisor (or `task_adopt`) after the groups are proved gone, with the holds
+moving into the schema in a migration owned by that follow-up.
 
 ## Not in this delivery
 

@@ -1657,7 +1657,13 @@ def _occupancy(conn, ignore_task: Optional[str] = None) -> list[_Access]:
             held.append(_Access(exclusive=True, task_id=row["id"],
                                 provider=(_field(json.loads(row["frontmatter"]), "provider")
                                           or "").strip().lower()))
+    reserved = {row[0] for row in conn.execute("SELECT task_id FROM execution_reservations")}
     for hold in cleanup_holds(_db_root(conn)):
+        # An execution the supervisor is running is listed from its dispatch (`while_reserved`): its
+        # reservation counts while it stands, and the moment the executor gives it back this entry takes
+        # over without a gap, until the supervisor has proved every process group of the execution gone.
+        if hold.get("while_reserved") and hold.get("task_id") in reserved:
+            continue
         held.append(_Access(
             exclusive=hold.get("access_class") != "declared",
             scopes=[(str(s["path"]), str(s["mode"])) for s in hold.get("scopes") or []

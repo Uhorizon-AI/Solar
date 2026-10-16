@@ -480,6 +480,15 @@ _WAIT_KINDS = (
     ("drain_barrier", "capacity"),
     ("maintenance", "recovery"),
     ("parent_revoked", "recovery"),
+    # not resources or capacity: the task itself is not ready (schedule, approval, cancellation, access)
+    ("cancellation_requested", "other"),
+    ("recurring_interval", "other"),
+    ("outside_schedule", "other"),
+    ("approval_digest_mismatch", "other"),
+    ("absent", "other"),
+    ("legacy", "other"),
+    ("mismatch", "other"),
+    ("access_policy_invalid", "other"),
 )
 
 
@@ -494,7 +503,7 @@ def wait_kind(reason):
     for prefix, kind in _WAIT_KINDS:
         if text == prefix:
             return kind
-    return "other"
+    return "other"          # never null: an unknown reason is still shown, as "other"
 
 
 def console_capacity(store, supervisor=None):

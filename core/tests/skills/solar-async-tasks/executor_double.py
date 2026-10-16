@@ -12,6 +12,7 @@ Spec keys (all optional):
   hold <seconds>                    sleep after the barrier/gate, before finishing
   outcome  complete (default) | crash_before_attach | hang_before_attach | crash_after_attach | hang
   straggler true                    leave a child in this process group that outlives the executor
+  provider_leave true               start the command's own group (recorded for the task) and leave it running
   heartbeat true                    renew the lease every 0.3 s while running
 """
 from __future__ import annotations
@@ -79,6 +80,13 @@ def main(argv: list[str]) -> int:
     if spec.get("straggler"):
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
         (BASE / f"straggler-{task}.pid").write_text(str(child.pid))
+    if spec.get("provider_leave"):
+        # like the router: the command runs in a group of its own, whose leader the executor records
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"], start_new_session=True)
+        (BASE / f"straggler-{task}-provider.pid").write_text(str(child.pid))
+        with solar_state.session() as store:
+            store.task_record(task, pid=child.pid, token=token)
+        event(task, "provider", provider_pid=child.pid)
     event(task, "start")
     barrier = spec.get("barrier")
     if barrier:

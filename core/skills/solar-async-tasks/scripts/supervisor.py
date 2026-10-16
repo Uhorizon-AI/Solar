@@ -111,6 +111,7 @@ class Execution:
         self.task_id, self.token, self.worker = task_id, token, worker
         self.pid, self.started, self.proc, self.adopted = pid, started, proc, adopted
         self.pgid = pid
+        self.provider_pid: Optional[int] = None    # leader of the command's own group, once the executor recorded it
         self.access = access or {}
         self.dispatched_epoch = time.time()
         self.cancel_seen: Optional[float] = None
@@ -120,8 +121,12 @@ class Execution:
 
     def record(self) -> dict:
         return {"task_id": self.task_id, "token": self.token, "worker": self.worker, "pid": self.pid,
-                "pgid": self.pgid, "started": self.started, "dispatched_epoch": self.dispatched_epoch,
-                "access": self.access}
+                "pgid": self.pgid, "provider_pid": self.provider_pid, "started": self.started,
+                "dispatched_epoch": self.dispatched_epoch, "access": self.access}
+
+    def groups(self) -> list[int]:
+        """Every process group of this execution that must be gone before it counts as over."""
+        return [g for g in (self.pgid, self.provider_pid) if g]
 
     def view(self) -> dict:
         return {"task_id": self.task_id, "pid": self.pid, "pgid": self.pgid, "adopted": self.adopted,
@@ -259,12 +264,18 @@ class Supervisor:
                 "version": 1, "executions": [c.record() for c in self.children.values()]}, mode=0o600)
             lib.write_json_atomic(self.ctx.blocked_file, {"version": 1, "blocked": list(self.blocked.values())},
                                   mode=0o600)
-            # What a failed cleanup still holds is kept where every claim reads it (capacity and
-            # resources stay taken for the supervisor, activate.sh and the diagnostic worker alike).
-            solar_state.cleanup_holds_write(self.ctx.runtime, [
-                {"task_id": e["task_id"], "reason": e.get("reason"), "since": e.get("since"),
-                 "pgid": e.get("pgid"), **(e.get("access") or {})}
-                for e in self.blocked.values() if e.get("released")])
+            # What an execution holds is kept where every claim reads it, from its dispatch until every
+            # one of its process groups is proved gone: while the reservation stands it is the
+            # reservation that counts; the moment the executor gives it back, this entry takes over
+            # (capacity and resources stay taken for the supervisor, activate.sh and the diagnostic
+            # worker alike). A failed or unverified cleanup keeps its entry beyond that.
+            holds = [{"task_id": c.task_id, "while_reserved": True, "pgids": c.groups(),
+                      **(c.access or {})} for c in self.children.values()]
+            holds += [{"task_id": e["task_id"], "reason": e.get("reason"), "since": e.get("since"),
+                       "pgids": e.get("pgids") or ([e["pgid"]] if e.get("pgid") else []),
+                       **(e.get("access") or {})}
+                      for e in self.blocked.values() if e.get("released")]
+            solar_state.cleanup_holds_write(self.ctx.runtime, holds)
         except OSError as exc:
             log(f"cannot record the executions: {exc}")
 
@@ -308,12 +319,26 @@ class Supervisor:
             self._exit_record("state_unavailable", str(exc))
             return 1
         self._load_blocked()
+        previous = [h for h in solar_state.cleanup_holds(self.ctx.runtime) if not h.get("unreadable")]
         try:
             self._sweep(startup=True)
         except solar_state.StateError as exc:
             log(f"reconciliation could not finish: {exc}")
             self._exit_record("reconciliation_failed", str(exc))
             return 1
+        # An execution that was running when the previous supervisor went away and is neither adopted nor
+        # blocked now has finished (or is finishing) with nobody to prove its groups gone: it keeps its
+        # hold as an unverified cleanup until they are.
+        for hold in previous:
+            task_id = hold.get("task_id")
+            if hold.get("while_reserved") and task_id and task_id not in self.children \
+                    and task_id not in self.blocked and hold.get("pgids"):
+                self.blocked[task_id] = {
+                    "task_id": task_id, "reason": "cleanup_unverified", "since": lib.iso(time.time()),
+                    "detail": "the supervisor that ran it went away before its process groups were proved gone",
+                    "pgids": hold["pgids"], "pid": None, "pgid": None, "token": None, "worker": None,
+                    "released": True, "ours": True,
+                    "access": {k: hold.get(k) for k in ("provider", "access_class", "resources", "scopes")}}
         self.reconciled, self.reconciled_at, self.state = True, time.time(), "ready"
         self._save_records()
         self.publish(durable=True)
@@ -453,6 +478,7 @@ class Supervisor:
                 hook_timeout = float(store.task_field(task_id, "cleanup_timeout") or HOOK_TIMEOUT)
             except ValueError:
                 hook_timeout = HOOK_TIMEOUT
+            hook_timeout = min(max(hook_timeout, 1.0), 3600.0)      # 0 or a negative value is not "no time"
         if cleanup:
             tasks_root = Path(os.environ.get("SOLAR_TASK_ROOT") or self.ctx.tasks)
             env = {**os.environ, "HOOKS_DIR": str(tasks_root / "hooks"), "DIR_LOCKS": str(tasks_root / ".locks"),
@@ -576,6 +602,7 @@ class Supervisor:
             return "none", None
         kind, info = lib.probe(pid)
         members = group_members(pid)
+        ex.provider_pid = pid                      # remembered: it is one of the groups that must be proved gone
         if kind == "unknown" or members is None:
             return "uncertain", pid
         if kind == "alive" and pid in members and (info.get("epoch") or 0) >= ex.dispatched_epoch - 2:
@@ -667,7 +694,8 @@ class Supervisor:
     def _block(self, ex: Execution, reason: str, detail: str, *, released: bool) -> None:
         self.blocked[ex.task_id] = {
             "task_id": ex.task_id, "reason": reason, "detail": detail, "since": lib.iso(time.time()),
-            "pid": ex.pid, "pgid": ex.pgid, "started": ex.started, "token": ex.token, "worker": ex.worker,
+            "pid": ex.pid, "pgid": ex.pgid, "pgids": ex.groups(), "started": ex.started,
+            "token": ex.token, "worker": ex.worker,
             "access": ex.access, "released": released, "ours": not ex.foreign}
         log(f"BLOCKED {ex.task_id}: {reason}: {detail}")
 
@@ -742,8 +770,10 @@ class Supervisor:
         self._save_records()
 
     def _cleared(self, entry: dict, still_reserved: bool) -> bool:
-        if entry.get("reason") == "cleanup_failed" and entry.get("pgid"):
-            return group_members(entry["pgid"]) == []
+        if entry.get("reason") in ("cleanup_failed", "cleanup_unverified"):
+            # every group the execution had (the executor's and the command's), not only the wrapper's
+            groups = entry.get("pgids") or ([entry["pgid"]] if entry.get("pgid") else [])
+            return bool(groups) and all(group_members(g) == [] for g in groups)
         if entry.get("reason") == "owner_unverifiable":
             return False
         return not still_reserved
@@ -776,6 +806,8 @@ class Supervisor:
         pseudo.foreign = not ours
         if rec and rec.get("pgid"):
             pseudo.pgid = rec["pgid"]
+        if rec and rec.get("provider_pid"):
+            pseudo.provider_pid = rec["provider_pid"]
         if "unknown" in states:
             self._block(pseudo, "owner_unverifiable", "the process table could not be asked about its owner",
                         released=False)

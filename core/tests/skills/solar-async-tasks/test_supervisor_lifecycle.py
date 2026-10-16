@@ -623,3 +623,31 @@ def test_a_forced_cancellation_ends_the_command_too_before_the_place_is_freed(ri
                         os.kill(pid, sig)
                     except OSError:
                         pass
+
+
+def test_nothing_is_admitted_between_the_executor_finishing_and_its_command_being_proved_gone(rig):
+    """The real executor, capacity 1: A completes but its command leaves a child alive. Until the
+    supervisor has ended that group, a manual activation of B must be refused."""
+    pidfile = rig.tmp / "leftover.pid"
+    rel = rig.local_script(f'sleep 300 >/dev/null 2>&1 </dev/null &\necho $! > "{pidfile}"\n', name="leave.sh")
+    a = rig.local("Leaves a child", rel, timeout=60)
+    b = rig.local("Zz second", rig.local_script("true\n", name="quick.sh"), timeout=60)
+    # a slow loop: the supervisor notices the end of A late, which is exactly the window
+    proc = _start_supervisor_process(rig, tick=3.0, poll=30, sweep=30, term_grace=1.0, kill_wait=2.0)
+    child = None
+    try:
+        wait_until(lambda: rig.status(a) == "completed", 60, interval=0.005, what="A to complete")
+        child = int(pidfile.read_text())
+        assert alive(child) and rig.reservations() == []        # reservation gone, command still running
+        with solar_state.session() as store:
+            refused = store.task_claim_detail(b, "activate-b")
+        assert refused["claimed"] is False and refused["reason"] in ("exclusive_needs_idle", "blocked_by_exclusive"), \
+            "a conflicting activation was admitted while A's command was still running"
+        wait_until(lambda: not alive(child), 30, what="the supervisor to end the leftover group")
+        wait_until(lambda: not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists(), 30, what="the hold to be released")
+        wait_until(lambda: rig.status(b) == "completed", 60, what="B, free to run now")   # the supervisor runs it
+    finally:
+        proc.kill()
+        proc.wait()
+        if child and alive(child):
+            os.kill(child, signal.SIGKILL)

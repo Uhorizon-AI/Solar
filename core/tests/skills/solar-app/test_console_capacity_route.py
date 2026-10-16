@@ -48,5 +48,9 @@ def test_the_console_projects_capacity_the_supervisor_and_the_configuration(harn
         stop = _run(harness, "stop_supervisor.sh", "--drain", "--timeout", "30")
         if stop.returncode != 0:                      # never leave a supervisor in the next test's runtime
             identity = json.loads((harness.runtime / "async-tasks" / ".locks" / "supervisor.json").read_text())
-            os.kill(identity["pid"], 9)
+            # only the process this harness's supervisor really is: pid AND start time, never a bare pid
+            sys.path.insert(0, str(SCRIPTS))
+            import supervisor_lib
+            if supervisor_lib.matches(identity["pid"], identity.get("started"))[0] == "alive":
+                os.kill(identity["pid"], 9)
     assert stop.returncode == 0, f"the drain did not finish: {stop.stdout}{stop.stderr}"

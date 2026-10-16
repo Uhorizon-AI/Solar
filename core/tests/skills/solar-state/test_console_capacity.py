@@ -165,3 +165,12 @@ def test_the_console_judges_the_heartbeat_with_the_same_threshold_as_the_check(s
     assert console_data.capacity(tmp_path)["supervisor"]["fresh"] is False                 # 45 s > the default 30 s
     monkeypatch.setenv("SOLAR_SUPERVISOR_HEARTBEAT_STALE", "120")                           # what check_async_tasks sees too
     assert console_data.capacity(tmp_path)["supervisor"]["fresh"] is True
+
+
+def test_every_reason_a_claim_can_give_has_a_kind():
+    reasons = ["blocked_by_dependency", "provider_capacity", "global_capacity", "scope_conflict", "resource:x",
+               "exclusive_needs_idle", "blocked_by_exclusive", "drain_barrier", "maintenance", "parent_revoked",
+               "cancellation_requested", "recurring_interval", "outside_schedule", "approval_digest_mismatch",
+               "absent", "legacy", "mismatch", "access_policy_invalid", "something_new"]
+    assert all(runtime_views.wait_kind(r) for r in reasons)
+    assert runtime_views.wait_kind("cancellation_requested") == "other"

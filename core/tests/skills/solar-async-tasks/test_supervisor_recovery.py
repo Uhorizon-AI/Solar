@@ -223,6 +223,59 @@ def test_a_failed_cleanup_blocks_that_resource_for_every_entry_point_and_survive
     assert not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
 
 
+def test_a_failed_check_of_the_commands_group_keeps_the_hold_through_sweeps_and_a_restart(rig, monkeypatch):
+    rig.apply_policy(global_capacity=3)
+    held = rig.reader("Left a command", resources=["demo"], spec=dict(provider_leave=True, hold=0.1))
+    real_members = supervisor_mod.group_members
+    stuck = {"on": True}
+
+    def members(pgid):
+        provider = [e["provider_pid"] for e in rig.events("provider", held)]
+        if stuck["on"] and pgid in provider:
+            return [pgid]                       # the command's group cannot be proved gone
+        return real_members(pgid)
+
+    monkeypatch.setattr(supervisor_mod, "group_members", members)
+    with rig.running(sweep=0.2, term_grace=0.2, kill_wait=0.2) as sup:
+        wait_until(lambda: held in sup.blocked, 30, what="the cleanup to be blocked")
+        entry = sup.blocked[held]
+        provider_pid = rig.events("provider", held)[0]["provider_pid"]
+        assert provider_pid in entry["pgids"] and len(entry["pgids"]) == 2     # both groups are remembered
+        same = rig.reader("Wants demo", resources=["demo"], spec=dict(hold=0.05))
+        time.sleep(1.0)                          # several sweeps: the executor's group is empty, the command's is not
+        assert held in sup.blocked and rig.status(same) == "queued"
+        with solar_state.session() as store:
+            assert store.task_claim_detail(same, "activate-1")["reason"] == "resource:demo"
+    with rig.running(sweep=0.2, term_grace=0.2, kill_wait=0.2) as again:        # and across a restart
+        wait_until(lambda: held in again.blocked, 30)
+        time.sleep(0.8)
+        assert held in again.blocked and rig.status(same) == "queued"
+        stuck["on"] = False
+        wait_until(lambda: rig.status(same) == "completed", 30, what="the resource to be free once both groups are gone")
+
+
+def test_an_execution_keeps_its_place_from_the_dispatch_until_it_is_proved_over(rig):
+    """Even with no supervisor running when the executor finishes, nothing conflicting is admitted."""
+    rig.apply_policy(global_capacity=3)
+    held = rig.reader("Runs", resources=["demo"], spec=dict(gate="release"))
+    same = rig.reader("Wants demo", resources=["demo"], spec=dict(hold=0.05))
+    first = rig.build()
+    box = {}
+    thread = threading.Thread(target=lambda: box.setdefault("code", first.run()), daemon=True)
+    thread.start()
+    rig.threads.append(thread)
+    wait_until(lambda: rig.events("start", held), 30)
+    rig.stop_abruptly(first, thread)                           # the supervisor goes away while it runs
+    rig.gate("release")
+    wait_until(lambda: rig.status(held) == "completed", 30)      # finished: its reservation is gone
+    assert rig.reservations_of(held) is None
+    with solar_state.session() as store:
+        assert store.task_claim_detail(same, "activate-1") == dict(claimed=False, reason="resource:demo")
+    with rig.running(sweep=0.2):                               # a new supervisor proves it over, then it is free
+        wait_until(lambda: rig.status(same) == "completed", 30)
+    assert not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
+
+
 def test_a_process_table_that_does_not_answer_is_not_an_empty_group(rig, monkeypatch):
     task = rig.legacy("Group in doubt", spec=dict(gate="never"))
     with solar_state.session() as store:
