@@ -115,13 +115,46 @@ def _lines(path: Path) -> list[str]:
 # Processes
 # ---------------------------------------------------------------------------
 
+def _install_roots() -> list[str]:
+    """The installs whose processes block a cutover: `SOLAR_CUTOVER_INSTALL_ROOTS` (a colon-separated
+    list; the update names the live install, because the helper runs from the staged copy), else
+    the install this helper belongs to."""
+    raw = os.environ.get("SOLAR_CUTOVER_INSTALL_ROOTS", "")
+    roots = [r for r in raw.split(":") if r] or [str(Path(__file__).resolve().parents[4])]
+    out = []
+    for root in roots:
+        for form in (root, os.path.realpath(root)):
+            form = form.rstrip("/")
+            if form and form not in out:
+                out.append(form)
+    return out
+
+
+def _belongs_elsewhere(cmd: str, roots: list[str]) -> bool:
+    """True when the command line names a Solar script by absolute path and every such path is
+    under another install. A process that names none (a relative `./run_worker.sh`) cannot be
+    placed, so it still counts."""
+    paths = [t for t in cmd.split() if t.startswith("/") and any(m in t for m in RUNNING_MARKERS)]
+    if not paths:
+        return False
+    return not any(p.startswith(r + "/") for p in paths for r in roots)
+
+
 def list_processes() -> list[tuple[int, str]]:
-    out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True,
-                         check=False).stdout
+    """The process table, minus Solar processes of other installs on the machine (another
+    checkout, a test's temporary install): they are not what this cutover must wait for.
+    `SOLAR_CUTOVER_PS_OUTPUT_FILE` (lines of `pid command`) replaces the table, for tests."""
+    override = os.environ.get("SOLAR_CUTOVER_PS_OUTPUT_FILE")
+    if override:
+        out = Path(override).read_text(encoding="utf-8")
+    else:
+        out = subprocess.run(["ps", "-ww", "-axo", "pid=,command="], capture_output=True, text=True,
+                             check=False).stdout
+    roots = _install_roots()
     procs = []
     for line in out.splitlines():
         pid, _, cmd = line.strip().partition(" ")
-        if pid.isdigit():
+        if pid.isdigit() and not _belongs_elsewhere(cmd.strip(), roots):
             procs.append((int(pid), cmd.strip()))
     return procs
 

@@ -98,3 +98,12 @@ No test starts the real console or occupies port 9000.
   workspace, runtime and app-data directory, and a private free port. The console port is 9000. A test can move it only with SOLAR_APP_TEST_MODE=1 and SOLAR_APP_TEST_PORT both in the process environment (never from a .env, never to 9000).
 - Teardown signals only the processes the harness started and the `host_server.py`
   listeners of its own private port. It never removes directories; pytest owns them.
+
+## The cutover and the process table
+
+`solar_state_cutover.py migrate` waits for Solar processes to end (`RUNNING_MARKERS`). Its default process listing is
+scoped: a process that names a Solar script by absolute path counts only when that path is under this install
+(`SOLAR_CUTOVER_INSTALL_ROOTS`, a colon-separated list; the update sets it to the live install because the helper runs from
+the staged copy; by default the install the helper belongs to). A supervisor, an executor or a test of another checkout or
+temporary install on the same machine no longer blocks it. A process that names no path (`./run_worker.sh`) still counts.
+`SOLAR_CUTOVER_PS_OUTPUT_FILE` (lines of `pid command`) replaces the table: the CLI tests of `test_cutover.py` read an empty one.

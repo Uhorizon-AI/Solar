@@ -35,6 +35,15 @@ def _lines(marker: Path) -> list[str]:
     return marker.read_text().splitlines() if marker.is_file() else []
 
 
+def _start_supervisor_process(rig, **kw):
+    """A supervisor process with tuned timings (the launcher uses the defaults)."""
+    args = ", ".join(f"{k}={v!r}" for k, v in kw.items())
+    code = ("import sys; sys.path.insert(0, %r); import supervisor, supervisor_lib as lib; "
+            "raise SystemExit(supervisor.Supervisor(lib.Context(), %s).run())" % (str(lib.HERE), args))
+    return subprocess.Popen([sys.executable, "-c", code], env=rig.env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
 def _ready(rig, **env):
     out = rig.script("ensure_async_tasks.sh", extra_env=env)
     assert out.returncode == 0, out.stdout + out.stderr
@@ -501,3 +510,116 @@ def test_the_update_drain_gives_up_without_killing_when_the_execution_is_too_lon
     assert done.returncode != 0 and "drain-timeout" in names and "did not drain" in done.stderr
     assert alive(pid) and rig.status(task) == "active", "a timed-out drain must not stop anything"
     wait_until(lambda: rig.status(task) == "completed", 60)
+
+
+@pytest.mark.parametrize("code, kind, event, expected", [
+    (1, "timeout", "drain-timeout", ["did not drain", "nothing was killed", "update --resume"]),
+    (2, "unidentified", "drain-refused", ["could not be identified", "not asked to stop", "check_async_tasks.sh"]),
+    (3, "blocked", "drain-blocked", ["executions with an uncertain owner or a failed cleanup remain blocked", "resolve them"]),
+])
+def test_the_update_drain_says_what_to_do_for_each_stop_code(rig, code, kind, event, expected):
+    stub = rig.tmp / f"stop-{kind}.sh"
+    stub.write_text(f"#!/bin/bash\necho '{{\"state\":\"x\"}}'\nexit {code}\n")
+    stub.chmod(0o755)
+    events = rig.tmp / "events.jsonl"
+    env = {**rig.env, "SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT": str(stub), "SOLAR_CLIENT_UPDATE_EVENTS_FILE": str(events),
+           "SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE": "async-supervisor", "SOLAR_CLIENT_DRAIN_POLL": "0.1"}
+    install = lib.HERE.parents[3]
+    done = subprocess.run(["bash", "-c", f'source "{install}/core/skills/solar-client/scripts/client_lib.sh"; '
+                                         f'solar_client_drain_async "{install}" 5'],
+                          env=env, capture_output=True, text=True, timeout=60, cwd=rig.workspace)
+    assert done.returncode == 1, done.stdout + done.stderr
+    text = done.stderr.lower()
+    for fragment in expected:
+        assert fragment.lower() in text, (fragment, done.stderr)
+    rows = [json.loads(line) for line in events.read_text().splitlines()]
+    assert [r["event"] for r in rows] == ["drain-start", event] and rows[-1]["code"] == str(code)
+    if kind != "timeout":
+        assert "did not drain" not in text, "a different failure was reported as a timeout"
+
+
+def test_a_pre_start_hook_that_never_ends_neither_freezes_the_supervisor_nor_starts_the_task(rig):
+    task = rig.legacy("Hook hangs", cleanup_required="true", resources="demo", cleanup_timeout="1")
+    hook = rig.task_root / "hooks" / "demo" / "pre_start.sh"
+    hook.parent.mkdir(parents=True)
+    leftover = rig.tmp / "hook-child.pid"
+    hook.write_text(f"#!/bin/bash\nsleep 300 &\necho $! > '{leftover}'\nwait\n")
+    hook.chmod(0o755)
+    proc = _start_supervisor_process(rig)
+    try:
+        wait_until(lambda: rig.identity() and rig.identity()["reconciled"], 30, what="the supervisor")
+        beats = []
+        deadline = time.monotonic() + 3.5                    # the hook has a 1 s deadline; the beat must not stop
+        while time.monotonic() < deadline:
+            beats.append(rig.identity()["heartbeat_epoch"])
+            time.sleep(0.4)
+        assert len(set(beats)) >= 4, f"the heartbeat stalled while a hook hung: {beats}"
+        assert rig.script("check_async_tasks.sh").returncode == 0, "check saw a frozen supervisor"
+        assert rig.status(task) == "queued" and rig.reservations() == [], "the blocked hook must give the claim back"
+        wait_until(lambda: leftover.exists(), 10)
+        child = int(leftover.read_text())
+        wait_until(lambda: not alive(child), 10, what="the hook's own group to be ended")
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+# ---------------------------------------------------------------------------
+# the real executor runs its command in a group of its own: stopping an execution ends that too
+# ---------------------------------------------------------------------------
+
+def _running_command(rig, title):
+    """A task whose command leaves a long-lived child behind; returns (task id, pid of that child)."""
+    pidfile = rig.tmp / f"{title}.pid"
+    rel = rig.local_script(f'sleep 300 &\necho $! > "{pidfile}"\nwait\n', name=f"{title}.sh")
+    task = rig.local(title, rel, timeout=600)
+    return task, pidfile
+
+
+def test_a_lease_that_ran_out_ends_the_command_the_executor_started_before_the_task_is_failed(rig):
+    task, pidfile = _running_command(rig, "Lease")
+    proc = _start_supervisor_process(rig, sweep=0.5, term_grace=1.0, kill_wait=2.0)
+    try:
+        wait_until(lambda: pidfile.exists() and pidfile.read_text().strip(), 40, what="the command to start")
+        sleeper = int(pidfile.read_text())
+        assert alive(sleeper)
+        with solar_state.session() as store:
+            store.conn.execute("UPDATE execution_reservations SET lease_expires_at = '2000-01-01T00:00:00Z' "
+                               "WHERE task_id = ?", (task,))
+        wait_until(lambda: rig.status(task) == "error", 40, interval=0.005, what="the timeout to be handled")
+        assert not alive(sleeper), "the task was failed and its place freed while its command was still running"
+        assert rig.reservations() == []
+    finally:
+        proc.kill()
+        proc.wait()
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+
+
+def test_a_forced_cancellation_ends_the_command_too_before_the_place_is_freed(rig):
+    task, pidfile = _running_command(rig, "Cancel")
+    proc = _start_supervisor_process(rig, sweep=0.5, cancel_grace=1.0, term_grace=1.0, kill_wait=2.0)
+    executor = None
+    try:
+        wait_until(lambda: pidfile.exists() and pidfile.read_text().strip(), 40, what="the command to start")
+        sleeper = int(pidfile.read_text())
+        executor = wait_until(lambda: (rig.reservations_of(task) or {}).get("owner_pid"), 20)
+        os.kill(executor, signal.SIGSTOP)                  # an executor that cannot react to the cancellation
+        with solar_state.session() as store:
+            store.cancellation_request(task)
+        wait_until(lambda: rig.status(task) == "cancelled", 40, interval=0.005, what="the forced cancellation")
+        assert not alive(sleeper), "the place was freed while the command was still running"
+        assert not alive(executor)
+    finally:
+        proc.kill()
+        proc.wait()
+        for pid in (executor, int(pidfile.read_text()) if pidfile.exists() and pidfile.read_text().strip() else None):
+            if pid:
+                for sig in (signal.SIGCONT, signal.SIGKILL):
+                    try:
+                        os.kill(pid, sig)
+                    except OSError:
+                        pass

@@ -185,7 +185,7 @@ def test_an_owner_that_cannot_be_identified_is_blocked_and_left_alone(rig, monke
 # cleanup that cannot be proved
 # ---------------------------------------------------------------------------
 
-def test_a_failed_cleanup_blocks_that_resource_and_not_the_others(rig, monkeypatch):
+def test_a_failed_cleanup_blocks_that_resource_for_every_entry_point_and_survives_a_restart(rig, monkeypatch):
     rig.apply_policy(global_capacity=3)
     held = rig.reader("Holds demo", resources=["demo"], spec=dict(hold=0.1))
     real_members = supervisor_mod.group_members
@@ -201,43 +201,49 @@ def test_a_failed_cleanup_blocks_that_resource_and_not_the_others(rig, monkeypat
     with rig.running(sweep=0.3, term_grace=0.2, kill_wait=0.2) as sup:
         wait_until(lambda: held in sup.blocked, 30, what="the cleanup to be blocked")
         assert sup.blocked[held]["reason"] == "cleanup_failed"
-        # the same resource is refused, an unrelated one is not
         same = rig.reader("Wants demo", resources=["demo"], spec=dict(hold=0.05))
         other = rig.reader("Wants other", resources=["other"], spec=dict(hold=0.05))
         wait_until(lambda: rig.status(other) == "completed", 30, what="the unrelated task to run")
         time.sleep(0.6)
         assert rig.status(same) == "queued" and rig.events("launched", same) == []
+        # not only the supervisor's claims: a manual activation is refused by the state itself
+        with solar_state.session() as store:
+            assert store.task_claim_detail(same, "activate-1") == dict(claimed=False, reason="resource:demo")
+        assert (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).is_file()
+    # the supervisor restarts: the hold is still there, for it and for a manual activation
+    with rig.running(sweep=0.3, term_grace=0.2, kill_wait=0.2) as again:
+        wait_until(lambda: held in again.blocked, 30, what="the blocked execution to be remembered")
+        time.sleep(0.6)
+        assert rig.status(same) == "queued"
+        with solar_state.session() as store:
+            assert store.task_claim_detail(same, "activate-2")["reason"] == "resource:demo"
         stuck["on"] = False                                    # recovery: the group is really gone
         wait_until(lambda: rig.status(same) == "completed", 30, what="the resource to be free again")
-        assert held not in sup.blocked
+        assert held not in again.blocked
+    assert not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
 
 
-def test_a_claim_that_slips_past_the_exclusion_is_judged_again_and_given_back(rig):
-    """The list of excluded tasks is decided before the claim; a task queued in between must still be
-    refused when it conflicts with a resource whose cleanup is blocked."""
-    rig.apply_policy(global_capacity=3)
-    sup = rig.build()
-    sup.blocked["ghost"] = {"task_id": "ghost", "reason": "cleanup_failed", "released": True, "token": "x",
-                            "access": {"provider": "codex", "access_class": "declared", "resources": ["demo"], "scopes": []}}
-    # the race: the blocked-resource exclusion missed it (the cooldown of a given-back claim still holds)
-    sup._exclude = lambda store, policy: [t for t, until in sup.cooldown.items() if until > time.monotonic()]
-    wants = rig.reader("Wants demo", resources=["demo"], spec=dict(hold=0.05))
-    free = rig.reader("Wants other", resources=["other"], spec=dict(hold=0.05))
-    sup._fill()
-    assert rig.status(wants) == "queued" and rig.reservations_of(wants) is None
-    assert wants in sup.cooldown
-    assert free in sup.children, "an unrelated task was held back too"
-    sup.draining = True
-    wait_until(lambda: free in sup.children and sup.children[free].proc.poll() is not None, 30)
-    sup._reap()
-    assert rig.status(free) == "completed"
+def test_a_process_table_that_does_not_answer_is_not_an_empty_group(rig, monkeypatch):
+    task = rig.legacy("Group in doubt", spec=dict(gate="never"))
+    with solar_state.session() as store:
+        token = store.task_claim_next("supervisor-dead")["token"]
+        store.reservation_attach(task, token, pid=dead_pid())
+    lib.write_json_atomic(rig.ctx.children_file, {"version": 1, "executions": [
+        {"task_id": task, "token": token, "worker": "supervisor-dead", "pid": dead_pid(), "pgid": 424242,
+         "started": None, "dispatched_epoch": time.time(), "access": {}}]}, mode=0o600)
+    monkeypatch.setattr(supervisor_mod, "group_members", lambda pgid: None)     # ps would not answer
+    with rig.running(sweep=0.2) as sup:
+        wait_until(lambda: task in sup.blocked, 30)
+        assert sup.blocked[task]["reason"] == "group_uncertain" and "could not be asked" in sup.blocked[task]["detail"]
+        time.sleep(0.6)
+        assert rig.status(task) == "active" and rig.reservations_of(task) is not None, \
+            "the reservation was given up without being able to check the group"
 
 
 def test_what_is_still_being_collected_is_not_claimed_again(rig):
     sup = rig.build()
     sup.children["recurring"] = supervisor_mod.Execution("recurring", "t", "w")
-    with solar_state.session() as store:
-        assert "recurring" in sup._exclude(store, store.async_policy())
+    assert "recurring" in sup._exclude()
 
 
 def test_an_executor_that_hangs_before_taking_its_execution_is_stopped_when_its_lease_runs_out(rig):

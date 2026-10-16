@@ -16,6 +16,15 @@ import pytest
 import solar_state as st
 import solar_state_cutover as cut
 
+
+@pytest.fixture(autouse=True)
+def _quiet_process_table(tmp_path_factory, monkeypatch):
+    """The CLI and the default lister read the machine's process table. Another checkout's
+    supervisor, or a parallel test run, must not make these tests wait: they read an empty one."""
+    table = tmp_path_factory.mktemp("ps") / "table.txt"
+    table.write_text("", encoding="utf-8")
+    monkeypatch.setenv("SOLAR_CUTOVER_PS_OUTPUT_FILE", str(table))
+
 _SCRIPT = Path(cut.__file__)
 
 AUDIT = ['{"ts": "t1",  "event":"start", "router_id":"r1", "nota":"ñ"}',
@@ -1374,3 +1383,21 @@ def test_the_cli_applies_through_a_hook_and_writes_the_events(runtime, tmp_path)
                              "--apply-hook", str(hook)], capture_output=True, text=True, timeout=60)
     assert failed.returncode == 2 and "apply hook failed (exit 3)" in failed.stderr
     assert _schema(runtime)[0] == 5
+
+
+def test_processes_of_another_install_do_not_block_a_cutover(tmp_path, monkeypatch):
+    mine, other = tmp_path / "mine", tmp_path / "other"
+    table = tmp_path / "ps.txt"
+    table.write_text(
+        f"101 python3 {other}/core/skills/solar-async-tasks/scripts/supervisor.py run\n"
+        f"102 bash {other}/core/skills/solar-async-tasks/scripts/execute_active.sh --task x --token y\n"
+        f"103 python3 {mine}/core/skills/solar-async-tasks/scripts/supervisor.py run\n"
+        f"104 bash ./run_worker.sh --diagnostic\n"
+        f"105 vim notes.txt\n", encoding="utf-8")
+    monkeypatch.setenv("SOLAR_CUTOVER_PS_OUTPUT_FILE", str(table))
+    monkeypatch.setenv("SOLAR_CUTOVER_INSTALL_ROOTS", str(mine))
+    assert [pid for pid, _ in cut.list_processes()] == [103, 104, 105]      # 104 names no install: it counts
+    monkeypatch.setenv("SOLAR_CUTOVER_INSTALL_ROOTS", f"{mine}:{other}")      # the update names the live install
+    assert [pid for pid, _ in cut.list_processes()] == [101, 102, 103, 104, 105]
+    reasons = cut.in_flight(tmp_path, cut.list_processes)
+    assert any("pid 101" in r for r in reasons) and not any("pid 105" in r for r in reasons)

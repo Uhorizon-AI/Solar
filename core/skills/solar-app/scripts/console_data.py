@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -643,6 +644,17 @@ def executions(workspace) -> dict:
     return data
 
 
+def _heartbeat_stale_seconds() -> float:
+    """How old a heartbeat may be before it counts as stopped: the same threshold
+    `check_async_tasks.sh` uses (`SOLAR_SUPERVISOR_HEARTBEAT_STALE`, 2 to 600 s, 30 by default), so the
+    console and the check never disagree about a supervisor that is alive."""
+    try:
+        value = float(os.environ.get("SOLAR_SUPERVISOR_HEARTBEAT_STALE", 30.0))
+    except ValueError:
+        value = 30.0
+    return min(max(value, 2.0), 600.0)
+
+
 def _supervisor_published() -> dict | None:
     """What the resident supervisor published about itself (identity, heartbeat, blocked
     executions), read as a file: the console never opens the supervisor's lock or probes it.
@@ -655,7 +667,7 @@ def _supervisor_published() -> dict | None:
     return {
         "state": data.get("state"), "pid": data.get("pid"), "started_at": data.get("started_at"),
         "heartbeat_at": beat, "heartbeat_age_seconds": age,
-        "fresh": age is not None and age <= 30, "reconciled": bool(data.get("reconciled")),
+        "fresh": age is not None and age <= _heartbeat_stale_seconds(), "reconciled": bool(data.get("reconciled")),
         "blocked": data.get("blocked") or [], "draining": data.get("draining"),
         "children": data.get("children") or [],
     }

@@ -25,7 +25,8 @@ selection rules); it applies everything else. A refused claim never stamps `recu
 A task cannot run twice at once: its row is `active` and its reservation is unique.
 
 An active task that has no reservation (it predates them) counts as exclusive until it is taken
-over or finished.
+over or finished. Executions whose cleanup the supervisor could not prove (`async-tasks/supervisor/cleanup-holds.json`)
+also count, for capacity and resources, until it verifies them (`core/docs/async-supervisor.md`).
 
 ## The execution token
 

@@ -45,4 +45,8 @@ def test_the_console_projects_capacity_the_supervisor_and_the_configuration(harn
         health = _get(harness, "/api/console/health")             # the stamp vocabulary reaches the verdict
         assert health["verdict"]["verdict"] in ("calm", "fault", "unverified")
     finally:
-        _run(harness, "stop_supervisor.sh", "--drain", "--timeout", "30")
+        stop = _run(harness, "stop_supervisor.sh", "--drain", "--timeout", "30")
+        if stop.returncode != 0:                      # never leave a supervisor in the next test's runtime
+            identity = json.loads((harness.runtime / "async-tasks" / ".locks" / "supervisor.json").read_text())
+            os.kill(identity["pid"], 9)
+    assert stop.returncode == 0, f"the drain did not finish: {stop.stdout}{stop.stderr}"

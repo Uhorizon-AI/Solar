@@ -115,3 +115,53 @@ def test_wait_kinds():
     assert kinds("blocked_by_dependency") == "dependency" and kinds("provider_capacity") == "provider"
     assert kinds("global_capacity") == kinds("drain_barrier") == kinds("exclusive_needs_idle") == "capacity"
     assert kinds("maintenance") == kinds("parent_revoked") == "recovery" and kinds("outside_schedule") == "other"
+
+
+def test_queue_waits_gives_the_answers_a_claim_gives(ready):
+    """The console's reasons come from the claim's own rules: for the same queue, what it says would
+    start is what a claim starts (in order), and what it says is waiting is what a claim reports."""
+    with solar_state.session(ready, auto_backup=False) as s:
+        set_policy(s, global_capacity=3, provider_capacity={"codex": 1})
+        run1 = make(s, "A run", policy=access(), provider="codex")
+        assert s.task_claim_detail(run1, "w")["claimed"]
+        make(s, "B provider", policy=access(), provider="codex")           # codex is full
+        make(s, "C free one", policy=access(), provider="claude")           # would start
+        make(s, "D free two", policy=access(resources=["x"]), provider="claude")   # would start
+        make(s, "E full", policy=access(), provider="claude")               # then nothing is left
+        make(s, "F depends", policy=access(), provider="claude", blocked_by_task_ids=json.dumps(run1))
+        stale = make(s, "G stale approval", policy=access(), provider="claude")
+        s.conn.execute("UPDATE tasks SET body = body || ? WHERE id = ?", ("\nchanged after approval\n", stale))
+        make(s, "H recurring soon", policy=access(), provider="claude", recurring="true",
+             recurring_min_interval="86400", recurring_last_run=json.dumps("2999-01-01T00:00:00Z"))
+        before = {w["id"]: w["reason"] for w in s.queue_waits()}
+        audit_before = s.conn.execute("SELECT count(*) FROM audit").fetchone()[0]
+    assert before["b-provider"] == "provider_capacity" and before["f-depends"] == "blocked_by_dependency"
+    assert before["g-stale-approval"] in ("mismatch", "legacy", "absent")
+    assert before["h-recurring-soon"] == "recurring_interval"
+    would_start = [t for t, r in before.items() if r is None]
+    assert would_start == ["c-free-one", "d-free-two"] and before["e-full"] == "global_capacity"
+    with solar_state.read_session(ready) as store:                    # asking changed nothing
+        assert store.conn.execute("SELECT count(*) FROM audit").fetchone()[0] == audit_before
+    with solar_state.session(ready, auto_backup=False) as s:
+        claimed = []
+        while True:
+            task = s.task_claim_next("w")
+            if task is None:
+                break
+            claimed.append(task["id"])
+        assert claimed == would_start
+        after = {w["id"]: w["reason"] for w in s.queue_waits()}
+        waiting = {w["id"]: w["reason"] for w in s.task_claim_next_detail("w")["waiting"]}
+    assert waiting and all(after[t] == r for t, r in waiting.items())
+
+
+def test_the_console_judges_the_heartbeat_with_the_same_threshold_as_the_check(scene, monkeypatch, tmp_path):
+    from datetime import datetime, timedelta, timezone
+    monkeypatch.setenv("SOLAR_RUNTIME_ROOT", str(scene["root"]))
+    locks = scene["root"] / "async-tasks" / ".locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    beat = (datetime.now(timezone.utc) - timedelta(seconds=45)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (locks / "supervisor.json").write_text(json.dumps(dict(state="ready", pid=1, heartbeat_at=beat, reconciled=True)))
+    assert console_data.capacity(tmp_path)["supervisor"]["fresh"] is False                 # 45 s > the default 30 s
+    monkeypatch.setenv("SOLAR_SUPERVISOR_HEARTBEAT_STALE", "120")                           # what check_async_tasks sees too
+    assert console_data.capacity(tmp_path)["supervisor"]["fresh"] is True

@@ -67,9 +67,20 @@ otherwise 20. A held maintenance barrier answers 20 without starting anything.
   `cancelled` only once its group is gone. A lease that expired while the process is alive stops that group and
   fails the task (`lease_expired`).
 * **Failed cleanup.** A group that cannot be proven gone leaves the execution counted and visible as
-  `blocked: cleanup_failed`. While its reservation stands the claim already refuses what conflicts; when the executor
-  had already finished, the supervisor withholds only the queued tasks that conflict with what the execution held
-  (same resource, overlapping writer scope, or anything when it ran alone). Other resources are not touched.
+  `blocked: cleanup_failed`. While its reservation stands the claim already refuses what conflicts. When the executor
+  had already given the reservation back, what the execution held (capacity, resources, writer scopes, or the whole
+  machine when it ran alone) is written to `async-tasks/supervisor/cleanup-holds.json`, which **every claim reads**
+  (`solar_state.cleanup_holds`): the supervisor, `activate.sh`, the diagnostic worker and an adoption are all refused
+  until the supervisor verifies the cleanup and removes the hold (it survives a restart; an unreadable file holds the
+  whole machine). Other resources are not touched.
+* **The command's own group.** The router runs the command or provider in a process group of its own, apart from the
+  executor's. The pid the executor records for the task (not the one an earlier run left) names it: when the supervisor
+  stops an execution (cancellation, lease timeout) or collects it, that group is ended and proved gone **before** the
+  task is failed or cancelled and the reservation released. A process table that does not answer is never read as an
+  empty group: the reservation stays and the execution is `blocked: group_uncertain`.
+* **Hooks.** A pre-start hook has a deadline (`cleanup_timeout` of the task, 60 s by default). One that does not answer is
+  ended with its group and counts as blocked (the claim is given back, with a cooldown); while it runs the heartbeat keeps
+  beating and finished executions are still collected.
 * **Lowering the capacity** never stops a running execution; it limits new claims.
 
 ## Restart and recovery
@@ -118,6 +129,16 @@ Observation thresholds only (they cannot name an owner or a lock): `SOLAR_SUPERV
 `SOLAR_SUPERVISOR_STARTING_LIMIT` (120), `SOLAR_SUPERVISOR_HEARTBEAT_STALE` (30), `SOLAR_SUPERVISOR_LEGACY_LIMIT` (120),
 `SOLAR_SUPERVISOR_UNCERTAIN_HOLD` (300); and the supervisor's own `SOLAR_SUPERVISOR_POLL` (≤ 1),
 `SOLAR_SUPERVISOR_SWEEP`, `SOLAR_SUPERVISOR_CANCEL_GRACE`, `SOLAR_SUPERVISOR_TERM_GRACE`, `SOLAR_SUPERVISOR_KILL_WAIT`.
+
+## Known limit (follow-up before PR 4)
+
+The executor gives its reservation back in the same transaction that moves the task out of `active`, a few milliseconds
+before its process ends, and the supervisor can only verify the end afterwards. In that gap a conflicting manual
+activation (or any claim) can be admitted. With the applied capacity `1` and `VERIFIED_PROFILES` empty nothing can run
+next to anything else, so it has no effect today; it must be closed before 3/5 are enabled. Proposal: a deferred release
+in solar-state — the executor marks the execution `ending` and the reservation is released only by the supervisor (or by
+`task_adopt`) after the group is proved gone, with the cleanup holds above moving from a file into the schema (a
+migration owned by that follow-up). Tracked in Uhorizon-AI/Solar#39.
 
 ## Not in this delivery
 

@@ -68,6 +68,7 @@ DAILY_KEEP = 7
 DAILY_MAX_AGE_SEC = 24 * 3600
 DEFAULT_LOCK_TIMEOUT = float(os.environ.get("SOLAR_STATE_LOCK_TIMEOUT", "30"))
 MAINTENANCE_NAME = "maintenance.json"
+CLEANUP_HOLDS_NAME = "async-tasks/supervisor/cleanup-holds.json"
 CAPACITY_MAX = 5
 LEASE_SECONDS = int(os.environ.get("SOLAR_TASK_LEASE_SECONDS", "300"))
 
@@ -1138,13 +1139,13 @@ def _audit(conn, event: str, **row) -> None:
 
 
 def _approval_gate(conn, task_id: str, row_version: int, pairs: list[list[str]],
-                   body: str) -> Optional[str]:
+                   body: str, *, record: bool = True) -> Optional[str]:
     """The claim's check, inside its transaction. None: the approval covers what is
     stored. Otherwise the reason, recorded once per version of the row in `audit`
     (a worker polls every minute) and logged every time."""
     reason = approval_state(pairs, body)
-    if reason is None:
-        return None
+    if reason is None or not record:
+        return reason
     _LOG.warning("approval_digest_mismatch task=%s reason=%s row_version=%s",
                  task_id, reason, row_version)
     seen = conn.execute(
@@ -1539,6 +1540,41 @@ def maintenance_state(root=None) -> Optional[dict]:
     return data if isinstance(data, dict) else dict(unreadable=True)
 
 
+# -- holds left by a cleanup that could not be proved ---------------------------------
+
+def cleanup_holds(root=None) -> list[dict]:
+    """What executions whose cleanup could not be proved still hold, after their reservation
+    was given back. Kept in a file beside the supervisor's records (not in the schema) and
+    read by every claim, so capacity and resources stay held for the supervisor, `activate.sh`
+    and the diagnostic worker alike until the supervisor verifies the cleanup. An unreadable
+    file fails closed: it holds the whole machine."""
+    path = _root(root) / CLEANUP_HOLDS_NAME
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        holds = data["holds"]
+        if not isinstance(holds, list):
+            raise ValueError("holds is not a list")
+    except (OSError, ValueError, KeyError, TypeError):
+        return [dict(task_id="?", access_class="exclusive", provider="", scopes=[], resources=[],
+                     unreadable=True)]
+    return [h for h in holds if isinstance(h, dict)]
+
+
+def cleanup_holds_write(root, holds: list[dict]) -> None:
+    """Replace the holds (atomically). An empty list removes the file."""
+    path = _root(root) / CLEANUP_HOLDS_NAME
+    if not holds:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    tmp.write_text(json.dumps(dict(version=1, holds=holds), ensure_ascii=False, sort_keys=True) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
 # -- what a task asks for, what the others hold --------------------------------------
 
 class _Access:
@@ -1621,6 +1657,13 @@ def _occupancy(conn, ignore_task: Optional[str] = None) -> list[_Access]:
             held.append(_Access(exclusive=True, task_id=row["id"],
                                 provider=(_field(json.loads(row["frontmatter"]), "provider")
                                           or "").strip().lower()))
+    for hold in cleanup_holds(_db_root(conn)):
+        held.append(_Access(
+            exclusive=hold.get("access_class") != "declared",
+            scopes=[(str(s["path"]), str(s["mode"])) for s in hold.get("scopes") or []
+                    if isinstance(s, dict) and "path" in s and "mode" in s],
+            resources=[str(r) for r in hold.get("resources") or []],
+            provider=str(hold.get("provider") or ""), task_id=hold.get("task_id")))
     return held
 
 
@@ -1751,7 +1794,8 @@ def _claim_order(row) -> tuple:
     return (-_PRIORITY_RANK.get(row["priority"] or "", 0), row["created"] or "", row["id"])
 
 
-def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual: bool) -> Optional[str]:
+def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual: bool,
+                 record: bool = True) -> Optional[str]:
     """Why a queued task cannot be claimed for reasons of its own, or None.
 
     The worker's selection rules (the recurring interval and the schedule window) are not
@@ -1768,7 +1812,7 @@ def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual:
         if not scheduled_now(_field(pairs, "scheduled_time"), _field(pairs, "scheduled_weekdays"),
                              moment, _field(pairs, "scheduled_timezone")):
             return "outside_schedule"
-    reason = _approval_gate(conn, task_id, row["row_version"], pairs, row["body"])
+    reason = _approval_gate(conn, task_id, row["row_version"], pairs, row["body"], record=record)
     if reason:
         return reason
     problem = _provenance_problem(conn, task_id)
@@ -2792,32 +2836,20 @@ class Session:
         policy = _policy_row(conn)
         held = _occupancy(conn)
         target = _drain_target(conn, policy, moment)
-        rows = list(conn.execute("SELECT id, priority, created, frontmatter, body FROM tasks "
-                                 "WHERE status = 'queued'"))
+        rows = list(conn.execute("SELECT id, status, priority, created, frontmatter, body, row_version "
+                                 "FROM tasks WHERE status = 'queued'"))
         rows.sort(key=_claim_order)
         out = []
         for row in rows:
             task_id = row["id"]
             pairs = json.loads(row["frontmatter"])
-            reason: Optional[str] = None
-            if conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?", (task_id,)).fetchone():
-                reason = "cancellation_requested"
-            elif _blocked(conn, pairs):
-                reason = "blocked_by_dependency"
-            elif not _recurring_ready(pairs, moment.timestamp()):
-                reason = "recurring_interval"
-            elif not scheduled_now(_field(pairs, "scheduled_time"), _field(pairs, "scheduled_weekdays"),
-                                   moment, _field(pairs, "scheduled_timezone")):
-                reason = "outside_schedule"
-            elif approval_state(pairs, row["body"]):
-                reason = "approval_digest_mismatch"
-            elif _provenance_problem(conn, task_id):
-                reason = _provenance_problem(conn, task_id)
-            else:
+            # The claim's own rules (cancellation, dependencies, recurrence, schedule, approval,
+            # provenance, access), without recording anything: a change to a claim criterion
+            # changes this answer with it.
+            reason = _eligibility(conn, row, pairs, moment, manual=False, record=False)
+            if reason is None:
                 access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
-                if access.invalid:
-                    reason = "access_policy_invalid"
-                elif target and task_id != target:
+                if target and task_id != target:
                     reason = "drain_barrier"
                 else:
                     reason = _admission(access, held, policy)

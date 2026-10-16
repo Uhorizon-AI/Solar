@@ -38,6 +38,7 @@ import supervisor_lib as lib  # noqa: E402
 import solar_state  # noqa: E402
 
 LOCK_IDENTITY_WAIT = 2.0        # how long a candidate that lost the lock waits for the winner to show itself
+HOOK_TIMEOUT = 60.0             # a pre-start hook's deadline unless the task sets cleanup_timeout
 MAX_START_FAILURES = 3          # an executor that never took its execution, this many times in a row
 MAX_PER_PASS = 16               # claims in one pass: the policy decides how many fit, this only bounds a pass
 WAITING_SHOWN = 20
@@ -258,6 +259,12 @@ class Supervisor:
                 "version": 1, "executions": [c.record() for c in self.children.values()]}, mode=0o600)
             lib.write_json_atomic(self.ctx.blocked_file, {"version": 1, "blocked": list(self.blocked.values())},
                                   mode=0o600)
+            # What a failed cleanup still holds is kept where every claim reads it (capacity and
+            # resources stay taken for the supervisor, activate.sh and the diagnostic worker alike).
+            solar_state.cleanup_holds_write(self.ctx.runtime, [
+                {"task_id": e["task_id"], "reason": e.get("reason"), "since": e.get("since"),
+                 "pgid": e.get("pgid"), **(e.get("access") or {})}
+                for e in self.blocked.values() if e.get("released")])
         except OSError as exc:
             log(f"cannot record the executions: {exc}")
 
@@ -398,41 +405,13 @@ class Supervisor:
         return {"revision": policy["revision"], "global": policy["global_capacity"],
                 "provider": policy["provider_capacity"]}
 
-    def _blocked_holds(self) -> list:
-        """What the executions whose cleanup could not be proved still hold, as the reservation sees
-        it. Only entries whose reservation is already gone need this: while it stands, the claim
-        itself refuses whatever conflicts."""
-        held = []
-        for entry in self.blocked.values():
-            if not entry.get("released"):
-                continue
-            access = entry.get("access") or {}
-            held.append(solar_state._Access(
-                exclusive=access.get("access_class") == "exclusive",
-                scopes=[(s["path"], s["mode"]) for s in access.get("scopes") or []],
-                resources=access.get("resources") or [], provider=access.get("provider") or "",
-                task_id=entry["task_id"]))
-        return held
-
-    @staticmethod
-    def _conflicts(access, held: list, policy: dict) -> bool:
-        """Same rules as the reservation, with capacity out of the picture (it is the claim's)."""
-        relaxed = dict(policy, global_capacity=10 ** 6, provider_capacity={})
-        return bool(held) and solar_state._admission(access, held, relaxed) is not None
-
-    def _exclude(self, store, policy: dict) -> list[str]:
+    def _exclude(self) -> list[str]:
         now = time.monotonic()
         # An execution still being collected is not claimed again (a recurring task is queued again
         # the moment its executor finishes it, a few milliseconds before the process is gone).
         excluded = [tid for tid, until in list(self.cooldown.items()) if until > now] + list(self.children)
         for tid in [t for t, until in self.cooldown.items() if until <= now]:
             del self.cooldown[tid]
-        held = self._blocked_holds()
-        if held:
-            for task in store.task_list("queued"):
-                access = solar_state._access_of(task["frontmatter"], task["id"], policy["enabled_reader_profiles"])
-                if self._conflicts(access, held, policy):
-                    excluded.append(task["id"])
         return excluded
 
     def _fill(self) -> None:
@@ -442,22 +421,12 @@ class Supervisor:
             with self._session() as store:
                 policy = store.async_policy()
                 self.capacity_view = self._capacity_from(policy)
-                detail = store.task_claim_next_detail(self.worker, exclude=self._exclude(store, policy))
+                detail = store.task_claim_next_detail(self.worker, exclude=self._exclude())
                 task, token = detail["task"], detail["token"]
                 self.waiting = [w for w in detail["waiting"] if w.get("id")][:WAITING_SHOWN]
                 if task is None:
                     return
                 access = self._access_of(store, task["id"])
-                # The exclusion above was decided before the claim: a task queued in between could
-                # still conflict with a resource whose cleanup is blocked. Judge the claim itself.
-                conflict = self._conflicts(
-                    solar_state._access_of(task["frontmatter"], task["id"], policy["enabled_reader_profiles"]),
-                    self._blocked_holds(), policy)
-            if conflict:
-                log(f"{task['id']} conflicts with a resource whose cleanup is blocked; given back")
-                self._give_back(task["id"], token, self.worker)
-                self.cooldown[task["id"]] = time.monotonic() + self.cooldown_seconds
-                continue
             if not self._post_claim(task, token):
                 continue
             self._dispatch(task["id"], token, self.worker, access)
@@ -465,8 +434,11 @@ class Supervisor:
     @staticmethod
     def _access_of(store, task_id: str) -> dict:
         row = store.reservation_for(task_id) or {}
+        task = store.task_get(task_id) or {}
         return {"provider": row.get("provider") or "", "access_class": row.get("access_class") or "exclusive",
-                "resources": row.get("resources") or [], "scopes": row.get("scopes") or []}
+                "resources": row.get("resources") or [], "scopes": row.get("scopes") or [],
+                # the pid recorded by an earlier run: only a different one belongs to this execution
+                "prior_pid": task.get("pid")}
 
     def _post_claim(self, task: dict, token: str) -> bool:
         """What `start_next.sh` does after a claim: the pre-start hooks of the task's resources (a
@@ -477,6 +449,10 @@ class Supervisor:
             cleanup = (store.task_field(task_id, "cleanup_required") or "") == "true"
             resources = store.task_field(task_id, "resources") or ""
             exported = store.task_export(task_id) if cleanup else ""
+            try:
+                hook_timeout = float(store.task_field(task_id, "cleanup_timeout") or HOOK_TIMEOUT)
+            except ValueError:
+                hook_timeout = HOOK_TIMEOUT
         if cleanup:
             tasks_root = Path(os.environ.get("SOLAR_TASK_ROOT") or self.ctx.tasks)
             env = {**os.environ, "HOOKS_DIR": str(tasks_root / "hooks"), "DIR_LOCKS": str(tasks_root / ".locks"),
@@ -488,12 +464,11 @@ class Supervisor:
                 export_file = self.ctx.support / f".export-{task_id}"
                 export_file.write_text(exported, encoding="utf-8")
                 try:
-                    blocked = subprocess.run([str(hook), str(export_file)], env=env, stdin=subprocess.DEVNULL,
-                                             capture_output=True, text=True, check=False).returncode != 0
+                    blocked = self._run_hook(hook, export_file, env, hook_timeout)
                 finally:
                     export_file.unlink(missing_ok=True)
                 if blocked:
-                    log(f"pre-start hook blocked {task_id} (resource busy: {resource}); given back")
+                    log(f"pre-start hook blocked {task_id} (resource busy or no answer: {resource}); given back")
                     self._give_back(task_id, token, self.worker)
                     self.cooldown[task_id] = time.monotonic() + self.cooldown_seconds
                     return False
@@ -502,6 +477,28 @@ class Supervisor:
                 store.task_set(task_id, "recurring_last_run", lib.iso(time.time()))
             store.task_unset(task_id, "blocked_by_task_ids")
         return True
+
+    def _run_hook(self, hook: Path, export_file: Path, env: dict, timeout: float) -> bool:
+        """Run a pre-start hook with a deadline; True when it blocks the start. A hook that does
+        not answer in time is a blocked hook (its whole group is ended), never a frozen supervisor:
+        while it runs the heartbeat keeps beating and finished executions are still collected."""
+        proc = subprocess.Popen([str(hook), str(export_file)], env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        deadline = time.monotonic() + timeout
+        next_beat = 0.0
+        while proc.poll() is None:
+            now = time.monotonic()
+            if now >= deadline:
+                log(f"pre-start hook {hook} gave no answer in {timeout:g}s; ending it")
+                stop_group(proc.pid, self.term_grace, self.kill_wait)
+                proc.wait()
+                return True
+            if now >= next_beat:
+                self.publish()
+                self._guarded(self._reap)
+                next_beat = now + 1.0
+            time.sleep(0.05)
+        return proc.returncode != 0
 
     def _give_back(self, task_id: str, token: str, worker: str) -> None:
         try:
@@ -558,12 +555,51 @@ class Supervisor:
                 code = None
             self._collect(ex, code)
 
+    def _provider_group(self, ex: Execution, immediate: bool = True) -> tuple[str, Optional[int]]:
+        """The process group of the command or provider this execution started (the router runs it
+        in a group of its own, apart from the executor's): ('none'|'alive'|'uncertain', pid).
+
+        The pid is the one the executor recorded for this task after it was dispatched. `alive`
+        means that process still leads its own group and started after the dispatch (so it is
+        this execution's). A group whose leader is gone but still has members is this execution's
+        too when we look right after its executor ended (`immediate`: a group id cannot be reused
+        while it has members, and the window for it to have emptied and been reused is the
+        milliseconds since); otherwise, and when the process table would not answer, it is
+        `uncertain`."""
+        with self._session() as store:
+            pid = (store.task_get(ex.task_id) or {}).get("pid")
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return "none", None
+        if pid <= 1 or pid == (ex.access or {}).get("prior_pid") or pid == os.getpgrp():
+            return "none", None
+        kind, info = lib.probe(pid)
+        members = group_members(pid)
+        if kind == "unknown" or members is None:
+            return "uncertain", pid
+        if kind == "alive" and pid in members and (info.get("epoch") or 0) >= ex.dispatched_epoch - 2:
+            return "alive", pid
+        if not members:
+            return "none", None
+        return ("alive", pid) if immediate else ("uncertain", pid)
+
+    def _settle_provider_group(self, ex: Execution, immediate: bool = True) -> bool:
+        """End the provider group of this execution and prove it gone. False when that cannot be
+        proved (the reservation then stays and nothing unproven is signalled)."""
+        state, pid = self._provider_group(ex, immediate)
+        if state == "none":
+            return True
+        if state == "alive":
+            return stop_group(pid, self.term_grace, self.kill_wait)
+        return False
+
     def _collect(self, ex: Execution, code: Optional[int]) -> None:
         """The executor is over. Prove its group is gone, then finish what it left unfinished.
         Only after that is the place forgotten; when the proof fails the execution stays counted
         and visible as blocked."""
-        if not stop_group(ex.pgid, self.term_grace, self.kill_wait):
-            self._block(ex, "cleanup_failed", f"the process group {ex.pgid} could not be proven gone",
+        if not (stop_group(ex.pgid, self.term_grace, self.kill_wait) and self._settle_provider_group(ex)):
+            self._block(ex, "cleanup_failed", f"the process group of {ex.task_id} could not be proven gone",
                         released=True)
             self.children.pop(ex.task_id, None)
             self._save_records()
@@ -578,7 +614,8 @@ class Supervisor:
         # next pass settles it; nothing is forgotten while its outcome is not recorded.
         log(f"collected {ex.task_id}: executor exit {code}, {outcome}")
         self.children.pop(ex.task_id, None)
-        self.start_failures.pop(ex.task_id, None) if outcome != "never_started" else None
+        if outcome != "never_started":
+            self.start_failures.pop(ex.task_id, None)
         self._save_records()
         self.wake.set()
 
@@ -665,6 +702,7 @@ class Supervisor:
         """Stop this execution's group, and nothing else. The loop notices the exit and finishes it."""
         ex.forced, ex.reason = True, reason
         log(f"stopping the group of {ex.task_id} ({reason})")
+        self._settle_provider_group(ex)                  # the command's own group first
         kind, _ = lib.matches(ex.pid, ex.started)
         if kind == "alive":
             stop_group(ex.pgid, self.term_grace, self.kill_wait)
@@ -768,11 +806,22 @@ class Supervisor:
             return
         if not expired and not ours:
             return                                     # a foreign owner that just died: the lease decides
-        if pseudo.pgid and (group_members(pseudo.pgid) or []) and pseudo.pgid != os.getpgrp():
-            self._block(pseudo, "group_uncertain",
-                        f"its executor is gone but process group {pseudo.pgid} still has members "
-                        "that cannot be proven to be its own", released=False)
-            return
+        if pseudo.pgid and pseudo.pgid != os.getpgrp():
+            members = group_members(pseudo.pgid)
+            if members is None or members:
+                # members it cannot prove are its own, or a process table that would not answer:
+                # neither is "the group is empty", so the reservation stays and nothing is killed
+                why = ("the process table could not be asked about its group" if members is None else
+                       f"its executor is gone but process group {pseudo.pgid} still has members "
+                       "that cannot be proven to be its own")
+                self._block(pseudo, "group_uncertain", why, released=False)
+                return
+        if self._provider_group(pseudo, immediate=False)[0] != "none":
+            if not self._settle_provider_group(pseudo, immediate=False):
+                self._block(pseudo, "group_uncertain",
+                            "its executor is gone but the command it started still has processes "
+                            "that cannot be proven gone", released=False)
+                return
         token = row["token"] if ours else self._adopt_token(task_id)
         if token is None:
             return
