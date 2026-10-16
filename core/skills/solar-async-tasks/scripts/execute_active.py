@@ -18,6 +18,7 @@ import os
 import pathlib
 import re
 import shlex
+import signal
 import subprocess
 import threading
 import time
@@ -51,7 +52,22 @@ def _token() -> Optional[str]:
     return os.environ.get("SOLAR_TASK_TOKEN") or None
 
 
-HEARTBEAT_SECONDS = 30
+HEARTBEAT_SECONDS = float(os.environ.get("SOLAR_TASK_HEARTBEAT_SECONDS", "30"))
+_PROVIDER_PID: Optional[int] = None       # the process group this execution started, if any
+
+
+def _stop_own_group() -> None:
+    """Stop the process group of THIS execution (the provider and what it spawned): it was
+    started in its own session, so its pgid is its pid. Nothing else is signalled."""
+    pid = _PROVIDER_PID
+    if not pid:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.5 if sig == signal.SIGTERM else 0)
 
 
 def _own_reservation(task_id: str) -> None:
@@ -80,7 +96,8 @@ def _own_reservation(task_id: str) -> None:
                 with solar_state.session() as store:
                     store.reservation_heartbeat(task_id, token)
             except solar_state.StaleToken:
-                os._exit(75)         # the execution belongs to someone else now
+                _stop_own_group()    # the execution belongs to someone else now: stop its provider first
+                os._exit(75)
             except solar_state.StateError:
                 continue             # busy or unavailable for a moment: the next beat retries
 
@@ -948,6 +965,8 @@ def main() -> int:
     _own_reservation(task_id)
 
     def record_pid(pid):
+        global _PROVIDER_PID
+        _PROVIDER_PID = pid
         with solar_state.session() as store:
             store.task_record(task_id, pid=pid, token=_token())
 
@@ -1116,4 +1135,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except solar_state.StaleToken as exc:
+        # The execution was taken over while this process ran: it must not report anything
+        # about a task it no longer owns, and what it started is stopped.
+        _stop_own_group()
+        print(f"Execution lost: {exc}", file=sys.stderr, flush=True)
+        sys.exit(75)

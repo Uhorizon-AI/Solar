@@ -87,16 +87,18 @@ def test_propose_writes_the_file_and_changes_nothing(solar_env):
 
 
 def test_apply_makes_the_revision_the_one_every_claim_reads(solar_env):
-    proposed = run("async_execution.propose", dict(global_capacity=3, provider_limits=[dict(provider="codex", limit=2)]))
+    proposed = run("async_execution.propose", dict(global_capacity=3, provider_limits=[dict(provider="Codex", limit=2)],
+                                                   enabled_reader_profiles=["text_only_review_v1"]))
     done = run("async_execution.apply", dict(revision=proposed["revision"],
                                              proposal_digest=proposed["proposal_digest"]))
     assert done["applied"] and done["global_capacity"] == 3 and done["provider_capacity"] == {"codex": 2}
     assert applied()["revision"] == 1 and applied()["applied_by"] == "mcp:async_execution.apply"
     with solar_state.session() as store:
-        ids = [store.task_create([("title", f'"T{i}"'), ("access_policy", json.dumps(
-            dict(version=1, mode="read", scopes=[], resources=[])))], "\n# T\n", status="queued")
-            for i in range(4)]
+        ids = [store.task_create([("title", f'"T{i}"'), ("execution_profile", "text_only_review_v1"),
+                                  ("access_policy", json.dumps(dict(version=1, mode="read", scopes=[], resources=[])))],
+                                 "\n# T\n", status="queued") for i in range(4)]
         assert [store.task_claim_detail(t, "w")["claimed"] for t in ids] == [True, True, True, False]
+        assert store.async_policy()["provider_capacity"] == {"codex": 2}          # kept in lowercase
 
 
 def test_editing_the_file_by_hand_activates_nothing(solar_env):
@@ -141,6 +143,16 @@ def test_a_revision_cannot_be_applied_twice_and_the_next_one_keeps_what_it_does_
     assert document["provider_capacity"] == {"codex": 2} and document["exclusive_wait_seconds"] == 30
     run("async_execution.apply", dict(revision=2, proposal_digest=second["proposal_digest"]))
     assert applied()["global_capacity"] == 2
+
+
+def test_a_validation_message_that_mentions_a_digest_is_not_a_changed_proposal(solar_env):
+    broken = dict(schema_version=1, revision=1, global_capacity=2, provider_capacity={"digest": 9})
+    path = proposal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(broken), encoding="utf-8")
+    refuse("async_execution.apply", dict(revision=1, proposal_digest=solar_state.policy_digest(broken)),
+           "policy_invalid")
+    assert applied()["revision"] == 0
 
 
 def test_the_proposal_lives_under_the_resolved_runtime(solar_env):

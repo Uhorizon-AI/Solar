@@ -317,9 +317,10 @@ def _do_async_apply(arguments: dict) -> dict:
         try:
             applied = store.async_policy_apply(document, actor=_actor("async_execution.apply"),
                                                expected_digest=arguments["proposal_digest"])
+        except solar_state.ProposalChanged as exc:
+            raise OperationError("proposal_changed", str(exc)) from None
         except solar_state.PolicyInvalid as exc:
-            code = "proposal_changed" if "digest" in str(exc) else "policy_invalid"
-            raise OperationError(code, str(exc)) from None
+            raise OperationError("policy_invalid", str(exc)) from None
     return dict(applied=True, revision=applied["revision"], global_capacity=applied["global_capacity"],
                 provider_capacity=applied["provider_capacity"],
                 exclusive_wait_seconds=applied["exclusive_wait_seconds"],

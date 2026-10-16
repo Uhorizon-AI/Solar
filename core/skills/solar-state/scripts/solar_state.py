@@ -311,6 +311,10 @@ class PolicyInvalid(StateError):
     """A proposed execution policy is refused; the applied one stays."""
 
 
+class ProposalChanged(PolicyInvalid):
+    """The proposal is not the document that was approved (its digest differs)."""
+
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -1453,11 +1457,16 @@ def validate_policy_document(doc: Any, current_revision: int) -> dict:
     providers = doc.get("provider_capacity", {})
     if not isinstance(providers, dict):
         raise PolicyInvalid("provider_capacity must map a provider to a positive integer")
+    lowered: dict[str, int] = {}
     for name, limit in providers.items():
         if not isinstance(name, str) or not _SLUG_RE.match(name):
             raise PolicyInvalid(f"provider_capacity: {name!r} is not a provider name")
         if not _is_int(limit) or not 1 <= limit <= CAPACITY_MAX:
             raise PolicyInvalid(f"provider_capacity.{name} must be an integer from 1 to {CAPACITY_MAX}")
+        # A task's provider is compared in lowercase: a limit kept as "Codex" would never apply.
+        if name.lower() in lowered:
+            raise PolicyInvalid(f"provider_capacity names {name.lower()!r} twice")
+        lowered[name.lower()] = limit
     wait = doc.get("exclusive_wait_seconds", 60)
     if not _is_int(wait) or not 1 <= wait <= 86400:
         raise PolicyInvalid("exclusive_wait_seconds must be an integer from 1 to 86400")
@@ -1467,7 +1476,7 @@ def validate_policy_document(doc: Any, current_revision: int) -> dict:
     except FormatError as exc:
         raise PolicyInvalid(str(exc)) from None
     return dict(schema_version=POLICY_SCHEMA_VERSION, revision=revision, global_capacity=cap,
-                provider_capacity={k: providers[k] for k in sorted(providers)},
+                provider_capacity={k: lowered[k] for k in sorted(lowered)},
                 exclusive_wait_seconds=wait, enabled_reader_profiles=profiles)
 
 
@@ -1554,7 +1563,12 @@ def _overlaps(left: str, right: str) -> bool:
     return a.startswith(b) or b.startswith(a)
 
 
-def _access_of(pairs: list[list[str]], task_id: Optional[str] = None) -> _Access:
+def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
+               profiles: Iterable[str] = ()) -> _Access:
+    """What the task asks for. A declaration alone never makes a task concurrent: the providers
+    still run with their own permissions, so the declaration is trusted only for an
+    `execution_profile` the applied policy lists in `enabled_reader_profiles` (it starts empty).
+    Any other task, declared or not, keeps running alone."""
     provider = (_field(pairs, "provider") or "").strip().lower()
     resources = set(_csv(_field(pairs, "resources")))
     raw = _get_pair(pairs, "access_policy")
@@ -1566,6 +1580,9 @@ def _access_of(pairs: list[list[str]], task_id: Optional[str] = None) -> _Access
         return _Access(exclusive=True, resources=resources, provider=provider,
                        invalid=str(exc), task_id=task_id)
     resources |= set(policy["resources"])
+    profile = (_field(pairs, "execution_profile") or "").strip()
+    if not profile or profile not in set(profiles):
+        return _Access(exclusive=True, resources=resources, provider=provider, task_id=task_id)
     scopes = [(_resolve_scope(path), policy["mode"]) for path in policy["scopes"]]
     return _Access(exclusive=False, scopes=scopes, resources=resources, provider=provider,
                    task_id=task_id)
@@ -1626,10 +1643,10 @@ def _reserve(conn, task_id: str, pairs: list[list[str]], worker: Optional[str],
     every way into `active` is checked here, whoever asked."""
     if maintenance_state(_db_root(conn)) is not None:
         raise TransitionRefused(f"{task_id} cannot start: maintenance is in progress")
-    access = _access_of(pairs, task_id)
+    policy = _policy_row(conn)
+    access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
     if access.invalid:
         raise TransitionRefused(f"{task_id} cannot start: access_policy_invalid ({access.invalid})")
-    policy = _policy_row(conn)
     reason = _admission(access, _occupancy(conn, ignore_task=task_id), policy)
     if reason:
         raise TransitionRefused(f"{task_id} cannot start now: {reason}")
@@ -1640,8 +1657,8 @@ def _reserve(conn, task_id: str, pairs: list[list[str]], worker: Optional[str],
 def _reserve_with(conn, task_id: str, pairs: list[list[str]], worker: Optional[str], token: str, *,
                   handoff: bool, access: Optional[_Access] = None,
                   policy: Optional[dict] = None) -> str:
-    access = access or _access_of(pairs, task_id)
     policy = policy or _policy_row(conn)
+    access = access or _access_of(pairs, task_id, policy["enabled_reader_profiles"])
     now = _now()
     conn.execute(
         "INSERT INTO execution_reservations (token, task_id, worker, provider, access_class, "
@@ -1680,15 +1697,26 @@ def _check_token(conn, task_id: str, token: Optional[str]) -> None:
         raise StaleToken(f"{task_id}: that execution token is not the current one")
 
 
+class IdentityUnknown(Exception):
+    """The process table could not be asked (denied, timed out, failed): its answer is unknown."""
+
+
 def _process_identity(pid: int) -> Optional[str]:
-    """Start time of a process as `ps` prints it; None when it is not running."""
+    """Start time of a process as `ps` prints it; None only when `ps` answers that it is not
+    running. Any failure to ask raises `IdentityUnknown`: nobody may be replaced on a guess."""
     import subprocess
     try:
-        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))], capture_output=True,
-                             text=True, check=False, timeout=10).stdout.strip()
-    except (OSError, ValueError, subprocess.SubprocessError):
+        done = subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))], capture_output=True,
+                              text=True, check=False, timeout=10)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise IdentityUnknown(f"cannot ask the process table about {pid}: {exc}") from None
+    out = done.stdout.strip()
+    if out:
+        return out
+    if done.returncode == 1 and not done.stderr.strip():
         return None
-    return out or None
+    raise IdentityUnknown(f"the process table answered {done.returncode} for {pid}: "
+                          f"{done.stderr.strip()[:120]}")
 
 
 def _provenance_problem(conn, task_id: str) -> Optional[str]:
@@ -1758,7 +1786,7 @@ def _drain_target(conn, policy: dict, moment: datetime, exclude: Optional[str] =
         if now_epoch - _epoch(waits[row["id"]]["first_blocked_at"]) < policy["exclusive_wait_seconds"]:
             continue
         pairs = json.loads(row["frontmatter"])
-        if _access_of(pairs).exclusive and _eligibility(conn, row, pairs, moment, manual=False) is None:
+        if _access_of(pairs, profiles=policy["enabled_reader_profiles"]).exclusive and _eligibility(conn, row, pairs, moment, manual=False) is None:
             return row["id"]
     return None
 
@@ -2279,7 +2307,7 @@ class Session:
                 return dict(claimed=False, reason=reason)
             policy = _policy_row(conn)
             target = _drain_target(conn, policy, moment, exclude=task_id)
-            access = _access_of(pairs, task_id)
+            access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
             if target:
                 _note_wait(conn, task_id, access, "drain_barrier", policy, target=None)
                 return dict(claimed=False, reason="drain_barrier")
@@ -2403,7 +2431,7 @@ class Session:
             rows.sort(key=_claim_order)
             target = _drain_target(conn, policy, moment)
             held = _occupancy(conn)
-            exclusives: set[str] = set()
+            ineligible: set[str] = set()
             for row in rows:
                 task_id = row["id"]
                 if conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?",
@@ -2411,14 +2439,12 @@ class Session:
                     _move(conn, task_id, "cancelled", "claim-next")
                     continue
                 if task_id in skipped:
-                    exclusives.add(task_id)
                     continue
                 pairs = json.loads(row["frontmatter"])
                 if _eligibility(conn, row, pairs, moment, manual=False):
+                    ineligible.add(task_id)
                     continue
-                access = _access_of(pairs, task_id)
-                if access.exclusive:
-                    exclusives.add(task_id)
+                access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
                 if target and task_id != target:
                     waiting.append(dict(id=task_id, reason="drain_barrier"))
                     _note_wait(conn, task_id, access, "drain_barrier", policy, target=None)
@@ -2431,12 +2457,13 @@ class Session:
                     break
                 waiting.append(dict(id=task_id, reason=reason))
                 _note_wait(conn, task_id, access, reason, policy, target=target, held=held)
-            if claimed is None:
-                # A wait only counts while the task stays eligible: dependencies, schedule or
-                # approval that stopped holding reset its clock.
-                for wait in conn.execute("SELECT task_id FROM claim_waits").fetchall():
-                    if wait[0] not in exclusives:
-                        conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (wait[0],))
+            # A wait only counts while the task stays eligible: dependencies, schedule or approval
+            # that stopped holding reset its clock, whether or not this pass claimed something.
+            # Tasks the pass never reached keep theirs.
+            queued_now = {row["id"] for row in rows}
+            for wait in conn.execute("SELECT task_id FROM claim_waits").fetchall():
+                if wait[0] in ineligible or wait[0] not in queued_now:
+                    conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (wait[0],))
             token = (conn.execute("SELECT token FROM execution_reservations WHERE task_id = ?",
                                   (claimed,)).fetchone()[0] if claimed else None)
         return dict(task=self.task_get(claimed) if claimed else None, token=token, waiting=waiting)
@@ -2513,6 +2540,10 @@ class Session:
                 raise TransitionRefused(f"no task {task_id}")
             if row["status"] == "active":
                 _check_token(conn, task_id, token)
+            elif token:
+                # The execution that token belonged to is over (the task finished, or went back
+                # to the queue for its next run): it cannot fail what it no longer owns.
+                raise StaleToken(f"{task_id} is {row['status']}: that execution token has ended")
             _move(conn, task_id, "error", actor or "fail", rewrite_body=rewrite, fields=fields)
 
     def task_await(self, task_id: str, child_ids: Iterable[str],
@@ -2644,10 +2675,10 @@ class Session:
             token = uuid.uuid4().hex
             if res is None:
                 pairs = json.loads(row["frontmatter"])
-                access = _access_of(pairs, task_id)
+                policy = _policy_row(conn)
+                access = _access_of(pairs, task_id, policy["enabled_reader_profiles"])
                 if access.invalid:
                     return dict(adopted=False, reason="access_policy_invalid")
-                policy = _policy_row(conn)
                 reason = _admission(access, _occupancy(conn, ignore_task=task_id), policy)
                 if reason:
                     return dict(adopted=False, reason=reason)
@@ -2659,7 +2690,10 @@ class Session:
                     if not expired:
                         return dict(adopted=False, reason="lease_valid")
                     if res["owner_pid"] is not None:
-                        alive = identity(res["owner_pid"])
+                        try:
+                            alive = identity(res["owner_pid"])
+                        except IdentityUnknown:
+                            return dict(adopted=False, reason="owner_unverifiable")
                         if alive and (res["owner_started"] is None or alive == res["owner_started"]):
                             return dict(adopted=False, reason="owner_alive")
                 conn.execute("UPDATE execution_reservations SET token = ?, worker = ?, handoff = 0, "
@@ -2687,8 +2721,8 @@ class Session:
             normalized = validate_policy_document(document, current["revision"])
             digest = policy_digest(normalized)
             if expected_digest is not None and digest != expected_digest:
-                raise PolicyInvalid("the proposal is not the one that was approved "
-                                    "(its digest changed); nothing was applied")
+                raise ProposalChanged("the proposal is not the one that was approved "
+                                      "(its digest changed); nothing was applied")
             conn.execute(
                 "UPDATE async_policy SET revision = ?, global_capacity = ?, provider_capacity = ?, "
                 "exclusive_wait_seconds = ?, enabled_reader_profiles = ?, applied_at = ?, "

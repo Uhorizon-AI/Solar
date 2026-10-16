@@ -22,7 +22,7 @@
 #   client_update_staged.sh --install-root P --workspace W --runtime-root R --stage-root S \
 #     --mode git|bundle [--target REF] [--apply-hook H] [--target-identity "V COMMIT"] \
 #     [--restart-mode auto|never|always] [--reinstall-launchagent] [--portable] \
-#     [--did-backup] [--from-version V --from-commit C]
+#     [--did-backup]
 #   client_update_staged.sh --resume --install-root P --workspace W --runtime-root R
 set -euo pipefail
 
@@ -42,8 +42,6 @@ RESTART_MODE=auto
 REINSTALL_LAUNCHAGENT=false
 PORTABLE=false
 DID_BACKUP=false
-FROM_VERSION=""
-FROM_COMMIT=""
 RESUME=false
 
 need() { [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }; }
@@ -58,8 +56,6 @@ while [[ $# -gt 0 ]]; do
     --apply-hook) need "$@"; APPLY_HOOK="$2"; shift 2 ;;
     --target-identity) need "$@"; TARGET_IDENTITY="$2"; shift 2 ;;
     --restart-mode) need "$@"; RESTART_MODE="$2"; shift 2 ;;
-    --from-version) need "$@"; FROM_VERSION="$2"; shift 2 ;;
-    --from-commit) need "$@"; FROM_COMMIT="$2"; shift 2 ;;
     --reinstall-launchagent) REINSTALL_LAUNCHAGENT=true; shift ;;
     --portable) PORTABLE=true; shift ;;
     --did-backup) DID_BACKUP=true; shift ;;
@@ -129,9 +125,6 @@ if [[ -z "$APPLY_HOOK" ]]; then
   solar_client_validate_staged "$STAGE_ROOT"
   solar_client_write_apply_hook "$staging/apply-hook.sh" "$INSTALL_ROOT" "$MODE" "$TARGET" "$commit" "$STAGE_ROOT"
   APPLY_HOOK="$staging/apply-hook.sh"
-  if [[ -z "$FROM_VERSION" ]]; then
-    read -r FROM_VERSION FROM_COMMIT < <(solar_client_git_identity "$INSTALL_ROOT")
-  fi
 fi
 if [[ -z "$TARGET_IDENTITY" && "$MODE" == git ]]; then
   read -r _tv _tc < <(solar_client_git_identity "$STAGE_ROOT")

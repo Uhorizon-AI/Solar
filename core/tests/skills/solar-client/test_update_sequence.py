@@ -16,6 +16,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -212,7 +213,7 @@ def test_the_whole_sequence_runs_in_order_with_an_old_supervisor_and_schema(rig)
 def test_the_first_installation_runs_the_staged_entrypoint_with_explicit_paths(rig, tmp_path):
     rig.runtime_state(5)
     staging = tmp_path / "prepared"
-    subprocess.run(["git", "clone", "-q", "--branch", "v0.0.2", str(rig.install), str(staging)], check=True)
+    subprocess.run(["git", "clone", "-q", "--no-local", "--branch", "v0.0.2", str(rig.install), str(staging)], check=True)
     staged = staging / "core" / "skills" / "solar-client" / "scripts" / "client_update_staged.sh"
     env = rig.env()
     rig.guard(env)
@@ -476,3 +477,53 @@ def test_the_supervisor_is_detected_by_install_not_by_name(rig):
 def test_the_drain_waits_for_this_installs_async_work_only(rig, line, busy):
     done = lib(rig, f'solar_client_async_busy "{rig.install}"', [line.format(install=rig.install)])
     assert (done.returncode == 0) is busy, done.stdout + done.stderr
+
+
+# --------------------------------------------------------------------------
+# one process drives the operation at a time
+# --------------------------------------------------------------------------
+
+def test_a_resume_cannot_run_next_to_the_update_that_is_still_driving(rig):
+    rig.runtime_state(5)
+    env_extra = dict(SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host", SOLAR_CLIENT_DRAIN_TIMEOUT="60")
+    env = rig.env(**env_extra)
+    rig.guard(env)
+    entry = rig.install / "core" / "skills" / "solar-client" / "scripts" / "client_update.sh"
+    original = subprocess.Popen(["bash", str(entry), "--workspace", str(rig.ws), "--ref", "v0.0.2", "--yes"],
+                                env=env, cwd=rig.ws, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.time() + 60
+        while time.time() < deadline and "drain-start" not in rig.names():
+            time.sleep(0.1)
+        assert "drain-start" in rig.names(), "the original never reached the drain"
+        resumed = rig.update("--resume", env_extra=env_extra)
+        assert resumed.returncode != 0 and "another update process is driving" in resumed.stderr
+        again = rig.update("--ref", "v0.0.2", "--yes", env_extra=env_extra)
+        assert again.returncode != 0
+        assert rig.barrier()["phase"] == "ticks-paused"                         # nothing ran twice, nothing was released
+        assert not {"host-start", "release", "resume"} & set(rig.names())
+        rig.busy.unlink()                                                       # the old work finishes
+        out, err = original.communicate(timeout=300)
+    finally:
+        if original.poll() is None:
+            original.kill()
+    assert original.returncode == 0, out + err
+    names = rig.names()
+    assert names.count("host-start") == 1 and names.count("release") == 1 and "resume" not in names
+    assert rig.barrier() is None and not (rig.rt / "maintenance.lock").exists()
+
+
+def test_a_lock_left_by_a_dead_process_is_taken_over_but_an_unverifiable_one_is_respected(rig):
+    rig.runtime_state(5)
+    no_supervisor = dict(SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host", SOLAR_CLIENT_DRAIN_TIMEOUT="1")
+    assert rig.update("--ref", "v0.0.2", "--yes", env_extra=no_supervisor).returncode != 0
+    rig.busy.unlink()
+    lock = rig.rt / "maintenance.lock"
+    lock.write_text("{ not json")
+    refused = rig.update("--resume", env_extra=no_supervisor)
+    assert refused.returncode != 0 and "another update process is driving" in refused.stderr
+    assert rig.marker() == "OLD" and rig.barrier() is not None
+    lock.write_text(json.dumps(dict(pid=2 ** 22 - 3, start="Thu Jan  1 00:00:00 1970")))
+    resumed = rig.update("--resume", env_extra=no_supervisor)
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert rig.marker() == "NEW" and rig.barrier() is None and not lock.exists()

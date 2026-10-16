@@ -13,9 +13,9 @@ fit stays `queued` and the reason is returned (never an error):
 |---|---|
 | `global_capacity` | The applied policy's capacity is used up |
 | `provider_capacity` | The provider has its own limit and it is used up |
-| `scope_conflict` | A writer overlaps a scope held by another task (parent/child paths overlap; symlinks are resolved at claim time; reader/reader never conflicts) |
+| `scope_conflict` | A writer overlaps a scope held by another task (parent/child paths overlap; symlinks are resolved at claim time; reader/reader never conflicts). Paths are compared case-insensitively on every platform: on a case-sensitive volume `/Data/x` and `/data/x` are treated as the same scope, which can only serialize more, never less |
 | `resource:<name>` | The resource is held; resources are always exclusive |
-| `exclusive_needs_idle` / `blocked_by_exclusive` | A task that declares no access runs alone, and blocks every other start while it runs |
+| `exclusive_needs_idle` / `blocked_by_exclusive` | A task that runs alone (see below), and blocks every other start while it runs |
 | `drain_barrier` | An exclusive task has waited `exclusive_wait_seconds`; nothing else starts until it does |
 | `maintenance` | An update holds the barrier (below) |
 | `cancellation_requested`, `blocked_by_dependency`, `parent_revoked`, `access_policy_invalid`, `absent`/`legacy`/`mismatch` | Revalidated inside the same transaction |
@@ -39,13 +39,24 @@ the lease every 30 seconds (`lease_expires_at`, 300 s by default). `task_adopt` 
 only when the previous owner cannot be running: a manual activation no executor attached to yet,
 an active task with no reservation, or a lease that ended whose recorded process is gone or is no
 longer the process that started. A lease that ended with its process still alive is `owner_alive`
-and is left alone. An old token stops working the moment the new one commits.
+and is left alone; when the process table cannot be asked (denied, timed out, failed) the owner is
+`owner_unverifiable` and is also left alone: only a proof that it is gone allows a replacement. A
+token cannot fail or finish an execution that already ended (a recurring task back in the queue
+included): it raises `StaleToken`. If the heartbeat finds its token replaced, the executor stops
+the process group it started before it exits. An old token stops working the moment the new one commits.
 
 `start_next.sh` hands the claimed id and token to the worker in `$SOLAR_CLAIM_FILE`;
 `execute_active.sh --task <id> --token <token>` runs exactly that claim. Without them
 (`--once`/`--all`) it adopts what nobody runs. It never takes "the first active task".
 
 ## Access declaration and the new material keys
+
+**A declaration alone never makes a task concurrent.** The providers still run with their own
+permissions (`bypassPermissions`, `workspace-write`), so `read` does not stop a write. A declared
+task is admitted next to others only when its `execution_profile` is listed in the applied
+policy's `enabled_reader_profiles`, which starts empty; any other task runs alone, declared or not,
+and readers and writers with disjoint scopes alike. Raising the capacity therefore changes nothing
+until a profile whose confinement was verified is enabled.
 
 `access_policy` is JSON: `{"version":1,"mode":"read"|"write","scopes":["/abs/path"],"resources":["name"]}`.
 A writer names at least one scope. Paths are absolute and normalized; the digest hashes the
@@ -69,7 +80,7 @@ and no record is ever inferred from `parent_task_id`.
 
 ## The applied policy
 
-`async_policy` has one row: `revision`, `global_capacity` (1 to 5, initially **1**),
+`async_policy` has one row (provider names are kept in lowercase, as a task's provider is compared): `revision`, `global_capacity` (1 to 5, initially **1**),
 `provider_capacity`, `exclusive_wait_seconds` (60), `enabled_reader_profiles`. Every claim reads it
 in its own transaction. Lowering the capacity never stops a running task.
 
@@ -113,7 +124,10 @@ then the target's own `client_update_staged.sh` runs:
 5. services start, code identity and schema are verified, the ticks resume, the barrier is released.
 
 A failure keeps the services stopped and the barrier held; `solar client update --resume` continues
-the same operation from its recorded phase. `--no-restart` stops after step 4 and holds the
+the same operation from its recorded phase. One process drives it at a time: an operation lock
+(`<runtime>/maintenance.lock`, the pid and start time of the driver) is held for the whole sequence,
+so a `--resume`, a second update or a sync is refused while the original is alive. A lock whose
+process is gone is taken over; one whose owner cannot be verified is respected. `--no-restart` stops after step 4 and holds the
 barrier until `--resume`. `--check` writes nothing. The event log (`<runtime>/update-events.jsonl`)
 records the order. `solar client sync` uses the same barrier and order without a code replacement.
 

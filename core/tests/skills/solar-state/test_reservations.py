@@ -34,11 +34,17 @@ def access(mode="read", scopes=(), resources=()):
                       sort_keys=True, separators=(",", ":"))
 
 
-def make(store, title, *, policy=None, status="queued", **extra):
-    """An approved task. `policy` is the access declaration; without it the task is legacy."""
+PROFILE = "text_only_review_v1"
+
+
+def make(store, title, *, policy=None, status="queued", profile=PROFILE, **extra):
+    """An approved task. `policy` is the access declaration; without it the task is legacy.
+    A declared task also names the execution profile (the one `set_policy` enables)."""
     fields = [("title", json.dumps(title))]
     if policy is not None:
         fields.append(("access_policy", policy))
+        if profile:
+            fields.append(("execution_profile", profile))
     fields += [(k, v) for k, v in extra.items()]
     task_id = store.task_create(fields, f"\n# {title}\n\nDo {title}.\n", task_id=title.lower().replace(" ", "-"))
     if status == "queued":
@@ -47,7 +53,9 @@ def make(store, title, *, policy=None, status="queued", **extra):
 
 
 def set_policy(store, **changes):
+    """Apply the next revision. The reader profile is enabled unless the test says otherwise."""
     current = store.async_policy()
+    changes.setdefault("enabled_reader_profiles", [PROFILE])
     document = dict(schema_version=1, revision=current["revision"] + 1,
                     global_capacity=current["global_capacity"],
                     provider_capacity=current["provider_capacity"],
@@ -83,6 +91,7 @@ def test_a_new_base_starts_with_capacity_one(store):
 
 
 def test_a_second_claim_waits_for_the_only_place(store):
+    set_policy(store)                       # capacity 1, the reader profile enabled
     a, b = make(store, "A", policy=access()), make(store, "B", policy=access())
     first = claim(store, a)
     assert first["claimed"] and first["token"]
@@ -93,6 +102,7 @@ def test_a_second_claim_waits_for_the_only_place(store):
 
 
 def test_every_way_into_active_takes_a_reservation(store):
+    set_policy(store)
     a, b = make(store, "A", policy=access()), make(store, "B", policy=access())
     store.task_transition(a, "active")                   # the generic move is not a way around it
     assert store.reservation_for(a)["token"]
@@ -184,6 +194,7 @@ def test_adopt_takes_an_active_task_that_predates_reservations(store):
 
 
 def test_an_active_task_without_a_reservation_counts_as_exclusive(store):
+    set_policy(store, global_capacity=3)
     ghost = make(store, "Ghost", policy=access())
     store.conn.execute("UPDATE tasks SET status = 'active' WHERE id = ?", (ghost,))
     b = make(store, "B", policy=access())
@@ -419,6 +430,7 @@ def test_a_task_without_approval_takes_no_place(store):
 
 
 def test_a_refused_claim_does_not_consume_the_recurring_interval(store):
+    set_policy(store)
     held = make(store, "Held", policy=access())
     claim(store, held)
     recurring = make(store, "Tick", policy=access(), recurring="true", recurring_min_interval="3600")
@@ -521,11 +533,13 @@ def test_an_invalid_revision_is_refused_and_the_applied_one_stays(store):
 def test_the_file_proposes_and_only_an_applied_revision_counts(store):
     path = solar_state.config_path(store.root)
     assert path == store.root / "async-tasks" / "config" / "async-execution.json"
-    solar_state.write_proposal(dict(schema_version=1, revision=1, global_capacity=5), store.root)
+    solar_state.write_proposal(dict(schema_version=1, revision=1, global_capacity=5,
+                                    enabled_reader_profiles=[PROFILE]), store.root)
     status = store.async_policy_status()
     assert status["pending"] and status["applies"] and status["applied"]["global_capacity"] == 1
     ids = [make(store, f"R{i}", policy=access()) for i in range(2)]
-    assert claim(store, ids[0])["claimed"] and claim(store, ids[1])["reason"] == "global_capacity"
+    assert claim(store, ids[0])["claimed"] and claim(store, ids[1])["reason"] == "exclusive_needs_idle"
+    store.task_complete(ids[0], token=token_of(store, ids[0]))               # it ran alone: no profile was enabled yet
     digest = status["proposal"]["digest"]
     with pytest.raises(PolicyInvalid, match="digest"):
         store.async_policy_apply(solar_state.read_proposal(store.root)["document"], expected_digest="0" * 64)
@@ -747,6 +761,7 @@ def test_the_cli_hands_out_and_demands_the_token(ready):
 
 def test_the_cli_claim_next_reports_the_token_and_what_waits(ready):
     with solar_state.session(ready, auto_backup=False) as s:
+        set_policy(s)
         make(s, "A", policy=access())
         make(s, "B", policy=access())
     out = json.loads(cli(ready, "task", "claim-next", "--worker", "w").stdout)
@@ -769,3 +784,150 @@ def test_the_cli_applies_the_proposal_file(ready):
     rejected = cli(ready, "async-policy", "apply")                    # same revision again
     assert rejected.returncode == 2 and "PolicyInvalid" in rejected.stderr
     assert json.loads(cli(ready, "maintenance").stdout)["held"] is False
+
+
+# --------------------------------------------------------------------------
+# a declaration is trusted only for an enabled execution profile
+# --------------------------------------------------------------------------
+
+def test_a_declaration_alone_never_makes_a_task_concurrent(store):
+    """The providers run with their own permissions: `read` does not stop a write."""
+    set_policy(store, global_capacity=5, enabled_reader_profiles=[])          # nothing is enabled yet
+    codex = [make(store, f"C{i}", policy=access("read", [f"/r/{i}"]), profile=None, provider=json.dumps("codex"))
+             for i in range(2)]
+    assert claim(store, codex[0])["claimed"]
+    assert claim(store, codex[1])["reason"] == "exclusive_needs_idle"
+    assert store.reservation_for(codex[0])["access_class"] == "exclusive"
+    assert store.task_claim_next("w") is None
+
+
+def test_a_declaration_with_a_profile_that_is_not_enabled_serializes(store):
+    set_policy(store, global_capacity=5, enabled_reader_profiles=[])
+    first = make(store, "First", policy=access("read", ["/a"]))
+    second = make(store, "Second", policy=access("read", ["/b"]))
+    assert claim(store, first)["claimed"] and claim(store, second)["reason"] == "exclusive_needs_idle"
+    store.task_complete(first, token=token_of(store, first))
+    other = make(store, "Other", policy=access("read", ["/c"]), profile="some_other_profile")
+    set_policy(store, enabled_reader_profiles=[PROFILE])
+    assert claim(store, other)["claimed"]
+    assert claim(store, second)["reason"] == "blocked_by_exclusive"            # still not the enabled one
+
+
+def test_writers_with_disjoint_scopes_also_wait_for_an_enabled_profile(store):
+    set_policy(store, global_capacity=5, enabled_reader_profiles=[])
+    one = make(store, "One", policy=access("write", ["/repo/a"]))
+    two = make(store, "Two", policy=access("write", ["/repo/b"]))
+    assert claim(store, one)["claimed"] and claim(store, two)["reason"] == "exclusive_needs_idle"
+
+
+def test_an_enabled_profile_lets_declared_tasks_run_together(store):
+    set_policy(store, global_capacity=3, enabled_reader_profiles=[PROFILE])
+    ids = [make(store, f"R{i}", policy=access("read", [f"/r/{i}"])) for i in range(3)]
+    assert all(claim(store, t)["claimed"] for t in ids)
+    assert {r["access_class"] for r in store.reservations()} == {"declared"}
+
+
+def test_disabling_the_profile_makes_new_starts_exclusive_again(store):
+    set_policy(store, global_capacity=3)
+    first = make(store, "First", policy=access("read", ["/a"]))
+    second = make(store, "Second", policy=access("read", ["/b"]))
+    assert claim(store, first)["claimed"]
+    set_policy(store, enabled_reader_profiles=[])
+    assert claim(store, second)["reason"] == "exclusive_needs_idle"            # and the running one is untouched
+    assert store.task_status(first) == "active"
+
+
+def test_provider_limits_are_matched_in_lowercase(store):
+    set_policy(store, global_capacity=5, provider_capacity={"Codex": 1})
+    assert store.async_policy()["provider_capacity"] == {"codex": 1}
+    a = make(store, "A", policy=access("read", ["/a"]), provider=json.dumps("Codex"))
+    b = make(store, "B", policy=access("read", ["/b"]), provider=json.dumps("codex"))
+    assert claim(store, a)["claimed"] and claim(store, b)["reason"] == "provider_capacity"
+    with pytest.raises(PolicyInvalid, match="twice"):
+        set_policy(store, provider_capacity={"Codex": 1, "codex": 2})
+
+
+# --------------------------------------------------------------------------
+# tokens of executions that ended
+# --------------------------------------------------------------------------
+
+def test_the_token_of_a_finished_execution_cannot_fail_the_next_run(store):
+    set_policy(store)
+    tick = make(store, "Tick", policy=access("read", ["/a"]), recurring="true", recurring_min_interval="1")
+    old = claim(store, tick)["token"]
+    assert store.task_complete(tick, token=old) == "queued"                   # back in the queue for its next run
+    with pytest.raises(StaleToken):
+        store.task_fail(tick, "late failure", token=old)
+    assert store.task_status(tick) == "queued"
+    done = make(store, "Done", policy=access("read", ["/b"]))
+    token = claim(store, done)["token"]
+    store.task_complete(done, token=token)
+    with pytest.raises(StaleToken):
+        store.task_fail(done, "late failure", token=token)
+    assert store.task_status(done) == "completed"
+    store.task_fail(tick, "operator note")                                    # no token, no execution claimed
+
+
+# --------------------------------------------------------------------------
+# a process that cannot be shown to be gone is not gone
+# --------------------------------------------------------------------------
+
+def _expired_owner(store, pid):
+    a = make(store, "A", policy=access())
+    token = claim(store, a)["token"]
+    store.reservation_attach(a, token, pid=pid)
+    store.conn.execute("UPDATE execution_reservations SET lease_expires_at = '2000-01-01T00:00:00Z'")
+    return a, token
+
+
+def test_the_process_table_answers_are_told_apart():
+    assert solar_state._process_identity(os.getpid())
+    assert solar_state._process_identity(2 ** 22 - 3) is None
+
+
+@pytest.mark.parametrize("failure", ["denied", "timeout", "error_status"])
+def test_a_failed_process_query_never_lets_an_owner_be_replaced(store, monkeypatch, failure):
+    a, token = _expired_owner(store, os.getpid())                              # the owner is alive
+    real = subprocess.run
+
+    def broken(cmd, *args, **kwargs):
+        if cmd[0] == "ps":
+            if failure == "denied":
+                raise PermissionError("ps: operation not permitted")
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(cmd, 10)
+            return subprocess.CompletedProcess(cmd, 2, "", "ps: kernel error")
+        return real(cmd, *args, **kwargs)
+    monkeypatch.setattr(subprocess, "run", broken)
+    assert store.task_adopt(a, "w2")["reason"] == "owner_unverifiable"
+    monkeypatch.undo()
+    assert store.reservation_for(a)["token"] == token
+    assert store.task_adopt(a, "w2", identity=lambda pid: None)["adopted"]    # proven gone: replaced
+
+
+# --------------------------------------------------------------------------
+# the wait clock of a task that stopped being eligible
+# --------------------------------------------------------------------------
+
+def test_a_successful_claim_still_resets_the_clock_of_an_ineligible_task(store):
+    set_policy(store, global_capacity=3)
+    holder = make(store, "Holder", policy=access("read", ["/a"]))
+    claim(store, holder)
+    waiting = make(store, "Waiting", priority="high")                         # exclusive, waits for the holder
+    assert claim(store, waiting)["reason"] == "exclusive_needs_idle"
+    store.task_set(waiting, "scope", json.dumps("edited"))                     # it no longer matches its approval
+    assert store.conn.execute("SELECT COUNT(*) FROM claim_waits").fetchone()[0] == 1
+    other = make(store, "Other", policy=access("read", ["/b"]), priority="low")
+    assert store.task_claim_next("w")["id"] == other                           # a pass that claims something after it
+    assert store.conn.execute("SELECT COUNT(*) FROM claim_waits").fetchone()[0] == 0
+
+
+def test_tasks_a_claiming_pass_never_reached_keep_their_clock(store):
+    set_policy(store, global_capacity=3)
+    holder = make(store, "Holder", policy=access("read", ["/a"]))
+    claim(store, holder)
+    waiting = make(store, "Waiting", priority="low")
+    assert claim(store, waiting)["reason"] == "exclusive_needs_idle"
+    make(store, "First", policy=access("read", ["/b"]), priority="high")
+    assert store.task_claim_next("w")["id"] == "first"                         # claims before reaching Waiting
+    assert store.conn.execute("SELECT task_id FROM claim_waits").fetchall()[0][0] == waiting

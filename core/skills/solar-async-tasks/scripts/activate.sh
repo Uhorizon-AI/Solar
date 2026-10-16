@@ -79,19 +79,26 @@ WORKER="activate-$$"
 # The claim decides. A refusal (another worker got it, or its approval does not cover
 # what is stored) stops here: nothing is stamped, released or reported as activated.
 if ! CLAIM_JSON="$(state task claim "$TASK_ID" --worker "$WORKER" --stamp-last-run)"; then
-    # The hooks above took the task's resources. A claim that is refused (capacity, access, a
-    # pending cancellation...) must not leave them held: the on_error hooks force-release them.
-    if [[ "$HOOKS_RAN" == 1 ]]; then
-        export_file="$(task_export_tmp "$TASK_ID")"
-        for resource in $(parse_resources "$(task_field "$TASK_ID" "resources")"); do
-            error_hook="$HOOKS_DIR/${resource}/on_error.sh"
-            [[ -x "$error_hook" ]] && { "$error_hook" "$export_file" || true; }
-        done
-        rm -f "$export_file"
-    fi
     REASON="$(printf '%s' "$CLAIM_JSON" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("reason") or "unknown")
 except Exception: print("unknown")')"
+    # The hooks above took the task's resources for this attempt. When the claim is refused
+    # because the task does not fit or is not ready (capacity, access, a pending cancellation...),
+    # the on_error hooks force-release them. When the task is no longer queued, another executor
+    # claimed it and its resources are theirs: nothing is released.
+    case "$REASON" in
+        not_queued|unknown) ;;
+        *)
+            if [[ "$HOOKS_RAN" == 1 ]]; then
+                export_file="$(task_export_tmp "$TASK_ID")"
+                for resource in $(parse_resources "$(task_field "$TASK_ID" "resources")"); do
+                    error_hook="$HOOKS_DIR/${resource}/on_error.sh"
+                    [[ -x "$error_hook" ]] && { "$error_hook" "$export_file" || true; }
+                done
+                rm -f "$export_file"
+            fi
+            ;;
+    esac
     case "$REASON" in
         absent|legacy|mismatch)
             echo "Error: approval_digest_mismatch (reason=$REASON): the approval of $TASK_ID does not cover its current content. Approve it again with task.approve." >&2

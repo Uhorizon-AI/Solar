@@ -299,8 +299,7 @@ echo ""
 
 STAGED_ARGS=(--install-root "$INSTALL_ROOT" --workspace "$SOLAR_WORKSPACE" --runtime-root "$(solar_runtime_root)"
   --stage-root "$STAGE_ROOT" --mode "$APPLY_MODE" --target "$TARGET_TAG"
-  --apply-hook "$UPDATE_STAGING/apply-hook.sh" --restart-mode "$RESTART_SERVICES"
-  --from-version "$cur_ver" --from-commit "$cur_commit")
+  --apply-hook "$UPDATE_STAGING/apply-hook.sh" --restart-mode "$RESTART_SERVICES")
 [[ "$DID_BACKUP" == true ]] && STAGED_ARGS+=(--did-backup)
 [[ "$REINSTALL_LAUNCHAGENT" == true ]] && STAGED_ARGS+=(--reinstall-launchagent)
 [[ "$PORTABLE_UPDATE" == true ]] && STAGED_ARGS+=(--portable)

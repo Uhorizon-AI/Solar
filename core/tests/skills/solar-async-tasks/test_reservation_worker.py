@@ -221,3 +221,90 @@ def test_a_refused_activation_gives_back_the_resources_its_hooks_took(tmp_path):
     assert not lock.exists(), "the pre_start lock must not outlive a refused activation"
     with solar_state.session() as store:
         assert store.task_status(wanted) == "queued"
+
+
+def _hooks(env, name="demo", pre_start="exit 0\n"):
+    """Hooks written by the test: pre_start runs the given body; on_error leaves a mark."""
+    folder = Path(env["SOLAR_TASK_ROOT"]) / "hooks" / name
+    folder.mkdir(parents=True)
+    mark = folder / "on_error_ran"
+    for hook, body in (("pre_start.sh", pre_start), ("on_error.sh", f'echo "$1" >> "{mark}"\n')):
+        (folder / hook).write_text("#!/bin/bash\n" + body, encoding="utf-8")
+        (folder / hook).chmod(0o755)
+    return mark
+
+
+def test_a_refusal_for_capacity_releases_what_this_attempt_took(tmp_path):
+    rel, env, _ = _setup(tmp_path)
+    mark = _hooks(env)
+    with solar_state.session() as store:
+        _local(store, "Holder", rel)
+        wanted = _local(store, "Wanted", rel, cleanup_required="true", resources=json.dumps("demo"))
+    assert "Started task" in _sh(env, "start_next.sh").stdout
+    refused = _sh(env, "activate.sh", wanted)
+    assert refused.returncode != 0 and "reason=exclusive_needs_idle" in refused.stderr
+    assert mark.is_file(), "the on_error hook must release what the pre_start hook took"
+
+
+def test_a_task_another_executor_claimed_keeps_its_resources(tmp_path):
+    """Between the hooks and the claim somebody else claimed the same task: its resources are theirs."""
+    rel, env, _ = _setup(tmp_path)
+    state_py = CORE_ROOT / "skills" / "solar-state" / "scripts" / "solar_state.py"
+    mark = _hooks(env, pre_start=(
+        'id="$(grep -m1 "^id:" "$1" | cut -d: -f2 | tr -d \' "\')"\n'
+        f'python3 "{state_py}" task claim "$id" --worker someone-else >/dev/null\n'))
+    with solar_state.session() as store:
+        wanted = _local(store, "Wanted", rel, cleanup_required="true", resources=json.dumps("demo"))
+    refused = _sh(env, "activate.sh", wanted)
+    assert refused.returncode != 0 and "no longer queued" in refused.stderr
+    assert not mark.exists(), "another executor owns the resources now: nothing may be released"
+    with solar_state.session() as store:
+        assert store.task_status(wanted) == "active" and store.reservation_for(wanted)["worker"] == "someone-else"
+
+
+def _alive(pid: int) -> bool:
+    done = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    state = done.stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def test_losing_the_execution_stops_the_provider_it_started(tmp_path):
+    """The heartbeat finds the token replaced: the provider's process group goes down with the executor."""
+    script = tmp_path / "planets" / "louis" / "skills" / "sync" / "scripts" / "linger.sh"
+    script.parent.mkdir(parents=True)
+    pids = tmp_path / "pids"
+    script.write_text(f'#!/bin/bash\nsleep 120 &\necho "$$ $!" > "{pids}"\nwait\n', encoding="utf-8")
+    script.chmod(0o755)
+    task_root = tmp_path / "sun" / "runtime" / "async-tasks"
+    task_root.mkdir(parents=True)
+    env = env_for(task_root, {**os.environ, "SOLAR_WORKSPACE": str(tmp_path)})
+    with solar_state.session() as store:
+        task_id = store.task_create(
+            [("title", '"Linger"'), ("executor", "local"),
+             ("local_command", json.dumps("bash planets/louis/skills/sync/scripts/linger.sh")),
+             ("local_timeout", "100")], "\n# Linger\n\nx\n", status="queued", task_id="linger")
+        token = store.task_claim_next("worker")["token"]
+    proc = subprocess.Popen([sys.executable, str(SCRIPTS / "execute_active.py"), task_id, "/nonexistent/router.py"],
+                            env={**env, "SOLAR_TASK_TOKEN": token, "SOLAR_TASK_HEARTBEAT_SECONDS": "0.3"},
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.time() + 30
+        while time.time() < deadline and not pids.exists():
+            time.sleep(0.1)
+        assert pids.exists(), "the provider never started"
+        time.sleep(0.2)
+        leader, child = (int(x) for x in pids.read_text().split())
+        assert _alive(leader) and _alive(child)
+        with solar_state.session() as store:                                   # somebody took the execution over
+            store.conn.execute("UPDATE execution_reservations SET token = ? WHERE task_id = ?", ("f" * 32, task_id))
+        code = proc.wait(timeout=30)
+        assert code == 75, proc.stdout.read() + proc.stderr.read()
+        time.sleep(0.5)
+        assert not _alive(leader) and not _alive(child), "the provider outlived its executor"
+    finally:
+        proc.kill()
+        for pid in (locals().get("leader"), locals().get("child")):
+            if pid:
+                subprocess.run(["kill", "-9", str(pid)], capture_output=True)
+    with solar_state.session() as store:
+        assert store.task_status(task_id) == "active"                          # the new owner decides, not the loser

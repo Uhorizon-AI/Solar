@@ -2125,16 +2125,118 @@ raise SystemExit(0 if info.get("ready") and info.get("schema") == info.get("expe
   return 0
 }
 
+# One process drives an update at a time. The barrier says WHAT is in progress and survives a
+# crash; this lock says that a process is driving it NOW, for the whole sequence, so a
+# `--resume` (or a second update, or a sync) cannot run next to the original. The lock names the
+# process and its start time; a lock whose process is gone is taken over, a lock whose owner
+# cannot be verified is respected. Exit 3: another process holds it.
+solar_client_operation_lock_file() {
+  printf '%s/maintenance.lock\n' "$(solar_runtime_root)"
+}
+
+solar_client_operation_lock_acquire() {
+  python3 - "$(solar_client_operation_lock_file)" "$$" <<'PY'
+import json, os, subprocess, sys
+
+path, pid = sys.argv[1], int(sys.argv[2])
+
+
+def start_of(number):
+    """Start time as ps prints it; None when the process is not running; '?' when unknown."""
+    try:
+        done = subprocess.run(["ps", "-o", "lstart=", "-p", str(number)], capture_output=True,
+                              text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+    if done.stdout.strip():
+        return done.stdout.strip()
+    return None if done.returncode == 1 and not done.stderr.strip() else "?"
+
+
+def create():
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"pid": pid, "start": start_of(pid)}, fh)
+        fh.write("\n")
+
+
+os.makedirs(os.path.dirname(path), exist_ok=True)
+try:
+    create()
+    sys.exit(0)
+except FileExistsError:
+    pass
+try:
+    text = open(path, encoding="utf-8").read()
+    owner = json.loads(text)
+    owner_pid = int(owner["pid"])
+except (OSError, ValueError, KeyError, TypeError):
+    print("the operation lock is unreadable", file=sys.stderr)
+    sys.exit(3)
+alive = start_of(owner_pid)
+if alive == "?" or (alive is not None and alive == owner.get("start")):
+    print(f"pid {owner_pid}", file=sys.stderr)
+    sys.exit(3)
+# The owner is gone (or the pid belongs to another process now): take the lock over. One taker
+# at a time, and only if the lock is still the one that was judged stale.
+guard = path + ".takeover"
+try:
+    os.close(os.open(guard, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))
+except FileExistsError:
+    print("another process is taking the lock over", file=sys.stderr)
+    sys.exit(3)
+try:
+    if open(path, encoding="utf-8").read() != text:
+        sys.exit(3)
+    os.unlink(path)
+    create()
+except (FileExistsError, FileNotFoundError, OSError):
+    sys.exit(3)
+finally:
+    try:
+        os.unlink(guard)
+    except OSError:
+        pass
+PY
+}
+
+# Release the lock only when this shell owns it.
+solar_client_operation_lock_release() {
+  python3 - "$(solar_client_operation_lock_file)" "$$" <<'PY'
+import json, os, sys
+path, pid = sys.argv[1], int(sys.argv[2])
+try:
+    if json.load(open(path, encoding="utf-8")).get("pid") == pid:
+        os.unlink(path)
+except (OSError, ValueError, AttributeError):
+    pass
+PY
+}
+
+solar_client_state_cutover() {
+  local rc held
+  if ! held="$(solar_client_operation_lock_acquire 2>&1)"; then
+    echo "ERROR: another update process is driving the runtime (${held:-unknown}). Nothing was changed;" >&2
+    echo "       wait for it to end, or run: solar client update --resume once it has stopped." >&2
+    return 1
+  fi
+  _solar_client_state_cutover_locked "$@"
+  rc=$?
+  solar_client_operation_lock_release
+  return "$rc"
+}
+
 # Stop what Solar starts, migrate the runtime, then start what was running, all under a
 # maintenance barrier. Order: barrier, ticks paused, drain, services stopped, cutover (which
 # applies the code first when an apply hook is given), services started, readiness, ticks
 # resumed, barrier released. A failure keeps the services stopped and the barrier held.
 # restart_mode "never" migrates and leaves everything stopped, the barrier held, until
 # `solar client update --resume`. Args: install_root [restart_mode] [apply_hook] [resume]
+# (Called through solar_client_state_cutover, which holds the operation lock.)
 # Test hooks: SOLAR_CLIENT_CUTOVER_SCRIPT, SOLAR_CLIENT_CUTOVER_ROOT,
 # SOLAR_CLIENT_GATEWAY_STOP_SCRIPT, SOLAR_CLIENT_LAUNCHCTL, SOLAR_CLIENT_DRAIN_TIMEOUT,
 # SOLAR_CLIENT_ASYNC_BUSY_COMMAND, SOLAR_CLIENT_READINESS_COMMAND and the restart hooks.
-solar_client_state_cutover() {
+_solar_client_state_cutover_locked() {
   local install_root="$1"
   local restart_mode="${2:-auto}"
   local apply_hook="${3:-}"
