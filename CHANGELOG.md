@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-10-16
+
 ### Added
 - `task.return_to_draft` (A2, `task_id` + `expected_row_version`): a queued task goes back to draft keeping its id, body, schedule, run counters and history. `approved_*` are withdrawn (the previous digest stays in `audit` as `task_approval_withdrawn`) and the worker cannot claim it until `task.approve`. Schema v5 adds `queued -> draft` to the `transitions` table of existing bases.
 - `approval_digest_mismatch` (`audit` row once per row version, a log line on every refusal, and the console task list): the reason is `absent`, `legacy` or `mismatch`.
