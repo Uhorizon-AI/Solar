@@ -838,6 +838,11 @@ DIGEST_PREFIX = "v2:"
 # Level-2 sections the runtime appends to the body. They are not instructions.
 RUNTIME_SECTIONS = ("## Delivery", "## Subtask results", "## Execution Error", "## Result")
 
+# The actor `task_import` records on the first event of an imported task. `_was_imported`
+# reads it back: an import brings results in the body that nothing else recorded, so the two
+# must agree.
+IMPORT_ACTOR = "import"
+
 _LOG = logging.getLogger("solar_state")
 
 
@@ -978,22 +983,21 @@ def _definition_head(body: str, title: Optional[str] = None) -> str:
     return definition_text("".join(lines[:stop]))
 
 
-def _record_boundary(pairs: list[list[str]], body: str) -> None:
+def _record_boundary(pairs: list[list[str]], body: str) -> Optional[str]:
     """Write the boundary before an approval is withdrawn or recreated, so the results
-    already in the body keep their place apart from the instructions."""
-    if _get_pair(pairs, BOUNDARY_KEY) is None and _get_pair(pairs, "approved_definition") is None:
-        head = _definition_head(body, value_of(_get_pair(pairs, "title")))
-        _set_pair(pairs, BOUNDARY_KEY, " " + json.dumps(head))
+    already in the body keep their place apart from the instructions. Returns the stored
+    value when it wrote one (the caller that moves the task persists it), else None."""
+    if _get_pair(pairs, BOUNDARY_KEY) is not None or _get_pair(pairs, "approved_definition") is not None:
+        return None
+    value = json.dumps(_definition_head(body, value_of(_get_pair(pairs, "title"))))
+    _set_pair(pairs, BOUNDARY_KEY, " " + value)
+    return value
 
 
 def _was_imported(conn, task_id: str) -> bool:
     row = conn.execute("SELECT actor FROM task_events WHERE task_id = ? ORDER BY seq LIMIT 1",
                        (task_id,)).fetchone()
-    return row is not None and row[0] == "import"
-
-
-def _get_pair_value(pairs: list[list[str]], key: str) -> str:
-    return (_get_pair(pairs, key) or "").strip()
+    return row is not None and row[0] == IMPORT_ACTOR
 
 
 def _boundary(pairs: list[list[str]]) -> Optional[str]:
@@ -1199,7 +1203,7 @@ class Session:
         return task_id
 
     def task_import(self, document: str, status: Optional[str] = None,
-                    actor: str = "import", log_path: Optional[str] = None,
+                    actor: str = IMPORT_ACTOR, log_path: Optional[str] = None,
                     source_name: Optional[str] = None) -> str:
         """Store a task document exactly as written: the pairs `parse_task_document`
         returns, untouched. Any status is accepted (this is how existing tasks
@@ -1356,10 +1360,9 @@ class Session:
             _check_version(task_id, row["row_version"], expected_row_version)
             pairs = json.loads(row["frontmatter"])
             withdrawn = self._withdraw_approval(conn, task_id, pairs, reason, actor)
-            _record_boundary(pairs, row["body"])
+            boundary = _record_boundary(pairs, row["body"])
             _move(conn, task_id, "draft", actor or "return_to_draft", drop=APPROVAL_KEYS,
-                  fields={BOUNDARY_KEY: _get_pair_value(pairs, BOUNDARY_KEY)}
-                  if _get_pair(pairs, BOUNDARY_KEY) is not None else None)
+                  fields={BOUNDARY_KEY: boundary} if boundary else None)
             version = conn.execute("SELECT row_version FROM tasks WHERE id = ?",
                                    (task_id,)).fetchone()[0]
         return dict(task_id=task_id, from_status="queued", status="draft",

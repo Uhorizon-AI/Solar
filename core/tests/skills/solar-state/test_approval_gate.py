@@ -755,3 +755,12 @@ def test_the_boundary_survives_losing_only_the_approval_fields(ready):
                               allowed_status=("draft", "planned", "queued"),
                               definition=f"\n# T\n\nNew {number}.\n")
             assert results.strip() in store.task_get(task_id)["body"]
+
+
+def test_an_import_records_the_actor_that_was_imported_reads_back(ready):
+    with solar_state.session() as store:
+        store.task_import('---\nid: "who"\ntitle: "T"\nstatus: draft\n---\n\nx\n')
+        first = store.conn.execute("SELECT actor FROM task_events WHERE task_id = 'who' "
+                                   "ORDER BY seq LIMIT 1").fetchone()[0]
+        assert first == solar_state.IMPORT_ACTOR
+        assert solar_state._was_imported(store.conn, "who") is True

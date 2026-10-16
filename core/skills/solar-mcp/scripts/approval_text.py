@@ -202,7 +202,8 @@ def _facts(task_id: str) -> dict | None:
         instructions = body[len(heading):] if body.startswith(heading) else body
         return dict(title=title, status=task["status"], row_version=task["row_version"],
                     values=values, priority=task["priority"],
-                    approval=solar_state.approval_state(task["frontmatter"], task["body"]), object=task["object"] or "",
+                    approval=solar_state.approval_state(task["frontmatter"], task["body"]),
+                    object=task["object"] or "",
                     scope=task["scope"] or "", effect=task["effect"] or "",
                     recurring=str(values.get("recurring") or "").lower() == "true",
                     instructions=instructions.strip("\n").rstrip(), schedule=task_views._schedule(values))

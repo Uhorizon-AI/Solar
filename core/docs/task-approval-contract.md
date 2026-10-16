@@ -45,6 +45,9 @@ claim transaction, after block, schedule and recurrence, before `queued -> activ
 - **Runtime sections.** Text placed under a runtime heading after the first result is not
   protected. `task.update` refuses new instructions that reuse those section names while results
   are recorded, and treats them as an instruction change otherwise.
+- **Two snapshots, on purpose.** `approved_definition` belongs to the approval: the digest binds it,
+  the claim compares it, and a withdrawn approval removes it. `definition_snapshot` only records
+  where the results begin; it is not an approval and survives a withdrawal.
 - **Where the results begin.** `definition_snapshot` records the definition the body starts with. It is
   kept when an approval is withdrawn, so results (with headings of their own) stay apart from the
   instructions through any number of edits and approvals. `approved_definition`, bound by the
