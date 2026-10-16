@@ -324,6 +324,59 @@ def test_a_sqlite_format_is_not_trusted_blindly(runtime, breakage):
     assert (runtime / "async-tasks" / "completed" / "parent-task.md").is_file()   # nothing moved
 
 
+def _downgrade(runtime: Path, to: int) -> None:
+    """The base a release behind this code would have left: schema `to`, without what
+    the later migrations added."""
+    import sqlite3
+    conn = sqlite3.connect(st.db_path(runtime))
+    conn.execute("DELETE FROM transitions WHERE from_status = 'queued' AND to_status = 'draft'")
+    conn.execute(f"PRAGMA user_version = {to}")
+    conn.commit()
+    conn.close()
+
+
+def _transitions(runtime: Path) -> set:
+    import sqlite3
+    conn = sqlite3.connect(st.db_path(runtime))
+    try:
+        return set(conn.execute("SELECT from_status, to_status FROM transitions"))
+    finally:
+        conn.close()
+
+
+def test_a_migrated_base_behind_in_schema_is_upgraded_not_refused(runtime):
+    """`solar client update` after a release that adds a migration: format already sqlite."""
+    cut.migrate(runtime, lister=quiet)
+    _downgrade(runtime, st.SCHEMA_VERSION - 1)
+    assert ("queued", "draft") not in _transitions(runtime)
+    result = cut.migrate(runtime, lister=quiet)
+    assert result["already"] is True
+    import sqlite3
+    conn = sqlite3.connect(st.db_path(runtime))
+    try:
+        assert st._schema_version(conn) == st.SCHEMA_VERSION
+        assert conn.execute("SELECT count(*) FROM tasks").fetchone()[0] > 0     # rows kept
+    finally:
+        conn.close()
+    assert ("queued", "draft") in _transitions(runtime)
+    backups = list(runtime.rglob(f"state-v{st.SCHEMA_VERSION - 1}-to-v{st.SCHEMA_VERSION}-*.sqlite"))
+    assert len(backups) == 1
+    again = cut.migrate(runtime, lister=quiet)          # and a second run changes nothing
+    assert again["already"] is True
+    assert len(list(runtime.rglob("state-v*-to-v*.sqlite"))) == 1
+
+
+def test_a_base_ahead_of_this_code_is_still_refused(runtime):
+    cut.migrate(runtime, lister=quiet)
+    import sqlite3
+    conn = sqlite3.connect(st.db_path(runtime))
+    conn.execute(f"PRAGMA user_version = {st.SCHEMA_VERSION + 1}")
+    conn.commit()
+    conn.close()
+    with pytest.raises(cut.CutoverRefused, match="schema"):
+        cut.migrate(runtime, lister=quiet)
+
+
 def test_a_resumed_migration_brings_in_what_old_code_wrote_meanwhile(runtime):
     with pytest.raises(RuntimeError):
         cut.migrate(runtime, lister=quiet, _fail_at="after-format")

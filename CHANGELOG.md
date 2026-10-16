@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- `solar client update` no longer stops with `CutoverRefused: base schema v4, this code speaks v5` on an already migrated runtime. The cutover now upgrades a base that is only behind in schema (backup first, one transaction per version) before it checks it; a base ahead of the code, unreadable or inconsistent is still refused. v0.47.0 shipped the v5 migration but no path that applied it to a base the cutover had already built. **To recover a runtime left at v4 by v0.47.0, update to the release that carries this fix and run `solar client update` again.**
+
 ## [0.47.0] - 2026-10-16
 
 ### Added

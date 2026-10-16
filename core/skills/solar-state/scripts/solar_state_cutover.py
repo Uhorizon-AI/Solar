@@ -440,8 +440,35 @@ def _is_stamp(stamp: str) -> bool:
             and stamp[:8].isdigit() and stamp[9:21].isdigit())
 
 
-def _check_migrated_base(base: Path) -> str:
-    """Before trusting STATE_FORMAT=sqlite: the marker, the base and its schema."""
+def _upgrade_older_schema(path: Path, cut: "st.Cutover") -> None:
+    """A base the cutover already built, behind this code by one or more schema versions.
+
+    Every release that adds a migration meets this base on `solar client update`: the
+    format is already sqlite, so the build step that creates the schema never runs. The
+    upgrade is the cutover's own (backup first, one transaction per version). A base
+    that is unreadable, empty or ahead of this code is left for the check to refuse.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            version = st._schema_version(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return
+    if not 0 < version < st.SCHEMA_VERSION:
+        return
+    try:
+        cut.upgrade_schema()
+    except (sqlite3.Error, st.StateError) as exc:
+        raise CutoverRefused(f"base schema v{version} could not be upgraded to "
+                             f"v{st.SCHEMA_VERSION} ({exc}): refusing to move files") from None
+
+
+def _check_migrated_base(base: Path, cut: Optional["st.Cutover"] = None) -> str:
+    """Before trusting STATE_FORMAT=sqlite: the marker, the base and its schema.
+
+    With `cut`, a base that is only behind in schema is upgraded first."""
     marker = _marker(base)
     if not marker.is_file():
         raise CutoverRefused("format says sqlite but there is no migration marker: refusing to move files")
@@ -457,6 +484,8 @@ def _check_migrated_base(base: Path) -> str:
     path = st.db_path(base)
     if not path.is_file():
         raise CutoverRefused("format says sqlite but the base is missing: refusing to move files")
+    if cut is not None:
+        _upgrade_older_schema(path, cut)
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     except sqlite3.Error as exc:
@@ -745,7 +774,7 @@ def migrate(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
         if st.read_format(base) == st.FORMAT_SQLITE:
             # The format already changed. Finish an interrupted move, or leave
             # a finished one alone. The base is not a photo of migration day.
-            stamp = _check_migrated_base(base)
+            stamp = _check_migrated_base(base, cut)
             _wait_until_quiet(base, wait, lister)
             # No live file is not proof the move finished, and neither is one
             # file already aside. `moved` is the record. Without it, every
