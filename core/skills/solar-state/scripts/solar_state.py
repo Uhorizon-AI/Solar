@@ -1207,9 +1207,6 @@ def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optiona
         _reserve(conn, task_id, pairs, (extra or {}).get("claimed_by") or actor, handoff=handoff)
     elif current == "active" and to_status != "active":
         conn.execute("DELETE FROM execution_reservations WHERE task_id = ?", (task_id,))
-    if to_status != "queued":
-        # A wait only describes a queued task: leaving the queue (cancelled, archived, ...) ends it.
-        conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (task_id,))
     _write_task(conn, task_id, to_status, pairs, body, insert=False, extra=extra)
     conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                  "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, to_status, actor))
@@ -1247,6 +1244,10 @@ def _write_task(conn, task_id: str, status: str, pairs, body: str, *, insert: bo
         marks = ", ".join("?" for _ in cols)
         conn.execute(f"INSERT INTO tasks ({names}) VALUES ({marks})", list(cols.values()))
     else:
+        if status != "queued":
+            # A wait only describes a queued task: whatever path takes it out of the queue
+            # (cancel, back to draft, archive, ...) ends it, so its clock cannot outlive it.
+            conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (task_id,))
         sets = ", ".join(f"{name} = ?" for name in cols)
         conn.execute(f"UPDATE tasks SET {sets}, row_version = row_version + 1 WHERE id = ?",
                      [*cols.values(), task_id])
@@ -2254,7 +2255,6 @@ class Session:
                 pairs = json.loads(row["frontmatter"])
                 _set_pair(pairs, "status", " cancelled")
                 _write_task(conn, task_id, "cancelled", pairs, row["body"], insert=False)
-                conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (task_id,))
                 conn.execute(
                     "INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                     "VALUES (?, ?, ?, ?, ?)",

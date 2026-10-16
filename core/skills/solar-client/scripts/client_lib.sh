@@ -2136,7 +2136,7 @@ solar_client_operation_lock_file() {
 
 solar_client_operation_lock_acquire() {
   python3 - "$(solar_client_operation_lock_file)" "$$" <<'PY'
-import json, os, subprocess, sys
+import json, os, subprocess, sys, time
 
 path, pid = sys.argv[1], int(sys.argv[2])
 
@@ -2184,11 +2184,48 @@ if alive == "?" or (alive is not None and (recorded in (None, "?") or alive == r
 # The owner is gone (or the pid belongs to another process now): take the lock over. One taker
 # at a time, and only if the lock is still the one that was judged stale.
 guard = path + ".takeover"
+
+
+def own_guard():
+    """The guard names its owner (pid and start) under the same liveness rule as the lock."""
+    fd = os.open(guard, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"pid": pid, "start": start_of(pid)}, fh)
+
+
+def guard_is_held():
+    try:
+        held = json.load(open(guard, encoding="utf-8"))
+        holder = int(held["pid"])
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError):
+        # Unreadable: a taker may be writing it right now; one that stayed so for a minute died.
+        try:
+            return time.time() - os.path.getmtime(guard) < 60
+        except OSError:
+            return False
+    seen = start_of(holder)
+    recorded_start = held.get("start")
+    if seen == "?":
+        return True
+    return seen is not None and (recorded_start in (None, "?") or seen == recorded_start)
+
+
 try:
-    os.close(os.open(guard, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))
+    own_guard()
 except FileExistsError:
-    print("another process is taking the lock over", file=sys.stderr)
-    sys.exit(3)
+    # A taker killed between creating the guard and removing it must not close the lock for
+    # good: a guard whose owner is gone is removed (once, by whoever sees it) and tried again.
+    if guard_is_held():
+        print("another process is taking the lock over", file=sys.stderr)
+        sys.exit(3)
+    try:
+        os.unlink(guard)
+        own_guard()
+    except OSError:
+        print("another process is taking the lock over", file=sys.stderr)
+        sys.exit(3)
 try:
     if open(path, encoding="utf-8").read() != text:
         sys.exit(3)

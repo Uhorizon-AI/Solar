@@ -857,6 +857,20 @@ def test_enabling_a_profile_nobody_implements_grants_no_concurrency(store, monke
     assert claim(store, other)["reason"] == "exclusive_needs_idle"            # verified for claude only
 
 
+def test_a_task_returned_to_draft_restarts_its_wait_clock(store):
+    set_policy(store, global_capacity=1)
+    running = make(store, "Running")
+    waiting = make(store, "Waiting")
+    assert claim(store, running)["claimed"]
+    assert claim(store, waiting)["claimed"] is False
+    assert store.conn.execute("SELECT 1 FROM claim_waits WHERE task_id = ?", (waiting,)).fetchone()
+    row = store.task_get(waiting)
+    store.task_update(waiting, expected_row_version=row["row_version"], allowed_status=("queued",),
+                      body=row["body"] + "\nAnd also something else.\n", actor="test")
+    assert store.task_status(waiting) == "draft"
+    assert store.conn.execute("SELECT 1 FROM claim_waits WHERE task_id = ?", (waiting,)).fetchone() is None
+
+
 def test_a_queued_task_that_is_cancelled_leaves_no_wait_behind(store):
     set_policy(store, global_capacity=1)
     running = make(store, "Running")
