@@ -80,12 +80,12 @@ def test_the_worker_runs_exactly_the_claimed_task_and_frees_its_place(tmp_path):
     with solar_state.session() as store:
         one = _local(store, "One", rel)
         _local(store, "Two", rel)
-    cycle = _sh(env, "run_worker.sh", "--once")
+    cycle = _sh(env, "run_worker.sh", "--diagnostic", "--once")
     assert cycle.returncode == 0, cycle.stdout + cycle.stderr
     assert [line.split()[1] for line in _runs(marker)] == ["One"]
     with solar_state.session() as store:
         assert store.task_status(one) == "completed" and store.reservations() == []
-    assert _sh(env, "run_worker.sh", "--once").returncode == 0
+    assert _sh(env, "run_worker.sh", "--diagnostic", "--once").returncode == 0
     assert [line.split()[1] for line in _runs(marker)] == ["One", "Two"]
 
 
@@ -107,7 +107,7 @@ def test_a_manual_activation_is_run_by_the_worker_through_the_reservation(tmp_pa
     assert _sh(env, "activate.sh", task_id).returncode == 0
     with solar_state.session() as store:
         first = store.reservation_for(task_id)["token"]
-    cycle = _sh(env, "run_worker.sh", "--once")
+    cycle = _sh(env, "run_worker.sh", "--diagnostic", "--once")
     assert cycle.returncode == 0, cycle.stdout + cycle.stderr
     assert [line.split()[1] for line in _runs(marker)] == ["Manual"]
     with solar_state.session() as store:
@@ -160,12 +160,12 @@ def test_a_maintenance_barrier_stops_the_worker_before_it_starts_anything(tmp_pa
         task_id = _local(store, "One", rel)
         runtime = store.root
     (runtime / "maintenance.json").write_text(json.dumps(dict(operation="update")))
-    cycle = _sh(env, "run_worker.sh", "--once")
+    cycle = _sh(env, "run_worker.sh", "--diagnostic", "--once")
     assert cycle.returncode == 0 and _runs(marker) == []
     with solar_state.session() as store:
         assert store.task_status(task_id) == "queued" and store.reservations() == []
     (runtime / "maintenance.json").unlink()
-    assert _sh(env, "run_worker.sh", "--once").returncode == 0
+    assert _sh(env, "run_worker.sh", "--diagnostic", "--once").returncode == 0
     assert len(_runs(marker)) == 1
 
 
@@ -178,7 +178,7 @@ def test_the_executor_records_its_process_and_keeps_the_lease(tmp_path):
         task_id = store.task_create(
             [("title", '"Slow"'), ("executor", "local"), ("local_command", '"bash planets/louis/skills/sync/scripts/slow.sh"')],
             "\n# Slow\n\nx\n", status="queued", task_id="slow")
-    proc = subprocess.Popen(["bash", str(SCRIPTS / "run_worker.sh"), "--once"], env=env,
+    proc = subprocess.Popen(["bash", str(SCRIPTS / "run_worker.sh"), "--diagnostic", "--once"], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     deadline = time.time() + 30
     seen = None
@@ -194,18 +194,18 @@ def test_the_executor_records_its_process_and_keeps_the_lease(tmp_path):
         assert store.task_status(task_id) == "completed"
 
 
-def test_ensure_does_not_start_a_worker_during_maintenance(tmp_path):
+def test_ensure_starts_no_supervisor_during_maintenance(tmp_path):
     rel, env, marker = _setup(tmp_path)
     with solar_state.session() as store:
         _local(store, "One", rel)
         runtime = store.root
-    env = {**env, "SOLAR_TASK_WORKER_LOCK": str(tmp_path / "worker.lock")}
     (runtime / "maintenance.json").write_text(json.dumps(dict(operation="update")))
     held = _sh(env, "ensure_async_tasks.sh")
-    assert held.returncode == 0 and "Maintenance in progress" in held.stdout and _runs(marker) == []
-    (runtime / "maintenance.json").unlink()
-    free = _sh(env, "ensure_async_tasks.sh")
-    assert free.returncode == 0 and len(_runs(marker)) == 1
+    answer = json.loads(held.stdout.strip().splitlines()[-1])
+    assert held.returncode == 20 and answer["state"] == "blocked" and answer["reason"] == "maintenance"
+    assert _runs(marker) == [] and not (runtime / "async-tasks" / ".locks" / "supervisor.json").exists()
+    checked = _sh(env, "check_async_tasks.sh")
+    assert checked.returncode == 20 and json.loads(checked.stdout.strip().splitlines()[-1])["reason"] == "maintenance"
 
 
 def test_a_refused_activation_gives_back_the_resources_its_hooks_took(tmp_path):

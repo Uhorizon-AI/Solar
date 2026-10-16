@@ -73,13 +73,15 @@ bash core/skills/solar-system/scripts/check_orchestrator.sh
 
 When `solar-system` supervises `async-tasks`, the agent stops after `task.approve`; the LaunchAgent picks up the queued task on its tick.
 
-Fallback rule: if `solar-system` is not supervising `async-tasks`, use `ensure_async_tasks.sh` once as documented fallback. Do not bypass the runtime with direct provider CLIs.
+Fallback rule: if `solar-system` is not supervising `async-tasks`, run `ensure_async_tasks.sh` **once** as the documented fallback and read its answer (JSON on the last line of stdout): exit `0` ready, `10` starting (a live, identified supervisor is still reconciling: do nothing, the next observation sees the same one), `20` blocked (maintenance, recovery, stale heartbeat or no live identity: report it, do not retry or start anything else), `1` failed. Never start `run_worker.sh` or any other launcher, and never bypass the runtime with direct provider CLIs. `check_async_tasks.sh` only observes (same JSON and codes).
+
+**The resident supervisor.** Production runs one `supervisor.py` per workspace/runtime, started by `launch_supervisor.sh` (detached: its own session, stdin null, stdout/stderr on its own log) and kept alive by the tick (`ensure_async_tasks.sh`, which waits at most 5 seconds for the handshake and never for the tasks). Only the supervisor takes `<runtime root>/async-tasks/.locks/supervisor.lock`, resolved through solar-paths and bound to the workspace owner; the tick and `check_async_tasks.sh` observe its published identity (workspace, runtime, install, pid and start time, heartbeat) without taking the lock or writing its pid. It dispatches every claim by id and token to its own executor in its own process group, collects it with wait/poll and fills a free place within one second of one ending (or of a `SIGUSR1`), without waiting for the next tick. Capacity is decided only by the reservation of `solar-state` (the same one `activate.sh` uses); with the initial capacity `1` it is sequential. `stop_supervisor.sh --drain [--timeout N]` is how an update or a stop asks it to finish its executions and exit; it never removes the lock and never kills by pid. Contract and recovery rules: `core/docs/async-supervisor.md`. `run_worker.sh` is no longer an entry point: it needs `--diagnostic` and goes through the same reservations.
 
 ## Workflow
 
 1. Draft: `task.create` stores a draft; `task.update` and `task.schedule` refine it. None of them queues.
 2. Approve: `task.approve` moves that draft to `queued`. A task that is already `planned` uses the same operation. There is no operation that creates the plan.
-3. Execute: `solar-system` starts one eligible queued task and executes it.
+3. Execute: the resident supervisor (kept alive by `solar-system`) claims every eligible queued task the applied policy has room for and executes each in its own process group.
 4. Complete: success sets `completed`, recurrence may requeue, failure sets `error`.
 
 For user-facing work, approval ends the conversational agent's execution role. The system runtime owns actual execution.

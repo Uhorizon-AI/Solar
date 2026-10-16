@@ -1,28 +1,31 @@
 #!/usr/bin/env bash
-# check_async_tasks.sh — Check if a run_worker.sh process is already running.
+# check_async_tasks.sh — observe the resident async-tasks supervisor. Starts nothing.
 #
-# Exit codes:
-#   0 — worker is already running (no action needed)
-#   1 — worker is not running (caller should start it)
+# Reads the identity the supervisor publishes and proves the process behind it (pid and start
+# time). It never takes the supervisor's lock, never writes a pid for it and never removes a lock.
+#
+# One JSON object on stdout (state, reason, identity, age_seconds, heartbeat_age_seconds). Exit codes:
+#   0 ready · 10 starting · 20 blocked (maintenance, recovery, stale heartbeat, draining ...) · 1 failed
+#   or not running.
+#
+# Usage:
+#   bash core/skills/solar-async-tasks/scripts/check_async_tasks.sh [--quiet]
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUIET=false
 [[ "${1:-}" == "--quiet" ]] && QUIET=true
 
-log() { $QUIET || echo "$*"; }
-
-LOCK_FILE="${SOLAR_TASK_WORKER_LOCK:-/tmp/solar-async-tasks-worker.lock}"
-
-# Check lock file: exists and PID is alive
-if [[ -f "$LOCK_FILE" ]]; then
-  existing_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-  if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
-    log "⏸️  run_worker.sh already running (pid=$existing_pid)."
-    exit 0
+if [[ -z "${SOLAR_WORKSPACE:-}" ]]; then
+  _RESOLVE="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/resolve_solar_paths.sh"
+  if [[ -f "$_RESOLVE" ]]; then
+    # shellcheck source=/dev/null
+    source "$_RESOLVE"
+    solar_resolve_paths --quiet 2>/dev/null || true
   fi
-  # Stale lock — clean it up
-  rm -f "$LOCK_FILE"
 fi
 
-log "✅ No worker running — safe to start."
-exit 1
+if $QUIET; then
+  exec python3 "$SCRIPT_DIR/supervisor_lib.py" observe >/dev/null
+fi
+exec python3 "$SCRIPT_DIR/supervisor_lib.py" observe

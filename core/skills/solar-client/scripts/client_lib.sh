@@ -1544,8 +1544,8 @@ solar_client_report_launchagent_binding() {
 # bridges) and "host" (console on :9000). A process counts only if its command
 # line holds this install's script path (fixed-string match), so services of
 # another Solar install on the machine are never mistaken for ours. "async-supervisor" is the
-# resident async-tasks supervisor. The one-shot worker is not listed: it starts fresh on
-# every orchestrator tick, and the update waits for it through the drain.
+# resident async-tasks supervisor. A one-shot worker of the previous design is not listed: the
+# update waits for it through the drain (and ensure never starts one any more).
 # Args: install_root.
 # Test hooks: SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE ("gateway,host", or "none");
 # SOLAR_CLIENT_PS_OUTPUT_FILE (file with `ps -axo command=` lines).

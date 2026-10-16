@@ -333,7 +333,7 @@ def test_a_crash_between_the_code_and_the_schema_is_resumed_not_repeated(rig, tm
     ensure = subprocess.run(["bash", str(rig.install / "core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh")],
                             env=rig.env(SOLAR_TASK_WORKER_LOCK=str(rig.tmp / "worker.lock")), cwd=rig.ws,
                             capture_output=True, text=True, timeout=120)
-    assert ensure.returncode == 0 and "Maintenance in progress" in ensure.stdout
+    assert ensure.returncode == 20 and "\"reason\": \"maintenance\"" in ensure.stdout
     with pytest.raises(solar_state.StateUnavailable, match="migration has not run"):
         with solar_state.session(rig.rt, auto_backup=False):
             pass                                                           # new code never meets the old schema
@@ -384,7 +384,7 @@ def test_no_restart_leaves_dispatch_suspended_until_an_explicit_resume(rig):
     ensure = subprocess.run(["bash", str(rig.install / "core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh")],
                             env=rig.env(SOLAR_TASK_WORKER_LOCK=str(rig.tmp / "worker.lock")), cwd=rig.ws,
                             capture_output=True, text=True, timeout=120)
-    assert "Maintenance in progress" in ensure.stdout
+    assert ensure.returncode == 20 and "\"reason\": \"maintenance\"" in ensure.stdout
     resumed = rig.update("--resume")
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert subsequence(rig.names(), ["held-no-restart", "resume", "host-start", "readiness-ok", "launchctl-bootstrap", "release"])

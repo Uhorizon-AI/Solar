@@ -469,7 +469,7 @@ def test_a_request_with_subtasks_completes_end_to_end(tmp_path):
     worker = skills / "solar-async-tasks" / "scripts" / "run_worker.sh"
 
     for _ in range(8):
-        subprocess.run(["bash", str(worker), "--once"], capture_output=True, text=True,
+        subprocess.run(["bash", str(worker), "--diagnostic", "--once"], capture_output=True, text=True,
                        env=env, timeout=120)
         mirror(root)
         if (root / "completed" / "parent.md").exists():

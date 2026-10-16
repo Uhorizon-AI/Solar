@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
-# ensure_async_tasks.sh — Ensure run_worker.sh runs exactly once at a time.
+# ensure_async_tasks.sh — make sure the resident async-tasks supervisor of this runtime is running.
 #
-# If a worker is already running, this is a no-op.
-# Otherwise, starts run_worker.sh --once and tracks its PID.
+# It does not run tasks and it never waits for them. It observes the supervisor's identity (it does
+# not take its lock and does not write its pid), starts one candidate through launch_supervisor.sh
+# when none is alive, and waits at most 5 seconds for the handshake (lock held, workspace/runtime
+# identity, pid and start time, heartbeat, reconciliation done).
+#
+# One JSON object on the last line of stdout: state, reason, identity, age_seconds, ...
+# Exit codes:
+#   0   ready     the supervisor answered the handshake
+#   10  starting  a live, identified process is still reconciling (the next tick sees the same one)
+#   20  blocked   needs attention: maintenance, recovery, stale heartbeat, no live identity after the
+#                 handshake budget, or starting for more than 120 seconds. Nothing is started again.
+#   1   failed    the start failed (checked); the next tick tries again
 #
 # Called by:
 #   - solar-system (run_orchestrator.sh) on each LaunchAgent tick
-#   - AI agent as fallback when solar-system is not installed
+#   - an AI agent as the documented fallback when solar-system is not installed (once; it respects
+#     10 and 20 and never starts run_worker.sh or another launcher)
 #
 # Usage:
 #   bash core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh
@@ -14,25 +25,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-LOCK_FILE="${SOLAR_TASK_WORKER_LOCK:-/tmp/solar-async-tasks-worker.lock}"
-
-# An update holds a maintenance barrier in the runtime (outside the schema). No launcher starts
-# a worker while it is held; the claims refuse as well, so a worker started by hand does nothing.
-STATE_PY="$SCRIPT_DIR/../../solar-state/scripts/solar_state.py"
-if [[ "$(python3 "$STATE_PY" maintenance 2>/dev/null | python3 -c 'import json,sys
-try: print("held" if json.load(sys.stdin).get("held") else "free")
-except Exception: print("free")')" == "held" ]]; then
-  echo "⏸️  Maintenance in progress: the async worker is not started."
-  exit 0
+if [[ -z "${SOLAR_WORKSPACE:-}" ]]; then
+  _RESOLVE="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/resolve_solar_paths.sh"
+  if [[ -f "$_RESOLVE" ]]; then
+    # shellcheck source=/dev/null
+    source "$_RESOLVE"
+    solar_resolve_paths --quiet 2>/dev/null || true
+  fi
 fi
 
-if bash "$SCRIPT_DIR/check_async_tasks.sh" --quiet; then
-  # Worker already running — nothing to do.
-  exit 0
-fi
-
-# Write PID lock and run worker.
-echo "$$" > "$LOCK_FILE"
-trap 'rm -f "$LOCK_FILE"' EXIT INT TERM
-
-exec bash "$SCRIPT_DIR/run_worker.sh" --once
+exec python3 "$SCRIPT_DIR/supervisor_lib.py" ensure
