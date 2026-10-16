@@ -28,6 +28,7 @@ sys.path.insert(0, str(CORE / "skills" / "solar-state" / "scripts"))
 sys.path.insert(0, str(CORE / "tests" / "support"))
 
 import solar_state  # noqa: E402
+from dead_process import dead_pid  # noqa: E402
 from runtime_owner import claim_test_owner  # noqa: E402
 
 V6_TABLES = ("reservation_resources", "reservation_scopes", "execution_reservations",
@@ -523,7 +524,27 @@ def test_a_lock_left_by_a_dead_process_is_taken_over_but_an_unverifiable_one_is_
     refused = rig.update("--resume", env_extra=no_supervisor)
     assert refused.returncode != 0 and "another update process is driving" in refused.stderr
     assert rig.marker() == "OLD" and rig.barrier() is not None
-    lock.write_text(json.dumps(dict(pid=2 ** 22 - 3, start="Thu Jan  1 00:00:00 1970")))
+    lock.write_text(json.dumps(dict(pid=dead_pid(), start="Thu Jan  1 00:00:00 1970")))
     resumed = rig.update("--resume", env_extra=no_supervisor)
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert rig.marker() == "NEW" and rig.barrier() is None and not lock.exists()
+
+
+def test_a_lock_written_without_a_verifiable_start_is_not_stolen_from_a_live_owner(rig):
+    """The owner's start time could not be read when the lock was written ("?"). A start time
+    that reads fine now proves nothing, so a live pid keeps the lock."""
+    rig.runtime_state(5)
+    no_supervisor = dict(SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host", SOLAR_CLIENT_DRAIN_TIMEOUT="1")
+    assert rig.update("--ref", "v0.0.2", "--yes", env_extra=no_supervisor).returncode != 0
+    rig.busy.unlink()
+    lock = rig.rt / "maintenance.lock"
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        lock.write_text(json.dumps(dict(pid=holder.pid, start="?")))
+        refused = rig.update("--resume", env_extra=no_supervisor)
+        assert refused.returncode != 0 and "another update process is driving" in refused.stderr
+        assert json.loads(lock.read_text())["pid"] == holder.pid
+        assert rig.marker() == "OLD" and rig.barrier() is not None
+    finally:
+        holder.kill()
+        holder.wait()

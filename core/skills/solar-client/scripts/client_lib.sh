@@ -2129,7 +2129,7 @@ raise SystemExit(0 if info.get("ready") and info.get("schema") == info.get("expe
 # crash; this lock says that a process is driving it NOW, for the whole sequence, so a
 # `--resume` (or a second update, or a sync) cannot run next to the original. The lock names the
 # process and its start time; a lock whose process is gone is taken over, a lock whose owner
-# cannot be verified is respected. Exit 3: another process holds it.
+# cannot be verified (now, or when it was written) is respected. Exit 3: another process holds it.
 solar_client_operation_lock_file() {
   printf '%s/maintenance.lock\n' "$(solar_runtime_root)"
 }
@@ -2174,7 +2174,11 @@ except (OSError, ValueError, KeyError, TypeError):
     print("the operation lock is unreadable", file=sys.stderr)
     sys.exit(3)
 alive = start_of(owner_pid)
-if alive == "?" or (alive is not None and alive == owner.get("start")):
+recorded = owner.get("start")
+# A recorded start that is unknown ("?") proves nothing about who the pid is now: while any
+# process holds that pid the lock is respected. Only a known, different start (pid reuse) or a
+# pid nobody runs lets it go.
+if alive == "?" or (alive is not None and (recorded in (None, "?") or alive == recorded)):
     print(f"pid {owner_pid}", file=sys.stderr)
     sys.exit(3)
 # The owner is gone (or the pid belongs to another process now): take the lock over. One taker

@@ -65,8 +65,10 @@ def _stop_own_group() -> None:
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(pid, sig)
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError:
             return
+        except PermissionError:
+            pass        # this signal was not allowed; the next one may be
         time.sleep(0.5 if sig == signal.SIGTERM else 0)
 
 

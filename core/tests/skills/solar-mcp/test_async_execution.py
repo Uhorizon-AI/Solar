@@ -11,6 +11,17 @@ import solar_state
 from mcp_helpers import execute, new_task, run, search, stored
 
 
+class _EveryProvider:
+    def __contains__(self, _):
+        return True
+
+
+@pytest.fixture(autouse=True)
+def verified_profile(monkeypatch):
+    """Stands in for a verified implementation of the profile (none exists yet)."""
+    monkeypatch.setattr(solar_state, "VERIFIED_PROFILES", {"text_only_review_v1": _EveryProvider()})
+
+
 def refuse(operation, arguments, code):
     body, error = execute(operation, arguments)
     assert error, body

@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import solar_state
+from dead_process import dead_pid
 from reservation_tokens import token_of
 from solar_state import PolicyInvalid, StaleToken, TransitionRefused
 
@@ -35,6 +36,19 @@ def access(mode="read", scopes=(), resources=()):
 
 
 PROFILE = "text_only_review_v1"
+
+
+class _EveryProvider:
+    def __contains__(self, _):
+        return True
+
+
+@pytest.fixture(autouse=True)
+def verified_profile(monkeypatch):
+    """No profile has a verified implementation yet (PR 3 delivers one). These tests stand in
+    for that: they pretend `PROFILE` is enforced for every provider, so the admission rules
+    for declared tasks can be exercised. The tests of the real, empty registry undo it."""
+    monkeypatch.setattr(solar_state, "VERIFIED_PROFILES", {PROFILE: _EveryProvider()})
 
 
 def make(store, title, *, policy=None, status="queued", profile=PROFILE, **extra):
@@ -257,6 +271,7 @@ def test_the_same_provider_can_fill_every_place_when_no_limit_is_set(store):
 def _claim_proc(root, workspace, kind, task_id, barrier, out):
     os.environ["SOLAR_RUNTIME_ROOT"] = root
     os.environ["SOLAR_WORKSPACE"] = workspace
+    solar_state.VERIFIED_PROFILES = {PROFILE: _EveryProvider()}          # a spawned process starts clean
     with solar_state.session(root, auto_backup=False) as s:
         barrier.wait()
         if kind == "manual":
@@ -767,7 +782,7 @@ def test_the_cli_claim_next_reports_the_token_and_what_waits(ready):
     out = json.loads(cli(ready, "task", "claim-next", "--worker", "w").stdout)
     assert out["claimed"] and out["token"] and out["waiting"] == []
     again = json.loads(cli(ready, "task", "claim-next", "--worker", "w").stdout)
-    assert again["claimed"] is False and again["waiting"] == [dict(id="b", reason="global_capacity")]
+    assert again["claimed"] is False and again["waiting"] == [dict(id="b", reason="exclusive_needs_idle")]
     listed = json.loads(cli(ready, "task", "reservations").stdout)
     assert [r["task_id"] for r in listed] == ["a"]
 
@@ -827,6 +842,32 @@ def test_an_enabled_profile_lets_declared_tasks_run_together(store):
     assert {r["access_class"] for r in store.reservations()} == {"declared"}
 
 
+def test_enabling_a_profile_nobody_implements_grants_no_concurrency(store, monkeypatch):
+    """Listing the name in the policy is not enough: with no verified implementation for the
+    provider, the tasks keep running alone (this is the state until the profile is delivered)."""
+    monkeypatch.setattr(solar_state, "VERIFIED_PROFILES", {})
+    set_policy(store, global_capacity=5, enabled_reader_profiles=[PROFILE])
+    ids = [make(store, f"V{i}", policy=access("read", [f"/v/{i}"]), provider=json.dumps("codex"))
+           for i in range(2)]
+    assert claim(store, ids[0])["claimed"]
+    assert claim(store, ids[1])["reason"] == "exclusive_needs_idle"
+    assert store.reservation_for(ids[0])["access_class"] == "exclusive"
+    monkeypatch.setattr(solar_state, "VERIFIED_PROFILES", {PROFILE: frozenset({"claude"})})
+    other = make(store, "Other", policy=access("read", ["/v/9"]), provider=json.dumps("codex"))
+    assert claim(store, other)["reason"] == "exclusive_needs_idle"            # verified for claude only
+
+
+def test_a_queued_task_that_is_cancelled_leaves_no_wait_behind(store):
+    set_policy(store, global_capacity=1)
+    running = make(store, "Running")
+    waiting = make(store, "Waiting")
+    assert claim(store, running)["claimed"]
+    assert claim(store, waiting)["claimed"] is False
+    assert store.conn.execute("SELECT 1 FROM claim_waits WHERE task_id = ?", (waiting,)).fetchone()
+    store.task_cancel(waiting)
+    assert store.conn.execute("SELECT 1 FROM claim_waits WHERE task_id = ?", (waiting,)).fetchone() is None
+
+
 def test_disabling_the_profile_makes_new_starts_exclusive_again(store):
     set_policy(store, global_capacity=3)
     first = make(store, "First", policy=access("read", ["/a"]))
@@ -882,7 +923,7 @@ def _expired_owner(store, pid):
 
 def test_the_process_table_answers_are_told_apart():
     assert solar_state._process_identity(os.getpid())
-    assert solar_state._process_identity(2 ** 22 - 3) is None
+    assert solar_state._process_identity(dead_pid()) is None
 
 
 @pytest.mark.parametrize("failure", ["denied", "timeout", "error_status"])

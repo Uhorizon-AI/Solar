@@ -16,7 +16,7 @@ The format is based on Keep a Changelog.
 ### Changed
 - **Behaviour:** an update no longer replaces the code before it stops anything; a failed update keeps the services stopped and the barrier held until `solar client update --resume`. A release older than this one cannot give that order: run `client_update_staged.sh` with explicit paths for the first installation (see `core/docs/execution-reservations.md`). The cutover marker also records the schema; a marker without it never lets an update skip the stop and cutover.
 - **Behaviour:** `activate.sh` and `task_claim` revalidate dependencies and a pending cancellation, and refuse when the task does not fit (capacity, access, maintenance). With the initial capacity `1` the worker stays sequential.
-- **Behaviour:** a declared `access_policy` makes a task concurrent only when its `execution_profile` is in the policy's `enabled_reader_profiles` (empty at first); every other task still runs alone, so raising the capacity changes nothing until a confined profile is enabled.
+- **Behaviour:** a declared `access_policy` makes a task concurrent only when its `execution_profile` is in the policy's `enabled_reader_profiles` (empty at first); every other task still runs alone, so raising the capacity changes nothing until a confined profile is enabled. Enabling is not enough either: the profile needs a verified implementation for the provider (`VERIFIED_PROFILES`, empty in this delivery), so every task still runs alone until the profile is delivered.
 - **Behaviour:** `complete.sh`, `task_complete`, `task_release`, `task_fail`, `task_await` and a transition out of `active` refuse a missing or stale execution token (`StaleToken`) while the task holds a reservation.
 
 ## [0.47.1] - 2026-10-16

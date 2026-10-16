@@ -1207,6 +1207,9 @@ def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optiona
         _reserve(conn, task_id, pairs, (extra or {}).get("claimed_by") or actor, handoff=handoff)
     elif current == "active" and to_status != "active":
         conn.execute("DELETE FROM execution_reservations WHERE task_id = ?", (task_id,))
+    if to_status != "queued":
+        # A wait only describes a queued task: leaving the queue (cancelled, archived, ...) ends it.
+        conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (task_id,))
     _write_task(conn, task_id, to_status, pairs, body, insert=False, extra=extra)
     conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                  "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, to_status, actor))
@@ -1563,11 +1566,19 @@ def _overlaps(left: str, right: str) -> bool:
     return a.startswith(b) or b.startswith(a)
 
 
+# Profiles whose confinement has a verified implementation, per provider. Naming a profile in the
+# applied policy is not enough to run next to other tasks: the executor must really enforce it.
+# Empty until the delivery that implements `text_only_review_v1` (claude only); until then every
+# task stays exclusive even when the policy lists the name.
+VERIFIED_PROFILES: dict[str, frozenset] = {}
+
+
 def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
                profiles: Iterable[str] = ()) -> _Access:
     """What the task asks for. A declaration alone never makes a task concurrent: the providers
     still run with their own permissions, so the declaration is trusted only for an
-    `execution_profile` the applied policy lists in `enabled_reader_profiles` (it starts empty).
+    `execution_profile` that the applied policy lists in `enabled_reader_profiles` (it starts empty)
+    AND that `VERIFIED_PROFILES` says the task's provider enforces (empty for now).
     Any other task, declared or not, keeps running alone."""
     provider = (_field(pairs, "provider") or "").strip().lower()
     resources = set(_csv(_field(pairs, "resources")))
@@ -1581,7 +1592,8 @@ def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
                        invalid=str(exc), task_id=task_id)
     resources |= set(policy["resources"])
     profile = (_field(pairs, "execution_profile") or "").strip()
-    if not profile or profile not in set(profiles):
+    if (not profile or profile not in set(profiles)
+            or provider not in VERIFIED_PROFILES.get(profile, frozenset())):
         return _Access(exclusive=True, resources=resources, provider=provider, task_id=task_id)
     scopes = [(_resolve_scope(path), policy["mode"]) for path in policy["scopes"]]
     return _Access(exclusive=False, scopes=scopes, resources=resources, provider=provider,
@@ -2242,6 +2254,7 @@ class Session:
                 pairs = json.loads(row["frontmatter"])
                 _set_pair(pairs, "status", " cancelled")
                 _write_task(conn, task_id, "cancelled", pairs, row["body"], insert=False)
+                conn.execute("DELETE FROM claim_waits WHERE task_id = ?", (task_id,))
                 conn.execute(
                     "INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                     "VALUES (?, ?, ?, ?, ?)",

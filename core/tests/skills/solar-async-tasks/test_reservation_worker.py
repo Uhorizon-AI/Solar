@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 
+from dead_process import dead_pid
 from reservation_tokens import token_of
 
 CORE_ROOT = Path(__file__).resolve().parents[3]
@@ -144,7 +145,7 @@ def test_an_execution_whose_owner_is_gone_is_taken_over_once_its_lease_ended(tmp
         task_id = _local(store, "Orphan", rel)
         claimed = store.task_claim_next("worker")
         # The owner was a process that no longer exists, and its lease ran out.
-        store.reservation_attach(task_id, claimed["token"], pid=2 ** 22 - 3)
+        store.reservation_attach(task_id, claimed["token"], pid=dead_pid())
         store.conn.execute("UPDATE execution_reservations SET lease_expires_at = '2000-01-01T00:00:00Z'")
     taken = _sh(env, "execute_active.sh", "--once")
     assert taken.returncode == 0, taken.stdout + taken.stderr

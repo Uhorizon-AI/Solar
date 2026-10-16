@@ -58,6 +58,13 @@ policy's `enabled_reader_profiles`, which starts empty; any other task runs alon
 and readers and writers with disjoint scopes alike. Raising the capacity therefore changes nothing
 until a profile whose confinement was verified is enabled.
 
+Enabling is necessary but not sufficient: the profile must also have a verified implementation
+for the task's provider (`VERIFIED_PROFILES` in `solar_state.py`, per provider). That registry is
+**empty in this delivery**, so listing `text_only_review_v1` in `enabled_reader_profiles` is
+accepted and recorded, yet every task still runs alone. The delivery that implements the profile
+(read-only confinement in the executor, claude only) fills the registry; codex, agent and agy
+stay out of it.
+
 `access_policy` is JSON: `{"version":1,"mode":"read"|"write","scopes":["/abs/path"],"resources":["name"]}`.
 A writer names at least one scope. Paths are absolute and normalized; the digest hashes the
 canonical JSON. A task without it is **legacy and exclusive**. An invalid declaration refuses the
