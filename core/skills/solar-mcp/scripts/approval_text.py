@@ -57,6 +57,12 @@ COPY = {
         update_planned="the task returns to draft and must be approved again. Nothing is queued or run.",
         update_draft="the stored draft is rewritten. Nothing is queued or run.",
         edit_active="refused: a running task keeps the instructions it started with.",
+        executor="Executor", local_command="Local command", local_timeout="Local timeout",
+        update_queued_rename="only the title changes. The task keeps its place in the queue and its approval; nothing is run.",
+        update_queued_material="this changes what was approved. The task returns to draft, its approval is withdrawn and a worker will not take it until it is approved again. Results of earlier runs and the run count are kept. Nothing is run.",
+        draft_head="Return task to draft",
+        draft_effect="the task leaves the queue and its approval is withdrawn: a worker will not take it. Its id, instructions, schedule and history are kept. It needs a new approval to be queued again. Nothing is run.",
+        draft_refused="refused: only a queued task can be returned to draft.",
         edit_closed="refused: a task that is {status} is not edited; prepare a revision instead.",
         lines_changed="{n} lines changed",
         schedule_head="Schedule task", days="Days", time="Time", zone="Time zone", repeats="Repeats",
@@ -101,6 +107,12 @@ COPY = {
         update_planned="la tarea vuelve a borrador y debe aprobarse de nuevo. No se encola ni se ejecuta nada.",
         update_draft="se reescribe el borrador guardado. No se encola ni se ejecuta nada.",
         edit_active="se rechaza: una tarea en ejecución conserva las instrucciones con las que empezó.",
+        executor="Ejecutor", local_command="Comando local", local_timeout="Límite de tiempo local",
+        update_queued_rename="solo cambia el título. La tarea conserva su sitio en la cola y su aprobación; no se ejecuta nada.",
+        update_queued_material="esto cambia lo aprobado. La tarea vuelve a borrador, se retira su aprobación y ningún worker la tomará hasta que se apruebe de nuevo. Se conservan los resultados de ejecuciones anteriores y el contador de ejecuciones. No se ejecuta nada.",
+        draft_head="Devolver tarea a borrador",
+        draft_effect="la tarea sale de la cola y se retira su aprobación: ningún worker la tomará. Se conservan su id, instrucciones, programación e historial. Necesita una nueva aprobación para volver a la cola. No se ejecuta nada.",
+        draft_refused="se rechaza: solo se devuelve a borrador una tarea en cola.",
         edit_closed="se rechaza: una tarea en estado {status} no se edita; prepara una revisión.",
         lines_changed="{n} líneas cambiadas",
         schedule_head="Programar tarea", days="Días", time="Hora", zone="Zona horaria", repeats="Repite",
@@ -189,7 +201,9 @@ def _facts(task_id: str) -> dict | None:
         body = task["body"] or ""
         instructions = body[len(heading):] if body.startswith(heading) else body
         return dict(title=title, status=task["status"], row_version=task["row_version"],
-                    values=values, priority=task["priority"], object=task["object"] or "",
+                    values=values, priority=task["priority"],
+                    approval=solar_state.approval_state(task["frontmatter"], task["body"]),
+                    object=task["object"] or "",
                     scope=task["scope"] or "", effect=task["effect"] or "",
                     recurring=str(values.get("recurring") or "").lower() == "true",
                     instructions=instructions.strip("\n").rstrip(), schedule=task_views._schedule(values))
@@ -396,20 +410,26 @@ def _update(copy, args):
     if not facts or facts.get("missing"):
         return _head(copy, copy["update_head"], [(copy["task"], None)], notes)
     lines = []
+    material = False
     for key in ("title", "object", "scope", "effect", "priority", "provider", "planet", "agent", "responsibility"):
         if key not in args:
             continue
         old = facts[key] if key in ("object", "scope", "effect", "priority") else (
             facts["title"] if key == "title" else facts["values"].get(key))
         if (old or "") != args[key]:
+            material = material or key != "title"
             before, after = _pair(old, args[key])
             lines.append(f"{key}: {before or copy['none']} → {after}")
     if "instructions" in args and args["instructions"].rstrip() != facts["instructions"]:
+        material = True
         lines.append(copy["instructions"] + ":")
         lines += ["  " + row for row in _diff_lines(copy, facts["instructions"], args["instructions"].rstrip())]
     status = facts["status"]
     if status == "active":
         effect = copy["edit_active"]
+    elif status == "queued":
+        # A queued task whose approval does not cover it goes to draft on any edit.
+        effect = copy["update_queued_material" if material or facts["approval"] else "update_queued_rename"]
     elif status not in ("draft", "planned"):
         effect = copy["edit_closed"].format(status=status)
     else:
@@ -463,6 +483,8 @@ def _schedule(copy, args):
     status = facts["status"]
     if status in ("draft", "planned"):
         effect = copy["schedule_effect"] + (" " + copy["schedule_planned"] if status == "planned" else "")
+    elif status == "queued":
+        effect = copy["update_queued_material"]
     else:
         effect = copy["edit_active"] if status == "active" else copy["edit_closed"].format(status=status)
     rows.append((copy["effect"], effect))
@@ -479,6 +501,13 @@ def _context_rows(copy: dict, facts: dict) -> list:
     if schedule.get("time") and schedule["time"] != "now":
         rows.append((copy["time"], f"{_days(copy, schedule['weekdays'])} {schedule['time']} "
                                    f"({schedule.get('timezone') or '—'})"))
+    # A local executor runs this command instead of a provider: what is approved includes it.
+    values = facts.get("values") or {}
+    if values.get("executor") and str(values["executor"]).lower() != "provider":
+        rows.append((copy["executor"], _line(str(values["executor"]), _VALUE)))
+        for key in ("local_command", "local_timeout"):
+            if values.get(key):
+                rows.append((copy[key], _line(str(values[key]), _VALUE)))
     if facts["recurring"]:
         rows.append((copy["repeats"], _repeats(copy, True, schedule.get("recurring_min_interval"),
                                                schedule.get("recurring_max_runs"))))
@@ -512,6 +541,14 @@ def _requeue(copy, args):
     return _head(copy, copy["requeue_head"], _context_rows(copy, facts) + [(copy["effect"], effect)], notes)
 
 
+def _return_to_draft(copy, args):
+    facts, notes = _stored(args)
+    if not facts or facts.get("missing"):
+        return _head(copy, copy["draft_head"], [], notes)
+    effect = copy["draft_effect"] if facts["status"] == "queued" else copy["draft_refused"]
+    return _head(copy, copy["draft_head"], _context_rows(copy, facts) + [(copy["effect"], effect)], notes)
+
+
 def _telegram(copy, args):
     rows = [(copy["to"], _line(args["chat_id"]))]
     if args.get("parse_mode"):
@@ -535,7 +572,8 @@ def _generic(copy, name, args):
 
 RENDERERS = {"task.archive": _archive, "task.create": _create, "task.update": _update,
              "task.schedule": _schedule, "task.approve": _approve, "task.cancel": _cancel,
-             "task.requeue": _requeue, "telegram.send": _telegram}
+             "task.requeue": _requeue, "task.return_to_draft": _return_to_draft,
+             "telegram.send": _telegram}
 
 
 def render(name: str, arguments: dict, *, seconds: int, lang: str | None = None) -> tuple[str, str]:

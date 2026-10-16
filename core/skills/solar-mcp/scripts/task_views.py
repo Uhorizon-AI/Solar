@@ -261,7 +261,7 @@ def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
                 row_version=task["row_version"], view=view)
     body = task["body"] or ""
     if view == "detail":
-        digest = solar_state.material_digest(task["frontmatter"], body)
+        digest = solar_state.task_digest(task["status"], task["frontmatter"], body)
         detail = dict(base, priority=task["priority"], created=task["created"], updated=task["updated"],
                       object=task["object"], scope=task["scope"], effect=task["effect"],
                       schedule=_schedule(values), digest=digest,

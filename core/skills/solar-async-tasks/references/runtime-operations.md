@@ -57,6 +57,7 @@ Race protection:
 
 - `recurring_last_run` and `recurring_min_interval` prevent duplicate execution.
 - If the interval has not elapsed, the worker skips the task and leaves it queued.
+- `recurring_last_run` is written after a claim that won, never before: a claim refused by the approval check (`approval_digest_mismatch`) does not consume the interval. Editing, returning to draft and approving again keep `recurring_run_count` and `recurring_last_run`, and add no run.
 
 ## Resource Cleanup
 

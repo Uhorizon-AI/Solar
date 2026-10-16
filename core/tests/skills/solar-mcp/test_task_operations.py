@@ -72,8 +72,8 @@ def test_editing_a_planned_task_sends_it_back_to_draft_for_review(solar_env):
     assert queued_count() == 0
 
 
-@pytest.mark.parametrize("status", ["queued", "completed", "error", "cancelled", "archived"])
-def test_approved_or_finished_tasks_keep_what_was_approved(solar_env, status):
+@pytest.mark.parametrize("status", ["completed", "error", "cancelled", "archived"])
+def test_finished_tasks_keep_what_was_approved(solar_env, status):
     with solar_state.session() as store:
         task_id = store.task_create([("title", '"T"')], "\n# T\n\nOriginal.\n", status="queued")
         if status != "queued":
@@ -223,9 +223,11 @@ def test_approve_queues_the_exact_stored_task_and_records_it(solar_env):
     out = run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
     task = stored(made["id"])
     assert task["status"] == "queued" and out["approved_digest"] == made["digest"]
-    # What was approved can no longer be edited through MCP.
-    refuse("task.update", dict(task_id=made["id"], expected_row_version=task["row_version"],
-                               instructions="Swapped after approval."), "task_not_editable")
+    # Editing what was approved sends the task back to draft: the approval is gone with it.
+    out = run("task.update", dict(task_id=made["id"], expected_row_version=task["row_version"],
+                                  instructions="Swapped after approval."))
+    assert out["status"] == "draft" and out["needs_approval"] is True
+    assert "approved_digest" not in {k for k, _ in stored(made["id"])["frontmatter"]}
 
 
 def test_approve_refuses_a_task_that_is_not_a_draft(solar_env):

@@ -1200,6 +1200,66 @@ async function settled() {
   if (page.els.title.textContent !== "Resumen") throw new Error("spanish setting left the title in English");
   if (page.document.title !== "Consola local de Solar") throw new Error("browser title stayed " + page.document.title);
   if (page.els.health.innerHTML.includes("Lo último que Solar tenía")) throw new Error("global Spanish continuity card remained");
+  // One row per logical task: older finished versions fold under the task that revises
+  // them (by revises_task_id), a similar title alone folds nothing, and a version that
+  // can still run keeps its own row.
+  const row = (id, status, title, extra) => Object.assign({ id, status, title, provider: null, channel: null,
+    created_at: "2026-10-0" + (extra && extra.n || 1), updated_at: "2026-10-0" + (extra && extra.n || 1), recurring: false, parent_id: null }, extra || {});
+  const chain = {
+    tasks: [
+      row("v1-aaaaaaaa", "archived", "Weekly report", { n: 1 }),
+      row("v2-bbbbbbbb", "cancelled", "Weekly report", { n: 2, revises_task_id: "v1-aaaaaaaa" }),
+      row("v3-cccccccc", "queued", "Weekly report", { n: 3, revises_task_id: "v2-bbbbbbbb" }),
+      row("twin-dddddd", "archived", "Weekly report", { n: 4 }),
+      row("live-eeeeee", "queued", "Other", { n: 5 }),
+      row("live-ffffff", "draft", "Other (revision)", { n: 6, revises_task_id: "live-eeeeee" }),
+      row("stuck-gggggg", "queued", "Stuck", { n: 7, approval_digest_mismatch: { reason: "legacy", at: "2026-10-07T00:00:00Z" } }),
+    ],
+    by_status: { archived: { n: 2, recurring: 0 }, cancelled: { n: 1, recurring: 0 }, queued: { n: 3, recurring: 0 }, draft: { n: 1, recurring: 0 } },
+    links: [], history: [],
+    statuses: ["draft", "planned", "queued", "active", "completed", "error", "archived", "cancelled"],
+    transitions: [],
+  };
+  page = boot(Object.assign({ "/api/console/tasks": { body: chain } }, calm));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-filter": "all" });
+  view = page.els.health.innerHTML;
+  const listed = (id) => (view.match(new RegExp('class="row trow pick[^"]*" data-task="' + id + '"', "g")) || []).length;
+  if (listed("v1-aaaaaaaa") || listed("v2-bbbbbbbb")) throw new Error("older versions kept their own row");
+  if (listed("v3-cccccccc") !== 1) throw new Error("the current version lost its row");
+  if (listed("twin-dddddd") !== 1) throw new Error("a similar title folded a task that revises nothing");
+  if (listed("live-eeeeee") !== 1 || listed("live-ffffff") !== 1) throw new Error("a version that can still run was folded");
+  need(view, "2 versions", "version count on the current row");
+  need(view, "Approval needed", "mismatch badge on the queued row");
+  page.click({ "data-task": "v3-cccccccc" });
+  view = page.els.health.innerHTML;
+  need(view, "Earlier versions (2)", "versions listed in the detail");
+  need(view, 'data-task="v1-aaaaaaaa"', "older version reachable from the detail");
+  need(view, "Revises", "link to the version it revises");
+  page.click({ "data-task": "v1-aaaaaaaa" });
+  need(page.els.health.innerHTML, "Weekly report", "an older version opens from the detail");
+  page.click({ "data-task": "stuck-gggggg" });
+  view = page.els.health.innerHTML;
+  need(view, "The worker will not start this task: it was approved under an older rule. Approve it again to queue it.", "mismatch explained");
+  page = boot(Object.assign({ "/api/console/tasks": { body: Object.assign({}, chain, { language: "es" }) } }, calm));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-filter": "all" });
+  need(page.els.health.innerHTML, "2 versiones", "spanish version count");
+  need(page.els.health.innerHTML, "Falta aprobación", "spanish mismatch badge");
+  // A cycle in the links must not hang or hide the tasks.
+  const loop = { tasks: [row("c1", "archived", "A", { n: 1, revises_task_id: "c2" }), row("c2", "archived", "B", { n: 2, revises_task_id: "c1" })],
+    by_status: { archived: { n: 2, recurring: 0 } }, links: [], history: [], statuses: chain.statuses, transitions: [] };
+  page = boot(Object.assign({ "/api/console/tasks": { body: loop } }, calm));
+  await settled();
+  page.click({ "data-screen": "tareas" });
+  await settled();
+  page.click({ "data-filter": "all" });
+  need(page.els.health.innerHTML, 'data-task="c1"', "cycle keeps c1 listed");
+  need(page.els.health.innerHTML, 'data-task="c2"', "cycle keeps c2 listed");
   console.log(JSON.stringify({ ok: true }));
 })().catch((error) => {
   console.error(error && error.stack || error);

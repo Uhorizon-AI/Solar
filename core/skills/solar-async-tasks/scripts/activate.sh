@@ -2,7 +2,8 @@
 
 # Activate one task by id.
 # draft or planned becomes queued through task approve (no priority rewrite),
-# then that id is claimed. Schedule and recurring gates are not applied.
+# then that id is claimed. Schedule and recurring gates are not applied; the
+# approval digest is. A claim that is refused fails the script.
 
 set -euo pipefail
 
@@ -72,12 +73,28 @@ if [[ "$(task_field "$TASK_ID" "cleanup_required")" == "true" ]]; then
 fi
 rm -f "$export_file"
 
-if [[ "$(task_field "$TASK_ID" "recurring")" == "true" ]]; then
-    state task set "$TASK_ID" recurring_last_run "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
+WORKER="activate-$$"
+# The claim decides. A refusal (another worker got it, or its approval does not cover
+# what is stored) stops here: nothing is stamped, released or reported as activated.
+if ! CLAIM_JSON="$(state task claim "$TASK_ID" --worker "$WORKER" --stamp-last-run)"; then
+    REASON="$(printf '%s' "$CLAIM_JSON" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("reason") or "unknown")
+except Exception: print("unknown")')"
+    case "$REASON" in
+        absent|legacy|mismatch)
+            echo "Error: approval_digest_mismatch (reason=$REASON): the approval of $TASK_ID does not cover its current content. Approve it again with task.approve." >&2
+            ;;
+        *)
+            echo "Error: Task $TASK_ID was not claimed (reason=$REASON); it is no longer queued." >&2
+            ;;
+    esac
+    exit 1
 fi
 
-WORKER="activate-$$"
-state task claim "$TASK_ID" --worker "$WORKER" >/dev/null
+# The claim stamped recurring_last_run itself (same transaction), so a failure after it
+# cannot leave an active task without its interval. Do not move this stamp before the claim,
+# and do not align it with start_next.sh: there the hooks run after the claim and may release
+# it, here they run before it, so the claim is the first point at which a run really starts.
 state task unset "$TASK_ID" blocked_by_task_ids >/dev/null
 
 echo "✅ Activated task: [$TASK_ID] $TITLE"

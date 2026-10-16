@@ -45,6 +45,9 @@ while true; do
         continue
     fi
 
+    # Unlike activate.sh (hooks run before its claim, which stamps the interval itself),
+    # the hooks here run after the claim and may release it: the interval is stamped only
+    # once they have passed, so a blocked task does not consume it.
     if [[ "$(task_field "$TASK_ID" "recurring")" == "true" ]]; then
         state task set "$TASK_ID" recurring_last_run "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
     fi

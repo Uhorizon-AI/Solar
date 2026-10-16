@@ -433,9 +433,16 @@ def console_tasks(store):
     """
     tasks = []
     by_status = {}
+    # What the worker will refuse is read from the stored approval itself, so a queued
+    # task shows it right after an upgrade, before any poll, and a rename does not hide it.
+    unapproved = {row['id']: row['reason'] for row in store.tasks_unapproved()}
     rows = store.conn.execute(
         "SELECT id, status, title, provider, origin_channel, created, updated, "
-        "completed_at, recurring, parent_task_id FROM tasks ORDER BY updated DESC, id"
+        "completed_at, recurring, parent_task_id, "
+        "CASE WHEN json_valid(tasks.frontmatter) THEN "
+        " (SELECT json_extract(j.value, '$[1]') FROM json_each(tasks.frontmatter) AS j "
+        "  WHERE json_extract(j.value, '$[0]') = 'revises_task_id') END AS revises "
+        "FROM tasks ORDER BY updated DESC, id"
     ).fetchall()
     for row in rows:
         item = dict(
@@ -443,7 +450,10 @@ def console_tasks(store):
             channel=row['origin_channel'], created_at=row['created'], updated_at=row['updated'],
             completed_at=row['completed_at'], recurring=bool(row['recurring']),
             parent_id=row['parent_task_id'],
+            revises_task_id=solar_state.value_of(row['revises']) or None,
         )
+        if row['id'] in unapproved:
+            item['approval_digest_mismatch'] = dict(reason=unapproved[row['id']])
         tasks.append(item)
         bucket = by_status.setdefault(item['status'], {'n': 0, 'recurring': 0})
         bucket['n'] += 1

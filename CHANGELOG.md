@@ -6,6 +6,16 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- `task.return_to_draft` (A2, `task_id` + `expected_row_version`): a queued task goes back to draft keeping its id, body, schedule, run counters and history. `approved_*` are withdrawn (the previous digest stays in `audit` as `task_approval_withdrawn`) and the worker cannot claim it until `task.approve`. Schema v5 adds `queued -> draft` to the `transitions` table of existing bases.
+- `approval_digest_mismatch` (`audit` row once per row version, a log line on every refusal, and the console task list): the reason is `absent`, `legacy` or `mismatch`.
+- The console list shows one row per logical task: finished older versions fold under the newest one linked by `revises_task_id`, which `console_tasks` now projects.
+
+### Changed
+- **Behaviour:** `task_claim`, `task_claim_next` and `activate.sh` take a queued task only when its approval covers what is stored. The digest (now `v2:`-prefixed) covers the material fields without the title, and the definition: the body without the `# {title}` heading and without the runtime sections. `task.approve` records it, with a snapshot of the definition, with or without `expected_row_version`; a task created already queued is stamped the same way. **Release note: every row already `queued` (recurring ones included), and any imported by the cutover, carries no `v2:` digest and is NOT claimed until it is approved again with `task.approve`; nothing is converted automatically and nothing is announced beyond the log, `audit` and the console. Right after upgrading run `python3 core/skills/solar-state/scripts/solar_state.py task list-unapproved` and approve each task.** Executor settings (`executor`, `local_command`, `local_timeout`) are now part of what is approved. Contract: `core/docs/task-approval-contract.md`.
+- `task.update` and `task.schedule` accept queued tasks. A rename keeps the place and the approval; any other change returns the task to draft in the same transaction. Results, delivery and errors of earlier runs and `recurring_run_count`/`recurring_last_run` are kept.
+- `activate.sh` fails when its claim is refused (no `Activated`, `blocked_by_task_ids` kept) and `recurring_last_run` is stamped only after a winning claim. `approve.sh` no longer reports success when the approval fails.
+
 ## [0.46.0] - 2026-10-15
 
 ### Added

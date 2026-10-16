@@ -242,9 +242,8 @@ def test_export_is_byte_for_byte():
 def test_imported_document_round_trips_through_the_base(ready):
     original = ('---\nid: "abc"\ntitle: "T: con dos puntos"\nstatus: queued\n'
                 'priority: high\nx_custom: "keep me"\n---\n\nbody\n')
-    pairs, body = parse_task_document(original)
     with session(ready, auto_backup=False) as s:
-        s.task_create([(k, v.strip()) for k, v in pairs], body, status="queued")
+        s.task_import(original)   # an import is stored as written; only task_create approves
         assert s.task_export("abc") == original
         task = s.task_get("abc")
     assert task["title"] == "T: con dos puntos"
@@ -420,7 +419,9 @@ def test_cli_create_claim_show(ready):
     assert lost.returncode == 3 and json.loads(lost.stdout)["claimed"] is False
 
     shown = _cli(ready, "task", "show", tid)
-    assert shown.stdout.startswith(f'---\nid: "{tid}"\ntitle: "Desde Bash"\npriority: normal\nstatus: active\n---\n')
+    # Created already queued, the task carries the approval it was created with.
+    assert shown.stdout.startswith(f'---\nid: "{tid}"\ntitle: "Desde Bash"\npriority: normal\nstatus: active\n')
+    assert 'approved_digest: "v2:' in shown.stdout
 
     refused = _cli(ready, "task", "transition", tid, "draft")
     assert refused.returncode == 2 and "TransitionRefused" in refused.stderr
