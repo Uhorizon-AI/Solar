@@ -122,11 +122,13 @@ class BaseProvider(ABC):
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(entry)
 
-    def stream(self, prompt: str):
+    def stream(self, prompt: str, *, review=None):
         """Default: single chunk via run(). Override for real streaming."""
-        yield self.run(prompt)
+        yield self.run(prompt, review=review)
 
-    def run(self, prompt: str) -> str:
+    def run(self, prompt: str, *, review=None) -> str:
+        if review is not None:
+            return self.run_review(**review)
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
         cmd = self.get_cmd(prompt)
         env = self.prepare_env(os.environ.copy())
@@ -146,3 +148,27 @@ class BaseProvider(ABC):
         if not output:
             raise RuntimeError("provider returned empty output")
         return self.clean_output(output)
+
+    def run_review(self, *, manifest, expected, profile, before_launch=lambda: None) -> str:
+        """Restricted execution has one launch constructor and a fixed JSON output format."""
+        import json
+        from execution_profiles import restricted_launch
+        self.last_usage = None
+        with restricted_launch(self, manifest, expected, profile=profile,
+                               before_launch=before_launch) as (argv, env, cwd):
+            # Inherit the router's process group: the worker owns that group and
+            # must stop the provider with it on timeout, cancellation or revocation.
+            proc = subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True,
+                                  timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300))
+        if proc.returncode:
+            raise RuntimeError("restricted provider returned non-zero")
+        result = json.loads(proc.stdout)
+        if result.get("is_error") or not isinstance(result.get("result"), str) or not result["result"]:
+            raise RuntimeError("restricted provider returned no review text")
+        self.last_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
+        return result["result"]
+
+    def stream_review(self, **review):
+        # Capture the result as text and consumption only, with the exact same
+        # launch format as run. Transport streaming does not enable tool events.
+        yield self.run_review(**review)

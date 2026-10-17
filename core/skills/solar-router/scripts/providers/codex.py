@@ -19,7 +19,10 @@ class CodexProvider(BaseProvider):
             f"-C {SOLAR_WORKSPACE} --"
         )
 
-    def stream(self, prompt: str):
+    def stream(self, prompt: str, *, review=None):
+        if review is not None:
+            yield from self.stream_review(**review)
+            return
         self.log_prompt(prompt, " --json")
         self.last_usage = None
         new_key = "SOLAR_ROUTER_CODEX_CMD"

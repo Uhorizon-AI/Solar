@@ -212,3 +212,13 @@ demand through a read session and never writes. It returns `id`, `context`,
 
 Recorded evidence does not verify an effect or authorize a retry. Scheduling uses
 the registered `task.schedule` operation; this projection never writes or queues.
+
+## Derived review authorization
+
+`Session.materialize_children(parent_id, declarations, token=...)` is the only
+worker path to enqueue derived reviews. It validates approved templates and
+immutable inputs and commits children, snapshots, links and provenance together.
+`Session.execution_snapshot` validates the current ID/token and approval;
+`task_reprepare` releases that exact claim after invalid inputs. `synthesis_begin`
+records one synthesis attempt after terminal children. See the
+[restricted review contract](../../docs/restricted-review-profile.md).

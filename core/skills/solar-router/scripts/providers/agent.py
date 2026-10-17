@@ -17,7 +17,10 @@ class AgentProvider(BaseProvider):
             f"agent -p -f --approve-mcps --trust --workspace {SOLAR_WORKSPACE}"
         )
 
-    def stream(self, prompt: str):
+    def stream(self, prompt: str, *, review=None):
+        if review is not None:
+            yield from self.stream_review(**review)
+            return
         """Stream using --output-format stream-json."""
         self.log_prompt(prompt, " --output-format stream-json")
         self.last_usage = None

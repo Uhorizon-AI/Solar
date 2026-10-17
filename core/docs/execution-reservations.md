@@ -17,6 +17,7 @@ fit stays `queued` and the reason is returned (never an error):
 | `resource:<name>` | The resource is held; resources are always exclusive |
 | `exclusive_needs_idle` / `blocked_by_exclusive` | A task that runs alone (see below), and blocks every other start while it runs |
 | `drain_barrier` | An exclusive task has waited `exclusive_wait_seconds`; nothing else starts until it does |
+| `subtask_authorization_required` | The child lacks valid derived authorization under its parent's approved policy |
 | `maintenance` | An update holds the barrier (below) |
 | `cancellation_requested`, `blocked_by_dependency`, `parent_revoked`, `access_policy_invalid`, `absent`/`legacy`/`mismatch` | Revalidated inside the same transaction |
 
@@ -61,12 +62,12 @@ policy's `enabled_reader_profiles`, which starts empty; any other task runs alon
 and readers and writers with disjoint scopes alike. Raising the capacity therefore changes nothing
 until a profile whose confinement was verified is enabled.
 
-Enabling is necessary but not sufficient: the profile must also have a verified implementation
-for the task's provider (`VERIFIED_PROFILES` in `solar_state.py`, per provider). That registry is
-**empty in this delivery**, so listing `text_only_review_v1` in `enabled_reader_profiles` is
-accepted and recorded, yet every task still runs alone. The delivery that implements the profile
-(read-only confinement in the executor, claude only) fills the registry; codex, agent and agy
-stay out of it.
+Enabling is necessary but not sufficient: the profile must also have an enforcing
+adapter for the task's provider (`VERIFIED_PROFILES` in `solar_state.py`). The registry
+contains `text_only_review_v1` for Claude only; Codex, Agent and Agy stay unsupported.
+The constructor separately rejects a CLI whose flags or effective managed policy
+cannot be validated. No reader profile is enabled in production. See
+`restricted-review-profile.md` for the guarded adapter and remaining real-CLI validation.
 
 `access_policy` is JSON: `{"version":1,"mode":"read"|"write","scopes":["/abs/path"],"resources":["name"]}`.
 A writer names at least one scope. Paths are absolute and normalized; the digest hashes the
@@ -84,9 +85,9 @@ Nothing is converted, and no `v3:` re-approval is needed.
 `task_authorizations` records the provenance of a derived (subtask) authorization: parent, parent
 digest, manifest digest and key, once per parent and key. A claim of a derived task is refused
 (`parent_revoked`) when the parent is cancelled, archived, errored, returned to draft or has a
-cancellation request. Creating children through it belongs to a later delivery. Subtasks created
+cancellation request. Children are materialized transactionally through `Session.materialize_children`; their exact approved templates and immutable inputs are revalidated with provenance at claim. See `restricted-review-profile.md`. Subtasks created
 before it have no record: `Session.legacy_children()` lists them (read-only, shown by the cutover),
-and no record is ever inferred from `parent_task_id`.
+and no record is ever inferred from `parent_task_id`. They remain nonexecutable without provenance.
 
 ## The applied policy
 

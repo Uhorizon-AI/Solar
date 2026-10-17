@@ -36,6 +36,15 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 - Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
 - Append `start`/`end` audit rows through `solar-state` for each execution (including failed early-exit paths).
 
+## Restricted reviews
+
+Internal ID/token-bound requests use `text_only_review_v1` before interactive
+context loading. `execution_profiles.py` composes and verifies immutable prompts
+and builds the sole restricted command/environment for run and stream. Claude
+is the only implemented adapter; unknown effective managed policy is rejected.
+No profile is enabled in production. See [the profile contract](../../docs/restricted-review-profile.md)
+for `build_review_envelope_v1`, manifest fields, launch preflight and limitations.
+
 ## Internal architecture
 
 ```

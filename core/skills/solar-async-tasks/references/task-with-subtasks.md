@@ -1,112 +1,72 @@
 # Reference: Task with Subtasks
 
-A task that delegates work to child tasks, waits for them, and synthesizes their results when it resumes. This is the **same task** across two executions — not two separate tasks.
+A parent declares an approved batch, waits for its independent children, then
+synthesizes their terminal results in the same task. Independence alone does
+not permit parallel execution: all claims share capacity, resources and access
+admission. Production capacity is 1 and reader profiles are disabled.
 
-The provider never writes into the task queue. It **declares** the children it wants and stops; the worker creates them, waits, and serves their results back. A provider running in a sandbox (codex) cannot write into `SOLAR_TASK_ROOT`, which is why declaring is the only supported path.
+## Prepare and approve before execution
 
-## When to use this pattern
+Capture evidence in a separately authorized preparation step. Build canonical
+review envelopes with `execution_profiles.build_review_envelope_v1`, then include
+the complete immutable catalog and its digest in the parent's material fields.
+Approve a bounded `subtask_policy`: three initial children, never more than five,
+allowed providers, exact instruction templates and input digests, object, scope,
+effect and maximum access. A legacy parent without this policy authorizes no
+new children.
 
-- You need to run the same work in parallel with different providers or configurations
-- The final result depends on aggregating or contrasting child outputs
-- Children are independent from each other
+The catalog shape, template inputs and execution restrictions are specified in
+[restricted text review](../../../docs/restricted-review-profile.md). Initially,
+materialization supports read-only Claude `text_only_review_v1` envelopes.
+Other-provider restricted readers remain unsupported.
 
-## Flow
+## Declare only those approved definitions
 
-```
-Execution 1 (parent)
-  └─► Provider ends its reply with a <subtasks> block and stops
-  └─► execute_active.py validates it, writes subtask_ids, creates the children,
-      and exits 20 without touching the queue
-  └─► execute_active.sh translates that into await_subtasks.sh
-  └─► Parent waits in queued/, blocked
+Close execution 1 with one JSON block:
 
-Worker processes children (by priority order)
-  └─► Each child's result stays in its own log; it writes nothing into the queue
-
-Execution 2 (same parent, unblocked once all children are terminal)
-  └─► execute_active.py writes ## Subtask results into the parent
-  └─► Provider reads them from its own task body, synthesizes, writes ## Result
-```
-
-## Detecting which execution you are in
-
-`## Subtask results` in the task body means execution 2: the children are done and their results are right there. Without it, and without an output artifact for this task, this is execution 1.
-
-> The full Task ID is injected into the prompt as `Task ID: <uuid>`.
-
-## Execution 1 — declare the children
-
-Close the reply with one block. Nothing else is needed, and nothing else is accepted:
-
-```
+```text
 <subtasks>
 [
-  {"title": "Review with claude", "body": "<full instructions for the child>", "provider": "claude"},
-  {"title": "Review with agy", "body": "<full instructions for the child>"}
+  {"title":"Review 0","body":"<exact approved instructions>","provider":"claude"},
+  {"title":"Review 1","body":"<exact approved instructions>","provider":"claude"},
+  {"title":"Review 2","body":"<exact approved instructions>","provider":"claude"}
 ]
 </subtasks>
 ```
 
-Rules, all of them hard:
+The title and body must identify one unique approved template. An omitted
+provider uses its approved envelope's provider. Arbitrary instructions,
+providers, inputs, access or extra fields do not create children. The parser
+also enforces title/body length, a hard cap of five, and a single JSON list;
+if several blocks appear the last one is parsed.
 
-| Rule | Detail |
-|---|---|
-| Format | One JSON list. If several blocks appear, the last one wins |
-| `title` | Required, text, up to 120 characters |
-| `body` | Required, text, up to 8000 characters. Self-contained: the child sees nothing else |
-| `provider` | Optional, one of `codex`, `claude`, `agy`, `agent`. Picks the model for that child |
-| Any other key | Rejects the whole block |
-| Cap | 5 children. A sixth rejects the whole block; it does not stop at five |
-| Depth | One. A task that already has `parent_task_id` cannot declare children: its block is ignored |
-| Second batch | A parent that already has `subtask_ids` cannot declare again: the block is ignored |
+The worker calls `Session.materialize_children` with the parent's current token.
+Solar-state validates and commits the whole batch, each child's own approval,
+links and provenance, the saved declaration and `subtask_ids` atomically. Retrying
+that declaration cannot duplicate rows or authorize changed children.
+`subtask_authorization_required` rejects the batch at the parent; children do
+not each notify. Do not write the queue or dispatch providers yourself.
 
-A malformed block, an unknown provider, a key that is not allowed or more than five children creates **nothing** and sets the status to `error` with the reason named. Half a batch is never created.
+## Wait and synthesize
 
-**Critical rules:**
-- Do not write anything into the task queue
-- Do not write the final artifact in execution 1 — results are not available yet
-- Do not call `run_router.py` directly — it bypasses the worker and providers fail without auth
-- Do not touch any gate or state file in execution 1
+The wrapper parks the parent with `blocked_by_task_ids`. The supervisor admits
+each child through the common gate; the restricted worker verifies its approved
+sources before launch. Children return text and consumption, with no new
+subtasks, delivery actions or conversation/continuity writes. Changed or missing
+evidence returns to preparation rather than granting the reader tools.
 
-## What the worker fixes, and what it takes from you
+Only after all children are terminal does the worker serve `## Subtask results`
+to the parent, one section per child with its status and output. Failed children
+remain visible as failures. A missing child is reported explicitly. Result text
+is bounded at 4000 characters and marked when truncated.
 
-| Field of the child | Who sets it |
-|---|---|
-| `title`, `body`, `provider` | The provider, inside the contract above |
-| `object`, `scope`, `effect` | The worker, inherited from the parent unchanged, in the frontmatter and as an `## Object` section at the top of the child's body — frontmatter is stripped before the prompt, so the section is what the child actually reads |
-| `parent_task_id`, `subtask_key` | The worker, written in the same atomic write as the rest of the task |
-| `priority` | The worker: the parent's |
-| Origin and notification | The worker: **none**. Only the parent notifies the chat |
-| `delivery_expected` | The worker: **no**. The delivery belongs to the parent |
+A transactional marker allows one synthesis attempt. An interrupted attempt
+requires explicit recovery (`subtask_synthesis_uncertain`), not silent replay.
+The parent produces the final artifact and delivery, identifying any failed or
+uncovered part. The children never deliver to the origin chat.
 
-## Execution 2 — synthesize
-
-The children's results are already in this task, under `## Subtask results`, one section per child with its key, its status and its result (truncated at 4000 characters, marked when truncated). A child that failed appears with its status and its reason — it is never omitted.
-
-With results read:
-1. Write the final artifact to the intended path
-2. Write `## Result` into the parent task file
-3. Say in the delivery which part was not covered, if a child failed
-
-**A failed child does not stop the parent.** It synthesizes with what it has, the same way the unblock already reactivates the parent whether a child ends well or in error.
-
-## Frontmatter
-
-```yaml
----
-id: "<uuid>"
-title: "<title>"
-created: "<ISO8601>"
-status: queued
-priority: normal
-recurring: false        # or true for a periodic loop
-subtask_ids: "<key>=<child id>,<key>=<child id>"   # written by the worker
----
-```
-
-## Notes
-
-- `subtask_ids` is the durable record of which children were this parent's, and it is never cleared. `blocked_by_task_ids` is the traffic light of the wait and is removed on unblock (`start_next.sh`) and on activate (`activate.sh`) — do not use it as the execution-2 signal, and do not set either by hand
-- The declaration itself is kept beside the queue, in `subtasks/<parent id>.json`, so an interrupted creation can be resumed. On the next run the worker finishes creating what is missing and does not call the provider at all
-- `subtask_key` is derived from the parent id, the position and a digest of title and body: the same declaration always produces the same key, which is what makes a retry idempotent
-- Each child's result lives in its log (`logs/<slug>.log`), under `## Result` or `## Error`. Children do not write into their own task file and do not write into the parent's
+`subtask_ids` is the durable batch identity. `blocked_by_task_ids` is only the
+wait condition and is removed on unblock; do not use it as an execution-2 signal.
+`## Subtask results` is the synthesis input. Depth is one; a restricted child's
+`<subtasks>` text is inert. Legacy children without recorded provenance do not
+become executable merely because they name a parent.

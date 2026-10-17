@@ -150,5 +150,4 @@ moving into the schema in a migration owned by that follow-up.
 
 ## Not in this delivery
 
-The restricted execution profile, the router branch and derived subtasks (PR 3), and the macOS launchd harness, the pilot
-and the 3/5 rollout (PR 4). `VERIFIED_PROFILES` is still empty, so every task still runs alone whatever the capacity.
+The restricted profile and derived-child contracts are in `restricted-review-profile.md`. Production reader profiles remain disabled and capacity remains 1. Effective managed-policy inspection for real CLI execution, the macOS launchd harness, quality pilot and 3/5 rollout are not verified by the supervisor simulations.

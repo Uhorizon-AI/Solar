@@ -321,13 +321,18 @@ def test_a_previous_hold_that_cannot_be_checked_stays_blocked(rig, monkeypatch):
 def test_the_commands_group_is_in_the_hold_while_the_execution_runs(rig):
     rig.apply_policy(global_capacity=3)
     task = rig.reader("Runs a command", spec=dict(provider_leave=True, gate="release"))
-    with rig.running() as sup:
-        wait_until(lambda: rig.events("provider", task), 30)
-        provider_pid = rig.events("provider", task)[0]["provider_pid"]
-        wait_until(lambda: sup.children[task].provider_pid == provider_pid, 10, what="the command's group to be noticed")
-        holds = solar_state.cleanup_holds(rig.runtime)
-        assert [h for h in holds if h["task_id"] == task][0]["pgids"] == [sup.children[task].pgid, provider_pid]
-        rig.gate("release")
+    with rig.running():
+        try:
+            provider = wait_until(lambda: rig.events("provider", task), 30)[0]
+            executor = wait_until(lambda: rig.events("launched", task), 30)[0]
+            expected = [executor["pid"], provider["provider_pid"]]
+            # In-memory discovery precedes the atomic publication of cleanup holds.
+            # Wait for the persistent contract consumed by admission, not that interval.
+            wait_until(lambda: any(h["task_id"] == task and h["pgids"] == expected
+                                   for h in solar_state.cleanup_holds(rig.runtime)),
+                       10, what="both owned groups to be published in the cleanup hold")
+        finally:
+            rig.gate("release")  # a failed assertion must still let the fixture drain
         wait_until(lambda: rig.status(task) == "completed", 30)
 
 
@@ -410,9 +415,19 @@ def test_a_resource_hook_that_blocks_gives_the_claim_back(rig):
     flag = rig.tmp / "demo-free"
     hook.write_text(f"#!/bin/bash\n[ -f '{flag}' ]\n")
     hook.chmod(0o755)
+    def claim_was_given_back():
+        # Observe a committed transition, not the queued row between retries.
+        with solar_state.session() as store:
+            return store.conn.execute(
+                "SELECT 1 FROM task_events WHERE task_id = ? AND from_status = 'active' "
+                "AND to_status = 'queued' LIMIT 1", (task,)).fetchone() is not None
+
     with rig.running():
-        time.sleep(1.0)
-        assert rig.status(task) == "queued" and rig.events("launched") == [] and rig.reservations() == []
-        flag.write_text("1")
+        wait_until(claim_was_given_back, 30, what="the blocked hook to give its claim back")
+        assert rig.events("launched") == []
+    # Draining ends retries before asserting their stable final state.
+    assert rig.status(task) == "queued" and rig.reservations() == []
+    flag.write_text("1")
+    with rig.running():
         wait_until(lambda: rig.status(task) == "completed", 30)
     assert len(rig.events("start", task)) == 1

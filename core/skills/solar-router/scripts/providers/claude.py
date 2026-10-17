@@ -11,7 +11,10 @@ class ClaudeProvider(BaseProvider):
     default_cmd = "claude -p --permission-mode bypassPermissions --no-session-persistence"
     last_usage: dict | None = None
 
-    def stream(self, prompt: str):
+    def stream(self, prompt: str, *, review=None):
+        if review is not None:
+            yield from self.stream_review(**review)
+            return
         """Stream token-by-token using --include-partial-messages."""
         self.log_prompt(prompt, " --output-format stream-json --include-partial-messages")
         new_key = "SOLAR_ROUTER_CLAUDE_CMD"

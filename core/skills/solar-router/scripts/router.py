@@ -601,7 +601,10 @@ def _gateway_task_body(
         f"{user_text.strip()}\n\n"
         f"## Instructions\n"
         f"Follow `core/skills/solar-async-tasks/references/task-with-subtasks.md`.\n"
-        f"1. If this is execution 1 and the work needs children: **declare** them and "
+        f"Only declare children already covered by an approved bounded `subtask_policy` "
+        f"and immutable review envelopes. Without that approval, return a preparation "
+        f"request instead of declaring a batch. Independence does not grant concurrency.\n"
+        f"1. If this is execution 1 and the work needs approved children: **declare** them and "
         f"stop. Close your reply with a `<subtasks>` block holding a JSON list:\n"
         f"   ```\n"
         f"   <subtasks>\n"
@@ -612,7 +615,7 @@ def _gateway_task_body(
         f"   </subtasks>\n"
         f"   ```\n"
         f"   `title` and `body` are required, `provider` is optional "
-        f"(codex | claude | agy | agent) and picks the model for that child. No other "
+        f"and must match the approved Claude review envelope. No other "
         f"key is accepted, and at most 5 children: anything else rejects the whole "
         f"block and fails this task. Do **not** run `create.sh` and do **not** write "
         f"into the task queue — the worker creates the children, waits for them, and "
@@ -1289,6 +1292,82 @@ def _failed_after_audit(
     return _failed(request_id, error_code, error, provider_used)
 
 
+def _restricted_route(payload, *, stream=False):
+    """An internal ID/token-bound execution; no interactive context or decisions."""
+    from execution_profiles import ProfileError, verify_envelope, verify_sources
+    request_id = str(payload.get("request_id") or "unknown")
+    identity = payload.get("execution")
+    router_id = str(uuid.uuid4())
+    task_id = token = None
+    provider = None
+    try:
+        if not isinstance(identity, dict) or set(identity) != {"task_id", "token", "profile"}:
+            raise ProfileError("review_input_mismatch")
+        task_id, token, profile = (identity[key] for key in ("task_id", "token", "profile"))
+        with solar_state.session() as store:
+            snapshot = store.execution_snapshot(task_id, token, profile)
+        fields = snapshot["fields"]
+        provider = fields["provider"]
+        if provider not in ("claude",):
+            raise ProfileError("execution_profile_unsupported")
+        if payload.get("provider") and payload["provider"] != provider:
+            raise ProfileError("review_input_mismatch")
+        manifest = verify_envelope(fields["review_input_manifest"], fields["review_input_digest"],
+                                   provider=provider, profile=profile)
+        access = solar_state.parse_access_policy(fields["access_policy"])
+        if not access or access["mode"] != "read":
+            raise ProfileError("review_input_mismatch")
+        verify_sources(manifest, access["scopes"])
+
+        def before_launch():
+            with solar_state.session() as store:
+                current = store.execution_snapshot(task_id, token, profile)
+            if current != snapshot:
+                raise ProfileError("review_input_mismatch")
+            verify_sources(manifest, access["scopes"])
+
+        audit_log(router_id, "start", request_id=request_id, task_id=task_id,
+                  execution_profile=profile, review_input_digest=fields["review_input_digest"], stream=stream)
+        review = dict(manifest=manifest, expected=fields["review_input_digest"],
+                      profile=profile, before_launch=before_launch)
+        adapter = PROVIDERS[provider]
+        if stream:
+            output = "".join(adapter.stream("", review=review))
+        else:
+            output = adapter.run("", review=review)
+        audit_log(router_id, "end", status="success", task_id=task_id,
+                  provider=provider, execution_profile=profile, stream=stream,
+                  usage=getattr(adapter, "last_usage", None))
+        return dict(status="success", request_id=request_id, provider_used=provider,
+                    provider=provider, reply_text=output, usage=getattr(adapter, "last_usage", None),
+                    error=None, error_code=None)
+    except solar_state.StaleToken:
+        # The identity is not the current one: nothing to release, and nothing of this caller's to withdraw.
+        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="review_input_mismatch", stream=stream)
+        return _failed(request_id, "review_input_mismatch", "review_input_mismatch", provider)
+    except (ProfileError, solar_state.ReviewInputsInvalid, solar_state.FormatError, ValueError, TypeError, KeyError) as exc:
+        code = getattr(exc, "code", "review_input_mismatch")
+        released = False
+        if code in ("review_input_mismatch", "review_input_too_large") and task_id and token:
+            try:
+                with solar_state.session() as store:
+                    store.task_reprepare(task_id, token, code)
+                released = True
+            except solar_state.StateError:
+                pass  # a stale caller cannot release another execution's reservation
+        audit_log(router_id, "end", status="failed", task_id=task_id, error_code=code, stream=stream)
+        return dict(_failed(request_id, code, code, provider), claim_released=released)
+    except solar_state.StateError as exc:
+        # A busy or unavailable base (a cutover is running) says nothing about the review inputs:
+        # the approval and the claim stay as they are and the caller sees a transient failure.
+        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="state_unavailable", stream=stream)
+        return _failed(request_id, "state_unavailable", str(exc), provider)
+    except Exception as exc:
+        audit_log(router_id, "end", status="failed", task_id=task_id,
+                  error_code="provider_locked_failed", stream=stream)
+        return _failed(request_id, "provider_locked_failed", str(exc), provider)
+
+
 # ---------------------------------------------------------------------------
 # Core routing — streaming
 # ---------------------------------------------------------------------------
@@ -1303,6 +1382,13 @@ def route_stream(raw: str):
         payload = parse_request_payload(raw)
     except json.JSONDecodeError as exc:
         yield json.dumps({"type": "done", "status": "failed", "error": str(exc), "provider": None, "request_id": "unknown"})
+        return
+
+    if "execution" in payload:
+        result = _restricted_route(payload, stream=True)
+        if result["status"] == "success":
+            yield json.dumps({"type": "chunk", "text": result["reply_text"]}, ensure_ascii=False)
+        yield json.dumps(dict(result, type="done"), ensure_ascii=False)
         return
 
     request_id = str(payload.get("request_id", "")).strip() or "unknown"
@@ -1458,6 +1544,9 @@ def route(raw: str) -> Dict[str, Any]:
         payload = parse_request_payload(raw)
     except json.JSONDecodeError as exc:
         return _failed("unknown", "invalid_json", f"invalid JSON input: {exc}")
+
+    if "execution" in payload:
+        return _restricted_route(payload)
 
     request_id = str(payload.get("request_id", "")).strip() or "unknown"
     router_id = str(uuid.uuid4())

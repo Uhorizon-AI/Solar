@@ -308,6 +308,11 @@ class StaleToken(TransitionRefused):
     """The execution token is missing or is not the one of the current reservation."""
 
 
+class ReviewInputsInvalid(StateError):
+    """The approval, provenance, cancellation or profile of an execution no longer holds. Only this
+    (never a busy or unavailable base) may send a task back to preparation."""
+
+
 class PolicyInvalid(StateError):
     """A proposed execution policy is refused; the applied one stays."""
 
@@ -1605,9 +1610,10 @@ def _overlaps(left: str, right: str) -> bool:
 
 # Profiles whose confinement has a verified implementation, per provider. Naming a profile in the
 # applied policy is not enough to run next to other tasks: the executor must really enforce it.
-# Empty until the delivery that implements `text_only_review_v1` (claude only); until then every
-# task stays exclusive even when the policy lists the name.
-VERIFIED_PROFILES: dict[str, frozenset] = {}
+# The Claude constructor enforces the profile and fails closed on unknown host policy.
+# This registry neither enables it nor attests a host; enabled_reader_profiles starts empty.
+_REVIEW_PROFILE = "text_only_review_v1"
+VERIFIED_PROFILES: dict[str, frozenset] = {_REVIEW_PROFILE: frozenset({"claude"})}
 
 
 def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
@@ -1615,7 +1621,7 @@ def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
     """What the task asks for. A declaration alone never makes a task concurrent: the providers
     still run with their own permissions, so the declaration is trusted only for an
     `execution_profile` that the applied policy lists in `enabled_reader_profiles` (it starts empty)
-    AND that `VERIFIED_PROFILES` says the task's provider enforces (empty for now).
+    AND that `VERIFIED_PROFILES` says the adapter enforces (Claude only; runtime preflight also gates launches).
     Any other task, declared or not, keeps running alone."""
     provider = (_field(pairs, "provider") or "").strip().lower()
     resources = set(_csv(_field(pairs, "resources")))
@@ -1782,18 +1788,89 @@ def _process_identity(pid: int) -> Optional[str]:
 
 
 def _provenance_problem(conn, task_id: str) -> Optional[str]:
-    """A derived task needs its parent's authorization to still stand."""
-    row = conn.execute("SELECT parent_id FROM task_authorizations WHERE task_id = ?",
+    """Derived claims require provenance and the unchanged, still-approved parent."""
+    row = conn.execute("SELECT * FROM task_authorizations WHERE task_id = ?",
                        (task_id,)).fetchone()
     if row is None:
-        return None
-    parent = conn.execute("SELECT status FROM tasks WHERE id = ?", (row["parent_id"],)).fetchone()
+        task = conn.execute("SELECT parent_task_id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        linked = conn.execute("SELECT 1 FROM task_links WHERE child_id = ?", (task_id,)).fetchone()
+        return "subtask_authorization_required" if linked or (task and task[0]) else None
+    parent = conn.execute("SELECT * FROM tasks WHERE id = ?", (row["parent_id"],)).fetchone()
     if parent is None or parent["status"] not in ("queued", "active", "completed"):
+        return "parent_revoked"
+    pairs = json.loads(parent["frontmatter"])
+    if approval_state(pairs, parent["body"]) or _field(pairs, "approved_digest") != row["parent_digest"]:
         return "parent_revoked"
     if conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?",
                     (row["parent_id"],)).fetchone():
         return "parent_revoked"
+    try:
+        policy = parse_subtask_policy(_field(pairs, "subtask_policy"))
+        catalog = json.loads(_field(pairs, "review_input_manifest") or "null")
+        if (not policy or not isinstance(catalog, dict)
+                or _manifest_digest(catalog) != row["manifest_digest"]
+                or row["manifest_digest"] != _field(pairs, "review_input_digest")):
+            return "subtask_authorization_required"
+        templates = [t for t in policy["templates"] if t["key"] == row["child_key"]]
+        entries = [e for e in catalog["reviews"] if e["key"] == row["child_key"]]
+        child = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        child_pairs = json.loads(child["frontmatter"])
+        if (len(templates) != 1 or len(entries) != 1
+                or _field(child_pairs, "review_input_digest") != entries[0]["review_input_digest"]
+                or templates[0]["inputs"] != [entries[0]["review_input_digest"]]
+                or json.loads(_field(child_pairs, "review_input_manifest")) != entries[0]["manifest"]
+                or _field(child_pairs, "parent_task_id") != row["parent_id"]
+                or _field(child_pairs, "subtask_key") != row["child_key"]
+                or _field(child_pairs, "provider") != entries[0]["manifest"]["provider"]
+                or _field(child_pairs, "provider") not in policy["providers"]
+                or _field(child_pairs, "execution_profile") != _REVIEW_PROFILE
+                or parse_access_policy(_field(child_pairs, "access_policy")) != policy["max_access"]
+                or any(_field(child_pairs, key) != policy[key] for key in ("object", "scope", "effect"))
+                or current_definition(child["body"], _field(child_pairs, "title"),
+                                      _field(child_pairs, "approved_definition")) != templates[0]["instructions"]):
+            return "subtask_authorization_required"
+    except (StateError, ValueError, TypeError, KeyError):
+        return "subtask_authorization_required"
     return None
+
+
+def _manifest_digest(document) -> str:
+    """Hash an already canonical approved manifest; state does not compose prompts."""
+    return hashlib.sha256(_canonical_json(document).encode("utf-8")).hexdigest()
+
+
+def _execution_snapshot(conn, task_id, token, profile=None):
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    reservation = conn.execute("SELECT token FROM execution_reservations WHERE task_id = ?",
+                               (task_id,)).fetchone()
+    if not row or row["status"] != "active" or not reservation or not token or reservation[0] != token:
+        raise StaleToken("execution identity is not current")
+    pairs = json.loads(row["frontmatter"])
+    if (approval_state(pairs, row["body"]) or _provenance_problem(conn, task_id)
+            or conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?", (task_id,)).fetchone()):
+        raise ReviewInputsInvalid("review_input_mismatch")
+    fields = {key: _field(pairs, key) for key in MATERIAL_KEYS}
+    if profile is not None and fields["execution_profile"] != profile:
+        raise ReviewInputsInvalid("review_input_mismatch")
+    return dict(fields=fields, definition=_field(pairs, "approved_definition"),
+                digest=_field(pairs, "approved_digest"), claimed_by=row["claimed_by"])
+
+
+def _record_authorization(conn, child_id, parent_id, child_key, parent_digest, manifest_digest):
+    for task in (child_id, parent_id):
+        if conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task,)).fetchone() is None:
+            raise StateError(f"no task {task}")
+    same = conn.execute("SELECT * FROM task_authorizations WHERE parent_id = ? AND child_key = ?",
+                        (parent_id, child_key)).fetchone()
+    if same is not None:
+        if (same["task_id"], same["manifest_digest"], same["parent_digest"]) != (
+                child_id, manifest_digest, parent_digest):
+            raise StateError("subtask_authorization_required")
+        return False
+    conn.execute("INSERT INTO task_authorizations (task_id, kind, parent_id, parent_digest, "
+                 "manifest_digest, child_key, recorded_at) VALUES (?, 'derived', ?, ?, ?, ?, ?)",
+                 (child_id, parent_id, parent_digest, manifest_digest, child_key, _now()))
+    return True
 
 
 def _claim_order(row) -> tuple:
@@ -1914,7 +1991,7 @@ class Session:
         _set_pair(pairs, "status", f" {status}")
         if status == "queued":
             # Creating a task already queued is the caller's own approval (the queue
-            # scripts, and a parent's subtasks). It is recorded like any other, so the
+            # scripts). Derived children use materialize_children instead. It is recorded like any other, so the
             # claim finds a digest that covers exactly this content.
             for key, value in _approval_fields(self.conn, task_id, pairs, body, 1).items():
                 _set_pair(pairs, key, f" {value}")
@@ -2655,12 +2732,25 @@ class Session:
                          "VALUES (?, ?)", (task_id, _now()))
 
     def cancellation_requested(self, task_id: str) -> bool:
-        return self.conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?",
-                                 (task_id,)).fetchone() is not None
+        if self.conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?",
+                             (task_id,)).fetchone() is not None:
+            return True
+        derived = self.conn.execute("SELECT 1 FROM task_authorizations WHERE task_id = ?",
+                                    (task_id,)).fetchone()
+        if derived:
+            task = self.task_get(task_id)
+            return bool(_provenance_problem(self.conn, task_id)
+                        or not task or approval_state(task["frontmatter"], task["body"]))
+        return False
 
     def cancellation_ids(self) -> list[str]:
-        return [r[0] for r in self.conn.execute(
-            "SELECT task_id FROM cancellation_requests ORDER BY task_id")]
+        """Explicit requests plus active derived executions whose authority was withdrawn."""
+        ids = {r[0] for r in self.conn.execute("SELECT task_id FROM cancellation_requests")}
+        for row in self.conn.execute("SELECT a.task_id FROM task_authorizations a JOIN tasks t "
+                                     "ON t.id = a.task_id WHERE t.status = 'active'"):
+            if self.cancellation_requested(row[0]):
+                ids.add(row[0])
+        return sorted(ids)
 
     def task_children(self, parent_id: str) -> list[dict]:
         return [dict(r) for r in self.conn.execute(
@@ -2872,27 +2962,170 @@ class Session:
         The same record again is a no-op (True means it was written now); another manifest
         for the same parent and key is refused."""
         with _transaction(self.conn) as conn:
-            for task in (child_id, parent_id):
-                if conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task,)).fetchone() is None:
-                    raise StateError(f"no task {task}")
-            same = conn.execute("SELECT * FROM task_authorizations WHERE parent_id = ? AND child_key = ?",
-                                (parent_id, child_key)).fetchone()
-            if same is not None:
-                if (same["task_id"], same["manifest_digest"], same["parent_digest"]) != (
-                        child_id, manifest_digest, parent_digest):
-                    raise StateError(f"{parent_id}/{child_key} was authorized with other content")
+            return _record_authorization(conn, child_id, parent_id, child_key,
+                                         parent_digest, manifest_digest)
+
+    def execution_snapshot(self, task_id: str, token: str, profile=None) -> dict:
+        """Validate ID/token/approval together before a restricted router can load context."""
+        with _transaction(self.conn) as conn:
+            return _execution_snapshot(conn, task_id, token, profile)
+
+    def task_reprepare(self, task_id: str, token: str, reason: str) -> None:
+        """Give back the exact claim and withdraw approval after invalid review inputs."""
+        with _transaction(self.conn) as conn:
+            reservation = conn.execute("SELECT token FROM execution_reservations WHERE task_id = ?",
+                                       (task_id,)).fetchone()
+            if not reservation or not token or reservation[0] != token:
+                raise StaleToken("execution identity is not current")
+            row = conn.execute("SELECT status, frontmatter, body FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not row or row["status"] != "active":
+                raise StaleToken("execution is no longer active")
+            pairs = json.loads(row["frontmatter"])
+            self._withdraw_approval(conn, task_id, pairs, reason, "review-preparation")
+            boundary = _record_boundary(pairs, row["body"])
+            _move(conn, task_id, "queued", "review-preparation",
+                  extra={"claimed_by": None, "claimed_at": None})
+            _move(conn, task_id, "draft", "review-preparation", drop=APPROVAL_KEYS,
+                  fields={BOUNDARY_KEY: boundary} if boundary else None)
+            _audit(conn, "review_preparation_required", task_id=task_id, reason=reason)
+
+    def synthesis_begin(self, parent_id: str, *, token: str) -> bool:
+        """One synthesis attempt per approved batch. A crash is uncertain, never retried silently."""
+        with _transaction(self.conn) as conn:
+            _execution_snapshot(conn, parent_id, token)
+            rows = list(conn.execute("SELECT t.id, t.status FROM task_links l JOIN tasks t "
+                                     "ON t.id = l.child_id WHERE l.parent_id = ? ORDER BY t.id", (parent_id,)))
+            if not rows or any(row["status"] not in TERMINAL_STATUSES for row in rows):
                 return False
-            conn.execute("INSERT INTO task_authorizations (task_id, kind, parent_id, parent_digest, "
-                         "manifest_digest, child_key, recorded_at) VALUES (?, 'derived', ?, ?, ?, ?, ?)",
-                         (child_id, parent_id, parent_digest, manifest_digest, child_key, _now()))
-        return True
+            task = conn.execute("SELECT frontmatter, body FROM tasks WHERE id = ?", (parent_id,)).fetchone()
+            pairs = json.loads(task["frontmatter"])
+            if _field(pairs, "subtask_synthesis_started"):
+                return False
+            _set_pair(pairs, "subtask_synthesis_started", " " + json.dumps(_now()))
+            _write_task(conn, parent_id, "active", pairs, task["body"], insert=False)
+            _audit(conn, "subtask_synthesis_started", task_id=parent_id,
+                   children=[dict(row) for row in rows])
+            return True
+
+    def materialize_children(self, parent_id: str, declarations: list[dict], *, token: str) -> list[dict]:
+        """Atomically materialize only exact approved templates and immutable envelopes.
+
+        A batch catalog is version 1 with `reviews`: entries {key, manifest,
+        review_input_digest}. A template's inputs is exactly [that envelope digest].
+        No provider-selected data is approved here. Retry never rewrites a child.
+        """
+        try:
+            with _transaction(self.conn) as conn:
+                snapshot = _execution_snapshot(conn, parent_id, token)
+                fields = snapshot["fields"]
+                policy = parse_subtask_policy(fields["subtask_policy"])
+                if not policy or not isinstance(declarations, list) or not 1 <= len(declarations) <= policy["max_children"]:
+                    raise StateError("subtask_authorization_required")
+                if any(fields[key] != policy[key] for key in ("object", "scope", "effect")):
+                    raise StateError("subtask_authorization_required")
+                if policy["max_access"]["mode"] != "read":
+                    raise StateError("subtask_authorization_required")
+                catalog = json.loads(fields["review_input_manifest"] or "null")
+                if (not isinstance(catalog, dict) or set(catalog) != {"version", "reviews"}
+                        or not _is_int(catalog["version"]) or catalog["version"] != 1
+                        or not isinstance(catalog["reviews"], list)
+                        or _manifest_digest(catalog) != fields["review_input_digest"]):
+                    raise StateError("subtask_authorization_required")
+                reviews = {}
+                templates = {t["key"]: t for t in policy["templates"]}
+                for entry in catalog["reviews"]:
+                    if (set(entry) != {"key", "manifest", "review_input_digest"}
+                            or entry["key"] in reviews or entry["key"] not in templates):
+                        raise StateError("subtask_authorization_required")
+                    manifest = entry["manifest"]
+                    if (not isinstance(manifest, dict)
+                            or set(manifest) != {"composition", "execution_profile", "provider", "model",
+                                                "system_prompt", "user_prompt", "sources", "context_budget"}
+                            or manifest["execution_profile"] != _REVIEW_PROFILE
+                            or manifest["composition"] != "review_envelope_v1"
+                            or manifest["provider"] != "claude"
+                            or _manifest_digest(manifest) != entry["review_input_digest"]):
+                        raise StateError("subtask_authorization_required")
+                    template = templates[entry["key"]]
+                    if (template["inputs"] != [entry["review_input_digest"]]
+                            or json.loads(manifest["user_prompt"])["instructions"] != template["instructions"]
+                            or manifest["provider"] not in policy["providers"]):
+                        raise StateError("subtask_authorization_required")
+                    reviews[entry["key"]] = entry
+                selected = []
+                used = set()
+                for declaration in declarations:
+                    if set(declaration) - {"title", "body", "provider"}:
+                        raise StateError("subtask_authorization_required")
+                    matches = [t for t in templates.values() if t["title"] == declaration.get("title")
+                               and t["instructions"] == declaration.get("body")]
+                    if len(matches) != 1:
+                        raise StateError("subtask_authorization_required")
+                    key = matches[0]["key"]
+                    if key in used or key not in reviews:
+                        raise StateError("subtask_authorization_required")
+                    used.add(key)
+                    entry = reviews[key]
+                    if (declaration.get("provider") or entry["manifest"]["provider"]) != entry["manifest"]["provider"]:
+                        raise StateError("subtask_authorization_required")
+                    selected.append((key, matches[0], entry))
+                if used != set(reviews):
+                    raise StateError("subtask_authorization_required")
+                existing = {r["child_key"]: r for r in conn.execute(
+                    "SELECT * FROM task_authorizations WHERE parent_id = ?", (parent_id,))}
+                if len(set(existing) | used) > policy["max_children"]:
+                    raise StateError("subtask_authorization_required")
+                result = []
+                for key, template, entry in selected:
+                    if key in existing:
+                        old = existing[key]
+                        task = conn.execute("SELECT * FROM tasks WHERE id = ?", (old["task_id"],)).fetchone()
+                        if (old["parent_digest"] != snapshot["digest"]
+                                or old["manifest_digest"] != fields["review_input_digest"]
+                                or approval_state(json.loads(task["frontmatter"]), task["body"])):
+                            raise StateError("subtask_authorization_required")
+                        result.append(dict(key=key, id=old["task_id"]))
+                        continue
+                    child_id = str(uuid.uuid4())
+                    values = dict(id=child_id, title=template["title"], status="queued", created=_now(),
+                                  parent_task_id=parent_id, subtask_key=key, priority=fields["priority"] or "normal",
+                                  provider=entry["manifest"]["provider"], recurring="false",
+                                  scheduled_time="now", execution_profile=_REVIEW_PROFILE,
+                                  access_policy=_canonical_json(policy["max_access"]),
+                                  review_input_manifest=_canonical_json(entry["manifest"]),
+                                  review_input_digest=entry["review_input_digest"],
+                                  **{name: policy[name] for name in ("object", "scope", "effect")})
+                    pairs = [[name, " " + json.dumps(value)] for name, value in values.items()]
+                    body = template["instructions"]
+                    for name, value in _approval_fields(conn, child_id, pairs, body, 1).items():
+                        _set_pair(pairs, name, " " + value)
+                    _write_task(conn, child_id, "queued", pairs, body, insert=True)
+                    conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
+                                 "VALUES (?, ?, NULL, 'queued', 'derived-authorization')", (child_id, _now()))
+                    conn.execute("INSERT INTO task_links (parent_id, child_id, subtask_key) VALUES (?, ?, ?)",
+                                 (parent_id, child_id, key))
+                    _record_authorization(conn, child_id, parent_id, key, snapshot["digest"], fields["review_input_digest"])
+                    result.append(dict(key=key, id=child_id))
+                row = conn.execute("SELECT frontmatter, body FROM tasks WHERE id = ?", (parent_id,)).fetchone()
+                pairs = json.loads(row["frontmatter"])
+                # The list, declaration, child rows, links and provenance commit together.
+                _set_pair(pairs, "subtask_ids", " " + json.dumps(
+                    ",".join(item["key"] + "=" + item["id"] for item in result)))
+                _write_task(conn, parent_id, "active", pairs, row["body"], insert=False)
+                conn.execute("INSERT OR REPLACE INTO subtask_plans (parent_id, plan) VALUES (?, ?)",
+                             (parent_id, json.dumps(declarations)))
+                _audit(conn, "subtasks_materialized", task_id=parent_id, children=result,
+                       parent_digest=snapshot["digest"], manifest_digest=fields["review_input_digest"])
+                return result
+        except StaleToken:
+            raise
+        except (StateError, ValueError, KeyError, TypeError):
+            raise StateError("subtask_authorization_required") from None
 
     def legacy_children(self) -> list[dict]:
         """Subtasks created before derived authorizations existed: every task that names a
         parent (the frontmatter or a link) and has no authorization record. Read-only: nothing
-        is backfilled from `parent_task_id`. `executable` says whether the child can be
-        claimed today under its own approval; one that cannot stays out of the queue until a
-        person approves it again."""
+        is backfilled from `parent_task_id`. `executable` is always false without derived provenance; a parent link is never backfilled into authority."""
         recorded = {r[0] for r in self.conn.execute("SELECT task_id FROM task_authorizations")}
         linked = {r[0]: r[1] for r in self.conn.execute("SELECT child_id, parent_id FROM task_links")}
         found = []
@@ -2904,7 +3137,7 @@ class Session:
             approval = approval_state(pairs, task["body"]) or "valid"
             found.append(dict(id=task["id"], parent_id=parent, status=task["status"],
                               approval=approval,
-                              executable=task["status"] == "queued" and approval == "valid"))
+                              executable=False))
         return found
 
     # -- audit -------------------------------------------------------------
