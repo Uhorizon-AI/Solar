@@ -118,13 +118,30 @@ note_feature() {
 
 if has_feature "async-tasks"; then
   echo "▶ Running feature: async-tasks"
-  if ! bash "$(solar_system_skill_script solar-async-tasks ensure_async_tasks.sh)"; then
-    echo "❌ async-tasks feature failed." >&2
-    failures=$((failures + 1))
-    note_feature async-tasks failed
-  else
-    note_feature async-tasks ok
-  fi
+  # ensure answers within its handshake budget and never waits for the tasks themselves:
+  #   0 ready · 10 starting (a live, identified supervisor is reconciling: not a failure) ·
+  #   20 blocked (needs attention) · 1 failed. The gateway and the host are processed in every case.
+  ensure_code=0
+  bash "$(solar_system_skill_script solar-async-tasks ensure_async_tasks.sh)" || ensure_code=$?
+  case "$ensure_code" in
+    0)
+      note_feature async-tasks ok
+      ;;
+    10)
+      echo "⏳ async-tasks supervisor is starting; the next tick observes the same one."
+      note_feature async-tasks starting
+      ;;
+    20)
+      echo "⚠️  async-tasks supervisor is blocked and needs attention (see the state above)." >&2
+      failures=$((failures + 1))
+      note_feature async-tasks blocked
+      ;;
+    *)
+      echo "❌ async-tasks feature failed." >&2
+      failures=$((failures + 1))
+      note_feature async-tasks failed
+      ;;
+  esac
 fi
 
 if has_feature "transport-gateway"; then

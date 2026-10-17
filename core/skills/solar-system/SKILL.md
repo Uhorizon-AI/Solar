@@ -96,11 +96,11 @@ After `solar client update` or relocating the global install, re-run `install_la
 2. reads `SOLAR_SYSTEM_FEATURES`,
 3. acquires a lock to avoid overlapping ticks,
 4. runs enabled features in order:
-   - async tasks: `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` (the script first checks whether async-tasks is already supervised by solar-system, then falls back to the local worker only when needed)
+   - async tasks: `core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh` — it observes the resident supervisor and starts one detached candidate when none is alive; it waits at most 5 seconds for the handshake and never for the tasks. Exit `0` → `ok`; `10` → `starting` (a live, identified supervisor is reconciling; not a failure); `20` → `blocked` and `1` → `failed` (both count as a failure and ask for attention). The gateway and the host are processed in every case.
    - transport gateway: `core/skills/solar-gateway/scripts/ensure_transport_gateway.sh`
    - host: `core/skills/solar-app/scripts/ensure_host.sh`
 5. writes `<runtime root>/system/pass-stamp.json` through `write_pass_stamp.sh`:
-   the time, each feature result (`ok`, `failed`, `deprecated`, `ignored`), and,
+   the time, each feature result (`ok`, `failed`, `skipped`, `deprecated`, `ignored`, `starting`, `blocked`), and,
    when `transport-gateway` ran, whether the ws, http, and tunnel processes are
    alive, whether local `/health` answered, and whether the connector is ready.
    The probe curls only loopback. The file is replaced atomically. A tick with

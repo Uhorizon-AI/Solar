@@ -470,6 +470,90 @@ def console_tasks(store):
                 transitions=[list(pair) for pair in solar_state.TRANSITIONS])
 
 
+_WAIT_KINDS = (
+    ("blocked_by_dependency", "dependency"),
+    ("provider_capacity", "provider"),
+    ("global_capacity", "capacity"),
+    ("scope_conflict", "resource"),
+    ("exclusive_needs_idle", "capacity"),
+    ("blocked_by_exclusive", "capacity"),
+    ("drain_barrier", "capacity"),
+    ("maintenance", "recovery"),
+    ("parent_revoked", "recovery"),
+    # not resources or capacity: the task itself is not ready (schedule, approval, cancellation, access)
+    ("cancellation_requested", "other"),
+    ("recurring_interval", "other"),
+    ("outside_schedule", "other"),
+    ("approval_digest_mismatch", "other"),
+    ("absent", "other"),
+    ("legacy", "other"),
+    ("mismatch", "other"),
+    ("access_policy_invalid", "other"),
+)
+
+
+def wait_kind(reason):
+    """The console's family for a claim reason: dependency, resource, provider, capacity or
+    recovery. Anything else (schedule, approval, cancellation) is `other`."""
+    if not reason:
+        return None
+    text = str(reason)
+    if text.startswith("resource:"):
+        return "resource"
+    for prefix, kind in _WAIT_KINDS:
+        if text == prefix:
+            return kind
+    return "other"          # never null: an unknown reason is still shown, as "other"
+
+
+def console_capacity(store, supervisor=None):
+    """Places in use, what runs at once, why the rest waits, and the applied configuration.
+
+    `supervisor` is what the resident supervisor published (its blocked executions are the
+    `recovery` waits). Reads only: the applied revision comes from the state, the proposal file is
+    only compared with it."""
+    policy = store.async_policy()
+    status = store.async_policy_status()
+    titles = {row['id']: row['title'] for row in store.conn.execute("SELECT id, title FROM tasks")}
+    running = []
+    for row in store.reservations():
+        running.append(dict(
+            id=row['task_id'], title=titles.get(row['task_id']), provider=row.get('provider') or None,
+            access=row.get('access_class'), legacy=bool(row.get('legacy_active')),
+            since=row.get('claimed_at'), attached=row.get('owner_pid') is not None,
+            lease_expires_at=row.get('lease_expires_at')))
+    waiting = []
+    by_kind = {}
+    for item in store.queue_waits():
+        kind = wait_kind(item['reason'])
+        if kind is None:
+            continue
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+        waiting.append(dict(id=item['id'], title=titles.get(item['id']), reason=item['reason'], kind=kind))
+    recovery = []
+    if isinstance(supervisor, dict):
+        for entry in supervisor.get('blocked') or []:
+            recovery.append(dict(id=entry.get('task_id'), title=titles.get(entry.get('task_id')),
+                                 reason=entry.get('reason'), detail=entry.get('detail'), since=entry.get('since')))
+        if recovery:
+            by_kind['recovery'] = by_kind.get('recovery', 0) + len(recovery)
+    proposal = dict(status['proposal'])
+    return dict(
+        capacity=dict(used=len(running), global_capacity=policy['global_capacity'],
+                      provider_capacity=policy['provider_capacity'],
+                      simultaneous=len(running), free=max(policy['global_capacity'] - len(running), 0)),
+        running=running, waiting=waiting, wait_counts=by_kind, recovery=recovery,
+        configuration=dict(
+            applied=dict(revision=policy['revision'], global_capacity=policy['global_capacity'],
+                         provider_capacity=policy['provider_capacity'],
+                         exclusive_wait_seconds=policy['exclusive_wait_seconds'],
+                         enabled_reader_profiles=policy['enabled_reader_profiles'],
+                         applied_at=policy.get('applied_at'), applied_by=policy.get('applied_by')),
+            proposal=dict(present=proposal.get('present'), error=proposal.get('error'),
+                          digest=proposal.get('digest')),
+            pending=bool(status['pending']), differences=status['differences']))
+
+
 def _audit_body(raw):
     try:
         body = json.loads(raw)

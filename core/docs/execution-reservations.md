@@ -25,7 +25,8 @@ selection rules); it applies everything else. A refused claim never stamps `recu
 A task cannot run twice at once: its row is `active` and its reservation is unique.
 
 An active task that has no reservation (it predates them) counts as exclusive until it is taken
-over or finished.
+over or finished. Executions whose cleanup the supervisor could not prove (`async-tasks/supervisor/cleanup-holds.json`)
+also count, for capacity and resources, until it verifies them (`core/docs/async-supervisor.md`).
 
 ## The execution token
 
@@ -45,7 +46,9 @@ token cannot fail or finish an execution that already ended (a recurring task ba
 included): it raises `StaleToken`. If the heartbeat finds its token replaced, the executor stops
 the process group it started before it exits. An old token stops working the moment the new one commits.
 
-`start_next.sh` hands the claimed id and token to the worker in `$SOLAR_CLAIM_FILE`;
+The resident supervisor (`core/docs/async-supervisor.md`) is the production executor: it claims through these
+same reservations and dispatches each claim by id and token. `start_next.sh` hands the claimed id and token to
+the diagnostic worker (`run_worker.sh --diagnostic`) in `$SOLAR_CLAIM_FILE`;
 `execute_active.sh --task <id> --token <token>` runs exactly that claim. Without them
 (`--once`/`--all`) it adopts what nobody runs. It never takes "the first active task".
 
@@ -114,7 +117,8 @@ approval that stop holding reset the clock: they never close the line.
 new schema and the restarted services are verified. It lives outside the schema, under the control
 of `solar-client`, records phase, versions and the services that were running, and is never
 released by age. While it exists every claim answers `maintenance`, `ensure_async_tasks.sh`
-starts no worker, and an unreadable file counts as held.
+starts no supervisor (it answers `20 blocked`, reason `maintenance`), a running supervisor dispatches
+nothing, and an unreadable file counts as held.
 
 ## Update sequence
 
@@ -122,8 +126,9 @@ starts no worker, and an unreadable file counts as held.
 then the target's own `client_update_staged.sh` runs:
 
 1. barrier taken (`maintenance`); ticks paused (LaunchAgent booted out);
-2. drain: the resident supervisor is asked to drain through its stop script (when one runs), the
-   one-shot worker is waited for; 120 s, then the update ends with nothing replaced and the barrier held;
+2. drain: the resident supervisor is asked to drain through `stop_supervisor.sh --drain --timeout N` (when one
+   runs: it stops dispatching, collects its executions and exits; nothing is killed), a one-shot worker of the
+   previous design is waited for; 120 s, then the update ends with nothing replaced and the barrier held;
 3. the console and gateway stop;
 4. `solar_state_cutover.py migrate --apply-hook ...` takes the exclusive lock, revalidates that
    nothing runs, copies the base (`state-backups/pre-update/`), runs the hook that replaces the code,

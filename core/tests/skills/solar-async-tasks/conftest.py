@@ -17,3 +17,15 @@ def _restore_runtime_root(monkeypatch):
         os.environ.pop("SOLAR_RUNTIME_ROOT", None)
     else:
         os.environ["SOLAR_RUNTIME_ROOT"] = previous
+
+
+@pytest.fixture
+def rig(tmp_path, monkeypatch):
+    """A temporary workspace and runtime for the supervisor tests; its processes end with the test."""
+    import supervisor_support
+    supervisor_support.pretend_profile_is_verified(monkeypatch)
+    made = supervisor_support.Rig(tmp_path, monkeypatch)
+    try:
+        yield made
+    finally:
+        made.cleanup()

@@ -98,6 +98,16 @@
       st_draft: "Draft", st_planned: "Planned", st_queued: "Queued", st_active: "Active",
       st_completed: "Completed", st_error: "Error", st_archived: "Archived", st_cancelled: "Cancelled", st_none: "No status",
       ex_ok: "Ok", ex_failed: "Failed", ex_reconciled: "Reconciled", ex_none: "No result",
+      cap_title: "Capacity and waiting", cap_used: "places in use", cap_of: "of", cap_simul: "Running at once",
+      cap_free: "free", cap_waiting: "Waiting", cap_none_waiting: "Nothing is waiting.", cap_none_running: "Nothing is running.",
+      wait_dependency: "Dependency", wait_resource: "Resource", wait_provider: "Provider limit", wait_capacity: "Capacity",
+      wait_recovery: "Recovery", wait_other: "Other",
+      cfg_title: "Applied configuration", cfg_revision: "Revision", cfg_global: "Global capacity", cfg_provider: "Provider limits",
+      cfg_exclusive: "Exclusive wait (s)", cfg_none_provider: "none", cfg_no_pending: "The proposal file has no pending differences.",
+      cfg_pending: "Pending differences (not applied until confirmed):", cfg_applied: "applied", cfg_proposed: "proposed",
+      cfg_proposal_error: "The proposal file is invalid; the applied revision stays.",
+      sup_title: "Supervisor", sup_none: "No supervisor has published its identity.", sup_stale: "heartbeat stopped",
+      sup_blocked: "Blocked executions (need attention)",
       v_calm: "CALM", v_fault: "FAULT", v_unverified: "UNVERIFIED",
       r_database: "The state database cannot be read.",
       r_port: "Another process is using the console port.",
@@ -110,7 +120,7 @@
       no_channel: "no channel", other_channel: "Other",
       mode_global: "Global", mode_portable: "Portable copy",
       tunnel_named: "Named", tunnel_quick: "Quick",
-      feat_tasks: "Background tasks", feat_gateway: "Gateway", feat_ok: "ok", feat_failed: "failed",
+      feat_tasks: "Background tasks", feat_gateway: "Gateway", feat_ok: "ok", feat_failed: "failed", feat_starting: "starting", feat_blocked: "needs attention",
       gate_read: "Read allowed", gate_ask: "Asks for your permission", gate_with: "With your permission",
       gate_unknown_perm: "Unknown permission", gate_used: "Permission already used", gate_expired: "Permission expired",
       gate_mismatch: "The permission does not match", gate_ok: "Valid delegation", gate_denied: "Delegation denied",
@@ -255,6 +265,16 @@
       st_draft: "Borrador", st_planned: "Planificada", st_queued: "En cola", st_active: "Activa",
       st_completed: "Completada", st_error: "Error", st_archived: "Archivada", st_cancelled: "Cancelada", st_none: "Sin estado",
       ex_ok: "Bien", ex_failed: "Fallida", ex_reconciled: "Reconciliada", ex_none: "Sin resultado",
+      cap_title: "Capacidad y esperas", cap_used: "plazas en uso", cap_of: "de", cap_simul: "En marcha a la vez",
+      cap_free: "libres", cap_waiting: "En espera", cap_none_waiting: "Nada está esperando.", cap_none_running: "No hay nada en marcha.",
+      wait_dependency: "Dependencia", wait_resource: "Recurso", wait_provider: "Límite de proveedor", wait_capacity: "Capacidad",
+      wait_recovery: "Recuperación", wait_other: "Otro",
+      cfg_title: "Configuración aplicada", cfg_revision: "Revisión", cfg_global: "Capacidad global", cfg_provider: "Límites por proveedor",
+      cfg_exclusive: "Espera exclusiva (s)", cfg_none_provider: "ninguno", cfg_no_pending: "El archivo de propuesta no tiene diferencias pendientes.",
+      cfg_pending: "Diferencias pendientes (no se aplican hasta confirmarlas):", cfg_applied: "aplicado", cfg_proposed: "propuesto",
+      cfg_proposal_error: "El archivo de propuesta no es válido; se mantiene la revisión aplicada.",
+      sup_title: "Supervisor", sup_none: "Ningún supervisor ha publicado su identidad.", sup_stale: "latido detenido",
+      sup_blocked: "Ejecuciones bloqueadas (necesitan atención)",
       v_calm: "CALMA", v_fault: "AVERÍA", v_unverified: "SIN VERIFICAR",
       r_database: "La base de estado es ilegible.",
       r_port: "El puerto de la consola está ocupado por otro proceso.",
@@ -267,7 +287,7 @@
       no_channel: "sin canal", other_channel: "Otro",
       mode_global: "Global", mode_portable: "Copia portable",
       tunnel_named: "Con nombre", tunnel_quick: "Rápido",
-      feat_tasks: "Tareas en segundo plano", feat_gateway: "Gateway", feat_ok: "bien", feat_failed: "fallo",
+      feat_tasks: "Tareas en segundo plano", feat_gateway: "Gateway", feat_ok: "bien", feat_failed: "fallo", feat_starting: "arrancando", feat_blocked: "necesita atención",
       gate_read: "Lectura permitida", gate_ask: "Pide tu permiso", gate_with: "Con tu permiso",
       gate_unknown_perm: "Permiso desconocido", gate_used: "Permiso ya usado", gate_expired: "Permiso caducado",
       gate_mismatch: "El permiso no coincide", gate_ok: "Delegación válida", gate_denied: "Delegación denegada",
@@ -646,8 +666,10 @@
     var jobs = [load(screenOf(id)[3])];
     if (id === "entrada") jobs.push(load("/api/console/health"));
     if (id === "solicitante") jobs.push(load("/api/console/executions"));
+    if (id === "ejecuciones") jobs.push(load("/api/console/capacity"));
     Promise.all(jobs).then(function (parts) {
       var payload = parts[0];
+      if (id === "ejecuciones") cache.capacity = parts[1] || { refused: t("no_reply") };
       var extra = (id === "entrada" || id === "solicitante") ? (parts[1] || { refused: t("no_reply") }) : null;
       if (ui.screen !== id) {
         cache[id] = payload;
@@ -682,7 +704,7 @@
       restoreFocus(box, keep);
       announce(ui.announce, ui.empty);
     }
-    else if (id === "ejecuciones") box.innerHTML = renderExec(data);
+    else if (id === "ejecuciones") box.innerHTML = renderCapacity(cache.capacity) + renderExec(data);
     else if (id === "dashboards") box.innerHTML = renderDashboards(data);
     else if (id === "autonomia") box.innerHTML = renderMandates(data);
     else if (id === "ides") box.innerHTML = renderIdes(data);
@@ -723,7 +745,7 @@
   function featureLine(features) {
     if (!features || !Object.keys(features).length) return t("no_data");
     var names = { "async-tasks": t("feat_tasks"), "transport-gateway": t("feat_gateway") };
-    var states = { ok: t("feat_ok"), failed: t("feat_failed") };
+    var states = { ok: t("feat_ok"), failed: t("feat_failed"), starting: t("feat_starting"), blocked: t("feat_blocked") };
     return Object.keys(features).map(function (name) {
       var label = names[name] ? esc(names[name]) : '<span class="mono">' + esc(name) + "</span>";
       var state = states[features[name]] || t("no_data");
@@ -1282,6 +1304,67 @@
         (outs ? "" : '<span class="note">' + esc(t("final_state")) + "</span>") + "</div></div>";
     }).join("");
     return '<div class="row hd" style="grid-template-columns:130px 60px minmax(0,1fr)"><div>' + esc(t("col_status")) + "</div><div>" + esc(t("act_tasks")) + "</div><div>" + esc(t("can_go")) + "</div></div>" + rows;
+  }
+
+  function waitKindLabel(kind) {
+    var keys = { dependency: "wait_dependency", resource: "wait_resource", provider: "wait_provider",
+                 capacity: "wait_capacity", recovery: "wait_recovery" };
+    return t(keys[kind] || "wait_other");
+  }
+  function renderCapacity(reply) {
+    if (!reply) return "";
+    if (reply.refused) return '<div class="card"><div class="h3">' + esc(t("cap_title")) + "</div>" + refusedBox(reply.refused) + "</div>";
+    var data = reply.data || {};
+    var cap = data.capacity || {};
+    var running = (data.running || []).map(function (row) {
+      return '<div class="row" style="grid-template-columns:minmax(0,1fr) 110px 110px"><div style="font-weight:500">' +
+        esc(row.title || row.id) + '</div><div class="mono">' + esc(row.provider || "—") + '</div><div class="note">' +
+        esc(row.access === "declared" ? "read/write scoped" : "exclusive") + "</div></div>";
+    }).join("");
+    var waiting = (data.waiting || []).map(function (row) {
+      return '<div class="row" style="grid-template-columns:minmax(0,1fr) 130px minmax(0,1fr)"><div style="font-weight:500">' +
+        esc(row.title || row.id) + "</div><div>" + pill(row.kind === "recovery" ? "warn" : "neu", "…", waitKindLabel(row.kind)) +
+        '</div><div class="note mono">' + esc(row.reason) + "</div></div>";
+    }).join("");
+    var recovery = (data.recovery || []).map(function (row) {
+      return '<div class="row err" style="grid-template-columns:minmax(0,1fr) 170px minmax(0,1fr)"><div style="font-weight:500">' +
+        esc(row.title || row.id) + '</div><div class="mono">' + esc(row.reason) + '</div><div class="note">' + esc(row.detail || "") + "</div></div>";
+    }).join("");
+    var counts = data.wait_counts || {};
+    var countPills = Object.keys(counts).map(function (kind) {
+      return pill(kind === "recovery" ? "warn" : "neu", "…", waitKindLabel(kind) + " " + counts[kind]);
+    }).join(" ");
+    var providers = cap.provider_capacity || {};
+    var providerText = Object.keys(providers).length
+      ? Object.keys(providers).map(function (name) { return name + " ≤ " + providers[name]; }).join(", ") : t("cfg_none_provider");
+    var cfg = data.configuration || {};
+    var applied = cfg.applied || {};
+    var diffs = cfg.differences || {};
+    var diffRows = Object.keys(diffs).map(function (key) {
+      return '<div class="note mono">' + esc(key) + ": " + esc(t("cfg_applied")) + " " + esc(JSON.stringify(diffs[key].applied)) +
+        " → " + esc(t("cfg_proposed")) + " " + esc(JSON.stringify(diffs[key].proposed)) + "</div>";
+    }).join("");
+    var proposal = cfg.proposal || {};
+    var pendingHtml = cfg.pending
+      ? '<div class="note">' + esc(t("cfg_pending")) + "</div>" + diffRows
+      : '<div class="note">' + esc(t("cfg_no_pending")) + "</div>";
+    if (proposal.error) pendingHtml += '<div class="note">' + esc(t("cfg_proposal_error")) + " " + esc(proposal.error) + "</div>";
+    var sup = data.supervisor;
+    var supHtml = !sup ? '<div class="note">' + esc(t("sup_none")) + "</div>"
+      : '<div class="note mono">pid ' + esc(sup.pid) + " · " + esc(sup.state || "—") + (sup.fresh ? "" : " · " + esc(t("sup_stale"))) + "</div>";
+    return '<div class="card"><div class="h3" style="margin-bottom:10px">' + esc(t("cap_title")) + "</div>" +
+      '<div class="tiles"><div class="card"><div class="lbl">' + esc(t("cap_used")) + '</div><div class="big">' + nf(cap.used || 0) +
+      '<span class="note"> ' + esc(t("cap_of")) + " " + nf(cap.global_capacity || 0) + "</span></div><div class=\"note\">" +
+      nf(cap.free || 0) + " " + esc(t("cap_free")) + '</div></div><div class="card"><div class="lbl">' + esc(t("cap_simul")) +
+      '</div><div class="big">' + nf(cap.simultaneous || 0) + '</div></div><div class="card"><div class="lbl">' + esc(t("cap_waiting")) +
+      '</div><div class="big">' + nf((data.waiting || []).length + (data.recovery || []).length) + '</div><div>' + countPills + "</div></div></div>" +
+      (running || '<div class="note">' + esc(t("cap_none_running")) + "</div>") +
+      (waiting ? waiting : '<div class="note">' + esc(t("cap_none_waiting")) + "</div>") +
+      (recovery ? '<div class="lbl" style="margin-top:8px">' + esc(t("sup_blocked")) + "</div>" + recovery : "") +
+      '<div class="lbl" style="margin-top:12px">' + esc(t("cfg_title")) + '</div><div class="note mono">' + esc(t("cfg_revision")) + " " +
+      esc(applied.revision) + " · " + esc(t("cfg_global")) + " " + esc(applied.global_capacity) + " · " + esc(t("cfg_provider")) + ": " +
+      esc(providerText) + " · " + esc(t("cfg_exclusive")) + " " + esc(applied.exclusive_wait_seconds) + "</div>" + pendingHtml +
+      '<div class="lbl" style="margin-top:12px">' + esc(t("sup_title")) + "</div>" + supHtml + "</div>";
   }
 
   function renderExec(data) {

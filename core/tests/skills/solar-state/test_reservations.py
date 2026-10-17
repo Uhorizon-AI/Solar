@@ -986,3 +986,48 @@ def test_tasks_a_claiming_pass_never_reached_keep_their_clock(store):
     make(store, "First", policy=access("read", ["/b"]), priority="high")
     assert store.task_claim_next("w")["id"] == "first"                         # claims before reaching Waiting
     assert store.conn.execute("SELECT task_id FROM claim_waits").fetchall()[0][0] == waiting
+
+
+# --------------------------------------------------------------------------
+# what a cleanup that could not be proved still holds (kept by the supervisor, read by every claim)
+# --------------------------------------------------------------------------
+
+def _hold(root, **kw):
+    entry = dict(task_id="ghost", access_class="declared", provider="", scopes=[], resources=[])
+    entry.update(kw)
+    solar_state.cleanup_holds_write(root, [entry])
+
+
+def test_a_hold_keeps_its_resource_for_every_entry_point(store, ready):
+    set_policy(store, global_capacity=3)
+    same = make(store, "Same", policy=access(resources=["demo"]))
+    other = make(store, "Other", policy=access(resources=["other"]))
+    _hold(ready, resources=["demo"])
+    assert claim(store, same) == dict(claimed=False, reason="resource:demo")        # activate.sh / manual
+    assert store.task_claim_next("w")["id"] == "other" and store.task_status(same) == "queued"
+    assert {w["id"]: w["reason"] for w in store.queue_waits()}[same] == "resource:demo"
+    solar_state.cleanup_holds_write(ready, [])                                       # verified: released
+    assert claim(store, same)["claimed"]
+
+
+def test_a_hold_takes_a_place_and_an_exclusive_hold_takes_the_machine(store, ready):
+    set_policy(store, global_capacity=2)
+    a, b = make(store, "A", policy=access()), make(store, "B", policy=access())
+    _hold(ready)                                                                     # one place held
+    assert claim(store, a)["claimed"] and claim(store, b) == dict(claimed=False, reason="global_capacity")
+    _hold(ready, access_class="exclusive")
+    legacy = make(store, "Legacy", policy=None)
+    store.task_complete(a, token=token_of(store, a))
+    assert claim(store, legacy)["reason"] in ("exclusive_needs_idle", "blocked_by_exclusive")
+    assert claim(store, b)["reason"] == "blocked_by_exclusive"
+
+
+def test_holds_survive_a_restart_and_an_unreadable_file_holds_everything(store, ready):
+    set_policy(store, global_capacity=3)
+    task = make(store, "Task", policy=access(resources=["demo"]))
+    _hold(ready, resources=["demo"])
+    with solar_state.session(ready, auto_backup=False) as again:                    # a new session, as after a restart
+        assert again.task_claim_detail(task, "w")["reason"] == "resource:demo"
+    (ready / solar_state.CLEANUP_HOLDS_NAME).write_text("{not json")
+    assert claim(store, task)["reason"] in ("exclusive_needs_idle", "blocked_by_exclusive", "resource:demo")
+    assert not claim(store, task)["claimed"]

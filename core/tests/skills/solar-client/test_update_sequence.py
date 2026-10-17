@@ -292,10 +292,18 @@ def test_a_supervisor_that_cannot_be_drained_stops_the_update_before_it_changes_
 
 def test_a_supervisor_whose_drain_fails_is_not_killed_or_retried(rig):
     rig.runtime_state(5)
-    broken = sh(rig.tmp / "broken-stop.sh", 'echo "pending: 1 execution" >&2\nexit 3\n')
+    broken = sh(rig.tmp / "broken-stop.sh", 'echo "pending: 1 execution" >&2\nexit 1\n')
     failed = rig.update("--ref", "v0.0.2", "--yes", env_extra=dict(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=broken))
     assert failed.returncode != 0 and "did not drain" in failed.stderr
     assert "drain-timeout" in rig.names() and "host-stop" not in rig.names() and rig.marker() == "OLD"
+
+
+def test_a_supervisor_that_leaves_blocked_executions_stops_the_update_with_its_own_message(rig):
+    rig.runtime_state(5)
+    broken = sh(rig.tmp / "blocked-stop.sh", 'echo "pending: 1 execution" >&2\nexit 3\n')
+    failed = rig.update("--ref", "v0.0.2", "--yes", env_extra=dict(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=broken))
+    assert failed.returncode != 0 and "remain blocked" in failed.stderr and "supervisor did not drain" not in failed.stderr
+    assert "drain-blocked" in rig.names() and "host-stop" not in rig.names() and rig.marker() == "OLD"
 
 
 def test_a_migration_that_is_refused_keeps_the_services_stopped(rig):
@@ -333,7 +341,7 @@ def test_a_crash_between_the_code_and_the_schema_is_resumed_not_repeated(rig, tm
     ensure = subprocess.run(["bash", str(rig.install / "core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh")],
                             env=rig.env(SOLAR_TASK_WORKER_LOCK=str(rig.tmp / "worker.lock")), cwd=rig.ws,
                             capture_output=True, text=True, timeout=120)
-    assert ensure.returncode == 0 and "Maintenance in progress" in ensure.stdout
+    assert ensure.returncode == 20 and "\"reason\": \"maintenance\"" in ensure.stdout
     with pytest.raises(solar_state.StateUnavailable, match="migration has not run"):
         with solar_state.session(rig.rt, auto_backup=False):
             pass                                                           # new code never meets the old schema
@@ -384,7 +392,7 @@ def test_no_restart_leaves_dispatch_suspended_until_an_explicit_resume(rig):
     ensure = subprocess.run(["bash", str(rig.install / "core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh")],
                             env=rig.env(SOLAR_TASK_WORKER_LOCK=str(rig.tmp / "worker.lock")), cwd=rig.ws,
                             capture_output=True, text=True, timeout=120)
-    assert "Maintenance in progress" in ensure.stdout
+    assert ensure.returncode == 20 and "\"reason\": \"maintenance\"" in ensure.stdout
     resumed = rig.update("--resume")
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert subsequence(rig.names(), ["held-no-restart", "resume", "host-start", "readiness-ok", "launchctl-bootstrap", "release"])

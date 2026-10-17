@@ -1544,8 +1544,8 @@ solar_client_report_launchagent_binding() {
 # bridges) and "host" (console on :9000). A process counts only if its command
 # line holds this install's script path (fixed-string match), so services of
 # another Solar install on the machine are never mistaken for ours. "async-supervisor" is the
-# resident async-tasks supervisor. The one-shot worker is not listed: it starts fresh on
-# every orchestrator tick, and the update waits for it through the drain.
+# resident async-tasks supervisor. A one-shot worker of the previous design is not listed: the
+# update waits for it through the drain (and ensure never starts one any more).
 # Args: install_root.
 # Test hooks: SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE ("gateway,host", or "none");
 # SOLAR_CLIENT_PS_OUTPUT_FILE (file with `ps -axo command=` lines).
@@ -2049,9 +2049,22 @@ solar_client_drain_async() {
       return 1
     fi
     echo "Drain: asking the async supervisor to finish its executions"
-    if ! bash "$stop_script" --drain --timeout "$timeout"; then
-      echo "ERROR: the async supervisor did not drain. Nothing was replaced; the maintenance barrier stays." >&2
-      solar_client_update_event drain-timeout "reason=supervisor"
+    local stop_code=0
+    bash "$stop_script" --drain --timeout "$timeout" || stop_code=$?
+    if [[ "$stop_code" -ne 0 ]]; then
+      # stop_supervisor.sh: 1 = still draining at the deadline, 2 = its owner cannot be identified,
+      # 3 = it left but executions with an uncertain owner or a failed cleanup remain blocked.
+      # Each needs something different from the person, and none of them replaced anything.
+      case "$stop_code" in
+        1) echo "ERROR: the async supervisor did not drain: it was still collecting its executions after ${timeout}s. Nothing was replaced and nothing was killed; the maintenance barrier stays. Let them finish (or cancel them) and run: solar client update --resume" >&2
+           solar_client_update_event drain-timeout "reason=supervisor" "code=$stop_code" ;;
+        2) echo "ERROR: the async supervisor's process could not be identified (the process table did not answer), so it was not asked to stop. Nothing was replaced; the maintenance barrier stays. Check the process table (ps) and the supervisor's identity with: bash $(dirname "$stop_script")/check_async_tasks.sh, then run: solar client update --resume" >&2
+           solar_client_update_event drain-refused "reason=supervisor_unidentified" "code=$stop_code" ;;
+        3) echo "ERROR: the async supervisor stopped, but executions with an uncertain owner or a failed cleanup remain blocked (listed above). Nothing was replaced; the maintenance barrier stays. Resolve them (confirm their processes are gone, or fail/cancel the tasks) and run: solar client update --resume" >&2
+           solar_client_update_event drain-blocked "reason=blocked_executions" "code=$stop_code" ;;
+        *) echo "ERROR: stop_supervisor.sh failed (exit $stop_code). Nothing was replaced; the maintenance barrier stays." >&2
+           solar_client_update_event drain-timeout "reason=supervisor" "code=$stop_code" ;;
+      esac
       return 1
     fi
   fi
@@ -2369,7 +2382,8 @@ _solar_client_state_cutover_locked() {
     fi
     cutover_args+=(--events-file "$(solar_client_update_events_file)")
     [[ -n "$apply_hook" ]] && cutover_args+=(--apply-hook "$apply_hook")
-    if ! SOLAR_STATE_ALLOW_CUTOVER=1 python3 "$cutover_py" "${cutover_args[@]}"; then
+    # The helper runs from the staged copy: tell it which install's processes it must wait for.
+    if ! SOLAR_STATE_ALLOW_CUTOVER=1 SOLAR_CUTOVER_INSTALL_ROOTS="$install_root" python3 "$cutover_py" "${cutover_args[@]}"; then
       echo "ERROR: state migration failed. Stopped services were not started; the maintenance barrier stays." >&2
       echo "       Evidence: $(solar_client_update_events_file). Backups: $runtime/state-backups/" >&2
       solar_client_update_event cutover-failed

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -191,6 +192,12 @@ def _gateway_facts(probed: dict) -> dict:
     }
 
 
+# Results of one feature in the pass stamp. `failed` and `blocked` need a person (a blocked
+# feature is one that is waiting on recovery or maintenance); `starting` is a live process still
+# reconciling and is neither a fault nor a success yet; the rest never counted as problems.
+_FEATURE_PROBLEMS = frozenset({"failed", "blocked"})
+
+
 def verdict(*, stamp, db_readable: bool, port_foreign: bool, now=None) -> dict:
     """Calm, fault, or unverified. Quiet time is not a fault by itself.
 
@@ -213,7 +220,7 @@ def verdict(*, stamp, db_readable: bool, port_foreign: bool, now=None) -> dict:
         age = _age_seconds(stamp.get("at"), now)
         launchagent = {"state": "observed", "at": stamp.get("at"), "age_seconds": age}
         features = stamp.get("features") if isinstance(stamp.get("features"), dict) else {}
-        if any(value == "failed" for value in features.values()):
+        if any(value in _FEATURE_PROBLEMS for value in features.values()):
             reasons.append("system")
         if age is None or age > STAMP_FRESH_SEC:
             reasons.append("launchagent")
@@ -252,7 +259,7 @@ def verdict(*, stamp, db_readable: bool, port_foreign: bool, now=None) -> dict:
 def _checks(*, stamp, db_readable: bool, port_foreign: bool, launchagent: dict, gateway: dict) -> list[dict]:
     """Explicit state for each design check. The page renders this and does not decide it."""
     features = stamp.get("features") if isinstance(stamp, dict) and isinstance(stamp.get("features"), dict) else {}
-    if any(value == "failed" for value in features.values()):
+    if any(value in _FEATURE_PROBLEMS for value in features.values()):
         system = "fault"
     elif launchagent.get("state") == "observed":
         system = "ok"
@@ -443,27 +450,40 @@ def _join(items: list[str], language: str) -> str:
 
 def _system_phrase(features, language: str) -> str:
     text = _copy(language)
-    named = []
+    failed, blocked = [], []
     if isinstance(features, dict):
         for name, value in features.items():
-            if value != "failed":
+            if value not in _FEATURE_PROBLEMS:
                 continue
             label = text["feature"].get(name)
             if label is None:
                 return text["feature_unknown"]
-            named.append(label)
-    if not named:
+            (blocked if value == "blocked" else failed).append(label)
+    if not failed and not blocked:
         return text["feature_unknown"]
-    if language == "es":
-        if len(named) == 1:
-            verb = "han fallado" if named[0].startswith("las ") else "ha fallado"
-            return verb + " " + named[0]
-        return text["feature_many"].format(labels=_join(named, language))
-    if len(named) == 1 and named[0].endswith("s"):
-        return named[0] + " have failed"
-    if len(named) == 1:
-        return named[0] + " has failed"
-    return _join(named, language) + " have failed"
+    phrases = []
+    if failed:
+        if language == "es":
+            if len(failed) == 1:
+                verb = "han fallado" if failed[0].startswith("las ") else "ha fallado"
+                phrases.append(verb + " " + failed[0])
+            else:
+                phrases.append(text["feature_many"].format(labels=_join(failed, language)))
+        elif len(failed) == 1 and failed[0].endswith("s"):
+            phrases.append(failed[0] + " have failed")
+        elif len(failed) == 1:
+            phrases.append(failed[0] + " has failed")
+        else:
+            phrases.append(_join(failed, language) + " have failed")
+    if blocked:
+        joined = _join(blocked, language)
+        if language == "es":
+            plural = len(blocked) > 1 or blocked[0].startswith("las ")
+            phrases.append(joined + (" necesitan atención" if plural else " necesita atención"))
+        else:
+            plural = len(blocked) > 1 or blocked[0].endswith("s")
+            phrases.append(joined + (" need attention" if plural else " needs attention"))
+    return " · ".join(phrases)
 
 
 def _quiet_days(activity: dict) -> int:
@@ -621,6 +641,44 @@ def executions(workspace) -> dict:
         raise error
     data["requester"] = dict(REQUESTER)
     data["user_id_note"] = "Distinct user_id values. Not who requested the execution."
+    return data
+
+
+def _heartbeat_stale_seconds() -> float:
+    """How old a heartbeat may be before it counts as stopped: the same threshold
+    `check_async_tasks.sh` uses (`SOLAR_SUPERVISOR_HEARTBEAT_STALE`, 2 to 600 s, 30 by default), so the
+    console and the check never disagree about a supervisor that is alive."""
+    try:
+        value = float(os.environ.get("SOLAR_SUPERVISOR_HEARTBEAT_STALE", 30.0))
+    except ValueError:
+        value = 30.0
+    return min(max(value, 2.0), 600.0)
+
+
+def _supervisor_published() -> dict | None:
+    """What the resident supervisor published about itself (identity, heartbeat, blocked
+    executions), read as a file: the console never opens the supervisor's lock or probes it.
+    `fresh` is False when the heartbeat stopped; the verdict on liveness stays with check_async_tasks."""
+    data = _read_json(_runtime_file("async-tasks", ".locks", "supervisor.json"))
+    if not isinstance(data, dict):
+        return None
+    beat = data.get("heartbeat_at")
+    age = _age_seconds(beat, _now(None))
+    return {
+        "state": data.get("state"), "pid": data.get("pid"), "started_at": data.get("started_at"),
+        "heartbeat_at": beat, "heartbeat_age_seconds": age,
+        "fresh": age is not None and age <= _heartbeat_stale_seconds(), "reconciled": bool(data.get("reconciled")),
+        "blocked": data.get("blocked") or [], "draining": data.get("draining"),
+        "children": data.get("children") or [],
+    }
+
+
+def capacity(workspace) -> dict:
+    supervisor = _supervisor_published()
+    data, error = _with_store(lambda store: runtime_views.console_capacity(store, supervisor))
+    if error is not None:
+        raise error
+    data["supervisor"] = supervisor
     return data
 
 

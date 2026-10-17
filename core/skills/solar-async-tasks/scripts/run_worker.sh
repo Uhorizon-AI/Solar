@@ -1,22 +1,37 @@
 #!/bin/bash
 
-# Run the async task worker (once or loop):
-# 1) move queued tasks to active
-# 2) execute one active task
+# Diagnostic worker (once or loop): claim the next ready task and run it here, in the foreground.
+#
+# This is NOT a production entry point. Production runs the resident supervisor
+# (ensure_async_tasks.sh -> launch_supervisor.sh), which dispatches by id and token and fills
+# every place the applied policy allows. This script stays for diagnosis and goes through exactly
+# the same reservation (capacity, provider limit, access, token) as the supervisor and
+# activate.sh, so it can never exceed what they allow; it needs --diagnostic to run at all.
+#
+#   run_worker.sh --diagnostic [--once] [--interval SECS]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
 
 ONCE=false
 INTERVAL=60
+DIAGNOSTIC=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --once) ONCE=true; shift ;;
         --interval) INTERVAL="$2"; shift 2 ;;
-        *) echo "Usage: $0 [--once] [--interval SECS]" >&2; exit 1 ;;
+        --diagnostic) DIAGNOSTIC=true; shift ;;
+        *) echo "Usage: $0 --diagnostic [--once] [--interval SECS]" >&2; exit 1 ;;
     esac
 done
+
+if ! $DIAGNOSTIC; then
+    echo "run_worker.sh is no longer a production entry point." >&2
+    echo "Start async-tasks with: bash $SCRIPT_DIR/ensure_async_tasks.sh (the resident supervisor)." >&2
+    echo "For diagnosis only: $0 --diagnostic [--once]" >&2
+    exit 64
+fi
 
 ensure_dirs
 

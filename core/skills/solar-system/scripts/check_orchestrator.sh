@@ -251,13 +251,31 @@ if feature_active "async-tasks"; then
     async_severity="$(worst_severity "$async_severity" "DOWN")"
   fi
 
-  # 3c. Orphan lock check in $DIR_LOCKS
+  # 3c. The resident supervisor, observed by identity (never by taking its lock):
+  #     0 ready · 10 starting · 20 blocked · 1 failed or not running.
+  supervisor_code=0
+  supervisor_json="$(run_feature_with_timeout bash "$(solar_system_skill_script solar-async-tasks check_async_tasks.sh)" 2>/dev/null)" || supervisor_code=$?
+  supervisor_state="$(printf '%s' "$supervisor_json" | tail -n 1 | python3 -c 'import json,sys
+try:
+    d = json.loads(sys.stdin.read()); print(d.get("state") or "unknown", d.get("reason") or "-", d.get("age_seconds") if d.get("age_seconds") is not None else "-")
+except Exception:
+    print("unknown - -")')"
+  echo "  supervisor:  $supervisor_state (code $supervisor_code)"
+  case "$supervisor_code" in
+    0|10) ;;
+    20) async_severity="$(worst_severity "$async_severity" "PARTIAL")" ;;
+    *)  async_severity="$(worst_severity "$async_severity" "DOWN")" ;;
+  esac
+
+  # 3d. Orphan lock check in $DIR_LOCKS (resource-hook locks; the supervisor's own files are
+  #     identified by pid and start time above and are never listed here or removed)
   DIR_LOCKS="${DIR_LOCKS:-${SOLAR_TASK_ROOT:?SOLAR_TASK_ROOT unresolved}/.locks}"
   orphan_found=false
   if [[ -d "$DIR_LOCKS" ]]; then
     for lock_file in "$DIR_LOCKS"/*.lock; do
       [[ -e "$lock_file" ]] || continue
       lock_name="$(basename "$lock_file")"
+      case "$lock_name" in supervisor.lock|supervisor-launch.lock) continue ;; esac
       pid="$(cat "$lock_file" 2>/dev/null || true)"
       if [[ "$pid" =~ ^[0-9]+$ ]]; then
         if ! kill -0 "$pid" 2>/dev/null; then
@@ -437,10 +455,17 @@ if [[ "$verdict" != "HEALTHY" ]]; then
       _suggest_script "skills/solar-async-tasks/scripts/setup_async_tasks.sh"
     fi
     if [[ "${orphan_found:-false}" == "true" ]]; then
-      echo "  • Orphan lock(s) detected — remove stale locks manually:"
-      echo "    rm $DIR_LOCKS/*.lock"
+      echo "  • Orphan resource lock(s) detected — remove the stale ones manually (never supervisor*.lock):"
+      echo "    ls $DIR_LOCKS/*.lock"
       echo "    (verify no active tasks before removing)"
     fi
+    case "${supervisor_code:-0}" in
+      10) echo "  • The async supervisor is still starting; the next tick observes the same process." ;;
+      20) echo "  • The async supervisor is blocked (maintenance, recovery or a stale heartbeat):"
+          echo "    bash \"$(solar_system_suggest_script "skills/solar-async-tasks/scripts/check_async_tasks.sh")\"" ;;
+      1)  echo "  • The async supervisor is not running or its start failed — the next tick starts it, or:"
+          _suggest_script "skills/solar-async-tasks/scripts/ensure_async_tasks.sh" ;;
+    esac
   fi
 
   # interface feature removed — use host (Solar App)

@@ -55,8 +55,8 @@ while [[ $# -gt 0 ]]; do
       name="${pair%%=*}"
       result="${pair#*=}"
       case "$result" in
-        ok|failed|skipped|deprecated|ignored) ;;
-        *) echo "ERROR: feature result must be ok, failed, skipped, deprecated or ignored." >&2; exit 1 ;;
+        ok|failed|skipped|deprecated|ignored|starting|blocked) ;;
+        *) echo "ERROR: feature result must be ok, failed, skipped, deprecated, ignored, starting or blocked." >&2; exit 1 ;;
       esac
       features_json="$(FEATURES_JSON="$features_json" NAME="$name" RESULT="$result" python3 - <<'PY'
 import json, os
