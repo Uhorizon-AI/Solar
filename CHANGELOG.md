@@ -11,7 +11,7 @@ The format is based on Keep a Changelog.
 - Async 3/5 rollout and safe reversal runbook, plus an offline quality-pilot preparation/report runner, shared rubric and paired results template. Real provider quality validation remains separately authorized and unexecuted.
 
 ### Fixed
-- Wait for git identity collection before printing the update header, avoiding a macOS Bash 3.2 process-substitution signal race that could abort portable updates with an interrupted write.
+- Wait for git identity collection throughout update, staged cutover, installation and status helpers before printing or advancing, avoiding a macOS Bash 3.2 process-substitution signal race that could abort portable updates with an interrupted write.
 
 ## [0.50.0] - 2026-10-17
 

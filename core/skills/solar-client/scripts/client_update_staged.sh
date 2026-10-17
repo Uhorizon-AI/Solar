@@ -127,7 +127,8 @@ if [[ -z "$APPLY_HOOK" ]]; then
   APPLY_HOOK="$staging/apply-hook.sh"
 fi
 if [[ -z "$TARGET_IDENTITY" && "$MODE" == git ]]; then
-  read -r _tv _tc < <(solar_client_git_identity "$STAGE_ROOT")
+  git_identity="$(solar_client_git_identity "$STAGE_ROOT")"
+  read -r _tv _tc <<< "$git_identity"
   TARGET_IDENTITY="$_tv $_tc"
 fi
 
@@ -147,7 +148,8 @@ if ! solar_client_state_cutover "$INSTALL_ROOT" "$RESTART_MODE" "$APPLY_HOOK"; t
   exit 1
 fi
 
-read -r new_ver new_commit < <(solar_client_git_identity "$INSTALL_ROOT")
+git_identity="$(solar_client_git_identity "$INSTALL_ROOT")"
+read -r new_ver new_commit <<< "$git_identity"
 echo ""
 echo "OK: update complete — $new_ver (${new_commit:0:12})"
 if [[ "$DID_BACKUP" == true ]]; then
