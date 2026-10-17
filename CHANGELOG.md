@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-10-17
+
 ### Added
 - Resident async-tasks supervisor (`supervisor.py`, one per workspace/runtime): the only holder of the atomic lock `<runtime>/async-tasks/.locks/supervisor.lock` (resolved through solar-paths, bound to the workspace owner), it claims through the same reservations as every other entry point and dispatches each claim by id and token to its own executor in its own process group. Executions are collected with wait/poll, a free place is filled within one second of one ending (or on `SIGUSR1`) without waiting for the 60 s tick, and a place is forgotten only after the executor's process group is proved gone. At start it reconciles processes and leases: live owners from a previous supervisor are adopted, an owner it cannot identify stays blocked, an executor lost without finishing is failed (never run again), and a group it cannot prove is its own is never killed. Cancellation stops only that execution's group; a failed cleanup blocks the affected resource and nothing else; lowering the capacity never stops a running execution. Contract: `core/docs/async-supervisor.md`.
 - `launch_supervisor.sh` (detached `Popen(start_new_session=True)`, stdin null, output to the supervisor's log, no inherited pipes) and `stop_supervisor.sh --drain [--timeout N]` (the contract the update's drain already expected: stop dispatching, collect, exit; never removes the lock, never kills by pid).
