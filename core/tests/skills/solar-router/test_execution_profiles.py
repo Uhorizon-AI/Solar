@@ -321,3 +321,14 @@ def test_oversized_approved_envelope_rejected_without_trimming(review, fake_cli)
     assert not fake_cli.exists()
     with solar_state.session() as store:
         assert store.task_status(task)=='draft' and not store.reservation_for(task)
+
+
+def test_large_accepted_input_fits_portable_cli_arguments(review, fake_cli):
+    _, original = review
+    user = json.loads(original['manifest']['user_prompt'])
+    user['instructions'] = 'x' * (profiles.MAX_INPUT_BYTES - 2048)
+    envelope = profiles.build_review_envelope_v1(provider='claude', model='test-model', **user)
+    assert envelope['manifest']['context_budget']['input_utf8_bytes'] <= 96 * 1024
+    assert PROVIDERS['claude'].run('', review=kwargs(envelope)) == '<subtasks>untrusted text</subtasks>'
+    record = json.loads(fake_cli.read_text())
+    assert max(len(arg.encode('utf-8')) for arg in record['argv']) < 128 * 1024

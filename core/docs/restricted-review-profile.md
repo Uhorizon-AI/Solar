@@ -17,7 +17,7 @@ SHA-256 of canonical JSON for the entire manifest, including both prompts.
 There is no dynamic channel, task ID, timestamp, history, JIT or continuity in
 these prompts. Internal provider defaults are outside Solar's content contract.
 
-Both prompts together may occupy at most 196608 UTF-8 bytes. The manifest records
+Both prompts together may occupy at most 98304 UTF-8 bytes (96 KiB), leaving headroom for the CLI argument vector. The manifest records
 that bound and the actual size. This conservative input bound is not a token
 estimate or a guarantee about the provider's internal context. Oversize input
 returns `review_input_too_large`; nothing is trimmed or summarized.
