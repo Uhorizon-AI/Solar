@@ -151,3 +151,10 @@ moving into the schema in a migration owned by that follow-up.
 ## Not in this delivery
 
 The restricted profile and derived-child contracts are in `restricted-review-profile.md`. Production reader profiles remain disabled and capacity remains 1. Effective managed-policy inspection for real CLI execution, the macOS launchd harness, quality pilot and 3/5 rollout are not verified by the supervisor simulations.
+
+## Rollout evidence and operations
+
+See [Async capacity rollout and reversal](async-rollout.md) for prerequisites,
+exact proposal/application steps and safe drain/rollback. The
+[quality pilot](review-quality-pilot.md) is prepared separately and requires
+explicit account and bounded-cost authorization before real inference.

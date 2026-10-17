@@ -32,7 +32,8 @@ source "$SCRIPT_DIR/update_notice.sh"
 if [[ "$JSON" != true ]]; then
   _status_ver=""
   if [[ -n "${SOLAR_ROOT:-}" ]]; then
-    read -r _status_ver _ < <(solar_client_git_identity "$SOLAR_ROOT" 2>/dev/null) || _status_ver=""
+    git_identity="$(solar_client_git_identity "$SOLAR_ROOT" 2>/dev/null || true)"
+    read -r _status_ver _ <<< "$git_identity" || _status_ver=""
   fi
   solar_update_notice_print "${_status_ver:-}" || true
 fi

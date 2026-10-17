@@ -623,3 +623,96 @@ def test_a_lock_written_without_a_verifiable_start_is_not_stolen_from_a_live_own
     finally:
         holder.kill()
         holder.wait()
+
+
+def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_duplicates(rig, monkeypatch):
+    """Real resident supervisor + deterministic executors; update services stay doubled."""
+    import signal
+    import threading
+    sys.path.insert(0, str(CORE / "tests/skills/solar-async-tasks"))
+    sys.path.insert(0, str(CORE / "skills/solar-async-tasks/scripts"))
+    from supervisor_support import wait_until
+    import supervisor_lib
+    from rollout_policy import apply_policy
+
+    rig.runtime_state(6, tasks=0)
+    monkeypatch.chdir(rig.ws)
+    for key, value in rig.env().items():
+        if key.startswith("SOLAR_"):
+            monkeypatch.setenv(key, value)
+    apply_policy(3)
+    double = rig.tmp / "executor-double"
+    for sub in ("spec", "gates", "barriers"):
+        (double / sub).mkdir(parents=True, exist_ok=True)
+    tasks = []
+    with solar_state.session(rig.rt) as store:
+        for i in range(3):
+            task = store.task_create([
+                ("title", json.dumps(f"Review {i}")), ("provider", "claude"),
+                ("execution_profile", "text_only_review_v1"),
+                ("access_policy", json.dumps(dict(version=1, mode="read", scopes=[], resources=[])))],
+                "Deterministic update review.", status="queued")
+            tasks.append(task)
+            (double / "spec" / f"{task}.json").write_text(json.dumps(dict(
+                gate="release", hold=0.1 + i * 0.1, barrier=dict(name="three", parties=3))))
+    wrapper = rig.tmp / "supervisor-double-provider.py"
+    wrapper.write_text(
+        "import sys\n" + f"sys.path.insert(0, {str(rig.install / 'core/skills/solar-async-tasks/scripts')!r})\n" +
+        "import supervisor, supervisor_lib\n" +
+        f"executor = lambda task, token: [sys.executable, {str(CORE / 'tests/skills/solar-async-tasks/executor_double.py')!r}, '--task', task, '--token', token]\n" +
+        "raise SystemExit(supervisor.Supervisor(supervisor_lib.Context(), executor=executor, poll=0.1, sweep=0.2).run())\n")
+    env = rig.env(DOUBLE_DIR=str(double), SOLAR_CUTOVER_PS_OUTPUT_FILE=str(rig.tmp / "cutover-ps"))
+    (rig.tmp / "cutover-ps").write_text("")
+    original = subprocess.Popen([sys.executable, str(wrapper)], env=env, cwd=rig.ws,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    original_start = supervisor_lib.process_start(original.pid)
+    update_box = {}
+
+    def events():
+        path = double / "events.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    try:
+        wait_until(lambda: len([e for e in events() if e["event"] == "start"]) == 3, 45)
+        extra = dict(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=str(rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"),
+                     SOLAR_CLIENT_ASYNC_BUSY_COMMAND="exit 1", SOLAR_CLIENT_DRAIN_TIMEOUT="60",
+                     SOLAR_CUTOVER_PS_OUTPUT_FILE=str(rig.tmp / "cutover-ps"))
+        update = threading.Thread(target=lambda: update_box.setdefault("result", rig.update(
+            "--ref", "v0.0.2", "--yes", env_extra=extra)), daemon=True)
+        update.start()
+        wait_until(lambda: "drain-start" in rig.names(), 60)
+        assert original.poll() is None and rig.marker() == "OLD"
+        (double / "gates/release").touch()
+        update.join(180)
+        assert not update.is_alive()
+        done = update_box["result"]
+        assert done.returncode == 0, done.stdout + done.stderr
+        original.wait(timeout=10)
+        assert original.returncode == 0 and rig.marker() == "NEW" and rig.barrier() is None
+        with solar_state.session(rig.rt) as store:
+            assert store.async_policy()["global_capacity"] == 3
+            assert all(store.task_status(task) == "completed" for task in tasks)
+        # The actual ensure path starts the new code only after cutover released maintenance.
+        ensure = rig.install / "core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh"
+        started = subprocess.run(["bash", str(ensure)], env=env, cwd=rig.ws,
+                                 capture_output=True, text=True, timeout=60)
+        assert started.returncode == 0, started.stdout + started.stderr
+        identity = supervisor_lib.read_json(supervisor_lib.Context(rig.rt).identity_file)
+        assert identity and identity["pid"] != original.pid
+        stopped = subprocess.run(["bash", str(rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"),
+                                  "--drain", "--timeout", "30"], env=env, cwd=rig.ws,
+                                 capture_output=True, text=True, timeout=45)
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        assert all(len([e for e in events() if e["event"] == "start" and e["task"] == task]) == 1 for task in tasks)
+        assert len([e for e in events() if e["event"] == "completed"]) == 3
+        names = rig.names()
+        assert subsequence(names, ["drain-start", "drain-done", "cutover-lock", "cutover-done", "release"])
+    finally:
+        # Signals are restricted to recorded pid + process start; never by process name.
+        for identity in (dict(pid=original.pid, started=original_start),
+                         supervisor_lib.read_json(supervisor_lib.Context(rig.rt).identity_file) or {}):
+            if identity.get("started") and supervisor_lib.matches(identity.get("pid"), identity["started"])[0] == "alive":
+                os.kill(identity["pid"], signal.SIGTERM)
+        (double / "gates/release").touch()
+        if original.poll() is None:
+            original.wait(timeout=30)

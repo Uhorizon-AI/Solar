@@ -158,7 +158,8 @@ if ! "$SOLAR_BIN" --version >/dev/null 2>&1; then
   exit 1
 fi
 
-read -r ver commit < <(solar_client_git_identity "$INSTALL_DIR")
+git_identity="$(solar_client_git_identity "$INSTALL_DIR")"
+read -r ver commit <<< "$git_identity"
 
 echo "OK: Solar Client installed"
 echo "  SOLAR_ROOT=$INSTALL_DIR"

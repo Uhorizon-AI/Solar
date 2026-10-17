@@ -41,6 +41,70 @@ export SOLAR_RUNTIME_ROOT="$TMP/guard-runtime"
 export SOLAR_CLIENT_LAUNCHCTL="$TMP/guard-bin/launchctl"
 solar_test_guard
 
+# --- staged identity reads must wait for the helper to EXIT, not its first line ---
+test_staged_identity_completion() {
+  local stage="$TMP/staged-identity" ws="$TMP/staged-identity-ws" rt="$TMP/staged-identity-runtime"
+  local install="$TMP/staged-identity-install" events="$TMP/staged-identity-events"
+  local finished="$TMP/staged-identity-finished" output status
+  mkdir -p "$stage/core/skills/solar-client/scripts" "$ws/sun" "$rt" "$install"
+  cp "$CORE_ROOT/skills/solar-client/scripts/client_lib.sh" \
+     "$CORE_ROOT/skills/solar-client/scripts/client_update_staged.sh" "$stage/core/skills/solar-client/scripts/"
+  cp -R "$CORE_ROOT/skills/solar-paths" "$stage/core/skills/solar-paths"
+  # Only the state/service boundary is doubled. Run the real staged shell entrypoint.
+  # Identity emits its line, stays alive briefly, then records that it has finished.
+  # Both cutover and the success announcement must observe the completion marker.
+  cat >>"$stage/core/skills/solar-client/scripts/client_lib.sh" <<'EOF'
+solar_client_git_identity() {
+  rm -f "$STAGED_IDENTITY_FINISHED"
+  printf '%s\n' 'v0.0.2 abcdef0123456789'
+  sleep 1
+  printf '%s\n' identity-done >>"$STAGED_IDENTITY_EVENTS"
+  : >"$STAGED_IDENTITY_FINISHED"
+}
+solar_client_state_cutover() {
+  [[ -f "$STAGED_IDENTITY_FINISHED" ]] || return 1
+  [[ "$SOLAR_CLIENT_UPDATE_TARGET_IDENTITY" == 'v0.0.2 abcdef0123456789' ]] || return 1
+  printf '%s\n' cutover >>"$STAGED_IDENTITY_EVENTS"
+}
+solar_client_maintenance_held() { return 1; }
+solar_client_report_launchagent_binding() { return 0; }
+echo() {
+  case "$*" in
+    'OK: update complete '*)
+      [[ -f "$STAGED_IDENTITY_FINISHED" ]] || return 1
+      printf '%s\n' complete >>"$STAGED_IDENTITY_EVENTS"
+      ;;
+  esac
+  builtin echo "$@"
+}
+EOF
+  : >"$events"
+  status=0
+  output="$(
+    export SOLAR_ROOT="$stage" SOLAR_WORKSPACE="$ws" SOLAR_RUNTIME_ROOT="$rt"
+    export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none
+    export STAGED_IDENTITY_EVENTS="$events" STAGED_IDENTITY_FINISHED="$finished"
+    solar_test_guard --services
+    bash "$stage/core/skills/solar-client/scripts/client_update_staged.sh" \
+      --install-root "$install" --workspace "$ws" --runtime-root "$rt" \
+      --stage-root "$stage" --mode git --apply-hook "$TMP/unused-apply-hook" --restart-mode never
+  )" || status=$?
+  assert_ok "staged update waits for identity helpers and exits 0" test "$status" -eq 0
+  assert_ok "staged update announces the collected version and commit" \
+    grep -q 'OK: update complete.*v0.0.2 (abcdef012345)' <<<"$output"
+  printf '%s\n' identity-done cutover identity-done complete >"$TMP/staged-identity-expected"
+  assert_ok "staged identity helpers finish before cutover and success output" \
+    diff -u "$TMP/staged-identity-expected" "$events"
+  [[ "$status" -eq 0 ]] || printf '%s\n' "$output" >&2
+}
+test_staged_identity_completion
+# The focused mode makes 20 isolated repetitions inexpensive, without real services.
+if [[ "${1:-}" == --staged-identity-only ]]; then
+  echo "PASS=$PASS FAIL=$FAIL"
+  [[ "$FAIL" -eq 0 ]]
+  exit
+fi
+
 # --- manifest repair helpers ---
 WS="$TMP/ws-repair"
 INSTALL="$TMP/install-repair"

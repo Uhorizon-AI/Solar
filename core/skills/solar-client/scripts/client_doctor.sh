@@ -120,7 +120,8 @@ PY
   elif [[ -n "$core_source" ]]; then
     warn "settings core_source=$core_source (expected global or workspace-snapshot)"
   fi
-  read -r global_ver global_commit < <(solar_client_git_identity "$SOLAR_ROOT" 2>/dev/null || echo "unknown unknown")
+  git_identity="$(solar_client_git_identity "$SOLAR_ROOT" 2>/dev/null || echo "unknown unknown")"
+  read -r global_ver global_commit <<< "$git_identity"
   manifest_ver="$(solar_client_manifest_core_version "$MANIFEST")"
   manifest_commit="$(solar_client_manifest_core_commit "$MANIFEST")"
   if [[ "$core_source" != "workspace-snapshot" ]]; then
