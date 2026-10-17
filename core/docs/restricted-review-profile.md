@@ -57,10 +57,29 @@ variables are excluded. `--bare` is deliberately absent to preserve OAuth.
 
 Help must advertise the required flags. Effective managed policy must also be
 validated: unknown or nonempty policy returns `execution_profile_unsupported`.
-The current effective-policy inspection boundary returns **unknown** for real
-CLIs. There is no environment or prompt switch to bypass it. Tests substitute a
-simulated policy only. Real execution consequently remains unsupported until a
-supported effective-policy inspection is implemented and validated.
+The inspection has two parts, and a launch needs both to say "no policy":
+
+- **Local sources**, read directly: `managed-settings.json`, the
+  `managed-settings.d/*.json` drop-ins and `managed-mcp.json` under
+  `/Library/Application Support/ClaudeCode` and `/etc/claude-code`, and the
+  managed-preferences plist of the `com.anthropic.claudecode` domain. Any present
+  source is policy (its content is returned); one that cannot be read is unknown.
+- **Server-managed policy**, which no local file shows: the output of
+  `claude doctor` (the CLI's read-only diagnosis, run with the same restricted
+  environment and a private cwd). Only the wording of an account with no
+  organization policy counts (`Managed settings (remote): not fetched ...` and
+  `Organization policy: not applicable ...`). Any other wording, a non-zero exit
+  or a timeout is unknown. Accounts with an organization policy are therefore
+  unsupported until their wording is known: the profile fails closed.
+
+There is no environment or prompt switch to bypass it. Tests substitute a
+simulated policy or a CLI double; an opt-in smoke test (`SOLAR_TEST_REAL_CLAUDE=1`)
+checks the real CLI on a machine without policy.
+
+The inherited environment passes the adapter's own credentials through when they
+are set (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`), as the interactive
+adapter does: the profile adds no credential and no billing mode of its own, and
+with neither set the CLI authenticates with the OAuth login under `HOME`.
 
 Claude Code 2.1.285 advertised the flags on 2026-10-17. Its help and the
 [CLI reference](https://code.claude.com/docs/en/cli-reference) say managed policy
@@ -119,6 +138,5 @@ Explicit recovery is required after an uncertain attempt. Only the parent owns
 final delivery.
 
 Logical independence does not grant simultaneous execution. Production capacity
-remains **1**, with `enabled_reader_profiles` empty. The real managed-policy
-inspection, macOS launchd validation, quality pilot and capacity rollout remain
+remains **1**, with `enabled_reader_profiles` empty. macOS launchd validation, the quality pilot and the capacity rollout remain
 unverified. Other-provider confinement belongs to later extensions.

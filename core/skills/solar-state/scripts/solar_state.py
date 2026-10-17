@@ -308,6 +308,11 @@ class StaleToken(TransitionRefused):
     """The execution token is missing or is not the one of the current reservation."""
 
 
+class ReviewInputsInvalid(StateError):
+    """The approval, provenance, cancellation or profile of an execution no longer holds. Only this
+    (never a busy or unavailable base) may send a task back to preparation."""
+
+
 class PolicyInvalid(StateError):
     """A proposed execution policy is refused; the applied one stays."""
 
@@ -1843,10 +1848,10 @@ def _execution_snapshot(conn, task_id, token, profile=None):
     pairs = json.loads(row["frontmatter"])
     if (approval_state(pairs, row["body"]) or _provenance_problem(conn, task_id)
             or conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?", (task_id,)).fetchone()):
-        raise StateError("review_input_mismatch")
+        raise ReviewInputsInvalid("review_input_mismatch")
     fields = {key: _field(pairs, key) for key in MATERIAL_KEYS}
     if profile is not None and fields["execution_profile"] != profile:
-        raise StateError("review_input_mismatch")
+        raise ReviewInputsInvalid("review_input_mismatch")
     return dict(fields=fields, definition=_field(pairs, "approved_definition"),
                 digest=_field(pairs, "approved_digest"), claimed_by=row["claimed_by"])
 

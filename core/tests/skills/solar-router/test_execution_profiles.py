@@ -332,3 +332,23 @@ def test_large_accepted_input_fits_portable_cli_arguments(review, fake_cli):
     assert PROVIDERS['claude'].run('', review=kwargs(envelope)) == '<subtasks>untrusted text</subtasks>'
     record = json.loads(fake_cli.read_text())
     assert max(len(arg.encode('utf-8')) for arg in record['argv']) < 128 * 1024
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_a_busy_state_is_transient_and_never_withdraws_the_approval(tmp_path, fake_cli, monkeypatch, stream):
+    source, payload, _ = bound_child(tmp_path)
+    child = payload['execution']['task_id']
+
+    def busy(self, *args, **kwargs):
+        raise solar_state.StateBusy('state lock not granted in time (a cutover is running)')
+
+    monkeypatch.setattr(solar_state.Session, 'execution_snapshot', busy)
+    result = ([json.loads(line) for line in router.route_stream(json.dumps(payload))][-1]
+              if stream else router.route(json.dumps(payload)))
+    assert result['error_code'] == 'state_unavailable', result
+    assert not result.get('claim_released')
+    assert not fake_cli.exists()
+    with solar_state.session() as store:
+        task = store.task_get(child)
+        assert store.task_status(child) == 'active' and store.reservation_for(child) is not None
+        assert solar_state.approval_state(task['frontmatter'], task['body']) is None

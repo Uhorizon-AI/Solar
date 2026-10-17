@@ -670,6 +670,8 @@ def create_declared_children(task_file, task_root, task_id) -> Optional[str]:
     try:
         with solar_state.session() as store:
             store.materialize_children(task_id, plan, token=_token())
+    except (solar_state.StateBusy, solar_state.StateUnavailable):
+        raise       # a busy base is not an unauthorized declaration
     except solar_state.StateError:
         return "subtask_authorization_required"
     return None
@@ -836,6 +838,8 @@ def handle_declared_subtasks(
     try:
         with solar_state.session() as store:
             store.materialize_children(task_id, children, token=_token())
+    except (solar_state.StateBusy, solar_state.StateUnavailable):
+        raise       # a busy base is not an unauthorized declaration
     except solar_state.StateError:
         mark_task_error(task_file, task_id, title, None, "subtask_authorization_required",
                         "subtask_authorization_required", log_file)
@@ -911,7 +915,9 @@ def main() -> int:
             snapshot = store.execution_snapshot(task_id, _token()) if must_validate else None
         except solar_state.StaleToken:
             raise
-        except solar_state.StateError:
+        except solar_state.ReviewInputsInvalid:
+            # Only an approval that no longer holds sends the task back to preparation. A busy or
+            # unavailable base (a cutover, an update) propagates: it must never withdraw a human approval.
             snapshot = None
             invalid_snapshot = True
         else:

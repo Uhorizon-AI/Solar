@@ -115,3 +115,34 @@ def test_interrupted_legacy_manifest_does_not_backfill_authority(tmp_path):
     assert not marker.exists()
     with solar_state.session() as store:
         assert len(store.task_list()) == 1
+
+
+def test_a_busy_state_at_start_never_withdraws_an_approval(tmp_path):
+    """A lock that is not granted in time (a cutover, an update) says nothing about the approval."""
+    import os, subprocess, sys
+    from test_subtask_worker import EXECUTE, ROUTER_STUB, SCRIPTS
+    from queue_mirror import env_for, task_id_of
+    root = make_root(tmp_path)
+    source, parent, path, declarations = approved(root, tmp_path)
+    skills = SCRIPTS.parents[1]
+    wrapper = tmp_path / 'busy_snapshot.py'
+    wrapper.write_text(f'''import runpy, sys
+sys.path[:0] = {[str(SCRIPTS), str(skills / 'solar-state/scripts'), str(skills / 'solar-paths/scripts')]!r}
+import solar_state
+def busy(self, *args, **kwargs):
+    raise solar_state.StateBusy('state lock not granted in time (a cutover is running)')
+solar_state.Session.execution_snapshot = busy
+sys.argv = [{str(EXECUTE)!r}] + sys.argv[1:]
+runpy.run_path({str(EXECUTE)!r}, run_name='__main__')
+''')
+    router = tmp_path / 'router_stub.py'
+    router.write_text(ROUTER_STUB, encoding='utf-8')
+    seed(root)
+    proc = subprocess.run([sys.executable, str(wrapper), task_id_of(path), str(router)], capture_output=True,
+                          text=True, env=env_for(root, dict(os.environ)), timeout=120)
+    assert proc.returncode != 0
+    with solar_state.session() as store:
+        task = store.task_get(parent)
+        assert store.task_status(parent) == 'active', 'the task was sent back to draft by a transient error'
+        assert solar_state.approval_state(task['frontmatter'], task['body']) is None
+        assert 'review_preparation_required' not in [r[0] for r in store.conn.execute('SELECT event FROM audit')]

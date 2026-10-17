@@ -1341,7 +1341,11 @@ def _restricted_route(payload, *, stream=False):
         return dict(status="success", request_id=request_id, provider_used=provider,
                     provider=provider, reply_text=output, usage=getattr(adapter, "last_usage", None),
                     error=None, error_code=None)
-    except (ProfileError, solar_state.StateError, ValueError, TypeError, KeyError) as exc:
+    except solar_state.StaleToken:
+        # The identity is not the current one: nothing to release, and nothing of this caller's to withdraw.
+        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="review_input_mismatch", stream=stream)
+        return _failed(request_id, "review_input_mismatch", "review_input_mismatch", provider)
+    except (ProfileError, solar_state.ReviewInputsInvalid, solar_state.FormatError, ValueError, TypeError, KeyError) as exc:
         code = getattr(exc, "code", "review_input_mismatch")
         released = False
         if code in ("review_input_mismatch", "review_input_too_large") and task_id and token:
@@ -1353,6 +1357,11 @@ def _restricted_route(payload, *, stream=False):
                 pass  # a stale caller cannot release another execution's reservation
         audit_log(router_id, "end", status="failed", task_id=task_id, error_code=code, stream=stream)
         return dict(_failed(request_id, code, code, provider), claim_released=released)
+    except solar_state.StateError as exc:
+        # A busy or unavailable base (a cutover is running) says nothing about the review inputs:
+        # the approval and the claim stay as they are and the caller sees a transient failure.
+        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="state_unavailable", stream=stream)
+        return _failed(request_id, "state_unavailable", str(exc), provider)
     except Exception as exc:
         audit_log(router_id, "end", status="failed", task_id=task_id,
                   error_code="provider_locked_failed", stream=stream)

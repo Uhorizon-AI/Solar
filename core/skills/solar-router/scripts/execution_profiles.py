@@ -129,14 +129,86 @@ def verify_sources(manifest: dict, scopes: list[str]) -> None:
             raise ProfileError("review_input_mismatch")
 
 
-def _effective_managed_policy(binary: str, env: dict, cwd: str):
-    """Unknown until a supported effective-policy inspection is available.
+# Where Claude Code loads admin-managed policy from on disk (managed-settings page of the CLI docs):
+# a managed-settings.json, a managed-settings.d/ drop-in directory and a managed-mcp.json, per OS.
+# macOS MDM policy lands as a managed-preferences plist of the documented `com.anthropic.claudecode`
+# domain, in the standard macOS location for managed preferences.
+MANAGED_ROOTS = ("/Library/Application Support/ClaudeCode", "/etc/claude-code")
+MANAGED_PREFERENCES = ("/Library/Managed Preferences/com.anthropic.claudecode.plist",
+                       "/Library/Managed Preferences/{user}/com.anthropic.claudecode.plist")
+DOCTOR_TIMEOUT = 30
 
-    Help proves flag availability, not the policy loaded by the next process.
-    None rejects the launch. Tests replace this boundary with a simulated policy;
-    neither a prompt, manifest nor environment variable can attest real policy.
-    """
-    return None
+
+def _read_policy_object(path: Path):
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def _local_managed_policy():
+    """Admin policy on this machine's disk: {} when there is none, its content (or a marker) when
+    there is, None when a source exists but cannot be read. A present source is never ignored."""
+    found: dict = {}
+    try:
+        for root in MANAGED_ROOTS:
+            base = Path(root)
+            if not base.exists():
+                continue
+            files = [base / "managed-settings.json"]
+            dropins = base / "managed-settings.d"
+            if dropins.is_dir():
+                files += sorted(p for p in dropins.glob("*.json") if not p.name.startswith("."))
+            for path in files:
+                if not path.exists():
+                    continue
+                document = _read_policy_object(path)
+                if document is None:
+                    return None
+                found.update(document)
+            if (base / "managed-mcp.json").exists():
+                found["managed-mcp.json"] = True
+        import getpass
+        for template in MANAGED_PREFERENCES:
+            if Path(template.format(user=getpass.getuser())).exists():
+                found["mdm"] = True
+    except OSError:
+        return None
+    return found
+
+
+def _doctor_reports_no_org_policy(binary: str, env: dict, cwd: str) -> bool:
+    """`claude doctor` is the CLI's own read-only diagnosis of where policy loaded from, and it covers
+    what no local file can show (server-managed settings). Only the exact wording of an account with
+    no organization policy counts; anything else, or any failure to ask, is not proof of absence."""
+    try:
+        result = subprocess.run([binary, "doctor"], env=env, cwd=cwd, stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, timeout=DOCTOR_TIMEOUT, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode:
+        return False
+    lines = {}
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            lines[key.strip().lower()] = value.strip().lower()
+    remote = lines.get("managed settings (remote)", "")
+    organization = lines.get("organization policy", "")
+    return remote.startswith("not fetched") and organization.startswith("not applicable")
+
+
+def _effective_managed_policy(binary: str, env: dict, cwd: str):
+    """The admin policy the next process would load: {} only when it is known to be empty.
+
+    Local sources are read directly; server-managed policy, which no file shows, is taken from
+    `claude doctor`. Help proves flag availability, not policy. None (unknown) rejects the launch; a
+    prompt, manifest or environment variable can never attest it. Tests replace this boundary."""
+    local = _local_managed_policy()
+    if local is None or local:
+        return local
+    return {} if _doctor_reports_no_org_policy(binary, env, cwd) else None
 
 
 def preflight(binary: str, env: dict, cwd: str) -> None:
