@@ -223,7 +223,10 @@ if solar_client_maintenance_held; then
   exit 1
 fi
 
-read -r cur_ver cur_commit < <(solar_client_git_identity "$INSTALL_ROOT")
+# Wait for the identity subprocess before writing to the caller's pipe. On macOS
+# Bash 3.2 an outstanding process-substitution SIGCHLD can interrupt echo (EINTR).
+identity="$(solar_client_git_identity "$INSTALL_ROOT")"
+read -r cur_ver cur_commit <<< "$identity"
 use_git=false
 if [[ "$USE_BUNDLE" != true ]] && [[ -d "$INSTALL_ROOT/.git" ]]; then
   use_git=true

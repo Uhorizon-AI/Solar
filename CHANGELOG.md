@@ -6,6 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Isolated opt-in macOS launchd evidence harness and integrated simulated concurrency/update regressions; production capacity remains 1 and reader profiles remain disabled.
+- Async 3/5 rollout and safe reversal runbook, plus an offline quality-pilot preparation/report runner, shared rubric and paired results template. Real provider quality validation remains separately authorized and unexecuted.
+
+### Fixed
+- Wait for git identity collection throughout update, staged cutover, installation, status parsing and update-cache helpers before printing or advancing, avoiding a macOS Bash 3.2 process-substitution signal race that could abort portable updates with an interrupted write.
+
 ## [0.50.0] - 2026-10-17
 
 ### Added

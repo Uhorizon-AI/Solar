@@ -104,12 +104,13 @@ solar_update_resolve_latest() {
     return 0
   fi
 
-  local cache ttl now checked latest stale=1
+  local cache ttl now checked latest cache_values _ttl stale=1
   cache="$(solar_update_cache_path)"
   ttl="${SOLAR_UPDATE_CHECK_TTL:-86400}"
   now="$(date +%s)"
 
-  if read -r latest checked _ttl < <(solar_update_read_cache "$cache" 2>/dev/null); then
+  if cache_values="$(solar_update_read_cache "$cache" 2>/dev/null)" \
+      && read -r latest checked _ttl <<< "$cache_values"; then
     if [[ -n "$checked" && "$checked" =~ ^[0-9]+$ && $((now - checked)) -lt $ttl ]]; then
       stale=0
     fi

@@ -32,7 +32,8 @@ source "$SCRIPT_DIR/update_notice.sh"
 if [[ "$JSON" != true ]]; then
   _status_ver=""
   if [[ -n "${SOLAR_ROOT:-}" ]]; then
-    read -r _status_ver _ < <(solar_client_git_identity "$SOLAR_ROOT" 2>/dev/null) || _status_ver=""
+    git_identity="$(solar_client_git_identity "$SOLAR_ROOT" 2>/dev/null || true)"
+    read -r _status_ver _ <<< "$git_identity" || _status_ver=""
   fi
   solar_update_notice_print "${_status_ver:-}" || true
 fi
@@ -71,7 +72,8 @@ if [[ -f "$HOST_SCRIPTS/check_host.sh" ]]; then
   solar_host_load_env
   host_check="$(bash "$HOST_SCRIPTS/check_host.sh" --json 2>/dev/null || true)"
   if [[ -n "$host_check" ]]; then
-    read -r host_available host_storage host_runtime_status < <(python3 -c 'import json,sys; d=json.load(sys.stdin); print(int(bool(d.get("available"))), int(bool(d.get("storage_ok"))), d.get("runtime_status", "unknown"))' <<<"$host_check" 2>/dev/null || echo '0 0 unknown')
+    host_values="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(int(bool(d.get("available"))), int(bool(d.get("storage_ok"))), d.get("runtime_status", "unknown"))' <<<"$host_check" 2>/dev/null || echo '0 0 unknown')"
+    read -r host_available host_storage host_runtime_status <<< "$host_values"
     # A console that answers but is not this one: say so, instead of a bare DOWN.
     host_error="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("error", ""))' <<<"$host_check" 2>/dev/null || true)"
   else

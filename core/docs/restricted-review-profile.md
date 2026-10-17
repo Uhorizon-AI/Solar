@@ -140,3 +140,10 @@ final delivery.
 Logical independence does not grant simultaneous execution. Production capacity
 remains **1**, with `enabled_reader_profiles` empty. macOS launchd validation, the quality pilot and the capacity rollout remain
 unverified. Other-provider confinement belongs to later extensions.
+
+## Rollout evidence and operations
+
+See [Async capacity rollout and reversal](async-rollout.md) for prerequisites,
+exact proposal/application steps and safe drain/rollback. The
+[quality pilot](review-quality-pilot.md) is prepared separately and requires
+explicit account and bounded-cost authorization before real inference.

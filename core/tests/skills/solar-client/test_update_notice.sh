@@ -87,7 +87,8 @@ unset SOLAR_STABLE_RELEASE_TAG
 
 # Fresh cache must be reused without network (Codex review).
 solar_update_write_cache "$SOLAR_UPDATE_CACHE" "v7.7.7" 86400
-read -r c_latest c_checked c_ttl < <(solar_update_read_cache "$SOLAR_UPDATE_CACHE")
+c_values="$(solar_update_read_cache "$SOLAR_UPDATE_CACHE")"
+read -r c_latest c_checked c_ttl <<< "$c_values"
 assert_ok "cache read parses latest" test "$c_latest" = "v7.7.7"
 assert_ok "cache read parses checked_at" test -n "$c_checked"
 assert_ok "cache read parses ttl" test "$c_ttl" = "86400"
@@ -103,6 +104,33 @@ chmod +x "$TMP/bin/curl"
 export SOLAR_RELEASES_API_URL="http://127.0.0.1:1/should-not-hit"
 got_cache="$(solar_update_resolve_latest)"
 assert_ok "fresh cache reused without network" test "$got_cache" = "v7.7.7"
+
+# An absent or malformed cache must stay a cache miss when refresh fails.
+rm -f "$SOLAR_UPDATE_CACHE"
+assert_fail "missing cache and failed refresh stay unknown" solar_update_resolve_latest
+printf '%s\n' '{invalid json' >"$SOLAR_UPDATE_CACHE"
+assert_fail "malformed cache and failed refresh stay unknown" solar_update_resolve_latest
+printf '%s\n' '{"latest":"v6.6.6","checked_at":1,"ttl":86400}' >"$SOLAR_UPDATE_CACHE"
+got_stale="$(solar_update_resolve_latest)"
+assert_ok "failed refresh preserves stale-cache fallback" test "$got_stale" = v6.6.6
+
+# The reader emits a valid line before exiting. Publishing the resolved tag
+# must wait for its completion, rather than just consuming the first line.
+got_completed="$(
+  solar_update_read_cache() {
+    builtin printf '%s %s %s\n' v7.7.7 "$(date +%s)" 86400
+    sleep 0.2
+    : >"$TMP/cache-reader-finished"
+  }
+  printf() {
+    if [[ "${2:-}" == v7.7.7 && ! -f "$TMP/cache-reader-finished" ]]; then
+      return 1
+    fi
+    builtin printf "$@"
+  }
+  solar_update_resolve_latest
+)"
+assert_ok "resolved tag waits for cache reader completion" test "$got_completed" = v7.7.7
 
 SOLAR="$ROOT/core/skills/solar-client/scripts/solar"
 export SOLAR_UPDATE_LATEST_FOR_TEST="v9.9.9"

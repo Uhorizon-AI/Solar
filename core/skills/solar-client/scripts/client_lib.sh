@@ -97,6 +97,8 @@ print(tag)
   printf '%s\n' "$tag"
 }
 
+# Callers capture the complete output synchronously before read/printing. A
+# process substitution can leave SIGCHLD pending during a piped echo on Bash 3.2.
 solar_client_git_identity() {
   local client_root="$1"
   local git_root version commit
@@ -455,7 +457,9 @@ solar_client_write_settings_v12() {
   local preserve_synced="${3:-}"
   local profile_json="${4:-}"
   local version commit synced_at write_path read_path
-  read -r version commit < <(solar_client_git_identity "$client_root")
+  local git_identity
+  git_identity="$(solar_client_git_identity "$client_root")"
+  read -r version commit <<< "$git_identity"
   synced_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   write_path="$(solar_client_settings_write_path "$workspace")"
   read_path="$(solar_client_settings_path "$workspace")"
@@ -577,7 +581,9 @@ solar_client_bump_manifest_from_install() {
   write_path="$(solar_client_settings_write_path "$workspace")"
   [[ -f "$read_path" ]] || return 0
   local version commit
-  read -r version commit < <(solar_client_git_identity "$client_root")
+  local git_identity
+  git_identity="$(solar_client_git_identity "$client_root")"
+  read -r version commit <<< "$git_identity"
   python3 - <<PY "$write_path" "$read_path" "$version" "$commit"
 import json, os, sys, tempfile
 write_path, read_path, version, commit = sys.argv[1:5]
@@ -710,7 +716,9 @@ solar_client_print_upgrade_report() {
   local root="$2"
   local layout manifest_layout git_ver git_commit
   layout="$(solar_client_workspace_layout "$ws" 2>/dev/null || echo "unknown")"
-  read -r git_ver git_commit < <(solar_client_git_identity "$root")
+  local git_identity
+  git_identity="$(solar_client_git_identity "$root")"
+  read -r git_ver git_commit <<< "$git_identity"
   manifest_layout=""
   if solar_client_settings_exists "$ws"; then
     manifest_layout="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("layout",""))' "$(solar_client_settings_path "$ws")" 2>/dev/null || true)"
@@ -1149,7 +1157,9 @@ solar_client_check_snapshot_outdated() {
     install_root="$(solar_global_install_root 2>/dev/null || true)"
   fi
   [[ -n "$install_root" ]] || return 1
-  read -r global_ver _ < <(solar_client_git_identity "$install_root")
+  local git_identity
+  git_identity="$(solar_client_git_identity "$install_root")"
+  read -r global_ver _ <<< "$git_identity"
   [[ -n "$bundle_ver" && -n "$global_ver" && "$bundle_ver" != "$global_ver" && "$global_ver" != dev* ]]
 }
 
@@ -1171,7 +1181,9 @@ solar_client_write_manifest_portable() {
     [[ -n "$synced_at" ]] || synced_at="$snapshot_at"
   fi
   if global_root="$(solar_global_install_root 2>/dev/null || true)" && [[ -n "$global_root" ]]; then
-    read -r existing_ver existing_commit < <(solar_client_git_identity "$global_root")
+    local git_identity
+    git_identity="$(solar_client_git_identity "$global_root")"
+    read -r existing_ver existing_commit <<< "$git_identity"
   elif [[ -f "$read_path" ]]; then
     existing_ver="$(solar_client_manifest_core_version "$read_path")"
     existing_commit="$(solar_client_manifest_core_commit "$read_path")"
@@ -1370,7 +1382,9 @@ solar_client_update_check_report() {
   local install_root="$1"
   local workspace="${2:-}"
 
-  read -r gv gc < <(solar_client_git_identity "$install_root")
+  local git_identity
+  git_identity="$(solar_client_git_identity "$install_root")"
+  read -r gv gc <<< "$git_identity"
   echo "Global Solar Client (SOLAR_ROOT):"
   echo "  path=$install_root"
   echo "  version=$gv commit=${gc:0:12}"
@@ -1677,7 +1691,9 @@ solar_client_cutover_identity() {
     printf '%s\n' "$checksum"
     return 0
   fi
-  read -r _ commit < <(solar_client_git_identity "$install_root")
+  local git_identity
+  git_identity="$(solar_client_git_identity "$install_root")"
+  read -r _ commit <<< "$git_identity"
   if [[ -z "$commit" || "$commit" == "unknown" ]]; then
     printf '\n'
     return 0
@@ -1722,7 +1738,9 @@ solar_client_write_cutover_marker() {
   [[ -n "$identity" ]] || return 0
   if [[ -n "$install_root" ]]; then
     expected="$(solar_client_expected_schema "$install_root")"
-    read -r code_version _ < <(solar_client_git_identity "$install_root")
+    local git_identity
+    git_identity="$(solar_client_git_identity "$install_root")"
+    read -r code_version _ <<< "$git_identity"
   fi
   python3 - <<'PY' "$runtime/state-cutover.json" "$identity" "$expected" "$code_version"
 import json, os, sys
@@ -2115,7 +2133,9 @@ solar_client_update_readiness() {
   fi
   if [[ -n "$expected" ]]; then
     local current
-    read -r current_ver current_commit < <(solar_client_git_identity "$install_root")
+    local git_identity
+    git_identity="$(solar_client_git_identity "$install_root")"
+    read -r current_ver current_commit <<< "$git_identity"
     current="$current_ver $current_commit"
     if [[ "$current_commit" != unknown && "$current" != "$expected" ]]; then
       echo "ERROR: the installed code is '$current', the update expected '$expected'" >&2
@@ -2294,7 +2314,9 @@ _solar_client_state_cutover_locked() {
     return 0
   fi
 
-  read -r target_ver target_commit < <(solar_client_git_identity "$install_root")
+  local git_identity
+  git_identity="$(solar_client_git_identity "$install_root")"
+  read -r target_ver target_commit <<< "$git_identity"
   operation="update-$$-$(date +%s)"
   if [[ -n "$resume" ]]; then
     if ! solar_client_maintenance_held; then
@@ -2322,7 +2344,8 @@ _solar_client_state_cutover_locked() {
       fi
     fi
     local from_ver from_commit staging
-    read -r from_ver from_commit < <(solar_client_git_identity "$install_root")
+    git_identity="$(solar_client_git_identity "$install_root")"
+    read -r from_ver from_commit <<< "$git_identity"
     staging="${SOLAR_CLIENT_UPDATE_STAGING:-}"
     if ! solar_client_maintenance_begin "$operation" "$install_root" "$from_ver $from_commit" \
         "${SOLAR_CLIENT_UPDATE_TARGET_IDENTITY:-$target_ver $target_commit}" \
