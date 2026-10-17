@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-10-18
+
 ### Added
 - Isolated opt-in macOS launchd evidence harness and integrated simulated concurrency/update regressions; production capacity remains 1 and reader profiles remain disabled.
 - Async 3/5 rollout and safe reversal runbook, plus an offline quality-pilot preparation/report runner, shared rubric and paired results template. Real provider quality validation remains separately authorized and unexecuted.
