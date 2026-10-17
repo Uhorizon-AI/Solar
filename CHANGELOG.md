@@ -6,8 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
-### Documentation
-- Record the unresolved effective-managed-policy validation for the proposed restricted text-review profile. No adapter is registered or enabled, and no execution behavior changes.
+### Added
+- Guarded Claude `text_only_review_v1` adapter with one restricted launch constructor for run and stream, canonical approved envelopes, input budgets, token-bound router isolation and source revalidation. Unknown effective managed policy rejects real launches; production reader profiles remain disabled and capacity remains 1.
+- Transactional, idempotent derived review children with bounded approved policy, individual approval snapshots, provenance checks and one recorded parent synthesis attempt. Legacy children without provenance remain nonexecutable. The console groups approval/provenance waits as authorization pending.
+
+### Changed
+- A provider's subtask declaration no longer authorizes arbitrary queued children. Only exact approved review templates and immutable input digests may be materialized. Interrupted synthesis requires explicit recovery rather than automatic replay.
 
 ## [0.49.0] - 2026-10-17
 

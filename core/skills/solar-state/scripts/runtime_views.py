@@ -498,6 +498,8 @@ def wait_kind(reason):
     if not reason:
         return None
     text = str(reason)
+    if text in ("absent", "legacy", "mismatch", "parent_revoked", "subtask_authorization_required"):
+        return "authorization"
     if text.startswith("resource:"):
         return "resource"
     for prefix, kind in _WAIT_KINDS:

@@ -47,7 +47,7 @@ claim transaction, after block, schedule and recurrence, before `queued -> activ
   title, which is the human check. If a stricter rule is wanted, put `title` back in
   `MATERIAL_KEYS`; renames then return the task to draft.
 - **Created queued = approved by the creator.** `task_create(status="queued")` stamps the approval
-  (queue scripts, subtasks of an approved parent). `task_import` does not.
+  (explicit queue scripts). Derived children require transactional policy/input validation, their own snapshots and recorded provenance; see `restricted-review-profile.md`. `task_import` does not.
 - **Runtime sections.** Text placed under a runtime heading after the first result is not
   protected. `task.update` refuses new instructions that reuse those section names while results
   are recorded, and treats them as an instruction change otherwise.

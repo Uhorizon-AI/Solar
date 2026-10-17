@@ -270,6 +270,7 @@ def call_router(
     task_id: str,
     prompt: str,
     provider: Optional[str],
+    execution=None,
 ) -> Dict[str, Any]:
     """
     Call solar-router v3 with channel=async-task, mode=direct_only.
@@ -291,6 +292,8 @@ def call_router(
     }
     if provider:
         payload["provider"] = provider
+    if execution is not None:
+        payload["execution"] = execution
 
     proc = run_managed(
         [router_python, str(router_script)],
@@ -331,6 +334,7 @@ def write_log(
     result_text: str,
     error_text: Optional[str],
     error_code: Optional[str],
+    usage: Optional[Dict[str, Any]] = None,
 ) -> None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -343,6 +347,8 @@ def write_log(
         f"- provider_used: {provider_used or 'unknown'}",
         "",
     ]
+    if usage is not None:
+        lines.insert(-1, "- usage: " + json.dumps(usage, sort_keys=True, ensure_ascii=False))
     if outcome == "success":
         lines += ["## Result", "", result_text]
     else:
@@ -658,85 +664,14 @@ def child_object_section(parent_file: pathlib.Path) -> str:
     )
 
 
-def create_child_task(
-    task_root: pathlib.Path,
-    parent_file: str,
-    parent_id: str,
-    child: Dict[str, Any],
-    key: str,
-) -> Tuple[Optional[str], Optional[str]]:
-    """Create one child in solar-state. Returns (task_id, error).
-
-    The provider only chose title, body and provider. The object travels down
-    from the parent unchanged, and the child gets no origin metadata, so it
-    has no notify_when and only the parent speaks to the chat. The subtask key
-    is written in the same create as the row.
-    """
-    del task_root
-    priority = read_frontmatter_key(parent_file, "priority") or "normal"
-    if priority not in ("high", "normal", "low"):
-        priority = "normal"
-    created = datetime.now().astimezone().isoformat(timespec="seconds")
-    fields = [
-        ("title", json.dumps(child["title"], ensure_ascii=False)),
-        ("created", json.dumps(created, ensure_ascii=False)),
-        ("priority", priority),
-        ("scheduled_time", json.dumps("now")),
-        ("recurring", "false"),
-        ("parent_task_id", json.dumps(parent_id, ensure_ascii=False)),
-        ("subtask_key", json.dumps(key, ensure_ascii=False)),
-    ]
-    if child.get("provider"):
-        fields.append(("provider", json.dumps(child["provider"], ensure_ascii=False)))
-    for name in ("object", "scope", "effect"):
-        value = read_frontmatter_key(parent_file, name)
-        if value:
-            fields.append((name, json.dumps(value, ensure_ascii=False)))
-    body = "\n# " + child["title"] + "\n\n" + child_object_section(parent_file) + child["body"] + "\n"
+def create_declared_children(task_file, task_root, task_id) -> Optional[str]:
+    """Materialize the whole declaration atomically; no per-child enqueue shortcut."""
+    plan = read_subtask_plan(task_root, task_id)
     try:
         with solar_state.session() as store:
-            child_id = store.task_create(fields, body, status="queued")
-            store.task_link(parent_id, child_id, key)
-    except solar_state.StateError as exc:
-        return None, f"task create failed for {child['title']!r}: {exc}"
-    return child_id, None
-
-
-def create_declared_children(
-    task_file: pathlib.Path, task_root: pathlib.Path, task_id: str
-) -> Optional[str]:
-    """Create every child the manifest still lacks. Returns an error, or None.
-
-    The manifest is written before the first child exists and updated after each
-    one, so an interruption is recoverable: a pair that already has an id is
-    skipped, an empty one is created.
-    """
-    plan = read_subtask_plan(task_root, task_id)
-    pairs = read_subtask_manifest(task_file)
-    if not pairs:
-        return "subtask manifest is empty"
-    if len(plan) != len(pairs):
-        return (
-            f"subtask plan has {len(plan)} children but the manifest has {len(pairs)}"
-        )
-
-    updated = list(pairs)
-    for index, (key, existing_id) in enumerate(pairs):
-        if existing_id:
-            continue
-        already = find_task_by_subtask_key(task_root, key)
-        if already is not None:
-            updated[index] = (key, read_frontmatter_key(already, "id"))
-            write_subtask_manifest(task_file, updated)
-            continue
-        child_id, error = create_child_task(
-            task_root, task_file, task_id, plan[index], key
-        )
-        if error:
-            return error
-        updated[index] = (key, child_id or "")
-        write_subtask_manifest(task_file, updated)
-        print(f"  → subtask created: {key} = {child_id}", flush=True)
+            store.materialize_children(task_id, plan, token=_token())
+    except solar_state.StateError:
+        return "subtask_authorization_required"
     return None
 
 
@@ -835,7 +770,7 @@ def subtask_pre_phase(
         if error:
             mark_task_error(
                 task_file, task_id, title, None,
-                "subtask_create_failed", error, log_file,
+                "subtask_authorization_required", error, log_file,
             )
             return "error"
         return "waiting"
@@ -898,19 +833,12 @@ def handle_declared_subtasks(
         )
         return 1
 
-    record_subtask_plan(task_root, task_id, children)
-    write_subtask_manifest(
-        task_file,
-        [
-            (subtask_key(task_id, position, child["title"], child["body"]), "")
-            for position, child in enumerate(children, start=1)
-        ],
-    )
-    error = create_declared_children(task_file, task_root, task_id)
-    if error:
-        mark_task_error(
-            task_file, task_id, title, None, "subtask_create_failed", error, log_file
-        )
+    try:
+        with solar_state.session() as store:
+            store.materialize_children(task_id, children, token=_token())
+    except solar_state.StateError:
+        mark_task_error(task_file, task_id, title, None, "subtask_authorization_required",
+                        "subtask_authorization_required", log_file)
         return 1
     print(f"  Declared {len(children)} subtask(s); waiting for them.", flush=True)
     return SUBTASK_WAITING_EXIT
@@ -973,13 +901,61 @@ def main() -> int:
             store.task_record(task_id, pid=pid, token=_token())
 
     _START_HOOK = record_pid
+    with solar_state.session() as store:
+        # A removed profile must not fall through to the interactive command.
+        # Pre-reservation active legacy tasks with no approval/input fields retain
+        # their historical path; every standing approval is revalidated here.
+        must_validate = any(store.task_field(task_id, key) for key in
+                            ("approved_digest", "execution_profile", "review_input_digest", "review_input_manifest"))
+        try:
+            snapshot = store.execution_snapshot(task_id, _token()) if must_validate else None
+        except solar_state.StaleToken:
+            raise
+        except solar_state.StateError:
+            snapshot = None
+            invalid_snapshot = True
+        else:
+            invalid_snapshot = False
+    if invalid_snapshot:
+        with solar_state.session() as store:
+            task = store.task_get(task_id)
+            own_approval_valid = solar_state.approval_state(task["frontmatter"], task["body"]) is None
+        if own_approval_valid and _CANCEL_CHECK():
+            _acknowledge(task_id)
+            return 130
+        with solar_state.session() as store:
+            store.task_reprepare(task_id, _token(), "review_input_mismatch")
+        return 1
     if _CANCEL_CHECK():
         _acknowledge(task_id)
         return 130
+    execution_profile = snapshot["fields"]["execution_profile"] if snapshot else None
+    restricted = bool(execution_profile)
+    execution = None
+    if read_frontmatter_key(task_file, "parent_task_id") and not restricted:
+        mark_task_error(task_file, task_id, title, None, "subtask_authorization_required",
+                        "Legacy child has no derived review authorization.", log_file)
+        return 1
+    if restricted:
+        from execution_profiles import verify_envelope, verify_sources, ProfileError
+        try:
+            fields = snapshot["fields"]
+            manifest = verify_envelope(fields["review_input_manifest"], fields["review_input_digest"],
+                                       provider=fields["provider"], profile=execution_profile)
+            access = solar_state.parse_access_policy(fields["access_policy"])
+            if not access or access["mode"] != "read":
+                raise ProfileError("review_input_mismatch")
+            verify_sources(manifest, access["scopes"])
+        except (ProfileError, solar_state.StateError) as exc:
+            with solar_state.session() as store:
+                store.task_reprepare(task_id, _token(), getattr(exc, "code", "review_input_mismatch"))
+            print("Review inputs require preparation.", flush=True)
+            return 1
+        execution = dict(task_id=task_id, token=_token(), profile=execution_profile)
 
     task_provider = read_frontmatter_key(task_file, "provider").strip().lower() or None
     executor = read_frontmatter_key(task_file, "executor").strip().lower()
-    if read_frontmatter_key(task_file, "origin_channel") in ("app", "voice"):
+    if not restricted and read_frontmatter_key(task_file, "origin_channel") in ("app", "voice"):
         # Phase 1 preparation worker: read context, return text. No write/shell/MCP tools.
         task_provider = "claude"
         os.environ["SOLAR_ROUTER_CLAUDE_CMD"] = shlex.join([
@@ -990,6 +966,9 @@ def main() -> int:
         ])
         if executor == "local":
             raise ValueError("Voice preparation cannot use local executors")
+
+    if restricted and executor == "local":
+        raise ValueError("Restricted reviews cannot use local executors")
 
     if executor == "local":
         local_command = read_frontmatter_key(task_file, "local_command").strip()
@@ -1072,20 +1051,29 @@ def main() -> int:
     # task reaches a provider. start_next.sh is what reactivates a parent and it
     # stays untouched — by the time the executor has the task it is already
     # active, so the wait and the unblock never notice this step.
-    phase = subtask_pre_phase(task_file, task_root, task_id, title, log_file)
+    phase = "none" if restricted else subtask_pre_phase(task_file, task_root, task_id, title, log_file)
     if phase == "error":
         return 1
     if phase == "waiting":
         return SUBTASK_WAITING_EXIT
 
     # Build prompt
-    body = strip_frontmatter(task_file)
-    prompt = build_prompt(task_id, title, body)
+    body = "" if restricted else strip_frontmatter(task_file)
+    prompt = "" if restricted else build_prompt(task_id, title, body)
+    if phase == "ready" and read_frontmatter_key(task_file, "subtask_policy"):
+        with solar_state.session() as store:
+            if not store.synthesis_begin(task_id, token=_token()):
+                mark = "subtask_synthesis_uncertain"
+            else:
+                mark = None
+        if mark:
+            mark_task_error(task_file, task_id, title, None, mark, mark, log_file)
+            return 1
 
     # Call router
     print(f"  Calling router (channel=async-task, mode=direct_only, provider={task_provider or 'priority'}) ...", flush=True)
     try:
-        response = call_router(router_script, task_id, prompt, task_provider)
+        response = call_router(router_script, task_id, prompt, task_provider, execution=execution)
     except ProcessCancelled:
         _acknowledge(task_id)
         return 130
@@ -1109,6 +1097,8 @@ def main() -> int:
     error_text = response.get("error")
 
     if status != "success" or not reply_text:
+        if response.get("claim_released"):
+            return 1
         error_msg = error_text or f"router returned status={status}"
         mark_task_error(
             task_file, task_id, title, provider_used,
@@ -1117,8 +1107,13 @@ def main() -> int:
         return 1
 
     # Success: write log
-    write_log(log_file, task_id, title, "success", provider_used, reply_text, None, None)
+    write_log(log_file, task_id, title, "success", provider_used, reply_text, None, None,
+              usage=response.get("usage") if restricted else None)
     record_result_path(task_file, log_file)
+
+    if restricted:
+        print(reply_text, flush=True)
+        return 0
 
     # A declared batch ends execution 1 here. No delivery is expected yet, and
     # record_delivery would mark this task as missing one.

@@ -101,7 +101,7 @@
       cap_title: "Capacity and waiting", cap_used: "places in use", cap_of: "of", cap_simul: "Running at once",
       cap_free: "free", cap_waiting: "Waiting", cap_none_waiting: "Nothing is waiting.", cap_none_running: "Nothing is running.",
       wait_dependency: "Dependency", wait_resource: "Resource", wait_provider: "Provider limit", wait_capacity: "Capacity",
-      wait_recovery: "Recovery", wait_other: "Other",
+      wait_authorization: "Authorization pending", wait_recovery: "Recovery", wait_other: "Other",
       cfg_title: "Applied configuration", cfg_revision: "Revision", cfg_global: "Global capacity", cfg_provider: "Provider limits",
       cfg_exclusive: "Exclusive wait (s)", cfg_none_provider: "none", cfg_no_pending: "The proposal file has no pending differences.",
       cfg_pending: "Pending differences (not applied until confirmed):", cfg_applied: "applied", cfg_proposed: "proposed",
@@ -268,7 +268,7 @@
       cap_title: "Capacidad y esperas", cap_used: "plazas en uso", cap_of: "de", cap_simul: "En marcha a la vez",
       cap_free: "libres", cap_waiting: "En espera", cap_none_waiting: "Nada está esperando.", cap_none_running: "No hay nada en marcha.",
       wait_dependency: "Dependencia", wait_resource: "Recurso", wait_provider: "Límite de proveedor", wait_capacity: "Capacidad",
-      wait_recovery: "Recuperación", wait_other: "Otro",
+      wait_authorization: "Autorización pendiente", wait_recovery: "Recuperación", wait_other: "Otro",
       cfg_title: "Configuración aplicada", cfg_revision: "Revisión", cfg_global: "Capacidad global", cfg_provider: "Límites por proveedor",
       cfg_exclusive: "Espera exclusiva (s)", cfg_none_provider: "ninguno", cfg_no_pending: "El archivo de propuesta no tiene diferencias pendientes.",
       cfg_pending: "Diferencias pendientes (no se aplican hasta confirmarlas):", cfg_applied: "aplicado", cfg_proposed: "propuesto",
@@ -1308,7 +1308,7 @@
 
   function waitKindLabel(kind) {
     var keys = { dependency: "wait_dependency", resource: "wait_resource", provider: "wait_provider",
-                 capacity: "wait_capacity", recovery: "wait_recovery" };
+                 capacity: "wait_capacity", authorization: "wait_authorization", recovery: "wait_recovery" };
     return t(keys[kind] || "wait_other");
   }
   function renderCapacity(reply) {

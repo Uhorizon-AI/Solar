@@ -114,7 +114,8 @@ def test_wait_kinds():
     assert kinds(None) is None and kinds("resource:browser") == "resource" and kinds("scope_conflict") == "resource"
     assert kinds("blocked_by_dependency") == "dependency" and kinds("provider_capacity") == "provider"
     assert kinds("global_capacity") == kinds("drain_barrier") == kinds("exclusive_needs_idle") == "capacity"
-    assert kinds("maintenance") == kinds("parent_revoked") == "recovery" and kinds("outside_schedule") == "other"
+    assert kinds("maintenance") == "recovery" and kinds("outside_schedule") == "other"
+    assert kinds("parent_revoked") == kinds("subtask_authorization_required") == kinds("absent") == "authorization"
 
 
 def test_queue_waits_gives_the_answers_a_claim_gives(ready):

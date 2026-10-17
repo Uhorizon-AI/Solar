@@ -43,7 +43,9 @@ class OllamaProvider(BaseProvider):
 
         return cleaned
 
-    def run(self, prompt: str) -> str:
+    def run(self, prompt: str, *, review=None) -> str:
+        if review is not None:
+            return self.run_review(**review)
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
         cmd = self.get_cmd(prompt)
         env = self.prepare_env(os.environ.copy())

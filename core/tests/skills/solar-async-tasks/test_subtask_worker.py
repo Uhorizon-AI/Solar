@@ -30,6 +30,7 @@ print(json.dumps({
     "status": "success",
     "reply_text": os.environ.get("STUB_REPLY", "done"),
     "provider_used": "codex",
+    "usage": {"input_tokens": 12, "output_tokens": 4},
 }))
 """
 
@@ -88,57 +89,16 @@ def children_files(root):
 
 # --- declaration → creation ------------------------------------------------
 
-def test_a_declaration_creates_the_children_and_asks_to_wait(tmp_path):
+
+def test_rejected_batch_leaves_no_child_manifest(tmp_path):
     root = make_root(tmp_path)
     task = write_parent(root)
-    proc = run_executor(task, root, block([
-        {"title": "Uno", "body": "Revisa A"},
-        {"title": "Dos", "body": "Revisa B", "provider": "claude"},
-    ]), tmp_path)
+    proc = run_executor(task, root, block([{"title": "Uno", "body": "Revisa A"}]), tmp_path)
+    assert proc.returncode == 1
+    rejected = root / "error" / "parent.md"
+    assert "subtask_ids:" not in rejected.read_text()
+    assert not children_files(root)
 
-    assert proc.returncode == 20, proc.stdout + proc.stderr
-    pairs = manifest(task)
-    assert len(pairs) == 2
-    assert all("=" in pair and pair.split("=")[1] for pair in pairs)
-
-    created = children_files(root)
-    assert len(created) == 2
-    bodies = [f.read_text(encoding="utf-8") for f in created]
-    for text in bodies:
-        assert 'parent_task_id: "parent-0001-aaaa"' in text
-        assert "subtask_key:" in text
-        # Only the parent speaks to the chat.
-        assert "notify_when" not in text
-        assert "origin_chat_id" not in text
-        assert "delivery_expected" not in text
-        # The object travels down unchanged.
-        assert 'object: "el informe"' in text
-        assert "priority: normal" in text
-    assert any('provider: "claude"' in text for text in bodies)
-    # Execution 1 owes no delivery.
-    assert "## Delivery" not in task.read_text(encoding="utf-8")
-
-
-def test_the_manifest_survives_and_the_task_is_not_moved(tmp_path):
-    root = make_root(tmp_path)
-    task = write_parent(root)
-    run_executor(task, root, block([{"title": "Uno", "body": "Revisa A"}]), tmp_path)
-    # The executor never touches the queue: moving the parent is the shell's job.
-    assert task.exists()
-    assert "status: active" in task.read_text(encoding="utf-8")
-
-
-def test_five_children_are_allowed(tmp_path):
-    root = make_root(tmp_path)
-    task = write_parent(root)
-    proc = run_executor(task, root, block([
-        {"title": f"Hijo {i}", "body": f"Trabajo {i}"} for i in range(5)
-    ]), tmp_path)
-    assert proc.returncode == 20, proc.stdout + proc.stderr
-    assert len(children_files(root)) == 5
-
-
-# --- rejection is total and visible ---------------------------------------
 
 @pytest.mark.parametrize("reply,reason", [
     (block([{"title": f"Hijo {i}", "body": "x"} for i in range(6)]), "cap is 5"),
@@ -166,19 +126,6 @@ def test_a_bad_block_creates_nothing_and_names_the_reason(tmp_path, reply, reaso
     assert reason in text
 
 
-def test_the_last_block_wins(tmp_path):
-    root = make_root(tmp_path)
-    task = write_parent(root)
-    reply = (
-        "Así se declara:\n<subtasks>\n[{\"title\": \"Ejemplo\", \"body\": \"no\"}]\n</subtasks>\n"
-        "Y esto es lo que quiero:\n" + block([{"title": "Real", "body": "sí"}])
-    )
-    assert run_executor(task, root, reply, tmp_path).returncode == 20
-    created = children_files(root)
-    assert len(created) == 1
-    assert 'title: "Real"' in created[0].read_text(encoding="utf-8")
-
-
 # --- depth is one, and one batch per request -------------------------------
 
 def test_a_child_cannot_declare_grandchildren(tmp_path):
@@ -186,9 +133,9 @@ def test_a_child_cannot_declare_grandchildren(tmp_path):
     task = write_parent(root, extra='parent_task_id: "some-parent"\n')
     proc = run_executor(task, root, block([{"title": "Nieto", "body": "no"}]), tmp_path)
 
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.returncode == 1, proc.stdout + proc.stderr
     assert not children_files(root)
-    assert "subtask_ids" not in task.read_text(encoding="utf-8")
+    assert "subtask_ids" not in (root / "error/parent.md").read_text(encoding="utf-8")
 
 
 def test_a_second_declaration_does_not_create_a_second_batch(tmp_path):
@@ -210,66 +157,6 @@ def test_a_second_declaration_does_not_create_a_second_batch(tmp_path):
 
 
 # --- recovery: a crash mid-creation resumes -------------------------------
-
-def test_a_half_written_manifest_is_resumed_without_calling_the_provider(tmp_path):
-    root = make_root(tmp_path)
-    task = write_parent(root)
-    # State left by a run that died between the two children.
-    (root / "subtasks").mkdir()
-    (root / "subtasks" / "parent-0001-aaaa.json").write_text(json.dumps([
-        {"title": "Uno", "body": "Revisa A", "provider": None},
-        {"title": "Dos", "body": "Revisa B", "provider": None},
-    ]), encoding="utf-8")
-    existing = root / "queued" / "first.md"
-    existing.write_text(
-        '---\nid: "child-1"\ntitle: "Uno"\nstatus: queued\nsubtask_key: "k1"\n---\n\n# Uno\n',
-        encoding="utf-8",
-    )
-    task.write_text(
-        task.read_text(encoding="utf-8").replace(
-            "status: active\n", 'status: active\nsubtask_ids: "k1=child-1,k2="\n'
-        ),
-        encoding="utf-8",
-    )
-
-    marker = tmp_path / "router-was-called"
-    proc = run_executor(task, root, block([{"title": "No", "body": "no"}]), tmp_path, marker=marker)
-
-    assert proc.returncode == 20, proc.stdout + proc.stderr
-    assert not marker.exists(), "the provider must not be called while children are missing"
-    pairs = manifest(task)
-    assert len(pairs) == 2 and all(p.split("=")[1] for p in pairs)
-    assert len(children_files(root)) == 2  # the one that existed, plus the missing one
-
-
-def test_a_child_that_already_exists_is_not_created_twice(tmp_path):
-    root = make_root(tmp_path)
-    task = write_parent(root)
-    (root / "subtasks").mkdir()
-    child = {"title": "Uno", "body": "Revisa A", "provider": None}
-    (root / "subtasks" / "parent-0001-aaaa.json").write_text(json.dumps([child]), encoding="utf-8")
-
-    # Same declaration ⇒ same key, computed the way the worker computes it.
-    sys.path.insert(0, str(SCRIPTS))
-    import execute_active  # noqa: E402
-    key = execute_active.subtask_key("parent-0001-aaaa", 1, child["title"], child["body"])
-
-    orphan = root / "queued" / "orphan.md"
-    orphan.write_text(
-        f'---\nid: "child-9"\ntitle: "Uno"\nstatus: queued\nsubtask_key: "{key}"\n---\n\n# Uno\n',
-        encoding="utf-8",
-    )
-    task.write_text(
-        task.read_text(encoding="utf-8").replace(
-            "status: active\n", f'status: active\nsubtask_ids: "{key}="\n'
-        ),
-        encoding="utf-8",
-    )
-
-    proc = run_executor(task, root, "sin bloque", tmp_path)
-    assert proc.returncode == 20, proc.stdout + proc.stderr
-    assert len(children_files(root)) == 1
-    assert manifest(task) == [f"{key}=child-9"]
 
 
 # --- results come back through the worker ---------------------------------
@@ -434,63 +321,6 @@ print(json.dumps({"status": "success", "reply_text": reply, "provider_used": "co
 '''
 
 
-def test_a_request_with_subtasks_completes_end_to_end(tmp_path):
-    """The closing criterion, run locally: declare, create, wait, serve, synthesize."""
-    skills = tmp_path / "skills"
-    shutil.copytree(SCRIPTS, skills / "solar-async-tasks" / "scripts")
-    shutil.copytree(SCRIPTS.parent.parent / "solar-router" / "scripts",
-                    skills / "solar-router" / "scripts", dirs_exist_ok=True)
-    _ensure_framework(skills)
-    (skills / "solar-router" / "scripts" / "run_router.py").write_text(
-        ROUTER_E2E, encoding="utf-8")
-
-    install = tmp_path / "install"
-    sender = install / "core/skills/solar-telegram/scripts/send_telegram.sh"
-    sender.parent.mkdir(parents=True)
-    sender.write_text('#!/bin/bash\nprintf "%s\\n" "$1" >> "$SOLAR_TASK_ROOT/sent.log"\n',
-                      encoding="utf-8")
-    sender.chmod(0o755)
-
-    root = make_root(tmp_path)
-    parent = root / "queued" / "parent.md"
-    parent.write_text(
-        '---\nid: "parent-0001-aaaa"\ntitle: "Parent"\nstatus: queued\npriority: normal\n'
-        'scheduled_time: "now"\nrecurring: false\n'
-        'object: "el informe"\nscope: "solo lectura"\neffect: "un resumen"\n'
-        'origin_channel: "telegram"\norigin_chat_id: "456"\nnotify_when: completed\n'
-        'delivery_expected: true\n---\n\n# Parent\n\nSOY EL PADRE. Reparte el trabajo.\n',
-        encoding="utf-8",
-    )
-
-    env = env_for(root, {**os.environ, "SOLAR_WORKSPACE": str(tmp_path),
-                          "SOLAR_ROOT": str(install), "TELEGRAM_CHAT_ID": "456",
-                          "TELEGRAM_ALLOWED_CHAT_IDS": "456", "TELEGRAM_BOT_TOKEN": "fake"})
-    seed(root)
-    worker = skills / "solar-async-tasks" / "scripts" / "run_worker.sh"
-
-    for _ in range(8):
-        subprocess.run(["bash", str(worker), "--diagnostic", "--once"], capture_output=True, text=True,
-                       env=env, timeout=120)
-        mirror(root)
-        if (root / "completed" / "parent.md").exists():
-            break
-
-    done = root / "completed" / "parent.md"
-    assert done.exists(), sorted(p.name for p in root.rglob("*.md"))
-    text = done.read_text(encoding="utf-8")
-
-    # The children were created, ran, and came back through the worker.
-    assert len(list((root / "completed").glob("*.md"))) == 3
-    assert "## Subtask results" in text
-    assert "Hecho: parte A" in text and "Hecho: parte B" in text
-    # The parent synthesized and only the parent spoke to the chat.
-    assert "coinciden en el diagnóstico" in text
-    assert "coinciden en el diagnóstico" in (root / "sent.log").read_text(encoding="utf-8")
-    assert (root / "sent.log").read_text(encoding="utf-8").count("Revisado por dos vías") == 1
-    # The record of which children were this parent's survives completion.
-    assert "subtask_ids:" in text
-
-
 # --- the child's identity and the object it inherits -----------------------
 
 ROUTER_RECORDER = '''#!/usr/bin/env python3
@@ -511,99 +341,6 @@ def _scripts_tree(tmp_path):
                     skills / "solar-router" / "scripts", dirs_exist_ok=True)
     _ensure_framework(skills)
     return skills / "solar-async-tasks" / "scripts"
-
-
-def test_the_object_reaches_the_child_in_its_prompt(tmp_path):
-    """Frontmatter is stripped before the prompt: the scope must be in the body."""
-    root = make_root(tmp_path)
-    parent = write_parent(root)
-    assert run_executor(parent, root, block([
-        {"title": "Uno", "body": "Revisa la parte A."},
-    ]), tmp_path).returncode == 20
-
-    child = children_files(root)[0]
-    child_id = task_id_of(child)
-    sys.path.insert(0, str(SCRIPTS.parent.parent / "solar-state" / "scripts"))
-    import solar_state
-    with solar_state.session() as store:
-        # What execute_active.sh does when the parent asks to wait: it gives its place back.
-        store.task_await("parent-0001-aaaa", [child_id], token=token_of(store, "parent-0001-aaaa"))
-        store.task_claim(child_id, worker="test")
-
-    router = tmp_path / "router_recorder.py"
-    router.write_text(ROUTER_RECORDER, encoding="utf-8")
-    prompt_file = tmp_path / "prompt.txt"
-    proc = subprocess.run(
-        [sys.executable, str(EXECUTE), child_id, str(router)],
-        capture_output=True, text=True, timeout=120,
-        env=env_for(root, {**os.environ, "PROMPT_FILE": str(prompt_file)}),
-    )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-
-    prompt = prompt_file.read_text(encoding="utf-8")
-    assert "## Object" in prompt
-    assert "el informe" in prompt and "solo lectura" in prompt
-    assert "a child cannot widen it" in prompt
-    assert "$SOLAR_ROOT" in prompt
-    assert "Revisa la parte A." in prompt
-    # The frontmatter copy stays for checking, but it is not what was sent.
-    assert "parent_task_id" not in prompt
-
-
-def test_the_childs_identity_is_written_with_the_file_not_after_it(tmp_path):
-    root = make_root(tmp_path)
-    task = write_parent(root)
-    assert run_executor(task, root, block([{"title": "Uno", "body": "x"}]), tmp_path).returncode == 20
-    child = children_files(root)[0]
-    text = child.read_text(encoding="utf-8")
-    key = manifest(task)[0].split("=")[0]
-    assert f'subtask_key: "{key}"' in text
-    assert 'parent_task_id: "parent-0001-aaaa"' in text
-    # Same write as the rest of the frontmatter: no partial file can exist.
-    assert text.index("subtask_key:") < text.index("---", 4)
-
-
-def test_a_crash_right_after_publishing_a_child_does_not_duplicate_it(tmp_path):
-    """The child exists, with its key, before the manifest records the id.
-
-    The key is written in the same insert as the row, so a retry finds the
-    child instead of publishing a second one.
-    """
-    root = make_root(tmp_path)
-    task = write_parent(root)
-    seed(root)
-    sys.path.insert(0, str(SCRIPTS))
-    import execute_active as ea
-
-    declared = [
-        {"title": "Uno", "body": "Revisa A"},
-        {"title": "Dos", "body": "Revisa B"},
-    ]
-    parent_id = "parent-0001-aaaa"
-    ea.record_subtask_plan(root, parent_id, declared)
-    keys = [
-        ea.subtask_key(parent_id, index, child["title"], child["body"])
-        for index, child in enumerate(declared, 1)
-    ]
-    ea.write_subtask_manifest(parent_id, [(keys[0], ""), (keys[1], "")])
-    child_id, error = ea.create_child_task(root, parent_id, parent_id, declared[0], keys[0])
-    assert error is None, error
-    assert child_id
-    mirror(root)
-
-    orphans = children_files(root)
-    assert len(orphans) == 1
-    assert "subtask_key:" in orphans[0].read_text(encoding="utf-8")
-    assert manifest(task)[0].endswith("=")
-
-    resumed = run_executor(task, root, "done", tmp_path)
-    assert resumed.returncode == 20, resumed.stdout + resumed.stderr
-    created = children_files(root)
-    assert len(created) == 2, [f.name for f in created]
-    titles = sorted(read_title(f) for f in created)
-    assert titles == ["Dos", "Uno"]
-    pairs = manifest(task)
-    assert len(pairs) == 2 and all(p.split("=")[1] for p in pairs)
 
 
 def read_title(path):

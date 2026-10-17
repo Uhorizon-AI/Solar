@@ -45,9 +45,8 @@ class _EveryProvider:
 
 @pytest.fixture(autouse=True)
 def verified_profile(monkeypatch):
-    """No profile has a verified implementation yet (PR 3 delivers one). These tests stand in
-    for that: they pretend `PROFILE` is enforced for every provider, so the admission rules
-    for declared tasks can be exercised. The tests of the real, empty registry undo it."""
+    """Simulate enforced profiles for all providers to exercise admission independently
+    of the real Claude-only adapter registry. Registry-specific tests override this."""
     monkeypatch.setattr(solar_state, "VERIFIED_PROFILES", {PROFILE: _EveryProvider()})
 
 
@@ -716,18 +715,18 @@ def test_a_derived_authorization_is_recorded_once_and_checked_at_the_claim(store
     set_policy(store, global_capacity=3)
     parent = make(store, "Parent", policy=access())
     child = make(store, "Child", policy=access())
-    assert store.authorization_record(child, parent, "k1", parent_digest="p", manifest_digest="m")
-    assert store.authorization_record(child, parent, "k1", parent_digest="p", manifest_digest="m") is False
+    assert store.authorization_record(child, parent, "k1", parent_digest=store.task_field(parent, "approved_digest"), manifest_digest="m")
+    assert store.authorization_record(child, parent, "k1", parent_digest=store.task_field(parent, "approved_digest"), manifest_digest="m") is False
     with pytest.raises(solar_state.StateError):
-        store.authorization_record(child, parent, "k1", parent_digest="p", manifest_digest="other")
-    assert claim(store, child)["claimed"] is True        # the parent still stands (queued)
+        store.authorization_record(child, parent, "k1", parent_digest=store.task_field(parent, "approved_digest"), manifest_digest="other")
+    assert claim(store, child)["reason"] == "subtask_authorization_required"  # a record alone is not approved policy
 
 
 @pytest.mark.parametrize("revoke", ["cancel_request", "draft", "cancelled"])
 def test_a_revoked_parent_stops_new_derived_claims(store, revoke):
     parent = make(store, "Parent", policy=access())
     child = make(store, "Child", policy=access())
-    store.authorization_record(child, parent, "k1", parent_digest="p", manifest_digest="m")
+    store.authorization_record(child, parent, "k1", parent_digest=store.task_field(parent, "approved_digest"), manifest_digest="m")
     if revoke == "cancel_request":
         store.cancellation_request(parent)
     elif revoke == "draft":
@@ -744,10 +743,10 @@ def test_legacy_children_are_listed_and_never_backfilled(store):
     stale = make(store, "Stale child", policy=access(), parent_task_id=json.dumps(parent))
     store.task_set_body(stale, store.task_get(stale)["body"].replace("Do Stale child.", "Do something else."))
     derived = make(store, "Derived child", policy=access(), parent_task_id=json.dumps(parent))
-    store.authorization_record(derived, parent, "k", parent_digest="p", manifest_digest="m")
+    store.authorization_record(derived, parent, "k", parent_digest=store.task_field(parent, "approved_digest"), manifest_digest="m")
     found = {c["id"]: c for c in store.legacy_children()}
     assert set(found) == {ok, stale} and derived not in found
-    assert found[ok]["executable"] is True and found[stale]["approval"] == "mismatch"
+    assert found[ok]["executable"] is False and found[stale]["approval"] == "mismatch"
     assert found[stale]["executable"] is False
     assert store.conn.execute("SELECT COUNT(*) FROM task_authorizations").fetchone()[0] == 1
     assert claim(store, stale)["claimed"] is False
