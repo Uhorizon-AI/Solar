@@ -18,7 +18,12 @@ Before requesting an operational change, collect and review:
 - A successful opt-in real launchd run on macOS: isolated install/workspace/runtime
   under `/private/tmp`, unique `com.solar.test.async.<uuid>`, 60-second interval,
   RunAtLoad and AbandonProcessGroup, supervisor recovery within 75 seconds,
-  reconciliation, single dispatch per execution and verified cleanup.
+  reconciliation and adoption of an execution held at a deterministic gate, single
+  dispatch per execution and verified cleanup, including failures during setup.
+  The temporary plist lives in its own disposable subdirectory of
+  `~/Library/LaunchAgents`; all executable code and runtime data stay under
+  `/private/tmp`. The harness boots out only its own unique label, verifies
+  recorded pid/start identities are gone, and removes both temporary directories.
   The accepted PR 4 environment uses the user's active `gui/<uid>` account,
   **a deviation from the earlier separate-account/VM plan**, with temporary
   isolated paths and a private label. Record macOS version, account/uid, paths,

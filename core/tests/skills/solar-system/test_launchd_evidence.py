@@ -48,6 +48,9 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
+import platform
+import signal
 import shutil
 import subprocess
 import sys
@@ -96,7 +99,7 @@ def _process_start(pid: int) -> str | None:
 def _kill_by_identity(pid: int | None, started: str | None, sig=15) -> bool:
     """Signal ONLY a recorded pid whose start time still matches. Never by name."""
     import supervisor_lib as lib
-    if not pid or int(pid) <= 1 or int(pid) == os.getpid():
+    if not started or not pid or int(pid) <= 1 or int(pid) in (os.getpid(), os.getppid()):
         return False
     kind, _ = lib.matches(pid, started)
     if kind != "alive":
@@ -158,11 +161,22 @@ class LaunchdRig:
     # -- guards ---------------------------------------------------------------
 
     def assert_safe(self) -> None:
-        assert self.label != FORBIDDEN_LABEL and self.label.startswith(LABEL_PREFIX)
-        assert self.runtime.resolve() != LIVE_RUNTIME.resolve()
-        assert not str(self.runtime.resolve()).startswith(str(LIVE_RUNTIME.resolve()))
-        assert str(self.base.resolve()).startswith("/private/tmp/")
-        assert self.install.resolve() != CORE.parents[1].resolve()
+        if self.label == FORBIDDEN_LABEL or not self.label.startswith(LABEL_PREFIX):
+            raise ValueError("refused: production or non-test label")
+        base = self.base.resolve()
+        live = Path.home() / ".local/share/solar"
+        inherited = Path(os.environ.get("SOLAR_ROOT") or CORE.parent).resolve()
+        if inherited == live.resolve():
+            raise ValueError("refused: inherited SOLAR_ROOT is the live installation")
+        for path in (base, self.install.resolve(), self.workspace.resolve(), self.runtime.resolve()):
+            if not path.is_relative_to(Path("/private/tmp")) or path == Path("/private/tmp"):
+                raise ValueError(f"refused: non-temporary path {path}")
+        if self.runtime.resolve().is_relative_to(LIVE_RUNTIME.resolve()):
+            raise ValueError("refused: operational runtime")
+        if self.install.resolve() == live.resolve():
+            raise ValueError("refused: live installation")
+        if os.environ.get("SOLAR_APP_TEST_PORT") == "9000":
+            raise ValueError("refused: port 9000")
 
     # -- setup ----------------------------------------------------------------
 
@@ -207,19 +221,45 @@ class LaunchdRig:
         with solar_state.cutover(self.runtime) as cut:
             cut.upgrade_schema()
             cut.set_format(solar_state.FORMAT_SQLITE)
+        # The standard guard still protects any client/cutover path. Only this
+        # harness's explicit bootstrap/bootout calls use real launchctl.
+        double = self.base / "launchctl-double"
+        double.write_text("#!/bin/sh\nexit 1\n")
+        double.chmod(0o755)
+        guarded = dict(self.env(), SOLAR_CLIENT_LAUNCHCTL=str(double),
+                       SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="none")
+        subprocess.run(["bash", "-c", 'source "$1"; solar_test_guard --services',
+                        "_", str(CORE / "tests/support/shell_runtime_guard.sh")],
+                       env=guarded, check=True, capture_output=True, text=True, timeout=30)
+        self.record("environment", host=platform.platform(), uid=os.getuid(),
+                    account=os.environ.get("USER"), domain=_launchctl_domain(),
+                    install=str(self.install), workspace=str(self.workspace), runtime=str(self.runtime))
         # deterministic local executor task runner: a planet script the local
         # executor allowlist accepts (planets/<p>/skills/<s>/scripts/**)
         script = self.workspace / "planets" / "louis" / "skills" / "sync" / "scripts" / "run.sh"
         script.parent.mkdir(parents=True, exist_ok=True)
-        script.write_text(
-            "#!/bin/bash\n"
-            # durable start/end events with wall-clock time, one line each
-            'printf \'{"event":"start","task":"%s","t":%s}\\n\' "$1" "$(date +%s)"'
-            f' >> {self.logs}/exec.jsonl\n'
-            'sleep 2\n'
-            'printf \'{"event":"end","task":"%s","t":%s}\\n\' "$1" "$(date +%s)"'
-            f' >> {self.logs}/exec.jsonl\n',
-            encoding="utf-8")
+        # exec avoids an unrecorded shell/sleep descendant. The task waits on a
+        # gate, so it is provably still running when the replacement reconciles.
+        worker = self.base / "local_work.py"
+        worker.write_text(
+            "import json, os, pathlib, subprocess, sys, time\n"
+            "task, folder = sys.argv[1], pathlib.Path(sys.argv[2])\n"
+            "started = subprocess.check_output(['ps', '-p', str(os.getpid()), '-o', 'lstart='], text=True).strip()\n"
+            "started = ' '.join(started.split())\n"
+            "def emit(event):\n"
+            "    row = dict(event=event, task=task, t=time.time(), pid=os.getpid(), started=started)\n"
+            "    fd = os.open(folder/'exec.jsonl', os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600)\n"
+            "    try: os.write(fd, (json.dumps(row)+'\\n').encode())\n"
+            "    finally: os.close(fd)\n"
+            "emit('start')\n"
+            "deadline = time.monotonic() + 180\n"
+            "while not (folder / ('release-' + task)).exists():\n"
+            "    if time.monotonic() > deadline: raise SystemExit(2)\n"
+            "    time.sleep(0.05)\n"
+            "emit('end')\n", encoding="utf-8")
+        import shlex
+        script.write_text("#!/bin/bash\nexec " + shlex.join(
+            [sys.executable, str(worker)]) + ' "$1" ' + shlex.quote(str(self.logs)) + "\n")
         script.chmod(0o755)
         self.script = script
 
@@ -259,6 +299,10 @@ class LaunchdRig:
         assert self.label in text and FORBIDDEN_LABEL not in text
         assert str(self.install) in text and str(self.workspace) in text
         assert str(self.entrypoint) in text
+        document = plistlib.loads(self.plist.read_bytes())
+        assert document["StartInterval"] == 60
+        assert document["RunAtLoad"] is True and document["AbandonProcessGroup"] is True
+        self.record("plist", document=document)
         lc = _launchctl()
         subprocess.run([lc, "bootout", f"{_launchctl_domain()}/{self.label}"],
                        capture_output=True, timeout=30)
@@ -287,7 +331,7 @@ class LaunchdRig:
                 ("title", json.dumps(task_id)),
                 ("executor", "local"),
                 ("local_command", json.dumps(f"bash planets/louis/skills/sync/scripts/run.sh {task_id}")),
-                ("local_timeout", "60"),
+                ("local_timeout", "240"),
             ], "\n# local launchd evidence task\n", status="draft", task_id=task_id)
             store.task_approve(task_id, actor="launchd-evidence")
 
@@ -331,52 +375,76 @@ class LaunchdRig:
     # -- teardown -------------------------------------------------------------
 
     def cleanup(self) -> None:
+        # Refusal must also protect teardown after a failed setup.
+        try:
+            self.assert_safe()
+        except ValueError:
+            self._env.restore()
+            raise
+        import supervisor_lib as lib
         problems: list[str] = []
-        # 1. bootout THIS label first: no further tick can fire while we drain
-        if self.booted:
-            try:
-                done = subprocess.run([_launchctl(), "bootout",
-                                       f"{_launchctl_domain()}/{self.label}"],
+        registered = set(self.started_pids)
+        try:
+            # Bootstrap can succeed even if its caller loses the response.
+            if _plist_label_listed(self.label):
+                done = subprocess.run([_launchctl(), "bootout", f"{_launchctl_domain()}/{self.label}"],
                                       capture_output=True, text=True, timeout=30)
                 if done.returncode != 0:
                     problems.append(f"bootout: {done.stderr.strip()}")
-                time.sleep(1.0)
-                if _plist_label_listed(self.label):
-                    problems.append("the label is still listed after bootout")
-                self.record("bootout", label=self.label)
-            except Exception as exc:                               # noqa: BLE001
-                problems.append(f"bootout: {exc}")
-        # 2. drain the identified supervisor (never kill blind)
-        import supervisor_lib as lib
-        try:
-            code, state = lib.stop(self.ctx(), timeout=20,
-                                   requested_by="launchd-evidence-cleanup")
-            self.record("drain", code=code, state=state.get("state"))
-        except Exception as exc:                                   # noqa: BLE001
-            problems.append(f"drain: {exc}")
-        # 3. signal ONLY the recorded identities (pid + start), then the supervisor
-        try:
-            ident = self.supervisor_identity() or {}
+            if _plist_label_listed(self.label):
+                problems.append("the label is still listed after bootout")
+            self.record("bootout", label=self.label, absent=not _plist_label_listed(self.label))
+            for path in (self.ctx().identity_file, self.ctx().candidate_file):
+                item = lib.read_json(path) or {}
+                if item.get("pid") and item.get("started"):
+                    registered.add((item["pid"], item["started"]))
             children = lib.read_json(self.ctx().children_file) or {}
             for item in children.get("executions", []):
-                _kill_by_identity(item.get("pid"), item.get("started"), sig=9)
-            if ident.get("pid"):
-                _kill_by_identity(ident["pid"], ident.get("started"), sig=9)
-        except Exception as exc:                                   # noqa: BLE001
-            problems.append(f"signal: {exc}")
-        # 4. temporary directories must not linger — /private/tmp first, then the
-        # ~/Library/LaunchAgents evidence folder with its plist inside
-        try:
-            shutil.rmtree(self.base, ignore_errors=True)
-            shutil.rmtree(self.agent_dir, ignore_errors=True)
-            if self.agent_dir.exists():
-                problems.append(f"agent plist folder still present: {self.agent_dir}")
-        except Exception as exc:                                   # noqa: BLE001
-            problems.append(f"rmtree: {exc}")
-        self.record("cleanup", problems=problems)
-        self._dump_evidence()
-        # 5. the pytest process is unbound from the temporary workspace LAST
-        self._env.restore()
+                if item.get("pid") and item.get("started"):
+                    registered.add((item["pid"], item["started"]))
+            for item in _exec_events(self):
+                registered.add((item["pid"], item["started"]))
+                (self.logs / ("release-" + item["task"])).touch()
+            code, state = lib.stop(self.ctx(), timeout=20, requested_by="launchd-evidence-cleanup")
+            self.record("drain", code=code, state=state.get("state"))
+        except Exception as exc:
+            problems.append(f"cleanup observation/drain: {exc}")
+        finally:
+            # Even failure during setup is covered. Never signal an unverified pid.
+            for pid, started in registered:
+                _kill_by_identity(pid, started, sig=signal.SIGKILL)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and any(
+                    lib.matches(pid, started)[0] == "alive" for pid, started in registered):
+                time.sleep(0.1)
+            survivors = [(pid, started) for pid, started in registered
+                         if lib.matches(pid, started)[0] not in ("gone", "reused")]
+            table = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True,
+                                   text=True, timeout=10)
+            leftovers = [line for line in table.stdout.splitlines()
+                         if str(self.base) in line]
+            if table.returncode != 0 or leftovers:
+                problems.append(f"temporary runtime process check failed: {table.returncode}, {leftovers}")
+            # Preserve runtime evidence before deleting it, including real tick output.
+            for path in (self.logs / "exec.jsonl", self.logs / "agent-stdout.log",
+                         self.logs / "agent-stderr.log", self.ctx().support / "supervisor.log"):
+                if path.exists():
+                    self.record("log", name=path.name, content=path.read_text(errors="replace"))
+            if survivors:
+                problems.append(f"unverified or surviving processes: {survivors}")
+            if not survivors and not leftovers and table.returncode == 0:
+                for path in (self.base, self.agent_dir):
+                    try:
+                        if path.exists():
+                            shutil.rmtree(path)
+                    except OSError as exc:
+                        problems.append(f"remove {path}: {exc}")
+                if self.base.exists() or self.agent_dir.exists():
+                    problems.append("temporary runtime or plist files remain")
+            self.record("cleanup", problems=problems, registered=sorted(registered),
+                        runtime_absent=not self.base.exists(), plist_absent=not self.agent_dir.exists())
+            self._dump_evidence()
+            self._env.restore()
         assert not problems, "; ".join(problems)
 
     def _dump_evidence(self) -> None:
@@ -403,9 +471,9 @@ def rig():
         pytest.skip("launchctl not available")
     # the production label is never touched: we only assert OUR label is private
     RIG = LaunchdRig()
-    RIG.setup()
-    RIG.install_agent()
     try:
+        RIG.setup()
+        RIG.install_agent()
         yield RIG
     finally:
         try:
@@ -421,32 +489,34 @@ def _exec_events(rig: LaunchdRig) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def test_tick_returns_while_supervisor_stays_alive(rig: LaunchdRig):
+def _tick_returns_while_supervisor_stays_alive(rig: LaunchdRig):
     """(a) RunAtLoad fires the tick; ensure answers within its handshake budget and the
     supervisor process keeps running with the same identity."""
     seen = rig.wait_supervisor_ready()
     assert seen["state"] == "ready"
     ident = rig.supervisor_identity() or {}
     assert ident.get("pid") and ident.get("started")
-    # the tick itself is the agent's run: RunAtLoad already ran it. Re-run the same
-    # orchestrator path by hand to observe the tick END while the supervisor lives:
-    done = subprocess.run(["bash", str(SYSTEM / "run_orchestrator.sh"), "--once"],
-                          env=rig.env(), cwd=str(rig.workspace),
-                          capture_output=True, text=True, timeout=90)
-    assert done.returncode == 0, done.stdout + done.stderr
-    after = rig.supervisor_identity() or {}
-    assert after.get("pid") == ident.get("pid") and after.get("started") == ident.get("started")
+    # Observe the actual launchd tick ending, rather than substitute a manual
+    # subprocess for the lifecycle being validated.
+    def tick_ended():
+        output = rig.logs / "agent-stdout.log"
+        job = subprocess.run([_launchctl(), "print", f"{_launchctl_domain()}/{rig.label}"],
+                             capture_output=True, text=True, timeout=10)
+        return (job.returncode == 0 and "state = running" not in job.stdout
+                and output.exists() and "Solar system tick completed" in output.read_text())
+    rig.wait_condition("the real launchd tick to end", tick_ended, 15)
     import supervisor_lib as lib
     assert lib.matches(ident["pid"], ident["started"])[0] == "alive"
-    rig.record("tick_returned")
+    rig.record("tick_returned", pid=ident["pid"], started=ident["started"])
 
 
-def test_only_supervisor_killed_recovers_within_75s(rig: LaunchdRig):
+def _only_supervisor_killed_recovers_within_75s(rig: LaunchdRig):
     """(b) Terminate ONLY the resident supervisor (pid+start verified). The next launchd
     tick (StartInterval 60) recovers it: a new identity appears, reconciliation runs and
     the queued local task is dispatched exactly once."""
     ident = rig.supervisor_identity() or {}
     assert ident.get("pid") and ident.get("started")
+    t0 = time.monotonic()
     rig.record("kill_supervisor", pid=ident.get("pid"), started=ident.get("started"))
     assert _kill_by_identity(ident["pid"], ident["started"], sig=9)
     time.sleep(1.0)
@@ -455,15 +525,13 @@ def test_only_supervisor_killed_recovers_within_75s(rig: LaunchdRig):
     # seed while the supervisor is dead: nobody else can dispatch this task
     rig.seed_task("launchd-recovery-1")
 
-    t0 = time.time()
-
     def recovered() -> bool:
         now = rig.supervisor_identity() or {}
         return bool(now.get("pid") and now["pid"] != ident["pid"]
                     and lib.matches(now["pid"], now.get("started"))[0] == "alive"
                     and lib.observe(rig.ctx())["state"] == "ready")
     rig.wait_condition("a new ready supervisor within 75s", recovered, RECOVERY_BUDGET)
-    elapsed = time.time() - t0
+    elapsed = time.monotonic() - t0
     rig.record("recovered", seconds=round(elapsed, 1),
                budget=RECOVERY_BUDGET, within_budget=elapsed <= RECOVERY_BUDGET)
     assert elapsed <= RECOVERY_BUDGET
@@ -478,6 +546,7 @@ def test_only_supervisor_killed_recovers_within_75s(rig: LaunchdRig):
     def ended() -> bool:
         return any(e["event"] == "end" and e["task"] == "launchd-recovery-1"
                    for e in _exec_events(rig))
+    (rig.logs / "release-launchd-recovery-1").touch()
     rig.wait_condition("the task ends", ended, 30)
     starts = [e for e in _exec_events(rig)
               if e["event"] == "start" and e["task"] == "launchd-recovery-1"]
@@ -485,7 +554,7 @@ def test_only_supervisor_killed_recovers_within_75s(rig: LaunchdRig):
     rig.record("single_dispatch", starts=len(starts), ends=1)
 
 
-def test_running_executions_are_not_duplicated(rig: LaunchdRig):
+def _running_executions_are_not_duplicated(rig: LaunchdRig):
     """(c) An execution that is already running when the supervisor is replaced is not
     started a second time: the replacement adopts or leaves it, never re-dispatches."""
     rig.seed_task("launchd-longrun-1")
@@ -498,13 +567,36 @@ def test_running_executions_are_not_duplicated(rig: LaunchdRig):
     starts_before = [e for e in _exec_events(rig)
                      if e["event"] == "start" and e["task"] == "launchd-longrun-1"]
     assert len(starts_before) == 1
-    # kill the supervisor while the task runs (the script sleeps 2s; poll timing may miss
-    # the window on a slow host — the assertion is "never two starts", which holds either way)
+    assert not any(e["event"] == "end" and e["task"] == "launchd-longrun-1" for e in _exec_events(rig))
     rig.record("kill_supervisor_midrun", pid=ident.get("pid"), started=ident.get("started"))
-    _kill_by_identity(ident["pid"], ident.get("started"), sig=9)
+    t0 = time.monotonic()
+    assert _kill_by_identity(ident["pid"], ident.get("started"), sig=9)
+    import supervisor_lib as lib
+    def adopted():
+        now = rig.supervisor_identity() or {}
+        return (now.get("pid") != ident["pid"] and now.get("reconciled")
+                and lib.observe(rig.ctx())["state"] == "ready"
+                and any(e.get("task_id") == "launchd-longrun-1" and e.get("adopted")
+                        for e in now.get("children", [])))
+    rig.wait_condition("replacement to reconcile and adopt the still-running execution", adopted, RECOVERY_BUDGET)
+    elapsed = time.monotonic() - t0
+    assert elapsed <= RECOVERY_BUDGET
+    rig.record("adopted_live_execution", seconds=elapsed, identity=rig.supervisor_identity())
+    assert not any(e["event"] == "end" and e["task"] == "launchd-longrun-1" for e in _exec_events(rig))
+    (rig.logs / "release-launchd-longrun-1").touch()
     rig.wait_condition("the task ended", lambda: any(
-        e["event"] == "end" and e["task"] == "launchd-longrun-1" for e in _exec_events(rig)), 120)
-    starts_after = [e for e in _exec_events(rig)
-                    if e["event"] == "start" and e["task"] == "launchd-longrun-1"]
-    assert len(starts_after) == 1, f"the run was duplicated: {starts_after}"
-    rig.record("no_duplicate", starts=len(starts_after))
+        e["event"] == "end" and e["task"] == "launchd-longrun-1" for e in _exec_events(rig)), 30)
+    def persisted():
+        with __import__("solar_state").session(rig.runtime) as store:
+            return all(store.task_status(task) == "completed" for task in
+                       ("launchd-recovery-1", "launchd-longrun-1"))
+    rig.wait_condition("both results persisted", persisted, 30)
+    assert all(len([e for e in _exec_events(rig) if e["event"] == "start" and e["task"] == task]) == 1
+               for task in ("launchd-recovery-1", "launchd-longrun-1"))
+    rig.record("no_duplicate", execution_events=_exec_events(rig))
+
+
+def test_real_launchd_lifecycle(rig: LaunchdRig):
+    _tick_returns_while_supervisor_stays_alive(rig)
+    _only_supervisor_killed_recovers_within_75s(rig)
+    _running_executions_are_not_duplicated(rig)
