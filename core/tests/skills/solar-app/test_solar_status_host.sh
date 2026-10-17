@@ -116,10 +116,41 @@ else
   fail "stale-count other owner" "ec=$foreign_ec out='$foreign_out' err=$(cat "$TMP/foreign.err" 2>/dev/null || true)"
 fi
 
+# Render status against a copied install and a host-check double. No socket,
+# live console or production port is used, including the owner-refusal case.
+STATUS_INSTALL="$TMP/status-install"
+mkdir -p "$STATUS_INSTALL/core/skills/solar-app/scripts"
+for skill in solar-client solar-paths solar-state solar-router; do
+  cp -R "$ROOT/skills/$skill" "$STATUS_INSTALL/core/skills/$skill"
+done
+cat >"$STATUS_INSTALL/core/skills/solar-app/scripts/host_lib.sh" <<'EOF'
+solar_host_load_env() { SOLAR_APP_BASE_URL=http://status-test.invalid; }
+EOF
+cat >"$STATUS_INSTALL/core/skills/solar-app/scripts/check_host.sh" <<'EOF'
+#!/bin/bash
+printf '%s' "${STATUS_TEST_HOST_JSON:-}"
+EOF
+
+check_host_presentation() {
+  local response="$1" expected="$2" output actual
+  output="$(cd "$TMP"; SOLAR_ROOT="$STATUS_INSTALL" STATUS_TEST_HOST_JSON="$response" bash "$SOLAR" status --json)"
+  actual="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["host"])' <<<"$output")"
+  if [[ "$actual" == "$expected" ]]; then
+    pass "host presentation: $expected for $response"
+  else
+    fail "host presentation: expected $expected, got $actual"
+  fi
+}
+check_host_presentation '{"available":true,"storage_ok":true,"runtime_status":"ready"}' OK
+check_host_presentation '{"available":true,"storage_ok":true,"runtime_status":"problems"}' WARN
+check_host_presentation '{"available":false,"storage_ok":false}' DOWN
+check_host_presentation '{invalid json' DOWN
+check_host_presentation '' DOWN
+
 status_json="$(
   cd "$OTHER"
   unset SOLAR_WORKSPACE
-  bash "$SOLAR" status --json
+  SOLAR_ROOT="$STATUS_INSTALL" bash "$SOLAR" status --json
 )"
 status_router_state="$(printf '%s\n' "$status_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("router",""))')"
 status_router_detail="$(printf '%s\n' "$status_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("router_detail",""))')"
