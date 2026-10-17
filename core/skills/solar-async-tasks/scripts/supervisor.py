@@ -326,25 +326,56 @@ class Supervisor:
             log(f"reconciliation could not finish: {exc}")
             self._exit_record("reconciliation_failed", str(exc))
             return 1
-        # An execution that was running when the previous supervisor went away and is neither adopted nor
-        # blocked now has finished (or is finishing) with nobody to prove its groups gone: it keeps its
-        # hold as an unverified cleanup until they are.
-        for hold in previous:
-            task_id = hold.get("task_id")
-            if hold.get("while_reserved") and task_id and task_id not in self.children \
-                    and task_id not in self.blocked and hold.get("pgids"):
-                self.blocked[task_id] = {
-                    "task_id": task_id, "reason": "cleanup_unverified", "since": lib.iso(time.time()),
-                    "detail": "the supervisor that ran it went away before its process groups were proved gone",
-                    "pgids": hold["pgids"], "pid": None, "pgid": None, "token": None, "worker": None,
-                    "released": True, "ours": True,
-                    "access": {k: hold.get(k) for k in ("provider", "access_class", "resources", "scopes")}}
+        self._recover_holds(previous)
         self.reconciled, self.reconciled_at, self.state = True, time.time(), "ready"
         self._save_records()
         self.publish(durable=True)
         log(f"ready: workspace {(self.ctx.expected() or {}).get('workspace_id')}, runtime {self.ctx.runtime}, "
             f"{len(self.children)} execution(s) adopted, {len(self.blocked)} blocked")
         return 0
+
+    def _recover_holds(self, previous: list[dict]) -> None:
+        """An execution that was running when the previous supervisor went away and is neither adopted
+        nor blocked now has finished (or is finishing) with nobody to prove its groups gone. Its
+        groups are the executor's and the command's: the command's leader is read again from the task
+        when the hold did not carry it. A hold whose groups are all empty is dropped; one with any
+        member left, or that cannot be checked, stays as an unverified cleanup (the claim exclusion
+        is kept) until every group is empty."""
+        for hold in previous:
+            task_id = hold.get("task_id")
+            if not (hold.get("while_reserved") and task_id) or task_id in self.children or task_id in self.blocked:
+                continue
+            groups = [g for g in hold.get("pgids") or [] if g]
+            try:
+                with self._session() as store:
+                    pid = (store.task_get(task_id) or {}).get("pid")
+                if self._recorded_provider_pid(pid, hold.get("prior_pid")) and int(pid) not in groups:
+                    groups.append(int(pid))
+            except (solar_state.StateError, OSError):
+                pass
+            if not groups:
+                continue
+            if all(group_members(g) == [] for g in groups):
+                log(f"{task_id}: its groups were already gone when the previous supervisor's hold was read")
+                continue
+            self.blocked[task_id] = {
+                "task_id": task_id, "reason": "cleanup_unverified", "since": lib.iso(time.time()),
+                "detail": "the supervisor that ran it went away before its process groups were proved gone",
+                "pgids": groups, "pid": None, "pgid": None, "token": None, "worker": None,
+                "released": True, "ours": True,
+                "access": {k: hold.get(k) for k in ("provider", "access_class", "resources", "scopes")}}
+            log(f"BLOCKED {task_id}: cleanup_unverified: groups {groups} are not proved gone")
+
+    @staticmethod
+    def _recorded_provider_pid(pid, prior) -> Optional[int]:
+        """The pid the executor recorded for the command of THIS execution (not one an earlier run left)."""
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return None
+        if pid <= 1 or pid == prior or pid == os.getpgrp():
+            return None
+        return pid
 
     # -- main loop ---------------------------------------------------------------------
 
@@ -709,8 +740,17 @@ class Supervisor:
             with self._session() as store:
                 cancels = set(store.cancellation_ids())
                 held = {r["task_id"]: r for r in store.reservations() if r.get("token")}
+                recorded = {ex.task_id: (store.task_get(ex.task_id) or {}).get("pid") for ex in live}
         except (solar_state.StateError, OSError):
             return
+        # The command's own group, as soon as the executor records it, so the hold carries it from then on.
+        changed = False
+        for ex in live:
+            pid = self._recorded_provider_pid(recorded.get(ex.task_id), (ex.access or {}).get("prior_pid"))
+            if pid and pid != ex.provider_pid:
+                ex.provider_pid, changed = pid, True
+        if changed:
+            self._save_records()
         now = time.monotonic()
         for ex in live:
             if ex.forced:

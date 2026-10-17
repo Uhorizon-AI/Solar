@@ -158,12 +158,16 @@ def test_a_steady_flow_of_readers_does_not_starve_an_exclusive_task(rig):
             n += 1
             time.sleep(0.1)
 
-    def watch():                             # the moment the drain barrier opens
+    def watch():                             # the moment the drain barrier opened, from the persisted audit event
         while not stop.is_set() and not barrier_seen:
-            with solar_state.session() as store:
-                row = store.conn.execute("SELECT drain_started_at FROM claim_waits WHERE task_id = ?",
-                                         (exclusive,)).fetchone()
-            if row and row[0]:
+            try:
+                with solar_state.session() as store:
+                    row = store.conn.execute(
+                        "SELECT ts FROM audit WHERE event = 'exclusive_drain_started' "
+                        "AND json_extract(row, '$.task_id') = ?", (exclusive,)).fetchone()
+            except Exception:                # a busy or momentarily unreadable base: ask again
+                row = None
+            if row:
                 barrier_seen.append(time.time())
             time.sleep(0.01)
 

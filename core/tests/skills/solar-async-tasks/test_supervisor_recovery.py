@@ -276,6 +276,61 @@ def test_an_execution_keeps_its_place_from_the_dispatch_until_it_is_proved_over(
     assert not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
 
 
+def _previous_hold(rig, task_id, pgids, **extra):
+    entry = dict(task_id=task_id, while_reserved=True, pgids=pgids, access_class="declared", provider="codex",
+                 scopes=[], resources=["demo"])
+    entry.update(extra)
+    solar_state.cleanup_holds_write(rig.runtime, [entry])
+
+
+def test_a_previous_hold_whose_groups_are_all_gone_is_dropped_at_start(rig):
+    gone = dead_pid()
+    _previous_hold(rig, "ghost", [gone])
+    with rig.running() as sup:
+        assert "ghost" not in sup.blocked, "a hold with nothing left alive must not block the supervisor"
+    assert lib.observe(rig.ctx)["reason"] != "recovery_required"
+    assert not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
+
+
+def test_a_previous_hold_with_a_live_group_stays_blocked_until_it_is_empty(rig):
+    stranger = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"], start_new_session=True)
+    try:
+        _previous_hold(rig, "ghost", [dead_pid(), stranger.pid])
+        with rig.running(sweep=0.2) as sup:
+            assert sup.blocked["ghost"]["reason"] == "cleanup_unverified"
+            assert stranger.pid in sup.blocked["ghost"]["pgids"]
+            time.sleep(0.8)
+            assert "ghost" in sup.blocked and (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
+            stranger.kill()
+            stranger.wait()
+            wait_until(lambda: "ghost" not in sup.blocked, 30, what="the hold to clear once the group is empty")
+    finally:
+        if stranger.poll() is None:
+            stranger.kill()
+            stranger.wait()
+
+
+def test_a_previous_hold_that_cannot_be_checked_stays_blocked(rig, monkeypatch):
+    monkeypatch.setattr(supervisor_mod, "group_members", lambda pgid: None)       # ps does not answer
+    _previous_hold(rig, "ghost", [dead_pid()])
+    with rig.running(sweep=0.2) as sup:
+        time.sleep(0.8)
+        assert sup.blocked["ghost"]["reason"] == "cleanup_unverified"
+
+
+def test_the_commands_group_is_in_the_hold_while_the_execution_runs(rig):
+    rig.apply_policy(global_capacity=3)
+    task = rig.reader("Runs a command", spec=dict(provider_leave=True, gate="release"))
+    with rig.running() as sup:
+        wait_until(lambda: rig.events("provider", task), 30)
+        provider_pid = rig.events("provider", task)[0]["provider_pid"]
+        wait_until(lambda: sup.children[task].provider_pid == provider_pid, 10, what="the command's group to be noticed")
+        holds = solar_state.cleanup_holds(rig.runtime)
+        assert [h for h in holds if h["task_id"] == task][0]["pgids"] == [sup.children[task].pgid, provider_pid]
+        rig.gate("release")
+        wait_until(lambda: rig.status(task) == "completed", 30)
+
+
 def test_a_process_table_that_does_not_answer_is_not_an_empty_group(rig, monkeypatch):
     task = rig.legacy("Group in doubt", spec=dict(gate="never"))
     with solar_state.session() as store:

@@ -137,8 +137,10 @@ ends. That gap is closed without changing the schema: from its dispatch the supe
 `async-tasks/supervisor/cleanup-holds.json` (`while_reserved`, with the process groups of the executor and of its command).
 While the reservation stands it is the reservation that counts; the instant it is released, the entry takes over in the
 same transaction, so no claim (manual activation included) is admitted until the supervisor has proved **every** group gone
-and removed the entry. After a restart, entries of executions that ended with nobody to verify them become
-`blocked: cleanup_unverified` and are cleared once their groups are empty.
+and removed the entry. The command's group is added to the entry as soon as the executor records it (checked every second). After a
+restart, an entry of an execution that ended with nobody to verify it is read again (the command's leader is re-read from the task
+if the entry lacks it): when every group is already empty it is dropped, otherwise — or if the process table cannot be asked — it
+becomes `blocked: cleanup_unverified` and stays until all its groups are empty.
 
 What remains is that this state lives in a file read by `solar_state` rather than in the schema: it is written only by the
 supervisor, so a runtime with no supervisor ever started again keeps its entries until one runs. Proposal for the follow-up

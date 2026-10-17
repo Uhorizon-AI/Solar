@@ -1401,3 +1401,17 @@ def test_processes_of_another_install_do_not_block_a_cutover(tmp_path, monkeypat
     assert [pid for pid, _ in cut.list_processes()] == [101, 102, 103, 104, 105]
     reasons = cut.in_flight(tmp_path, cut.list_processes)
     assert any("pid 101" in r for r in reasons) and not any("pid 105" in r for r in reasons)
+
+
+def test_a_snapshot_install_under_the_workspace_still_counts(tmp_path, monkeypatch):
+    workspace, other = tmp_path / "ws", tmp_path / "other"
+    table = tmp_path / "ps.txt"
+    table.write_text(
+        f"201 python3 {workspace}/.agents/skills/solar-async-tasks/scripts/supervisor.py run\n"
+        f"202 python3 {other}/.agents/skills/solar-async-tasks/scripts/supervisor.py run\n", encoding="utf-8")
+    monkeypatch.setenv("SOLAR_CUTOVER_PS_OUTPUT_FILE", str(table))
+    monkeypatch.setenv("SOLAR_CUTOVER_INSTALL_ROOTS", str(tmp_path / "live"))
+    monkeypatch.delenv("SOLAR_WORKSPACE", raising=False)
+    assert cut.list_processes() == []                           # neither names the live install
+    monkeypatch.setenv("SOLAR_WORKSPACE", str(workspace))        # the workspace's own snapshot skills count
+    assert [pid for pid, _ in cut.list_processes()] == [201]

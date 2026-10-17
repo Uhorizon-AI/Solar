@@ -118,9 +118,13 @@ def _lines(path: Path) -> list[str]:
 def _install_roots() -> list[str]:
     """The installs whose processes block a cutover: `SOLAR_CUTOVER_INSTALL_ROOTS` (a colon-separated
     list; the update names the live install, because the helper runs from the staged copy), else
-    the install this helper belongs to."""
+    the install this helper belongs to. The workspace (`SOLAR_WORKSPACE`) counts too: a snapshot
+    install keeps its skills under `<workspace>/.agents/skills`."""
     raw = os.environ.get("SOLAR_CUTOVER_INSTALL_ROOTS", "")
     roots = [r for r in raw.split(":") if r] or [str(Path(__file__).resolve().parents[4])]
+    workspace = os.environ.get("SOLAR_WORKSPACE", "").strip()
+    if workspace:
+        roots.append(workspace)         # a workspace-snapshot install keeps its skills under <workspace>/.agents/skills
     out = []
     for root in roots:
         for form in (root, os.path.realpath(root)):

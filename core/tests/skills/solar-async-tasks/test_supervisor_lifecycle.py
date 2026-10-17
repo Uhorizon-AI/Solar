@@ -651,3 +651,41 @@ def test_nothing_is_admitted_between_the_executor_finishing_and_its_command_bein
         proc.wait()
         if child and alive(child):
             os.kill(child, signal.SIGKILL)
+
+
+def test_a_restart_before_the_execution_is_collected_keeps_the_commands_group_blocked(rig):
+    """A completes and leaves a child in its command's group; the supervisor dies before it collects A. The
+    new supervisor must read the command's group again and keep B out until that child is gone."""
+    pidfile = rig.tmp / "left.pid"
+    rel = rig.local_script(f'sleep 300 >/dev/null 2>&1 </dev/null &\necho $! > "{pidfile}"\n', name="left.sh")
+    a = rig.local("Leaves a child", rel, timeout=60)
+    b = rig.local("Zz second", rig.local_script("true\n", name="quick.sh"), timeout=60)
+    first = _start_supervisor_process(rig, tick=30.0, poll=30, sweep=30, term_grace=1.0, kill_wait=2.0)
+    second = None
+    child = None
+    try:
+        wait_until(lambda: rig.status(a) == "completed", 60, interval=0.005, what="A to complete")
+        child = int(pidfile.read_text())
+        first.kill()                                   # before it collected A (its loop sleeps 30 s)
+        first.wait()
+        with solar_state.session() as store:
+            assert store.task_claim_detail(b, "activate-b")["claimed"] is False
+        second = _start_supervisor_process(rig, sweep=0.3, term_grace=1.0, kill_wait=2.0)
+        wait_until(lambda: rig.identity() and rig.identity().get("reconciled") and rig.identity()["pid"] == second.pid, 30)
+        blocked = rig.identity()["blocked"]
+        assert [e["reason"] for e in blocked] == ["cleanup_unverified"] and len(blocked[0]["pgids"]) == 2
+        import supervisor as supervisor_mod
+        assert child in supervisor_mod.group_members(blocked[0]["pgids"][1]), "the command's group was not remembered"
+        time.sleep(1.5)                                # several sweeps: the wrapper's group is empty, the command's is not
+        assert alive(child) and rig.status(b) == "queued"
+        with solar_state.session() as store:
+            assert store.task_claim_detail(b, "activate-b")["claimed"] is False
+        os.kill(child, signal.SIGKILL)
+        wait_until(lambda: rig.status(b) == "completed", 60, what="B, once the command's group is gone")
+    finally:
+        for proc in (first, second):
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        if child and alive(child):
+            os.kill(child, signal.SIGKILL)
