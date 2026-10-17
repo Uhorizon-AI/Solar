@@ -157,3 +157,10 @@ bash /tmp/solar-staging/core/skills/solar-client/scripts/client_update_staged.sh
   --install-root <install> --workspace <workspace> --runtime-root <runtime> \
   --stage-root /tmp/solar-staging --mode git --target <tag>
 ```
+
+## Rollout evidence and operations
+
+See [Async capacity rollout and reversal](async-rollout.md) for prerequisites,
+exact proposal/application steps and safe drain/rollback. The
+[quality pilot](review-quality-pilot.md) is prepared separately and requires
+explicit account and bounded-cost authorization before real inference.
