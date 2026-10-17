@@ -14,9 +14,11 @@ Before requesting an operational change, collect and review:
 - Two consecutive full pytest results and 20 isolated repetitions of timing and
   concurrency regressions, with durable start/end events and maximum-gap checks.
   Linux and macOS results must be identified separately; one host proves only
-  its own platform. CI Install E2E does not run pytest.
+  its own platform. CI Install E2E runs the focused Codex-agent pytest file,
+  not the complete pytest suite.
 - A successful opt-in real launchd run on macOS: isolated install/workspace/runtime
-  under `/private/tmp`, unique `com.solar.test.async.<uuid>`, 60-second interval,
+  with an active user GUI domain, `launchctl` permission and macOS command-line
+  tools (`gcc`/Clang), under `/private/tmp`, unique `com.solar.test.async.<uuid>`, 60-second interval,
   RunAtLoad and AbandonProcessGroup, supervisor recovery within 75 seconds,
   reconciliation and adoption of an execution held at a deterministic gate, single
   dispatch per execution and verified cleanup, including failures during setup.
