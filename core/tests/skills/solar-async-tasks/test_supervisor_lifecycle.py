@@ -549,11 +549,16 @@ def test_a_pre_start_hook_that_never_ends_neither_freezes_the_supervisor_nor_sta
     try:
         wait_until(lambda: rig.identity() and rig.identity()["reconciled"], 30, what="the supervisor")
         beats = []
-        deadline = time.monotonic() + 3.5                    # the hook has a 1 s deadline; the beat must not stop
+        deadline = time.monotonic() + 4.5                    # the hook has a 1 s deadline; the beat must not stop
         while time.monotonic() < deadline:
             beats.append(rig.identity()["heartbeat_epoch"])
-            time.sleep(0.4)
-        assert len(set(beats)) >= 4, f"the heartbeat stalled while a hook hung: {beats}"
+            time.sleep(0.2)
+        # What matters is that the beat never stops for long, not how many distinct values a sampler caught
+        # (a beat takes about a second, durable writes included): the longest gap between two beats stays short.
+        distinct = sorted(set(beats))
+        assert len(distinct) >= 3, f"the heartbeat stalled while a hook hung: {beats}"
+        assert max(b - a for a, b in zip(distinct, distinct[1:])) < 2.0, f"the heartbeat paused too long: {distinct}"
+        assert time.time() - distinct[-1] < 2.0, f"the heartbeat is not current: {distinct[-1]}"
         assert rig.script("check_async_tasks.sh").returncode == 0, "check saw a frozen supervisor"
         assert rig.status(task) == "queued" and rig.reservations() == [], "the blocked hook must give the claim back"
         wait_until(lambda: leftover.exists(), 10)
@@ -689,3 +694,39 @@ def test_a_restart_before_the_execution_is_collected_keeps_the_commands_group_bl
                 proc.wait()
         if child and alive(child):
             os.kill(child, signal.SIGKILL)
+
+
+def test_no_write_during_the_start_up_reconciliation_publishes_a_state_without_the_previous_holds(rig):
+    """The previous supervisor left a hold for an execution whose command is still alive. The new one
+    writes its records several times while it reconciles; a claim attempted right after each of those
+    writes must still be refused, and the hold must still be on disk."""
+    leftover = subprocess.Popen(["sleep", "300"], start_new_session=True)      # its own group: the command's
+    sup = None
+    try:
+        b = rig.legacy("Zz second", spec=dict(hold=0.1))
+        solar_state.cleanup_holds_write(rig.runtime, [{
+            "task_id": "gone-a", "while_reserved": True, "pgids": [leftover.pid],
+            "access_class": "exclusive", "provider": "", "resources": [], "scopes": []}])
+        sup = rig.build()
+        original = sup._save_records
+        attempts: list[dict] = []
+
+        def spy():
+            original()
+            with solar_state.session() as store:
+                claim = store.task_claim_detail(b, "activate-b")             # a manual activation, in between
+            attempts.append(dict(during_start=not sup.reconciled, claimed=claim["claimed"],
+                                 held=any(h.get("task_id") == "gone-a" for h in solar_state.cleanup_holds(rig.runtime))))
+
+        sup._save_records = spy
+        assert sup.start() == 0
+        during = [a for a in attempts if a["during_start"]]
+        assert during, "the start-up reconciliation never wrote its records: the test checks nothing"
+        assert all(not a["claimed"] and a["held"] for a in attempts), attempts
+        assert [e["reason"] for e in sup.blocked.values()] == ["cleanup_unverified"]
+        assert rig.status(b) == "queued"
+    finally:
+        if sup is not None:
+            sup.release()
+        leftover.kill()
+        leftover.wait()

@@ -176,6 +176,9 @@ class Supervisor:
         self.state_errors = 0
         self._next_enforce = 0.0
         self._next_adopted_check = 0.0
+        # The holds the previous supervisor left, kept in every write until the start-up reconciliation
+        # has decided about them: a write in between must never publish a state without them.
+        self._carried_holds: Optional[list[dict]] = None
 
     # -- lock and identity ----------------------------------------------------------
 
@@ -275,6 +278,9 @@ class Supervisor:
                        "pgids": e.get("pgids") or ([e["pgid"]] if e.get("pgid") else []),
                        **(e.get("access") or {})}
                       for e in self.blocked.values() if e.get("released")]
+            if self._carried_holds:
+                covered = {h.get("task_id") for h in holds}
+                holds += [h for h in self._carried_holds if h.get("task_id") not in covered]
             solar_state.cleanup_holds_write(self.ctx.runtime, holds)
         except OSError as exc:
             log(f"cannot record the executions: {exc}")
@@ -320,13 +326,18 @@ class Supervisor:
             return 1
         self._load_blocked()
         previous = [h for h in solar_state.cleanup_holds(self.ctx.runtime) if not h.get("unreadable")]
+        self._carried_holds = previous
         try:
-            self._sweep(startup=True)
-        except solar_state.StateError as exc:
-            log(f"reconciliation could not finish: {exc}")
-            self._exit_record("reconciliation_failed", str(exc))
-            return 1
-        self._recover_holds(previous)
+            try:
+                self._sweep(startup=True)
+            except solar_state.StateError as exc:
+                log(f"reconciliation could not finish: {exc}")
+                self._exit_record("reconciliation_failed", str(exc))
+                return 1
+            self._recover_holds(previous)
+        finally:
+            # Only now, with the sweep done and the holds judged, are they replaced together.
+            self._carried_holds = None
         self.reconciled, self.reconciled_at, self.state = True, time.time(), "ready"
         self._save_records()
         self.publish(durable=True)
@@ -351,8 +362,9 @@ class Supervisor:
                     pid = (store.task_get(task_id) or {}).get("pid")
                 if self._recorded_provider_pid(pid, hold.get("prior_pid")) and int(pid) not in groups:
                     groups.append(int(pid))
-            except (solar_state.StateError, OSError):
-                pass
+            except (solar_state.StateError, OSError) as exc:
+                log(f"{task_id}: could not re-read the command's group from the task ({exc}); "
+                    "keeping the groups the hold recorded")
             if not groups:
                 continue
             if all(group_members(g) == [] for g in groups):

@@ -6,6 +6,8 @@ of the console is never the evidence. The doubles never call a provider.
 """
 from __future__ import annotations
 
+import calendar
+
 import threading
 import time
 
@@ -145,48 +147,41 @@ def test_lowering_the_capacity_neither_kills_nor_loses_results(rig, before):
 
 def test_a_steady_flow_of_readers_does_not_starve_an_exclusive_task(rig):
     rig.apply_policy(global_capacity=3, exclusive_wait_seconds=1)
-    early = [rig.reader(f"Early {i}", spec=dict(hold=0.5)) for i in range(3)]
+    # The readers must overlap without ever ending together: if all of them end at the same instant the
+    # machine is idle and the exclusive task (next in claim order) simply runs, with nothing to starve.
+    early = [rig.reader(f"Early {i}", spec=dict(hold=hold)) for i, hold in enumerate((0.5, 0.7, 0.9))]
     exclusive = rig.legacy("Needs the machine", spec=dict(hold=0.1))
     stop = threading.Event()
     added: list[str] = []
-    barrier_seen: list[float] = []
 
     def feed():                              # a continuous flow of new readers
         n = 0
         while not stop.is_set():
-            added.append(rig.reader(f"Flow {n}", spec=dict(hold=0.5)))
+            added.append(rig.reader(f"Flow {n}", spec=dict(hold=0.45 + 0.1 * (n % 4))))
             n += 1
             time.sleep(0.1)
 
-    def watch():                             # the moment the drain barrier opened, from the persisted audit event
-        while not stop.is_set() and not barrier_seen:
-            try:
-                with solar_state.session() as store:
-                    row = store.conn.execute(
-                        "SELECT ts FROM audit WHERE event = 'exclusive_drain_started' "
-                        "AND json_extract(row, '$.task_id') = ?", (exclusive,)).fetchone()
-            except Exception:                # a busy or momentarily unreadable base: ask again
-                row = None
-            if row:
-                barrier_seen.append(time.time())
-            time.sleep(0.01)
-
     feeder = threading.Thread(target=feed, daemon=True)
-    watcher = threading.Thread(target=watch, daemon=True)
     with rig.running(poll=0.1):
         feeder.start()
-        watcher.start()
         wait_until(lambda: rig.status(exclusive) == "completed", 90, what="the exclusive task to run")
         stop.set()
         feeder.join()
-        watcher.join()
         wait_until(lambda: all(rig.status(t) == "completed" for t in early + added), 90)
-    assert barrier_seen, "the drain barrier never opened although readers kept arriving"
+    # The moment the drain barrier opened is the persisted audit event, read once everything has ended:
+    # it cannot be missed by a poll that happened to run late. Its stamp has one-second resolution, so the
+    # barrier opened at some instant in [stamp, stamp + 1).
+    with solar_state.session() as store:
+        events = store.conn.execute("SELECT ts FROM audit WHERE event = 'exclusive_drain_started' "
+                                    "AND json_extract(row, '$.task_id') = ?", (exclusive,)).fetchall()
+    assert events, "the drain barrier never opened although readers kept arriving"
+    opened = calendar.timegm(time.strptime(events[0][0], "%Y-%m-%dT%H:%M:%SZ"))
     began, finished = rig.first("start", exclusive), rig.first("end", exclusive)
-    assert began >= barrier_seen[0] - 0.01
+    assert began >= opened - 0.01
     readers_started = [e["t"] for e in rig.events("start") if e["task"] != exclusive]
-    # once the barrier was open (plus the time to notice it) no reader was admitted until the exclusive task ended
-    assert [t for t in readers_started if barrier_seen[0] + 0.15 < t < finished] == []
+    # once the barrier was open (plus the resolution of its stamp and the time to notice it) no reader was
+    # admitted until the exclusive task ended
+    assert [t for t in readers_started if opened + 1.0 + 0.15 < t < finished] == []
     # and nothing overlapped the exclusive run itself
     assert [t for t in readers_started if began <= t <= finished] == []
     with solar_state.session() as store:
