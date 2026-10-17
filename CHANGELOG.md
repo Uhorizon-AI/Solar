@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Documentation
+- Record the unresolved effective-managed-policy validation for the proposed restricted text-review profile. No adapter is registered or enabled, and no execution behavior changes.
+
 ## [0.49.0] - 2026-10-17
 
 ### Added
