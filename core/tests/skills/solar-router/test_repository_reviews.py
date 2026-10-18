@@ -66,12 +66,13 @@ def test_both_transports_share_commands_and_snapshot_then_clean_up(tmp_path, mon
     binary.write_text(f'''#!{sys.executable}
 import json, os, pathlib, sys
 if '--help' in sys.argv:
- print({repr(' '.join(profiles.FLAGS) + ' --sandbox read-only --json --ephemeral --ignore-user-config --ignore-rules')})
+ print({repr(' '.join(profiles.FLAGS) + ' --sandbox read-only --json --ephemeral --ignore-user-config --ignore-rules --output-schema --output-last-message')})
 else:
  pathlib.Path({str(record)!r}).write_text(json.dumps(dict(argv=sys.argv[1:], cwd=os.getcwd(), env=dict(os.environ),
     operations=pathlib.Path('operations.md').read_text())))
  if {provider!r} == 'codex':
-  print(json.dumps(dict(type='item.completed', item=dict(type='agent_message',text='Review result'))))
+  print(json.dumps(dict(type='item.completed', item=dict(type='agent_message',text='Reading the evidence first.'))))
+  pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(dict(review='Review result')))
   print(json.dumps(dict(type='turn.completed',usage=dict(input_tokens=11,output_tokens=3))))
  else: print(json.dumps(dict(result='Review result',usage=dict(input_tokens=11,output_tokens=3))))
 ''')
@@ -93,7 +94,10 @@ else:
     first = json.loads(record.read_text())
     assert ''.join(adapter.stream('UNAPPROVED CONTEXT', review=review)) == expected
     second = json.loads(record.read_text())
-    assert first['argv'] == second['argv']
+    def stable(argv):  # each launch uses its own private directory
+        import re
+        return [re.sub(r'solar-repository-review-\w+', 'PRIVATE', a) for a in argv]
+    assert stable(first['argv']) == stable(second['argv'])
     assert first['operations'] == 'The maximum batch is five.\n'
     assert not Path(first['cwd']).exists() and not Path(second['cwd']).exists()
     assert 'HOSTILE' not in first['env'].values()
@@ -105,6 +109,7 @@ else:
     else:
         assert first['argv'][first['argv'].index('--sandbox')+1] == 'read-only'
         assert '--ignore-user-config' in first['argv']
+        assert '--output-schema' in first['argv'] and '--output-last-message' in first['argv']
         assert not Path(first['env']['CODEX_HOME']).exists()
     assert (root / 'operations.md').read_text() == 'The maximum batch is five.\n'
 
@@ -129,7 +134,7 @@ def test_codex_effective_policy_requires_known_isolated_configuration(tmp_path, 
     binary = tmp_path / 'codex'
     binary.write_text(f"""#!{sys.executable}
 import sys,json
-if '--help' in sys.argv: print('--sandbox read-only --model --json --ephemeral --ignore-user-config --ignore-rules')
+if '--help' in sys.argv: print('--sandbox read-only --model --json --ephemeral --ignore-user-config --ignore-rules --output-schema --output-last-message')
 else: print({json.dumps({'checks':checks})!r})
 """)
     binary.chmod(0o700)
@@ -162,7 +167,7 @@ if '--help' in sys.argv: print({repr(' '.join(profiles.FLAGS))})
 else:
  pathlib.Path({str(record)!r}).write_text(pathlib.Path('operations.md').read_text())
  if {provider!r}=='codex':
-  print(json.dumps(dict(type='item.completed',item=dict(type='agent_message',text='Bound review'))))
+  pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(dict(review='Bound review')))
   print(json.dumps(dict(type='turn.completed',usage=dict(input_tokens=5,output_tokens=2))))
  else: print(json.dumps(dict(result='Bound review',usage=dict(input_tokens=5,output_tokens=2))))
 ''')
@@ -188,3 +193,137 @@ else:
     result=router.route(json.dumps(payload))
     assert result['error_code']=='review_input_mismatch'
     assert not record.exists()
+
+
+def _codex_review(monkeypatch, stdout, last_message, returncode=0):
+    """Drive run_review for Codex with a simulated launch and process; no provider is executed."""
+    import subprocess
+    from contextlib import contextmanager
+    from providers.base import BaseProvider
+    seen = {}
+
+    @contextmanager
+    def fake_launch(*args, **kwargs):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / 'last-message.json'
+            if last_message is not None:
+                out.write_text(last_message)
+            seen['out'] = out
+            yield ['codex', '--output-last-message', str(out)], {}, temp
+
+    monkeypatch.setattr(profiles, 'restricted_launch', fake_launch)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, returncode, stdout, ''))
+    adapter = PROVIDERS['codex']
+    return adapter.run_review(manifest={}, expected='', profile='other_profile')
+
+
+def _events(*items, completed=True, extra=()):
+    lines = [json.dumps(dict(type='item.completed', item=dict(type='agent_message', text=t))) for t in items]
+    lines += [json.dumps(e) for e in extra]
+    if completed:
+        lines.append(json.dumps(dict(type='turn.completed', usage=dict(input_tokens=1, output_tokens=1))))
+    return '\n'.join(lines)
+
+
+def test_codex_progress_without_final_structured_message_is_a_failure(monkeypatch):
+    # Reproduces the pilot weakness: only a progress-looking message, turn completed.
+    with pytest.raises(RuntimeError, match='no structured final review'):
+        _codex_review(monkeypatch, _events('I will review the documents.'), 'I will review the documents.')
+
+
+def test_codex_missing_final_file_is_a_failure(monkeypatch):
+    with pytest.raises(RuntimeError, match='no structured final review'):
+        _codex_review(monkeypatch, _events('I will review the documents.'), None)
+
+
+def test_codex_progress_then_final_uses_only_the_final_structured_message(monkeypatch):
+    out = _codex_review(monkeypatch, _events('Reading the evidence.', 'Checking rules.', '{"review":"Finding A"}'),
+                        json.dumps(dict(review='Finding A')))
+    assert out == 'Finding A'
+    assert 'Reading' not in out and 'Checking' not in out
+
+
+@pytest.mark.parametrize('final', ['', '   ', '[]', '{"review":""}', '{"review":"  "}', '{"review":3}',
+                                   '{"text":"x"}', '{"review":"x","extra":1}', 'not json'])
+def test_codex_invalid_final_shape_is_a_failure(monkeypatch, final):
+    with pytest.raises(RuntimeError, match='no structured final review'):
+        _codex_review(monkeypatch, _events('x'), final)
+
+
+@pytest.mark.parametrize('extra', [[dict(type='error', message='x')], [dict(type='turn.failed', error=dict(message='x'))]])
+def test_codex_failure_events_propagate_even_with_a_valid_file(monkeypatch, extra):
+    with pytest.raises(RuntimeError, match='returned an error'):
+        _codex_review(monkeypatch, _events('x', extra=extra, completed=False), json.dumps(dict(review='ok')))
+
+
+def test_codex_requires_exactly_one_completed_turn(monkeypatch):
+    good = json.dumps(dict(review='ok'))
+    with pytest.raises(RuntimeError, match='no completed review'):
+        _codex_review(monkeypatch, _events('x', completed=False), good)
+    with pytest.raises(RuntimeError, match='more than one completed turn'):
+        _codex_review(monkeypatch, _events('x') + '\n' + json.dumps(dict(type='turn.completed')), good)
+
+
+def test_codex_nonzero_exit_and_malformed_events_are_failures(monkeypatch):
+    good = json.dumps(dict(review='ok'))
+    with pytest.raises(RuntimeError, match='non-zero'):
+        _codex_review(monkeypatch, _events('x'), good, returncode=1)
+    with pytest.raises(RuntimeError, match='malformed events'):
+        _codex_review(monkeypatch, 'not jsonl', good)
+
+
+def test_codex_argv_requests_schema_and_final_message_file(tmp_path, monkeypatch):
+    root, commit = repository(tmp_path)
+    e = envelope(root, commit, 'codex')
+    auth = tmp_path / 'auth'; auth.mkdir(); (auth / 'auth.json').write_text('{}')
+    monkeypatch.setenv('CODEX_HOME', str(auth))
+    monkeypatch.setattr(repo, 'codex_preflight', lambda *a: None)
+    monkeypatch.setattr(PROVIDERS['codex'], 'resolve_binary', lambda _: 'codex')
+    with repo.launch(PROVIDERS['codex'], e['manifest'], e['review_input_digest'], lambda: None) as (argv, env, cwd):
+        schema = json.loads(Path(argv[argv.index('--output-schema') + 1]).read_text())
+        assert schema == repo.CODEX_REVIEW_SCHEMA
+        out = Path(argv[argv.index('--output-last-message') + 1])
+        assert out.parent != Path(cwd) and out.parent == Path(argv[argv.index('--output-schema') + 1]).parent
+        assert not out.exists()
+
+
+def test_codex_preflight_requires_output_flags(tmp_path):
+    binary = tmp_path / 'codex'
+    binary.write_text(f"#!{sys.executable}\nprint('--sandbox read-only --model --json --ephemeral --ignore-user-config --ignore-rules')\n")
+    binary.chmod(0o700)
+    with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
+        repo.codex_preflight(str(binary), dict(os.environ), str(tmp_path), [])
+
+
+@pytest.mark.parametrize('argv', [['codex', '--output-last-message'], ['codex', '--output-last-message', '/nonexistent/dir/x.json']])
+def test_codex_unreadable_or_valueless_final_message_path_fails_cleanly(monkeypatch, argv):
+    import subprocess
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_launch(*args, **kwargs):
+        yield argv, {}, '.'
+
+    monkeypatch.setattr(profiles, 'restricted_launch', fake_launch)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, _events('x'), ''))
+    with pytest.raises(RuntimeError, match='no structured final review'):
+        PROVIDERS['codex'].run_review(manifest={}, expected='', profile='other_profile')
+
+
+def test_codex_non_utf8_final_message_file_fails_cleanly(monkeypatch):
+    import subprocess
+    import tempfile
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_launch(*args, **kwargs):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / 'last-message.json'
+            out.write_bytes(b'\x80\xff')
+            yield ['codex', '--output-last-message', str(out)], {}, temp
+
+    monkeypatch.setattr(profiles, 'restricted_launch', fake_launch)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, _events('x'), ''))
+    with pytest.raises(RuntimeError, match='no structured final review'):
+        PROVIDERS['codex'].run_review(manifest={}, expected='', profile='other_profile')

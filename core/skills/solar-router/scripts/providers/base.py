@@ -160,18 +160,18 @@ class BaseProvider(ABC):
             # must stop the provider with it on timeout, cancellation or revocation.
             proc = subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True,
                                   timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300))
+            # The launch directory is removed on exit: read the final-message file now.
+            last_message = None
+            if self.name == "codex" and "--output-last-message" in argv:
+                try:
+                    with open(argv[argv.index("--output-last-message") + 1], encoding="utf-8") as fh:
+                        last_message = fh.read()
+                except (OSError, ValueError, IndexError):  # ValueError: non-UTF-8 bytes
+                    pass
         if proc.returncode:
             raise RuntimeError("restricted provider returned non-zero")
         if self.name == "codex":
-            events = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
-            if any(event.get("type") in {"error", "turn.failed"} for event in events):
-                raise RuntimeError("restricted provider returned an error")
-            completed = [e for e in events if e.get("type") == "turn.completed"]
-            texts = [e["item"]["text"] for e in events if e.get("type") == "item.completed"
-                     and e.get("item", {}).get("type") == "agent_message"]
-            if len(completed) != 1 or not texts:
-                raise RuntimeError("restricted provider returned no completed review")
-            result = dict(result="\n".join(texts), usage=completed[0].get("usage"))
+            result = self._codex_final_review(proc.stdout, last_message)
         else:
             result = json.loads(proc.stdout)
         if not isinstance(result, dict):
@@ -197,6 +197,36 @@ class BaseProvider(ABC):
             commit = json.loads(approved["user_prompt"])["commit"]
             return "Reviewed commit: " + commit + "\n\n" + result["result"]
         return result["result"]
+
+    @staticmethod
+    def _codex_final_review(stdout: str, last_message) -> dict:
+        """Accept only the CLI's final-message file, validated against the requested schema.
+
+        The JSONL stream has no field separating progress from the answer, so it is used
+        for failure signals, the completed-turn marker and usage only; its text is never the review.
+        """
+        import json
+        try:
+            events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+        except ValueError:
+            raise RuntimeError("restricted provider returned malformed events") from None
+        if not all(isinstance(event, dict) for event in events):
+            raise RuntimeError("restricted provider returned malformed events")
+        if any(event.get("type") in {"error", "turn.failed"} for event in events):
+            raise RuntimeError("restricted provider returned an error")
+        completed = [e for e in events if e.get("type") == "turn.completed"]
+        if not completed:
+            raise RuntimeError("restricted provider returned no completed review")
+        if len(completed) > 1:
+            raise RuntimeError("restricted provider returned more than one completed turn")
+        try:
+            final = json.loads(last_message) if last_message else None
+        except ValueError:
+            final = None
+        if (not isinstance(final, dict) or set(final) != {"review"}
+                or not isinstance(final["review"], str) or not final["review"].strip()):
+            raise RuntimeError("restricted provider returned no structured final review")
+        return dict(result=final["review"], usage=completed[0].get("usage"))
 
     def stream_review(self, **review):
         # Capture the result as text and consumption only, with the exact same
