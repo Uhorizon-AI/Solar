@@ -492,6 +492,31 @@ def test_result_view_keeps_the_headings_of_the_providers_own_reply(solar_env):
         assert part in found["text"]
 
 
+def test_result_view_caps_a_multibyte_reply_at_the_byte_limit(solar_env):
+    logs = solar_env.runtime / "task-logs"
+    logs.mkdir(parents=True)
+    log = logs / "multibyte.md"
+    log.write_text("# Async Task Execution\n\n## Result\n\nReviewed commit: abc\n\n## Findings\n" + "界" * 40000,
+                   encoding="utf-8")
+    with solar_state.session() as store:
+        task = store.task_create([("title", '"R"'), ("result_path", json.dumps(str(log)))], "\n# R\n", status="draft")
+    found = search(scope="tasks", task_id=task, view="result")["execution_log"]
+    assert found["truncated"] is True
+    assert found["text"].startswith("## Result\n\nReviewed commit: abc\n\n## Findings")
+    assert len(found["text"].encode("utf-8")) <= 60000
+
+
+def test_result_view_keeps_a_result_heading_without_a_body(solar_env):
+    logs = solar_env.runtime / "task-logs"
+    logs.mkdir(parents=True)
+    log = logs / "no-body.md"
+    log.write_text("# Async Task Execution\n\n## Result\n")
+    with solar_state.session() as store:
+        task = store.task_create([("title", '"R"'), ("result_path", json.dumps(str(log)))], "\n# R\n", status="draft")
+    found = search(scope="tasks", task_id=task, view="result")["execution_log"]
+    assert found["outcome"] == "result" and found["text"].startswith("## Result")
+
+
 def test_result_view_falls_back_to_the_recorded_log_path_and_stays_confined(solar_env):
     logs = solar_env.runtime / "task-logs"
     logs.mkdir(parents=True)

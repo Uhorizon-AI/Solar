@@ -237,10 +237,12 @@ def _execution_result(task: dict, values: dict) -> dict | None:
                  if item["level"] == 2 and item["title"] in ("Result", "Error")]
         if not found:
             continue
-        # The outcome runs to the end of the log, as `execute_active` reads it: the
-        # provider's own reply sits under it and may carry `## ` headings of its own.
+        # The outcome runs to the end of the log, as `execute_active` reads it
+        # (RE_LOG_OUTCOME_SECTION, keep the two rules aligned): the provider's own reply
+        # sits under it and may carry `## ` headings of its own. The cut is on bytes.
+        body = text[found[0]["start"]:].encode("utf-8")[:_LIMIT_BYTES].decode("utf-8", "ignore")
         return dict(file=path.name, truncated=len(text.encode()) > _LIMIT_BYTES,
-                    outcome=found[0]["title"].lower(), text=text[found[0]["start"]:][:_LIMIT_BYTES])
+                    outcome=found[0]["title"].lower(), text=body)
     return None
 
 
