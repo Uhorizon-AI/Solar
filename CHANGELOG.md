@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Repository reviews now record the repository HEAD when the review finished (`Repository HEAD when the review finished: <id>`, same as / differs from the reviewed commit, or `unknown`) right after `Reviewed commit`. It is a record, not a gate: it never rejects or fails a review and stays out of the manifest and digest. Statements by the model about HEAD remain commentary.
+
 ## [0.53.1] - 2026-10-18
 ### Fixed
 - fix: cap the task result view on bytes and cover multibyte replies

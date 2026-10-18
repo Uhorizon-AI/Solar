@@ -115,14 +115,13 @@ else:
     assert (root / 'operations.md').read_text() == 'The maximum batch is five.\n'
 
 
-def _label(root, commit):
-    return 'Repository HEAD when the review finished: '
+LABEL = 'Repository HEAD when the review finished: '
 
 
 def test_freshness_same_head(tmp_path):
     root, commit = repository(tmp_path)
     e = envelope(root, commit)
-    assert repo.freshness_line(e['manifest']) == _label(root, commit) + commit + ' (same as the reviewed commit)'
+    assert repo.freshness_line(e['manifest']) == LABEL + commit + ' (same as the reviewed commit)'
 
 
 def test_freshness_newer_head_is_recorded_and_snapshot_digest_is_unchanged(tmp_path):
@@ -131,7 +130,7 @@ def test_freshness_newer_head_is_recorded_and_snapshot_digest_is_unchanged(tmp_p
     (root / 'operations.md').write_text('Builder now supports six.\n')
     git(root, 'add', '.'); git(root, 'commit', '-qm', 'builder continues')
     head = git(root, 'rev-parse', 'HEAD').strip()
-    assert repo.freshness_line(e['manifest']) == _label(root, commit) + head + ' (differs from the reviewed commit)'
+    assert repo.freshness_line(e['manifest']) == LABEL + head + ' (differs from the reviewed commit)'
     # Recording freshness is not part of the approved contract.
     assert profiles.verify_envelope(e['manifest'], e['review_input_digest'], provider='claude', profile=repo.PROFILE)
 
@@ -143,8 +142,8 @@ def test_freshness_detached_head_still_reports_the_commit(tmp_path):
     assert repo.freshness_line(e['manifest']).endswith('(same as the reviewed commit)')
 
 
-@pytest.mark.parametrize('breakage', ['moved', 'no_git', 'bad_manifest'])
-def test_freshness_failures_are_unknown_and_never_raise(tmp_path, breakage):
+@pytest.mark.parametrize('breakage', ['moved', 'no_git', 'nested_without_git', 'unborn', 'timeout', 'bad_manifest'])
+def test_freshness_failures_are_unknown_and_never_raise(tmp_path, monkeypatch, breakage):
     root, commit = repository(tmp_path)
     e = envelope(root, commit)
     manifest = e['manifest']
@@ -153,9 +152,25 @@ def test_freshness_failures_are_unknown_and_never_raise(tmp_path, breakage):
     elif breakage == 'no_git':
         import shutil
         shutil.rmtree(root / '.git')
+    elif breakage == 'nested_without_git':
+        # An enclosing repository must never be reported as the approved one.
+        import shutil
+        git(tmp_path, 'init', '-q')
+        git(tmp_path, 'config', 'user.name', 'Fixture'); git(tmp_path, 'config', 'user.email', 'fixture@example.invalid')
+        (tmp_path / 'outer.txt').write_text('outer'); git(tmp_path, 'add', 'outer.txt'); git(tmp_path, 'commit', '-qm', 'outer')
+        shutil.rmtree(root / '.git')
+    elif breakage == 'unborn':
+        empty = tmp_path / 'empty'; empty.mkdir(); git(empty, 'init', '-q')
+        manifest = dict(manifest, user_prompt=json.dumps(dict(repository=str(empty), commit=commit)))
+    elif breakage == 'timeout':
+        import subprocess
+
+        def timed_out(*a, **kw):
+            raise subprocess.TimeoutExpired('git', 20)
+        monkeypatch.setattr(repo.subprocess, 'run', timed_out)
     else:
         manifest = dict(manifest, user_prompt='not json')
-    assert repo.freshness_line(manifest) == _label(root, commit) + 'unknown'
+    assert repo.freshness_line(manifest) == LABEL + 'unknown'
 
 
 def test_review_succeeds_with_unknown_freshness_and_model_prose_is_not_the_record(tmp_path, monkeypatch):
@@ -182,7 +197,7 @@ else: print(json.dumps(dict(result='HEAD is deadbeef, the version is stale.')))
     out = adapter.run('ctx', review=review)
     lines = out.split('\n')
     assert lines[0] == 'Reviewed commit: ' + commit
-    assert lines[1] == _label(root, commit) + 'unknown'
+    assert lines[1] == LABEL + 'unknown'
     assert out.endswith('HEAD is deadbeef, the version is stale.')
 
 

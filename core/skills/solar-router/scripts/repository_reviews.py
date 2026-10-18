@@ -160,6 +160,10 @@ def freshness_line(manifest):
     label = 'Repository HEAD when the review finished: '
     try:
         user = json.loads(manifest['user_prompt'])
+        # Without its own .git the path may sit inside another repository: never report that one.
+        top = _git(user['repository'], 'rev-parse', '--show-toplevel').decode().strip()
+        if Path(top).resolve() != Path(user['repository']).resolve():
+            return label + 'unknown'
         head = _git(user['repository'], 'rev-parse', '--verify', '-q', 'HEAD').decode().strip()
         if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', head):
             return label + 'unknown'
