@@ -38,6 +38,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from functools import partial
 from pathlib import Path
 
 _SKILLS = Path(__file__).resolve().parents[2]
@@ -546,15 +547,21 @@ def serve(stdin=None, stdout=None) -> int:
         stdout.write(json.dumps(message, default=str) + "\n")
         stdout.flush()
 
-    def confirm(name, arguments, request_id):
+    def confirm(name, arguments, request_id, *, request_meta=None):
         # The text is rendered here from the validated arguments and the stored
         # task, never from caller prose; the binding stays on the full arguments.
         elicitation_id = 'approval-' + uuid.uuid4().hex
         message, checkbox = approval_text.render(name, arguments, seconds=CONFIRMATION_TIMEOUT)
-        emit(dict(jsonrpc="2.0", id=elicitation_id, method="elicitation/create", params=dict(
+        form_params = dict(
             message=message,
             requestedSchema=dict(type="object", properties=dict(
-                approve=dict(type="boolean", title=checkbox, default=False)), required=["approve"]))))
+                approve=dict(type="boolean", title=checkbox, default=False)), required=["approve"]))
+        # Some hosts route native forms using the originating progress token.
+        # Correlation is not authority; never forward other caller metadata.
+        token = request_meta.get('progressToken') if isinstance(request_meta, dict) else None
+        if type(token) in (str, int):
+            form_params['_meta'] = {'progressToken': token}
+        emit(dict(jsonrpc="2.0", id=elicitation_id, method="elicitation/create", params=form_params))
         def close_form():
             emit(dict(jsonrpc="2.0", method="notifications/cancelled",
                       params=dict(requestId=elicitation_id, reason="Origin cancelled or confirmation expired")))
@@ -597,10 +604,10 @@ def serve(stdin=None, stdout=None) -> int:
         close_form()
         return False
 
-    def confirm_and_record(name, arguments, request_id):
+    def confirm_and_record(name, arguments, request_id, *, request_meta=None):
         confirmation.update(attempted=True, outcome='pending')
         try:
-            accepted = confirm(name, arguments, request_id)
+            accepted = confirm(name, arguments, request_id, request_meta=request_meta)
         except ConfirmationCancelled:
             confirmation['outcome'] = 'cancelled'
             raise
@@ -638,7 +645,10 @@ def serve(stdin=None, stdout=None) -> int:
         active_key = request_key(message['id']) if 'id' in message else None
         try:
             confirmation.update(attempted=False, outcome='not_requested')
-            response = handle(message, confirm_and_record if supports_confirmation else None)
+            params = message.get('params')
+            request_meta = params.get('_meta') if isinstance(params, dict) else None
+            callback = partial(confirm_and_record, request_meta=request_meta) if supports_confirmation else None
+            response = handle(message, callback)
             if response and 'result' in response:
                 if message.get('method') == 'initialize':
                     response['result']['_meta'] = {'solar/confirmation': dict(confirmation)}

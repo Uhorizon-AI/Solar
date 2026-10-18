@@ -29,6 +29,29 @@ The operator CLI grants only registered A2 operations with valid arguments; anyt
 Telegram confirmation requires an explicit destination (`chat_id` is required by the schema), so changing the default
 chat cannot redirect a confirmed call.
 
+## Native form correlation
+
+Solar forwards only a string or integer `params._meta.progressToken` from the
+originating tool call into the pending `elicitation/create` request's `_meta`.
+Booleans and other types are ignored; calls without a valid token retain the
+existing form request. No other metadata is copied, and deferred calls retain
+their own token rather than inheriting one from a previous call.
+
+This is routing compatibility, not consent: the token never replaces the
+server-generated elicitation ID, explicit `accept` with `approve: true`, scoped
+approval, expiry, cancellation or single-use checks. Tool arguments cannot set it.
+The MCP specification defines progress tokens for optional progress reporting;
+using the originating token to route a form is a host compatibility requirement,
+not a universal elicitation requirement.
+
+An isolated desktop probe on Antigravity 2.24.0 advertised form support but
+immediately returned `cancel` without a visible form when the token was omitted.
+Forwarding the originating token displayed the native form and returned explicit
+acceptance. Codex and Cursor also completed isolated native-form probes without
+this correlation requirement. These probes do not establish a full Solar task
+execution or validate all cancellation paths in those applications. Claude's
+MCP form path remains unverified in this round.
+
 ## Confirmation text
 
 `approval_text.py` writes the prompt from the validated arguments and the task as
@@ -81,13 +104,10 @@ An `approval_required` refusal on a connection without form support also gives
 or ask an agent to manufacture approval. This diagnoses negotiation separately
 from workspace resolution, operation validation, and visible client UI behavior.
 
-Antigravity's native `ask_question` panel can display questions and return the
-user's selection to its agent. This does not by itself answer Solar's pending
-`elicitation/create` request. User-supplied screenshots on 2026-10-18 confirmed
-the panel and selected answer in the desktop app; two separate reported Solar
-calls were refused with `approval_required`. Those refusals did not record the
-negotiated capability, so its absence remains a hypothesis until checked with
-these diagnostics. They do not establish universal lack of client support.
+Antigravity's native `ask_question` panel is separate from MCP elicitation.
+A working question tool does not prove that a pending MCP form is routed correctly;
+see [Native form correlation](#native-form-correlation) for the isolated desktop
+probe and the originating progress token required by that installed client.
 
 The [official hook contract](https://antigravity.google/docs/hooks#posttooluse)
 documents `toolCall`, `stepIdx` and `error` for command-based `PostToolUse` hooks,
@@ -101,8 +121,9 @@ A future native host adapter must receive the actual UI result outside model
 tool arguments, bind it to Solar's generated request, exact operation/arguments,
 workspace and expiry, and enforce cancellation and single use before execution.
 That adapter needs a real host integration and acceptance/decline/cancel/timeout
-tests in the target client. This change adds diagnostics, not that adapter or a
-macOS dialog fallback. No hook or client configuration is installed automatically.
+tests in the target client. Diagnostics and routing correlation do not install
+that adapter or a macOS dialog fallback. No hook or client configuration is
+installed automatically.
 
 ### All clients use their own native interaction surface
 
@@ -115,7 +136,7 @@ OS dialog for one client or make an agent forward its own account of an answer.
 | Codex | MCP form confirmation observed in the repository pilot. Native input tools are a separate surface. | Verify any proposed adapter against host permission rules; do not repurpose a clarification-only tool for permissions. |
 | Claude | `AskUserQuestion` and SDK `canUseTool` are documented native interaction hooks. | A real callback binding to Solar and client UI lifecycle tests remain unverified here. |
 | Cursor | Reported exact-call MCP confirmation created only a draft in the client test. | Verify any different question-tool adapter separately; do not infer it from MCP form success. |
-| Antigravity | User screenshots confirm `ask_question` and the selected answer. | Confirm negotiated MCP support and a trusted desktop response callback to Solar. |
+| Antigravity | Isolated MCP form acceptance observed on desktop 2.24.0 when the originating progress token was forwarded. | Verify the complete Solar operation and remaining UI lifecycle outcomes. |
 
 Tool names and availability must come from each active host, not from the review
 provider name. In particular, Codex's `request_user_input` is subject to host
