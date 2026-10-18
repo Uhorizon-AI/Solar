@@ -63,7 +63,8 @@ run_expect_ok() {
 run_expect_fail() {
   local label="$1"
   shift
-  if "$@" >/dev/null 2>&1; then
+  if "$@" >"$TMP/command.log" 2>&1; then
+    cat "$TMP/command.log" >&2
     fail "$label (expected failure)"
   else
     pass "$label"
@@ -80,13 +81,18 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Do not inherit production roots, cutover hooks or provider configuration.
+# Clear SOLAR_TEST_* too: opt-in suites must be run separately, never implicitly
+# enabled by the caller of this offline smoke.
 for smoke_var in ${!SOLAR_@}; do unset "$smoke_var"; done
 mkdir -p "$TMP/bin" "$TMP/install"
 # Exercise a disposable copy, including upgrade's install-pruning path.
 SOURCE_ROOT="$INSTALL_ROOT"
 mkdir -p "$TMP/install/core"
 (cd "$SOURCE_ROOT/core" && tar --exclude='.venv' --exclude='__pycache__' -cf - .) | \
-  tar -xf - -C "$TMP/install/core" || exit 1
+  tar -xf - -C "$TMP/install/core" || {
+    echo "ERROR: could not copy the source install" >&2
+    exit 1
+  }
 INSTALL_ROOT="$TMP/install"
 SOLAR="$INSTALL_ROOT/core/skills/solar-client/scripts/solar"
 RESOLVE="$INSTALL_ROOT/core/skills/solar-paths/scripts/resolve_solar_paths.sh"
@@ -96,7 +102,10 @@ exit 1
 EOF
 cat >"$TMP/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-# The smoke is offline. Individual unit tests install their own response doubles.
+# The smoke is offline, including _smoke_unit children that inherit PATH.
+# Unit suites must install response doubles. A future suite needing real curl
+# must explicitly select its executable through a test-owned variable; the
+# inherited curl intentionally refuses all requests.
 exit 1
 EOF
 chmod +x "$TMP/bin/launchctl" "$TMP/bin/curl"
@@ -120,6 +129,7 @@ _smoke_unit() (
   # Unit fixtures select their own installs and workspaces.
   unset SOLAR_ROOT SOLAR_INSTALL_DIR SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE SOLAR_WORKSPACE
   # Historical updater regressions need the source repository's release tags.
+  # The smoke does not modify that checkout or enforce filesystem read-only access.
   bash "$SOURCE_ROOT/${1#"$INSTALL_ROOT/"}"
 )
 _smoke_context preflight

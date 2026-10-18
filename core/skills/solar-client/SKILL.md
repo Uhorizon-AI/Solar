@@ -143,8 +143,11 @@ bash core/skills/solar-client/scripts/smoke-solar-client.sh "$PWD"
 ```
 
 The smoke runs offline against disposable install copies and workspaces, with a
-separate runtime per workspace and simulated service/LaunchAgent controls. Its
-source install is read-only; failures include captured command output.
+separate runtime per workspace and simulated service/LaunchAgent controls. The
+smoke does not write to the source install; it does not enforce filesystem
+read-only access for shell suites run from that checkout. Failures include
+captured command output. Inherited `SOLAR_TEST_*` opt-ins are cleared; run
+optional suites separately.
 
 ## CLI (via `solar` entrypoint)
 

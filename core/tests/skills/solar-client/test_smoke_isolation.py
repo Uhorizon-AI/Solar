@@ -28,7 +28,7 @@ def test_smoke_ignores_caller_runtime_and_reports_reinit_errors(tmp_path, fail_r
         target = install / "core/tests/skills" / folder
         target.mkdir(parents=True)
         for name in names:
-            (target / name).write_text("#!/bin/bash\nexit 0\n")
+            (target / name).write_text("#!/bin/bash\n[[ -z ${SOLAR_TEST_LAUNCHD+x} ]]\n")
     if fail_reinit:
         cli = install / "core/skills/solar-client/scripts/solar"
         code = cli.read_text()
@@ -50,7 +50,7 @@ fi''', 1)
     sentinel = install / ".cursor/skills/keep"
     sentinel.mkdir(parents=True)
     env = os.environ.copy()
-    env.update(SOLAR_ROOT=str(install), SOLAR_WORKSPACE=str(tmp_path / "caller-workspace"),
+    env.update(SOLAR_TEST_LAUNCHD="1", SOLAR_ROOT=str(install), SOLAR_WORKSPACE=str(tmp_path / "caller-workspace"),
                SOLAR_RUNTIME_ROOT=str(runtime), SOLAR_APP_DATA=str(tmp_path / "caller-app"),
                SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="host,gateway",
                SOLAR_CLIENT_LAUNCHCTL="/bin/launchctl")
@@ -76,3 +76,45 @@ fi''', 1)
     else:
         assert result.returncode == 0, output
         assert "FAIL=0" in output
+
+
+def test_smoke_reports_copy_failure_and_cleans_temporary_files(tmp_path):
+    source = tmp_path / "source"
+    (source / "core").mkdir(parents=True)
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    tar = binaries / "tar"
+    tar.write_text("#!/bin/bash\necho 'injected archive failure' >&2\nexit 9\n")
+    tar.chmod(0o755)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"], TMPDIR=str(scratch))
+    result = subprocess.run(
+        ["bash", str(CORE / "skills/solar-client/scripts/smoke-solar-client.sh"), str(source)],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 1
+    assert "injected archive failure" in result.stderr
+    assert "ERROR: could not copy the source install" in result.stderr
+    assert list(scratch.iterdir()) == []
+
+
+@pytest.mark.parametrize("exit_code", [0, 9])
+def test_negative_expectation_only_prints_output_on_unexpected_success(tmp_path, exit_code):
+    script = (CORE / "skills/solar-client/scripts/smoke-solar-client.sh").read_text()
+    helpers = script[script.index("PASS=0"):script.index("_smoke_seed_workspace()")]
+    command = 'TMP="$1"\n' + helpers + """
+run_expect_fail probe bash -c 'echo command-detail; exit "$1"' _ "$2"
+printf 'FAIL=%s\n' "$FAIL"
+"""
+    result = subprocess.run(["bash", "-c", command, "_", str(tmp_path), str(exit_code)],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0
+    if exit_code == 0:
+        assert "command-detail" in result.stderr
+        assert "FAIL: probe (expected failure)" in result.stderr
+        assert "FAIL=1" in result.stdout
+    else:
+        assert "command-detail" not in result.stdout + result.stderr
+        assert "PASS: probe" in result.stdout
+        assert "FAIL=0" in result.stdout
