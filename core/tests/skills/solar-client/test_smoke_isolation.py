@@ -102,7 +102,11 @@ def test_smoke_reports_copy_failure_and_cleans_temporary_files(tmp_path):
 @pytest.mark.parametrize("exit_code", [0, 9])
 def test_negative_expectation_only_prints_output_on_unexpected_success(tmp_path, exit_code):
     script = (CORE / "skills/solar-client/scripts/smoke-solar-client.sh").read_text()
-    helpers = script[script.index("PASS=0"):script.index("_smoke_seed_workspace()")]
+    _, start, remainder = script.partition("PASS=0")
+    assert start, "Smoke helper start delimiter missing: PASS=0"
+    body, end, _ = remainder.partition("_smoke_seed_workspace()")
+    assert end, "Smoke helper end delimiter missing after PASS=0: _smoke_seed_workspace()"
+    helpers = start + body
     command = 'TMP="$1"\n' + helpers + """
 run_expect_fail probe bash -c 'echo command-detail; exit "$1"' _ "$2"
 printf 'FAIL=%s\n' "$FAIL"
