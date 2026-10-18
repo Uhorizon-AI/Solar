@@ -151,6 +151,29 @@ def verify(manifest, expected, provider):
         raise _error() from None
 
 
+def freshness_line(manifest):
+    """Solar's own record of the repository HEAD when the review finished.
+
+    Informational only: it never rejects, never enters the manifest or digest, and any
+    failure (unborn HEAD, git error or timeout) yields "unknown".
+    """
+    label = 'Repository HEAD when the review finished: '
+    try:
+        user = json.loads(manifest['user_prompt'])
+        # Without its own .git the path may sit inside another repository: never report that one.
+        top = _git(user['repository'], 'rev-parse', '--show-toplevel').decode().strip()
+        if Path(top).resolve() != Path(user['repository']).resolve():
+            return label + 'unknown'
+        head = _git(user['repository'], 'rev-parse', '--verify', '-q', 'HEAD').decode().strip()
+        if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', head):
+            return label + 'unknown'
+        if head == user['commit']:
+            return label + head + ' (same as the reviewed commit)'
+        return label + head + ' (differs from the reviewed commit)'
+    except Exception:  # noqa: BLE001 - diagnostic must never change the outcome
+        return label + 'unknown'
+
+
 def verify_scope(manifest, scopes):
     root = Path(json.loads(manifest['user_prompt'])['repository']).resolve()
     if not any(root == Path(s).resolve() or Path(s).resolve() in root.parents for s in scopes):

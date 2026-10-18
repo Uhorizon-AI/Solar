@@ -201,7 +201,9 @@ class BaseProvider(ABC):
             from execution_profiles import verify_envelope
             approved = verify_envelope(manifest, expected, provider=self.name, profile=profile)
             commit = json.loads(approved["user_prompt"])["commit"]
-            return "Reviewed commit: " + commit + "\n\n" + result["result"]
+            from repository_reviews import freshness_line
+            return ("Reviewed commit: " + commit + "\n" + freshness_line(approved) + "\n\n"
+                    + result["result"])
         return result["result"]
 
     def _capture_evidence(self, manifest, argv, env, stdout, returncode, timed_out=False) -> None:
