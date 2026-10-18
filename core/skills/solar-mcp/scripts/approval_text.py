@@ -40,6 +40,7 @@ COPY = {
     "en": dict(
         approve_title="Approve this action",
         footer="Single use, valid {seconds} seconds. If it fails or is uncertain, a new approval is needed.",
+        review_unreadable="Review metadata could not be verified.",
         task="Task", reason="Reason", effect="Effect", to="To", message="Message", format="Format",
         warn="Warning", none="(none)", unlimited="unlimited",
         archive_head="Archive task",
@@ -100,6 +101,7 @@ COPY = {
     "es": dict(
         approve_title="Aprobar esta acción",
         footer="Un solo uso, válida {seconds} segundos. Si falla o es incierta, hace falta una nueva aprobación.",
+        review_unreadable="No se pudieron verificar los datos de revisión.",
         task="Tarea", reason="Motivo", effect="Efecto", to="Destinatario", message="Mensaje", format="Formato",
         warn="Aviso", none="(ninguno)", unlimited="sin límite",
         archive_head="Archivar tarea",
@@ -317,6 +319,9 @@ def _archive(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
         return _head(copy, copy["archive_head"], [(copy["reason"], _line(args["reason"]))], notes)
+    if "review" in args or "review_batch" in args:
+        material = True
+        lines += [f"{k}: {v}" for k,v in _review_rows(copy, args.get("review") or args["review_batch"])]
     status = facts["status"]
     if status == "active":
         effect = copy["archive_active"]
@@ -329,6 +334,20 @@ def _archive(copy, args):
     rows = [(copy["task"], _line(facts["title"], _VALUE)), (copy["reason"], _line(args["reason"])),
             (copy["effect"], effect)]
     return _head(copy, copy["archive_head"], rows, notes, [copy["archive_guard"]])
+
+
+def _review_rows(copy, spec):
+    rows = []
+    for key in ("profile", "model", "repository", "commit"):
+        if spec.get(key):
+            rows.append((key, _line(spec[key], 1000 if key == "repository" else _VALUE)))
+    for child in spec.get("reviews", []):
+        rows.append(("review", _line(child["title"] + ": " + child["provider"] + " / " + child["model"], _VALUE)))
+        rows.append((copy["instructions"], _excerpt(copy, child["instructions"])))
+        for key in ("repository", "commit"):
+            if child.get(key):
+                rows.append((key, _line(child[key], 1000)))
+    return rows
 
 
 def _create(copy, args):
@@ -346,6 +365,7 @@ def _create(copy, args):
             rows.append((key, _line(args[key], _VALUE)))
     if "access_policy" in args:
         rows.append((copy["access"], _access_text(copy, dict(args["access_policy"], version=1))))
+    rows += _review_rows(copy, args.get("review") or args.get("review_batch") or {})
     rows.append((copy["instructions"], _excerpt(copy, args["instructions"])))
     rows.append((copy["effect"], copy["revise_effect" if source else "create_effect"]))
     return _head(copy, copy["revise_head" if source else "create_head"], rows, notes)
@@ -553,6 +573,22 @@ def _context_rows(copy: dict, facts: dict) -> list:
             if values.get(key):
                 rows.append((copy[key], _line(str(values[key]), _VALUE)))
     rows.append((copy["access"], _access_text(copy, values.get("access_policy"))))
+    try:
+        manifest = json.loads(values.get("review_input_manifest") or "null")
+        if values.get("execution_profile") and isinstance(manifest, dict):
+            spec = dict(profile=values["execution_profile"], model=manifest["model"])
+            user = json.loads(manifest["user_prompt"])
+            spec.update({k:user[k] for k in ("repository", "commit") if k in user})
+            rows += _review_rows(copy, spec)
+        elif isinstance(manifest, dict) and "reviews" in manifest:
+            children = []
+            for entry in manifest["reviews"]:
+                m = entry["manifest"]; u = json.loads(m["user_prompt"])
+                children.append(dict(title=entry["key"],provider=m["provider"],model=m["model"],instructions=u["instructions"],
+                                     repository=u.get("repository"),commit=u.get("commit")))
+            rows += _review_rows(copy, dict(reviews=children))
+    except (KeyError, ValueError, TypeError):
+        rows.append((copy["warn"], copy["review_unreadable"]))
     if facts["recurring"]:
         rows.append((copy["repeats"], _repeats(copy, True, schedule.get("recurring_min_interval"),
                                                schedule.get("recurring_max_runs"))))

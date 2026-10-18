@@ -147,3 +147,9 @@ See [Async capacity rollout and reversal](async-rollout.md) for prerequisites,
 exact proposal/application steps and safe drain/rollback. The
 [quality pilot](review-quality-pilot.md) is prepared separately and requires
 explicit account and bounded-cost authorization before real inference.
+
+## Repository review extension
+
+[Repository readers alongside a builder](repository-readonly-review.md) adds an
+independent commit-bound read-only profile. Packet reviews remain supported.
+The extension does not change applied capacity or enable any reader profile.

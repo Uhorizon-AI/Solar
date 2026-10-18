@@ -122,12 +122,85 @@ def _task(store, task_id: str) -> dict:
     return task
 
 
+def _review_fields(arguments: dict) -> dict:
+    """Compose inputs through Router before native confirmation; never queue."""
+    if "review_batch" in arguments:
+        return _review_batch_fields(arguments)
+    if "review" not in arguments:
+        return {}
+    router_scripts = str(_SKILLS / "solar-router" / "scripts")
+    if router_scripts not in sys.path:
+        sys.path.insert(0, router_scripts)
+    from execution_profiles import build_review_envelope_v1, verify_sources, canonical, ProfileError
+    from repository_reviews import build as build_repository, PROFILE as REPOSITORY_PROFILE
+    spec = arguments["review"]
+    try:
+        if not arguments.get("provider") or not arguments.get("instructions"):
+            raise OperationError("review_input_invalid", "A review needs explicit provider and instructions.")
+        common = dict(provider=arguments["provider"], model=spec["model"],
+                      instructions=arguments["instructions"], rules=spec.get("rules", []))
+        if spec["profile"] == REPOSITORY_PROFILE:
+            if set(spec) - {"profile", "model", "rules", "repository", "commit"}:
+                raise OperationError("review_input_invalid", "Repository reviews cannot contain packet evidence.")
+            envelope = build_repository(repository=spec["repository"], commit=spec["commit"], **common)
+            scopes = [spec["repository"]]
+        else:
+            if set(spec) - {"profile", "model", "rules", "evidence"}:
+                raise OperationError("review_input_invalid", "Packet reviews cannot contain repository fields.")
+            envelope = build_review_envelope_v1(evidence=[dict(path=e["source_path"], content=e["content"], sha256=e["sha256"]) for e in spec["evidence"]], **common)
+            scopes = [item["source_path"] for item in spec["evidence"]]
+        access = arguments.get("access_policy", dict(mode="read", scopes=scopes, resources=[]))
+        if access["mode"] != "read":
+            raise OperationError("review_input_invalid", "Review access must be read-only.")
+        verify_sources(envelope["manifest"], access.get("scopes", []))
+        return dict(execution_profile=json.dumps(spec["profile"]),
+                    review_input_manifest=json.dumps(canonical(envelope["manifest"])),
+                    review_input_digest=json.dumps(envelope["review_input_digest"]),
+                    access_policy=_access_text(access))
+    except (ProfileError, KeyError, ValueError, TypeError) as exc:
+        raise OperationError("review_input_invalid", getattr(exc, "code", "Review fields are incomplete.")) from None
+
+
+def _review_batch_fields(arguments):
+    if "review" in arguments or any(not arguments.get(k) for k in ("object", "scope", "effect")):
+        raise OperationError("review_input_invalid", "A review batch needs object/scope/effect and no single review.")
+    spec = arguments["review_batch"]
+    entries, templates, declarations = [], [], []
+    keys, titles = set(), set()
+    repository = spec["repository"]
+    for child in spec["reviews"]:
+        if child["key"] in keys or child["title"] in titles:
+            raise OperationError("review_input_invalid", "Review keys and titles must be unique.")
+        keys.add(child["key"]); titles.add(child["title"])
+        fields = _review_fields(dict(provider=child["provider"], instructions=child["instructions"], review=dict(
+            profile="repository_readonly_v1", repository=repository, commit=spec["commit"],
+            model=child["model"], rules=child.get("rules", []))))
+        manifest = json.loads(json.loads(fields["review_input_manifest"]))
+        digest = json.loads(fields["review_input_digest"])
+        entries.append(dict(key=child["key"], manifest=manifest, review_input_digest=digest))
+        templates.append(dict(key=child["key"], title=child["title"], instructions=child["instructions"], inputs=[digest]))
+    from execution_profiles import canonical, digest
+    catalog = dict(version=1, reviews=entries)
+    access = dict(version=1, mode="read", scopes=[repository], resources=[])
+    policy = dict(version=1, max_children=len(entries), providers=sorted({c["provider"] for c in spec["reviews"]}),
+                  templates=templates, max_access=access, **{k: arguments[k] for k in ("object", "scope", "effect")})
+    return dict(subtask_policy=json.dumps(canonical(policy)), review_input_manifest=json.dumps(canonical(catalog)),
+                review_input_digest=json.dumps(digest(catalog)))
+
+
+def _prepare_review(arguments):
+    # Validate and compose before presenting a native approval. The handler
+    # recomposes afterwards: source changes cannot reuse the earlier attestation.
+    _review_fields(arguments)
+
+
 def _do_task_create(arguments: dict) -> dict:
     import solar_state
 
     fields = [("title", json.dumps(arguments["title"], ensure_ascii=False)),
               ("created", json.dumps(_now_iso())),
               ("updated", json.dumps(_now_iso()))]
+    review_fields = _review_fields(arguments)
     source_id = arguments.get("revises_task_id")
     copied: dict = {}
     with solar_state.session() as store:
@@ -139,6 +212,8 @@ def _do_task_create(arguments: dict) -> dict:
                     "revision_unsupported",
                     "A task with a local executor is not revised through MCP: "
                     "executor settings are never copied or set here.")
+            if raw.get("execution_profile") and not review_fields:
+                raise OperationError("review_input_invalid", "A restricted revision needs fresh review inputs.")
             for key in _COPIED:
                 if key in raw and raw[key].strip():
                     copied[key] = raw[key].strip()
@@ -150,6 +225,7 @@ def _do_task_create(arguments: dict) -> dict:
             merged["priority"] = arguments["priority"]
         if "access_policy" in arguments:
             merged["access_policy"] = _access_text(arguments["access_policy"])
+        merged.update(review_fields)
         fields += list(merged.items())
         if source_id:
             fields.append(("revises_task_id", json.dumps(source_id)))
@@ -213,7 +289,15 @@ def _do_task_update(arguments: dict) -> dict:
     with solar_state.read_session() as store:
         current = _task(store, arguments["task_id"])
     old_title = solar_state.value_of(dict((k, v) for k, v in current["frontmatter"]).get("title")) or ""
+    current_fields = dict(current["frontmatter"])
+    if ((current_fields.get("execution_profile") and "review_batch" in changes)
+            or (current_fields.get("subtask_policy") and "review" in changes)):
+        raise OperationError("review_input_invalid", "Changing between a review and a parent batch needs a new revision.")
+    if (dict(current["frontmatter"]).get("execution_profile")
+            and set(changes) & {"instructions", "provider", "access_policy"} and "review" not in changes):
+        raise OperationError("review_input_invalid", "Restricted edits require fresh review inputs.")
     fields = {key: _fm(value) for key, value in changes.items() if key in _TEXT_FIELDS}
+    fields.update(_review_fields(arguments))
     if "priority" in changes:
         fields["priority"] = changes["priority"]
     if "access_policy" in changes:
@@ -462,6 +546,25 @@ _ACCESS = _obj(dict(
     resources={"type": "array", "items": SLUG, "maxItems": 32, "uniqueItems": True,
                "description": "Resources held exclusively while it runs, e.g. a browser session."}),
     required=("mode",))
+_REVIEW = _obj(dict(
+    profile={"type": "string", "enum": ["text_only_review_v1", "repository_readonly_v1"]},
+    model=LINE(160), rules={"type": "array", "items": LINE(1000), "maxItems": 32},
+    repository={"type": "string", "pattern": r"/[^\x00-\x1f\x7f]*", "maxLength": 1000},
+    commit={"type": "string", "pattern": r"[0-9a-f]{40}|[0-9a-f]{64}"},
+    evidence={"type": "array", "maxItems": 128, "items": _obj(dict(
+        source_path={"type": "string", "pattern": r"/[^\x00-\x1f\x7f]*", "maxLength": 1000},
+        content={"type": "string", "maxLength": 98304},
+        sha256={"type": "string", "pattern": r"[0-9a-f]{64}"}), required=("source_path", "content", "sha256"))}),
+    required=("profile", "model"))
+
+_REVIEW_BATCH = _obj(dict(repository=_REVIEW["properties"]["repository"],
+    commit=_REVIEW["properties"]["commit"], reviews={"type": "array", "minItems": 1, "maxItems": 5,
+        "items": _obj(dict(key=SLUG, title=_TITLE, instructions=_INSTRUCTIONS,
+                           provider={"type": "string", "enum": ["claude", "codex"]}, model=LINE(160),
+                           rules=_REVIEW["properties"]["rules"]),
+                      required=("key", "title", "instructions", "provider", "model"))}),
+    required=("repository", "commit", "reviews"))
+
 _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 
 OPERATIONS: dict[str, Operation] = {op.name: op for op in (
@@ -469,9 +572,10 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "task.create", A2, "Create a draft task, or a draft revision of an existing task.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),
                   effect=LINE(500), priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
-                  responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS),
+                  responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH),
              required=("title", "instructions")),
-        errors=("task_not_found", "revision_unsupported", "access_policy_invalid"),
+        pre_confirm=_prepare_review,
+        errors=("task_not_found", "revision_unsupported", "access_policy_invalid", "review_input_invalid"),
         effects="Writes one draft row. " + _APPROVED_ONLY + " revises_task_id copies "
                 "configuration, schedule and access declaration from that task and leaves it untouched. "
                 "access_policy declares what the task reads or writes; a task that declares nothing runs alone."),
@@ -480,9 +584,10 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION, title=_TITLE,
                   instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500), effect=LINE(500),
                   priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
-                  responsibility=SLUG, access_policy=_ACCESS),
+                  responsibility=SLUG, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH),
              required=("task_id", "expected_row_version")),
-        errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable",
+        pre_confirm=_prepare_review,
+        errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable", "review_input_invalid",
                 "no_changes", "access_policy_invalid"),
         effects="Rewrites the draft. A planned task returns to draft. A queued task that is only "
                 "renamed keeps its place and its approval; any other change returns it to draft and "

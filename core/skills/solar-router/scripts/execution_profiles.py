@@ -97,6 +97,9 @@ def build_review_envelope_v1(*, instructions: str, rules: list, evidence: list,
 
 def verify_envelope(manifest, expected: str, *, provider: str, profile: str) -> dict:
     """Recompose, including fixed prompt and budget, rather than trusting metadata."""
+    if profile == "repository_readonly_v1":
+        from repository_reviews import verify
+        return verify(manifest, expected, provider)
     try:
         if isinstance(manifest, str):
             manifest = json.loads(manifest)
@@ -113,6 +116,10 @@ def verify_envelope(manifest, expected: str, *, provider: str, profile: str) -> 
 
 def verify_sources(manifest: dict, scopes: list[str]) -> None:
     """Worker-only reads within approved scopes; symlinks cannot widen access."""
+    if manifest.get("execution_profile") == "repository_readonly_v1":
+        from repository_reviews import verify_scope
+        verify_scope(manifest, scopes)
+        return
     roots = [Path(scope).resolve() for scope in scopes]
     content = {s["path"]: s["content"] for s in json.loads(manifest["user_prompt"])["evidence"]}
     for source in manifest["sources"]:
@@ -244,6 +251,13 @@ def reject_project_overrides(root: Path) -> None:
 def restricted_launch(adapter, manifest, expected: str, *, profile: str, extra_flags=(),
                       before_launch=lambda: None):
     """Used unchanged by run/stream. No shell, ambient project cwd or fallback."""
+    if profile == "repository_readonly_v1":
+        if extra_flags:
+            raise ProfileError("execution_profile_override_rejected")
+        from repository_reviews import launch
+        with launch(adapter, manifest, expected, before_launch) as invocation:
+            yield invocation
+        return
     if adapter.name != "claude" or profile != PROFILE:
         raise ProfileError("execution_profile_unsupported")
     inherited = os.environ

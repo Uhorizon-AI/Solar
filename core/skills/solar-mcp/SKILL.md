@@ -178,3 +178,13 @@ Task operations write only through `solar-state` and refuse when the runtime for
 orchestrator processes queued tasks separately. Console and background services
 have their own startup/LaunchAgent lifecycle. A connected MCP child is not evidence
 that the queue worker, console or transport is running.
+
+## Repository review profile
+
+`repository_readonly_v1` explores a private copy of an approved Git commit through
+Router with an exact provider/model. Native `task.create`/`task.update` prepare
+`review` inputs or a bounded `review_batch`; approval and pool admission remain
+separate. Claude and Codex have guarded constructors; other providers refuse.
+The packet profile is unchanged and production profiles remain disabled. See
+[repository review](../../docs/repository-readonly-review.md) for scope, host
+policy checks, CLI restrictions, limitations and the opt-in inference-free probe.

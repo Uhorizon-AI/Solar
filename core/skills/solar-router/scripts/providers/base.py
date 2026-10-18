@@ -162,10 +162,26 @@ class BaseProvider(ABC):
                                   timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300))
         if proc.returncode:
             raise RuntimeError("restricted provider returned non-zero")
-        result = json.loads(proc.stdout)
+        if self.name == "codex":
+            events = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+            if any(event.get("type") in {"error", "turn.failed"} for event in events):
+                raise RuntimeError("restricted provider returned an error")
+            completed = [e for e in events if e.get("type") == "turn.completed"]
+            texts = [e["item"]["text"] for e in events if e.get("type") == "item.completed"
+                     and e.get("item", {}).get("type") == "agent_message"]
+            if len(completed) != 1 or not texts:
+                raise RuntimeError("restricted provider returned no completed review")
+            result = dict(result="\n".join(texts), usage=completed[0].get("usage"))
+        else:
+            result = json.loads(proc.stdout)
         if result.get("is_error") or not isinstance(result.get("result"), str) or not result["result"]:
             raise RuntimeError("restricted provider returned no review text")
         self.last_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
+        if profile == "repository_readonly_v1":
+            from execution_profiles import verify_envelope
+            approved = verify_envelope(manifest, expected, provider=self.name, profile=profile)
+            commit = json.loads(approved["user_prompt"])["commit"]
+            return "Reviewed commit: " + commit + "\n\n" + result["result"]
         return result["result"]
 
     def stream_review(self, **review):
