@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-10-18
+
 ### Added
 - Repository reviews now record the repository HEAD when the review finished (`Repository HEAD when the review finished: <id>`, same as / differs from the reviewed commit, or `unknown`) right after `Reviewed commit`. It is a record, not a gate: it never rejects or fails a review and stays out of the manifest and digest. Statements by the model about HEAD remain commentary.
 
