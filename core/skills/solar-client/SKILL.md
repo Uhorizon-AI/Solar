@@ -142,6 +142,10 @@ bash core/tests/skills/solar-client/test_update_notice.sh
 bash core/skills/solar-client/scripts/smoke-solar-client.sh "$PWD"
 ```
 
+The smoke runs offline against disposable install copies and workspaces, with a
+separate runtime per workspace and simulated service/LaunchAgent controls. Its
+source install is read-only; failures include captured command output.
+
 ## CLI (via `solar` entrypoint)
 
 Canonical entry: `core/skills/solar-client/scripts/solar`
