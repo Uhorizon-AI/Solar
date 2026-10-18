@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.53.1] - 2026-10-18
+### Fixed
+- fix: cap the task result view on bytes and cover multibyte replies
+- fix: keep the provider's own headings in the task result view
+
+
 ## [0.53.0] - 2026-10-18
 
 ### Added
