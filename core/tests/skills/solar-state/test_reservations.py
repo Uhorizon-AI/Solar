@@ -186,7 +186,7 @@ def test_adopt_refuses_a_live_owner_and_a_valid_lease(store):
     assert store.task_adopt(a, "w2", identity=lambda pid: started)["reason"] == "owner_alive"
     assert store.reservation_for(a)["token"] == token
     # The same pid reused by another process (another start time) is not the owner.
-    assert store.task_adopt(a, "w2", identity=lambda pid: "another start")["adopted"]
+    assert store.task_adopt(a, "w2", identity=lambda pid: "another start", groups=lambda pgid: [])["adopted"]
 
 
 def test_adopt_takes_a_manual_activation_nobody_runs_yet(store):
@@ -956,7 +956,7 @@ def test_a_failed_process_query_never_lets_an_owner_be_replaced(store, monkeypat
     assert store.task_adopt(a, "w2")["reason"] == "owner_unverifiable"
     monkeypatch.undo()
     assert store.reservation_for(a)["token"] == token
-    assert store.task_adopt(a, "w2", identity=lambda pid: None)["adopted"]    # proven gone: replaced
+    assert store.task_adopt(a, "w2", identity=lambda pid: None, groups=lambda pgid: [])["adopted"]    # owner and groups proven gone
 
 
 # --------------------------------------------------------------------------
@@ -1027,6 +1027,6 @@ def test_holds_survive_a_restart_and_an_unreadable_file_holds_everything(store, 
     _hold(ready, resources=["demo"])
     with solar_state.session(ready, auto_backup=False) as again:                    # a new session, as after a restart
         assert again.task_claim_detail(task, "w")["reason"] == "resource:demo"
-    (ready / solar_state.CLEANUP_HOLDS_NAME).write_text("{not json")
+    store.conn.execute("UPDATE execution_cleanup_holds SET payload = ?", ("{not json",))
     assert claim(store, task)["reason"] in ("exclusive_needs_idle", "blocked_by_exclusive", "resource:demo")
     assert not claim(store, task)["claimed"]

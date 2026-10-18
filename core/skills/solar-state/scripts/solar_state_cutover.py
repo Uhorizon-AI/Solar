@@ -541,7 +541,8 @@ def _read_stamp(base: Path) -> str:
 
 # What the reservation migration adds to a base, and what each must hold.
 ASYNC_TABLES = ("async_policy", "execution_reservations", "reservation_scopes",
-                "reservation_resources", "task_authorizations", "claim_waits")
+                "reservation_resources", "task_authorizations", "claim_waits",
+                "execution_lifecycle", "execution_groups", "execution_cleanup_holds")
 
 
 def _check_async_records(conn: sqlite3.Connection, *, initial: bool) -> list[str]:
@@ -569,7 +570,8 @@ def _check_async_records(conn: sqlite3.Connection, *, initial: bool) -> list[str
             problems.append(f"a freshly migrated base holds {held} reservations")
     orphans = conn.execute(
         "SELECT COUNT(*) FROM execution_reservations r LEFT JOIN tasks t ON t.id = r.task_id "
-        "WHERE t.id IS NULL OR t.status != 'active'").fetchone()[0]
+        "LEFT JOIN execution_lifecycle l ON l.token = r.token "
+        "WHERE t.id IS NULL OR (t.status != 'active' AND l.ending_at IS NULL)").fetchone()[0]
     if orphans:
         problems.append(f"{orphans} reservations do not belong to an active task")
     return problems
@@ -603,7 +605,7 @@ def _check_migrated_base(base: Path, cut: Optional["st.Cutover"] = None,
                    "cancellation_requests", "statuses", "transitions", *ASYNC_TABLES} - tables
         if missing:
             raise CutoverRefused(f"the base is missing tables: {', '.join(sorted(missing))}")
-        problems = _check_async_records(conn, initial=upgraded is not None)
+        problems = _check_async_records(conn, initial=upgraded is not None and upgraded["from_version"] < 6)
         if problems:
             raise CutoverRefused("the execution records of the base are not valid:\n- "
                                  + "\n- ".join(problems))
@@ -1104,6 +1106,9 @@ def rollback(root: Optional[Path] = None, wait: float = DEFAULT_WAIT_SEC,
             active = lambda: [r[0] for r in session.conn.execute(  # noqa: E731
                 "SELECT id FROM tasks WHERE status = 'active'")]
             _wait_until_quiet(base, wait, lister, active)
+            if session.reservations() or st._cleanup_holds_read(session.conn):
+                raise CutoverRefused("execution reservations or cleanup holds remain: "
+                                     "prove all execution groups gone before rolling back")
             _undo_placed(base)                                   # leftovers of a killed attempt
             staging = base / ROLLBACK_STAGING
             shutil.rmtree(staging, ignore_errors=True)

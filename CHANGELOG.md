@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Retain attached execution reservations until the owner and every recorded process group are proved gone. Persist ending markers and cleanup holds in schema v7, import legacy holds during backed-up cutover, and recover ending executions without rerunning completed work (#39).
+
 ## [0.51.0] - 2026-10-18
 
 ### Added

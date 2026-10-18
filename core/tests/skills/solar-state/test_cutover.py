@@ -344,7 +344,7 @@ def _downgrade(runtime: Path, to: int) -> None:
     `queued -> draft` row the v5 migration inserted). Older bases are modelled with _v1_base."""
     assert to in (4, 5), "model older bases with _v1_base or a real dump"
     conn = sqlite3.connect(st.db_path(runtime))
-    for table in V6_TABLES:
+    for table in ("execution_lifecycle", "execution_groups", "execution_cleanup_holds", *V6_TABLES):
         conn.execute(f"DROP TABLE {table}")
     if to == 4:
         conn.execute("DELETE FROM transitions WHERE from_status = 'queued' AND to_status = 'draft'")
@@ -1170,13 +1170,13 @@ def _policy(runtime: Path) -> tuple:
 INITIAL_POLICY = ((0, 1, "{}", 60, "[]"),)
 
 
-@pytest.mark.parametrize("source", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("source", [1, 2, 3, 4, 5, 6])
 def test_every_supported_source_version_reaches_the_reservations_schema(runtime, source):
     cut.migrate(runtime, lister=quiet)
     expected = _base_at(runtime, source)
     result = cut.migrate(runtime, lister=quiet)
     assert result["already"] is True
-    assert _schema(runtime)[0] == st.SCHEMA_VERSION == 6
+    assert _schema(runtime)[0] == st.SCHEMA_VERSION == 7
     assert _counts(runtime) == expected                              # tasks, links, audit, events kept
     assert _policy(runtime) == INITIAL_POLICY                        # capacity 1, nothing reserved
     conn = sqlite3.connect(st.db_path(runtime))
@@ -1186,7 +1186,7 @@ def test_every_supported_source_version_reaches_the_reservations_schema(runtime,
     finally:
         conn.close()
     backups = _backups(runtime)                                      # a copy of the old base first
-    assert [p.name.startswith(f"state-v{source}-to-v6-") for p in backups] == [True]
+    assert [p.name.startswith(f"state-v{source}-to-v{st.SCHEMA_VERSION}-") for p in backups] == [True]
     old = sqlite3.connect(f"file:{backups[0]}?mode=ro", uri=True)
     try:
         assert st._schema_version(old) == source
@@ -1226,7 +1226,7 @@ def test_a_policy_other_than_the_initial_one_right_after_the_upgrade_is_refused(
     cut.migrate(runtime, lister=quiet)
     _downgrade(runtime, 5)
     real = st.MIGRATIONS
-    monkeypatch.setattr(st, "MIGRATIONS", real[:-1] + (real[-1].replace("VALUES (1, 0, 1,", "VALUES (1, 0, 3,"),))
+    monkeypatch.setattr(st, "MIGRATIONS", real[:5] + (real[5].replace("VALUES (1, 0, 1,", "VALUES (1, 0, 3,"),) + real[6:])
     with pytest.raises(cut.CutoverRefused, match="initial execution policy"):
         cut.migrate(runtime, lister=quiet)
 
@@ -1295,7 +1295,7 @@ def test_the_apply_runs_under_the_lock_after_the_check_and_a_backup(runtime):
                 pass
     result = cut.migrate(runtime, lister=quiet, apply=apply, events=log)
     assert seen["version"] == 5 and len(seen["backups"]) == 1 and "-v5-" in seen["backups"][0]
-    assert _schema(runtime)[0] == 6 and result["pre_update_backup"].endswith(".sqlite")
+    assert _schema(runtime)[0] == st.SCHEMA_VERSION and result["pre_update_backup"].endswith(".sqlite")
     names = [json.loads(line)["event"] for line in log.read_text().splitlines()]
     assert names == ["cutover-lock", "quiet-verified", "backup", "apply-start", "apply-done",
                      "migrated-and-validated"]
@@ -1375,7 +1375,7 @@ def test_the_cli_applies_through_a_hook_and_writes_the_events(runtime, tmp_path)
                            "--apply-hook", str(hook), "--events-file", str(events)],
                           capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
-    assert (tmp_path / "applied").read_text() == "applied\n" and _schema(runtime)[0] == 6
+    assert (tmp_path / "applied").read_text() == "applied\n" and _schema(runtime)[0] == st.SCHEMA_VERSION
     assert "apply-done" in events.read_text()
     hook.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
     _downgrade(runtime, 5)
@@ -1415,3 +1415,33 @@ def test_a_snapshot_install_under_the_workspace_still_counts(tmp_path, monkeypat
     assert cut.list_processes() == []                           # neither names the live install
     monkeypatch.setenv("SOLAR_WORKSPACE", str(workspace))        # the workspace's own snapshot skills count
     assert [pid for pid, _ in cut.list_processes()] == [201]
+
+
+def test_v6_to_v7_keeps_an_already_applied_noninitial_policy(runtime):
+    cut.migrate(runtime, lister=quiet)
+    _base_at(runtime, 6)
+    with sqlite3.connect(st.db_path(runtime)) as conn:
+        conn.execute("UPDATE async_policy SET revision = 4, global_capacity = 3")
+    before = _policy(runtime)
+    assert cut.migrate(runtime, lister=quiet)["already"] is True
+    assert _schema(runtime)[0] == 7 and _policy(runtime) == before
+
+
+@pytest.mark.parametrize("kind", ["ending", "hold"])
+def test_rollback_refuses_unreleased_cleanup_even_when_no_task_is_active(runtime, monkeypatch, kind):
+    cut.migrate(runtime, lister=quiet)
+    with st.session(runtime, auto_backup=False) as store:
+        if kind == "hold":
+            st.cleanup_holds_write(runtime, [dict(task_id="ghost", access_class="exclusive")])
+        else:
+            from dead_process import dead_pid
+            task = store.task_create([("title", '"Finishing"')], "\n# Finishing\n", status="queued")
+            token = store.task_claim_detail(task, "test")["token"]
+            store.reservation_attach(task, token, pid=dead_pid())
+            store.task_complete(task, token=token)
+            assert store.task_status(task) == "completed"
+    before = _snapshot(runtime)
+    with pytest.raises(cut.CutoverRefused, match="cleanup holds remain"):
+        cut.rollback(runtime, lister=quiet)
+    assert st.read_format(runtime) == st.FORMAT_SQLITE
+    assert _snapshot(runtime) == before

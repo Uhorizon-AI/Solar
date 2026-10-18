@@ -277,6 +277,23 @@ MIGRATIONS: tuple[str, ...] = (
     """,
 )
 
+# v7 keeps cleanup exclusion and deferred release in the same database as claims.
+MIGRATIONS += ("""
+    CREATE TABLE execution_lifecycle (
+        token TEXT PRIMARY KEY REFERENCES execution_reservations(token) ON DELETE CASCADE ON UPDATE CASCADE,
+        ending_at TEXT
+    );
+    CREATE TABLE execution_groups (
+        token TEXT NOT NULL REFERENCES execution_reservations(token) ON DELETE CASCADE ON UPDATE CASCADE,
+        pgid INTEGER NOT NULL,
+        PRIMARY KEY (token, pgid)
+    );
+    CREATE TABLE execution_cleanup_holds (
+        task_id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL
+    )
+""",)
+
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -1192,7 +1209,8 @@ def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optiona
     """One allowed transition. The caller already holds the transaction.
 
     Becoming active takes a reservation (and is refused when it does not fit); leaving
-    `active` gives it back. No path changes the status around this."""
+    `active` marks an attached execution ending until its groups are proved gone.
+    Unattached claims return immediately. No path changes the status around this."""
     row = conn.execute("SELECT status, frontmatter, body FROM tasks WHERE id = ?",
                        (task_id,)).fetchone()
     if row is None:
@@ -1212,7 +1230,15 @@ def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optiona
     if to_status == "active" and current != "active":
         _reserve(conn, task_id, pairs, (extra or {}).get("claimed_by") or actor, handoff=handoff)
     elif current == "active" and to_status != "active":
-        conn.execute("DELETE FROM execution_reservations WHERE task_id = ?", (task_id,))
+        reserved = conn.execute("SELECT token, owner_pid FROM execution_reservations WHERE task_id = ?",
+                                (task_id,)).fetchone()
+        if reserved is not None and (reserved["owner_pid"] is not None or conn.execute(
+                "SELECT 1 FROM execution_groups WHERE token = ?", (reserved["token"],)).fetchone()):
+            conn.execute("INSERT INTO execution_lifecycle (token, ending_at) VALUES (?, ?) "
+                         "ON CONFLICT(token) DO UPDATE SET ending_at = excluded.ending_at",
+                         (reserved["token"], _now()))
+        else:  # No executor ever attached: hook refusal / failed start has nothing to drain.
+            conn.execute("DELETE FROM execution_reservations WHERE task_id = ?", (task_id,))
     _write_task(conn, task_id, to_status, pairs, body, insert=False, extra=extra)
     conn.execute("INSERT INTO task_events (task_id, ts, from_status, to_status, actor) "
                  "VALUES (?, ?, ?, ?, ?)", (task_id, _now(), current, to_status, actor))
@@ -1547,37 +1573,53 @@ def maintenance_state(root=None) -> Optional[dict]:
 
 # -- holds left by a cleanup that could not be proved ---------------------------------
 
-def cleanup_holds(root=None) -> list[dict]:
-    """What executions whose cleanup could not be proved still hold, after their reservation
-    was given back. Kept in a file beside the supervisor's records (not in the schema) and
-    read by every claim, so capacity and resources stay held for the supervisor, `activate.sh`
-    and the diagnostic worker alike until the supervisor verifies the cleanup. An unreadable
-    file fails closed: it holds the whole machine."""
+def _legacy_cleanup_holds(root=None) -> list[dict]:
+    """Read the pre-v7 file only during cutover. Unreadable exclusions import as an
+    exclusive hold; normal claims and supervisors never read this legacy file."""
     path = _root(root) / CLEANUP_HOLDS_NAME
     if not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         holds = data["holds"]
-        if not isinstance(holds, list):
-            raise ValueError("holds is not a list")
+        if not isinstance(holds, list) or any(not isinstance(h, dict) for h in holds):
+            raise ValueError("holds is not a list of objects")
+        ids = [str(h.get("task_id") or "?") for h in holds]
+        if len(set(ids)) != len(ids):
+            raise ValueError("duplicate cleanup hold identities")
     except (OSError, ValueError, KeyError, TypeError):
         return [dict(task_id="?", access_class="exclusive", provider="", scopes=[], resources=[],
                      unreadable=True)]
     return [h for h in holds if isinstance(h, dict)]
 
 
+def _cleanup_holds_read(conn) -> list[dict]:
+    holds = []
+    for row in conn.execute("SELECT payload FROM execution_cleanup_holds ORDER BY task_id"):
+        try:
+            value = json.loads(row[0])
+            if not isinstance(value, dict):
+                raise ValueError("hold is not an object")
+        except (ValueError, TypeError):
+            value = dict(task_id="?", access_class="exclusive", unreadable=True)
+        holds.append(value)
+    return holds
+
+
+def cleanup_holds(root=None) -> list[dict]:
+    """Durable cleanup exclusions. Claims read these in their own database transaction."""
+    with read_session(root) as store:
+        return _cleanup_holds_read(store.conn)
+
+
 def cleanup_holds_write(root, holds: list[dict]) -> None:
-    """Replace the holds (atomically). An empty list removes the file."""
-    path = _root(root) / CLEANUP_HOLDS_NAME
-    if not holds:
-        path.unlink(missing_ok=True)
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}")
-    tmp.write_text(json.dumps(dict(version=1, holds=holds), ensure_ascii=False, sort_keys=True) + "\n",
-                   encoding="utf-8")
-    os.replace(tmp, path)
+    """Replace the supervisor's cleanup exclusions atomically, through solar-state."""
+    with session(root) as store:
+        with _transaction(store.conn) as conn:
+            conn.execute("DELETE FROM execution_cleanup_holds")
+            for hold in holds:
+                conn.execute("INSERT INTO execution_cleanup_holds VALUES (?, ?)",
+                             (str(hold.get("task_id") or "?"), json.dumps(hold, sort_keys=True)))
 
 
 # -- what a task asks for, what the others hold --------------------------------------
@@ -1664,11 +1706,11 @@ def _occupancy(conn, ignore_task: Optional[str] = None) -> list[_Access]:
                                 provider=(_field(json.loads(row["frontmatter"]), "provider")
                                           or "").strip().lower()))
     reserved = {row[0] for row in conn.execute("SELECT task_id FROM execution_reservations")}
-    for hold in cleanup_holds(_db_root(conn)):
+    for hold in _cleanup_holds_read(conn):
         # An execution the supervisor is running is listed from its dispatch (`while_reserved`): its
-        # reservation counts while it stands, and the moment the executor gives it back this entry takes
-        # over without a gap, until the supervisor has proved every process group of the execution gone.
-        if hold.get("while_reserved") and hold.get("task_id") in reserved:
+        # reservation (running or ending) counts while it stands. A hold without a reservation
+        # counts independently until every process group is proved gone.
+        if hold.get("task_id") in reserved:
             continue
         held.append(_Access(
             exclusive=hold.get("access_class") != "declared",
@@ -1709,6 +1751,8 @@ def _reserve(conn, task_id: str, pairs: list[list[str]], worker: Optional[str],
              *, handoff: bool = False) -> str:
     """Take the place for a task that is becoming active. Raises when it does not fit:
     every way into `active` is checked here, whoever asked."""
+    if conn.execute("SELECT 1 FROM execution_reservations WHERE task_id = ?", (task_id,)).fetchone():
+        raise TransitionRefused(f"{task_id} cannot start: execution_ending")
     if maintenance_state(_db_root(conn)) is not None:
         raise TransitionRefused(f"{task_id} cannot start: maintenance is in progress")
     policy = _policy_row(conn)
@@ -1763,6 +1807,9 @@ def _check_token(conn, task_id: str, token: Optional[str]) -> None:
         raise StaleToken(f"{task_id} is reserved: its execution token is required")
     if token != row["token"]:
         raise StaleToken(f"{task_id}: that execution token is not the current one")
+    if conn.execute("SELECT 1 FROM execution_lifecycle WHERE token = ? AND ending_at IS NOT NULL",
+                    (token,)).fetchone():
+        raise StaleToken(f"{task_id}: that execution is ending")
 
 
 class IdentityUnknown(Exception):
@@ -1774,17 +1821,49 @@ def _process_identity(pid: int) -> Optional[str]:
     running. Any failure to ask raises `IdentityUnknown`: nobody may be replaced on a guess."""
     import subprocess
     try:
-        done = subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))], capture_output=True,
+        done = subprocess.run(["ps", "-o", "lstart=,stat=", "-p", str(int(pid))], capture_output=True,
                               text=True, check=False, timeout=10)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise IdentityUnknown(f"cannot ask the process table about {pid}: {exc}") from None
     out = done.stdout.strip()
     if out:
-        return out
+        parts = out.rsplit(None, 1)
+        if len(parts) != 2:
+            raise IdentityUnknown(f"the process table returned an unreadable identity for {pid}")
+        started, state = parts
+        return None if state.startswith("Z") else started
     if done.returncode == 1 and not done.stderr.strip():
         return None
     raise IdentityUnknown(f"the process table answered {done.returncode} for {pid}: "
                           f"{done.stderr.strip()[:120]}")
+
+
+def _process_group(pid: int) -> int:
+    try:
+        return os.getpgid(int(pid))
+    except ProcessLookupError:
+        return int(pid)  # Gone already; retain a conservative group to verify.
+    except OSError as exc:
+        raise IdentityUnknown(f"cannot identify process group of {pid}: {exc}") from None
+
+
+def _group_members(pgid: int) -> Optional[list[int]]:
+    import subprocess
+    try:
+        done = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="], capture_output=True,
+                              text=True, check=False, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0 or not done.stdout.strip():
+        return None
+    members = []
+    for line in done.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            return None
+        if int(parts[1]) == pgid and not parts[2].startswith("Z"):
+            members.append(int(parts[0]))
+    return members
 
 
 def _provenance_problem(conn, task_id: str) -> Optional[str]:
@@ -1885,6 +1964,10 @@ def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual:
     applied when a person starts a task by name (`manual`). Everything else is revalidated
     at every claim, inside its transaction."""
     task_id = row["id"]
+    if conn.execute("SELECT 1 FROM execution_reservations r JOIN execution_lifecycle l "
+                    "ON l.token = r.token WHERE r.task_id = ? AND l.ending_at IS NOT NULL",
+                    (task_id,)).fetchone():
+        return "execution_ending"
     if conn.execute("SELECT 1 FROM cancellation_requests WHERE task_id = ?", (task_id,)).fetchone():
         return "cancellation_requested"
     if _blocked(conn, pairs):
@@ -2527,6 +2610,9 @@ class Session:
                 raise StateError(f"no task {task_id}")
             if pid is not None:
                 _check_token(conn, task_id, token)
+                if token:
+                    conn.execute("INSERT OR IGNORE INTO execution_groups VALUES (?, ?)",
+                                 (token, _process_group(pid)))
             _write_task(conn, task_id, row["status"], json.loads(row["frontmatter"]),
                         row["body"], insert=False, extra=extra)
 
@@ -2765,6 +2851,11 @@ class Session:
         out = []
         for row in self.conn.execute("SELECT * FROM execution_reservations ORDER BY claimed_at, task_id"):
             item = dict(row)
+            lifecycle = self.conn.execute("SELECT * FROM execution_lifecycle WHERE token = ?",
+                                          (row["token"],)).fetchone()
+            item["phase"] = "ending" if lifecycle and lifecycle["ending_at"] else "running"
+            item["pgids"] = [g[0] for g in self.conn.execute(
+                "SELECT pgid FROM execution_groups WHERE token = ? ORDER BY pgid", (row["token"],))]
             item["scopes"] = [dict(path=r[0], mode=r[1]) for r in self.conn.execute(
                 "SELECT path, mode FROM reservation_scopes WHERE token = ? ORDER BY path, mode",
                 (row["token"],))]
@@ -2786,6 +2877,8 @@ class Session:
         pid = os.getpid() if pid is None else int(pid)
         with _transaction(self.conn) as conn:
             self._require_reserved(conn, task_id, token)
+            conn.execute("INSERT OR IGNORE INTO execution_groups VALUES (?, ?)",
+                         (token, _process_group(pid)))
             conn.execute("UPDATE execution_reservations SET owner_pid = ?, owner_started = ?, "
                          "heartbeat_at = ?, lease_expires_at = ?, handoff = 0 WHERE task_id = ?",
                          (pid, _process_identity(pid), _now(), _lease_expiry(), task_id))
@@ -2803,8 +2896,43 @@ class Session:
             raise StaleToken(f"{task_id} holds no reservation")
         _check_token(conn, task_id, token)
 
+    def reservation_finish(self, task_id: str, token: str, *,
+                           identity: Callable = _process_identity,
+                           groups: Callable = _group_members) -> dict:
+        """Release an ending execution only after owner identity and every recorded group
+        are proved gone. Never signals a process and never reruns the completed work."""
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT r.*, l.ending_at "
+                               "FROM execution_reservations r LEFT JOIN execution_lifecycle l "
+                               "ON l.token = r.token WHERE r.task_id = ?", (task_id,)).fetchone()
+            if row is None or row["token"] != token:
+                raise StaleToken(f"{task_id}: that execution token is not current")
+            if not row["ending_at"]:
+                return dict(released=False, reason="not_ending")
+            try:
+                owner = identity(row["owner_pid"]) if row["owner_pid"] else None
+                if owner and (not row["owner_started"] or owner == row["owner_started"]):
+                    return dict(released=False, reason="owner_alive")
+                pgids = {g[0] for g in conn.execute(
+                    "SELECT pgid FROM execution_groups WHERE token = ?", (token,))}
+                for hold in _cleanup_holds_read(conn):
+                    if hold.get("task_id") == task_id:
+                        if hold.get("unreadable"):
+                            return dict(released=False, reason="cleanup_unverifiable")
+                        pgids.update(hold.get("pgids") or [])
+                if not pgids or any(groups(g) != [] for g in pgids):
+                    return dict(released=False, reason="cleanup_unverifiable")
+            except IdentityUnknown:
+                return dict(released=False, reason="owner_unverifiable")
+            conn.execute("DELETE FROM execution_reservations WHERE token = ?", (token,))
+            conn.execute("DELETE FROM execution_cleanup_holds WHERE task_id = ?", (task_id,))
+            _audit(conn, "execution_released", task_id=task_id, token=token,
+                   pgids=sorted(pgids), reason="process_groups_gone")
+            return dict(released=True, reason=None)
+
     def task_adopt(self, task_id: str, worker: str, *,
-                   identity: Callable[[int], Optional[str]] = _process_identity) -> dict:
+                   identity: Callable[[int], Optional[str]] = _process_identity,
+                   groups: Optional[Callable] = None) -> dict:
         """Take over an active task nobody is running, with a new token.
 
         Allowed only when the previous owner cannot be running it: a manual activation no
@@ -2814,6 +2942,12 @@ class Session:
         active task that predates reservations has no owner to wait for. The old token stops
         working the moment this commits.
         """
+        groups = groups or _group_members
+        ending = self.reservation_for(task_id)
+        if ending and ending.get("phase") == "ending":
+            result = self.reservation_finish(task_id, ending["token"], identity=identity, groups=groups)
+            return dict(adopted=False, released=result["released"],
+                        reason="ending_released" if result["released"] else result["reason"])
         with _transaction(self.conn) as conn:
             row = conn.execute("SELECT status, frontmatter FROM tasks WHERE id = ?",
                                (task_id,)).fetchone()
@@ -2849,6 +2983,17 @@ class Session:
                             return dict(adopted=False, reason="owner_unverifiable")
                         if alive and (res["owner_started"] is None or alive == res["owner_started"]):
                             return dict(adopted=False, reason="owner_alive")
+                pgids = {g[0] for g in conn.execute("SELECT pgid FROM execution_groups WHERE token = ?",
+                                                  (res["token"],))}
+                for hold in _cleanup_holds_read(conn):
+                    if hold.get("task_id") == task_id:
+                        if hold.get("unreadable"):
+                            return dict(adopted=False, reason="cleanup_unverifiable")
+                        pgids.update(hold.get("pgids") or [])
+                if (res["owner_pid"] is not None and not pgids) or any(groups(g) != [] for g in pgids):
+                    return dict(adopted=False, reason="cleanup_unverifiable")
+                conn.execute("DELETE FROM execution_lifecycle WHERE token = ?", (res["token"],))
+                conn.execute("DELETE FROM execution_groups WHERE token = ?", (res["token"],))
                 conn.execute("UPDATE execution_reservations SET token = ?, worker = ?, handoff = 0, "
                              "owner_pid = NULL, owner_started = NULL, heartbeat_at = ?, "
                              "lease_expires_at = ? WHERE task_id = ?",
@@ -3502,6 +3647,10 @@ class Cutover:
                         # Statement by statement: executescript() would COMMIT mid-transaction.
                         for statement in _statements(MIGRATIONS[version - 1]):
                             conn.execute(statement)
+                        if version == 7:
+                            for hold in _legacy_cleanup_holds(self.root):
+                                conn.execute("INSERT OR REPLACE INTO execution_cleanup_holds VALUES (?, ?)",
+                                             (str(hold.get("task_id") or "?"), json.dumps(hold, sort_keys=True)))
                         if version == 1:
                             conn.executemany("INSERT INTO statuses (name) VALUES (?)",
                                              [(s,) for s in STATUSES])
@@ -3511,6 +3660,13 @@ class Cutover:
                 if backup is not None:
                     Path(backup).unlink(missing_ok=True)    # a copy of a base nothing changed
                 raise
+            if current < 7:
+                legacy = self.root / CLEANUP_HOLDS_NAME
+                if legacy.exists():
+                    try:
+                        legacy.replace(legacy.with_suffix(".json.migrated-v7"))
+                    except OSError:
+                        _LOG.warning("legacy holds imported; could not archive %s", legacy)
             return dict(from_version=current, to_version=SCHEMA_VERSION,
                         backup=str(backup) if backup else None)
         finally:
@@ -3761,7 +3917,7 @@ def _cli(argv: list[str]) -> int:
                 elif args.cmd == "adopt":
                     result = s.task_adopt(args.id, args.worker)
                     _print(dict(id=args.id, **result))
-                    return 0 if result["adopted"] else 3
+                    return 0 if result["adopted"] or result.get("released") else 3
                 elif args.cmd == "attach":
                     s.reservation_attach(args.id, args.token, pid=args.pid)
                     _print(dict(id=args.id))

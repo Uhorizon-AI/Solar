@@ -1,7 +1,7 @@
 # Execution reservations
 
 What `solar-state` guarantees before a task becomes `active`, and how an update keeps new code
-away from an old runtime. Delivered in schema v6. Every entry point shares it: `task_claim`,
+away from an old runtime. Delivered in schema v6; deferred release and cleanup exclusions are stored in schema v7. Every entry point shares it: `task_claim`,
 `task_claim_next`, `activate.sh`, the worker, and the generic move to `active`.
 
 ## One place per active task
@@ -19,6 +19,7 @@ fit stays `queued` and the reason is returned (never an error):
 | `drain_barrier` | An exclusive task has waited `exclusive_wait_seconds`; nothing else starts until it does |
 | `subtask_authorization_required` | The child lacks valid derived authorization under its parent's approved policy |
 | `maintenance` | An update holds the barrier (below) |
+| `execution_ending` | A queued recurrence still holds the reservation of its preceding execution |
 | `cancellation_requested`, `blocked_by_dependency`, `parent_revoked`, `access_policy_invalid`, `absent`/`legacy`/`mismatch` | Revalidated inside the same transaction |
 
 The manual activation keeps ignoring the schedule window and the recurring interval (the worker's
@@ -26,7 +27,7 @@ selection rules); it applies everything else. A refused claim never stamps `recu
 A task cannot run twice at once: its row is `active` and its reservation is unique.
 
 An active task that has no reservation (it predates them) counts as exclusive until it is taken
-over or finished. Executions whose cleanup the supervisor could not prove (`async-tasks/supervisor/cleanup-holds.json`)
+over or finished. Executions whose cleanup the supervisor could not prove (`execution_cleanup_holds` in SQLite)
 also count, for capacity and resources, until it verifies them (`core/docs/async-supervisor.md`).
 
 ## The execution token
@@ -34,7 +35,11 @@ also count, for capacity and resources, until it verifies them (`core/docs/async
 A claim returns a random `token` tied to the reservation. `task_complete`, `task_release`,
 `task_fail`, `task_await`, `task_record(pid=...)`, the heartbeat and any move out of `active`
 need the current token (`--token`, or `SOLAR_TASK_TOKEN` for the CLI); a missing or stale one
-raises `StaleToken`. Leaving `active` gives the place back with the status.
+raises `StaleToken`. Leaving `active` marks an attached execution `ending` in the same transaction,
+retaining its reservation until `reservation_finish` proves its owner and every recorded group gone.
+An unattached claim returned by a hook or failed start releases immediately. Ending tokens cannot
+write more execution state; queued recurrences wait with `execution_ending`. See the
+[deferred release and schema upgrade](async-supervisor.md#deferred-release-and-schema-upgrade-39).
 
 The executor (`execute_active.py`) attaches its pid and start time to the reservation and renews
 the lease every 30 seconds (`lease_expires_at`, 300 s by default). `task_adopt` replaces the token

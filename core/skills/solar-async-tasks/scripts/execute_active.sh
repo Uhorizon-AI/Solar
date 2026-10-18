@@ -6,6 +6,16 @@
 
 set -euo pipefail
 
+# Direct/diagnostic invocations need their own group too: the caller must not keep an
+# ending execution alive, and cleanup must never cover the caller's process group.
+if [[ "${SOLAR_SUPERVISOR_DISPATCH:-}" != "1" && "${SOLAR_EXECUTOR_ISOLATED:-}" != "1" ]]; then
+    export SOLAR_EXECUTOR_ISOLATED=1
+    exec python3 -c 'import os, sys
+if os.getpgrp() != os.getpid():
+    os.setsid()
+os.execv(sys.argv[1], sys.argv[1:])' "$BASH" "$0" "$@"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
 

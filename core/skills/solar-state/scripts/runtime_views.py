@@ -522,6 +522,7 @@ def console_capacity(store, supervisor=None):
         running.append(dict(
             id=row['task_id'], title=titles.get(row['task_id']), provider=row.get('provider') or None,
             access=row.get('access_class'), legacy=bool(row.get('legacy_active')),
+            phase=row.get('phase') or 'running',
             since=row.get('claimed_at'), attached=row.get('owner_pid') is not None,
             lease_expires_at=row.get('lease_expires_at')))
     waiting = []

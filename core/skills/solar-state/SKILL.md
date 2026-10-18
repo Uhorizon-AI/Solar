@@ -38,7 +38,8 @@ None
 | `subtask_plans` | The children a parent declared, JSON verbatim |
 | `cancellation_requests` | Pending cancellation requests |
 | `async_policy` | The applied execution configuration: capacity (initially 1), provider limits, exclusive wait. Every claim reads it |
-| `execution_reservations`, `reservation_scopes`, `reservation_resources` | One place per active task: its execution token, lease, owner process, scopes and resources |
+| `execution_reservations`, `reservation_scopes`, `reservation_resources` | One place per running or ending execution: its token, lease, owner process, scopes and resources |
+| `execution_lifecycle`, `execution_groups`, `execution_cleanup_holds` | Captured executor/command groups, ending markers and durable cleanup exclusions; reservations stay held until groups are proved gone |
 | `task_authorizations`, `claim_waits` | Provenance of a derived (subtask) authorization; the clock of an exclusive task that waits to start |
 
 Taking a place and becoming `active` are one transaction, with the same rules for every entry

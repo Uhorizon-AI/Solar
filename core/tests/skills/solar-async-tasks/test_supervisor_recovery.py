@@ -209,7 +209,7 @@ def test_a_failed_cleanup_blocks_that_resource_for_every_entry_point_and_survive
         # not only the supervisor's claims: a manual activation is refused by the state itself
         with solar_state.session() as store:
             assert store.task_claim_detail(same, "activate-1") == dict(claimed=False, reason="resource:demo")
-        assert (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).is_file()
+        assert bool(solar_state.cleanup_holds(rig.runtime))
     # the supervisor restarts: the hold is still there, for it and for a manual activation
     with rig.running(sweep=0.3, term_grace=0.2, kill_wait=0.2) as again:
         wait_until(lambda: held in again.blocked, 30, what="the blocked execution to be remembered")
@@ -220,7 +220,7 @@ def test_a_failed_cleanup_blocks_that_resource_for_every_entry_point_and_survive
         stuck["on"] = False                                    # recovery: the group is really gone
         wait_until(lambda: rig.status(same) == "completed", 30, what="the resource to be free again")
         assert held not in again.blocked
-    assert not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
+    assert not solar_state.cleanup_holds(rig.runtime)
 
 
 def test_a_failed_check_of_the_commands_group_keeps_the_hold_through_sweeps_and_a_restart(rig, monkeypatch):
@@ -267,13 +267,17 @@ def test_an_execution_keeps_its_place_from_the_dispatch_until_it_is_proved_over(
     wait_until(lambda: rig.events("start", held), 30)
     rig.stop_abruptly(first, thread)                           # the supervisor goes away while it runs
     rig.gate("release")
-    wait_until(lambda: rig.status(held) == "completed", 30)      # finished: its reservation is gone
-    assert rig.reservations_of(held) is None
+    wait_until(lambda: rig.status(held) == "completed", 30)      # result committed, execution still held
+    assert rig.reservations_of(held)["phase"] == "ending"
     with solar_state.session() as store:
         assert store.task_claim_detail(same, "activate-1") == dict(claimed=False, reason="resource:demo")
+    # The schema must recover this even when the supervisor's per-process files are gone.
+    rig.ctx.children_file.unlink(missing_ok=True)
+    rig.ctx.blocked_file.unlink(missing_ok=True)
     with rig.running(sweep=0.2):                               # a new supervisor proves it over, then it is free
         wait_until(lambda: rig.status(same) == "completed", 30)
-    assert not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
+    assert len(rig.events("launched", held)) == 1
+    assert not solar_state.cleanup_holds(rig.runtime)
 
 
 def _previous_hold(rig, task_id, pgids, **extra):
@@ -289,7 +293,7 @@ def test_a_previous_hold_whose_groups_are_all_gone_is_dropped_at_start(rig):
     with rig.running() as sup:
         assert "ghost" not in sup.blocked, "a hold with nothing left alive must not block the supervisor"
     assert lib.observe(rig.ctx)["reason"] != "recovery_required"
-    assert not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
+    assert not solar_state.cleanup_holds(rig.runtime)
 
 
 def test_a_previous_hold_with_a_live_group_stays_blocked_until_it_is_empty(rig):
@@ -300,7 +304,7 @@ def test_a_previous_hold_with_a_live_group_stays_blocked_until_it_is_empty(rig):
             assert sup.blocked["ghost"]["reason"] == "cleanup_unverified"
             assert stranger.pid in sup.blocked["ghost"]["pgids"]
             time.sleep(0.8)
-            assert "ghost" in sup.blocked and (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists()
+            assert "ghost" in sup.blocked and bool(solar_state.cleanup_holds(rig.runtime))
             stranger.kill()
             stranger.wait()
             wait_until(lambda: "ghost" not in sup.blocked, 30, what="the hold to clear once the group is empty")

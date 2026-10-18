@@ -278,5 +278,6 @@ def test_a_recurring_local_task_passes_the_claim_again_after_it_ran(tmp_path: Pa
     assert proc.returncode == 0, proc.stdout + proc.stderr
     with solar_state.session() as store:
         assert store.task_complete(task_id, token=claimed["token"]) == "queued"   # what complete.sh does next
+        assert store.task_adopt(task_id, "test-supervisor")["released"]
         again = store.task_claim_detail(task_id, "w")
         assert again["claimed"] is True and again["reason"] is None

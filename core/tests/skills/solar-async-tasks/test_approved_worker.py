@@ -27,6 +27,7 @@ def test_parent_three_reviews_and_one_synthesis_with_failure(tmp_path, monkeypat
         ids = [entry.split('=')[1] for entry in children]
         assert len(ids) == 3
         store.task_await(parent, ids, token=store.reservation_for(parent)['token'])
+        assert store.task_adopt(parent, 'test-supervisor')['released']
     mirror(root)
     for i, child in enumerate(ids):
         with solar_state.session() as store:
@@ -45,6 +46,7 @@ def test_parent_three_reviews_and_one_synthesis_with_failure(tmp_path, monkeypat
             assert '- usage: {\"input_tokens\": 12, \"output_tokens\": 4}' in log
             assert len(store.task_list()) == 4
             store.task_complete(child, token=store.reservation_for(child)['token'])
+            assert store.task_adopt(child, 'test-supervisor')['released']
     with solar_state.session() as store:
         assert store.task_claim_detail(parent, 'synthesis')['claimed']
     mirror(root)
@@ -72,6 +74,7 @@ def test_child_source_or_snapshot_change_returns_to_preparation(tmp_path, change
     with solar_state.session() as store:
         ids = [entry.split('=')[1] for entry in store.task_field(parent, 'subtask_ids').split(',')]
         store.task_await(parent, ids, token=store.reservation_for(parent)['token'])
+        assert store.task_adopt(parent, 'test-supervisor')['released']
         assert store.task_claim_detail(ids[0], 'child')['claimed']
         if change == 'source':
             source.write_text('Changed evidence')
@@ -90,6 +93,8 @@ def test_child_source_or_snapshot_change_returns_to_preparation(tmp_path, change
     assert not marker.exists()
     with solar_state.session() as store:
         assert store.task_status(ids[0]) == 'draft'
+        assert store.reservation_for(ids[0])["phase"] == "ending"
+        assert store.task_adopt(ids[0], "test-supervisor")["released"]
         assert store.reservation_for(ids[0]) is None
 
 

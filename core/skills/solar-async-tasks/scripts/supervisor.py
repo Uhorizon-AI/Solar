@@ -9,8 +9,8 @@ executor (`execute_active.sh --task <id> --token <token>`) in its own session an
 children are collected with wait/poll, and a free place is filled as soon as one ends or a queue
 signal arrives (SIGUSR1), with a poll of at most one second as the floor.
 
-The executor frees the reservation itself when it finishes the task. The supervisor verifies that
-the executor's process group is gone afterwards (and stops stragglers of that one group), and takes
+The executor marks its reservation ending when it finishes the task. The supervisor verifies that
+all recorded groups are gone (and stops only verified stragglers), releases the reservation, and takes
 over only what an executor left unfinished: it never re-runs a task whose outcome is uncertain, and
 an owner it cannot identify stays blocked and visible.
 
@@ -53,23 +53,8 @@ def _seconds(name: str, default: float, low: float, high: float) -> float:
 
 
 def group_members(pgid: int) -> Optional[list[int]]:
-    """Live (not zombie) processes of one process group. None when the process table cannot be
-    asked: a group is never declared empty on a guess."""
-    try:
-        done = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True,
-                              check=False, timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if done.returncode != 0 or not done.stdout.strip():
-        return None
-    members = []
-    for line in done.stdout.splitlines():
-        parts = line.split()
-        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
-            continue
-        if int(parts[1]) == pgid and not parts[2].startswith("Z"):
-            members.append(int(parts[0]))
-    return members
+    """Use the same fail-closed process-table proof as reservation recovery."""
+    return solar_state._group_members(pgid)
 
 
 def stop_group(pgid: int, term_grace: float, kill_wait: float) -> bool:
@@ -267,11 +252,9 @@ class Supervisor:
                 "version": 1, "executions": [c.record() for c in self.children.values()]}, mode=0o600)
             lib.write_json_atomic(self.ctx.blocked_file, {"version": 1, "blocked": list(self.blocked.values())},
                                   mode=0o600)
-            # What an execution holds is kept where every claim reads it, from its dispatch until every
-            # one of its process groups is proved gone: while the reservation stands it is the
-            # reservation that counts; the moment the executor gives it back, this entry takes over
-            # (capacity and resources stay taken for the supervisor, activate.sh and the diagnostic
-            # worker alike). A failed or unverified cleanup keeps its entry beyond that.
+            # Claims read these exclusions in the same database as reservations. A running or ending
+            # reservation counts once; a hold without a reservation counts independently until all
+            # groups are proved gone. A failed or unverified cleanup retains its exclusion.
             holds = [{"task_id": c.task_id, "while_reserved": True, "pgids": c.groups(),
                       **(c.access or {})} for c in self.children.values()]
             holds += [{"task_id": e["task_id"], "reason": e.get("reason"), "since": e.get("since"),
@@ -325,7 +308,7 @@ class Supervisor:
             self._exit_record("state_unavailable", str(exc))
             return 1
         self._load_blocked()
-        previous = [h for h in solar_state.cleanup_holds(self.ctx.runtime) if not h.get("unreadable")]
+        previous = solar_state.cleanup_holds(self.ctx.runtime)
         self._carried_holds = previous
         try:
             try:
@@ -354,7 +337,13 @@ class Supervisor:
         is kept) until every group is empty."""
         for hold in previous:
             task_id = hold.get("task_id")
-            if not (hold.get("while_reserved") and task_id) or task_id in self.children or task_id in self.blocked:
+            if hold.get("unreadable"):
+                self.blocked[task_id] = dict(task_id=task_id, reason="cleanup_unverified",
+                    detail="legacy cleanup exclusions were unreadable; operator recovery required",
+                    since=lib.iso(time.time()), pgids=[], released=True, ours=False,
+                    access=dict(access_class="exclusive"))
+                continue
+            if not task_id or task_id in self.children or task_id in self.blocked:
                 continue
             groups = [g for g in hold.get("pgids") or [] if g]
             try:
@@ -365,9 +354,7 @@ class Supervisor:
             except (solar_state.StateError, OSError) as exc:
                 log(f"{task_id}: could not re-read the command's group from the task ({exc}); "
                     "keeping the groups the hold recorded")
-            if not groups:
-                continue
-            if all(group_members(g) == [] for g in groups):
+            if groups and all(group_members(g) == [] for g in groups):
                 log(f"{task_id}: its groups were already gone when the previous supervisor's hold was read")
                 continue
             self.blocked[task_id] = {
@@ -682,6 +669,15 @@ class Supervisor:
             outcome = "already_settled"
         # Any other state error (busy, unavailable) propagates: the child stays counted and the
         # next pass settles it; nothing is forgotten while its outcome is not recorded.
+        with self._session() as store:
+            remaining = store.reservation_for(ex.task_id)
+            if remaining and remaining.get("token") == ex.token and remaining.get("phase") == "ending":
+                released = store.reservation_finish(ex.task_id, ex.token, groups=group_members)
+                if not released["released"]:
+                    self._block(ex, "cleanup_unverified", released["reason"], released=False)
+                    self.children.pop(ex.task_id, None)
+                    self._save_records()
+                    return
         log(f"collected {ex.task_id}: executor exit {code}, {outcome}")
         self.children.pop(ex.task_id, None)
         if outcome != "never_started":
@@ -690,8 +686,8 @@ class Supervisor:
         self.wake.set()
 
     def _finalize(self, ex: Execution, code: Optional[int]) -> str:
-        """Settle what the executor left. The place itself was given back by the executor when it
-        finished the task; this only acts on a task still active under THIS execution's token."""
+        """Settle unfinished task state under this execution's token. The reservation remains
+        ending until collection also verifies the owner and every persisted group is gone."""
         with self._session() as store:
             status = store.task_status(ex.task_id)
             row = store.reservation_for(ex.task_id)
@@ -839,6 +835,18 @@ class Supervisor:
 
     def _examine(self, row: dict, rec: Optional[dict], startup: bool) -> None:
         task_id = row["task_id"]
+        if row.get("phase") == "ending":
+            with self._session() as store:
+                result = store.reservation_finish(task_id, row["token"], groups=group_members)
+            if result["released"]:
+                self.blocked.pop(task_id, None)
+                log(f"{task_id}: ending execution released after its groups were proved gone")
+            else:
+                if task_id not in self.blocked:
+                    self.blocked[task_id] = dict(task_id=task_id, token=row["token"],
+                        reason="cleanup_unverified", detail=result["reason"], since=lib.iso(time.time()),
+                        pgids=row.get("pgids") or [], released=False, ours=False)
+            return
         if (self.blocked.get(task_id) or {}).get("reason") in (
                 "owner_unverifiable", "owner_alive_lease_expired", "group_uncertain"):
             del self.blocked[task_id]               # judged again below; it comes back if still true

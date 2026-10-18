@@ -137,11 +137,14 @@ class Rig:
         with solar_state.session(self.rt, auto_backup=False) as store:
             for index in range(tasks):
                 store.task_create([("title", json.dumps(f"T{index}"))], "\n# T\n", status="draft")
-        if version == 5:
+        if version < solar_state.SCHEMA_VERSION:
             conn = sqlite3.connect(solar_state.db_path(self.rt))
-            for table in V6_TABLES:
+            for table in ("execution_groups", "execution_lifecycle", "execution_cleanup_holds"):
                 conn.execute(f"DROP TABLE {table}")
-            conn.execute("PRAGMA user_version = 5")
+            if version == 5:
+                for table in V6_TABLES:
+                    conn.execute(f"DROP TABLE {table}")
+            conn.execute(f"PRAGMA user_version = {version}")
             conn.commit()
             conn.close()
         (self.rt / "state-migration.json").write_text(json.dumps(dict(stamp=solar_state._stamp(), moved=True)))
@@ -201,13 +204,13 @@ def test_the_whole_sequence_runs_in_order_with_an_old_supervisor_and_schema(rig)
     assert rig.barrier() is None
     # the code moved only after the drain and the stops, together with the schema
     assert rig.head() != old_head and rig.head() == rig.git("rev-parse", "v0.0.2") and rig.marker() == "NEW"
-    assert rig.schema() == solar_state.SCHEMA_VERSION == 6
+    assert rig.schema() == solar_state.SCHEMA_VERSION == 7
     assert list((rig.rt / "state-backups" / "pre-update").glob("state-v5-pre-update-*.sqlite"))
-    assert list((rig.rt / "state-backups" / "pre-migration").glob("state-v5-to-v6-*.sqlite"))
+    assert list((rig.rt / "state-backups" / "pre-migration").glob(f"state-v5-to-v{solar_state.SCHEMA_VERSION}-*.sqlite"))
     with solar_state.session(rig.rt, auto_backup=False) as store:
         assert len(store.task_list()) == 3 and store.async_policy()["global_capacity"] == 1
     marker = json.loads((rig.rt / "state-cutover.json").read_text())
-    assert marker["schema_version"] == 6 and marker["code_version"] == "v0.0.2"
+    assert marker["schema_version"] == solar_state.SCHEMA_VERSION and marker["code_version"] == "v0.0.2"
     assert not list(rig.tmp.glob("solar-update-staging.*"))               # released: the staging copy is gone
 
 
@@ -226,7 +229,7 @@ def test_the_first_installation_runs_the_staged_entrypoint_with_explicit_paths(r
                            "--target", "v0.0.2"], env=env, cwd=rig.ws, capture_output=True, text=True, timeout=300)
     assert done.returncode == 0, done.stdout + done.stderr
     assert subsequence(rig.names(), FULL)
-    assert rig.marker() == "NEW" and rig.schema() == 6 and rig.barrier() is None
+    assert rig.marker() == "NEW" and rig.schema() == solar_state.SCHEMA_VERSION and rig.barrier() is None
     assert staging.exists()            # a tree the person prepared is theirs
 
 
@@ -236,7 +239,7 @@ def test_a_bundle_install_follows_the_same_sequence(rig):
     done = rig.update("--bundle", "--from-dev", env_extra=dict(SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE=str(rig.install)))
     assert done.returncode == 0, done.stdout + done.stderr
     assert subsequence(rig.names(), FULL)
-    assert rig.schema() == 6 and rig.barrier() is None
+    assert rig.schema() == solar_state.SCHEMA_VERSION and rig.barrier() is None
 
 
 def test_the_sync_path_takes_the_same_barrier(rig):
@@ -252,7 +255,7 @@ def test_the_sync_path_takes_the_same_barrier(rig):
     assert subsequence(names, ["maintenance", "launchctl-bootout", "drain-start", "supervisor-drain", "drain-done",
                                "host-stop", "gateway-stop", "cutover-lock", "migrated-and-validated",
                                "cutover-done", "host-start", "readiness-ok", "launchctl-bootstrap", "release"])
-    assert rig.schema() == 6 and rig.barrier() is None
+    assert rig.schema() == solar_state.SCHEMA_VERSION and rig.barrier() is None
 
 
 # --------------------------------------------------------------------------
@@ -277,7 +280,7 @@ def test_a_drain_that_times_out_replaces_nothing_and_a_resume_finishes_it(rig):
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert subsequence(rig.names(), ["resume", "drain-done", "host-stop", "apply-done", "cutover-done",
                                      "readiness-ok", "launchctl-bootstrap", "release"])
-    assert rig.marker() == "NEW" and rig.schema() == 6 and rig.barrier() is None
+    assert rig.marker() == "NEW" and rig.schema() == solar_state.SCHEMA_VERSION and rig.barrier() is None
     assert not list(rig.tmp.glob("solar-update-staging.*"))
 
 
@@ -348,7 +351,7 @@ def test_a_crash_between_the_code_and_the_schema_is_resumed_not_repeated(rig, tm
     before = len(list((rig.rt / "state-backups" / "pre-update").glob("*.sqlite")))
     resumed = rig.update("--resume", env_extra=base)
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
-    assert rig.schema() == 6 and rig.barrier() is None and rig.names()[-1] == "release"
+    assert rig.schema() == solar_state.SCHEMA_VERSION and rig.barrier() is None and rig.names()[-1] == "release"
     with solar_state.session(rig.rt, auto_backup=False) as store:
         assert len(store.task_list()) == 2 and store.async_policy()["revision"] == 0
     assert before == 1                                                     # the first backup is the one that counts
@@ -387,7 +390,7 @@ def test_no_restart_leaves_dispatch_suspended_until_an_explicit_resume(rig):
     names = rig.names()
     assert "cutover-done" in names and "held-no-restart" in names
     assert not {"host-start", "gateway-restart", "launchctl-bootstrap", "release"} & set(names)
-    assert rig.barrier()["phase"] == "held-no-restart" and rig.marker() == "NEW" and rig.schema() == 6
+    assert rig.barrier()["phase"] == "held-no-restart" and rig.marker() == "NEW" and rig.schema() == solar_state.SCHEMA_VERSION
     assert "solar client update --resume" in done.stdout
     ensure = subprocess.run(["bash", str(rig.install / "core/skills/solar-async-tasks/scripts/ensure_async_tasks.sh")],
                             env=rig.env(SOLAR_TASK_WORKER_LOCK=str(rig.tmp / "worker.lock")), cwd=rig.ws,
@@ -635,7 +638,7 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
     import supervisor_lib
     from rollout_policy import apply_policy
 
-    rig.runtime_state(6, tasks=0)
+    rig.runtime_state(solar_state.SCHEMA_VERSION, tasks=0)
     monkeypatch.chdir(rig.ws)
     for key, value in rig.env().items():
         if key.startswith("SOLAR_"):
