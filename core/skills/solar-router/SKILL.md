@@ -85,7 +85,7 @@ bash core/skills/solar-router/scripts/onboard_router_env.sh
 - `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` — System prompt file path (default: `core/skills/solar-router/assets/system_prompt.md`)
 - `SOLAR_ROUTER_CONTEXT_TURNS` — Number of conversation turns to include (default: `12`)
 - `SOLAR_ROUTER_TIMEOUT_SEC` — End-to-end router timeout, including provider execution (default: `300`)
-- `SOLAR_ROUTER_REVIEW_EVIDENCE_DIR` / `SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP` — Opt-in local copy of Codex repository-review output (default: off; see `core/docs/repository-readonly-review.md`)
+- `SOLAR_ROUTER_REVIEW_EVIDENCE_DIR` / `SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP` — Opt-in local copy of Codex repository-review output (default: off; set in the environment of the process that runs the review, not the launching session; the output contains model text and repository reads, so it is sensitive; see `core/docs/repository-readonly-review.md`)
 
 Optional command overrides:
 - `SOLAR_ROUTER_CODEX_CMD`

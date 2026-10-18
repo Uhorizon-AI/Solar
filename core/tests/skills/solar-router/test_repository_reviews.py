@@ -333,6 +333,7 @@ def test_codex_non_utf8_final_message_file_fails_cleanly(monkeypatch):
 
 GOOD_FINAL = json.dumps(dict(review='Finding A'))
 SECRET = 'sk-live-0123456789abcdef0123456789'
+COMMIT = 'a' * 40
 
 
 def _evidence_run(monkeypatch, tmp_path, stdout, last_message, returncode=0, timeout=False, env=None):
@@ -347,7 +348,7 @@ def _evidence_run(monkeypatch, tmp_path, stdout, last_message, returncode=0, tim
         out = tmp_path / 'last-message.json'
         if last_message is not None:
             out.write_text(last_message)
-        yield ['codex', '--output-last-message', str(out), '--', 'PROMPT-TEXT'], dict(CODEX_HOME=str(home), **(env or {})), str(tmp_path)
+        yield ['codex', '--output-last-message', str(out), '--model', 'fixture-model', '--', 'PROMPT-TEXT'], dict(CODEX_HOME=str(home), **(env or {})), str(tmp_path)
 
     def fake_run(*a, **k):
         if timeout:
@@ -356,7 +357,8 @@ def _evidence_run(monkeypatch, tmp_path, stdout, last_message, returncode=0, tim
 
     monkeypatch.setattr(profiles, 'restricted_launch', fake_launch)
     monkeypatch.setattr(subprocess, 'run', fake_run)
-    return PROVIDERS['codex'].run_review(manifest={}, expected='', profile='other_profile')
+    manifest = dict(user_prompt=json.dumps(dict(commit=COMMIT, task='PROMPT-TEXT')))
+    return PROVIDERS['codex'].run_review(manifest=manifest, expected='', profile='other_profile')
 
 
 def _runs(root):
@@ -364,9 +366,11 @@ def _runs(root):
 
 
 def test_evidence_is_off_by_default(monkeypatch, tmp_path):
-    monkeypatch.delenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', raising=False)
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', '')
+    before = set(tmp_path.iterdir())
     assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
-    assert not (tmp_path / 'evidence').exists()
+    # The simulated launch itself only creates these two entries; nothing else may appear.
+    assert set(tmp_path.iterdir()) - before <= {tmp_path / 'codex-home', tmp_path / 'last-message.json'}
 
 
 def test_evidence_when_enabled_keeps_private_redacted_copy_and_result_is_unchanged(monkeypatch, tmp_path):
@@ -382,7 +386,9 @@ def test_evidence_when_enabled_keeps_private_redacted_copy_and_result_is_unchang
     assert SECRET not in text and 'PROMPT-TEXT' not in text and 'STDERR-TEXT' not in text
     assert '[REDACTED]' in (run / 'events.jsonl').read_text()
     assert (run / 'last-message.json').read_text() == GOOD_FINAL
-    assert json.loads((run / 'meta.json').read_text())['returncode'] == 0
+    meta = json.loads((run / 'meta.json').read_text())
+    assert meta['returncode'] == 0 and meta['model'] == 'fixture-model' and meta['commit'] == COMMIT
+    assert 'user_prompt' not in meta
 
 
 @pytest.mark.parametrize('kwargs,match', [
@@ -430,7 +436,8 @@ def test_unwritable_evidence_directory_never_changes_the_outcome(monkeypatch, tm
         with pytest.raises(RuntimeError, match='non-zero'):
             _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL, returncode=1)
     finally:
-        (tmp_path / 'ro').exists() and (tmp_path / 'ro').chmod(0o700)
+        if (tmp_path / 'ro').exists():
+            (tmp_path / 'ro').chmod(0o700)
 
 
 def test_symlinked_evidence_directory_is_refused(monkeypatch, tmp_path):
@@ -445,7 +452,7 @@ def test_symlinked_evidence_directory_is_refused(monkeypatch, tmp_path):
 
 def test_evidence_retention_is_bounded_and_spares_foreign_entries(monkeypatch, tmp_path):
     root = tmp_path / 'evidence'
-    root.mkdir()
+    root.mkdir(mode=0o700)
     (root / 'notes.txt').write_text('mine')
     monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
     monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP', '2')
@@ -466,3 +473,63 @@ def test_evidence_files_are_size_capped(monkeypatch, tmp_path):
     (run,) = _runs(root)
     assert (run / 'events.jsonl').stat().st_size == 50
     assert json.loads((run / 'meta.json').read_text())['events_truncated'] is True
+
+
+def test_preexisting_directory_open_to_others_is_refused_and_left_untouched(monkeypatch, tmp_path):
+    shared = tmp_path / 'shared'
+    shared.mkdir()
+    shared.chmod(0o755)
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(shared))
+    assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
+    assert oct(shared.stat().st_mode & 0o777) == '0o755'
+    assert not list(shared.iterdir())
+
+
+def test_ssh_auth_sock_is_not_treated_as_a_secret_but_token_names_are(monkeypatch, tmp_path):
+    root = tmp_path / 'evidence'
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
+    monkeypatch.setenv('SSH_AUTH_SOCK', '/private/tmp/agent.sock')
+    monkeypatch.setenv('SERVICE_API_TOKEN', 'tok-value-12345')
+    _evidence_run(monkeypatch, tmp_path, _events('/private/tmp/agent.sock tok-value-12345'), GOOD_FINAL)
+    (run,) = _runs(root)
+    text = (run / 'events.jsonl').read_text()
+    assert '/private/tmp/agent.sock' in text and 'tok-value-12345' not in text
+
+
+def test_size_cap_never_splits_a_multibyte_character(monkeypatch, tmp_path):
+    import review_evidence
+    monkeypatch.setattr(review_evidence, 'MAX_FILE_BYTES', 50)
+    root = tmp_path / 'evidence'
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
+    raw, cut = review_evidence._clean('\u00e9' * 100, [])
+    assert cut and len(raw) <= 50
+    raw.decode('utf-8')
+
+
+def test_capture_failures_never_change_the_outcome_or_the_timeout(monkeypatch, tmp_path):
+    import subprocess
+    import review_evidence
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(tmp_path / 'evidence'))
+
+    def boom(*a, **k):
+        raise ImportError('broken')
+
+    monkeypatch.setattr(review_evidence, 'capture_codex', boom)
+    assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
+    with pytest.raises(subprocess.TimeoutExpired):
+        _evidence_run(monkeypatch, tmp_path, _events('x'), None, timeout=True)
+
+
+def test_closed_stderr_does_not_break_the_never_raises_contract(monkeypatch, tmp_path):
+    import review_evidence
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', 'relative/evidence')
+
+    class Broken:
+        def write(self, *_):
+            raise OSError('closed')
+
+        def flush(self):
+            raise OSError('closed')
+
+    monkeypatch.setattr(review_evidence.sys, 'stderr', Broken())
+    review_evidence.capture_codex(['codex'], {}, 'x', 0)

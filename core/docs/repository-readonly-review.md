@@ -89,19 +89,29 @@ removed when the launch ends. To keep evidence for attributing a failed pilot,
 set `SOLAR_ROUTER_REVIEW_EVIDENCE_DIR` to an absolute directory (unset by
 default: nothing is kept). Each Codex review then writes one run directory
 `<UTC time>-<pid>-<random>/` with `events.jsonl`, `last-message.json` (when the
-CLI wrote one) and `meta.json` (exit code, timeout, truncation flags). It is
-taken for completed, failed and timed-out launches alike.
+CLI wrote one) and `meta.json` (provider, model id, reviewed commit, exit code,
+timeout, truncation flags; never the prompt). The model and commit tie a folder
+to the task that produced it. It is taken for completed, failed and timed-out
+launches alike.
 
-- The root and run directories are mode `0700`, files `0600`; a symlinked or
-  foreign-owned root is refused.
+The variable must be set in the environment of the process that executes the
+review (the supervisor/worker), not in the session that launches the task.
+
+- The root and run directories are mode `0700`, files `0600`. Solar creates the
+  root with `0700` but never changes the mode of a pre-existing directory: a
+  symlinked or foreign-owned root, or an existing one accessible to group or
+  others, is refused and nothing is captured.
 - Retention: the newest `SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP` runs (default `10`,
-  maximum `100`); older Solar-named run directories are deleted, other entries
-  are left alone. Each file is cut at 8 MiB.
+  maximum `100`; `0` or lower is raised to `1`); older Solar-named run directories are deleted, other entries
+  are left alone. Each file is cut at 8 MiB on a character boundary.
 - Never written: argv (it carries the prompt), env, stderr, `auth.json` or its
-  contents. Values of secret-named environment variables, the copied auth file's
-  values and JWT/`sk-` shaped strings are replaced with `[REDACTED]`. This is
-  pattern-based: the review input is repository text and model output may
-  quote it, so treat the directory as sensitive and delete it after use.
+  contents. Values of environment variables whose names end in `_KEY`, `_TOKEN`,
+  `_SECRET`, `_PASSWORD` or `_CREDENTIAL` (in the review environment or the
+  supervisor's), the copied auth file's values and JWT/`sk-` shaped strings are
+  replaced with `[REDACTED]`; an equal value that is also harmless text is
+  masked too. This is pattern-based. `events.jsonl` contains model output and
+  the reads of the reviewed repository, so it is sensitive data beyond
+  credentials: restrict access and delete it after use.
 - Capture is diagnostic only and never changes the outcome: any capture error
   is logged as a one-line warning and ignored, and the result is still decided
   solely by the validated final message.

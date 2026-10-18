@@ -7,7 +7,7 @@ copy of those two outputs is kept there. Unset (the default) captures nothing.
 
 Capture is diagnostic only: every failure here is swallowed so it can neither
 turn a failed review into a completed one nor the reverse. Only provider
-output is written: never argv (it carries the prompt), env, stderr or auth
+output and the model id and reviewed commit are written: never argv (it carries the prompt), env, stderr or auth
 files, and known secret values are redacted from what is written.
 """
 from __future__ import annotations
@@ -26,7 +26,9 @@ DEFAULT_KEEP = 10
 MAX_KEEP = 100
 MAX_FILE_BYTES = 8 * 1024 * 1024
 _RUN = re.compile(r"^\d{8}T\d{6}Z-\d+-[0-9a-f]{8}$")
-_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH", re.I)
+_SECRET_NAME = re.compile(r"_(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)$", re.I)
+_COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
+_MODEL = re.compile(r"^[A-Za-z0-9._:/@+-]{1,128}$")
 _SECRET_SHAPE = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*|sk-[A-Za-z0-9_-]{16,}")
 _REDACTED = "[REDACTED]"
 
@@ -76,7 +78,8 @@ def _clean(data, secrets):
     raw = data.encode("utf-8")
     truncated = len(raw) > MAX_FILE_BYTES
     if truncated:
-        raw = raw[:MAX_FILE_BYTES]
+        # Drop a multibyte character split by the cut so the file stays valid UTF-8.
+        raw = raw[:MAX_FILE_BYTES].decode("utf-8", "ignore").encode("utf-8")
     return raw, truncated
 
 
@@ -84,11 +87,20 @@ def _root(configured: str) -> Path:
     root = Path(configured)
     if not root.is_absolute():
         raise ValueError("evidence directory must be absolute")
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        root.mkdir(mode=0o700)
+        created = True
+    except FileExistsError:
+        created = False
     info = root.lstat()
-    if root.is_symlink() or info.st_uid != os.getuid():
+    if root.is_symlink() or not root.is_dir() or info.st_uid != os.getuid():
         raise ValueError("evidence directory must be a real directory owned by the current user")
-    os.chmod(root, 0o700)
+    if created:
+        os.chmod(root, 0o700)
+    elif info.st_mode & 0o077:
+        # Never change a pre-existing directory (it may be shared): refuse it instead.
+        raise ValueError("existing evidence directory must not be accessible to group or others")
     return root
 
 
@@ -104,7 +116,16 @@ def _prune(root: Path, keep: int) -> None:
         shutil.rmtree(old, ignore_errors=True)
 
 
-def capture_codex(argv, env, stdout, returncode, timed_out=False) -> None:
+def _model(argv):
+    """Model id after --model; argv also carries the prompt, so nothing else is read."""
+    try:
+        value = argv[argv.index("--model") + 1]
+    except (ValueError, IndexError, TypeError):
+        return None
+    return value if isinstance(value, str) and _MODEL.match(value) else None
+
+
+def capture_codex(argv, env, stdout, returncode, timed_out=False, commit=None) -> None:
     """Keep redacted JSONL stdout and the final-message file; never raises."""
     configured = (os.getenv(ENV_DIR) or "").strip()
     if not configured:
@@ -124,10 +145,15 @@ def capture_codex(argv, env, stdout, returncode, timed_out=False) -> None:
             _write(run / "last-message.json", message)
         except (OSError, ValueError, IndexError):
             pass  # absent or unreadable final message is itself evidence
-        meta = dict(provider="codex", returncode=returncode, timed_out=bool(timed_out),
+        meta = dict(provider="codex", model=_model(argv),
+                    commit=commit if isinstance(commit, str) and _COMMIT.match(commit) else None,
+                    returncode=returncode, timed_out=bool(timed_out),
                     events_truncated=events_cut, last_message_truncated=message_cut,
                     last_message_present=message_cut is not None)
         _write(run / "meta.json", json.dumps(meta, sort_keys=True).encode("utf-8"))
         _prune(root, _keep())
     except Exception as exc:  # noqa: BLE001 - evidence must never alter the review outcome
-        print("[solar-router] review evidence not captured: " + type(exc).__name__, file=sys.stderr)
+        try:
+            print("[solar-router] review evidence not captured: " + type(exc).__name__, file=sys.stderr)
+        except Exception:  # noqa: BLE001 - a closed or broken stderr must not matter either
+            pass
