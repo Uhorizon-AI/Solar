@@ -238,6 +238,115 @@ def test_dispatcher_handshake(solar_env):
     assert json.loads(result.stdout)['result']['serverInfo']['name'] == 'solar-mcp'
 
 
+@pytest.mark.parametrize('launch_directory', ['root', 'home', 'other-workspace'])
+@pytest.mark.parametrize('explicit', [False, True])
+def test_registered_stdio_reads_and_refuses_mutation_from_foreign_cwd(
+        solar_env, launch_directory, explicit):
+    dispatcher = Path(mcp_cli.__file__).resolve().parents[2] / 'solar-client/scripts/solar'
+    outside = solar_env.tmp_path / launch_directory
+    outside.mkdir()
+    if launch_directory == 'other-workspace':
+        (outside / 'sun').mkdir()
+        (outside / '.solar').mkdir()
+        (outside / '.solar/settings.json').write_text('{"version":"fixture"}')
+    cwd = '/' if launch_directory == 'root' else str(outside)
+    env = dict(solar_env.env, SOLAR_MCP_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE='1')
+    argv = ['bash', str(dispatcher), 'mcp']
+    if explicit:
+        # An explicit host argument wins over a different configured workspace.
+        env['SOLAR_WORKSPACE'] = str(outside)
+        argv += ['serve', '--workspace', str(solar_env.workspace)]
+    requests = [
+        {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'capabilities': {}}},
+        {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+         'params': {'name': 'solar_search', 'arguments': {'scope': 'tasks'}}},
+        {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call',
+         'params': {'name': 'solar_execute', 'arguments': {
+             'operation': 'task.create', 'arguments': {'title': 'Must not be created', 'instructions': 'x'}}}},
+        {'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call',
+         'params': {'name': 'solar_search', 'arguments': {'scope': 'tasks'}}},
+    ]
+    result = subprocess.run(argv, input=''.join(json.dumps(r)+'\n' for r in requests),
+                            cwd=cwd, env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    replies = {r['id']: r for r in map(json.loads, result.stdout.splitlines())}
+    for request_id in (2, 4):
+        reply = replies[request_id]['result']
+        assert reply['isError'] is False, reply
+        assert json.loads(reply['content'][0]['text'])['result']['tasks'] == []
+    refused = json.loads(replies[3]['result']['content'][0]['text'])['refused']
+    assert refused['code'] == 'approval_required'
+    assert not (outside / '.solar/settings.json').exists() or launch_directory == 'other-workspace'
+
+
+@pytest.mark.parametrize('configured', ['missing', 'empty', 'not-a-workspace'])
+def test_stdio_invalid_registration_fails_without_runtime_or_protocol_output(tmp_path, configured):
+    workspace = tmp_path / 'workspace'
+    if configured == 'not-a-workspace':
+        workspace.mkdir()
+    runtime = tmp_path / 'must-not-exist'
+    env = dict(os.environ, SOLAR_WORKSPACE='' if configured == 'empty' else str(workspace),
+               SOLAR_RUNTIME_ROOT=str(runtime), SOLAR_APP_DATA=str(tmp_path / 'app-data'))
+    result = subprocess.run([sys.executable, str(Path(mcp_cli.__file__))],
+                            input='', cwd='/', env=env, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 2
+    assert result.stdout == ''
+    assert 'ERROR:' in result.stderr and 'workspace' in result.stderr.lower()
+    assert not runtime.exists()
+    assert not (tmp_path / 'app-data').exists()
+
+
+def test_stdio_workspace_shell_characters_are_literal(tmp_path):
+    workspace = tmp_path / 'workspace " $(touch INJECTED) `touch OTHER`'
+    (workspace / '.solar').mkdir(parents=True)
+    (workspace / 'sun').mkdir()
+    (workspace / '.solar/settings.json').write_text('{"version":"fixture"}')
+    env = dict(os.environ, SOLAR_WORKSPACE=str(workspace), PYTHONDONTWRITEBYTECODE='1')
+    request = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'capabilities': {}}}
+    result = subprocess.run([sys.executable, str(Path(mcp_cli.__file__))],
+                            input=json.dumps(request)+'\n', cwd=tmp_path, env=env,
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)['result']['serverInfo']['name'] == 'solar-mcp'
+    assert not (tmp_path / 'INJECTED').exists()
+    assert not (tmp_path / 'OTHER').exists()
+
+
+@pytest.mark.parametrize('different_owner', [False, True])
+def test_stdio_keeps_discovery_and_runtime_ownership_checks(solar_env, different_owner):
+    workspace = solar_env.workspace
+    env = dict(solar_env.env, PYTHONDONTWRITEBYTECODE='1')
+    if different_owner:
+        workspace = solar_env.tmp_path / 'another-workspace'
+        (workspace / '.solar').mkdir(parents=True)
+        (workspace / 'sun').mkdir()
+        (workspace / '.solar/settings.json').write_text(
+            '{"version":"fixture","workspace_id":"7c070cd1-232b-435a-a3f8-6f77df40891c"}')
+        env['SOLAR_WORKSPACE'] = str(workspace)
+    else:
+        env.pop('SOLAR_WORKSPACE', None)
+    nested = workspace / 'planets/demo'
+    nested.mkdir(parents=True)
+    owner = solar_env.runtime / 'workspace-owner.json'
+    original = owner.read_bytes()
+    requests = [
+        {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'capabilities': {}}},
+        {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+         'params': {'name': 'solar_search', 'arguments': {'scope': 'tasks'}}},
+    ]
+    result = subprocess.run([sys.executable, str(Path(mcp_cli.__file__))],
+                            input=''.join(json.dumps(r)+'\n' for r in requests),
+                            cwd=nested, env=env, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    reply = json.loads(result.stdout.splitlines()[1])['result']
+    assert reply['isError'] is different_owner, reply
+    if different_owner:
+        refused = json.loads(reply['content'][0]['text'])
+        assert refused['code'] == 'state_unavailable'
+        assert 'this runtime belongs to workspace' in refused['error'].lower()
+    assert owner.read_bytes() == original
+
+
 def test_interpreter_preserves_stable_symlink(tmp_path, monkeypatch):
     stable = tmp_path / 'python3'
     stable.symlink_to(sys._base_executable)
@@ -258,7 +367,7 @@ def test_stable_selection_from_venv(monkeypatch):
     assert mcp_cli.registration_python() == sys._base_executable
 
 
-def test_stdio_does_not_import_tomllib(monkeypatch):
+def test_stdio_does_not_import_tomllib(solar_env, monkeypatch):
     import builtins
     real_import = builtins.__import__
     def no_toml(name, *args, **kwargs):

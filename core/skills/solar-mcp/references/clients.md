@@ -1,6 +1,8 @@
 # User-level MCP clients
 
 The client launches `solar mcp` as a stdio child, independently of LaunchAgent.
+Each client owns its transport process; all use the same workspace-bound runtime
+and approval gate. There is no shared HTTP MCP daemon or new listening port.
 Supported destinations:
 
 | Client | File |
@@ -25,6 +27,18 @@ The selected executable is probed for its version and venv status. A temporary
 venv is rejected as a registration target; running the installer from a venv
 is allowed when a stable external interpreter is explicitly selected.
 Stdio startup does not import `tomllib` or impose registration's 3.11 requirement.
+At stdio startup, `solar mcp` validates the registered `SOLAR_WORKSPACE` through
+the canonical resolver and changes only its own process directory before serving.
+GUI clients may launch it from `/`, their home directory, or a different project;
+they do not need a shell wrapper or to be opened from a terminal. Existing
+registrations work without reinstalling them after updating Solar and reconnecting
+the MCP server. `solar mcp serve --workspace PATH` explicitly selects a workspace;
+otherwise the registered environment is used, with parent discovery only when
+no workspace is configured. An invalid configured workspace fails startup on
+stderr instead of falling back to another project or creating runtime state.
+This fixes path resolution only: a client must separately support MCP form
+elicitation to offer native operation approval. A generic tool permission or a
+conversational answer does not replace that approval.
 If no installed Solar wrapper exists, the CLI warns before using the checkout
 path. Keep that checkout and interpreter in place, or reinstall the registration.
 

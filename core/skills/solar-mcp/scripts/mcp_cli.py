@@ -4,6 +4,7 @@
 Registration requires Python 3.11+; stdio does not load the TOML parser.
 Registration validates and preserves a stable interpreter path for GUI clients.
     solar mcp
+    solar mcp serve [--workspace PATH]
     solar mcp print --workspace PATH
     solar mcp install [--workspace PATH] [--clients cursor,claude,codex] [--dry-run]
     solar mcp uninstall [--clients cursor,claude,codex] [--dry-run]
@@ -301,10 +302,10 @@ def install(workspace: Path | None, names: list[str], *, dry_run=False, uninstal
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv == ['serve']:
-        os.execv(sys.executable, [sys.executable, str(MCP_SERVER)])
     parser = argparse.ArgumentParser(prog='solar mcp', description=__doc__)
     sub = parser.add_subparsers(dest='cmd', required=True)
+    serve = sub.add_parser('serve', help='Serve stdio from the registered workspace, regardless of client cwd')
+    serve.add_argument('--workspace')
     for name in ('print', 'install', 'uninstall'):
         command = sub.add_parser(name)
         if name != 'uninstall':
@@ -312,8 +313,19 @@ def main(argv: list[str] | None = None) -> int:
         if name != 'print':
             command.add_argument('--clients', default='cursor,claude,codex')
             command.add_argument('--dry-run', action='store_true')
-    args = parser.parse_args(argv)
+    args = parser.parse_args(argv or ['serve'])
     try:
+        if args.cmd == 'serve':
+            # Registration is host configuration, not caller-controlled tool input.
+            # Validate it through the canonical resolver before changing directory;
+            # downstream runtime/ownership checks must see the same workspace.
+            configured = args.workspace if args.workspace is not None else os.environ.get('SOLAR_WORKSPACE')
+            if configured is not None and not configured.strip():
+                raise ValueError('Configured Solar workspace must not be empty.')
+            ws = workspace_path(configured)
+            os.environ['SOLAR_WORKSPACE'] = str(ws)
+            os.chdir(ws)
+            os.execv(sys.executable, [sys.executable, str(MCP_SERVER)])
         toml_parser()
         names = [n.strip().lower() for n in getattr(args, 'clients', '').split(',') if n.strip()]
         if args.cmd != 'print' and (not names or any(n not in client_paths() for n in names)):
