@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.52.4] - 2026-10-18
+
 ### Fixed
 - Codex repository reviews no longer accept interim agent messages as the review: the result comes only from the CLI's final-message file under a requested JSON schema and is validated (one non-empty `review` string); progress-only or malformed output, missing files, error events and non-single completed turns fail instead of completing. Limit: this checks the output shape, not review quality, and a schema-conforming placeholder is still indistinguishable from content.
 
