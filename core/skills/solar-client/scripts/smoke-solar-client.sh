@@ -2,7 +2,7 @@
 # smoke-solar-client.sh — go/no-go for Solar Client (manifest + global install).
 #
 # Usage:
-#   bash core/scripts/smoke-solar-client.sh [INSTALL_ROOT]
+#   bash core/skills/solar-client/scripts/smoke-solar-client.sh [INSTALL_ROOT]
 #
 # INSTALL_ROOT = Solar install (parent of core/), default: parent of this script's core/.
 # Options:
@@ -52,9 +52,10 @@ skip() { echo "SKIP: $1"; SKIP=$((SKIP + 1)); }
 run_expect_ok() {
   local label="$1"
   shift
-  if "$@" >/dev/null 2>&1; then
+  if "$@" >"$TMP/command.log" 2>&1; then
     pass "$label"
   else
+    cat "$TMP/command.log" >&2
     fail "$label"
   fi
 }
@@ -62,7 +63,8 @@ run_expect_ok() {
 run_expect_fail() {
   local label="$1"
   shift
-  if "$@" >/dev/null 2>&1; then
+  if "$@" >"$TMP/command.log" 2>&1; then
+    cat "$TMP/command.log" >&2
     fail "$label (expected failure)"
   else
     pass "$label"
@@ -78,8 +80,63 @@ _smoke_seed_workspace() {
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Do not inherit production roots, cutover hooks or provider configuration.
+# Clear SOLAR_TEST_* too: opt-in suites must be run separately, never implicitly
+# enabled by the caller of this offline smoke.
+for smoke_var in ${!SOLAR_@}; do unset "$smoke_var"; done
+mkdir -p "$TMP/bin" "$TMP/install"
+# Exercise a disposable copy, including upgrade's install-pruning path.
+SOURCE_ROOT="$INSTALL_ROOT"
+mkdir -p "$TMP/install/core"
+(cd "$SOURCE_ROOT/core" && tar --exclude='.venv' --exclude='__pycache__' -cf - .) | \
+  tar -xf - -C "$TMP/install/core" || {
+    echo "ERROR: could not copy the source install" >&2
+    exit 1
+  }
+INSTALL_ROOT="$TMP/install"
+SOLAR="$INSTALL_ROOT/core/skills/solar-client/scripts/solar"
+RESOLVE="$INSTALL_ROOT/core/skills/solar-paths/scripts/resolve_solar_paths.sh"
+cat >"$TMP/bin/launchctl" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+cat >"$TMP/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+# The smoke is offline, including _smoke_unit children that inherit PATH.
+# Unit suites must install response doubles. A future suite needing real curl
+# must explicitly select its executable through a test-owned variable; the
+# inherited curl intentionally refuses all requests.
+exit 1
+EOF
+chmod +x "$TMP/bin/launchctl" "$TMP/bin/curl"
+export PATH="$TMP/bin:$PATH"
+export SOLAR_CLIENT_LAUNCHCTL="$TMP/bin/launchctl"
+export SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none
+: >"$TMP/empty-ps"
+export SOLAR_CLIENT_PS_OUTPUT_FILE="$TMP/empty-ps"
+export SOLAR_CUTOVER_PS_OUTPUT_FILE="$TMP/empty-ps"
+source "$INSTALL_ROOT/core/tests/support/shell_runtime_guard.sh" || exit 1
+
+_smoke_context() {
+  local name="$1" install="${2:-$INSTALL_ROOT}"
+  export SOLAR_ROOT="$install" SOLAR_INSTALL_DIR="$install"
+  export SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE="$install"
+  export SOLAR_APP_DATA="$TMP/$name-app" SOLAR_RUNTIME_ROOT="$TMP/$name-runtime"
+  solar_test_guard --services
+}
+
+_smoke_unit() (
+  # Unit fixtures select their own installs and workspaces.
+  unset SOLAR_ROOT SOLAR_INSTALL_DIR SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE SOLAR_WORKSPACE
+  # Historical updater regressions need the source repository's release tags.
+  # The smoke does not modify that checkout or enforce filesystem read-only access.
+  bash "$SOURCE_ROOT/${1#"$INSTALL_ROOT/"}"
+)
+_smoke_context preflight
+
 echo "Solar Client go/no-go smoke"
-echo "  INSTALL_ROOT=$INSTALL_ROOT"
+echo "  SOURCE_ROOT=$SOURCE_ROOT"
+echo "  INSTALL_ROOT=$INSTALL_ROOT (disposable copy)"
 echo ""
 
 echo "=== Preflight ($INSTALL_ROOT) ==="
@@ -97,42 +154,42 @@ UNIT_SYNC_EXCLUDE="$INSTALL_ROOT/core/tests/skills/solar-client/test_sync_exclud
 UNIT_SYNC_CODEX_AGENTS="$INSTALL_ROOT/core/tests/skills/solar-client/test_sync_codex_agents.sh"
 UNIT_DOCTOR_PORT="$INSTALL_ROOT/core/tests/skills/solar-client/test_doctor_port.sh"
 if [[ -f "$UNIT_RESOLVE" ]]; then
-  bash "$UNIT_RESOLVE" >/dev/null 2>&1 && pass "unit: test_resolve_solar_paths.sh" || fail "unit: test_resolve_solar_paths.sh"
+  run_expect_ok "unit: test_resolve_solar_paths.sh" _smoke_unit "$UNIT_RESOLVE"
 else
   fail "missing test_resolve_solar_paths.sh"
 fi
 if [[ -f "$UNIT_PATHS_PY" ]]; then
-  bash "$UNIT_PATHS_PY" >/dev/null 2>&1 && pass "unit: test_solar_paths_py.sh" || fail "unit: test_solar_paths_py.sh"
+  run_expect_ok "unit: test_solar_paths_py.sh" _smoke_unit "$UNIT_PATHS_PY"
 else
   skip "test_solar_paths_py.sh not found"
 fi
 if [[ -f "$UNIT_UPGRADE" ]]; then
-  bash "$UNIT_UPGRADE" >/dev/null 2>&1 && pass "unit: test_client_upgrade.sh" || fail "unit: test_client_upgrade.sh"
+  run_expect_ok "unit: test_client_upgrade.sh" _smoke_unit "$UNIT_UPGRADE"
 else
   fail "missing test_client_upgrade.sh"
 fi
 if [[ -f "$UNIT_MANIFEST" ]]; then
-  bash "$UNIT_MANIFEST" >/dev/null 2>&1 && pass "unit: test_client_manifest.sh" || fail "unit: test_client_manifest.sh"
+  run_expect_ok "unit: test_client_manifest.sh" _smoke_unit "$UNIT_MANIFEST"
 else
   fail "missing test_client_manifest.sh"
 fi
 if [[ -f "$UNIT_BUNDLE" ]]; then
-  bash "$UNIT_BUNDLE" >/dev/null 2>&1 && pass "unit: test_client_bundle.sh" || fail "unit: test_client_bundle.sh"
+  run_expect_ok "unit: test_client_bundle.sh" _smoke_unit "$UNIT_BUNDLE"
 else
   fail "missing test_client_bundle.sh"
 fi
 if [[ -f "$UNIT_SYNC_EXCLUDE" ]]; then
-  bash "$UNIT_SYNC_EXCLUDE" >/dev/null 2>&1 && pass "unit: test_sync_exclude.sh" || fail "unit: test_sync_exclude.sh"
+  run_expect_ok "unit: test_sync_exclude.sh" _smoke_unit "$UNIT_SYNC_EXCLUDE"
 else
   fail "missing test_sync_exclude.sh"
 fi
 if [[ -f "$UNIT_SYNC_CODEX_AGENTS" ]]; then
-  bash "$UNIT_SYNC_CODEX_AGENTS" >/dev/null 2>&1 && pass "unit: test_sync_codex_agents.sh" || fail "unit: test_sync_codex_agents.sh"
+  run_expect_ok "unit: test_sync_codex_agents.sh" _smoke_unit "$UNIT_SYNC_CODEX_AGENTS"
 else
   fail "missing test_sync_codex_agents.sh"
 fi
 if [[ -f "$UNIT_DOCTOR_PORT" ]]; then
-  bash "$UNIT_DOCTOR_PORT" >/dev/null 2>&1 && pass "unit: test_doctor_port.sh" || fail "unit: test_doctor_port.sh"
+  run_expect_ok "unit: test_doctor_port.sh" _smoke_unit "$UNIT_DOCTOR_PORT"
 else
   skip "test_doctor_port.sh not found"
 fi
@@ -155,14 +212,16 @@ unset SOLAR_WORKSPACE
 echo "=== client init (temp) ==="
 INIT_WS="$TMP/init-test"
 mkdir -p "$INIT_WS"
+_smoke_context init
 pushd "$INIT_WS" >/dev/null
-if bash "$SOLAR" client init >/dev/null 2>&1; then
+if bash "$SOLAR" client init >"$TMP/command.log" 2>&1; then
   if [[ -f .solar/settings.json && -d sun && ! -d .solar/core ]]; then
     pass "init: settings+sun, no .solar/core"
   else
     fail "init: bad layout"
   fi
 else
+  cat "$TMP/command.log" >&2
   fail "solar client init"
 fi
 
@@ -174,7 +233,8 @@ fi
 
 marker="SMOKE_$(date +%s)"
 echo "SMOKE_MARKER=$marker" >> .env
-if bash "$SOLAR" client init >/dev/null 2>&1 && grep -q "SMOKE_MARKER=$marker" .env; then
+run_expect_ok "solar client re-init" bash "$SOLAR" client init
+if grep -q "SMOKE_MARKER=$marker" .env; then
   pass "re-init preserves .env"
 else
   fail "re-init overwrote .env"
@@ -209,6 +269,7 @@ _smoke_seed_workspace "$UPG_WS"
 mkdir -p "$UPG_WS/.solar/core/skills"
 touch "$UPG_WS/.solar/.env"
 echo '{"layout":"solar-client-v1"}' > "$UPG_WS/.solar/manifest.json"
+_smoke_context upgrade
 pushd "$UPG_WS" >/dev/null
 if bash "$SOLAR" client upgrade >/dev/null 2>&1; then
   layout="$(python3 -c 'import json; print(json.load(open(".solar/settings.json")).get("layout",""))')"
@@ -240,6 +301,7 @@ BLOCK_WS="$TMP/block-test"
 _smoke_seed_workspace "$BLOCK_WS"
 mkdir -p "$BLOCK_WS/.solar/core"
 echo '{"layout":"solar-client-v1"}' > "$BLOCK_WS/.solar/manifest.json"
+_smoke_context block
 pushd "$BLOCK_WS" >/dev/null
 doc_out="$(bash "$SOLAR" client doctor 2>&1 || true)"
 if echo "$doc_out" | grep -qi "upgrade"; then
@@ -257,6 +319,7 @@ cp -R "$INSTALL_ROOT/core" "$PRUNE_INSTALL/core"
 echo '{"layout":"solar-client-v1.1","core_source":"global"}' > "$PRUNE_WS/.solar/manifest.json"
 mkdir -p "$PRUNE_INSTALL/.cursor/skills/smoke-dummy"
 PRUNE_SOLAR="$PRUNE_INSTALL/core/skills/solar-client/scripts/solar"
+_smoke_context prune "$PRUNE_INSTALL"
 pushd "$PRUNE_WS" >/dev/null
 if bash "$PRUNE_SOLAR" client upgrade >/dev/null 2>&1; then
   if [[ ! -d "$PRUNE_INSTALL/.cursor" ]]; then
@@ -269,19 +332,22 @@ else
 fi
 popd >/dev/null
 
-if [[ -d "$INSTALL_ROOT/.cursor/skills" ]]; then
+_smoke_context init
+if [[ -d "$SOURCE_ROOT/.cursor/skills" ]]; then
   skip "INSTALL_ROOT still has .cursor/ (run: solar client upgrade from ~/Solar)"
 else
   pass "INSTALL_ROOT has no .cursor/skills"
 fi
 
 echo "=== client update --check ==="
+pushd "$INIT_WS" >/dev/null
 run_expect_ok "update --check" bash "$SOLAR" client update --check
+popd >/dev/null
 
 echo "=== client update unit test ==="
 UPDATE_TEST="$INSTALL_ROOT/core/tests/skills/solar-client/test_client_update.sh"
 if [[ -f "$UPDATE_TEST" ]]; then
-  run_expect_ok "unit: test_client_update.sh" bash "$UPDATE_TEST"
+  run_expect_ok "unit: test_client_update.sh" _smoke_unit "$UPDATE_TEST"
 else
   fail "test_client_update.sh missing"
 fi
@@ -298,12 +364,9 @@ cp -R "$INSTALL_ROOT/core/templates" "$BUNDLE_INSTALL/core/" 2>/dev/null || mkdi
 echo '{"layout":"solar-client-v1.1","core_source":"global"}' > "$BUNDLE_WS/.solar/manifest.json"
 echo "before-bundle" > "$BUNDLE_INSTALL/core/.marker"
 BUNDLE_SOLAR="$BUNDLE_INSTALL/core/skills/solar-client/scripts/solar"
+_smoke_context bundle "$BUNDLE_INSTALL"
 pushd "$BUNDLE_WS" >/dev/null
-if bash "$BUNDLE_SOLAR" client update --bundle --yes >/dev/null 2>&1; then
-  pass "update --bundle on install without .git"
-else
-  fail "update --bundle on install without .git"
-fi
+run_expect_ok "update --bundle on install without .git" bash "$BUNDLE_SOLAR" client update --bundle --yes
 popd >/dev/null
 
 echo ""
