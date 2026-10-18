@@ -476,6 +476,22 @@ def test_result_view_returns_the_executor_log_when_the_body_has_no_result(solar_
         assert refused["recorded"] is False and refused["execution_log"] is None
 
 
+def test_result_view_keeps_the_headings_of_the_providers_own_reply(solar_env):
+    logs = solar_env.runtime / "task-logs"
+    logs.mkdir(parents=True)
+    log = logs / "reply-headings.md"
+    log.write_text("# Async Task Execution\n\n- outcome: success\n\n## Result\n\nReviewed commit: abc\n\n"
+                   "## Findings\nThe limits conflict.\n\n```\n## Not a heading\n```\n\n"
+                   "## Evidence\n- `a.md:2`\n\n### Detail\nmore\n")
+    with solar_state.session() as store:
+        task = store.task_create([("title", '"R"'), ("result_path", json.dumps(str(log)))], "\n# R\n", status="draft")
+    found = search(scope="tasks", task_id=task, view="result")["execution_log"]
+    assert found["outcome"] == "result" and found["truncated"] is False
+    assert found["text"].startswith("## Result\n\nReviewed commit: abc")
+    for part in ("## Findings", "The limits conflict.", "## Not a heading", "## Evidence", "### Detail", "more"):
+        assert part in found["text"]
+
+
 def test_result_view_falls_back_to_the_recorded_log_path_and_stays_confined(solar_env):
     logs = solar_env.runtime / "task-logs"
     logs.mkdir(parents=True)
