@@ -26,7 +26,7 @@ DEFAULT_KEEP = 10
 MAX_KEEP = 100
 MAX_FILE_BYTES = 8 * 1024 * 1024
 _RUN = re.compile(r"^\d{8}T\d{6}Z-\d+-[0-9a-f]{8}$")
-_SECRET_NAME = re.compile(r"_(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)$", re.I)
+_SECRET_NAME = re.compile(r"(?:^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)$", re.I)
 _COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
 _MODEL = re.compile(r"^[A-Za-z0-9._:/@+-]{1,128}$")
 _SECRET_SHAPE = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*|sk-[A-Za-z0-9_-]{16,}")
@@ -136,6 +136,7 @@ def capture_codex(argv, env, stdout, returncode, timed_out=False, commit=None) -
         name = "%s-%d-%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), os.getpid(), os.urandom(4).hex())
         run = root / name
         run.mkdir(mode=0o700)
+        os.chmod(run, 0o700)  # mkdir's mode is masked by the umask
         events, events_cut = _clean(stdout or "", secrets)
         _write(run / "events.jsonl", events)
         message_cut = None

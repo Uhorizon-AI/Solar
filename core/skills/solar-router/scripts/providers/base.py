@@ -216,8 +216,13 @@ class BaseProvider(ABC):
             except (KeyError, TypeError, ValueError):
                 commit = None
             capture_codex(argv, env, stdout, returncode, timed_out=timed_out, commit=commit)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            if (os.getenv("SOLAR_ROUTER_REVIEW_EVIDENCE_DIR") or "").strip():
+                try:  # enabled capture that cannot run must not go unnoticed
+                    print("[solar-router] review evidence not captured: " + type(exc).__name__,
+                          file=sys.stderr)
+                except Exception:  # noqa: BLE001
+                    pass
 
     @staticmethod
     def _codex_final_review(stdout: str, last_message) -> dict:

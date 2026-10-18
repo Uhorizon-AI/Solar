@@ -490,10 +490,13 @@ def test_ssh_auth_sock_is_not_treated_as_a_secret_but_token_names_are(monkeypatc
     monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
     monkeypatch.setenv('SSH_AUTH_SOCK', '/private/tmp/agent.sock')
     monkeypatch.setenv('SERVICE_API_TOKEN', 'tok-value-12345')
-    _evidence_run(monkeypatch, tmp_path, _events('/private/tmp/agent.sock tok-value-12345'), GOOD_FINAL)
+    monkeypatch.setenv('TOKEN', 'bare-token-6789')
+    monkeypatch.setenv('PASSWORD', 'bare-password-6789')
+    _evidence_run(monkeypatch, tmp_path, _events('/private/tmp/agent.sock tok-value-12345 bare-token-6789 bare-password-6789'), GOOD_FINAL)
     (run,) = _runs(root)
     text = (run / 'events.jsonl').read_text()
-    assert '/private/tmp/agent.sock' in text and 'tok-value-12345' not in text
+    assert '/private/tmp/agent.sock' in text
+    assert not any(v in text for v in ('tok-value-12345', 'bare-token-6789', 'bare-password-6789'))
 
 
 def test_size_cap_never_splits_a_multibyte_character(monkeypatch, tmp_path):
@@ -533,3 +536,33 @@ def test_closed_stderr_does_not_break_the_never_raises_contract(monkeypatch, tmp
 
     monkeypatch.setattr(review_evidence.sys, 'stderr', Broken())
     review_evidence.capture_codex(['codex'], {}, 'x', 0)
+
+
+def test_restrictive_umask_still_leaves_a_writable_run_directory(monkeypatch, tmp_path):
+    root = tmp_path / 'evidence'
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
+    import review_evidence
+    original = review_evidence.capture_codex
+
+    def under_umask(*args, **kwargs):  # only the capture runs masked; the simulated launch needs write bits
+        old = os.umask(0o277)
+        try:
+            return original(*args, **kwargs)
+        finally:
+            os.umask(old)
+
+    monkeypatch.setattr(review_evidence, 'capture_codex', under_umask)
+    assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
+    (run,) = _runs(root)
+    assert oct(run.stat().st_mode & 0o777) == '0o700'
+    assert sorted(p.name for p in run.iterdir()) == ['events.jsonl', 'last-message.json', 'meta.json']
+
+
+def test_unavailable_capture_module_warns_only_when_enabled(monkeypatch, tmp_path, capsys):
+    monkeypatch.setitem(sys.modules, 'review_evidence', None)  # import raises ImportError
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(tmp_path / 'evidence'))
+    assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
+    assert 'review evidence not captured: ModuleNotFoundError' in capsys.readouterr().err
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', '')
+    assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
+    assert capsys.readouterr().err == ''

@@ -100,7 +100,9 @@ review (the supervisor/worker), not in the session that launches the task.
 - The root and run directories are mode `0700`, files `0600`. Solar creates the
   root with `0700` but never changes the mode of a pre-existing directory: a
   symlinked or foreign-owned root, or an existing one accessible to group or
-  others, is refused and nothing is captured.
+  others, is refused and nothing is captured (one line on stderr). Create it
+  with `mkdir -m 700 <path>` (a plain `mkdir` gives `0755` on macOS), or let
+  Solar create it.
 - Retention: the newest `SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP` runs (default `10`,
   maximum `100`; `0` or lower is raised to `1`); older Solar-named run directories are deleted, other entries
   are left alone. Each file is cut at 8 MiB on a character boundary.
