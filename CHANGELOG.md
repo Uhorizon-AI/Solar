@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Bind MCP stdio startup to the validated registered workspace regardless of a GUI client's launch directory, preserving existing registrations, runtime ownership checks and native approval requirements.
+
 ## [0.52.0] - 2026-10-18
 
 ### Added
