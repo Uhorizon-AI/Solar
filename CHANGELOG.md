@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- A Claude preflight failure still returns `execution_profile_unsupported`, but the task log now names the check that failed, e.g. `execution_profile_unsupported (help_timeout)`: `help_unavailable`, `help_timeout`, `help_failed`, `help_missing_flags`, `policy_local_present`, `policy_local_unreadable`, `doctor_unavailable`, `doctor_timeout`, `doctor_failed` or `doctor_unrecognized`. The reason is a fixed word, never CLI output, paths or credentials.
+
 ## [0.54.0] - 2026-10-18
 
 ### Added

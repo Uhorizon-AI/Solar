@@ -57,6 +57,8 @@ variables are excluded. `--bare` is deliberately absent to preserve OAuth.
 
 Help must advertise the required flags. Effective managed policy must also be
 validated: unknown or nonempty policy returns `execution_profile_unsupported`.
+The task log appends a fixed reason naming the failed preflight check (for example
+`execution_profile_unsupported (help_timeout)`); the error code itself does not change.
 The inspection has two parts, and a launch needs both to say "no policy":
 
 - **Local sources**, read directly: `managed-settings.json`, the

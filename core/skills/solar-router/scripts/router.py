@@ -1356,7 +1356,9 @@ def _restricted_route(payload, *, stream=False):
             except solar_state.StateError:
                 pass  # a stale caller cannot release another execution's reservation
         audit_log(router_id, "end", status="failed", task_id=task_id, error_code=code, stream=stream)
-        return dict(_failed(request_id, code, code, provider), claim_released=released)
+        reason = getattr(exc, "reason", None)  # a fixed word naming the failed check, for the task log
+        message = code + " (" + reason + ")" if reason else code
+        return dict(_failed(request_id, code, message, provider), claim_released=released)
     except solar_state.StateError as exc:
         # A busy or unavailable base (a cutover is running) says nothing about the review inputs:
         # the approval and the claim stay as they are and the caller sees a transient failure.

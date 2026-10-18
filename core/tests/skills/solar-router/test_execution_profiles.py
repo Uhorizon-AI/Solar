@@ -113,6 +113,79 @@ def test_effective_policy_unknown_or_hostile_is_unsupported(review, fake_cli, mo
     assert not fake_cli.exists()
 
 
+def _preflight_reason(monkeypatch, runner, policy=None):
+    """The reason a preflight failure carries; the code stays execution_profile_unsupported."""
+    monkeypatch.setattr(profiles.subprocess, 'run', runner)
+    if policy is not None:
+        monkeypatch.setattr(profiles, '_effective_managed_policy', policy)
+    with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported') as caught:
+        profiles.preflight('claude-double', {}, '.')
+    assert caught.value.code == 'execution_profile_unsupported'
+    return caught.value.reason
+
+
+def _timeout(*a, **k):
+    raise profiles.subprocess.TimeoutExpired('claude', 10)
+
+
+def _missing(*a, **k):
+    raise FileNotFoundError('claude')
+
+
+def _result(returncode, stdout):
+    return lambda *a, **k: type('Result', (), {'returncode': returncode, 'stdout': stdout})()
+
+
+def test_preflight_reasons_name_the_failed_help_check(monkeypatch):
+    assert _preflight_reason(monkeypatch, _timeout) == 'help_timeout'
+    assert _preflight_reason(monkeypatch, _missing) == 'help_unavailable'
+    assert _preflight_reason(monkeypatch, _result(1, ' '.join(profiles.FLAGS))) == 'help_failed'
+    assert _preflight_reason(monkeypatch, _result(0, '--print')) == 'help_missing_flags'
+
+
+def test_preflight_reasons_name_the_failed_policy_check(monkeypatch, tmp_path):
+    ok_help = _result(0, ' '.join(profiles.FLAGS))
+    monkeypatch.setattr(profiles, '_local_managed_policy', lambda: None)
+    assert _preflight_reason(monkeypatch, ok_help, profiles._effective_managed_policy) == 'policy_local_unreadable'
+    monkeypatch.setattr(profiles, '_local_managed_policy', lambda: {'hooks': {}})
+    assert _preflight_reason(monkeypatch, ok_help) == 'policy_local_present'
+    monkeypatch.setattr(profiles, '_local_managed_policy', lambda: {})
+    doctor = {}
+
+    def runner(argv, **kw):
+        if argv[1] == '--help':
+            return ok_help()
+        return doctor['run'](argv, **kw)
+    for name, run, expected in (('timeout', _timeout, 'doctor_timeout'), ('missing', _missing, 'doctor_unavailable'),
+                                ('failed', _result(1, ''), 'doctor_failed'),
+                                ('unrecognized', _result(0, 'Managed settings (remote): fetched'), 'doctor_unrecognized')):
+        doctor['run'] = run
+        assert _preflight_reason(monkeypatch, runner) == expected, name
+
+
+def test_doctor_accepting_an_account_without_organization_policy_has_no_reason(monkeypatch):
+    ok = _result(0, 'Managed settings (remote): not fetched - Pro\nOrganization policy: not applicable to Pro\n')
+    monkeypatch.setattr(profiles.subprocess, 'run', ok)
+    assert profiles._doctor_check('claude-double', {}, '.') is None
+    assert profiles._doctor_reports_no_org_policy('claude-double', {}, '.') is True
+
+
+def test_failure_reason_reaches_the_error_message_without_changing_the_code(review, fake_cli, monkeypatch):
+    source, envelope = review
+    access = dict(version=1, mode='read', scopes=[str(source)], resources=[])
+    values = dict(provider='claude', execution_profile=profiles.PROFILE, access_policy=profiles.canonical(access),
+                  review_input_manifest=profiles.canonical(envelope['manifest']),
+                  review_input_digest=envelope['review_input_digest'])
+    with solar_state.session() as store:
+        task = store.task_create([(k, json.dumps(v)) for k, v in values.items()], 'Review', status='queued')
+        claimed = store.task_claim_detail(task, 'reader')
+    payload = dict(provider='claude', execution=dict(task_id=task, token=claimed['token'], profile=profiles.PROFILE))
+    monkeypatch.setattr(profiles.subprocess, 'run', _timeout)
+    result = router.route(json.dumps(payload))
+    assert result['error_code'] == 'execution_profile_unsupported'
+    assert result['error'] == 'execution_profile_unsupported (help_timeout)'
+
+
 def test_missing_cli_flag_is_unsupported(review, fake_cli, monkeypatch):
     monkeypatch.setattr(profiles.subprocess, 'run', lambda *a, **k: type('Result', (), {'returncode': 0, 'stdout':'--print'})())
     with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
