@@ -89,7 +89,8 @@ else:
     adapter = PROVIDERS[provider]
     monkeypatch.setattr(adapter, 'resolve_binary', lambda _: str(binary))
     review = dict(manifest=e['manifest'], expected=e['review_input_digest'], profile=repo.PROFILE)
-    expected = 'Reviewed commit: ' + commit + '\n\nReview result'
+    expected = ('Reviewed commit: ' + commit + '\nRepository HEAD when the review finished: ' + commit
+                + ' (same as the reviewed commit)\n\nReview result')
     assert adapter.run('UNAPPROVED CONTEXT', review=review) == expected
     first = json.loads(record.read_text())
     assert ''.join(adapter.stream('UNAPPROVED CONTEXT', review=review)) == expected
@@ -112,6 +113,77 @@ else:
         assert '--output-schema' in first['argv'] and '--output-last-message' in first['argv']
         assert not Path(first['env']['CODEX_HOME']).exists()
     assert (root / 'operations.md').read_text() == 'The maximum batch is five.\n'
+
+
+def _label(root, commit):
+    return 'Repository HEAD when the review finished: '
+
+
+def test_freshness_same_head(tmp_path):
+    root, commit = repository(tmp_path)
+    e = envelope(root, commit)
+    assert repo.freshness_line(e['manifest']) == _label(root, commit) + commit + ' (same as the reviewed commit)'
+
+
+def test_freshness_newer_head_is_recorded_and_snapshot_digest_is_unchanged(tmp_path):
+    root, commit = repository(tmp_path)
+    e = envelope(root, commit)
+    (root / 'operations.md').write_text('Builder now supports six.\n')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'builder continues')
+    head = git(root, 'rev-parse', 'HEAD').strip()
+    assert repo.freshness_line(e['manifest']) == _label(root, commit) + head + ' (differs from the reviewed commit)'
+    # Recording freshness is not part of the approved contract.
+    assert profiles.verify_envelope(e['manifest'], e['review_input_digest'], provider='claude', profile=repo.PROFILE)
+
+
+def test_freshness_detached_head_still_reports_the_commit(tmp_path):
+    root, commit = repository(tmp_path)
+    e = envelope(root, commit)
+    git(root, 'checkout', '-q', '--detach', commit)
+    assert repo.freshness_line(e['manifest']).endswith('(same as the reviewed commit)')
+
+
+@pytest.mark.parametrize('breakage', ['moved', 'no_git', 'bad_manifest'])
+def test_freshness_failures_are_unknown_and_never_raise(tmp_path, breakage):
+    root, commit = repository(tmp_path)
+    e = envelope(root, commit)
+    manifest = e['manifest']
+    if breakage == 'moved':
+        root.rename(tmp_path / 'moved')
+    elif breakage == 'no_git':
+        import shutil
+        shutil.rmtree(root / '.git')
+    else:
+        manifest = dict(manifest, user_prompt='not json')
+    assert repo.freshness_line(manifest) == _label(root, commit) + 'unknown'
+
+
+def test_review_succeeds_with_unknown_freshness_and_model_prose_is_not_the_record(tmp_path, monkeypatch):
+    root, commit = repository(tmp_path)
+    e = envelope(root, commit)
+    binary = tmp_path / 'claude'
+    binary.write_text(f'''#!{sys.executable}
+import json, sys
+if '--help' in sys.argv: print({repr(' '.join(profiles.FLAGS))})
+else: print(json.dumps(dict(result='HEAD is deadbeef, the version is stale.')))
+''')
+    binary.chmod(0o700)
+    monkeypatch.setattr(profiles, '_effective_managed_policy', lambda *a: {})
+    adapter = PROVIDERS['claude']
+    monkeypatch.setattr(adapter, 'resolve_binary', lambda _: str(binary))
+    review = dict(manifest=e['manifest'], expected=e['review_input_digest'], profile=repo.PROFILE)
+    real = repo._git  # only the HEAD read fails; the approved-snapshot checks keep working
+
+    def failing_head(repository, *args, **kw):
+        if args == ('rev-parse', '--verify', '-q', 'HEAD'):
+            raise repo._error()
+        return real(repository, *args, **kw)
+    monkeypatch.setattr(repo, '_git', failing_head)
+    out = adapter.run('ctx', review=review)
+    lines = out.split('\n')
+    assert lines[0] == 'Reviewed commit: ' + commit
+    assert lines[1] == _label(root, commit) + 'unknown'
+    assert out.endswith('HEAD is deadbeef, the version is stale.')
 
 
 def test_codex_unknown_effective_policy_is_refused(tmp_path):

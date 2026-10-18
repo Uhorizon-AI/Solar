@@ -62,6 +62,17 @@ copy of the same version. Uncommitted builder edits and newer commits do not
 change it. The source repository is never given as the review cwd. A result is
 labelled `Reviewed commit: <full ID>` by Solar, not inferred from model prose.
 
+Right after it Solar records `Repository HEAD when the review finished: <ID>`
+with `same as` or `differs from the reviewed commit`, or `unknown` when HEAD
+cannot be read (unborn HEAD, Git error or timeout). A detached HEAD is reported
+like any other. This is a record, never a gate: a differing HEAD is the expected
+case while the builder continues, the line is not part of the manifest or
+digest, and a failure to read it never fails or alters the review. The approved
+prompt still carries the repository path, and the sandbox does not stop the CLI
+from reading outside the snapshot, so the model may run Git on the live
+repository and comment on HEAD. Such statements are model commentary, not a
+freshness check; only the Solar-written lines above are authoritative.
+
 The copy is checked for unexpected files, symlinks and changed content after
 execution, and removed in `finally`. A mismatch invalidates the result. This is
 defense in depth, not the mechanism that prevents writes. The CLI restrictions
