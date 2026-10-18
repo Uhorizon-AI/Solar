@@ -1138,6 +1138,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # A direct Python invocation has no wrapper/supervisor to isolate its group.
+    # Its caller must not be counted as a surviving member of this execution.
+    if (os.environ.get("SOLAR_SUPERVISOR_DISPATCH") != "1"
+            and os.environ.get("SOLAR_EXECUTOR_ISOLATED") != "1"
+            and os.getpgrp() != os.getpid()):
+        os.setsid()
     try:
         sys.exit(main())
     except solar_state.StaleToken as exc:

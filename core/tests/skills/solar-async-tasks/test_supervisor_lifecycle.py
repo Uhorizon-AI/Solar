@@ -592,7 +592,12 @@ def test_a_lease_that_ran_out_ends_the_command_the_executor_started_before_the_t
             store.conn.execute("UPDATE execution_reservations SET lease_expires_at = '2000-01-01T00:00:00Z' "
                                "WHERE task_id = ?", (task,))
         wait_until(lambda: rig.status(task) == "error", 40, interval=0.005, what="the timeout to be handled")
-        assert not alive(sleeper), "the task was failed and its place freed while its command was still running"
+        assert not alive(sleeper), "the task was failed while its command was still running"
+        def release_recorded():
+            with solar_state.session() as store:
+                return any(json.loads(row[0]).get("task_id") == task for row in store.conn.execute(
+                    "SELECT row FROM audit WHERE event = 'execution_released'"))
+        wait_until(release_recorded, 5, what="the ending execution to be released")
         assert rig.reservations() == []
     finally:
         proc.kill()
@@ -643,13 +648,13 @@ def test_nothing_is_admitted_between_the_executor_finishing_and_its_command_bein
     try:
         wait_until(lambda: rig.status(a) == "completed", 60, interval=0.005, what="A to complete")
         child = int(pidfile.read_text())
-        assert alive(child) and rig.reservations() == []        # reservation gone, command still running
+        assert alive(child) and rig.reservations_of(a)["phase"] == "ending"  # held until group cleanup
         with solar_state.session() as store:
             refused = store.task_claim_detail(b, "activate-b")
         assert refused["claimed"] is False and refused["reason"] in ("exclusive_needs_idle", "blocked_by_exclusive"), \
             "a conflicting activation was admitted while A's command was still running"
         wait_until(lambda: not alive(child), 30, what="the supervisor to end the leftover group")
-        wait_until(lambda: not (rig.runtime / solar_state.CLEANUP_HOLDS_NAME).exists(), 30, what="the hold to be released")
+        wait_until(lambda: not solar_state.cleanup_holds(rig.runtime), 30, what="the hold to be released")
         wait_until(lambda: rig.status(b) == "completed", 60, what="B, free to run now")   # the supervisor runs it
     finally:
         proc.kill()

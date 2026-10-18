@@ -58,21 +58,20 @@ otherwise 20. A held maintenance barrier answers 20 without starting anything.
   anything else (the poll). It does not wait for the 60 s tick.
 * **Manual activations** (`activate.sh`) leave a reservation no executor holds; the supervisor takes it over with
   `task_adopt` (new token) and runs exactly that claim.
-* **Collect and release.** The executor frees the reservation when it finishes the task. After the executor process
-  ends, the supervisor proves its process group is gone (stopping stragglers of that one group, never another
-  group) before it forgets the place. A task still `active` under that execution's token — the executor died
+* **Collect and release.** Finishing the task marks its attached execution `ending`; its reservation,
+  scopes and resources remain taken. After the executor process ends, the supervisor proves every recorded
+  process group gone (stopping only verified groups belonging to that execution), then calls
+  `Session.reservation_finish` to release the reservation in a transaction. A task still `active` under that execution's token — the executor died
   without finishing — is failed with `executor_exited` (outcome uncertain: **never retried**); one whose executor
   never took its execution is given back unambiguously and failed after three tries.
 * **Cancellation** stops only the group of that execution, after a grace period, and the task becomes
   `cancelled` only once its group is gone. A lease that expired while the process is alive stops that group and
   fails the task (`lease_expired`).
 * **Failed cleanup.** A group that cannot be proven gone leaves the execution counted and visible as
-  `blocked: cleanup_failed`. While its reservation stands the claim already refuses what conflicts. When the executor
-  had already given the reservation back, what the execution held (capacity, resources, writer scopes, or the whole
-  machine when it ran alone) stays in `async-tasks/supervisor/cleanup-holds.json`, which **every claim reads**
-  (`solar_state.cleanup_holds`): the supervisor, `activate.sh`, the diagnostic worker and an adoption are all refused
-  until the supervisor verifies **all** the groups of the execution (the executor's and the command's) and removes the hold (it survives a restart; an unreadable file holds the
-  whole machine). Other resources are not touched.
+  `blocked: cleanup_failed` or `cleanup_unverified`. Ending reservations stay in `execution_reservations`;
+  additional exclusions live in `execution_cleanup_holds`. Every claim reads both in its own transaction,
+  so manual activation, the diagnostic worker and adoption cannot bypass cleanup. Holds survive restart.
+  An unreadable imported legacy hold remains exclusive and requires operator recovery; it is never silently dropped.
 * **The command's own group.** The router runs the command or provider in a process group of its own, apart from the
   executor's. The pid the executor records for the task (not the one an earlier run left) names it: when the supervisor
   stops an execution (cancellation, lease timeout) or collects it, that group is ended and proved gone **before** the
@@ -130,23 +129,36 @@ Observation thresholds only (they cannot name an owner or a lock): `SOLAR_SUPERV
 `SOLAR_SUPERVISOR_UNCERTAIN_HOLD` (300); and the supervisor's own `SOLAR_SUPERVISOR_POLL` (≤ 1),
 `SOLAR_SUPERVISOR_SWEEP`, `SOLAR_SUPERVISOR_CANCEL_GRACE`, `SOLAR_SUPERVISOR_TERM_GRACE`, `SOLAR_SUPERVISOR_KILL_WAIT`.
 
-## Known limit (follow-up before PR 4)
+## Deferred release and schema upgrade (#39)
 
-The executor gives its reservation back in the same transaction that moves the task out of `active`, before its process
-ends. That gap is closed without changing the schema: from its dispatch the supervisor lists every execution it runs in
-`async-tasks/supervisor/cleanup-holds.json` (`while_reserved`, with the process groups of the executor and of its command).
-While the reservation stands it is the reservation that counts; the instant it is released, the entry takes over in the
-same transaction, so no claim (manual activation included) is admitted until the supervisor has proved **every** group gone
-and removed the entry. The command's group is added to the entry as soon as the executor records it (checked every second). After a
-restart, an entry of an execution that ended with nobody to verify it is read again (the command's leader is re-read from the task
-if the entry lacks it): when every group is already empty it is dropped, otherwise — or if the process table cannot be asked — it
-becomes `blocked: cleanup_unverified` and stays until all its groups are empty.
+Install and verify this fix through the supported update flow before enabling capacity 3/5.
+A merged issue alone does not prove that the runtime has migrated; the other rollout prerequisites
+remain in [async-rollout.md](async-rollout.md).
 
-What remains is that this state lives in a file read by `solar_state` rather than in the schema: it is written only by the
-supervisor, so a runtime with no supervisor ever started again keeps its entries until one runs. Proposal for the follow-up
-(Uhorizon-AI/Solar#39, before 3/5 are enabled): a deferred release in solar-state — the executor marks the execution `ending`
-and the reservation is released only by the supervisor (or `task_adopt`) after the groups are proved gone, with the holds
-moving into the schema in a migration owned by that follow-up.
+Schema v7 stores execution group identities and the ending marker in `execution_lifecycle` and `execution_groups`, and
+cleanup exclusions in `execution_cleanup_holds`. The executor's group is captured when it attaches;
+the command's group is captured in the same transaction that records its pid. Leaving `active`
+commits the task result/status and the ending marker together, retaining the original reservation,
+provider place, scopes and resources. A claimed task to which no executor attached may be returned
+immediately after a refused hook or failed start.
+
+Only `Session.reservation_finish` releases an ending reservation. It checks the original owner's
+pid/start identity and all persisted groups, including supervisor holds. Unknown process-table
+answers or live members refuse release; this operation never sends a signal. Supervisor collection
+uses it after cleanup. Startup reconciliation releases finished executions without dispatching them
+again. `task_adopt <id> --worker <worker>` can also recover an ending execution without a supervisor:
+it returns `adopted: false`, `released: true`, `reason: ending_released` only after the same proof.
+A queued recurrence remains `execution_ending` until this release, so it cannot race its previous run.
+The capacity projection exposes each retained reservation's `phase` (`running` or `ending`).
+Active-task adoption also proves old groups gone before replacing its token.
+
+The normal maintenance/drain/cutover upgrade owns migration v6 → v7 and creates a pre-migration
+SQLite backup. It imports `async-tasks/supervisor/cleanup-holds.json` in the schema transaction and
+archives the source as `cleanup-holds.json.migrated-v7` only after commit. An unreadable source imports
+an exclusive hold. A failed migration preserves schema v6 and the source file. Existing applied
+policy, approvals, task results and history stay unchanged; this migration enables no concurrency.
+Do not downgrade binaries or schema while dependent processes remain. File-format rollback refuses
+while any reservation or cleanup exclusion remains, even when the task already has a terminal result.
 
 ## Not in this delivery
 

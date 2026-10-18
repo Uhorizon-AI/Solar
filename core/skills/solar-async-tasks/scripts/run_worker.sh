@@ -35,7 +35,21 @@ fi
 
 ensure_dirs
 
+recover_endings() {
+    local endings task_id
+    endings="$(state task reservations | python3 -c 'import json,sys
+for row in json.load(sys.stdin):
+    if row.get("phase") == "ending": print(row["task_id"])')" || return 1
+    while IFS= read -r task_id; do
+        [[ -n "$task_id" ]] || continue
+        # A refusal leaves the reservation held. Adoption never signals processes or
+        # executes an ending task; it only releases after every group is proved gone.
+        state task adopt "$task_id" --worker "diagnostic-$$" >/dev/null || true
+    done <<< "$endings"
+}
+
 run_cycle() {
+    recover_endings || return 1
     local out_start out_exec claim_file claimed_id claimed_token
     claim_file="$(mktemp "${TMPDIR:-/tmp}/solar-claim.XXXXXX")"
     : >"$claim_file"
@@ -67,6 +81,7 @@ run_cycle() {
         out_exec=$("$SCRIPT_DIR/execute_active.sh" --once 2>&1)
     fi
     local ret_exec=$?
+    recover_endings || return 1
     if [[ $ret_exec -ne 0 ]]; then
         log_msg "execute_active.sh failed (exit $ret_exec): $out_exec"
         return $ret_exec
