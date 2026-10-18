@@ -193,6 +193,13 @@ CODEX_CONFIG = ['approval_policy="never"', 'sandbox_mode="read-only"', 'mcp_serv
                 'features.remote_plugin=false', 'features.image_generation=false']
 
 
+# The Codex JSONL stream carries no phase or channel field, so interim progress messages
+# cannot be told apart from the answer there. The final turn message is requested as one
+# JSON object with exactly this shape and validated after the run; plain progress text fails.
+CODEX_REVIEW_SCHEMA = {'type': 'object', 'properties': {'review': {'type': 'string', 'minLength': 1}},
+                       'required': ['review'], 'additionalProperties': False}
+
+
 def codex_preflight(binary, env, cwd, config):
     """Inspect effective invocation configuration, including cloud policy; unknown fails closed."""
     try:
@@ -200,7 +207,8 @@ def codex_preflight(binary, env, cwd, config):
                                      capture_output=True, text=True, timeout=10)
         if help_result.returncode or any(f not in help_result.stdout for f in
                 ('--sandbox', 'read-only', '--model', '--json', '--ephemeral',
-                 '--ignore-user-config', '--ignore-rules')):
+                 '--ignore-user-config', '--ignore-rules', '--output-schema',
+                 '--output-last-message')):
             raise _error('execution_profile_unsupported')
         result = subprocess.run([binary, 'doctor', '--json', *config], env=env, cwd=cwd,
                                 capture_output=True, text=True, timeout=30)
@@ -269,8 +277,11 @@ def launch(adapter, manifest, expected, before_launch):
             env['CODEX_HOME'] = str(home)
             config = [arg for value in CODEX_CONFIG for arg in ('-c', value)]
             codex_preflight(binary, env, str(cwd), config)
+            schema, last_message = private / 'review-schema.json', private / 'last-message.json'
+            schema.write_text(json.dumps(CODEX_REVIEW_SCHEMA), encoding='utf-8')
             argv = [binary, 'exec', '--skip-git-repo-check', '--sandbox', 'read-only',
                     '--ignore-user-config', '--ignore-rules', '--ephemeral', '--json',
+                    '--output-schema', str(schema), '--output-last-message', str(last_message),
                     '--model', manifest['model'], *config, '-c',
                     'developer_instructions=' + json.dumps(manifest['system_prompt']), '--', manifest['user_prompt']]
         before_launch()
