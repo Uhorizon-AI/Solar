@@ -39,6 +39,9 @@ stderr instead of falling back to another project or creating runtime state.
 This fixes path resolution only: a client must separately support MCP form
 elicitation to offer native operation approval. A generic tool permission or a
 conversational answer does not replace that approval.
+Connection-specific confirmation diagnostics and the distinction from native
+question tools such as Antigravity's `ask_question` are documented in
+[approvals.md](approvals.md#connection-diagnostics-and-native-question-tools).
 If no installed Solar wrapper exists, the CLI warns before using the checkout
 path. Keep that checkout and interpreter in place, or reinstall the registration.
 

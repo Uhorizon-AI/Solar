@@ -401,6 +401,31 @@ def _text(payload) -> list:
     return [dict(type="text", text=json.dumps(payload, indent=2, sort_keys=True, default=str))]
 
 
+def _confirmation_content(content, confirmation: dict):
+    """Add server-owned diagnostics only to a supported content envelope."""
+    if (not isinstance(content, list) or len(content) != 1 or
+            not isinstance(content[0], dict) or content[0].get('type') != 'text'):
+        return content
+    try:
+        payload = json.loads(content[0].get('text'))
+        if not isinstance(payload, dict):
+            return content
+        diagnostic = dict(confirmation)
+        refused = payload.get('refused')
+        if (not diagnostic['client_form_advertised'] and isinstance(refused, dict) and
+                refused.get('code') == 'approval_required'):
+            diagnostic.update(reason='client_form_not_advertised', recovery=(
+                'This connection did not advertise MCP form elicitation. '
+                'Native question tools are separate and cannot grant Solar approval by themselves. '
+                'Use a form-capable client or a verified host adapter; do not self-grant or retry unchanged.'))
+        # Reserved at envelope level; a handler's result stays nested under result.
+        payload['confirmation'] = diagnostic
+        return [dict(content[0], text=_text(payload)[0]['text'])]
+    except (ValueError, TypeError):
+        # Diagnostics must not replace a completed operation's original response.
+        return content
+
+
 def handle(message: dict, confirm=None) -> dict | None:
     method = message.get("method")
     request_id = message.get("id")
@@ -492,6 +517,8 @@ def serve(stdin=None, stdout=None) -> int:
         incoming.put(None)
     threading.Thread(target=read_lines, daemon=True).start()
     supports_confirmation = False
+    confirmation = dict(client_form_advertised=False, transport='unavailable',
+                        attempted=False, outcome='not_requested')
     deferred = deque()
     cancelled = set()
     active_key = None
@@ -570,6 +597,16 @@ def serve(stdin=None, stdout=None) -> int:
         close_form()
         return False
 
+    def confirm_and_record(name, arguments, request_id):
+        confirmation.update(attempted=True, outcome='pending')
+        try:
+            accepted = confirm(name, arguments, request_id)
+        except ConfirmationCancelled:
+            confirmation['outcome'] = 'cancelled'
+            raise
+        confirmation['outcome'] = 'accepted' if accepted else 'not_accepted'
+        return accepted
+
     while True:
         line = deferred.popleft() if deferred else incoming.get()
         if line is None:
@@ -593,11 +630,23 @@ def serve(stdin=None, stdout=None) -> int:
             continue
         if message.get('method') == 'initialize':
             capabilities = (message.get('params') or {}).get('capabilities') or {}
-            elicitation = capabilities.get('elicitation')
-            supports_confirmation = isinstance(elicitation, dict) and (not elicitation or 'form' in elicitation)
+            elicitation = capabilities.get('elicitation') if isinstance(capabilities, dict) else None
+            supports_confirmation = (isinstance(elicitation, dict) and
+                                     (not elicitation or isinstance(elicitation.get('form'), dict)))
+            confirmation.update(client_form_advertised=supports_confirmation,
+                                transport='mcp-form' if supports_confirmation else 'unavailable')
         active_key = request_key(message['id']) if 'id' in message else None
         try:
-            response = handle(message, confirm if supports_confirmation else None)
+            confirmation.update(attempted=False, outcome='not_requested')
+            response = handle(message, confirm_and_record if supports_confirmation else None)
+            if response and 'result' in response:
+                if message.get('method') == 'initialize':
+                    response['result']['_meta'] = {'solar/confirmation': dict(confirmation)}
+                elif (message.get('method') == 'tools/call' and
+                      (message.get('params') or {}).get('name') == 'solar_execute'):
+                    result = response['result']
+                    if isinstance(result, dict) and 'content' in result:
+                        result['content'] = _confirmation_content(result['content'], confirmation)
         except ConfirmationCancelled:
             cancelled.discard(request_key(message.get('id')))
             continue
