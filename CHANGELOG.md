@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.52.3] - 2026-10-18
+
 ### Fixed
 - Preserve the originating MCP progress token when requesting native confirmation so hosts can route the form to the correct conversation, without treating routing metadata as approval.
 
