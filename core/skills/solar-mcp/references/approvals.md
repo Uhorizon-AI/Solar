@@ -53,6 +53,49 @@ Limits: Solar controls the text, not the client's modal size, scrolling or
 buttons; the form is the one `approve` checkbox the protocol defines. Client
 rendering of multi-line text is unverified here.
 
+## Connection diagnostics and native question tools
+
+The initialize result includes `_meta["solar/confirmation"]`. Each
+`solar_execute` text payload also includes `confirmation` with:
+
+- `client_form_advertised`: whether this connection declared legacy empty
+  elicitation support or an object-valued `elicitation.form` capability.
+- `transport`: `mcp-form` or `unavailable`; this is not a statement about all
+  features of a product or every installed version.
+- `attempted`: whether Solar actually requested confirmation for this call.
+- `outcome`: `not_requested`, `accepted`, or `not_accepted` in returned tool
+  results. `not_accepted` includes decline, malformed reply, disconnect and
+  timeout; it does not guess which UI the client displayed. A cancelled
+  originating request still produces no tool response.
+
+An `approval_required` refusal on a connection without form support also gives
+`reason=client_form_not_advertised` and recovery guidance. Do not retry unchanged
+or ask an agent to manufacture approval. This diagnoses negotiation separately
+from workspace resolution, operation validation, and visible client UI behavior.
+
+Antigravity's native `ask_question` panel can display questions and return the
+user's selection to its agent. This does not by itself answer Solar's pending
+`elicitation/create` request. User-supplied screenshots on 2026-10-18 confirmed
+the panel and selected answer in the desktop app; two separate reported Solar
+calls were refused with `approval_required`. Those refusals did not record the
+negotiated capability, so its absence remains a hypothesis until checked with
+these diagnostics. They do not establish universal lack of client support.
+
+The [official hook contract](https://antigravity.google/docs/hooks#posttooluse)
+documents `toolCall`, `stepIdx` and `error` for command-based `PostToolUse` hooks,
+but not a structured question response. The separate Python SDK exposes
+[`OnInteractionHook`](https://github.com/google-antigravity/antigravity-sdk-python/blob/main/google/antigravity/hooks/hooks.py)
+and `QuestionHookResult`; an SDK callback is not evidence that the desktop app
+loads that Python integration. Do not scrape a transcript or trust model-written
+answers to bridge the two.
+
+A future native host adapter must receive the actual UI result outside model
+tool arguments, bind it to Solar's generated request, exact operation/arguments,
+workspace and expiry, and enforce cancellation and single use before execution.
+That adapter needs a real host integration and acceptance/decline/cancel/timeout
+tests in the target client. This change adds diagnostics, not that adapter or a
+macOS dialog fallback. No hook or client configuration is installed automatically.
+
 ## Operator recovery (not an agent self-approval route)
 
 The trusted operator may still manage out-of-band approvals:

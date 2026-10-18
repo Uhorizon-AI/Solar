@@ -129,6 +129,9 @@ def test_transport_confirmation_matches_server_request(solar_env, monkeypatch, r
     messages = [json.loads(line) for line in output.getvalue().splitlines()]
     assert messages[-1]['id'] == 2
     assert messages[-1]['result']['isError'] is not expected
+    diagnostic = json.loads(messages[-1]['result']['content'][0]['text'])['confirmation']
+    assert diagnostic == dict(client_form_advertised=True, transport='mcp-form', attempted=True,
+                              outcome='accepted' if expected else 'not_accepted')
     assert bool(mcp_approve.listing()) is expected
 
 
@@ -139,6 +142,10 @@ def test_unadvertised_confirmation_does_not_prompt(solar_env):
     messages = list(map(json.loads, output.getvalue().splitlines()))
     assert all(message.get('method') != 'elicitation/create' for message in messages)
     assert messages[-1]['result']['isError']
+    diagnostic = json.loads(messages[-1]['result']['content'][0]['text'])['confirmation']
+    assert diagnostic['reason'] == 'client_form_not_advertised'
+    assert diagnostic['attempted'] is False
+    assert diagnostic['outcome'] == 'not_requested'
     assert not mcp_approve.listing()
 
 

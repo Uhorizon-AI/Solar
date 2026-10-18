@@ -492,6 +492,8 @@ def serve(stdin=None, stdout=None) -> int:
         incoming.put(None)
     threading.Thread(target=read_lines, daemon=True).start()
     supports_confirmation = False
+    confirmation = dict(client_form_advertised=False, transport='unavailable',
+                        attempted=False, outcome='not_requested')
     deferred = deque()
     cancelled = set()
     active_key = None
@@ -570,6 +572,16 @@ def serve(stdin=None, stdout=None) -> int:
         close_form()
         return False
 
+    def confirm_and_record(name, arguments, request_id):
+        confirmation.update(attempted=True, outcome='pending')
+        try:
+            accepted = confirm(name, arguments, request_id)
+        except ConfirmationCancelled:
+            confirmation['outcome'] = 'cancelled'
+            raise
+        confirmation['outcome'] = 'accepted' if accepted else 'not_accepted'
+        return accepted
+
     while True:
         line = deferred.popleft() if deferred else incoming.get()
         if line is None:
@@ -593,11 +605,29 @@ def serve(stdin=None, stdout=None) -> int:
             continue
         if message.get('method') == 'initialize':
             capabilities = (message.get('params') or {}).get('capabilities') or {}
-            elicitation = capabilities.get('elicitation')
-            supports_confirmation = isinstance(elicitation, dict) and (not elicitation or 'form' in elicitation)
+            elicitation = capabilities.get('elicitation') if isinstance(capabilities, dict) else None
+            supports_confirmation = (isinstance(elicitation, dict) and
+                                     (not elicitation or isinstance(elicitation.get('form'), dict)))
+            confirmation.update(client_form_advertised=supports_confirmation,
+                                transport='mcp-form' if supports_confirmation else 'unavailable')
         active_key = request_key(message['id']) if 'id' in message else None
         try:
-            response = handle(message, confirm if supports_confirmation else None)
+            confirmation.update(attempted=False, outcome='not_requested')
+            response = handle(message, confirm_and_record if supports_confirmation else None)
+            if response and 'result' in response:
+                if message.get('method') == 'initialize':
+                    response['result']['_meta'] = {'solar/confirmation': dict(confirmation)}
+                elif (message.get('method') == 'tools/call' and
+                      (message.get('params') or {}).get('name') == 'solar_execute'):
+                    payload = json.loads(response['result']['content'][0]['text'])
+                    payload['confirmation'] = dict(confirmation)
+                    if not supports_confirmation and payload.get('refused', {}).get('code') == 'approval_required':
+                        payload['confirmation']['reason'] = 'client_form_not_advertised'
+                        payload['confirmation']['recovery'] = (
+                            'This connection did not advertise MCP form elicitation. '
+                            'A native ask_question tool is separate and cannot grant Solar approval by itself. '
+                            'Use a form-capable client or a verified host adapter; do not self-grant or retry unchanged.')
+                    response['result']['content'] = _text(payload)
         except ConfirmationCancelled:
             cancelled.discard(request_key(message.get('id')))
             continue

@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Diagnose negotiated MCP form confirmation separately from native question tools: report advertised support, attempt and outcome, explain unsupported-connection refusals, and reject malformed form capabilities without weakening approval requirements.
+
 ## [0.52.1] - 2026-10-18
 
 ### Fixed
