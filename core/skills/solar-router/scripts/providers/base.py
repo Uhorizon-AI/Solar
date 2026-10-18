@@ -158,8 +158,14 @@ class BaseProvider(ABC):
                                before_launch=before_launch) as (argv, env, cwd):
             # Inherit the router's process group: the worker owns that group and
             # must stop the provider with it on timeout, cancellation or revocation.
-            proc = subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True,
-                                  timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300))
+            try:
+                proc = subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True,
+                                      timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300))
+            except subprocess.TimeoutExpired as exc:
+                self._capture_evidence(manifest, argv, env, exc.stdout, None, timed_out=True)
+                raise
+            # Opt-in diagnostic copy, taken before the launch directory is removed.
+            self._capture_evidence(manifest, argv, env, proc.stdout, proc.returncode)
             # The launch directory is removed on exit: read the final-message file now.
             last_message = None
             if self.name == "codex" and "--output-last-message" in argv:
@@ -197,6 +203,26 @@ class BaseProvider(ABC):
             commit = json.loads(approved["user_prompt"])["commit"]
             return "Reviewed commit: " + commit + "\n\n" + result["result"]
         return result["result"]
+
+    def _capture_evidence(self, manifest, argv, env, stdout, returncode, timed_out=False) -> None:
+        """Diagnostic only: any failure here, import included, must not change the outcome."""
+        if self.name != "codex":
+            return
+        try:
+            import json
+            from review_evidence import capture_codex
+            try:
+                commit = json.loads(manifest["user_prompt"])["commit"]
+            except (KeyError, TypeError, ValueError):
+                commit = None
+            capture_codex(argv, env, stdout, returncode, timed_out=timed_out, commit=commit)
+        except Exception as exc:  # noqa: BLE001
+            if (os.getenv("SOLAR_ROUTER_REVIEW_EVIDENCE_DIR") or "").strip():
+                try:  # enabled capture that cannot run must not go unnoticed
+                    print("[solar-router] review evidence not captured: " + type(exc).__name__,
+                          file=sys.stderr)
+                except Exception:  # noqa: BLE001
+                    pass
 
     @staticmethod
     def _codex_final_review(stdout: str, last_message) -> dict:

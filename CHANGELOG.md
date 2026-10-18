@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Opt-in local evidence for Codex repository reviews (`SOLAR_ROUTER_REVIEW_EVIDENCE_DIR`, off by default): a redacted copy of the provider JSONL and final-message file in a mode-0700 directory with bounded retention (`SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP`, default 10), kept for completed, failed and timed-out launches. `meta.json` records the model id and reviewed commit (never the prompt) to attribute a folder to its task. A pre-existing evidence directory open to group or others is refused, never chmod-ed (create it with `mkdir -m 700`), and an enabled capture that cannot run warns on stderr. Capture never changes review outcomes and never writes argv, env, stderr or credentials. Redaction is pattern-based, so the directory should still be treated as sensitive.
+
 ## [0.52.4] - 2026-10-18
 
 ### Fixed
