@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.51.2] - 2026-10-18
+
 ### Fixed
 - Isolate Solar Client smoke workspaces, runtime state, install copies and service controls; report command errors separately from `.env` preservation failures.
 
