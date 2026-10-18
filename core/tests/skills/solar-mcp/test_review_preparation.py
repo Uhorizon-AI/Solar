@@ -36,7 +36,7 @@ def test_preparation_approval_and_revision_keep_inputs_material(solar_env, tmp_p
 def test_invalid_review_does_not_create_any_task(solar_env, tmp_path, change):
     args = arguments(tmp_path)
     if change == 'write': args['access_policy'] = dict(mode='write', scopes=[args['review']['repository']])
-    elif change == 'provider': args['provider'] = 'agy'
+    elif change == 'provider': args['provider'] = 'ollama'
     elif change == 'model': args['review']['model'] = '-unsafe'
     else: args['review']['commit'] = '0' * 40
     body, error = execute('task.create', args)
@@ -48,7 +48,7 @@ def test_invalid_review_does_not_create_any_task(solar_env, tmp_path, change):
 def test_mixed_provider_children_keep_one_version_and_one_synthesis(solar_env, tmp_path):
     root, commit = repository(tmp_path)
     children = [dict(key=f'r{i}',title=f'Review {i}',instructions=f'Check criterion {i}.',
-                     provider=provider,model='fixture-model') for i,provider in enumerate(['claude','codex','codex'])]
+                     provider=provider,model='fixture-model') for i,provider in enumerate(['claude','codex','agent','agy'])]
     args = dict(title='Builder',instructions='Declare the approved reviewers, then synthesize their results.',
                 object=str(root),scope='Review committed files',effect='One synthesis',provider='claude',
                 review_batch=dict(repository=str(root),commit=commit,reviews=children))

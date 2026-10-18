@@ -10,7 +10,7 @@ import re
 import subprocess
 
 PROFILE = 'repository_readonly_v1'
-PROVIDERS = frozenset({'claude', 'codex'})
+PROVIDERS = frozenset({'claude', 'codex', 'agent', 'agy'})
 MAX_FILES = 10000
 MAX_BYTES = 32 * 1024 * 1024
 SYSTEM_PROMPT = (
@@ -89,7 +89,7 @@ def _files(repository, commit):
         if (mode not in {'100644', '100755'} or kind != 'blob' or not parts
                 or PurePosixPath(path).is_absolute() or any(p.lower() in {'.', '..', '.git'} for p in parts)
                 or '\\' in path or any(ord(c) < 32 for c in path)
-                or parts[0].lower() in {'.codex', '.claude', '.cursor', '.agy', '.mcp.json'}
+                or parts[0].lower() in {'.codex', '.claude', '.cursor', '.agy', '.gemini', '.agents', '.mcp.json'}
                 or any(p == '.env' or p.startswith('.env.') or p in {'credentials.json', 'auth.json',
                            'id_rsa', 'id_ed25519'} for p in parts)):
             raise _error('repository_review_unsafe_tree')
@@ -249,6 +249,9 @@ def launch(adapter, manifest, expected, before_launch):
                     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
                     '--settings', '{"disableAllHooks":true}', '--system-prompt', manifest['system_prompt'],
                     '--model', manifest['model'], '--output-format', 'json', '--', manifest['user_prompt']]
+        elif provider in {'agent', 'agy'}:
+            from repository_cli_guards import prepare
+            argv, env = prepare(provider, binary, env, private, cwd, manifest)
         else:
             # An empty config home prevents project/user integrations from loading.
             # Copy only the selected CLI auth file, never its configuration, rules,

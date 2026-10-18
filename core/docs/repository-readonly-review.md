@@ -79,8 +79,69 @@ instructions remain untrusted evidence, even when the CLI discovers them.
 |---|---|---|
 | Claude | Existing help/managed-policy preflight; safe/restricted modes, empty setting sources, only `Read,Glob,Grep`, plan permissions, empty strict MCP and disabled hooks; exact model and fixed system prompt | Implemented; real quality pilot still required |
 | Codex | Private config home with only a mode-0600 copy of the CLI auth file, `exec --sandbox read-only`, approval policy `never`, ignored user config/rules, ephemeral JSONL output, explicit empty integration registries and disabled hooks/plugins/apps/agent/browser/computer/image-generation and skill-install/discovery features | Implemented; effective-config preflight and real sandbox evidence required |
-| Cursor `agent` | Installed help advertises `--mode plan/ask` and sandbox, but no equivalent empty configuration/integration boundary was established | Candidate; rejected without fallback |
-| Agy | Installed help advertises `--mode plan` and terminal sandbox, but no equivalent empty configuration/integration boundary was established | Candidate; rejected without fallback |
+| Cursor `agent` | Private HOME/config/data and subscription-token file store, `--mode ask --sandbox enabled`, deny writes/shell/MCP/web, no inherited hooks/plugins, external OS write guard | Implemented; real model pilot still required |
+| Antigravity `agy` | Private HOME with standalone subscription token only, `--mode plan --sandbox --disable-slash-commands`, strict permissions denying writes/commands/MCP/web, external OS write guard | Implemented; real model pilot still required |
+
+### Cursor and Antigravity host guards
+
+These adapters supplement the CLI read-only/planning modes with an external OS
+write boundary. On macOS, `sandbox-exec` denies file writes except in disposable
+CLI state, and explicitly denies writes to the repository snapshot. On Linux,
+`bubblewrap` (`bwrap`) mounts the host and snapshot read-only and binds only the
+private CLI state writable. Missing helpers, unavailable kernel/user-namespace
+support, or a failed write probe refuse launch; there is no unguarded fallback.
+Linux deployments must install bubblewrap before enabling these readers.
+The real account's CLI/config trees are also denied or hidden, preventing a CLI
+from bypassing HOME redirection by resolving the home through the OS user database.
+
+Every invocation probes the actual boundary before starting the CLI: reading an
+existing snapshot file must succeed, overwriting it, creating a snapshot file,
+and overwriting a separate disposable host sentinel must fail. Private state
+writes must succeed. Help is then checked under the same guard. These adapters
+do not claim a doctor-style effective/cloud-policy attestation; their stronger
+write boundary is enforced externally. Network access remains available for the
+provider, so this is not an OS network-egress boundary or proof of absent
+provider-side integrations. A real model pilot must also verify tool refusals.
+
+Cursor receives `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, a private HOME/XDG tree,
+and `AGENT_CLI_CREDENTIAL_STORE=file`. Only subscription access/refresh tokens
+are copied, not API keys, settings, hooks, plugins, approvals or history. On
+macOS the two named Cursor keychain entries can be read into that private file;
+no keychain writes are made. The file-store switch was audited in Cursor
+`2026.10.14-0f9edde`; other versions refuse until explicitly audited, since this
+switch is not documented in CLI help. Known machine-managed Cursor directories cause a
+refusal rather than overriding administrator policy. Enterprise/team accounts
+and hidden provider-side context are not accredited by these help checks.
+
+Agy receives a private HOME/XDG tree with only
+`.gemini/jetski-standalone-oauth-token`; no Gemini API/ADC credentials, CLI state,
+plugins, MCP configuration or hooks are copied. Its private settings use strict
+permissions with explicit global write, command, unsandboxed-command, MCP and
+web denials. Slash-command/skill expansion is disabled. Both adapters remove
+ambient API keys, endpoint overrides, IDE/remote-control and shell injection
+variables. Token refresh stays in the disposable copy and is not copied back;
+subscription account validity and token lifecycle still need operator validation.
+
+Root `.agents` and `.gemini` trees are rejected as operational configuration,
+alongside the existing CLI configuration exclusions. The approved system rules
+and user input are combined into one fixed prompt for these CLIs. Their native
+JSON terminal states are checked; failures, unknown states or missing responses
+cannot become successful reviews. Run and stream use the same constructor.
+
+The inference-free host proof can check all three CLI/OS guards:
+
+```bash
+SOLAR_TEST_REPOSITORY_CLI=1 python3 core/tests/support/repository_review_cli_probe.py --provider all
+```
+
+Cursor/Agy checks use synthetic credentials and execute only `--help`, plus
+local OS guard probes. They do not demonstrate model quality, authentication,
+MCP refusal during inference, account headroom or billing behavior.
+
+Sources: [Cursor configuration](https://cursor.com/docs/cli/reference/configuration),
+[Cursor permissions](https://cursor.com/docs/cli/reference/permissions),
+[Antigravity permissions](https://antigravity.google/docs/permissions?tab=cli),
+[Antigravity headless output](https://antigravity.google/docs/cli/headless/).
 
 CLI configuration overrides and extra execution flags are refused. Account
 credentials are never put in manifests, prompts or captured results. Codex

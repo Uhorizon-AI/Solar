@@ -161,19 +161,20 @@ def test_applied_capacity_five_preserves_exclusive_admission(rig, enabled, undec
 
 
 @pytest.mark.parametrize('capacity', [3, 5])
-def test_repository_review_batch_overlaps_on_one_commit_and_synthesizes_once(rig, monkeypatch, capacity):
+@pytest.mark.parametrize('reader_provider', ['claude', 'codex', 'agent', 'agy'])
+def test_repository_review_batch_overlaps_on_one_commit_and_synthesizes_once(rig, monkeypatch, capacity, reader_provider):
     """Real supervisor/worker/MCP gates; deterministic provider barrier, no real CLI."""
     from rollout_policy import approved_operation
     from git_review_fixture import repository
     monkeypatch.setattr(solar_state, 'VERIFIED_PROFILES', {
         'text_only_review_v1': frozenset({'claude'}),
-        'repository_readonly_v1': frozenset({'claude','codex'})})
+        'repository_readonly_v1': frozenset({'claude','codex','agent','agy'})})
     old_parent, provider, executor = real_worker(rig, monkeypatch, count=capacity)
     with solar_state.session() as store:
         store.task_transition(old_parent, 'cancelled', expected_from='queued')
     root, commit = repository(rig.tmp)
     reviewers = [dict(key=f'r{i}',title=f'Reviewer {i}',instructions=f'Check criterion {i}.',
-                      provider='codex',model='fixture-model') for i in range(capacity)]
+                      provider=reader_provider,model='fixture-model') for i in range(capacity)]
     declarations=[dict(title=c['title'],body=c['instructions'],provider=c['provider']) for c in reviewers]
     (provider / 'declarations.json').write_text(json.dumps(declarations))
     proposal=approved_operation('async_execution.propose',dict(global_capacity=capacity,

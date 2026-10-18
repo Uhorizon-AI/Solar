@@ -224,7 +224,8 @@ Voice OS D9 may queue explicit, bounded local preparation through the Host; the 
 `repository_readonly_v1` explores a private copy of an approved Git commit through
 Router with an exact provider/model. Native `task.create`/`task.update` prepare
 `review` inputs or a bounded `review_batch`; approval and pool admission remain
-separate. Claude and Codex have guarded constructors; other providers refuse.
+separate. Claude, Codex, Cursor (`agent`) and Antigravity (`agy`) have guarded constructors;
+unknown providers refuse.
 The packet profile is unchanged and production profiles remain disabled. See
 [repository review](../../docs/repository-readonly-review.md) for scope, host
 policy checks, CLI restrictions, limitations and the opt-in inference-free probe.

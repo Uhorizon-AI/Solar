@@ -174,6 +174,20 @@ class BaseProvider(ABC):
             result = dict(result="\n".join(texts), usage=completed[0].get("usage"))
         else:
             result = json.loads(proc.stdout)
+        if not isinstance(result, dict):
+            raise RuntimeError("restricted provider returned no result object")
+        if self.name == "agy":
+            if result.get("status") != "SUCCESS" or result.get("error"):
+                raise RuntimeError("restricted provider returned an error")
+            result = dict(result=result.get("response"), usage=result.get("usage"))
+        elif self.name == "agent":
+            if result.get("type") != "result" or result.get("subtype") != "success":
+                raise RuntimeError("restricted provider returned an error")
+            usage = result.get("usage")
+            if isinstance(usage, dict) and "inputTokens" in usage:
+                result["usage"] = dict(input_tokens=usage.get("inputTokens", 0),
+                                       output_tokens=usage.get("outputTokens", 0),
+                                       cached_input_tokens=usage.get("cacheReadTokens", 0))
         if result.get("is_error") or not isinstance(result.get("result"), str) or not result["result"]:
             raise RuntimeError("restricted provider returned no review text")
         self.last_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None

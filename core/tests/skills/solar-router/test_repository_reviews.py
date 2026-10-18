@@ -52,7 +52,7 @@ def test_digest_scope_model_and_provider_cannot_be_changed(tmp_path):
     e['manifest']['model'] = 'another-model'
     with pytest.raises(profiles.ProfileError):
         profiles.verify_envelope(e['manifest'], e['review_input_digest'], provider='claude', profile=repo.PROFILE)
-    for provider in ('agent', 'agy', 'ollama'):
+    for provider in ('ollama', 'unknown'):
         with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
             envelope(root, commit, provider)
 

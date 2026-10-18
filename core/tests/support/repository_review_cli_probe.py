@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in, inference-free proof that the installed Codex sandbox denies writes."""
+"""Opt-in, inference-free sandbox/constructor proofs for repository reviewers."""
 import json
 import os
 from pathlib import Path
@@ -9,9 +9,40 @@ import sys
 import tempfile
 
 
+def extra_cli_probe(provider):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'skills/solar-router/scripts'))
+    from repository_cli_guards import prepare, write_json
+    binary = shutil.which(provider)
+    if not binary:
+        raise SystemExit(provider + ' CLI is required')
+    with tempfile.TemporaryDirectory(prefix='solar-repository-cli-') as name:
+        top = Path(name)
+        origin = top / 'synthetic-user'
+        # Synthetic tokens only; help never sends a prompt or authenticates.
+        auth = origin / ('.cursor' if sys.platform == 'darwin' else '.config/cursor')
+        write_json(auth / 'auth.json', dict(accessToken='synthetic', refreshToken='synthetic'))
+        token = origin / '.gemini/jetski-standalone-oauth-token'
+        token.parent.mkdir(parents=True, exist_ok=True); token.write_text('synthetic')
+        private = top / 'isolated'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+        (cwd / 'source.md').write_text('unchanged')
+        prepare(provider, binary, dict(HOME=str(origin), PATH=os.environ.get('PATH', '')), private, cwd,
+                dict(system_prompt='Review.', user_prompt='Synthetic fixture.', model='unused-help-only'))
+    assert not top.exists()
+    print(json.dumps(dict(provider=provider, status='passed', inference_calls=0,
+                         cli_help_checked=True, os_write_guard_checked=True,
+                         model_behavior_verified=False, temporary_resources_cleaned=True)))
+
+
 def main():
     if os.environ.get('SOLAR_TEST_REPOSITORY_CLI') != '1' or sys.platform not in {'darwin', 'linux'}:
         print(json.dumps(dict(status='skipped', reason='opt-in on macOS/Linux only')))
+        return 0
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--provider', choices=['codex', 'agent', 'agy', 'all'], default='codex')
+    selected = parser.parse_args().provider
+    if selected in {'agent', 'agy'}:
+        extra_cli_probe(selected)
         return 0
     binary = shutil.which('codex')
     if not binary:
@@ -47,6 +78,9 @@ raise SystemExit(bool(allowed))
         assert (repo/'source.txt').read_text()=='original' and outside.read_text()=='outside'
         print(json.dumps(dict(status='passed', inference_calls=0, source_unchanged=True,
                               outside_unchanged=True, temporary_resources_cleaned_on_exit=True)))
+    if selected == 'all':
+        for provider in ['agent', 'agy']:
+            extra_cli_probe(provider)
     return 0
 
 

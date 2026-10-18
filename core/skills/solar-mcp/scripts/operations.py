@@ -560,7 +560,7 @@ _REVIEW = _obj(dict(
 _REVIEW_BATCH = _obj(dict(repository=_REVIEW["properties"]["repository"],
     commit=_REVIEW["properties"]["commit"], reviews={"type": "array", "minItems": 1, "maxItems": 5,
         "items": _obj(dict(key=SLUG, title=_TITLE, instructions=_INSTRUCTIONS,
-                           provider={"type": "string", "enum": ["claude", "codex"]}, model=LINE(160),
+                           provider={"type": "string", "enum": ["claude", "codex", "agent", "agy"]}, model=LINE(160),
                            rules=_REVIEW["properties"]["rules"]),
                       required=("key", "title", "instructions", "provider", "model"))}),
     required=("repository", "commit", "reviews"))
