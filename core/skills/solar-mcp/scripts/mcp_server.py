@@ -401,6 +401,31 @@ def _text(payload) -> list:
     return [dict(type="text", text=json.dumps(payload, indent=2, sort_keys=True, default=str))]
 
 
+def _confirmation_content(content, confirmation: dict):
+    """Add server-owned diagnostics only to a supported content envelope."""
+    if (not isinstance(content, list) or len(content) != 1 or
+            not isinstance(content[0], dict) or content[0].get('type') != 'text'):
+        return content
+    try:
+        payload = json.loads(content[0].get('text'))
+        if not isinstance(payload, dict):
+            return content
+        diagnostic = dict(confirmation)
+        refused = payload.get('refused')
+        if (not diagnostic['client_form_advertised'] and isinstance(refused, dict) and
+                refused.get('code') == 'approval_required'):
+            diagnostic.update(reason='client_form_not_advertised', recovery=(
+                'This connection did not advertise MCP form elicitation. '
+                'Native question tools are separate and cannot grant Solar approval by themselves. '
+                'Use a form-capable client or a verified host adapter; do not self-grant or retry unchanged.'))
+        # Reserved at envelope level; a handler's result stays nested under result.
+        payload['confirmation'] = diagnostic
+        return [dict(content[0], text=_text(payload)[0]['text'])]
+    except (ValueError, TypeError):
+        # Diagnostics must not replace a completed operation's original response.
+        return content
+
+
 def handle(message: dict, confirm=None) -> dict | None:
     method = message.get("method")
     request_id = message.get("id")
@@ -619,15 +644,9 @@ def serve(stdin=None, stdout=None) -> int:
                     response['result']['_meta'] = {'solar/confirmation': dict(confirmation)}
                 elif (message.get('method') == 'tools/call' and
                       (message.get('params') or {}).get('name') == 'solar_execute'):
-                    payload = json.loads(response['result']['content'][0]['text'])
-                    payload['confirmation'] = dict(confirmation)
-                    if not supports_confirmation and payload.get('refused', {}).get('code') == 'approval_required':
-                        payload['confirmation']['reason'] = 'client_form_not_advertised'
-                        payload['confirmation']['recovery'] = (
-                            'This connection did not advertise MCP form elicitation. '
-                            'Native question tools are separate and cannot grant Solar approval by themselves. '
-                            'Use a form-capable client or a verified host adapter; do not self-grant or retry unchanged.')
-                    response['result']['content'] = _text(payload)
+                    result = response['result']
+                    if isinstance(result, dict) and 'content' in result:
+                        result['content'] = _confirmation_content(result['content'], confirmation)
         except ConfirmationCancelled:
             cancelled.discard(request_key(message.get('id')))
             continue

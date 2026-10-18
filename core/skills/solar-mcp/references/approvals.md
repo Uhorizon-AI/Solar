@@ -56,7 +56,15 @@ rendering of multi-line text is unverified here.
 ## Connection diagnostics and native question tools
 
 The initialize result includes `_meta["solar/confirmation"]`. Each
-`solar_execute` text payload also includes `confirmation` with:
+`solar_execute` text payload also includes `confirmation`.
+
+`confirmation` is reserved for server-generated diagnostics at the outer payload
+level and replaces any same-named outer field. Handler results remain nested under
+`result`, including any field they name `confirmation`. Unsupported content shapes
+or text that is not a JSON object pass through unchanged, without diagnostics;
+diagnostic enrichment must never turn a completed operation into a transport error.
+
+Diagnostic fields:
 
 - `client_form_advertised`: whether this connection declared legacy empty
   elicitation support or an object-valued `elicitation.form` capability.
