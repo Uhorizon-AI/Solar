@@ -96,6 +96,28 @@ That adapter needs a real host integration and acceptance/decline/cancel/timeout
 tests in the target client. This change adds diagnostics, not that adapter or a
 macOS dialog fallback. No hook or client configuration is installed automatically.
 
+### All clients use their own native interaction surface
+
+The integration target is vendor-neutral: the host renders its own supported
+question/consent UI and Solar retains one approval contract. Do not add a separate
+OS dialog for one client or make an agent forward its own account of an answer.
+
+| Client | Native interaction evidence | Remaining verification |
+|---|---|---|
+| Codex | MCP form confirmation observed in the repository pilot. Native input tools are a separate surface. | Verify any proposed adapter against host permission rules; do not repurpose a clarification-only tool for permissions. |
+| Claude | `AskUserQuestion` and SDK `canUseTool` are documented native interaction hooks. | A real callback binding to Solar and client UI lifecycle tests remain unverified here. |
+| Cursor | Reported exact-call MCP confirmation created only a draft in the client test. | Verify any different question-tool adapter separately; do not infer it from MCP form success. |
+| Antigravity | User screenshots confirm `ask_question` and the selected answer. | Confirm negotiated MCP support and a trusted desktop response callback to Solar. |
+
+Tool names and availability must come from each active host, not from the review
+provider name. In particular, Codex's `request_user_input` is subject to host
+restrictions and must not be used as a permission workaround. See the
+[official Codex host template](https://github.com/openai/codex/blob/main/codex-rs/collaboration-mode-templates/templates/default.md)
+and [Claude SDK user-input contract](https://platform.claude.com/docs/en/agent-sdk/user-input).
+An SDK feature is not automatically exposed by its desktop app. All four clients
+must meet the same exact-scope, expiry, single-use and cancellation checks before
+any new native question adapter can be declared verified.
+
 ## Operator recovery (not an agent self-approval route)
 
 The trusted operator may still manage out-of-band approvals:

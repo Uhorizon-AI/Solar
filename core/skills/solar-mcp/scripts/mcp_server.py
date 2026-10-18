@@ -625,7 +625,7 @@ def serve(stdin=None, stdout=None) -> int:
                         payload['confirmation']['reason'] = 'client_form_not_advertised'
                         payload['confirmation']['recovery'] = (
                             'This connection did not advertise MCP form elicitation. '
-                            'A native ask_question tool is separate and cannot grant Solar approval by itself. '
+                            'Native question tools are separate and cannot grant Solar approval by themselves. '
                             'Use a form-capable client or a verified host adapter; do not self-grant or retry unchanged.')
                     response['result']['content'] = _text(payload)
         except ConfirmationCancelled:
