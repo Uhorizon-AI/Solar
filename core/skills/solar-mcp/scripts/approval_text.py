@@ -319,9 +319,6 @@ def _archive(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
         return _head(copy, copy["archive_head"], [(copy["reason"], _line(args["reason"]))], notes)
-    if "review" in args or "review_batch" in args:
-        material = True
-        lines += [f"{k}: {v}" for k,v in _review_rows(copy, args.get("review") or args["review_batch"])]
     status = facts["status"]
     if status == "active":
         effect = copy["archive_active"]
