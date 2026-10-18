@@ -158,8 +158,18 @@ class BaseProvider(ABC):
                                before_launch=before_launch) as (argv, env, cwd):
             # Inherit the router's process group: the worker owns that group and
             # must stop the provider with it on timeout, cancellation or revocation.
-            proc = subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True,
-                                  timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300))
+            try:
+                proc = subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True,
+                                      timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300))
+            except subprocess.TimeoutExpired as exc:
+                if self.name == "codex":
+                    from review_evidence import capture_codex
+                    capture_codex(argv, env, exc.stdout, None, timed_out=True)
+                raise
+            if self.name == "codex":
+                # Opt-in diagnostic copy, taken before the launch directory is removed.
+                from review_evidence import capture_codex
+                capture_codex(argv, env, proc.stdout, proc.returncode)
             # The launch directory is removed on exit: read the final-message file now.
             last_message = None
             if self.name == "codex" and "--output-last-message" in argv:

@@ -82,6 +82,30 @@ instructions remain untrusted evidence, even when the CLI discovers them.
 | Cursor `agent` | Private HOME/config/data and subscription-token file store, `--mode ask --sandbox enabled`, deny writes/shell/MCP/web, no inherited hooks/plugins, external OS write guard | Implemented; real model pilot still required |
 | Antigravity `agy` | Private HOME with standalone subscription token only, `--mode plan --sandbox --disable-slash-commands`, strict permissions denying writes/commands/MCP/web, external OS write guard | Implemented; real model pilot still required |
 
+### Optional Codex review evidence
+
+The Codex JSONL and final-message file live in a launch directory that is
+removed when the launch ends. To keep evidence for attributing a failed pilot,
+set `SOLAR_ROUTER_REVIEW_EVIDENCE_DIR` to an absolute directory (unset by
+default: nothing is kept). Each Codex review then writes one run directory
+`<UTC time>-<pid>-<random>/` with `events.jsonl`, `last-message.json` (when the
+CLI wrote one) and `meta.json` (exit code, timeout, truncation flags). It is
+taken for completed, failed and timed-out launches alike.
+
+- The root and run directories are mode `0700`, files `0600`; a symlinked or
+  foreign-owned root is refused.
+- Retention: the newest `SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP` runs (default `10`,
+  maximum `100`); older Solar-named run directories are deleted, other entries
+  are left alone. Each file is cut at 8 MiB.
+- Never written: argv (it carries the prompt), env, stderr, `auth.json` or its
+  contents. Values of secret-named environment variables, the copied auth file's
+  values and JWT/`sk-` shaped strings are replaced with `[REDACTED]`. This is
+  pattern-based: the review input is repository text and model output may
+  quote it, so treat the directory as sensitive and delete it after use.
+- Capture is diagnostic only and never changes the outcome: any capture error
+  is logged as a one-line warning and ignored, and the result is still decided
+  solely by the validated final message.
+
 ### Cursor and Antigravity host guards
 
 These adapters supplement the CLI read-only/planning modes with an external OS

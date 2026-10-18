@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Opt-in local evidence for Codex repository reviews (`SOLAR_ROUTER_REVIEW_EVIDENCE_DIR`, off by default): a redacted copy of the provider JSONL and final-message file in a mode-0700 directory with bounded retention (`SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP`, default 10), kept for completed, failed and timed-out launches. Capture never changes review outcomes and never writes argv, env, stderr or credentials. Redaction is pattern-based, so the directory should still be treated as sensitive.
+
 ## [0.52.4] - 2026-10-18
 
 ### Fixed

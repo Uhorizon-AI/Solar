@@ -327,3 +327,142 @@ def test_codex_non_utf8_final_message_file_fails_cleanly(monkeypatch):
     monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, _events('x'), ''))
     with pytest.raises(RuntimeError, match='no structured final review'):
         PROVIDERS['codex'].run_review(manifest={}, expected='', profile='other_profile')
+
+
+# --- Opt-in Codex review evidence (simulated provider; nothing is executed) ---
+
+GOOD_FINAL = json.dumps(dict(review='Finding A'))
+SECRET = 'sk-live-0123456789abcdef0123456789'
+
+
+def _evidence_run(monkeypatch, tmp_path, stdout, last_message, returncode=0, timeout=False, env=None):
+    import subprocess
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_launch(*args, **kwargs):
+        home = tmp_path / 'codex-home'
+        home.mkdir(exist_ok=True)
+        (home / 'auth.json').write_text(json.dumps(dict(tokens=dict(access_token=SECRET))))
+        out = tmp_path / 'last-message.json'
+        if last_message is not None:
+            out.write_text(last_message)
+        yield ['codex', '--output-last-message', str(out), '--', 'PROMPT-TEXT'], dict(CODEX_HOME=str(home), **(env or {})), str(tmp_path)
+
+    def fake_run(*a, **k):
+        if timeout:
+            raise subprocess.TimeoutExpired(a, 1, output=stdout.encode())
+        return subprocess.CompletedProcess(a, returncode, stdout, 'STDERR-TEXT')
+
+    monkeypatch.setattr(profiles, 'restricted_launch', fake_launch)
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+    return PROVIDERS['codex'].run_review(manifest={}, expected='', profile='other_profile')
+
+
+def _runs(root):
+    return sorted(p for p in Path(root).iterdir() if p.is_dir())
+
+
+def test_evidence_is_off_by_default(monkeypatch, tmp_path):
+    monkeypatch.delenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', raising=False)
+    assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
+    assert not (tmp_path / 'evidence').exists()
+
+
+def test_evidence_when_enabled_keeps_private_redacted_copy_and_result_is_unchanged(monkeypatch, tmp_path):
+    root = tmp_path / 'evidence'
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
+    stdout = _events('read auth ' + SECRET)
+    assert _evidence_run(monkeypatch, tmp_path, stdout, GOOD_FINAL) == 'Finding A'
+    (run,) = _runs(root)
+    assert oct(root.stat().st_mode & 0o777) == '0o700' and oct(run.stat().st_mode & 0o777) == '0o700'
+    assert sorted(p.name for p in run.iterdir()) == ['events.jsonl', 'last-message.json', 'meta.json']
+    assert all(oct(p.stat().st_mode & 0o777) == '0o600' for p in run.iterdir())
+    text = ''.join(p.read_text() for p in run.iterdir())
+    assert SECRET not in text and 'PROMPT-TEXT' not in text and 'STDERR-TEXT' not in text
+    assert '[REDACTED]' in (run / 'events.jsonl').read_text()
+    assert (run / 'last-message.json').read_text() == GOOD_FINAL
+    assert json.loads((run / 'meta.json').read_text())['returncode'] == 0
+
+
+@pytest.mark.parametrize('kwargs,match', [
+    (dict(returncode=1), 'non-zero'),
+    (dict(stdout='not jsonl'), 'malformed events'),
+    (dict(last_message=None), 'no structured final review'),
+])
+def test_evidence_survives_failures_and_failure_stays_failure(monkeypatch, tmp_path, kwargs, match):
+    root = tmp_path / 'evidence'
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
+    args = dict(stdout=_events('x'), last_message=GOOD_FINAL)
+    args.update(kwargs)
+    with pytest.raises(RuntimeError, match=match):
+        _evidence_run(monkeypatch, tmp_path, **args)
+    (run,) = _runs(root)
+    assert (run / 'events.jsonl').exists()
+    assert json.loads((run / 'meta.json').read_text())['last_message_present'] is (args['last_message'] is not None)
+
+
+def test_evidence_is_kept_on_timeout_and_timeout_still_raises(monkeypatch, tmp_path):
+    import subprocess
+    root = tmp_path / 'evidence'
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
+    with pytest.raises(subprocess.TimeoutExpired):
+        _evidence_run(monkeypatch, tmp_path, _events('partial'), None, timeout=True)
+    (run,) = _runs(root)
+    assert json.loads((run / 'meta.json').read_text())['timed_out'] is True
+
+
+@pytest.mark.parametrize('make', ['file', 'readonly', 'relative'])
+def test_unwritable_evidence_directory_never_changes_the_outcome(monkeypatch, tmp_path, make):
+    if make == 'file':
+        target = tmp_path / 'blocked'
+        target.write_text('x')
+    elif make == 'readonly':
+        parent = tmp_path / 'ro'
+        parent.mkdir()
+        parent.chmod(0o500)
+        target = parent / 'evidence'
+    else:
+        target = 'relative/evidence'
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(target))
+    try:
+        assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
+        with pytest.raises(RuntimeError, match='non-zero'):
+            _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL, returncode=1)
+    finally:
+        (tmp_path / 'ro').exists() and (tmp_path / 'ro').chmod(0o700)
+
+
+def test_symlinked_evidence_directory_is_refused(monkeypatch, tmp_path):
+    real = tmp_path / 'real'
+    real.mkdir()
+    link = tmp_path / 'link'
+    link.symlink_to(real)
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(link))
+    assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
+    assert not list(real.iterdir())
+
+
+def test_evidence_retention_is_bounded_and_spares_foreign_entries(monkeypatch, tmp_path):
+    root = tmp_path / 'evidence'
+    root.mkdir()
+    (root / 'notes.txt').write_text('mine')
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP', '2')
+    import review_evidence
+    for i in range(4):
+        monkeypatch.setattr(review_evidence.time, 'strftime', lambda *a, i=i: '2026010%dT000000Z' % (i + 1))
+        _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL)
+    assert [p.name[:9] for p in _runs(root)] == ['20260103T', '20260104T']
+    assert (root / 'notes.txt').read_text() == 'mine'
+
+
+def test_evidence_files_are_size_capped(monkeypatch, tmp_path):
+    import review_evidence
+    monkeypatch.setattr(review_evidence, 'MAX_FILE_BYTES', 50)
+    root = tmp_path / 'evidence'
+    monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', str(root))
+    _evidence_run(monkeypatch, tmp_path, _events('x' * 500), GOOD_FINAL)
+    (run,) = _runs(root)
+    assert (run / 'events.jsonl').stat().st_size == 50
+    assert json.loads((run / 'meta.json').read_text())['events_truncated'] is True
