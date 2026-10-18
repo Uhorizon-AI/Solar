@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Commit-bound repository reviews alongside packet reviews: guarded Claude/Codex/Cursor/Antigravity CLI constructors, isolated snapshots, native review/batch preparation, derived child authorization and version-labelled results. Production capacity and enabled profiles remain unchanged.
+
 ## [0.51.2] - 2026-10-18
 
 ### Fixed

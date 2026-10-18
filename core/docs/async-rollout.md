@@ -156,3 +156,9 @@ cutover, restart/readiness and release through the supported update flow
 that cannot read the schema is not an operational capacity rollback. Preserve
 evidence and backups; do not claim success until runtime identity, policy and
 results have been rechecked.
+
+## Repository review extension
+
+[Repository readers alongside a builder](repository-readonly-review.md) adds an
+independent commit-bound read-only profile. Packet reviews remain supported.
+The extension does not change applied capacity or enable any reader profile.

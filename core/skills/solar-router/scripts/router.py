@@ -1308,7 +1308,7 @@ def _restricted_route(payload, *, stream=False):
             snapshot = store.execution_snapshot(task_id, token, profile)
         fields = snapshot["fields"]
         provider = fields["provider"]
-        if provider not in ("claude",):
+        if provider not in solar_state.VERIFIED_PROFILES.get(profile, frozenset()):
             raise ProfileError("execution_profile_unsupported")
         if payload.get("provider") and payload["provider"] != provider:
             raise ProfileError("review_input_mismatch")

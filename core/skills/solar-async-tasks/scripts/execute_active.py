@@ -1066,6 +1066,12 @@ def main() -> int:
     # Build prompt
     body = "" if restricted else strip_frontmatter(task_file)
     prompt = "" if restricted else build_prompt(task_id, title, body)
+    if not restricted and phase == "none" and read_frontmatter_key(task_file, "subtask_policy"):
+        policy = json.loads(read_frontmatter_key(task_file, "subtask_policy"))
+        declarations = [dict(title=t["title"], body=t["instructions"])
+                        for t in policy["templates"]]
+        prompt += ("\nApproved reviewer declarations (emit this complete JSON list inside <subtasks> tags "
+                   "when requesting these reviews; do not alter their definitions):\n" + json.dumps(declarations))
     if phase == "ready" and read_frontmatter_key(task_file, "subtask_policy"):
         with solar_state.session() as store:
             if not store.synthesis_begin(task_id, token=_token()):

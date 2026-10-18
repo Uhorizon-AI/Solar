@@ -1652,10 +1652,11 @@ def _overlaps(left: str, right: str) -> bool:
 
 # Profiles whose confinement has a verified implementation, per provider. Naming a profile in the
 # applied policy is not enough to run next to other tasks: the executor must really enforce it.
-# The Claude constructor enforces the profile and fails closed on unknown host policy.
+# Router constructors enforce each profile and fail closed on unknown host policy.
 # This registry neither enables it nor attests a host; enabled_reader_profiles starts empty.
 _REVIEW_PROFILE = "text_only_review_v1"
-VERIFIED_PROFILES: dict[str, frozenset] = {_REVIEW_PROFILE: frozenset({"claude"})}
+VERIFIED_PROFILES: dict[str, frozenset] = {_REVIEW_PROFILE: frozenset({"claude"}),
+    "repository_readonly_v1": frozenset({"claude", "codex", "agent", "agy"})}
 
 
 def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
@@ -1902,7 +1903,7 @@ def _provenance_problem(conn, task_id: str) -> Optional[str]:
                 or _field(child_pairs, "subtask_key") != row["child_key"]
                 or _field(child_pairs, "provider") != entries[0]["manifest"]["provider"]
                 or _field(child_pairs, "provider") not in policy["providers"]
-                or _field(child_pairs, "execution_profile") != _REVIEW_PROFILE
+                or _field(child_pairs, "execution_profile") != entries[0]["manifest"]["execution_profile"]
                 or parse_access_policy(_field(child_pairs, "access_policy")) != policy["max_access"]
                 or any(_field(child_pairs, key) != policy[key] for key in ("object", "scope", "effect"))
                 or current_definition(child["body"], _field(child_pairs, "title"),
@@ -3186,9 +3187,9 @@ class Session:
                     if (not isinstance(manifest, dict)
                             or set(manifest) != {"composition", "execution_profile", "provider", "model",
                                                 "system_prompt", "user_prompt", "sources", "context_budget"}
-                            or manifest["execution_profile"] != _REVIEW_PROFILE
-                            or manifest["composition"] != "review_envelope_v1"
-                            or manifest["provider"] != "claude"
+                            or manifest["provider"] not in VERIFIED_PROFILES.get(manifest["execution_profile"], frozenset())
+                            or manifest["composition"] != {"text_only_review_v1": "review_envelope_v1",
+                                "repository_readonly_v1": "repository_snapshot_v1"}.get(manifest["execution_profile"])
                             or _manifest_digest(manifest) != entry["review_input_digest"]):
                         raise StateError("subtask_authorization_required")
                     template = templates[entry["key"]]
@@ -3235,7 +3236,7 @@ class Session:
                     values = dict(id=child_id, title=template["title"], status="queued", created=_now(),
                                   parent_task_id=parent_id, subtask_key=key, priority=fields["priority"] or "normal",
                                   provider=entry["manifest"]["provider"], recurring="false",
-                                  scheduled_time="now", execution_profile=_REVIEW_PROFILE,
+                                  scheduled_time="now", execution_profile=entry["manifest"]["execution_profile"],
                                   access_policy=_canonical_json(policy["max_access"]),
                                   review_input_manifest=_canonical_json(entry["manifest"]),
                                   review_input_digest=entry["review_input_digest"],

@@ -158,3 +158,49 @@ def test_applied_capacity_five_preserves_exclusive_admission(rig, enabled, undec
     else:
         assert rig.max_overlap() == 1
     assert all(len(rig.events("start", task)) == 1 for task in tasks)
+
+
+@pytest.mark.parametrize('capacity', [3, 5])
+@pytest.mark.parametrize('reader_provider', ['claude', 'codex', 'agent', 'agy'])
+def test_repository_review_batch_overlaps_on_one_commit_and_synthesizes_once(rig, monkeypatch, capacity, reader_provider):
+    """Real supervisor/worker/MCP gates; deterministic provider barrier, no real CLI."""
+    from rollout_policy import approved_operation
+    from git_review_fixture import repository
+    monkeypatch.setattr(solar_state, 'VERIFIED_PROFILES', {
+        'text_only_review_v1': frozenset({'claude'}),
+        'repository_readonly_v1': frozenset({'claude','codex','agent','agy'})})
+    old_parent, provider, executor = real_worker(rig, monkeypatch, count=capacity)
+    with solar_state.session() as store:
+        store.task_transition(old_parent, 'cancelled', expected_from='queued')
+    root, commit = repository(rig.tmp)
+    reviewers = [dict(key=f'r{i}',title=f'Reviewer {i}',instructions=f'Check criterion {i}.',
+                      provider=reader_provider,model='fixture-model') for i in range(capacity)]
+    declarations=[dict(title=c['title'],body=c['instructions'],provider=c['provider']) for c in reviewers]
+    (provider / 'declarations.json').write_text(json.dumps(declarations))
+    proposal=approved_operation('async_execution.propose',dict(global_capacity=capacity,
+        enabled_reader_profiles=['repository_readonly_v1']))
+    approved_operation('async_execution.apply',dict(revision=proposal['revision'],proposal_digest=proposal['proposal_digest']))
+    parent=approved_operation('task.create',dict(title='Repository builder',instructions='Request the approved reviews then synthesize.',
+        provider='claude',object=str(root),scope='Review the committed version',effect='One synthesis',
+        review_batch=dict(repository=str(root),commit=commit,reviews=reviewers)))
+    approved_operation('task.approve',dict(task_id=parent['id'],expected_row_version=parent['row_version']))
+    # The interactive builder can continue without changing the approved review version.
+    (root / 'operations.md').write_text('Builder is now preparing the next version.\n')
+    with rig.running(executor=executor,poll=0.1):
+        wait_until(lambda:len([e for e in provider_events(provider) if e['event']=='start'])==capacity,
+                   60,what='repository reviewers at the barrier')
+        ids=children(parent['id'])
+        with solar_state.read_session() as store:
+            for task in ids:
+                manifest=json.loads(store.task_field(task,'review_input_manifest'))
+                assert json.loads(manifest['user_prompt'])['commit']==commit
+        (provider / 'release').touch()
+        wait_until(lambda:rig.status(parent['id'])=='completed',90,what='one repository synthesis')
+    events=provider_events(provider)
+    starts=[e['t'] for e in events if e['event']=='start']; ends=[e['t'] for e in events if e['event']=='end']
+    assert len(starts)==len(ends)==capacity and max(starts)<min(ends)
+    assert max(starts)-min(starts) <= 5.0
+    assert max(e['t'] for e in events if e['event']=='synthesis')-max(ends) <= 5.0
+    assert len([e for e in events if e['event']=='synthesis'])==1
+    assert not [e for e in events if e['event']=='barrier_timeout']
+    assert len({e['task'] for e in events if e['event']=='start'})==capacity

@@ -38,10 +38,11 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 
 ## Restricted reviews
 
-Internal ID/token-bound requests use `text_only_review_v1` before interactive
+Internal ID/token-bound requests use `text_only_review_v1` for packets or
+`repository_readonly_v1` for committed repository exploration before interactive
 context loading. `execution_profiles.py` composes and verifies immutable prompts
-and builds the sole restricted command/environment for run and stream. Claude
-is the only implemented adapter; unknown effective managed policy is rejected.
+and builds the sole restricted command/environment for run and stream. The packet adapter remains Claude-only; repository readers have guarded Claude, Codex, Cursor and Agy adapters.
+Provider-specific host guards refuse unsupported configurations.
 No profile is enabled in production. See [the profile contract](../../docs/restricted-review-profile.md)
 for `build_review_envelope_v1`, manifest fields, launch preflight and limitations.
 
@@ -230,3 +231,14 @@ EOF
 ## Managed execution
 
 `managed_process.py` is an internal helper used by app and async executors to bound and cancel router process groups; it is not a separate provider entrypoint.
+
+## Repository review profile
+
+`repository_readonly_v1` explores a private copy of an approved Git commit through
+Router with an exact provider/model. Native `task.create`/`task.update` prepare
+`review` inputs or a bounded `review_batch`; approval and pool admission remain
+separate. Claude, Codex, Cursor (`agent`) and Antigravity (`agy`) have guarded constructors;
+unknown providers refuse.
+The packet profile is unchanged and production profiles remain disabled. See
+[repository review](../../docs/repository-readonly-review.md) for scope, host
+policy checks, CLI restrictions, limitations and the opt-in inference-free probe.
