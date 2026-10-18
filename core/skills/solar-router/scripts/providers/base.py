@@ -166,7 +166,7 @@ class BaseProvider(ABC):
                 try:
                     with open(argv[argv.index("--output-last-message") + 1], encoding="utf-8") as fh:
                         last_message = fh.read()
-                except (OSError, IndexError):
+                except (OSError, ValueError, IndexError):  # ValueError: non-UTF-8 bytes
                     pass
         if proc.returncode:
             raise RuntimeError("restricted provider returned non-zero")

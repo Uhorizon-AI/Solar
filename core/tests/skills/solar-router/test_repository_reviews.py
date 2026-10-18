@@ -309,3 +309,21 @@ def test_codex_unreadable_or_valueless_final_message_path_fails_cleanly(monkeypa
     monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, _events('x'), ''))
     with pytest.raises(RuntimeError, match='no structured final review'):
         PROVIDERS['codex'].run_review(manifest={}, expected='', profile='other_profile')
+
+
+def test_codex_non_utf8_final_message_file_fails_cleanly(monkeypatch):
+    import subprocess
+    import tempfile
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_launch(*args, **kwargs):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / 'last-message.json'
+            out.write_bytes(b'\x80\xff')
+            yield ['codex', '--output-last-message', str(out)], {}, temp
+
+    monkeypatch.setattr(profiles, 'restricted_launch', fake_launch)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, _events('x'), ''))
+    with pytest.raises(RuntimeError, match='no structured final review'):
+        PROVIDERS['codex'].run_review(manifest={}, expected='', profile='other_profile')
