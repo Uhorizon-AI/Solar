@@ -45,7 +45,7 @@ def test_new_providers_use_native_router_bound_review_and_isolated_configuration
     binary.write_text(f'''#!{sys.executable}
 import json,os,pathlib,sys
 if '--version' in sys.argv: print('2026.10.14-0f9edde')
-elif '--help' in sys.argv: print('--mode read-only plan --sandbox --model --output-format --workspace --disable-slash-commands')
+elif '--help' in sys.argv: print('--mode read-only plan --sandbox --model --output-format --workspace --trust --disable-slash-commands')
 else:
  home=pathlib.Path(os.environ['HOME'])
  config=home/('.cursor/cli-config.json' if {provider!r}=='agent' else '.gemini/antigravity-cli/settings.json')
@@ -80,6 +80,7 @@ else:
     if provider == 'agent':
         assert called['config']['permissions']['deny'] == ['Write(**)', 'Shell(*)', 'Mcp(*:*)', 'WebFetch(*)']
         assert called['env']['AGENT_CLI_CREDENTIAL_STORE'] == 'file'
+        assert '--trust' in called['argv'] and '--approve-mcps' not in called['argv']
         assert called['argv'][called['argv'].index('--mode') + 1] == 'ask'
     else:
         assert called['config']['toolPermission'] == 'strict'
@@ -205,7 +206,7 @@ def test_cursor_unknown_version_refuses_private_file_store(tmp_path, monkeypatch
     e = repo.build(repository=str(source), commit=commit, provider='agent', model='fixed', instructions='Review.', rules=[])
     home = tmp_path / 'user'; auth_fixture(home); monkeypatch.setenv('HOME', str(home))
     binary = tmp_path / 'agent'
-    binary.write_text('#!/bin/sh\necho "--mode read-only --sandbox --model --output-format --workspace unknown-version"\n')
+    binary.write_text('#!/bin/sh\necho "--mode read-only --sandbox --model --output-format --workspace --trust unknown-version"\n')
     binary.chmod(0o700)
     monkeypatch.setattr(PROVIDERS['agent'], 'resolve_binary', lambda _: str(binary))
     monkeypatch.setattr(guards, 'guard_prefix', lambda *a: [])

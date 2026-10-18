@@ -182,8 +182,8 @@ def prepare(provider, binary, original_env, private, cwd, manifest):
         write_json(config / 'hooks.json', dict(version=1, hooks={}))
         env.update(CURSOR_CONFIG_DIR=str(config), CURSOR_DATA_DIR=str(home / 'cursor-data'),
                    AGENT_CLI_CREDENTIAL_STORE='file')
-        required = ['--mode', 'read-only', '--sandbox', '--model', '--output-format', '--workspace']
-        argv = [binary, '--print', '--mode', 'ask', '--sandbox', 'enabled', '--workspace', str(cwd),
+        required = ['--mode', 'read-only', '--sandbox', '--model', '--output-format', '--workspace', '--trust']
+        argv = [binary, '--print', '--mode', 'ask', '--sandbox', 'enabled', '--trust', '--workspace', str(cwd),
                 '--model', manifest['model'], '--output-format', 'json', '--', prompt]
     elif provider == 'agy':
         gemini = home / '.gemini'

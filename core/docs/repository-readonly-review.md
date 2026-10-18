@@ -104,7 +104,10 @@ provider, so this is not an OS network-egress boundary or proof of absent
 provider-side integrations. A real model pilot must also verify tool refusals.
 
 Cursor receives `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, a private HOME/XDG tree,
-and `AGENT_CLI_CREDENTIAL_STORE=file`. Only subscription access/refresh tokens
+and `AGENT_CLI_CREDENTIAL_STORE=file`. `--trust` satisfies the CLI headless
+workspace gate for the disposable snapshot only; it does not approve MCPs or
+trust repository instructions as authority. Its trust record stays in the
+private HOME and is deleted on exit. Only subscription access/refresh tokens
 are copied, not API keys, settings, hooks, plugins, approvals or history. On
 macOS the two named Cursor keychain entries can be read into that private file;
 no keychain writes are made. The file-store switch was audited in Cursor
