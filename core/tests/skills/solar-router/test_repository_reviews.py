@@ -261,7 +261,7 @@ def test_codex_requires_exactly_one_completed_turn(monkeypatch):
     good = json.dumps(dict(review='ok'))
     with pytest.raises(RuntimeError, match='no completed review'):
         _codex_review(monkeypatch, _events('x', completed=False), good)
-    with pytest.raises(RuntimeError, match='no completed review'):
+    with pytest.raises(RuntimeError, match='more than one completed turn'):
         _codex_review(monkeypatch, _events('x') + '\n' + json.dumps(dict(type='turn.completed')), good)
 
 
@@ -294,3 +294,18 @@ def test_codex_preflight_requires_output_flags(tmp_path):
     binary.chmod(0o700)
     with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
         repo.codex_preflight(str(binary), dict(os.environ), str(tmp_path), [])
+
+
+@pytest.mark.parametrize('argv', [['codex', '--output-last-message'], ['codex', '--output-last-message', '/nonexistent/dir/x.json']])
+def test_codex_unreadable_or_valueless_final_message_path_fails_cleanly(monkeypatch, argv):
+    import subprocess
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_launch(*args, **kwargs):
+        yield argv, {}, '.'
+
+    monkeypatch.setattr(profiles, 'restricted_launch', fake_launch)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, _events('x'), ''))
+    with pytest.raises(RuntimeError, match='no structured final review'):
+        PROVIDERS['codex'].run_review(manifest={}, expected='', profile='other_profile')

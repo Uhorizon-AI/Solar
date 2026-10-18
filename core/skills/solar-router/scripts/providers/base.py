@@ -166,7 +166,7 @@ class BaseProvider(ABC):
                 try:
                     with open(argv[argv.index("--output-last-message") + 1], encoding="utf-8") as fh:
                         last_message = fh.read()
-                except (OSError, ValueError):
+                except (OSError, IndexError):
                     pass
         if proc.returncode:
             raise RuntimeError("restricted provider returned non-zero")
@@ -215,8 +215,10 @@ class BaseProvider(ABC):
         if any(event.get("type") in {"error", "turn.failed"} for event in events):
             raise RuntimeError("restricted provider returned an error")
         completed = [e for e in events if e.get("type") == "turn.completed"]
-        if len(completed) != 1:
+        if not completed:
             raise RuntimeError("restricted provider returned no completed review")
+        if len(completed) > 1:
+            raise RuntimeError("restricted provider returned more than one completed turn")
         try:
             final = json.loads(last_message) if last_message else None
         except ValueError:
