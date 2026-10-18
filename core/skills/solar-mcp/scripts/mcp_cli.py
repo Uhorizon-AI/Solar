@@ -320,8 +320,10 @@ def main(argv: list[str] | None = None) -> int:
             # Validate it through the canonical resolver before changing directory;
             # downstream runtime/ownership checks must see the same workspace.
             configured = args.workspace if args.workspace is not None else os.environ.get('SOLAR_WORKSPACE')
-            if configured is not None and not configured.strip():
-                raise ValueError('Configured Solar workspace must not be empty.')
+            if configured is not None:
+                configured = configured.strip()
+                if not configured:
+                    raise ValueError('Configured Solar workspace must not be empty.')
             ws = workspace_path(configured)
             os.environ['SOLAR_WORKSPACE'] = str(ws)
             os.chdir(ws)

@@ -251,11 +251,12 @@ def test_registered_stdio_reads_and_refuses_mutation_from_foreign_cwd(
         (outside / '.solar/settings.json').write_text('{"version":"fixture"}')
     cwd = '/' if launch_directory == 'root' else str(outside)
     env = dict(solar_env.env, SOLAR_MCP_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE='1')
+    env['SOLAR_WORKSPACE'] = '  ' + str(solar_env.workspace) + '  '
     argv = ['bash', str(dispatcher), 'mcp']
     if explicit:
         # An explicit host argument wins over a different configured workspace.
         env['SOLAR_WORKSPACE'] = str(outside)
-        argv += ['serve', '--workspace', str(solar_env.workspace)]
+        argv += ['serve', '--workspace', '  ' + str(solar_env.workspace) + '  ']
     requests = [
         {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'capabilities': {}}},
         {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
@@ -279,19 +280,22 @@ def test_registered_stdio_reads_and_refuses_mutation_from_foreign_cwd(
     assert not (outside / '.solar/settings.json').exists() or launch_directory == 'other-workspace'
 
 
-@pytest.mark.parametrize('configured', ['missing', 'empty', 'not-a-workspace'])
+@pytest.mark.parametrize('configured', ['missing', 'empty', 'whitespace', 'not-a-workspace'])
 def test_stdio_invalid_registration_fails_without_runtime_or_protocol_output(tmp_path, configured):
     workspace = tmp_path / 'workspace'
     if configured == 'not-a-workspace':
         workspace.mkdir()
     runtime = tmp_path / 'must-not-exist'
-    env = dict(os.environ, SOLAR_WORKSPACE='' if configured == 'empty' else str(workspace),
+    selected = {'empty': '', 'whitespace': ' \t '}.get(configured, str(workspace))
+    env = dict(os.environ, SOLAR_WORKSPACE=selected,
                SOLAR_RUNTIME_ROOT=str(runtime), SOLAR_APP_DATA=str(tmp_path / 'app-data'))
     result = subprocess.run([sys.executable, str(Path(mcp_cli.__file__))],
                             input='', cwd='/', env=env, capture_output=True, text=True, timeout=15)
     assert result.returncode == 2
     assert result.stdout == ''
     assert 'ERROR:' in result.stderr and 'workspace' in result.stderr.lower()
+    if configured in {'empty', 'whitespace'}:
+        assert 'Configured Solar workspace must not be empty.' in result.stderr
     assert not runtime.exists()
     assert not (tmp_path / 'app-data').exists()
 
