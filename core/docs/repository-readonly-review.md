@@ -147,10 +147,13 @@ and overwriting a separate disposable host sentinel must fail. Private state
 writes must succeed. Help is then checked under the same guard: each required
 option must be declared (an example or another option's description does not
 count) and the values Solar passes (`--mode`, `--sandbox`, `--output-format`)
-must be advertised in that option's own block in a recognised form (`Values: a, b`,
-`Modes: ...`, `[a|b]`, `one of ...`); prose such as "the ask mode was removed" or
+must be advertised in that option's own block in a recognised form (`Values:`, `Modes:`, `Formats:`, `Choices:` or `Possible values:`
+at the start of a description or sentence; a sentence starting `one of`; `[a|b]`, `<a|b>`
+or `{a,b}` groups; quoted `"a" | "b"` lists; bullet lists under `Possible values:`);
+prose such as "the ask mode was removed", `Not one of ask`, or
 `e.g. --mode ask` does not count, lines under `Examples:`/`Usage:` and options nested in
-another option's description are not declarations, and colour codes are ignored. The CLI version is recorded in the
+another option's description column are not declarations, colour codes are ignored,
+and only the first option of a line is indexed (aliases after it are not). The CLI version is recorded in the
 result (`review_preflight.version`) and the audit log, and never blocks launch.
 A refusal carries `error_detail` with `provider`, `stage` and `reason` (for
 example `required_option_missing` with the option, `help_timeout`,

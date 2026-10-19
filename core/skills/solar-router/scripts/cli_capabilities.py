@@ -9,9 +9,15 @@ from execution_profiles import ProfileError
 _ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 _SECTION = re.compile(r'^\S[^\n]*:\s*$')
 _SKIPPED = re.compile(r'example|usage', re.I)
-_OPTION = re.compile(r'^(\s*)(?:-[A-Za-z?],?\s+)?(--[A-Za-z][\w-]*)(?=[\s=,]|$)(.*)$')
-_LABEL = re.compile(r'(?<![\w<-])(?:(?:values?|modes?|formats?|choices)\s*:|one of\b)\s*(.+?)(?:\.(?:\s|$)|$)', re.I | re.M)
-_GROUP = re.compile(r'[\[<{(]([\w.-]+(?:\s*[|,]\s*[\w.-]+)+)[\]>})]')
+_OPTION = re.compile(r'^(\s*)(?:-[A-Za-z?],?\s+)?(--[A-Za-z][\w-]*)(?=[\s=,\[]|$)(.*)$')
+# A label counts only where a description or sentence begins, or inside brackets.
+_START = r'(?:^|(?<=[.;(\[)\]>])\s*|(?<=\s\s))'
+_LABEL = re.compile(_START + r'(?:(?:(?:possible|supported|allowed|valid)\s+)?values|modes|formats|choices)\s*:'
+                    r'\s*(.+?)(?:\.(?:\s|$)|$)', re.I | re.M)
+_ONE_OF = re.compile(_START + r'(?:(?:must|can|may)\s+be\s+)?one\s+of\s+(.+?)(?:\.(?:\s|$)|$)', re.I | re.M)
+_GROUP = re.compile(r'[\[<{]([\w.-]+(?:\s*[|,]\s*[\w.-]+)+)[\]>}]')
+_QUOTED = re.compile(r'"[\w.-]+"(?:\s*[|,]\s*"[\w.-]+")+')
+_BULLETS = re.compile(r'(?:possible|allowed|supported|valid)?\s*values:\s*\n((?:\s*-\s*[\w.-]+\b[^\n]*\n?)+)', re.I)
 
 
 def unsupported(provider, stage, reason, *, option=None):
@@ -25,14 +31,15 @@ def option_blocks(help_text):
     """Index advertised option declarations, excluding examples and substring hits.
 
     Colour codes are removed. Lines under an `Examples:`/`Usage:` header are never
-    declarations, and an option-looking line indented under another option is part
-    of that option's description. The first declaration wins. Only the first option
+    declarations, and an option-looking line indented to the description column of
+    another option is part of that option's description. The first declaration wins. Only the first option
     of a line is indexed, so aliases or `--x[=V]` layouts are rejected rather than
     guessed. Unknown layouts fail closed.
     """
     blocks = {}
     current = None
     indent = 0
+    column = None
     skipping = False
     for line in _ANSI.sub('', help_text).splitlines():
         if _SECTION.match(line) and not _OPTION.match(line):
@@ -42,7 +49,7 @@ def option_blocks(help_text):
         if skipping:
             continue
         match = _OPTION.match(line)
-        nested = bool(match and current and len(match[1]) > indent)
+        nested = bool(match and current and column and len(match[1]) >= column)
         if match and not nested:
             if match[2] in blocks:
                 current = None
@@ -50,6 +57,8 @@ def option_blocks(help_text):
                 indent = len(match[1])
                 current = match[2]
                 blocks[current] = match[3]
+                gap = re.search(r'\S\s{2,}(?=\S)', line[len(match[1]):])
+                column = len(match[1]) + gap.end() if gap else None
         elif current and line.strip() and len(line) - len(line.lstrip()) > indent:
             blocks[current] += '\n' + line.strip()
         elif line.strip():
@@ -60,14 +69,19 @@ def option_blocks(help_text):
 def advertised_values(block):
     """Values an option block lists in a recognised form (`Values: a, b`, `[a|b]`).
 
-    A word that merely appears in prose never counts as a supported value.
+    Recognised: `Values:`/`Modes:`/`Formats:`/`Choices:` (also `Possible values:`),
+    a sentence starting `one of`, `[a|b]`/`<a|b>`/`{a,b}` groups, quoted `"a" | "b"`
+    lists and `Possible values:` bullet lists. A word that merely appears in prose
+    never counts as a supported value.
     """
+    parts = [m[1] for pattern in (_LABEL, _ONE_OF, _GROUP) for m in pattern.finditer(block)]
+    parts += [m[0] for m in _QUOTED.finditer(block)]
+    parts += [re.sub(r'(?m)^\s*-\s*([\w.-]+)[^\n]*$', r'\1,', m[1]) for m in _BULLETS.finditer(block)]
     found = set()
-    parts = [m[1] for m in _LABEL.finditer(block)] + [m[1] for m in _GROUP.finditer(block)]
     for part in parts:
         part = re.sub(r'\([^)]*\)', ' ', part)
-        for token in re.split(r'[,|/]|\bor\b', part):
-            token = token.strip(' \t`"\'[]<>{}')
+        for token in re.split(r'[,|/\n]|\bor\b', part):
+            token = token.strip(' \t`"\'[]<>{}()')
             if re.fullmatch(r'[\w.-]+', token):
                 found.add(token)
     return found

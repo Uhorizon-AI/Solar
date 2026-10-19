@@ -84,6 +84,9 @@ else:
     assert result['status'] == 'success', result
     assert commit in result['reply_text']
     assert result['review_preflight']['version'] == '2027.01.01-new-release'
+    with solar_state.session() as store:
+        row = [r for r in store.audit_rows(event='end') if r.get('task_id') == task][-1]
+    assert row['review_preflight']['version'] == '2027.01.01-new-release'
     assert '--print' in result['review_preflight']['capabilities_checked']
     called = json.loads(record.read_text())
     assert called['source'] == 'The maximum batch is five.\n'
@@ -414,3 +417,30 @@ def test_unknown_provider_is_reported_as_an_unsupported_profile(tmp_path):
         guards.prepare('other', '/none', {'HOME': str(tmp_path)}, private, cwd,
                        dict(system_prompt='x', user_prompt='y', model='m'))
     assert error.value.detail == dict(provider='other', stage='profile', reason='provider_unsupported')
+
+
+@pytest.mark.parametrize('raised,code', [('state', 'state_unavailable'), ('generic', 'provider_locked_failed')])
+def test_other_failures_keep_the_preflight_in_result_and_audit(tmp_path, monkeypatch, raised, code):
+    import router
+    import solar_state
+    source, commit = repository(tmp_path)
+    e = repo.build(repository=str(source), commit=commit, provider='agent', model='fixture-model',
+                   instructions='Review the committed version.', rules=[])
+    adapter = PROVIDERS['agent']
+    def run(*a, **k):
+        adapter.last_review_preflight = dict(provider='agent', version='2027.04.04-x')
+        raise solar_state.StateError('busy') if raised == 'state' else RuntimeError('boom')
+    monkeypatch.setattr(adapter, 'run', run)
+    fields = dict(provider='agent', execution_profile=repo.PROFILE,
+                  access_policy=profiles.canonical(dict(version=1, mode='read', scopes=[str(source)], resources=[])),
+                  review_input_manifest=profiles.canonical(e['manifest']), review_input_digest=e['review_input_digest'])
+    with solar_state.session() as store:
+        task = store.task_create([(k, json.dumps(v)) for k, v in fields.items()], 'Review.', status='queued')
+        claim = store.task_claim_detail(task, 'reader')
+    result = router.route(json.dumps(dict(text='x', provider='agent',
+                                          execution=dict(task_id=task, token=claim['token'], profile=repo.PROFILE))))
+    assert result['error_code'] == code
+    assert result['review_preflight']['version'] == '2027.04.04-x'
+    with solar_state.session() as store:
+        row = [r for r in store.audit_rows(event='end') if r.get('task_id') == task][-1]
+    assert row['review_preflight']['version'] == '2027.04.04-x'
