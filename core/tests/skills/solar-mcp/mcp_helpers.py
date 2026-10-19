@@ -51,3 +51,11 @@ def stored(task_id: str) -> dict:
     import solar_state
     with solar_state.session() as store:
         return store.task_get(task_id)
+
+
+def queue_and_authorize(task_id: str, expected_row_version: int) -> dict:
+    """Approve through the operation, then authorize the run: what a task that is not confined to a
+    verified read-only profile needs before a worker may claim it."""
+    queued = run("task.approve", dict(task_id=task_id, expected_row_version=expected_row_version))
+    run("task.authorize_run", dict(task_id=task_id, expected_row_version=queued["row_version"]))
+    return queued

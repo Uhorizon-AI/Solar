@@ -937,7 +937,12 @@ OPTIONAL_MATERIAL_KEYS = frozenset({
 
 # What an approval leaves in the frontmatter. `approved_definition` is the
 # snapshot: the definition text exactly as it was approved.
-APPROVAL_KEYS = ("approved_digest", "approved_at", "approved_row_version", "approved_definition")
+APPROVAL_KEYS = ("approved_digest", "approved_at", "approved_row_version", "approved_definition",
+                 "approved_consent", "run_authorized_digest")
+# `approved_consent: client` marks a queue entry made on the client's own tool permission (MCP, no form).
+# Such a task runs without further ado only when the executor itself confines it (`run_risk` low);
+# otherwise it waits for `run_authorized_digest`, the explicit authorization of this exact content.
+# Approvals made before this marker existed, and by the local scripts, carry neither and keep working.
 # Where the definition ends and the results begin, kept apart from the approval: it
 # survives an approval being withdrawn, so the results stay separate from the instructions
 # through any number of edits. The approval's own snapshot is `approved_definition`.
@@ -1957,6 +1962,29 @@ def _claim_order(row) -> tuple:
     return (-_PRIORITY_RANK.get(row["priority"] or "", 0), row["created"] or "", row["id"])
 
 
+def run_risk(pairs: list[list[str]]) -> str:
+    """`low` only when the executor itself confines the run: a restricted execution profile that has a
+    verified implementation for this provider, and read-only access. Everything else, a task with no
+    profile included, is `high`. What the task text says never counts."""
+    profile = (_field(pairs, "execution_profile") or "").strip()
+    provider = (_field(pairs, "provider") or "").strip().lower()
+    if not profile or provider not in VERIFIED_PROFILES.get(profile, frozenset()):
+        return "high"
+    try:
+        access = parse_access_policy(_field(pairs, "access_policy"))
+    except FormatError:
+        return "high"
+    return "low" if access and access["mode"] == "read" else "high"
+
+
+def needs_run_authorization(pairs: list[list[str]]) -> bool:
+    """A client-consented approval of a high-risk task is not yet permission to run it."""
+    if _field(pairs, "approved_consent") != "client" or run_risk(pairs) == "low":
+        return False
+    digest = _field(pairs, "approved_digest")
+    return not digest or _field(pairs, "run_authorized_digest") != digest
+
+
 def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual: bool,
                  record: bool = True) -> Optional[str]:
     """Why a queued task cannot be claimed for reasons of its own, or None.
@@ -1982,6 +2010,8 @@ def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual:
     reason = _approval_gate(conn, task_id, row["row_version"], pairs, row["body"], record=record)
     if reason:
         return reason
+    if needs_run_authorization(pairs):
+        return "awaiting_approval"
     problem = _provenance_problem(conn, task_id)
     if problem:
         return problem
@@ -2186,7 +2216,8 @@ class Session:
             raise StateError(f"{task_id}: object, scope or effect changed")
 
     def task_approve(self, task_id: str, actor: Optional[str] = None,
-                     expected_row_version: Optional[int] = None) -> str:
+                     expected_row_version: Optional[int] = None, *,
+                     consent: Optional[str] = None) -> str:
         """draft or planned -> queued. Never rewrites object, scope or effect.
 
         New work is approved from draft. A task already in planned, including
@@ -2198,6 +2229,9 @@ class Session:
         approval covering its content. With the version the approval is also
         checked against the exact stored task, and a task that revises another is
         refused while that other can still run.
+
+        `consent="client"` records that the queue entry rests on the client's own tool permission
+        (the MCP operation, no form): a high-risk task then waits for `task_authorize_run`.
         """
         with _transaction(self.conn) as conn:
             row = conn.execute(
@@ -2219,14 +2253,41 @@ class Session:
                             source["status"] == "completed" and repeats):
                         raise TransitionRefused(
                             f"{task_id} revises {source_id}, which can still run; archive or cancel it first")
-            came = _move(conn, task_id, "queued", actor or "approve",
-                         fields=_approval_fields(conn, task_id, pairs, row["body"],
-                                                 row["row_version"]))
+            fields = _approval_fields(conn, task_id, pairs, row["body"], row["row_version"])
+            if consent == "client":
+                fields["approved_consent"] = json.dumps("client")
+            came = _move(conn, task_id, "queued", actor or "approve", fields=fields,
+                         drop=("approved_consent", "run_authorized_digest"))
             after = conn.execute("SELECT object, scope, effect FROM tasks WHERE id = ?",
                                  (task_id,)).fetchone()
             if tuple(after) != (row["object"], row["scope"], row["effect"]):
                 raise StateError(f"{task_id}: object, scope or effect changed")
         return came
+
+    def task_authorize_run(self, task_id: str, *, expected_row_version: int,
+                           actor: Optional[str] = None) -> dict:
+        """Authorize this exact content to run: the one step left to confirm for a high-risk task.
+
+        Bound to the stored `approved_digest`: any material edit withdraws the approval and with it this
+        authorization. A recurring task keeps it for as long as its digest does not change."""
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter, body, row_version FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            if row["status"] != "queued":
+                raise TransitionRefused(f"{task_id} is {row['status']}: only a queued task is authorized to run")
+            _check_version(task_id, row["row_version"], expected_row_version)
+            pairs = json.loads(row["frontmatter"])
+            if approval_state(pairs, row["body"]):
+                raise TransitionRefused(f"{task_id}: its approval does not cover what is stored; queue it again")
+            digest = _field(pairs, "approved_digest")
+            _set_pair(pairs, "run_authorized_digest", " " + json.dumps(digest))
+            _write_task(conn, task_id, "queued", pairs, row["body"], insert=False)
+            _audit(conn, "task_run_authorized", task_id=task_id, actor=actor, digest=digest,
+                   risk=run_risk(pairs))
+            version = conn.execute("SELECT row_version FROM tasks WHERE id = ?", (task_id,)).fetchone()[0]
+        return dict(task_id=task_id, authorized=True, digest=digest, risk=run_risk(pairs), row_version=version)
 
     def task_return_to_draft(self, task_id: str, *, expected_row_version: int,
                              actor: Optional[str] = None,

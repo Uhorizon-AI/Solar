@@ -53,6 +53,17 @@ Limits and lifecycle: [references/discovery.md](references/discovery.md).
 
 ## Approval workflow
 
+**Where consent lives.** The client (Claude Code, Desktop, Codex, Cursor) holds the user's message and its own
+tool permission; that is the consent for the task lifecycle (`task.create`, `update`, `schedule`, `approve`,
+`return_to_draft`, `cancel`, `requeue`, `archive`). Solar asks no form for them. What Solar decides is the
+**risk of running**, at the claim: a task whose execution is confined by a restricted profile with a verified
+implementation for its provider, read-only, is low risk and runs. Any other task (no profile, writes, commands,
+a provider without a verified profile) is high risk and waits as `awaiting_approval` until `task.authorize_run`
+(native confirmation) authorizes that exact content. Sending outside the machine (`telegram.send`) and capacity
+changes (`async_execution.*`) keep their form. Tasks approved before this existed, and by local scripts, keep
+running as they did.
+
+
 1. Prepare the exact operation, arguments and destination. For `telegram.send` include an
    explicit `chat_id` and final text; apply the relevant communication gate first. For an
    existing task, read it first and pass its `row_version`.
@@ -101,14 +112,15 @@ Operations (each is gated on its own name, arguments and authority):
 
 | Operation | Authority | Passes when / does |
 |---|---|---|
-| `task.create` | A2 | Native confirmation or an exact-call approval. Stores a **draft**. `access_policy` (`mode` read/write, absolute `scopes`, exclusive `resources`) declares what the task touches; a task that declares nothing runs alone (`task.update` takes it too, and changing it withdraws the approval). `revises_task_id` copies configuration, schedule, execution restrictions (`origin_channel`), notification destination and resource hooks from another task and leaves it untouched. Cannot queue |
-| `task.update` | A2 | Same. Edits a draft or planned task under `expected_row_version`. A planned task returns to draft. A queued task that is only renamed keeps id, place and approval; any other change returns it to draft and withdraws the approval in the same transaction (results of earlier runs and run counters stay). Refused for active (`task_active_immutable`) and finished (`task_not_editable`) tasks |
-| `task.schedule` | A2 | Same. Time, ISO weekdays, an explicit IANA zone and recurrence for a draft, planned or queued task (a queued task returns to draft, counters kept). Never queues. Refuses an interval that would skip a run after a clock change |
-| `task.approve` | A2 | Same. The only operation that queues: the exact stored task at `expected_row_version`. Refuses an A3 mandate and a revision whose source can still run |
-| `task.return_to_draft` | A2 | Same, bound to `expected_row_version`. `queued` → `draft`: the approval is withdrawn (digest kept in the audit), the worker can no longer claim the task, id, body, schedule, counters and history stay. Needs `task.approve` to queue again |
-| `task.cancel` | A2 | Same, bound to `expected_row_version`. Cancels a queued task, or records the request for an active one |
-| `task.requeue` | A2 | Same, bound to `expected_row_version`. Moves an error task back to the queue and drops its `## Execution Error` section |
-| `task.archive` | A2 | Same. Archives keeping the row, body and events. A queued recurrence is cancelled first, in the same step. Refused while active, while another task waits on it, or while subtasks run |
+| `task.create` | A2 | The client's own tool permission (no form). Stores a **draft**, or queues it at once with `queue: true` (for work that should run now; same checks as `task.approve`). `access_policy` (`mode` read/write, absolute `scopes`, exclusive `resources`) declares what the task touches; a task that declares nothing runs alone (`task.update` takes it too, and changing it withdraws the approval). `revises_task_id` copies configuration, schedule, execution restrictions (`origin_channel`), notification destination and resource hooks from another task and leaves it untouched. Cannot queue without `queue: true` |
+| `task.update` | A2 | Client permission, no form. Edits a draft or planned task under `expected_row_version`. A planned task returns to draft. A queued task that is only renamed keeps id, place and approval; any other change returns it to draft and withdraws the approval in the same transaction (results of earlier runs and run counters stay). Refused for active (`task_active_immutable`) and finished (`task_not_editable`) tasks |
+| `task.schedule` | A2 | Client permission, no form. Time, ISO weekdays, an explicit IANA zone and recurrence for a draft, planned or queued task (a queued task returns to draft, counters kept). Never queues. Refuses an interval that would skip a run after a clock change |
+| `task.approve` | A2 | Client permission, no form. Queues: the exact stored task at `expected_row_version`. Refuses an A3 mandate and a revision whose source can still run. A task the executor does not confine waits (`awaiting_approval`) until `task.authorize_run` |
+| `task.return_to_draft` | A2 | Client permission, no form, bound to `expected_row_version`. `queued` → `draft`: the approval is withdrawn (digest kept in the audit), the worker can no longer claim the task, id, body, schedule, counters and history stay. Needs `task.approve` to queue again |
+| `task.cancel` | A2 | Client permission, no form, bound to `expected_row_version`. Cancels a queued task, or records the request for an active one |
+| `task.requeue` | A2 | Client permission, no form, bound to `expected_row_version`. Moves an error task back to the queue and drops its `## Execution Error` section |
+| `task.archive` | A2 | Client permission, no form. Archives keeping the row, body and events. A queued recurrence is cancelled first, in the same step. Refused while active, while another task waits on it, or while subtasks run |
+| `task.authorize_run` | A2 | Native confirmation of this exact call (the one form left for tasks). Lets a queued task that is not confined to a verified read-only profile run, as stored now; an edit withdraws it. Refuses an A3 mandate |
 | `async_execution.propose` | A2 | Same. Writes `<runtime>/async-tasks/config/async-execution.json` with the next revision (capacity 1 to 5, provider limits, exclusive wait, reader profiles; unnamed fields keep the applied values) and returns its digest. A proposal only: nothing changes until it is applied |
 | `async_execution.apply` | A2 | Same, for one exact `revision` and `proposal_digest`. Applies that revision to the runtime's policy in one transaction if the file still holds exactly it and it validates; otherwise the applied policy stays. Every claim, manual or worker, reads the applied revision. A provider task never prepares or applies it |
 | `telegram.send` | A2 | Same, for one exact text and an explicit `chat_id`. Sending outside the machine is never implicit |

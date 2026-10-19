@@ -271,6 +271,9 @@ def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
                       object=task["object"], scope=task["scope"], effect=task["effect"],
                       schedule=_schedule(values), digest=digest,
                       approved_digest=values.get("approved_digest"),
+                      risk=solar_state.run_risk(task["frontmatter"]),
+                      awaiting_approval=(task["status"] == "queued"
+                                         and solar_state.needs_run_authorization(task["frontmatter"])),
                       revises_task_id=values.get("revises_task_id"),
                       archived_reason=values.get("archived_reason"),
                       views=list(_VIEWS))

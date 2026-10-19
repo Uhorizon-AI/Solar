@@ -2,7 +2,7 @@
 import json
 import pytest
 import solar_state
-from mcp_helpers import run, execute, stored
+from mcp_helpers import run, execute, stored, queue_and_authorize
 from git_review_fixture import repository
 
 
@@ -53,7 +53,7 @@ def test_mixed_provider_children_keep_one_version_and_one_synthesis(solar_env, t
                 object=str(root),scope='Review committed files',effect='One synthesis',provider='claude',
                 review_batch=dict(repository=str(root),commit=commit,reviews=children))
     parent = run('task.create', args)
-    run('task.approve', dict(task_id=parent['id'],expected_row_version=parent['row_version']))
+    queue_and_authorize(parent['id'], parent['row_version'])
     with solar_state.session() as store:
         claim=store.task_claim_detail(parent['id'],'fixture')
         assert claim['claimed']

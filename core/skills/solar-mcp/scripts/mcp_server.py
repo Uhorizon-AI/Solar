@@ -475,7 +475,7 @@ def handle(message: dict, confirm=None) -> dict | None:
             op, inner, problem = resolve_execute(arguments)
             if problem:
                 return _error(request_id, -32602, f"Invalid tool arguments: {problem}")
-            if op.authority == A2:
+            if op.authority == A2 and not op.client_consent:
                 if op.pre_confirm:
                     try:
                         op.pre_confirm(inner)

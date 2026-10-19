@@ -74,6 +74,8 @@ COPY = {
         approve_effect="authorizes the task to run: it is queued with the instructions stored now and a worker will execute them. Editing it afterwards invalidates this approval.",
         approve_recurring="It then repeats on its schedule.",
         approve_refused="refused: only a draft or planned task can be approved.",
+        authorize_head="Authorize a task to run", authorize_effect="lets this exact task run now: it is not confined to a read-only review, so it may write files, run commands or use the provider's own permissions. Editing it afterwards withdraws this authorization.",
+        authorize_refused="refused: only a queued task can be authorized to run.",
         cancel_head_now="Cancel task", cancel_head_req="Request task stop",
         cancel_now="the queued task is cancelled immediately and will not run.",
         cancel_req="this only records a request to stop. The task stays active until its worker stops it; work already done is not undone.",
@@ -135,6 +137,8 @@ COPY = {
         approve_effect="autoriza su ejecución: se encola con las instrucciones guardadas ahora y un worker las ejecutará. Editarla después invalida esta aprobación.",
         approve_recurring="Después se repite según su programación.",
         approve_refused="se rechaza: solo se aprueba una tarea en borrador o planificada.",
+        authorize_head="Autorizar la ejecución de una tarea", authorize_effect="deja que esta tarea exacta se ejecute ahora: no está confinada a una revisión de solo lectura, así que puede escribir archivos, ejecutar comandos o usar los permisos del proveedor. Editarla después retira esta autorización.",
+        authorize_refused="se rechaza: solo se autoriza una tarea en cola.",
         cancel_head_now="Cancelar tarea", cancel_head_req="Solicitar la parada de la tarea",
         cancel_now="la tarea en cola se cancela de inmediato y no se ejecutará.",
         cancel_req="solo registra una solicitud de parada. La tarea sigue activa hasta que su worker la detenga; lo ya hecho no se deshace.",
@@ -601,6 +605,14 @@ def _approve(copy, args):
     return _head(copy, copy["approve_head"], _context_rows(copy, facts) + [(copy["effect"], effect)], notes)
 
 
+def _authorize(copy, args):
+    facts, notes = _stored(args)
+    if not facts or facts.get("missing"):
+        return _head(copy, copy["authorize_head"], [], notes)
+    effect = copy["authorize_effect"] if facts["status"] == "queued" else copy["authorize_refused"]
+    return _head(copy, copy["authorize_head"], _context_rows(copy, facts) + [(copy["effect"], effect)], notes)
+
+
 def _cancel(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
@@ -693,7 +705,7 @@ def _generic(copy, name, args):
 
 
 RENDERERS = {"task.archive": _archive, "task.create": _create, "task.update": _update,
-             "task.schedule": _schedule, "task.approve": _approve, "task.cancel": _cancel,
+             "task.schedule": _schedule, "task.approve": _approve, "task.authorize_run": _authorize, "task.cancel": _cancel,
              "task.requeue": _requeue, "task.return_to_draft": _return_to_draft,
              "async_execution.propose": _async_propose, "async_execution.apply": _async_apply,
              "telegram.send": _telegram}

@@ -104,3 +104,17 @@ class Env:
                  f"  evidence_log: runtime/delegations/{name}/", ""]
         (self.workspace / "sun" / "delegations" / f"{name}.yaml").write_text(
             "\n".join(body), encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _task_operations_ask_for_a_form_unless_the_module_tests_client_consent(request, monkeypatch):
+    """The form flow (elicitation, approvals, correlation, text) is exercised through the operations
+    that still use it. The task lifecycle operations run on the client's own tool permission; a module
+    sets CLIENT_CONSENT = True to test them as they ship, every other module keeps the form flow."""
+    if getattr(request.module, "CLIENT_CONSENT", False):
+        return
+    import dataclasses
+    import operations
+    for name, op in list(operations.OPERATIONS.items()):
+        if op.client_consent:
+            monkeypatch.setitem(operations.OPERATIONS, name, dataclasses.replace(op, client_consent=False))
