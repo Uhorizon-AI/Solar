@@ -371,3 +371,34 @@ def test_the_view_and_the_limit_share_one_start(ready, clock):
         claim(store, clock)
         after = store.approval_wait(task_id)
         assert before == after                                                                  # recording changes nothing
+
+
+def test_an_expiry_notice_is_not_sent_once_the_task_was_approved_and_authorized_again(ready, clock):
+    with solar_state.session() as store:
+        task_id = waiting(store)
+        claim(store, clock)
+        claim(store, clock, 73)
+        assert store.task_status(task_id) == "draft"
+        ref = [n for n in store.approval_notices() if n["event"] == "approval_wait_expired"][0]["ref"]
+        store.task_approve(task_id, expected_row_version=store.task_get(task_id)["row_version"], consent="client")
+        store.task_authorize_run(task_id, expected_row_version=store.task_get(task_id)["row_version"])
+        assert store.approval_notice_claim(ref) is None                        # "back to draft" is no longer true
+
+
+def test_an_expiry_notice_is_sent_while_it_is_still_true(ready, clock):
+    with solar_state.session() as store:
+        task_id = waiting(store)
+        claim(store, clock)
+        claim(store, clock, 73)
+        ref = [n for n in store.approval_notices() if n["event"] == "approval_wait_expired"][0]["ref"]
+        assert store.approval_notice_claim(ref)["outcome"] == "returned_to_draft"
+
+
+def test_a_skipped_occurrence_notice_follows_the_approval_it_names(ready, clock):
+    with solar_state.session() as store:
+        task_id = waiting(store, recurring="true", recurring_min_interval="3600", scheduled_time="now")
+        claim(store, clock)
+        claim(store, clock, 73)
+        ref = [n for n in store.approval_notices() if n["event"] == "approval_wait_expired"][0]["ref"]
+        store.task_authorize_run(task_id, expected_row_version=store.task_get(task_id)["row_version"])
+        assert store.approval_notice_claim(ref) is None                        # authorized: nothing waits any more

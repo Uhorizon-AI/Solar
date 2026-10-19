@@ -3289,10 +3289,15 @@ class Session:
             current = False
             if task is not None:
                 pairs = json.loads(task["frontmatter"])
-                current = (kind == "expired" or (task["status"] == "queued" and needs_run_authorization(pairs)
-                                                 and _wait_ref(pairs) == (data.get("digest", ""),
-                                                                          data.get("occurrence", ""),
-                                                                          data.get("approval", ""))))
+                same = _wait_ref(pairs)[0::2] == (data.get("digest", ""), data.get("approval", ""))
+                if kind == "waiting":
+                    current = (task["status"] == "queued" and needs_run_authorization(pairs)
+                               and _wait_ref(pairs) == (data.get("digest", ""), data.get("occurrence", ""),
+                                                        data.get("approval", "")))
+                elif data.get("outcome") == "returned_to_draft":
+                    current = task["status"] == "draft"          # approved again since: it is no longer true
+                else:                                            # a skipped occurrence: still waiting on that approval
+                    current = task["status"] == "queued" and same and needs_run_authorization(pairs)
             _audit(conn, "approval_notice", ref=ref, task_id=data.get("task_id"), kind=kind,
                    skipped=not current)
             return (dict(task_id=data["task_id"], kind=kind, title=task["title"], outcome=data.get("outcome"))

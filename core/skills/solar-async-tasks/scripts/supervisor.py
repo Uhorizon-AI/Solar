@@ -413,6 +413,7 @@ class Supervisor:
                 if self.wake.is_set() and not self.draining:
                     next_fill = 0.0
         finally:
+            self._stop_announcer()
             self.state = "stopped" if (self.draining or self.stop_event.is_set()) else "crashed"
             self._save_records()
             self.publish(durable=True)
@@ -487,12 +488,27 @@ class Supervisor:
         self._announcer = threading.Thread(target=self._send_notices, name="approval-notices", daemon=True)
         self._announcer.start()
 
+    def _stop_announcer(self) -> None:
+        """Before the supervisor leaves: end a notice that is still being sent, with its process group, and
+        collect its thread, so nothing outlives the supervisor."""
+        thread = getattr(self, "_announcer", None)
+        if thread is None or not thread.is_alive():
+            return
+        self._notice_closing = True
+        proc = getattr(self, "_notice_proc", None)
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        thread.join(10)
+
     def _send_notices(self) -> None:
         try:
             with self._session() as store:
                 pending = store.approval_notices(self.NOTICES_PER_PASS)
             for notice in pending:
-                if self.draining or self.stop_event.is_set():
+                if self.draining or self.stop_event.is_set() or getattr(self, "_notice_closing", False):
                     return
                 with self._session() as store:
                     taken = store.approval_notice_claim(notice["ref"])
@@ -505,6 +521,9 @@ class Supervisor:
                     proc = subprocess.Popen(["bash", str(HERE / "notify_if_configured.sh"), taken["task_id"], mode],
                                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                             stderr=subprocess.DEVNULL, env={**os.environ}, start_new_session=True)
+                    self._notice_proc = proc
+                    if getattr(self, "_notice_closing", False):     # the supervisor is leaving: do not start one
+                        os.killpg(proc.pid, signal.SIGKILL)
                     try:
                         code = proc.wait(timeout=self.NOTIFY_TIMEOUT)
                     except subprocess.TimeoutExpired:

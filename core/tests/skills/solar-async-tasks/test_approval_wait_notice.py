@@ -223,3 +223,27 @@ def test_a_notice_with_nowhere_to_go_is_not_recorded_as_sent(rig, tmp_path, monk
     with solar_state.session() as store:
         result = store.audit_rows("approval_notice_result")
         assert [(r["sent"], r["reason"]) for r in result] == [(False, "not_configured")]
+
+
+def test_stopping_the_supervisor_ends_a_notice_that_is_still_being_sent(rig, tmp_path, monkeypatch):
+    import supervisor_support
+    monkeypatch.setattr(supervisor_support.supervisor_mod.Supervisor, "NOTIFY_TIMEOUT", 120.0)
+    pidfile = tmp_path / "child.pid"
+    _sender(tmp_path, monkeypatch, f'#!/bin/bash\nsleep 300 &\necho $! > "{pidfile}"\nwait\n')
+    _queue_waiting(rig)
+    with rig.running() as sup:
+        supervisor_support.wait_until(pidfile.exists, 30, what="the sender to start")
+        child = int(pidfile.read_text())
+    # the supervisor has drained: neither its sender nor the thread that waits for it may remain
+    thread = getattr(sup, "_announcer", None)
+    assert thread is None or not thread.is_alive()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        os.kill(child, 9)
+        pytest.fail("the sender outlived the supervisor")
