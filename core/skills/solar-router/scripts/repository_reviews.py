@@ -258,6 +258,7 @@ def launch(adapter, manifest, expected, before_launch):
     import tempfile
     from execution_profiles import ENV_ALLOWLIST, preflight
     provider = adapter.name
+    adapter.last_review_preflight = dict(provider=provider, version=None)
     if provider not in PROVIDERS:
         raise _error('execution_profile_unsupported')
     prefixes = ('SOLAR_ROUTER_' + provider.upper() + '_', 'SOLAR_AI_' + provider.upper() + '_')
@@ -282,7 +283,8 @@ def launch(adapter, manifest, expected, before_launch):
                     '--model', manifest['model'], '--output-format', 'json', '--', manifest['user_prompt']]
         elif provider in {'agent', 'agy'}:
             from repository_cli_guards import prepare
-            argv, env = prepare(provider, binary, env, private, cwd, manifest)
+            argv, env = prepare(provider, binary, env, private, cwd, manifest,
+                                metadata=adapter.last_review_preflight)
         else:
             # An empty config home prevents project/user integrations from loading.
             # Copy only the selected CLI auth file, never its configuration, rules,

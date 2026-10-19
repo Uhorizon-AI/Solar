@@ -144,7 +144,28 @@ from bypassing HOME redirection by resolving the home through the OS user databa
 Every invocation probes the actual boundary before starting the CLI: reading an
 existing snapshot file must succeed, overwriting it, creating a snapshot file,
 and overwriting a separate disposable host sentinel must fail. Private state
-writes must succeed. Help is then checked under the same guard. These adapters
+writes must succeed. Help is then checked under the same guard:
+
+- every required option must be declared (an example or another option's
+  description does not count);
+- every value Solar passes (`--mode`, `--sandbox` and `--output-format` where
+  they take values) must be listed in that option's own block, in a form seen in
+  the real Cursor and Antigravity help: `Values:`/`Modes:`/`Formats:` lists,
+  `(choices: "a", "b")`, `a | b`, `[a|b]` or a closing `(a, b)` note;
+- ignored: `Examples:`/`Usage:` sections, options nested in another option's
+  description, prose, `e.g.` and lists introduced by a negation (`none of`,
+  `not one of`, `removed`); unknown layouts are refused, never guessed. Colour
+  is disabled and ANSI codes are stripped; details in
+  `cli_capabilities.advertised_values`;
+- the CLI version is recorded (`review_preflight.version` in the result and audit
+  log) and never blocks launch.
+
+A refusal carries `error_detail` with `provider`, `stage`, `reason` and, for help
+checks, `option`. Reasons: `required_option_missing`, `required_value_unadvertised`,
+`help_failed`, `help_timeout`, `help_unavailable`, `help_format_unknown`,
+`managed_policy_present`, `credentials_unavailable`, `boundary_unavailable`,
+`write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`.
+A help text proves neither the effective configuration nor that a guard works. These adapters
 do not claim a doctor-style effective/cloud-policy attestation; their stronger
 write boundary is enforced externally. Network access remains available for the
 provider, so this is not an OS network-egress boundary or proof of absent
@@ -157,9 +178,10 @@ trust repository instructions as authority. Its trust record stays in the
 private HOME and is deleted on exit. Only subscription access/refresh tokens
 are copied, not API keys, settings, hooks, plugins, approvals or history. On
 macOS the two named Cursor keychain entries can be read into that private file;
-no keychain writes are made. The file-store switch was audited in Cursor
-`2026.10.14-0f9edde`; other versions refuse until explicitly audited, since this
-switch is not documented in CLI help. Known machine-managed Cursor directories cause a
+Solar itself makes no keychain writes. The file-store switch is not documented in
+CLI help, so help discovery cannot confirm it: a CLI that ignored it could read or
+refresh the real keychain entries, and this stays unverified without a real run.
+Known machine-managed Cursor directories cause a
 refusal rather than overriding administrator policy. Enterprise/team accounts
 and hidden provider-side context are not accredited by these help checks.
 

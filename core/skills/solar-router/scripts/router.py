@@ -1300,6 +1300,7 @@ def _restricted_route(payload, *, stream=False):
     router_id = str(uuid.uuid4())
     task_id = token = None
     provider = None
+    adapter = None
     try:
         if not isinstance(identity, dict) or set(identity) != {"task_id", "token", "profile"}:
             raise ProfileError("review_input_mismatch")
@@ -1331,16 +1332,19 @@ def _restricted_route(payload, *, stream=False):
         review = dict(manifest=manifest, expected=fields["review_input_digest"],
                       profile=profile, before_launch=before_launch)
         adapter = PROVIDERS[provider]
+        adapter.last_review_preflight = {}
         if stream:
             output = "".join(adapter.stream("", review=review))
         else:
             output = adapter.run("", review=review)
         audit_log(router_id, "end", status="success", task_id=task_id,
                   provider=provider, execution_profile=profile, stream=stream,
-                  usage=getattr(adapter, "last_usage", None))
+                  usage=getattr(adapter, "last_usage", None),
+                  review_preflight=getattr(adapter, "last_review_preflight", {}))
         return dict(status="success", request_id=request_id, provider_used=provider,
                     provider=provider, reply_text=output, usage=getattr(adapter, "last_usage", None),
-                    error=None, error_code=None)
+                    error=None, error_code=None,
+                    review_preflight=getattr(adapter, "last_review_preflight", {}))
     except solar_state.StaleToken:
         # The identity is not the current one: nothing to release, and nothing of this caller's to withdraw.
         audit_log(router_id, "end", status="failed", task_id=task_id, error_code="review_input_mismatch", stream=stream)
@@ -1355,17 +1359,29 @@ def _restricted_route(payload, *, stream=False):
                 released = True
             except solar_state.StateError:
                 pass  # a stale caller cannot release another execution's reservation
-        audit_log(router_id, "end", status="failed", task_id=task_id, error_code=code, stream=stream)
-        return dict(_failed(request_id, code, code, provider), claim_released=released)
+        detail = getattr(exc, "detail", None)
+        metadata = getattr(adapter, "last_review_preflight", {})
+        audit_log(router_id, "end", status="failed", task_id=task_id, error_code=code, stream=stream,
+                  error_detail=detail, review_preflight=metadata)
+        message = code
+        if isinstance(detail, dict) and detail.get("reason"):
+            # Operators read this in the task log; the detail holds no free-form CLI text.
+            message = " ".join(str(detail[k]) for k in ("stage", "reason", "option") if detail.get(k))
+            message = f"{code}: {message}"
+        return dict(_failed(request_id, code, message, provider), claim_released=released,
+                    error_detail=detail, review_preflight=metadata)
     except solar_state.StateError as exc:
         # A busy or unavailable base (a cutover is running) says nothing about the review inputs:
         # the approval and the claim stay as they are and the caller sees a transient failure.
-        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="state_unavailable", stream=stream)
-        return _failed(request_id, "state_unavailable", str(exc), provider)
+        metadata = getattr(adapter, "last_review_preflight", {})
+        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="state_unavailable",
+                  stream=stream, review_preflight=metadata)
+        return dict(_failed(request_id, "state_unavailable", str(exc), provider), review_preflight=metadata)
     except Exception as exc:
+        metadata = getattr(adapter, "last_review_preflight", {})
         audit_log(router_id, "end", status="failed", task_id=task_id,
-                  error_code="provider_locked_failed", stream=stream)
-        return _failed(request_id, "provider_locked_failed", str(exc), provider)
+                  error_code="provider_locked_failed", stream=stream, review_preflight=metadata)
+        return dict(_failed(request_id, "provider_locked_failed", str(exc), provider), review_preflight=metadata)
 
 
 # ---------------------------------------------------------------------------
