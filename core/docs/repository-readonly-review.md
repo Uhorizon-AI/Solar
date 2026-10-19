@@ -178,12 +178,7 @@ trust repository instructions as authority. Its trust record stays in the
 private HOME and is deleted on exit. Only subscription access/refresh tokens
 are copied, not API keys, settings, hooks, plugins, approvals or history. On
 macOS the two named Cursor keychain entries can be read into that private file;
-no keychain writes are made. The file-store switch is not documented in CLI
-help, so help discovery cannot confirm it and no version list gates it. It was
-inspected in Cursor `2026.10.14-0f9edde`; a later release that ignored it could
-read or refresh the user's real keychain entries. That residual risk is accepted
-for now and stays unverified without a real run; do not read it as a guarantee.
-Known machine-managed Cursor directories cause a
+no keychain writes are made. Known machine-managed Cursor directories cause a
 refusal rather than overriding administrator policy. Enterprise/team accounts
 and hidden provider-side context are not accredited by these help checks.
 
