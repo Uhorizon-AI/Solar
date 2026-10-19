@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- A task waiting for `task.authorize_run` no longer waits in silence. The wait shows when it began and when it ends in the task list, the task views and the console; it is written once to the audit; it expires (`SOLAR_APPROVAL_WAIT_HOURS`, default 72, `0` turns it off): a one-off task goes back to draft, a recurring one skips only that occurrence and keeps its schedule; and the configured Telegram chat is told once when it begins and once when it ends, through the existing task notifier (title only, never the chat a task names). `task.authorize_run` is unchanged.
+
+  Upgrade note: the wait counts from the approval, so a task already waiting longer than the limit (72 h by default) when this version is installed ends at its first claim, with one notice each. Set `SOLAR_APPROVAL_WAIT_HOURS` in the supervisor, MCP server and console environment alike (`0` turns the expiry off).
+
 ## [0.54.1] - 2026-10-19
 
 ### Fixed

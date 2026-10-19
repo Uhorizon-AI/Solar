@@ -1985,6 +1985,100 @@ def needs_run_authorization(pairs: list[list[str]]) -> bool:
     return not digest or _field(pairs, "run_authorized_digest") != digest
 
 
+APPROVAL_WAIT_ENV = "SOLAR_APPROVAL_WAIT_HOURS"
+APPROVAL_WAIT_DEFAULT_HOURS = 72.0
+_NOTICE_EVENTS = ("awaiting_approval", "approval_wait_expired")
+
+
+def approval_wait_limit() -> Optional[float]:
+    """Seconds a task may wait for `task.authorize_run`; None when waiting never expires.
+    `SOLAR_APPROVAL_WAIT_HOURS` sets it (0 or less turns the expiry off); anything unreadable keeps the default."""
+    raw = (os.environ.get(APPROVAL_WAIT_ENV) or "").strip()
+    try:
+        hours = float(raw) if raw else APPROVAL_WAIT_DEFAULT_HOURS
+    except ValueError:
+        hours = APPROVAL_WAIT_DEFAULT_HOURS
+    if hours != hours:                      # NaN
+        hours = APPROVAL_WAIT_DEFAULT_HOURS
+    if hours <= 0 or hours == float("inf"):
+        return None
+    return hours * 3600.0
+
+
+def _wait_ref(pairs: list[list[str]]) -> tuple[str, str, str]:
+    """One wait is one approval (its digest and the row version it was made at, so approving the same
+    content again is a new wait) at one occurrence (a recurring task's last run)."""
+    return (_field(pairs, "approved_digest") or "", _field(pairs, "recurring_last_run") or "",
+            _field(pairs, "approved_row_version") or "")
+
+
+def _wait_since(conn, task_id: str, pairs: list[list[str]]) -> Optional[str]:
+    digest, occurrence, approval = _wait_ref(pairs)
+    found = conn.execute(
+        "SELECT row FROM audit WHERE event = 'awaiting_approval' AND json_extract(row, '$.task_id') = ? "
+        "AND json_extract(row, '$.digest') = ? AND json_extract(row, '$.occurrence') = ? "
+        "AND json_extract(row, '$.approval') = ? ORDER BY seq LIMIT 1",
+        (task_id, digest, occurrence, approval)).fetchone()
+    if not found:
+        return None
+    data = json.loads(found[0])
+    return data.get("since") or data["ts"]
+
+
+def _wait_start(pairs: list[list[str]]) -> Optional[str]:
+    """When a wait that no claim has recorded yet began: at the approval. A recurring task's later occurrence
+    has no start until the claim that finds it (None), so nothing is shown and nothing is owed before."""
+    if _field(pairs, "recurring_last_run"):
+        return None
+    start = _field(pairs, "approved_at") or ""
+    try:
+        datetime.fromisoformat(start.strip().replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        return None                       # an unreadable stamp is no start, never the year 1970
+    return start
+
+
+def _wait_info(conn, task_id: str, pairs: list[list[str]]) -> dict:
+    """When the wait for authorization began and when it expires (None: never). Reads only."""
+    since = _wait_since(conn, task_id, pairs) or _wait_start(pairs)
+    limit = approval_wait_limit()
+    expires = None
+    if since and limit is not None:
+        expires = datetime.fromtimestamp(_epoch(since) + limit, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dict(since=since, expires_at=expires)
+
+
+def _awaiting(conn, row, pairs: list[list[str]], moment: datetime, record: bool) -> str:
+    """The claim found a task that needs `task.authorize_run`. The first time for this content and
+    occurrence it is written to `audit` (once, whatever the polling); past the limit the wait ends."""
+    if not record:
+        return "awaiting_approval"
+    task_id = row["id"]
+    digest, occurrence, approval = _wait_ref(pairs)
+    since = _wait_since(conn, task_id, pairs)
+    if since is None:
+        since = _wait_start(pairs) or _now()          # the same start the views show before this record
+        _audit(conn, "awaiting_approval", task_id=task_id, digest=digest, occurrence=occurrence,
+               approval=approval, since=since, risk=run_risk(pairs), row_version=row["row_version"])
+    limit = approval_wait_limit()
+    if limit is None or moment.timestamp() - _epoch(since) < limit:
+        return "awaiting_approval"
+    if str(_field(pairs, "recurring") or "").lower() == "true":
+        # Only this occurrence lapses: the schedule and the approval stay, the next one starts its own wait.
+        _set_pair(pairs, "recurring_last_run", " " + _now())
+        _write_task(conn, task_id, "queued", pairs, row["body"], insert=False)
+        outcome = "occurrence_skipped"
+    else:
+        Session._withdraw_approval(conn, task_id, pairs, "approval_wait_expired", "approval-wait")
+        boundary = _record_boundary(pairs, row["body"])
+        _move(conn, task_id, "draft", "approval-wait", drop=APPROVAL_KEYS,
+              fields={BOUNDARY_KEY: boundary} if boundary else None)
+        outcome = "returned_to_draft"
+    _audit(conn, "approval_wait_expired", task_id=task_id, digest=digest, occurrence=occurrence,
+           approval=approval, outcome=outcome, waited_since=since)
+    return "approval_wait_expired"
+
+
 def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual: bool,
                  record: bool = True) -> Optional[str]:
     """Why a queued task cannot be claimed for reasons of its own, or None.
@@ -2011,7 +2105,7 @@ def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual:
     if reason:
         return reason
     if needs_run_authorization(pairs):
-        return "awaiting_approval"
+        return _awaiting(conn, row, pairs, moment, record)
     problem = _provenance_problem(conn, task_id)
     if problem:
         return problem
@@ -2040,7 +2134,7 @@ def _drain_target(conn, policy: dict, moment: datetime, exclude: Optional[str] =
         if now_epoch - _epoch(waits[row["id"]]["first_blocked_at"]) < policy["exclusive_wait_seconds"]:
             continue
         pairs = json.loads(row["frontmatter"])
-        if _access_of(pairs, profiles=policy["enabled_reader_profiles"]).exclusive and _eligibility(conn, row, pairs, moment, manual=False) is None:
+        if _access_of(pairs, profiles=policy["enabled_reader_profiles"]).exclusive and _eligibility(conn, row, pairs, moment, manual=False, record=False) is None:
             return row["id"]
     return None
 
@@ -2562,7 +2656,7 @@ class Session:
         return self.task_claim_detail(task_id, worker)["claimed"]
 
     def task_claim_detail(self, task_id: str, worker: str, *,
-                          stamp_last_run: bool = False) -> dict:
+                          stamp_last_run: bool = False, now: Optional[datetime] = None) -> dict:
         """`task_claim` with the reason it was refused: `not_queued`, the
         `approval_digest_mismatch` reason (`absent`, `legacy`, `mismatch`), or what keeps it
         from starting (`maintenance`, `cancellation_requested`, `blocked_by_dependency`,
@@ -2586,7 +2680,7 @@ class Session:
             if maintenance_state(self.root) is not None:
                 return dict(claimed=False, reason="maintenance")
             pairs = json.loads(row["frontmatter"])
-            moment = datetime.now()
+            moment = now or datetime.now()
             reason = _eligibility(conn, row, pairs, moment, manual=True)
             if reason:
                 return dict(claimed=False, reason=reason)
@@ -3158,8 +3252,117 @@ class Session:
                     reason = _admission(access, held, policy)
                     if reason is None:
                         held = held + [access]       # it would start: the next one is judged beside it
-            out.append(dict(id=task_id, reason=reason))
+            item = dict(id=task_id, reason=reason)
+            if reason == "awaiting_approval":
+                item.update(_wait_info(conn, task_id, pairs))
+            out.append(item)
         return out
+
+    def approval_wait(self, task_id: str) -> Optional[dict]:
+        """`{since, expires_at}` of a queued task that waits for `task.authorize_run`, else None."""
+        row = self.conn.execute("SELECT status, frontmatter FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None or row["status"] != "queued":
+            return None
+        pairs = json.loads(row["frontmatter"])
+        return _wait_info(self.conn, task_id, pairs) if needs_run_authorization(pairs) else None
+
+    # A notice is taken when its `approval_notice` row exists and no later `approval_notice_released` names it.
+    _TAKEN = ("EXISTS (SELECT 1 FROM audit n WHERE n.event = 'approval_notice' AND json_extract(n.row, '$.ref') = {ref} "
+              "AND NOT EXISTS (SELECT 1 FROM audit r WHERE r.event = 'approval_notice_released' "
+              "AND json_extract(r.row, '$.ref') = {ref} AND r.seq > n.seq))")
+
+    # Both queries below read a window of the audit index (event, time) one row at a time: no sort of the
+    # history, no full read. The window is the margin of time the audit clock may have gone back; inside it
+    # the row number decides everything, so a clock that went back never changes which notice comes next.
+    _NOTICE_NEWEST_FIRST = ("SELECT seq, ts, row FROM audit WHERE event = 'approval_notice' "
+                            "ORDER BY ts DESC, seq DESC")           # the order of the index audit_event(event, ts)
+    _NOTICE_PENDING = "SELECT seq, row FROM audit WHERE event = ? AND ts >= ? AND seq > ?"
+    _NOTICE_CLOCK_MARGIN = 86400        # seconds the audit clock may have gone back
+
+    @staticmethod
+    def _before(stamp: str, seconds: int) -> str:
+        return datetime.fromtimestamp(_epoch(stamp) - seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _notice_cursor(self) -> tuple[int, str]:
+        """The `audit` row (seq and time) of the last notice taken and not given back, or `(0, "")`: the
+        highest row number among the notices taken in the day that ends at the newest of them still taken.
+        Notices given back are skipped however old the one still taken is (only the newest taken one can be
+        given back, so there are few). Rows are read one at a time, newest first, so neither the time nor the
+        memory grows with the audit."""
+        best, anchor = (0, ""), ""
+        cursor = self.conn.execute(self._NOTICE_NEWEST_FIRST)
+        try:
+            for seq, at, row in cursor:
+                # The window opens at the first notice still taken, however old: the ones given back before it
+                # are skipped without limit (there are few), and only then does the clock margin apply.
+                if anchor and at < self._before(anchor, self._NOTICE_CLOCK_MARGIN):
+                    break
+                ref = int(json.loads(row)["ref"])
+                if ref > best[0] and not self.conn.execute(
+                        "SELECT 1 FROM audit WHERE event = 'approval_notice_released' AND seq > ? "
+                        "AND json_extract(row, '$.ref') = ?", (seq, ref)).fetchone():
+                    noticed = self.conn.execute("SELECT ts FROM audit WHERE seq = ?", (ref,)).fetchone()
+                    best = (ref, noticed[0] if noticed else "")
+                    anchor = anchor or at
+        finally:
+            cursor.close()
+        return best
+
+    def approval_notices(self, limit: int = 20) -> list[dict]:
+        """Waits and expiries in `audit` that nobody has been told about yet, oldest first: every row after
+        the last notice taken. Audit rows are written inside serialized transactions, so their order is the
+        order they committed in, and a row never lands behind a notice that was taken after it. Each event is
+        read as the window of the index from one clock margin before the cursor's time, and the rows are put
+        in row-number order before the limit is applied."""
+        ref, at = self._notice_cursor()
+        floor = self._before(at, self._NOTICE_CLOCK_MARGIN) if at else ""
+        found = []
+        for event in _NOTICE_EVENTS:
+            found += self.conn.execute(self._NOTICE_PENDING, (event, floor, ref)).fetchall()
+        found.sort(key=lambda r: r["seq"])
+        return [dict(ref=r["seq"], **json.loads(r["row"])) for r in found[:limit]]
+
+    def approval_notice_claim(self, ref: int) -> Optional[dict]:
+        """Take the one notice for an `audit` row before sending it: a second caller gets None, so a
+        notice is sent at most once. A wait that is already over (authorized, edited, cancelled) is
+        marked and not announced. Returns `{task_id, kind, title}` or None."""
+        with _transaction(self.conn) as conn:
+            event = conn.execute("SELECT row FROM audit WHERE seq = ?", (ref,)).fetchone()
+            if event is None or conn.execute(
+                    "SELECT " + self._TAKEN.format(ref="?"), (ref, ref)).fetchone()[0]:
+                return None
+            data = json.loads(event[0])
+            if data.get("event") not in _NOTICE_EVENTS:
+                return None
+            task = conn.execute("SELECT title, status, frontmatter FROM tasks WHERE id = ?",
+                                (data.get("task_id"),)).fetchone()
+            kind = "waiting" if data["event"] == "awaiting_approval" else "expired"
+            current = False
+            if task is not None:
+                pairs = json.loads(task["frontmatter"])
+                same = _wait_ref(pairs)[0::2] == (data.get("digest", ""), data.get("approval", ""))
+                if kind == "waiting":
+                    current = (task["status"] == "queued" and needs_run_authorization(pairs)
+                               and _wait_ref(pairs) == (data.get("digest", ""), data.get("occurrence", ""),
+                                                        data.get("approval", "")))
+                elif data.get("outcome") == "returned_to_draft":
+                    current = task["status"] == "draft"          # approved again since: it is no longer true
+                else:                                            # a skipped occurrence: still waiting on that approval
+                    current = task["status"] == "queued" and same and needs_run_authorization(pairs)
+            _audit(conn, "approval_notice", ref=ref, task_id=data.get("task_id"), kind=kind,
+                   skipped=not current)
+            return (dict(task_id=data["task_id"], kind=kind, title=task["title"], outcome=data.get("outcome"))
+                    if current else None)
+
+    def approval_notice_release(self, ref: int) -> None:
+        """Give a notice back: it was taken but nothing was started (the supervisor was leaving), so
+        the next supervisor sends it. A notice whose send began is never released."""
+        with _transaction(self.conn) as conn:
+            _audit(conn, "approval_notice_released", ref=ref)
+
+    def approval_notice_result(self, ref: int, sent: bool, reason: Optional[str] = None) -> None:
+        with _transaction(self.conn) as conn:
+            _audit(conn, "approval_notice_result", ref=ref, sent=bool(sent), reason=reason)
 
     # -- provenance of a derived authorization -------------------------------
 

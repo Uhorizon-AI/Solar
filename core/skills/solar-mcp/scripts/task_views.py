@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime
 import re
 import sys
+from typing import Optional
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -149,12 +150,16 @@ def _schedule(values: dict) -> dict:
     return block
 
 
-def _row(task: dict) -> dict:
+def _row(task: dict, waits: Optional[dict] = None) -> dict:
     values = _values(task)
-    return dict(id=task["id"], title=task["title"], status=task["status"], priority=task["priority"],
-                recurring=bool(task["recurring"]), row_version=task["row_version"],
-                updated=task["updated"] or task["created"], schedule=_schedule(values),
-                revises_task_id=values.get("revises_task_id"))
+    row = dict(id=task["id"], title=task["title"], status=task["status"], priority=task["priority"],
+               recurring=bool(task["recurring"]), row_version=task["row_version"],
+               updated=task["updated"] or task["created"], schedule=_schedule(values),
+               revises_task_id=values.get("revises_task_id"))
+    wait = (waits or {}).get(task["id"])
+    if wait:
+        row.update(awaiting_approval=True, waiting_since=wait["since"], waiting_expires_at=wait["expires_at"])
+    return row
 
 
 def find_tasks(query: str = "", state: str = "", limit: int = 10) -> dict:
@@ -177,7 +182,9 @@ def find_tasks(query: str = "", state: str = "", limit: int = 10) -> dict:
     ranked.sort(key=lambda item: item[1], reverse=True)   # newest first ...
     ranked.sort(key=lambda item: item[0])                  # ... then best match first
     shown = ranked[:limit]
-    return dict(count=len(ranked), tasks=[_row(task) for _, _, task in shown],
+    with solar_state.read_session() as store:        # only the rows that are shown
+        waits = {task["id"]: store.approval_wait(task["id"]) for _, _, task in shown if task["status"] == "queued"}
+    return dict(count=len(ranked), tasks=[_row(task, waits) for _, _, task in shown],
                 truncated=len(ranked) > len(shown))
 
 
@@ -261,6 +268,7 @@ def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
                       "SELECT ts, from_status, to_status, actor FROM task_events "
                       "WHERE task_id = ? ORDER BY seq", (task["id"],))]
         cancel_requested = store.cancellation_requested(task["id"])
+        wait = store.approval_wait(task["id"]) or {}
     values = _values(task)
     base = dict(id=task["id"], title=task["title"], status=task["status"],
                 row_version=task["row_version"], view=view)
@@ -274,6 +282,7 @@ def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
                       risk=solar_state.run_risk(task["frontmatter"]),
                       awaiting_approval=(task["status"] == "queued"
                                          and solar_state.needs_run_authorization(task["frontmatter"])),
+                      waiting_since=wait.get("since"), waiting_expires_at=wait.get("expires_at"),
                       revises_task_id=values.get("revises_task_id"),
                       archived_reason=values.get("archived_reason"),
                       views=list(_VIEWS))
@@ -307,6 +316,7 @@ def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
         return dict(base, risk=solar_state.run_risk(task["frontmatter"]),
                     awaiting_approval=(task["status"] == "queued"
                                        and solar_state.needs_run_authorization(task["frontmatter"])),
+                    waiting_since=wait.get("since"), waiting_expires_at=wait.get("expires_at"),
                     claimed_by=values.get("claimed_by"), claimed_at=values.get("claimed_at"),
                     cancellation_requested=cancel_requested,
                     blocked_by_task_ids=values.get("blocked_by_task_ids"),

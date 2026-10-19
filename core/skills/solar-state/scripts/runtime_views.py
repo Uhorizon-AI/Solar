@@ -486,6 +486,7 @@ _WAIT_KINDS = (
     ("outside_schedule", "other"),
     ("approval_digest_mismatch", "other"),
     ("awaiting_approval", "authorization"),
+    ("approval_wait_expired", "authorization"),
     ("absent", "other"),
     ("legacy", "other"),
     ("mismatch", "other"),
@@ -500,7 +501,7 @@ def wait_kind(reason):
         return None
     text = str(reason)
     if text in ("absent", "legacy", "mismatch", "parent_revoked", "subtask_authorization_required",
-                "awaiting_approval"):
+                "awaiting_approval", "approval_wait_expired"):
         return "authorization"
     if text.startswith("resource:"):
         return "resource"
@@ -534,7 +535,10 @@ def console_capacity(store, supervisor=None):
         if kind is None:
             continue
         by_kind[kind] = by_kind.get(kind, 0) + 1
-        waiting.append(dict(id=item['id'], title=titles.get(item['id']), reason=item['reason'], kind=kind))
+        entry = dict(id=item['id'], title=titles.get(item['id']), reason=item['reason'], kind=kind)
+        if item['reason'] == 'awaiting_approval':
+            entry.update(since=item.get('since'), expires_at=item.get('expires_at'))
+        waiting.append(entry)
     recovery = []
     if isinstance(supervisor, dict):
         for entry in supervisor.get('blocked') or []:

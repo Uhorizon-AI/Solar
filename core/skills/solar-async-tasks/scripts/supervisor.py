@@ -149,6 +149,10 @@ class Supervisor:
         self.capacity_view: dict = {}
         self.wake = threading.Event()
         self.stop_event = threading.Event()        # lets an in-process owner end the loop
+        self._notice_lock = threading.Lock()       # the approval-notice sender and the supervisor's exit
+        self._notice_closing = False
+        self._notice_proc: Optional[subprocess.Popen] = None
+        self._announcer: Optional[threading.Thread] = None
         self.draining = False
         self.drain_request: Optional[dict] = None
         self.state = "starting"
@@ -413,6 +417,7 @@ class Supervisor:
                 if self.wake.is_set() and not self.draining:
                     next_fill = 0.0
         finally:
+            self._stop_announcer()
             self.state = "stopped" if (self.draining or self.stop_event.is_set()) else "crashed"
             self._save_records()
             self.publish(durable=True)
@@ -469,7 +474,95 @@ class Supervisor:
             del self.cooldown[tid]
         return excluded
 
+    NOTIFY_TIMEOUT = 30.0
+    NOTICES_PER_PASS = 3
+
+    def _announce_approvals(self) -> None:
+        """Tell the configured chat about a task that began waiting for authorization, or whose wait ended.
+        The sending runs on its own thread, one at a time, so a slow or hung sender never delays a claim, the
+        heartbeat or a drain. Each audit row is announced once: the notice is taken before it is sent, so a
+        failure is recorded and not retried. The message carries the title only, through the task notifier
+        (`notify_if_configured.sh`); a sender that hangs is ended with its whole process group."""
+        current = self._announcer
+        if (current is not None and current.is_alive()) or self.draining or self.stop_event.is_set():
+            return
+        with self._session() as store:
+            if not store.approval_notices(1):
+                return
+        self._announcer = threading.Thread(target=self._send_notices, name="approval-notices", daemon=True)
+        self._announcer.start()
+
+    def _stop_announcer(self) -> None:
+        """Before the supervisor leaves: end a notice that is still being sent, with its process group, and
+        collect its thread, so nothing outlives the supervisor. The flag and the sender are set under one lock,
+        so a stop never falls between the thread starting a sender and the supervisor seeing it."""
+        with self._notice_lock:
+            self._notice_closing = True
+            proc = self._notice_proc
+            if proc is not None and proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        thread = self._announcer
+        if thread is not None and thread.is_alive():
+            thread.join(10)
+
+    def _send_notices(self) -> None:
+        try:
+            with self._session() as store:
+                pending = store.approval_notices(self.NOTICES_PER_PASS)
+            for notice in pending:
+                if self.draining or self.stop_event.is_set() or self._notice_closing:
+                    return
+                with self._session() as store:
+                    taken = store.approval_notice_claim(notice["ref"])
+                if taken is None:
+                    continue
+                mode = ("--waiting" if taken["kind"] == "waiting" else
+                        "--expired-skipped" if taken.get("outcome") == "occurrence_skipped" else "--expired-draft")
+                code, reason = None, None
+                try:
+                    with self._notice_lock:
+                        proc = None if self._notice_closing else subprocess.Popen(
+                            ["bash", str(HERE / "notify_if_configured.sh"), taken["task_id"], mode],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            env={**os.environ}, start_new_session=True)
+                        self._notice_proc = proc
+                    if proc is None:                                # the supervisor is leaving: no sender starts
+                        with self._session() as store:
+                            store.approval_notice_release(notice["ref"])     # the next supervisor sends it
+                        return
+                    try:
+                        code = proc.wait(timeout=self.NOTIFY_TIMEOUT)
+                    except subprocess.TimeoutExpired:
+                        reason = "timeout"
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+                        proc.wait()
+                except OSError:
+                    reason = "sender_unavailable"
+                if code == 3:
+                    reason = "not_configured"
+                elif self._notice_closing and reason is None and code != 0:
+                    reason = "supervisor_stopping"                  # ended in flight by the supervisor's exit
+                done = code == 0
+                with self._session() as store:
+                    store.approval_notice_result(notice["ref"], done, None if done else (reason or "send_failed"))
+                if not done:
+                    log(f"approval notice for {taken['task_id']} was not delivered ({reason or 'send_failed'})")
+        except Exception as error:      # a notice must never take the supervisor down
+            log(f"approval notices stopped: {type(error).__name__}")
+
     def _fill(self) -> None:
+        try:
+            self._fill_places()
+        finally:
+            self._announce_approvals()
+
+    def _fill_places(self) -> None:
         for _ in range(MAX_PER_PASS):
             if self.draining or self.stop_event.is_set():
                 return
