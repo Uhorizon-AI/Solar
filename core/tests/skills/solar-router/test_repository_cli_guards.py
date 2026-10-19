@@ -299,6 +299,46 @@ else: pathlib.Path({str(inference)!r}).write_text('ran')
     assert result['review_preflight']['version'] == '2027.02.02-renamed'
     assert result['error'] == 'execution_profile_unsupported: help required_option_missing --print'
     assert not inference.exists()
+    with solar_state.session() as store:
+        row = [r for r in store.audit_rows(event='end') if r.get('task_id') == task][-1]
+    assert row['error_detail'] == result['error_detail'] and row['review_preflight']['version'] == '2027.02.02-renamed'
+
+
+def test_failure_after_preflight_still_reports_the_version(tmp_path, monkeypatch):
+    import router
+    import solar_state
+    provider = 'agent'
+    source, commit = repository(tmp_path)
+    e = repo.build(repository=str(source), commit=commit, provider=provider, model='fixture-model',
+                   instructions='Review the committed version.', rules=[])
+    home = tmp_path / 'user'; auth_fixture(home); monkeypatch.setenv('HOME', str(home))
+    for key in list(os.environ):
+        if key.startswith(('SOLAR_ROUTER_AGENT_', 'SOLAR_AI_AGENT_')):
+            monkeypatch.delenv(key)
+    monkeypatch.setattr(guards, 'guard_prefix', lambda *a: [])
+    monkeypatch.setattr(guards, 'probe_guard', lambda *a: None)
+    binary = tmp_path / provider
+    binary.write_text(f'''#!{sys.executable}
+import sys
+if '--version' in sys.argv: print('2027.03.03-crashes')
+elif '--help' in sys.argv: print({HELP!r})
+else: sys.exit(3)
+''')
+    binary.chmod(0o700)
+    monkeypatch.setattr(PROVIDERS[provider], 'resolve_binary', lambda _: str(binary))
+    fields = dict(provider=provider, execution_profile=repo.PROFILE,
+                  access_policy=profiles.canonical(dict(version=1, mode='read', scopes=[str(source)], resources=[])),
+                  review_input_manifest=profiles.canonical(e['manifest']), review_input_digest=e['review_input_digest'])
+    with solar_state.session() as store:
+        task = store.task_create([(k, json.dumps(v)) for k, v in fields.items()], 'Review.', status='queued')
+        claim = store.task_claim_detail(task, 'reader')
+    result = router.route(json.dumps(dict(text='x', provider=provider,
+                                          execution=dict(task_id=task, token=claim['token'], profile=repo.PROFILE))))
+    assert result['status'] == 'failed'
+    assert result['review_preflight']['version'] == '2027.03.03-crashes'
+    with solar_state.session() as store:
+        row = [r for r in store.audit_rows(event='end') if r.get('task_id') == task][-1]
+    assert row['review_preflight']['version'] == '2027.03.03-crashes'
 
 
 def test_each_refusal_cause_has_its_own_reason(tmp_path, monkeypatch):
@@ -330,3 +370,39 @@ def test_present_managed_policy_is_reported_as_such(tmp_path, monkeypatch):
         guards.prepare('agent', '/no-provider-should-run', {'HOME': str(home)}, private, cwd,
                        dict(system_prompt='Review.', user_prompt='Version.', model='fixed'))
     assert error.value.detail == dict(provider='agent', stage='managed_policy', reason='managed_policy_present')
+
+
+@pytest.mark.parametrize('provider,option,value', [
+    ('agent', '--mode', 'ask'), ('agent', '--sandbox', 'enabled'), ('agent', '--output-format', 'json'),
+    ('agy', '--mode', 'plan'), ('agy', '--output-format', 'json')])
+def test_each_value_solar_passes_must_be_advertised(tmp_path, monkeypatch, provider, option, value):
+    home = tmp_path / 'user'; auth_fixture(home)
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'file').write_text('x')
+    help_text = '\n'.join(l.replace(value, 'other') if l.lstrip().startswith(option + ' ') else l for l in HELP.splitlines())
+    binary = tmp_path / provider
+    binary.write_text(f"#!{sys.executable}\nimport sys\nif '--help' in sys.argv: print({help_text!r})\nelse: raise AssertionError('inference forbidden')\n")
+    binary.chmod(0o700)
+    monkeypatch.setattr(guards, 'guard_prefix', lambda *a: [])
+    monkeypatch.setattr(guards, 'probe_guard', lambda *a: None)
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.prepare(provider, str(binary), {'HOME': str(home)}, private, cwd,
+                       dict(system_prompt='Review.', user_prompt='Version.', model='fixed'))
+    assert error.value.detail == dict(provider=provider, stage='help', reason='required_value_unadvertised', option=option)
+
+
+@pytest.mark.parametrize('option', ['--print', '--mode', '--sandbox', '--model', '--output-format', '--disable-slash-commands'])
+def test_each_required_agy_option_is_checked_before_inference(tmp_path, monkeypatch, option):
+    home = tmp_path / 'user'; auth_fixture(home)
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'file').write_text('x')
+    missing_help = '\n'.join(l for l in HELP.splitlines() if not l.lstrip().startswith(option + ' '))
+    binary = tmp_path / 'agy'
+    binary.write_text(f"#!{sys.executable}\nimport sys\nif '--help' in sys.argv: print({missing_help!r})\nelse: raise AssertionError('inference forbidden')\n")
+    binary.chmod(0o700)
+    monkeypatch.setattr(guards, 'guard_prefix', lambda *a: [])
+    monkeypatch.setattr(guards, 'probe_guard', lambda *a: None)
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.prepare('agy', str(binary), {'HOME': str(home)}, private, cwd,
+                       dict(system_prompt='Review.', user_prompt='Version.', model='fixed'))
+    assert error.value.detail['reason'] == 'required_option_missing' and error.value.detail['option'] == option

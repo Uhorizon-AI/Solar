@@ -19,13 +19,18 @@ def option_blocks(help_text):
 
     Values may be described on indented continuation lines. Unknown layouts fail
     closed; neither an example nor another option's description proves support.
+    The first declaration wins; later lines naming the same option (examples) are
+    ignored. Only the first option of a line is indexed, so aliases or `--x[=V]`
+    layouts are rejected rather than guessed.
     """
     blocks = {}
     current = None
     indent = 0
     for line in help_text.splitlines():
         match = re.match(r'^(\s*)(?:-[A-Za-z?],?\s+)?(--[A-Za-z][\w-]*)(?=[\s=,]|$)(.*)$', line)
-        if match:
+        if match and match[2] in blocks:
+            current = None
+        elif match:
             indent = len(match[1])
             current = match[2]
             blocks[current] = match[3]

@@ -21,6 +21,7 @@ def test_help_redaction_order_and_wrapping_do_not_change_capabilities(text):
     '  --model <name>  Example: --mode ask',
     'Options:\n  --mode-extra ask',
     'Options:\n  --mode <name>  plan\nExamples:\n  cli --mode ask',
+    'Options:\n  --mode <name>  plan\nExamples:\n  --mode ask',
 ])
 def test_incidental_text_never_proves_an_option_or_its_value(text):
     assert 'ask' not in option_blocks(text).get('--mode', '')
@@ -62,6 +63,17 @@ def test_a_malformed_version_label_is_dropped_not_recorded(tmp_path, monkeypatch
     def run(argv, **kwargs):
         out = label if '--version' in argv else '  --print  Print\n'
         return subprocess.CompletedProcess(argv, 0, out, '')
+    monkeypatch.setattr(subprocess, 'run', run)
+    metadata = {}
+    discover('synthetic', dict(os.environ), str(tmp_path), provider='agent', prefix=[],
+             required=['--print'], values={}, metadata=metadata)
+    assert metadata['version'] is None
+
+
+def test_a_failing_version_command_never_records_its_label(tmp_path, monkeypatch):
+    def run(argv, **kwargs):
+        if '--version' in argv: return subprocess.CompletedProcess(argv, 1, 'valid-label', '')
+        return subprocess.CompletedProcess(argv, 0, '  --print  Print\n', '')
     monkeypatch.setattr(subprocess, 'run', run)
     metadata = {}
     discover('synthetic', dict(os.environ), str(tmp_path), provider='agent', prefix=[],

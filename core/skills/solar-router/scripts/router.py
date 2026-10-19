@@ -1373,12 +1373,15 @@ def _restricted_route(payload, *, stream=False):
     except solar_state.StateError as exc:
         # A busy or unavailable base (a cutover is running) says nothing about the review inputs:
         # the approval and the claim stay as they are and the caller sees a transient failure.
-        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="state_unavailable", stream=stream)
-        return _failed(request_id, "state_unavailable", str(exc), provider)
+        metadata = getattr(adapter, "last_review_preflight", {})
+        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="state_unavailable",
+                  stream=stream, review_preflight=metadata)
+        return dict(_failed(request_id, "state_unavailable", str(exc), provider), review_preflight=metadata)
     except Exception as exc:
+        metadata = getattr(adapter, "last_review_preflight", {})
         audit_log(router_id, "end", status="failed", task_id=task_id,
-                  error_code="provider_locked_failed", stream=stream)
-        return _failed(request_id, "provider_locked_failed", str(exc), provider)
+                  error_code="provider_locked_failed", stream=stream, review_preflight=metadata)
+        return dict(_failed(request_id, "provider_locked_failed", str(exc), provider), review_preflight=metadata)
 
 
 # ---------------------------------------------------------------------------
