@@ -382,8 +382,13 @@ def _do_task_approve(arguments: dict) -> dict:
                                   expected_row_version=arguments["expected_row_version"], consent="client")
         task = store.task_get(task_id)
     stored = {key: solar_state.value_of(rest) for key, rest in task["frontmatter"]}
+    risk = solar_state.run_risk(task["frontmatter"])
+    waiting = solar_state.needs_run_authorization(task["frontmatter"])
     return dict(approved=True, id=task_id, from_status=came, to_status="queued",
-                approved_digest=stored.get("approved_digest"), row_version=task["row_version"])
+                approved_digest=stored.get("approved_digest"), row_version=task["row_version"],
+                risk=risk, awaiting_approval=waiting,
+                next=("Waiting: it is not confined to a verified read-only profile; run task.authorize_run "
+                      "to let it run." if waiting else "Queued; it runs when a place is free."))
 
 
 def _do_async_propose(arguments: dict) -> dict:
@@ -605,7 +610,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                   queue={"type": "boolean", "description": "Queue it right away, as task.approve would. For work "
                          "that should run now; a risky task still waits for task.authorize_run."}),
              required=("title", "instructions")),
-        pre_confirm=_prepare_review,
+        pre_confirm=_prepare_review,   # runs only where a form is asked; the handler validates again
         errors=("task_not_found", "revision_unsupported", "access_policy_invalid", "review_input_invalid"),
         client_consent=True,
         effects="Writes one draft row. " + _APPROVED_ONLY + " revises_task_id copies "
@@ -648,7 +653,9 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         errors=("task_not_found", "task_changed", "task_state_refused"),
         refuses_mandate=True,
         client_consent=True,
-        effects="Queues the task as it is stored now; a later edit invalidates this approval. "
+        effects="Queues the task as it is stored now; a later edit invalidates this approval. A task the "
+                "executor does not confine to a verified read-only profile then waits (awaiting_approval) for "
+                "task.authorize_run. "
                 "Refuses a revision while the task it replaces can still run."),
     Operation(
         "task.authorize_run", A2, "Authorize a queued high-risk task to run, as stored now.",

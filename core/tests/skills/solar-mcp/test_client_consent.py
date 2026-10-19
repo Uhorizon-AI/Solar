@@ -151,7 +151,11 @@ def test_a_task_that_is_not_confined_waits_for_authorization_and_runs_after_it(s
     assert claim(made["id"])["claimed"]
 
 
-def test_a_task_confined_to_a_verified_read_only_profile_runs_without_asking(solar_env, confined):
+def test_the_shipped_registry_confines_the_repository_profile_for_every_reader_provider():
+    assert solar_state.VERIFIED_PROFILES["repository_readonly_v1"] >= {"claude", "codex", "agent"}
+
+
+def test_a_task_confined_to_a_verified_read_only_profile_runs_without_asking(solar_env):
     made = make("Review", provider="codex")
     confine(made["id"])
     body, error = ask("task.approve", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
@@ -209,3 +213,58 @@ def test_authorizing_needs_a_queued_task_with_a_valid_approval(solar_env):
 def test_the_waiting_reason_is_shown_as_an_authorization_wait():
     import runtime_views
     assert runtime_views.wait_kind("awaiting_approval") == "authorization"
+
+
+# -- what survives edits, repeats and errors ---------------------------------------------------------
+
+def authorized(title="Auth", **extra):
+    made = make(title, queue=True, **extra)
+    execute("task.authorize_run", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+    return made["id"]
+
+
+def test_a_pure_rename_keeps_the_authorization_and_the_task_stays_claimable(solar_env):
+    task_id = authorized("Old name")
+    run("task.update", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"], title="New name"))
+    fields = {k: v for k, v in stored(task_id)["frontmatter"]}
+    assert stored(task_id)["status"] == "queued" and "run_authorized_digest" in fields
+    assert claim(task_id)["claimed"]
+
+
+@pytest.mark.parametrize("change", [dict(provider="claude"), dict(access_policy=dict(mode="read", scopes=["/tmp/x"]))])
+def test_changing_who_runs_it_or_what_it_may_touch_withdraws_the_authorization(solar_env, change):
+    task_id = authorized("Change me")
+    run("task.update", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"], **change))
+    fields = {k: v for k, v in stored(task_id)["frontmatter"]}
+    assert stored(task_id)["status"] == "draft" and "run_authorized_digest" not in fields
+    run("task.approve", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"]))
+    assert claim(task_id)["reason"] == "awaiting_approval"
+
+
+def test_a_recurring_task_keeps_its_authorization_while_its_content_does_not_change(solar_env):
+    made = make("Repeats")
+    with solar_state.session() as store:
+        store.task_set(made["id"], "recurring", "true")        # part of the content: set before queueing
+    queued = run("task.approve", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
+    run("task.authorize_run", dict(task_id=made["id"], expected_row_version=queued["row_version"]))
+    with solar_state.session() as store:
+        token = store.task_claim_detail(made["id"], "worker")["token"]
+        store.task_complete(made["id"], token=token)
+        assert store.task_status(made["id"]) == "queued"
+    assert claim(made["id"])["claimed"], "the next repeat asked for a second authorization"
+
+
+def test_requeueing_an_error_keeps_the_authorization_of_the_same_content(solar_env):
+    task_id = authorized("Fails once")
+    with solar_state.session() as store:
+        token = store.task_claim_detail(task_id, "worker")["token"]
+        store.task_fail(task_id, "## Execution Error\nboom", token=token)
+    run("task.requeue", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"]))
+    assert claim(task_id)["claimed"]
+
+
+def test_approving_through_the_operation_says_when_the_task_will_wait(solar_env):
+    made = make("Say it")
+    result = run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+    assert result["risk"] == "high" and result["awaiting_approval"] is True and "task.authorize_run" in result["next"]
+    assert search(scope="tasks", task_id=made["id"], view="status")["awaiting_approval"] is True

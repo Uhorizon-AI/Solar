@@ -67,22 +67,23 @@ running as they did.
 1. Prepare the exact operation, arguments and destination. For `telegram.send` include an
    explicit `chat_id` and final text; apply the relevant communication gate first. For an
    existing task, read it first and pass its `row_version`.
-2. Call `solar_execute` without `approval_id`. On clients advertising MCP form elicitation,
-   the runtime presents a compact summary of the exact operation (action, task, changes and effect, from the
-   validated arguments and the stored task) for confirmation, creates the approval and
-   executes internally. Do not ask the user to create or copy an identifier.
-3. Do not ask for conversational confirmation immediately before that native prompt.
-   An existing valid approval may be passed internally and does not prompt again.
-4. Never manufacture consent with `approved=true`, an agent-authored note or a shell
-   grant. If the client lacks elicitation, report the integration limitation and use
-   a trusted operator/host approval path. Never bypass the gate.
-5. Report success only from the execution result. On uncertain failure, check the
-   resulting state before requesting another execution.
+2. Task lifecycle operations: call `solar_execute` and nothing else; the client's tool permission is the
+   consent. `queue: true` on `task.create` is for work that should run now. If the answer says
+   `awaiting_approval`, the task is not confined to a verified read-only profile: tell the user and call
+   `task.authorize_run` when they agree.
+3. `task.authorize_run`, `async_execution.*` and `telegram.send`: call `solar_execute` without `approval_id`.
+   On clients advertising MCP form elicitation, the runtime presents a compact summary of the exact
+   operation for confirmation, creates the approval and executes internally. Do not ask the user to
+   create or copy an identifier, and do not ask for conversational confirmation right before that prompt.
+4. Never manufacture consent with `approved=true`, an agent-authored note or a shell grant. If the client
+   lacks elicitation for step 3, report the integration limitation and use a trusted operator/host
+   approval path. Never bypass the gate.
+5. Report success only from the execution result. On uncertain failure, check the resulting state before
+   requesting another execution.
 
-An explicit local instruction can provide A2-implicit authority, but MCP does not
-carry the original user turn. Until a trusted host binds that instruction to the
-exact call, this server requires native confirmation. Do not claim to verify
-conversational authority from caller-supplied fields. See
+Any MCP caller holds the client's permission, so subagents and gateways that reach this server are bound by
+the same limit: nothing that runs unconfined starts without `task.authorize_run`, and sends and capacity changes
+keep their form. Do not claim to verify conversational authority from caller-supplied fields. See
 [references/approvals.md](references/approvals.md) for trust boundaries and operator recovery.
 
 ## Resources (open)

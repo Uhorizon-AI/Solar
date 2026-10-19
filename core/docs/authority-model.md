@@ -111,7 +111,9 @@ The MCP client holds the user's instruction and its own tool permission; for loc
 permission is the consent, and Solar does not ask a second one. The decision Solar owns is the risk of what
 runs: a task confined by a verified restricted profile (read-only) runs; anything else waits for
 `task.authorize_run`, bound to the exact approved content. External sends and capacity changes still need
-formal A2. Unattended callers (subagents, gateways) keep using the router and A3 mandates.
+formal A2. This does not tell an interactive client from a subagent or a gateway that reaches the same
+server: every MCP caller holds the client's permission, so the limit that matters is the one above (nothing
+unconfined starts without `task.authorize_run`). Unattended inbound channels keep their own gate (router, A3).
 
 ---
 
