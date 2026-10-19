@@ -248,22 +248,23 @@ def test_stopping_the_supervisor_ends_a_notice_that_is_still_being_sent(rig, tmp
         pytest.fail("the sender outlived the supervisor")
 
 
-def test_a_supervisor_that_is_closing_starts_no_new_sender(rig, tmp_path, monkeypatch):
+def test_a_stop_that_lands_after_a_notice_was_taken_starts_no_sender(rig, tmp_path, monkeypatch):
+    """The stop falls between the thread taking a notice and starting its sender: the lock decides."""
     _sender(tmp_path, monkeypatch, '#!/bin/bash\necho run >> "$SOLAR_WORKSPACE/attempts.log"\n')
     _queue_waiting(rig)
     sup = rig.build()
-    sup._fill()                                   # the claim finds the wait; its notice may start on the thread
-    settle(sup)
-    sup2 = rig.build()
-    sup2._stop_announcer()                        # nothing running: a no-op, and it marks the supervisor as closing
-    sup2._notice_closing = True
-    (rig.workspace / "attempts.log").unlink(missing_ok=True)
-    with solar_state.session() as store:          # a second wait appears after the stop began
-        other = rig.legacy("Another")
-        store.task_return_to_draft(other, expected_row_version=store.task_get(other)["row_version"])
-        store.task_approve(other, expected_row_version=store.task_get(other)["row_version"], consent="client")
-        store.task_claim_next_detail("w")
-    sup2._send_notices()
-    assert not (rig.workspace / "attempts.log").exists()
     with solar_state.session() as store:
-        assert store.audit_rows("approval_notice_result")[-1]["reason"] == "supervisor_stopping"
+        store.task_claim_next_detail("w")                      # the claim finds the wait; no thread yet
+    original = solar_state.Session.approval_notice_claim
+
+    def taken_then_stop(self, ref):
+        taken = original(self, ref)
+        sup._stop_announcer()                                  # the supervisor starts leaving right now
+        return taken
+
+    monkeypatch.setattr(solar_state.Session, "approval_notice_claim", taken_then_stop)
+    sup._send_notices()
+    assert not (rig.workspace / "attempts.log").exists()       # no sender was started
+    with solar_state.session() as store:
+        result = store.audit_rows("approval_notice_result")
+        assert [(r["sent"], r["reason"]) for r in result] == [(False, "supervisor_stopping")]
