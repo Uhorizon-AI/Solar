@@ -457,7 +457,7 @@ def _plan(store, sql, args):
 def test_the_notice_queries_read_an_index_in_order_and_never_sort_the_history(ready):
     with solar_state.session() as store:
         newest = _plan(store, solar_state.Session._NOTICE_NEWEST_FIRST, ())
-        pending = _plan(store, solar_state.Session._NOTICE_PENDING, ("awaiting_approval", "", 0, 1))
+        pending = _plan(store, solar_state.Session._NOTICE_PENDING, ("awaiting_approval", "", 0))
         for plan in (newest, pending):
             assert "TEMP B-TREE" not in plan, plan                     # no sorting of the whole history
             assert "audit_event" in plan, plan                         # and both come from the index
@@ -510,3 +510,35 @@ def test_a_wait_written_while_the_audit_clock_was_behind_is_still_offered(ready)
         later = put("awaiting_approval", "2026-01-01T11:00:00Z", digest="d", occurrence="", approval="1")
         store.conn.commit()                                                    # later in order, an hour behind in time
         assert [n["ref"] for n in store.approval_notices()] == [later]
+
+
+def test_a_clock_that_went_back_never_changes_which_notice_comes_next(ready):
+    """More waits than the batch, with times that go backwards: every one is offered once, in row order."""
+    with solar_state.session() as store:
+        stamps = ["10:00", "10:05", "09:00", "10:10", "08:30", "10:15", "09:45", "10:20"]
+        refs = []
+        for n, at in enumerate(stamps):
+            store.conn.execute("INSERT INTO audit (ts, event, router_id, row) VALUES (?,?,NULL,?)",
+                               (f"2026-01-01T{at}:00Z", "awaiting_approval",
+                                json.dumps(dict(event="awaiting_approval", task_id=f"t{n}", digest="d",
+                                                occurrence="", approval="1"))))
+            refs.append(store.conn.execute("SELECT MAX(seq) FROM audit").fetchone()[0])
+        store.conn.commit()
+        offered = []
+        while True:
+            batch = store.approval_notices(3)
+            if not batch:
+                break
+            for notice in batch:
+                store.approval_notice_claim(notice["ref"])                     # taken (no such task: marked, not sent)
+                offered.append(notice["ref"])
+        assert offered == refs                                                 # all of them, once, in row order
+
+
+def test_the_cursor_is_the_highest_row_taken_even_when_times_run_backwards(ready):
+    with solar_state.session() as store:
+        for ref, at in ((1, "10:00"), (2, "09:00"), (3, "08:00")):
+            store.conn.execute("INSERT INTO audit (ts, event, router_id, row) VALUES (?,?,NULL,?)",
+                               (f"2026-01-01T{at}:00Z", "approval_notice", json.dumps(dict(event="approval_notice", ref=ref))))
+        store.conn.commit()
+        assert store._notice_cursor()[0] == 3

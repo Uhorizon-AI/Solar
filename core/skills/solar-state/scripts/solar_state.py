@@ -3271,46 +3271,51 @@ class Session:
               "AND NOT EXISTS (SELECT 1 FROM audit r WHERE r.event = 'approval_notice_released' "
               "AND json_extract(r.row, '$.ref') = {ref} AND r.seq > n.seq))")
 
-    # Both queries below read an index range in its own order, one row at a time: no sort, no full read of the audit.
-    _NOTICE_NEWEST_FIRST = ("SELECT seq, row FROM audit WHERE event = 'approval_notice' "
+    # Both queries below read a window of the audit index (event, time) one row at a time: no sort of the
+    # history, no full read. The window is the margin of time the audit clock may have gone back; inside it
+    # the row number decides everything, so a clock that went back never changes which notice comes next.
+    _NOTICE_NEWEST_FIRST = ("SELECT seq, ts, row FROM audit WHERE event = 'approval_notice' "
                             "ORDER BY ts DESC, seq DESC")           # the order of the index audit_event(event, ts)
-    _NOTICE_PENDING = ("SELECT seq, row FROM audit WHERE event = ? AND ts >= ? AND seq > ? "
-                       "ORDER BY ts, seq LIMIT ?")
-    _NOTICE_CLOCK_MARGIN = 86400        # seconds the audit clock may have gone back; the filter on seq is exact
+    _NOTICE_PENDING = "SELECT seq, row FROM audit WHERE event = ? AND ts >= ? AND seq > ?"
+    _NOTICE_CLOCK_MARGIN = 86400        # seconds the audit clock may have gone back
+
+    @staticmethod
+    def _before(stamp: str, seconds: int) -> str:
+        return datetime.fromtimestamp(_epoch(stamp) - seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def _notice_cursor(self) -> tuple[int, str]:
-        """The `audit` row (seq and time) of the last notice taken and not given back, or `(0, "")`.
-        Notices are taken in order, one thread at a time, so only the newest taken one can have been released;
-        this reads from the newest backwards, one row at a time, and stops at the first that is still taken,
-        so neither the time nor the memory grows with the audit."""
+        """The `audit` row (seq and time) of the last notice taken and not given back, or `(0, "")`: the
+        highest row number among the notices of the newest day of the audit. Only the newest one taken can
+        have been released. Rows are read one at a time, newest first, and only while they are inside the
+        clock margin of the newest, so neither the time nor the memory grows with the audit."""
+        best, newest = (0, ""), ""
         cursor = self.conn.execute(self._NOTICE_NEWEST_FIRST)
         try:
-            for seq, row in cursor:
+            for seq, at, row in cursor:
+                if newest and at < self._before(newest, self._NOTICE_CLOCK_MARGIN):
+                    break
+                newest = newest or at
                 ref = int(json.loads(row)["ref"])
-                if self.conn.execute(
+                if ref > best[0] and not self.conn.execute(
                         "SELECT 1 FROM audit WHERE event = 'approval_notice_released' AND seq > ? "
                         "AND json_extract(row, '$.ref') = ?", (seq, ref)).fetchone():
-                    continue
-                noticed = self.conn.execute("SELECT ts FROM audit WHERE seq = ?", (ref,)).fetchone()
-                return ref, (noticed[0] if noticed else "")
+                    noticed = self.conn.execute("SELECT ts FROM audit WHERE seq = ?", (ref,)).fetchone()
+                    best = (ref, noticed[0] if noticed else "")
         finally:
             cursor.close()
-        return 0, ""
+        return best
 
     def approval_notices(self, limit: int = 20) -> list[dict]:
         """Waits and expiries in `audit` that nobody has been told about yet, oldest first: every row after
         the last notice taken. Audit rows are written inside serialized transactions, so their order is the
         order they committed in, and a row never lands behind a notice that was taken after it. Each event is
-        read as a range of the index from the cursor's time (less a margin for a clock that went back); the
-        exact test is the row number."""
+        read as the window of the index from one clock margin before the cursor's time, and the rows are put
+        in row-number order before the limit is applied."""
         ref, at = self._notice_cursor()
-        floor = ""
-        if at:
-            floor = datetime.fromtimestamp(_epoch(at) - self._NOTICE_CLOCK_MARGIN, timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ")
+        floor = self._before(at, self._NOTICE_CLOCK_MARGIN) if at else ""
         found = []
         for event in _NOTICE_EVENTS:
-            found += self.conn.execute(self._NOTICE_PENDING, (event, floor, ref, limit)).fetchall()
+            found += self.conn.execute(self._NOTICE_PENDING, (event, floor, ref)).fetchall()
         found.sort(key=lambda r: r["seq"])
         return [dict(ref=r["seq"], **json.loads(r["row"])) for r in found[:limit]]
 
