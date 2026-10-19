@@ -76,21 +76,51 @@ def option_blocks(help_text):
     return blocks
 
 
+_NEGATED = re.compile(r'^\s*(?:none\s+of|not\b|never\b|no\s+longer|removed|deprecated|unlike)', re.I)
+_WITHDRAWN = re.compile(r'(?:removed|deprecated|not|never|unlike|no\s+longer)[\s:]*$', re.I)
+_ONE = r'[\[<{][\w.-]+(?:\s*[|,]\s*[\w.-]+)*[\]>}]'
+_CHAIN = re.compile(_ONE + r'(?:\s*(?:or|\|)\s*' + _ONE + r')+')
+_INNER = re.compile(r'[\[<{]([^\]>}]+)[\]>}]')
+
+
+def _until_unmatched_paren(text):
+    depth = 0
+    for index, char in enumerate(text):
+        depth += char == '('
+        if char == ')':
+            if not depth:
+                return text[:index]
+            depth -= 1
+    return text
+
+
 def advertised_values(block):
     """Values an option block lists in a recognised form (`Values: a, b`, `[a|b]`).
 
     Recognised: `Values:`/`Modes:`/`Formats:`/`Choices:` (also `Possible values:`),
-    a sentence starting `one of`, `[a|b]`/`<a|b>`/`{a,b}` groups, quoted `"a" | "b"`
-    lists and `Possible values:` bullet lists. A word that merely appears in prose
-    never counts as a supported value.
+    a sentence starting `one of`, `[a|b]`/`<a|b>`/`{a,b}` groups (also chained with
+    `or`), quoted `"a" | "b"` lists, bullet lists under `Possible values:` and, only
+    when nothing else is listed, a closing `(a, b)` note. Lists introduced by a
+    negation (`none of`, `not`, `removed`, ...) and groups right after such a word
+    are ignored. A word that merely appears in prose never counts as a supported value.
     """
     block = re.sub(r'([|,])[ \t]*\n\s*', r'\1 ', block)  # a list wrapped after its separator
-    parts = [m[1] for pattern in (_LABEL, _ONE_OF, _GROUP, _PAREN) for m in pattern.finditer(block)]
+    parts = [m[1] for pattern in (_LABEL, _ONE_OF) for m in pattern.finditer(block)]
+    for match in _GROUP.finditer(block):
+        if not _WITHDRAWN.search(block[:match.start()]):
+            parts.append(match[1])
+    for match in _CHAIN.finditer(block):
+        if not _WITHDRAWN.search(block[:match.start()]):
+            parts += _INNER.findall(match[0])
     parts += [m[0] for m in _QUOTED.finditer(block)]
     parts += [re.sub(r'(?m)^\s*-\s*([\w.-]+)[^\n]*$', r'\1,', m[1]) for m in _BULLETS.finditer(block)]
+    if not parts:
+        parts = [m[1] for m in _PAREN.finditer(block)]
     found = set()
     for part in parts:
-        part = re.sub(r'\([^)]*\)', ' ', part)
+        if _NEGATED.match(part):
+            continue
+        part = re.sub(r'\([^)]*\)', ' ', _until_unmatched_paren(part))
         for token in re.split(r'[,|/\n]|\bor\b', part):
             token = token.strip(' \t`"\'[]<>{}()')
             if re.fullmatch(r'[\w.-]+', token):

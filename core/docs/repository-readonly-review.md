@@ -151,7 +151,7 @@ must be advertised in that option's own block in a recognised form (`Values:`, `
 at the start of a description or sentence; a sentence starting `one of`; `[a|b]`, `<a|b>`
 or `{a,b}` groups; quoted `"a" | "b"` lists; bullet lists under `Possible values:`; `(choices: "a", "b")`; `Output format (...): a | b`; a closing
 `(a, b)` note on a description, as in the real Cursor and Antigravity help);
-prose such as "the ask mode was removed", `Not one of ask`, or
+lists introduced by a negation (`none of`, `not one of`, `removed`) and `[a|b]` right after such a word are ignored, and a closing `(a, b)` note counts only when nothing else is listed; prose such as "the ask mode was removed", `Not one of ask`, or
 `e.g. --mode ask` does not count, lines under an `Examples:`/`Usage:` header (any indentation; a title like `Usage of agy:` is not one) and options nested in
 another option's description column are not declarations, colour codes are ignored,
 and only the first option of a line is indexed (aliases after it are not). The CLI version is recorded in the

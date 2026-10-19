@@ -171,3 +171,24 @@ def test_an_examples_section_ends_at_a_header_of_the_same_or_shallower_indent_on
     assert '--print' not in option_blocks(deeper)
     same = 'Options:\n  Examples:\n    --a\n  More:\n  --b  x\n'
     assert sorted(option_blocks(same)) == ['--b']
+
+
+@pytest.mark.parametrize('text', [
+    ' <m>  Modes: plan (ask, plan)',
+    ' <m>  (choices: "plan") ask is deprecated (ask, legacy)',
+    ' <m>  Removed [ask|plan] in 2.0; modes: write',
+    ' <m>  Values: none of ask, plan',
+    ' <m>  Values: not one of ask, plan',
+])
+def test_withdrawn_or_secondary_lists_never_prove_a_value(text):
+    assert 'ask' not in advertised_values(text)
+
+
+@pytest.mark.parametrize('text,expected', [
+    (' <m>  {a,b} or {c}', {'a', 'b', 'c'}),
+    (' <m>  [a|b] | [c]', {'a', 'b', 'c'}),
+    (' <m>  Values: write. May be one of ask, plan.', {'write', 'ask', 'plan'}),
+    (' <m>  (choices: "plan") ask is deprecated (ask, legacy)', {'plan'}),
+])
+def test_chained_groups_and_later_sentences_are_read_whole(text, expected):
+    assert advertised_values(text) == expected
