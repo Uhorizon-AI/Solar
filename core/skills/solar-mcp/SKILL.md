@@ -163,9 +163,10 @@ name alone. The chat must be the configured one or listed in
 
 ## Clients in front of the gate
 
-Client tool allowlists and native Solar confirmation serve different purposes.
-A generic "allow this tool" card does not approve its exact destination and content.
-The runtime uses [MCP form elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)
+For the task lifecycle operations the client's own tool permission is the consent (`client_consent`), so
+a generic "allow this tool" card is what the user grants there. For `task.authorize_run`,
+`async_execution.*` and `telegram.send` it does not approve the exact destination and content, and the
+runtime uses [MCP form elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)
 when supported. Clients must route that request to the human, never to the model.
 
 ## Where the guarantee ends

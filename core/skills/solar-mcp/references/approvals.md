@@ -2,8 +2,9 @@
 
 ## Trust boundary
 
-The model proposes a tool call. The MCP server requests confirmation through
-`elicitation/create` only if the client advertised form elicitation. The client
+The model proposes a tool call. For `task.authorize_run`, `async_execution.*` and `telegram.send`, the MCP server requests confirmation through
+`elicitation/create` only if the client advertised form elicitation; the task lifecycle operations
+(`client_consent`) do not use this path. The client
 must present the request to the human. Only an `accept` response to that pending
 server-generated request ID, with `content.approve` exactly `true`, grants consent.
 Decline, cancel, disconnect, timeout, errors and unrelated responses do not grant.
@@ -55,6 +56,10 @@ execution or validate all cancellation paths in those applications. Claude's
 MCP form path remains unverified in this round.
 
 ## Confirmation text
+
+The sections below describe the prompt text. It is shown today for `task.authorize_run`,
+`async_execution.*` and `telegram.send`; the task lifecycle renderers remain for hosts that put
+the form back and are exercised by the tests.
 
 `approval_text.py` writes the prompt from the validated arguments and the task as
 stored at that moment; the schemas are closed, so no agent-supplied summary exists
