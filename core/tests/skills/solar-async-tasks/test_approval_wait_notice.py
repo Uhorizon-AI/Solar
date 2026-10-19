@@ -4,7 +4,6 @@ It goes through the task notifier that already exists, to the configured chat on
 never the instructions, and it does not touch the task. The sender is a double that writes a log; no
 chat is reached."""
 import os
-import time
 import subprocess
 import time
 from pathlib import Path
@@ -247,3 +246,24 @@ def test_stopping_the_supervisor_ends_a_notice_that_is_still_being_sent(rig, tmp
     else:
         os.kill(child, 9)
         pytest.fail("the sender outlived the supervisor")
+
+
+def test_a_supervisor_that_is_closing_starts_no_new_sender(rig, tmp_path, monkeypatch):
+    _sender(tmp_path, monkeypatch, '#!/bin/bash\necho run >> "$SOLAR_WORKSPACE/attempts.log"\n')
+    _queue_waiting(rig)
+    sup = rig.build()
+    sup._fill()                                   # the claim finds the wait; its notice may start on the thread
+    settle(sup)
+    sup2 = rig.build()
+    sup2._stop_announcer()                        # nothing running: a no-op, and it marks the supervisor as closing
+    sup2._notice_closing = True
+    (rig.workspace / "attempts.log").unlink(missing_ok=True)
+    with solar_state.session() as store:          # a second wait appears after the stop began
+        other = rig.legacy("Another")
+        store.task_return_to_draft(other, expected_row_version=store.task_get(other)["row_version"])
+        store.task_approve(other, expected_row_version=store.task_get(other)["row_version"], consent="client")
+        store.task_claim_next_detail("w")
+    sup2._send_notices()
+    assert not (rig.workspace / "attempts.log").exists()
+    with solar_state.session() as store:
+        assert store.audit_rows("approval_notice_result")[-1]["reason"] == "supervisor_stopping"

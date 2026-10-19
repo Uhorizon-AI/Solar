@@ -347,8 +347,8 @@ def test_the_notices_are_read_from_the_last_one_taken(ready, clock):
         first = store.approval_notices(1)
         assert len(first) == 1
         store.approval_notice_claim(first[0]["ref"])
-        assert [n["ref"] for n in store.approval_notices()] == sorted(n["ref"] for n in store.approval_notices())
-        assert len(store.approval_notices()) == 2
+        left = [n["ref"] for n in store.approval_notices()]
+        assert len(left) == 2 and all(ref > first[0]["ref"] for ref in left)       # only what follows the one taken
 
 
 def test_a_task_nobody_claimed_for_longer_than_the_limit_ends_at_its_first_claim(ready, clock):
