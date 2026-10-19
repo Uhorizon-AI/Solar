@@ -225,14 +225,16 @@ def _effective_managed_policy(binary: str, env: dict, cwd: str, why: list | None
     When `why` is a list, the fixed reason of a rejection is appended to it."""
     local = _local_managed_policy()
     if local is None:
-        why is None or why.append("policy_local_unreadable")
+        if why is not None:
+            why.append("policy_local_unreadable")
         return None
     if local:
-        why is None or why.append("policy_local_present")
+        if why is not None:
+            why.append("policy_local_present")
         return local
     reason = _doctor_check(binary, env, cwd)
-    if reason:
-        why is None or why.append(reason)
+    if reason and why is not None:
+        why.append(reason)
     return {} if reason is None else None
 
 
@@ -244,6 +246,7 @@ def preflight(binary: str, env: dict, cwd: str, metadata: dict | None = None) ->
              values=REQUIRED_VALUES, metadata={} if metadata is None else metadata)
     # A known empty effective managed policy is sufficient. Unknown or any
     # policy content is conservatively unsupported; do not override admin policy.
+    # `policy_unknown` only covers a policy reader that refused without saying why.
     why: list = []
     if _effective_managed_policy(binary, env, cwd, why) != {}:
         raise unsupported("claude", "policy", why[0] if why else "policy_unknown")
@@ -289,7 +292,7 @@ def restricted_launch(adapter, manifest, expected: str, *, profile: str, extra_f
     binary = adapter.resolve_binary("claude")
     with tempfile.TemporaryDirectory(prefix="solar-review-") as cwd:
         os.chmod(cwd, 0o700)
-        adapter.last_review_preflight = dict(provider=adapter.name, version=None)
+        adapter.last_review_preflight = {}  # discover fills provider, version and the checked options
         preflight(binary, env, cwd, adapter.last_review_preflight)
         argv = [binary, "-p", "--no-session-persistence", "--safe-mode", "--restricted",
                 "--setting-sources", "", "--tools", "", "--strict-mcp-config",

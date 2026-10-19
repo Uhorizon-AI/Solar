@@ -64,10 +64,13 @@ def test_both_transports_share_commands_and_snapshot_then_clean_up(tmp_path, mon
     e = envelope(root, commit, provider)
     record = tmp_path / 'record.json'
     binary = tmp_path / provider
+    # Codex help is not parsed here (codex_preflight is replaced below); only Claude's option blocks are.
+    help_text = claude_help() if provider == 'claude' else '--sandbox read-only --json --ephemeral'
     binary.write_text(f'''#!{sys.executable}
 import json, os, pathlib, sys
-if '--help' in sys.argv:
- print({repr(claude_help() + ' --sandbox read-only --json --ephemeral --ignore-user-config --ignore-rules --output-schema --output-last-message')})
+if '--version' in sys.argv: print('9.9.9 (test double)')
+elif '--help' in sys.argv:
+ print({help_text!r})
 else:
  pathlib.Path({str(record)!r}).write_text(json.dumps(dict(argv=sys.argv[1:], cwd=os.getcwd(), env=dict(os.environ),
     operations=pathlib.Path('operations.md').read_text())))
@@ -92,9 +95,15 @@ else:
     review = dict(manifest=e['manifest'], expected=e['review_input_digest'], profile=repo.PROFILE)
     expected = ('Reviewed commit: ' + commit + '\nRepository HEAD when the review finished: ' + commit
                 + ' (same as the reviewed commit)\n\nReview result')
+    def kept_metadata():
+        if provider == 'claude':  # the reader's preflight record survives for the audit log and the result
+            assert adapter.last_review_preflight['version'] == '9.9.9 (test double)'
+            assert adapter.last_review_preflight['capabilities_checked'] == list(profiles.FLAGS)
     assert adapter.run('UNAPPROVED CONTEXT', review=review) == expected
+    kept_metadata()
     first = json.loads(record.read_text())
     assert ''.join(adapter.stream('UNAPPROVED CONTEXT', review=review)) == expected
+    kept_metadata()
     second = json.loads(record.read_text())
     def stable(argv):  # each launch uses its own private directory
         import re

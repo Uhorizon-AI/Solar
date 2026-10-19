@@ -274,7 +274,7 @@ def launch(adapter, manifest, expected, before_launch):
         cwd.mkdir(mode=0o700)
         materialize(manifest, cwd)
         if provider == 'claude':
-            preflight(binary, env, str(cwd))
+            preflight(binary, env, str(cwd), adapter.last_review_preflight)
             argv = [binary, '-p', '--no-session-persistence', '--safe-mode', '--restricted',
                     '--setting-sources', '', '--tools', 'Read,Glob,Grep',
                     '--allowedTools', 'Read,Glob,Grep', '--permission-mode', 'plan',

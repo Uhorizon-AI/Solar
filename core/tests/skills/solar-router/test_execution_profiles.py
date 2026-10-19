@@ -114,8 +114,10 @@ def test_other_adapters_reject_without_binary_or_fallback(review, monkeypatch, p
                                   {'permissions': {'defaultMode': 'bypassPermissions'}}, {'managedMcpServers': {'x': {}}}])
 def test_effective_policy_unknown_or_hostile_is_unsupported(review, fake_cli, monkeypatch, policy):
     monkeypatch.setattr(profiles, '_effective_managed_policy', lambda *args: policy)
-    with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
+    with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported') as caught:
         PROVIDERS['claude'].run('', review=kwargs(review[1]))
+    # A reader that refuses without saying why still yields a fixed, named reason.
+    assert caught.value.detail == dict(provider='claude', stage='policy', reason='policy_unknown')
     assert not fake_cli.exists()
 
 
@@ -142,9 +144,12 @@ def test_real_claude_help_declares_every_required_option():
 
 @pytest.mark.parametrize('flag', profiles.FLAGS)
 def test_option_missing_from_help_names_it_even_if_prose_mentions_it(review, fake_cli, monkeypatch, flag):
-    # A flag quoted in another option's description is not a declaration.
-    lines = [line for line in HELP.read_text().splitlines()
-             if not line.lstrip().startswith((flag + ' ', flag + '<', '-p, ' + flag))]
+    # Only the declaration (shallow indent) is renamed; wrapped descriptions that start with the flag stay as prose.
+    import re
+    original = HELP.read_text().splitlines()
+    declaration = re.compile(r'^( {0,4}(?:-[A-Za-z],\s+)?)' + re.escape(flag) + r'(?=[\s<,=\[]|$)')
+    lines = [declaration.sub(r'\1--renamed-away', line) for line in original]
+    assert sum(a != b for a, b in zip(original, lines)) == 1, f'exactly the {flag} declaration must change'
     text = '\n'.join(lines) + f'\nSee also {flag} in the docs.\n'
     detail = refusal(monkeypatch, review, text)
     assert detail == dict(provider='claude', stage='help', reason='required_option_missing', option=flag)

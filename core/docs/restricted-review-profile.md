@@ -61,7 +61,8 @@ description does not count) and `--output-format` must advertise `json`. The ver
 is only recorded in `review_preflight`. Effective managed policy must also be
 validated: unknown or nonempty policy returns `execution_profile_unsupported`.
 Every refusal carries `error_detail` (`provider`, `stage` `help` or `policy`, a fixed
-`reason`, and the `option` when one is missing), shown in the task log.
+`reason`, and the `option` when one is missing), shown in the task log. A policy
+reader that refuses without a reason reports `policy_unknown`.
 The inspection has two parts, and a launch needs both to say "no policy":
 
 - **Local sources**, read directly: `managed-settings.json`, the
