@@ -82,8 +82,10 @@ new wait) at one occurrence (a recurring task's `recurring_last_run`).
     (`approval_notice_released`) for the next supervisor: announcing late beats not announcing.
   - A send already running when the supervisor stops is ended with its process group and recorded as not delivered
     (`reason: supervisor_stopping`); it is not retried, because it may have reached the chat.
-  - Notices are read from the last one taken. Audit rows are written inside serialized transactions, so a row never
-    lands behind a notice taken after it and none is skipped.
+  - Notices are read from the last one taken, as a range of the audit's own index read one row at a time (the
+    cost does not grow with the audit; the range starts one day before the last notice, in case the clock went back,
+    and the row number is the exact test). Audit rows are written inside serialized transactions, so a row never lands
+    behind a notice taken after it and none is skipped.
 - **Upgrade.** The wait counts from the approval, so a task already waiting for longer than the limit when this
   version is installed ends at its first claim, with one notice each.
 - **Limits.** A recurring task nobody authorizes starts a new wait, and sends a new notice, at each occurrence (about

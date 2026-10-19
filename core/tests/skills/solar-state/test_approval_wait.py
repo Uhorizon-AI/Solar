@@ -448,3 +448,65 @@ def test_notices_after_the_last_one_taken_are_offered_in_order_whatever_the_audi
         store.approval_notice_claim(refs[1])
         store.approval_notice_release(refs[1])                                 # only the newest taken can come back
         assert [n["ref"] for n in store.approval_notices()] == refs[1:]
+
+
+def _plan(store, sql, args):
+    return " | ".join(r[3] for r in store.conn.execute("EXPLAIN QUERY PLAN " + sql, args))
+
+
+def test_the_notice_queries_read_an_index_in_order_and_never_sort_the_history(ready):
+    with solar_state.session() as store:
+        newest = _plan(store, solar_state.Session._NOTICE_NEWEST_FIRST, ())
+        pending = _plan(store, solar_state.Session._NOTICE_PENDING, ("awaiting_approval", "", 0, 1))
+        for plan in (newest, pending):
+            assert "TEMP B-TREE" not in plan, plan                     # no sorting of the whole history
+            assert "audit_event" in plan, plan                         # and both come from the index
+
+
+def _steps(store, work):
+    """The SQLite virtual-machine steps `work()` took, a measure of how much of the audit it read."""
+    counted = []
+    store.conn.set_progress_handler(lambda: counted.append(1) or 0, 100)
+    try:
+        work()
+    finally:
+        store.conn.set_progress_handler(None, 0)
+    return len(counted)
+
+
+def test_neither_notice_query_reads_the_history(ready):
+    def fill(store, n):
+        rows = []
+        for i in range(n):
+            ev = "awaiting_approval" if i % 2 == 0 else "approval_notice"
+            body = {"event": ev, "task_id": f"t{i}", "digest": "d", "occurrence": "", "approval": "1"}
+            if ev == "approval_notice":
+                body["ref"] = i
+            day = 1 + (start + i) // 1000                                 # time moves on as the audit grows
+            rows.append(("2026-01-%02dT00:00:00Z" % day, ev, None, json.dumps(body)))
+        store.conn.executemany("INSERT INTO audit (ts, event, router_id, row) VALUES (?,?,?,?)", rows)
+        store.conn.commit()
+
+    start = 0
+    with solar_state.session() as store:
+        fill(store, 200)
+        small = _steps(store, lambda: store.approval_notices(1))
+        start = 200
+        fill(store, 20_000)
+        large = _steps(store, lambda: store.approval_notices(1))
+        # 100 times the history must not cost anything like 100 times the work: the margin of one day of
+        # audit is all it may read (about 50 steps here), against thousands for the whole history
+        assert large < 150, f"{small} steps on 200 rows, {large} on 20,200"
+
+
+def test_a_wait_written_while_the_audit_clock_was_behind_is_still_offered(ready):
+    with solar_state.session() as store:
+        def put(event, ts, **body):
+            store.conn.execute("INSERT INTO audit (ts, event, router_id, row) VALUES (?,?,NULL,?)",
+                               (ts, event, json.dumps(dict(event=event, task_id="t", **body))))
+            return store.conn.execute("SELECT MAX(seq) FROM audit").fetchone()[0]
+        first = put("awaiting_approval", "2026-01-01T12:00:00Z", digest="d", occurrence="", approval="1")
+        put("approval_notice", "2026-01-01T12:00:01Z", ref=first)
+        later = put("awaiting_approval", "2026-01-01T11:00:00Z", digest="d", occurrence="", approval="1")
+        store.conn.commit()                                                    # later in order, an hour behind in time
+        assert [n["ref"] for n in store.approval_notices()] == [later]

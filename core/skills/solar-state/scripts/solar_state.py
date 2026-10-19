@@ -3271,28 +3271,48 @@ class Session:
               "AND NOT EXISTS (SELECT 1 FROM audit r WHERE r.event = 'approval_notice_released' "
               "AND json_extract(r.row, '$.ref') = {ref} AND r.seq > n.seq))")
 
-    def _notice_cursor(self) -> int:
-        """The `audit` row of the last notice taken and not given back. Notices are taken in order, one
-        thread at a time, so only the newest taken one can have been released; this reads from the newest
-        backwards and stops at the first that is still taken, so the cost does not grow with the audit."""
-        for seq, row in self.conn.execute(
-                "SELECT seq, row FROM audit WHERE event = 'approval_notice' ORDER BY seq DESC").fetchall():
-            ref = json.loads(row)["ref"]
-            if not self.conn.execute(
-                    "SELECT 1 FROM audit WHERE event = 'approval_notice_released' AND seq > ? "
-                    "AND json_extract(row, '$.ref') = ?", (seq, ref)).fetchone():
-                return int(ref)
-        return 0
+    # Both queries below read an index range in its own order, one row at a time: no sort, no full read of the audit.
+    _NOTICE_NEWEST_FIRST = ("SELECT seq, row FROM audit WHERE event = 'approval_notice' "
+                            "ORDER BY ts DESC, seq DESC")           # the order of the index audit_event(event, ts)
+    _NOTICE_PENDING = ("SELECT seq, row FROM audit WHERE event = ? AND ts >= ? AND seq > ? "
+                       "ORDER BY ts, seq LIMIT ?")
+    _NOTICE_CLOCK_MARGIN = 86400        # seconds the audit clock may have gone back; the filter on seq is exact
+
+    def _notice_cursor(self) -> tuple[int, str]:
+        """The `audit` row (seq and time) of the last notice taken and not given back, or `(0, "")`.
+        Notices are taken in order, one thread at a time, so only the newest taken one can have been released;
+        this reads from the newest backwards, one row at a time, and stops at the first that is still taken,
+        so neither the time nor the memory grows with the audit."""
+        cursor = self.conn.execute(self._NOTICE_NEWEST_FIRST)
+        try:
+            for seq, row in cursor:
+                ref = int(json.loads(row)["ref"])
+                if self.conn.execute(
+                        "SELECT 1 FROM audit WHERE event = 'approval_notice_released' AND seq > ? "
+                        "AND json_extract(row, '$.ref') = ?", (seq, ref)).fetchone():
+                    continue
+                noticed = self.conn.execute("SELECT ts FROM audit WHERE seq = ?", (ref,)).fetchone()
+                return ref, (noticed[0] if noticed else "")
+        finally:
+            cursor.close()
+        return 0, ""
 
     def approval_notices(self, limit: int = 20) -> list[dict]:
         """Waits and expiries in `audit` that nobody has been told about yet, oldest first: every row after
         the last notice taken. Audit rows are written inside serialized transactions, so their order is the
-        order they committed in, and a row never lands behind a notice that was taken after it."""
-        marks = ",".join("?" for _ in _NOTICE_EVENTS)
-        found = self.conn.execute(
-            f"SELECT seq, row FROM audit WHERE event IN ({marks}) AND seq > ? ORDER BY seq LIMIT ?",
-            (*_NOTICE_EVENTS, self._notice_cursor(), limit)).fetchall()
-        return [dict(ref=r["seq"], **json.loads(r["row"])) for r in found]
+        order they committed in, and a row never lands behind a notice that was taken after it. Each event is
+        read as a range of the index from the cursor's time (less a margin for a clock that went back); the
+        exact test is the row number."""
+        ref, at = self._notice_cursor()
+        floor = ""
+        if at:
+            floor = datetime.fromtimestamp(_epoch(at) - self._NOTICE_CLOCK_MARGIN, timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+        found = []
+        for event in _NOTICE_EVENTS:
+            found += self.conn.execute(self._NOTICE_PENDING, (event, floor, ref, limit)).fetchall()
+        found.sort(key=lambda r: r["seq"])
+        return [dict(ref=r["seq"], **json.loads(r["row"])) for r in found[:limit]]
 
     def approval_notice_claim(self, ref: int) -> Optional[dict]:
         """Take the one notice for an `audit` row before sending it: a second caller gets None, so a
