@@ -148,3 +148,26 @@ def test_a_version_command_that_hangs_or_is_missing_never_blocks(tmp_path, monke
     discover('synthetic', dict(os.environ), str(tmp_path), provider='agent', prefix=[],
              required=['--print'], values={}, metadata=metadata)
     assert metadata['version'] is None and metadata['capabilities_checked'] == ['--print']
+
+
+def test_an_indented_examples_header_hides_what_follows_it():
+    text = 'Options:\n --mode <mode> Modes: ask, plan\n Examples:\n --print\n'
+    assert sorted(option_blocks(text)) == ['--mode']
+
+
+def test_a_title_such_as_usage_of_is_not_an_examples_section():
+    text = 'Usage of tool:\n  --print   Print\n  --mode   Set the mode (accept-edits, plan)\nExamples:\n  --extra\n'
+    blocks = option_blocks(text)
+    assert sorted(blocks) == ['--mode', '--print'] and advertised_values(blocks['--mode']) == {'accept-edits', 'plan'}
+
+
+def test_a_parenthesised_note_is_not_a_value_list_unless_it_closes_the_description():
+    assert advertised_values(' <m>  Pick one (e.g., ask)') == set()
+    assert advertised_values(' <m>  Pick one (for example, ask) and more') == set()
+
+
+def test_an_examples_section_ends_at_a_header_of_the_same_or_shallower_indent_only():
+    deeper = 'Options:\n  Examples:\n    Note:\n    --print\n'
+    assert '--print' not in option_blocks(deeper)
+    same = 'Options:\n  Examples:\n    --a\n  More:\n  --b  x\n'
+    assert sorted(option_blocks(same)) == ['--b']

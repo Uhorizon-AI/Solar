@@ -149,9 +149,10 @@ option must be declared (an example or another option's description does not
 count) and the values Solar passes (`--mode`, `--sandbox`, `--output-format`)
 must be advertised in that option's own block in a recognised form (`Values:`, `Modes:`, `Formats:`, `Choices:` or `Possible values:`
 at the start of a description or sentence; a sentence starting `one of`; `[a|b]`, `<a|b>`
-or `{a,b}` groups; quoted `"a" | "b"` lists; bullet lists under `Possible values:`);
+or `{a,b}` groups; quoted `"a" | "b"` lists; bullet lists under `Possible values:`; `(choices: "a", "b")`; `Output format (...): a | b`; a closing
+`(a, b)` note on a description, as in the real Cursor and Antigravity help);
 prose such as "the ask mode was removed", `Not one of ask`, or
-`e.g. --mode ask` does not count, lines under `Examples:`/`Usage:` and options nested in
+`e.g. --mode ask` does not count, lines under an `Examples:`/`Usage:` header (any indentation; a title like `Usage of agy:` is not one) and options nested in
 another option's description column are not declarations, colour codes are ignored,
 and only the first option of a line is indexed (aliases after it are not). The CLI version is recorded in the
 result (`review_preflight.version`) and the audit log, and never blocks launch.

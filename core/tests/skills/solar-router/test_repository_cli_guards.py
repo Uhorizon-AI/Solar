@@ -444,3 +444,27 @@ def test_other_failures_keep_the_preflight_in_result_and_audit(tmp_path, monkeyp
     with solar_state.session() as store:
         row = [r for r in store.audit_rows(event='end') if r.get('task_id') == task][-1]
     assert row['review_preflight']['version'] == '2027.04.04-x'
+
+
+FIXTURES = Path(__file__).parent / 'fixtures'
+
+
+@pytest.mark.parametrize('provider,fixture,stream', [
+    ('agent', 'cursor_agent_2026.10.16_help.txt', 'stdout'),
+    ('agy', 'agy_1.2.3_help_stderr.txt', 'stderr')])
+def test_real_help_output_of_each_cli_passes_the_real_requirements(tmp_path, monkeypatch, provider, fixture, stream):
+    """Captured from the installed CLIs with a throwaway HOME and no inference."""
+    home = tmp_path / 'user'; auth_fixture(home)
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'file').write_text('x')
+    binary = tmp_path / provider
+    binary.write_text(f"#!{sys.executable}\nimport sys\nif '--version' in sys.argv: print('9.9.9')\n"
+                      f"elif '--help' in sys.argv: print(open({str(FIXTURES / fixture)!r}).read(), file=sys.{stream})\n"
+                      "else: raise AssertionError('inference forbidden')\n")
+    binary.chmod(0o700)
+    monkeypatch.setattr(guards, 'guard_prefix', lambda *a: [])
+    monkeypatch.setattr(guards, 'probe_guard', lambda *a: None)
+    metadata = {}
+    argv, _ = guards.prepare(provider, str(binary), {'HOME': str(home)}, private, cwd,
+                             dict(system_prompt='Review.', user_prompt='Version.', model='fixed'), metadata=metadata)
+    assert metadata['version'] == '9.9.9' and '--print' in metadata['capabilities_checked']

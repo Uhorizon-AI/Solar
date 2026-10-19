@@ -7,15 +7,18 @@ import subprocess
 from execution_profiles import ProfileError
 
 _ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
-_SECTION = re.compile(r'^\S[^\n]*:\s*$')
-_SKIPPED = re.compile(r'example|usage', re.I)
+_HEADER = re.compile(r'^(\s*)\S[^\n]*:\s*$')
+_SKIPPED = re.compile(r'^\s*(?:examples?|usage)\s*:\s*$', re.I)
 _OPTION = re.compile(r'^(\s*)(?:-[A-Za-z?],?\s+)?(--[A-Za-z][\w-]*)(?=[\s=,\[]|$)(.*)$')
 # A label counts only where a description or sentence begins, or inside brackets.
 _START = r'(?:^|(?<=[.;(\[)\]>])\s*|(?<=\s\s))'
-_LABEL = re.compile(_START + r'(?:(?:(?:possible|supported|allowed|valid)\s+)?values|modes|formats|choices)\s*:'
+_LABEL = re.compile(_START + r'(?:(?:(?:possible|supported|allowed|valid)\s+)?values|modes|choices|formats|output\s+formats?(?:\s*\([^)]*\))?)\s*:'
                     r'\s*(.+?)(?:\.(?:\s|$)|$)', re.I | re.M)
 _ONE_OF = re.compile(_START + r'(?:(?:must|can|may)\s+be\s+)?one\s+of\s+(.+?)(?:\.(?:\s|$)|$)', re.I | re.M)
 _GROUP = re.compile(r'[\[<{]([\w.-]+(?:\s*[|,]\s*[\w.-]+)+)[\]>}]')
+# A parenthesised list counts only as the closing note of a description, never
+# prose such as "(e.g., ask)".
+_PAREN = re.compile(r'(?<!like )(?<!not )(?<!unlike )(?<!except )(?<!without )\(([a-z0-9][\w-]*(?:\s*[|,]\s*[a-z0-9][\w-]*)+)\)(?=\s*(?:\(default|\.|$))', re.I)
 _QUOTED = re.compile(r'"[\w.-]+"(?:\s*[|,]\s*"[\w.-]+")+')
 _BULLETS = re.compile(r'(?:possible|allowed|supported|valid)?\s*values:\s*\n((?:\s*-\s*[\w.-]+\b[^\n]*\n?)+)', re.I)
 
@@ -30,8 +33,9 @@ def unsupported(provider, stage, reason, *, option=None):
 def option_blocks(help_text):
     """Index advertised option declarations, excluding examples and substring hits.
 
-    Colour codes are removed. Lines under an `Examples:`/`Usage:` header are never
-    declarations, and an option-looking line indented to the description column of
+    Colour codes are removed. Lines under an `Examples:`/`Usage:` header (any
+    indentation) are never declarations until the next header at the same or a
+    shallower indent; a title such as `Usage of agy:` is not such a header, and an option-looking line indented to the description column of
     another option is part of that option's description. The first declaration wins. Only the first option
     of a line is indexed, so aliases or `--x[=V]` layouts are rejected rather than
     guessed. Unknown layouts fail closed.
@@ -40,13 +44,19 @@ def option_blocks(help_text):
     current = None
     indent = 0
     column = None
-    skipping = False
+    skip_indent = None
     for line in _ANSI.sub('', help_text).splitlines():
-        if _SECTION.match(line) and not _OPTION.match(line):
-            skipping = bool(_SKIPPED.search(line))
+        header = None if _OPTION.match(line) else _HEADER.match(line)
+        if skip_indent is not None:
+            if not (header and len(header[1]) <= skip_indent and not _SKIPPED.match(line)):
+                continue
+            skip_indent = None
+        if _SKIPPED.match(line):
+            skip_indent = len(line) - len(line.lstrip())
             current = None
             continue
-        if skipping:
+        if header and not header[1]:
+            current = None
             continue
         match = _OPTION.match(line)
         nested = bool(match and current and column and len(match[1]) >= column)
@@ -74,7 +84,8 @@ def advertised_values(block):
     lists and `Possible values:` bullet lists. A word that merely appears in prose
     never counts as a supported value.
     """
-    parts = [m[1] for pattern in (_LABEL, _ONE_OF, _GROUP) for m in pattern.finditer(block)]
+    block = re.sub(r'([|,])[ \t]*\n\s*', r'\1 ', block)  # a list wrapped after its separator
+    parts = [m[1] for pattern in (_LABEL, _ONE_OF, _GROUP, _PAREN) for m in pattern.finditer(block)]
     parts += [m[0] for m in _QUOTED.finditer(block)]
     parts += [re.sub(r'(?m)^\s*-\s*([\w.-]+)[^\n]*$', r'\1,', m[1]) for m in _BULLETS.finditer(block)]
     found = set()
