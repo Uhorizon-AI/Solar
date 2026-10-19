@@ -6,6 +6,19 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.54.3] - 2026-10-19
+### Fixed
+- fix: make refusal providers mandatory and the refusal test hermetic
+- fix: drop speculative help forms and name the real provider in refusals
+- fix: ignore withdrawn value lists and read chained groups whole
+- fix: accept the real Cursor and Antigravity help formats
+- fix: cover unquoted choices lists in help parsing
+- fix: accept common help layouts and close remaining parser false positives
+- fix: harden help parsing and report accurate refusal stages
+- fix: keep first help declaration and report preflight on every failure
+- fix: discover reader CLI capabilities from --help instead of versions
+
+
 ## [0.54.2] - 2026-10-19
 
 ### Fixed
