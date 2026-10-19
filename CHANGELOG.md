@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- The restricted Claude reader now discovers its capabilities from `claude --help` option blocks (the same `cli_capabilities` check as Cursor and Antigravity) instead of looking for flag names anywhere in the help text. The version is only recorded. A refusal keeps `execution_profile_unsupported` and carries `error_detail` (`provider`, `stage` `help` or `policy`, `reason`, `option`), so the task log says which check failed: `help_timeout`, `help_unavailable`, `help_failed`, `help_format_unknown`, `required_option_missing`, `required_value_unadvertised`, `policy_local_present`, `policy_local_unreadable`, `doctor_unavailable`, `doctor_timeout`, `doctor_failed`, `doctor_unrecognized` or `policy_unknown` (a policy reader that refused without a reason). Two small behaviour notes: the `--help` timeout for Claude is now 15 s (was 10 s), and `claude doctor` keeps the inherited environment without the `NO_COLOR`/`TERM=dumb` that the help and version calls add.
+
 ## [0.54.3] - 2026-10-19
 ### Fixed
 - fix: make refusal providers mandatory and the refusal test hermetic
