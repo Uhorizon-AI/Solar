@@ -542,3 +542,37 @@ def test_the_cursor_is_the_highest_row_taken_even_when_times_run_backwards(ready
                                (f"2026-01-01T{at}:00Z", "approval_notice", json.dumps(dict(event="approval_notice", ref=ref))))
         store.conn.commit()
         assert store._notice_cursor()[0] == 3
+
+
+def _audit_row(store, event, day, **body):
+    store.conn.execute("INSERT INTO audit (ts, event, router_id, row) VALUES (?,?,NULL,?)",
+                       (f"2026-01-{day:02d}T10:00:00Z", event, json.dumps(dict(event=event, **body))))
+    return store.conn.execute("SELECT MAX(seq) FROM audit").fetchone()[0]
+
+
+def test_a_returned_notice_does_not_reset_the_cursor_to_nothing(ready):
+    """Three notices sent over three days, then days later a fourth is taken and given back."""
+    with solar_state.session() as store:
+        refs = [_audit_row(store, "awaiting_approval", day, task_id=f"t{day}", digest="d", occurrence="",
+                           approval="1") for day in (1, 2, 3, 6)]
+        for day, ref in zip((1, 2, 3), refs):
+            _audit_row(store, "approval_notice", day, ref=ref)
+        fourth = _audit_row(store, "approval_notice", 6, ref=refs[3])
+        _audit_row(store, "approval_notice_released", 6, ref=refs[3])
+        store.conn.commit()
+        assert store._notice_cursor()[0] == refs[2]                            # the last one still taken, days older
+        assert [n["ref"] for n in store.approval_notices()] == [refs[3]]       # only the one that was given back
+        assert fourth > refs[3]
+
+
+def test_the_cursor_skips_every_returned_notice_before_the_first_still_taken(ready):
+    with solar_state.session() as store:
+        refs = [_audit_row(store, "awaiting_approval", day, task_id=f"t{day}", digest="d", occurrence="",
+                           approval="1") for day in (1, 20, 21)]
+        _audit_row(store, "approval_notice", 1, ref=refs[0])
+        for day, ref in ((20, refs[1]), (21, refs[2])):
+            _audit_row(store, "approval_notice", day, ref=ref)
+            _audit_row(store, "approval_notice_released", day, ref=ref)
+        store.conn.commit()
+        assert store._notice_cursor()[0] == refs[0]
+        assert [n["ref"] for n in store.approval_notices()] == refs[1:]

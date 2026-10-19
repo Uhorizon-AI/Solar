@@ -3285,22 +3285,25 @@ class Session:
 
     def _notice_cursor(self) -> tuple[int, str]:
         """The `audit` row (seq and time) of the last notice taken and not given back, or `(0, "")`: the
-        highest row number among the notices of the newest day of the audit. Only the newest one taken can
-        have been released. Rows are read one at a time, newest first, and only while they are inside the
-        clock margin of the newest, so neither the time nor the memory grows with the audit."""
-        best, newest = (0, ""), ""
+        highest row number among the notices taken in the day that ends at the newest of them still taken.
+        Notices given back are skipped however old the one still taken is (only the newest taken one can be
+        given back, so there are few). Rows are read one at a time, newest first, so neither the time nor the
+        memory grows with the audit."""
+        best, anchor = (0, ""), ""
         cursor = self.conn.execute(self._NOTICE_NEWEST_FIRST)
         try:
             for seq, at, row in cursor:
-                if newest and at < self._before(newest, self._NOTICE_CLOCK_MARGIN):
+                # The window opens at the first notice still taken, however old: the ones given back before it
+                # are skipped without limit (there are few), and only then does the clock margin apply.
+                if anchor and at < self._before(anchor, self._NOTICE_CLOCK_MARGIN):
                     break
-                newest = newest or at
                 ref = int(json.loads(row)["ref"])
                 if ref > best[0] and not self.conn.execute(
                         "SELECT 1 FROM audit WHERE event = 'approval_notice_released' AND seq > ? "
                         "AND json_extract(row, '$.ref') = ?", (seq, ref)).fetchone():
                     noticed = self.conn.execute("SELECT ts FROM audit WHERE seq = ?", (ref,)).fetchone()
                     best = (ref, noticed[0] if noticed else "")
+                    anchor = anchor or at
         finally:
             cursor.close()
         return best

@@ -87,7 +87,9 @@ new wait) at one occurrence (a recurring task's `recurring_last_run`).
     is cut. Both read a window of the audit's own index one row at a time (one day wide, in case the clock went
     back), so the cost does not grow with the audit and a clock that went back never changes which notice comes
     next. Audit rows are written inside serialized transactions, so a row never lands behind a notice taken after
-    it and none is skipped. Limit: a clock that went back by more than a day.
+    it and none is skipped. The cursor skips any notice given back, however old the one still taken is. Limits: a clock that went back by more than
+    a day, and the lookup of a wait's start (`awaiting_approval` rows of one task), whose cost grows with the number of
+    waits recorded, not with the audit.
 - **Upgrade.** The wait counts from the approval, so a task already waiting for longer than the limit when this
   version is installed ends at its first claim, with one notice each.
 - **Limits.** A recurring task nobody authorizes starts a new wait, and sends a new notice, at each occurrence (about
