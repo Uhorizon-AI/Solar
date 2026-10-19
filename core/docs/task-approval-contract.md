@@ -9,6 +9,7 @@ What a queued task was approved with, and what the worker checks before it claim
 - `approved_digest`: `v2:` + sha256 of the material fields and the definition.
 - `approved_definition`: the definition as approved (the snapshot).
 - `approved_at`, `approved_row_version`.
+- `approved_consent: "client"` when the queue entry was made through MCP on the client's own tool permission (no form), and `run_authorized_digest` once `task.authorize_run` authorized this exact content. Both are withdrawn with the approval. An approval without `approved_consent` (made before it existed, or by a local script) needs neither.
 
 Material fields: `solar_state.MATERIAL_KEYS`, including `executor`, `local_command` and
 `local_timeout` (a different command is a different task). Not material: run counters,
@@ -38,6 +39,12 @@ claim transaction, after block, schedule and recurrence, before `queued -> activ
   `approval_digest_mismatch` is written to `audit` (once per task, reason and row version), to the
   log and to the console. Nothing is converted: approve it again with `task.approve`.
   `python3 core/skills/solar-state/scripts/solar_state.py task list-unapproved` lists them.
+
+After the digest gate, the claim applies the risk gate (`needs_run_authorization`): a task with
+`approved_consent: client` whose execution is not confined (`run_risk` high: no restricted profile with a
+verified implementation for its provider, or not read-only) stays `queued` with the reason
+`awaiting_approval` until `run_authorized_digest` equals `approved_digest`. A confined task runs at once.
+A recurring task keeps its authorization for every repeat while its digest does not change.
 
 ## Decisions and limits
 
