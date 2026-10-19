@@ -183,6 +183,13 @@ def preflight(tool: str, arguments: dict, registry: dict) -> Verdict:
                            "work is never implicit.", A2, tool, checks)
         approval_id = str(arguments.get("approval_id") or "")
         checks.append(dict(check="approval_id_present", value=bool(approval_id)))
+        if not approval_id and spec.get("client_consent") and not spec.get("external_communication"):
+            # The client holds the user's message and its own tool permission: that is the consent.
+            # Nothing here sends outside the machine, and a task whose execution is not confined
+            # still needs task.authorize_run before it runs.
+            checks.append(dict(check="client_consent", value=True))
+            return Verdict(True, "client_consent", "The client's tool permission is the consent for "
+                           "this local task operation.", A2, tool, checks)
         if not approval_id:
             what = ("This verb sends outside the machine"
                     if spec.get("external_communication") else "This verb mutates state")

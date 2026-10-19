@@ -6,6 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Approval friction: every MCP task operation asked a native form (126 confirmations granted in 7 days, 27 attempts left unapproved, no form in Claude Desktop, 8 forms to launch 4 requested reviews). MCP task lifecycle operations (`task.create`, `update`, `schedule`, `approve`, `return_to_draft`, `cancel`, `requeue`, `archive`) no longer ask a native form: the client's own tool permission is the consent. Risk is decided when the task is claimed: a task confined by a verified restricted read-only profile runs; any other task waits as `awaiting_approval` until `task.authorize_run`. External sends and capacity changes keep their form; tasks approved before this change keep running.
+- `task.create` accepts `queue: true` to create and queue in one call (the gate audit keeps the argument). `task.requeue` and a recurring task keep their consent marker and authorization while the approved content is unchanged.
+
+### Added
+- `task.authorize_run` (native confirmation, bound to the approved content), `run_risk` / `needs_run_authorization` in solar-state, and `risk` / `awaiting_approval` in the task detail view.
+
 ## [0.54.0] - 2026-10-18
 
 ### Added

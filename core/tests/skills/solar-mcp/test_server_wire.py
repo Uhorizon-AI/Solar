@@ -141,17 +141,17 @@ def test_reading_needs_no_approval(solar_env):
 def test_the_handler_refuses_the_mutation(solar_env):
     """The closure of this change: refused by the handler, not by the caller."""
     with client(solar_env) as probe:
-        answer = execute(probe, "task.create", {"title": "Unapproved task", "instructions": "x"})
+        answer = execute(probe, "async_execution.propose", {"global_capacity": 3})
     assert answer["result"]["isError"] is True
     refused = payload(answer)["refused"]
     assert refused["allowed"] is False
     assert refused["code"] == "approval_required"
     assert refused["gate"] == "solar-mcp/handler"
-    assert refused["tool"] == "task.create"
-    # And nothing was created.
+    assert refused["tool"] == "async_execution.propose"
+    # And nothing was proposed.
     import solar_state
     with solar_state.session() as store:
-        assert store.task_list() == []
+        assert not solar_state.read_proposal(store.root)["present"]
 
 
 def test_a_forged_approval_does_not_open_the_door(solar_env):
@@ -210,10 +210,10 @@ def test_registered_action_runs_under_a_live_mandate(solar_env):
 
 def test_every_call_leaves_a_decision_in_the_gate_log(solar_env):
     with client(solar_env) as probe:
-        execute(probe, "task.create", {"title": "queda registrado", "instructions": "x"})
+        execute(probe, "async_execution.propose", {"global_capacity": 2})
         read = probe.request("resources/read", dict(uri="solar://gate"))
     decisions = json.loads(read["result"]["contents"][0]["text"])["decisions"]
-    assert decisions[-1]["tool"] == "task.create"
+    assert decisions[-1]["tool"] == "async_execution.propose"
     assert decisions[-1]["via"] == "solar_execute"
     assert decisions[-1]["allowed"] is False
     # The approval id never reaches the log.

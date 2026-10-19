@@ -105,6 +105,16 @@ Required controls: **limits**, **expiry** (`expires_at`), **stop conditions**, *
 
 **Enforcement ships with the framework:** `core/skills/solar-router/scripts/delegation_ctl.py` validates mandates, refuses mutating actions while in shadow, reserves volume under lock, records evidence, and requires real shadow evidence plus explicit owner approval to activate. See `core/skills/solar-router/references/a3-mandates.md`. Callers fail closed on non-zero exit.
 
+### Client consent and risk at execution (MCP)
+
+The MCP client holds the user's instruction and its own tool permission; for local task operations that
+permission is the consent, and Solar does not ask a second one. The decision Solar owns is the risk of what
+runs: a task confined by a verified restricted profile (read-only) runs; anything else waits for
+`task.authorize_run`, bound to the exact approved content. External sends and capacity changes still need
+formal A2. This does not tell an interactive client from a subagent or a gateway that reaches the same
+server: every MCP caller holds the client's permission, so the limit that matters is the one above (nothing
+unconfined starts without `task.authorize_run`). Unattended inbound channels keep their own gate (router, A3).
+
 ---
 
 ## Async: prepare ≠ queue

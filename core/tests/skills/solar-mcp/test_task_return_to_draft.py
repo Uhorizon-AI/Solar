@@ -6,14 +6,14 @@ import json
 import mcp_approve
 import operations
 import solar_state
-from mcp_helpers import call, execute, new_task, run, search, stored
+from mcp_helpers import call, execute, new_task, queue_and_authorize, run, search, stored
 from test_task_operations import refuse
 from reservation_tokens import token_of
 
 
 def approved_task(title="Weekly", instructions="Do the work.", **extra):
     made = new_task(title, instructions, **extra)
-    run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+    queue_and_authorize(made["id"], made["row_version"])
     return made["id"]
 
 
@@ -51,7 +51,7 @@ def test_return_to_draft_then_approve_queues_it_again_with_a_new_digest(solar_en
     out = run("task.return_to_draft", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"]))
     edited = run("task.update", dict(task_id=task_id, expected_row_version=out["row_version"],
                                      instructions="Changed steps."))
-    run("task.approve", dict(task_id=task_id, expected_row_version=edited["row_version"]))
+    queue_and_authorize(task_id, edited["row_version"])
     with solar_state.session() as store:
         assert store.task_claim_next("w")["id"] == task_id
 
@@ -142,7 +142,7 @@ def recurring_task():
 def reapprove(task_id):
     status = stored(task_id)["status"]
     if status == "draft":
-        run("task.approve", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"]))
+        queue_and_authorize(task_id, stored(task_id)["row_version"])
 
 
 def test_a_material_edit_of_a_queued_task_returns_it_to_draft_without_a_new_row(solar_env):

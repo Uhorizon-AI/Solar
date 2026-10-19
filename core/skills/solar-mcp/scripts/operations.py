@@ -47,6 +47,9 @@ class Operation:
     errors: tuple = ()
     external_communication: bool = False
     refuses_mandate: bool = False
+    # The client's own tool permission is the consent: no native form. Only for local operations whose
+    # worst outcome is a task that still needs `task.authorize_run` before anything risky runs.
+    client_consent: bool = False
     effects: str = ""
     # Extra rule checked on the arguments before an approval is requested.
     pre_confirm: Optional[Callable[[dict], None]] = field(default=None, compare=False)
@@ -57,6 +60,8 @@ class Operation:
             spec["external_communication"] = True
         if self.refuses_mandate:
             spec["refuses_mandate"] = True
+        if self.client_consent:
+            spec["client_consent"] = True
         return spec
 
 
@@ -188,12 +193,6 @@ def _review_batch_fields(arguments):
                 review_input_digest=json.dumps(digest(catalog)))
 
 
-def _prepare_review(arguments):
-    # Validate and compose before presenting a native approval. The handler
-    # recomposes afterwards: source changes cannot reuse the earlier attestation.
-    _review_fields(arguments)
-
-
 def _do_task_create(arguments: dict) -> dict:
     import solar_state
 
@@ -238,6 +237,21 @@ def _do_task_create(arguments: dict) -> dict:
     result = dict(created=True, id=task_id, status="draft", row_version=task["row_version"],
                   digest=digest, activated=False,
                   next="Review it with solar_search, then approve it with task.approve.")
+    if arguments.get("queue"):
+        try:
+            with solar_state.session() as store:
+                came = store.task_approve(task_id, actor=_actor("task.create"),
+                                          expected_row_version=task["row_version"], consent="client")
+                queued = store.task_get(task_id)
+            digest = solar_state.task_digest(queued["status"], queued["frontmatter"], queued["body"])
+            risk = solar_state.run_risk(queued["frontmatter"])
+            result.update(status="queued", queued=True, row_version=queued["row_version"], digest=digest,
+                          risk=risk, awaiting_approval=solar_state.needs_run_authorization(queued["frontmatter"]),
+                          next=("Queued. It is confined to a verified read-only profile and runs when a place is free."
+                                if risk == "low" else
+                                "Queued but waiting: it is not confined, so run task.authorize_run to let it run."))
+        except solar_state.StateError as exc:
+            result.update(queued=False, queue_refused=str(exc)[:300])
     if source_id:
         result["revises_task_id"] = source_id
         result["source_unchanged"] = True
@@ -359,11 +373,16 @@ def _do_task_approve(arguments: dict) -> dict:
     task_id = arguments["task_id"]
     with solar_state.session() as store:
         came = store.task_approve(task_id, actor=_actor("task.approve"),
-                                  expected_row_version=arguments["expected_row_version"])
+                                  expected_row_version=arguments["expected_row_version"], consent="client")
         task = store.task_get(task_id)
     stored = {key: solar_state.value_of(rest) for key, rest in task["frontmatter"]}
+    risk = solar_state.run_risk(task["frontmatter"])
+    waiting = solar_state.needs_run_authorization(task["frontmatter"])
     return dict(approved=True, id=task_id, from_status=came, to_status="queued",
-                approved_digest=stored.get("approved_digest"), row_version=task["row_version"])
+                approved_digest=stored.get("approved_digest"), row_version=task["row_version"],
+                risk=risk, awaiting_approval=waiting,
+                next=("Waiting: it is not confined to a verified read-only profile; run task.authorize_run "
+                      "to let it run." if waiting else "Queued; it runs when a place is free."))
 
 
 def _do_async_propose(arguments: dict) -> dict:
@@ -409,6 +428,15 @@ def _do_async_apply(arguments: dict) -> dict:
                 provider_capacity=applied["provider_capacity"],
                 exclusive_wait_seconds=applied["exclusive_wait_seconds"],
                 enabled_reader_profiles=applied["enabled_reader_profiles"])
+
+
+def _do_task_authorize_run(arguments: dict) -> dict:
+    import solar_state
+
+    with solar_state.session() as store:
+        return store.task_authorize_run(arguments["task_id"],
+                                        expected_row_version=arguments["expected_row_version"],
+                                        actor=_actor("task.authorize_run"))
 
 
 def _do_task_return_to_draft(arguments: dict) -> dict:
@@ -569,13 +597,15 @@ _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 
 OPERATIONS: dict[str, Operation] = {op.name: op for op in (
     Operation(
-        "task.create", A2, "Create a draft task, or a draft revision of an existing task.",
+        "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),
                   effect=LINE(500), priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
-                  responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH),
+                  responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH,
+                  queue={"type": "boolean", "description": "Queue it right away, as task.approve would. For work "
+                         "that should run now; a risky task still waits for task.authorize_run."}),
              required=("title", "instructions")),
-        pre_confirm=_prepare_review,
         errors=("task_not_found", "revision_unsupported", "access_policy_invalid", "review_input_invalid"),
+        client_consent=True,
         effects="Writes one draft row. " + _APPROVED_ONLY + " revises_task_id copies "
                 "configuration, schedule and access declaration from that task and leaves it untouched. "
                 "access_policy declares what the task reads or writes; a task that declares nothing runs alone."),
@@ -586,9 +616,9 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                   priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
                   responsibility=SLUG, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH),
              required=("task_id", "expected_row_version")),
-        pre_confirm=_prepare_review,
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable", "review_input_invalid",
                 "no_changes", "access_policy_invalid"),
+        client_consent=True,
         effects="Rewrites the draft. A planned task returns to draft. A queued task that is only "
                 "renamed keeps its place and its approval; any other change returns it to draft and "
                 "withdraws the approval. Results, delivery and errors of earlier runs are kept. "
@@ -605,6 +635,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable",
                 "no_changes", "schedule_invalid"),
+        client_consent=True,
         effects="Stores the schedule. A queued task returns to draft and loses its approval; run "
                 "counters and the last run time are kept. " + _APPROVED_ONLY),
     Operation(
@@ -613,13 +644,26 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_state_refused"),
         refuses_mandate=True,
-        effects="Queues the task as it is stored now; a later edit invalidates this approval. "
+        client_consent=True,
+        effects="Queues the task as it is stored now; a later edit invalidates this approval. A task the "
+                "executor does not confine to a verified read-only profile then waits (awaiting_approval) for "
+                "task.authorize_run. "
                 "Refuses a revision while the task it replaces can still run."),
+    Operation(
+        "task.authorize_run", A2, "Authorize a queued high-risk task to run, as stored now.",
+        _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION),
+             required=("task_id", "expected_row_version")),
+        errors=("task_not_found", "task_changed", "task_state_refused"),
+        refuses_mandate=True,
+        effects="A task queued without a form whose execution is not confined by a verified restricted "
+                "profile waits (awaiting_approval) until this runs. Bound to the approved content: an edit "
+                "withdraws it. Read-only reviews with a verified profile never need it."),
     Operation(
         "task.return_to_draft", A2, "Withdraw a queued task back to draft, keeping its id and history.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION),
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_state_refused"),
+        client_consent=True,
         effects="Only a queued task. Its approval is withdrawn (the previous digest stays in the "
                 "audit), the worker can no longer claim it and it needs task.approve to be queued "
                 "again. Body, schedule, run counters and history are kept. " + _APPROVED_ONLY),
@@ -628,18 +672,21 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION),
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_state_refused"),
+        client_consent=True,
         effects="A queued task becomes cancelled; an active one stays active until the worker stops."),
     Operation(
         "task.requeue", A2, "Move a task from error back to the queue.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION),
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_state_refused"),
+        client_consent=True,
         effects="Drops the recorded execution error; instructions are unchanged."),
     Operation(
         "task.archive", A2, "Archive a task, keeping its row, events and body.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION, reason=LINE(300)),
              required=("task_id", "expected_row_version", "reason")),
         errors=("task_not_found", "task_changed", "task_state_refused"),
+        client_consent=True,
         effects="A queued task, a recurrence waiting for its next run included, is cancelled and "
                 "archived in one step. Refused while the task is active, while another task waits "
                 "on it, or while its subtasks run."),
@@ -690,6 +737,7 @@ HANDLERS: dict[str, Callable[[dict], dict]] = {
     "task.update": _do_task_update,
     "task.schedule": _do_task_schedule,
     "task.approve": _do_task_approve,
+    "task.authorize_run": _do_task_authorize_run,
     "task.return_to_draft": _do_task_return_to_draft,
     "task.cancel": _do_task_cancel,
     "task.requeue": _do_task_requeue,

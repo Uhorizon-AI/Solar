@@ -183,7 +183,9 @@ def test_repository_review_batch_overlaps_on_one_commit_and_synthesizes_once(rig
     parent=approved_operation('task.create',dict(title='Repository builder',instructions='Request the approved reviews then synthesize.',
         provider='claude',object=str(root),scope='Review the committed version',effect='One synthesis',
         review_batch=dict(repository=str(root),commit=commit,reviews=reviewers)))
-    approved_operation('task.approve',dict(task_id=parent['id'],expected_row_version=parent['row_version']))
+    queued=approved_operation('task.approve',dict(task_id=parent['id'],expected_row_version=parent['row_version']))
+    # The builder parent is not confined to a read-only profile: it waits for its authorization to run.
+    approved_operation('task.authorize_run',dict(task_id=parent['id'],expected_row_version=queued['row_version']))
     # The interactive builder can continue without changing the approved review version.
     (root / 'operations.md').write_text('Builder is now preparing the next version.\n')
     with rig.running(executor=executor,poll=0.1):

@@ -2,8 +2,9 @@
 
 ## Trust boundary
 
-The model proposes a tool call. The MCP server requests confirmation through
-`elicitation/create` only if the client advertised form elicitation. The client
+The model proposes a tool call. For `task.authorize_run`, `async_execution.*` and `telegram.send`, the MCP server requests confirmation through
+`elicitation/create` only if the client advertised form elicitation; the task lifecycle operations
+(`client_consent`) do not use this path. The client
 must present the request to the human. Only an `accept` response to that pending
 server-generated request ID, with `content.approve` exactly `true`, grants consent.
 Decline, cancel, disconnect, timeout, errors and unrelated responses do not grant.
@@ -16,10 +17,12 @@ an ID. Reads and valid A3 mandates retain their existing paths.
 
 The server trusts the MCP client to report human input honestly. This does not
 protect against a malicious client or a process with the user's filesystem access.
-It also cannot infer earlier conversational consent: no trusted original-turn
-binding exists in this transport yet. A future host adapter must provide verified,
-exact-scope authority before suppressing the local confirmation. Never treat an
-agent-provided transcript, note or `approved` flag as that adapter.
+It also cannot infer earlier conversational consent from caller-supplied fields.
+For the task lifecycle operations the client's own tool permission is the consent
+(`client_consent`; no form), and what Solar decides is the risk of running: see
+`SKILL.md`, "Approval workflow". The form remains for `task.authorize_run`,
+`async_execution.*` and `telegram.send`. Never treat an agent-provided transcript,
+note or `approved` flag as consent.
 
 Approvals bind the operation name, exact arguments (a task's `expected_row_version` included) and resolved workspace, expire, and are
 reserved under a process-shared lock before side effects. A failed execution may
@@ -54,12 +57,16 @@ MCP form path remains unverified in this round.
 
 ## Confirmation text
 
+The sections below describe the prompt text. It is shown today for `task.authorize_run`,
+`async_execution.*` and `telegram.send`; the task lifecycle renderers remain for hosts that put
+the form back and are exercised by the tests.
+
 `approval_text.py` writes the prompt from the validated arguments and the task as
 stored at that moment; the schemas are closed, so no agent-supplied summary exists
 to substitute for it. English unless `language` in `.solar/settings.json` is
 Spanish. It shows action, object, concrete changes (edit: before → after; schedule:
 days, time, zone, recurrence limits; send: recipient and the full text) and the
-effect as implemented (approve authorizes execution; cancel of a queued task is
+effect as implemented (authorize_run lets an unconfined task run; cancel of a queued task is
 immediate, of an active one only a stop request). Identifiers, hashes, row versions,
 JSON and empty fields stay out. Approving or requeuing a task also shows its declared
 object, scope and effect and its recurrence limits. Characters that hide or reorder

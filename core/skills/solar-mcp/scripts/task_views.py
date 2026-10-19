@@ -271,6 +271,9 @@ def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
                       object=task["object"], scope=task["scope"], effect=task["effect"],
                       schedule=_schedule(values), digest=digest,
                       approved_digest=values.get("approved_digest"),
+                      risk=solar_state.run_risk(task["frontmatter"]),
+                      awaiting_approval=(task["status"] == "queued"
+                                         and solar_state.needs_run_authorization(task["frontmatter"])),
                       revises_task_id=values.get("revises_task_id"),
                       archived_reason=values.get("archived_reason"),
                       views=list(_VIEWS))
@@ -301,7 +304,10 @@ def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
         return dict(base, config={k: v for k, v in values.items() if k not in hidden},
                     schedule=_schedule(values))
     if view == "status":
-        return dict(base, claimed_by=values.get("claimed_by"), claimed_at=values.get("claimed_at"),
+        return dict(base, risk=solar_state.run_risk(task["frontmatter"]),
+                    awaiting_approval=(task["status"] == "queued"
+                                       and solar_state.needs_run_authorization(task["frontmatter"])),
+                    claimed_by=values.get("claimed_by"), claimed_at=values.get("claimed_at"),
                     cancellation_requested=cancel_requested,
                     blocked_by_task_ids=values.get("blocked_by_task_ids"),
                     subtask_ids=values.get("subtask_ids"),

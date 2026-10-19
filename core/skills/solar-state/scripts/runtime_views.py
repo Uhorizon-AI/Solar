@@ -485,6 +485,7 @@ _WAIT_KINDS = (
     ("recurring_interval", "other"),
     ("outside_schedule", "other"),
     ("approval_digest_mismatch", "other"),
+    ("awaiting_approval", "authorization"),
     ("absent", "other"),
     ("legacy", "other"),
     ("mismatch", "other"),
@@ -498,7 +499,8 @@ def wait_kind(reason):
     if not reason:
         return None
     text = str(reason)
-    if text in ("absent", "legacy", "mismatch", "parent_revoked", "subtask_authorization_required"):
+    if text in ("absent", "legacy", "mismatch", "parent_revoked", "subtask_authorization_required",
+                "awaiting_approval"):
         return "authorization"
     if text.startswith("resource:"):
         return "resource"

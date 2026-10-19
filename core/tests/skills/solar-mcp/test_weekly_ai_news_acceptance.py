@@ -13,7 +13,7 @@ import pytest
 
 import solar_state
 import task_views
-from mcp_helpers import execute, run, search, stored
+from mcp_helpers import execute, run, search, stored, queue_and_authorize
 from reservation_tokens import token_of
 
 MADRID = "Europe/Madrid"
@@ -132,7 +132,7 @@ def test_the_queue_runs_it_at_17_local_on_both_sides_of_a_clock_change(solar_env
     sched = run("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"],
                                       scheduled_time="17:00", scheduled_weekdays=[5],
                                       scheduled_timezone=MADRID, recurring=True))
-    run("task.approve", dict(task_id=made["id"], expected_row_version=sched["row_version"]))
+    queue_and_authorize(made["id"], sched["row_version"])
     interval = sched["schedule"]["recurring_min_interval"]
     assert interval == 7 * 86400 - 7200
 

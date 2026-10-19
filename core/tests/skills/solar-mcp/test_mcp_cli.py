@@ -263,7 +263,7 @@ def test_registered_stdio_reads_and_refuses_mutation_from_foreign_cwd(
          'params': {'name': 'solar_search', 'arguments': {'scope': 'tasks'}}},
         {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call',
          'params': {'name': 'solar_execute', 'arguments': {
-             'operation': 'task.create', 'arguments': {'title': 'Must not be created', 'instructions': 'x'}}}},
+             'operation': 'async_execution.propose', 'arguments': {'global_capacity': 3}}}},
         {'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call',
          'params': {'name': 'solar_search', 'arguments': {'scope': 'tasks'}}},
     ]

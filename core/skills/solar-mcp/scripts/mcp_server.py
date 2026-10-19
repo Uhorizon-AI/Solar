@@ -103,11 +103,14 @@ TOOLS = {
     "solar_execute": dict(
         description=(
             "Run one registered operation: task.create, task.update, task.schedule, task.approve, "
-            "task.return_to_draft, task.cancel, task.requeue, task.archive, async_execution.propose, "
-            "async_execution.apply, telegram.send, action.run. Each has its own "
+            "task.authorize_run, task.return_to_draft, task.cancel, task.requeue, task.archive, "
+            "async_execution.propose, async_execution.apply, telegram.send, action.run. Each has its own "
             "strict arguments, authority and approval; see solar_docs id=operation:<name>. "
-            "Mutations ask the user for native confirmation of this exact operation and arguments: "
-            "omit approval_id. Editing or scheduling never queues a task; only task.approve does."),
+            "Task lifecycle operations run on the client's own tool permission (no form). "
+            "task.authorize_run, async_execution.* and telegram.send ask the user for native confirmation "
+            "of this exact operation and arguments: omit approval_id. Editing or scheduling never queues "
+            "a task; only task.approve or task.create with queue true does, and a task the executor does "
+            "not confine then waits for task.authorize_run."),
         inputSchema=dict(type="object", properties=dict(
             operation=dict(type="string", enum=list(operations.OPERATIONS)),
             arguments=dict(type="object", description="Exactly the arguments of that operation."),
@@ -475,7 +478,7 @@ def handle(message: dict, confirm=None) -> dict | None:
             op, inner, problem = resolve_execute(arguments)
             if problem:
                 return _error(request_id, -32602, f"Invalid tool arguments: {problem}")
-            if op.authority == A2:
+            if op.authority == A2 and not op.client_consent:
                 if op.pre_confirm:
                     try:
                         op.pre_confirm(inner)

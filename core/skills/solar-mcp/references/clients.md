@@ -37,8 +37,9 @@ otherwise the registered environment is used, with parent discovery only when
 no workspace is configured. An invalid configured workspace fails startup on
 stderr instead of falling back to another project or creating runtime state.
 This fixes path resolution only: a client must separately support MCP form
-elicitation to offer native operation approval. A generic tool permission or a
-conversational answer does not replace that approval.
+elicitation to offer native operation approval for `task.authorize_run`, `async_execution.*`
+and `telegram.send`. For those, a generic tool permission or a conversational answer does not replace
+that approval; the task lifecycle operations need none (the client's permission is the consent).
 Connection-specific confirmation diagnostics and the distinction from native
 question tools such as Antigravity's `ask_question` are documented in
 [approvals.md](approvals.md#connection-diagnostics-and-native-question-tools).
