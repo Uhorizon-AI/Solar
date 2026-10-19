@@ -530,7 +530,7 @@ class Supervisor:
                         self._notice_proc = proc
                     if proc is None:                                # the supervisor is leaving: no sender starts
                         with self._session() as store:
-                            store.approval_notice_result(notice["ref"], False, "supervisor_stopping")
+                            store.approval_notice_release(notice["ref"])     # the next supervisor sends it
                         return
                     try:
                         code = proc.wait(timeout=self.NOTIFY_TIMEOUT)
@@ -545,6 +545,8 @@ class Supervisor:
                     reason = "sender_unavailable"
                 if code == 3:
                     reason = "not_configured"
+                elif self._notice_closing and reason is None and code != 0:
+                    reason = "supervisor_stopping"                  # ended in flight by the supervisor's exit
                 done = code == 0
                 with self._session() as store:
                     store.approval_notice_result(notice["ref"], done, None if done else (reason or "send_failed"))

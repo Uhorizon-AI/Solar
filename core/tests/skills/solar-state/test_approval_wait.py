@@ -327,16 +327,39 @@ def test_the_console_read_of_an_exclusive_waiter_writes_nothing(ready, clock):
 
 
 def test_starting_an_expired_task_by_name_ends_the_wait_and_says_so(ready, monkeypatch):
-    import time
-    monkeypatch.setenv(solar_state.APPROVAL_WAIT_ENV, "0.0006")             # 2.2 s, on the real clock
+    monkeypatch.setenv(solar_state.APPROVAL_WAIT_ENV, "2")
     with solar_state.session() as store:
         task_id = waiting(store)
-        assert store.task_claim_detail(task_id, "worker")["reason"] == "awaiting_approval"
-        time.sleep(3.0)
-        answer = store.task_claim_detail(task_id, "worker")
+        soon = datetime.now()
+        assert store.task_claim_detail(task_id, "worker", now=soon)["reason"] == "awaiting_approval"
+        answer = store.task_claim_detail(task_id, "worker", now=soon + 3 * HOUR)
         assert answer["claimed"] is False and answer["reason"] == "approval_wait_expired"
         assert store.task_status(task_id) == "draft"
         assert events(store, "approval_wait_expired")[0]["outcome"] == "returned_to_draft"
+
+
+def test_an_unreadable_start_is_no_start_and_never_the_year_1970(ready):
+    with solar_state.session() as store:
+        task_id = waiting(store)
+        store.task_set(task_id, "approved_at", json.dumps("garbage"))
+        assert store.approval_wait(task_id) == dict(since=None, expires_at=None)
+        claim(store)
+        assert store.task_status(task_id) == "queued"                          # not ended at once
+        assert events(store, "awaiting_approval")[0]["since"] != "garbage"
+
+
+def test_a_released_notice_is_offered_again_and_a_started_one_is_not(ready, clock):
+    with solar_state.session() as store:
+        waiting(store, title="A")
+        waiting(store, title="B")
+        claim(store, clock)
+        first, second = [n["ref"] for n in store.approval_notices()]
+        assert store.approval_notice_claim(first)
+        store.approval_notice_result(first, True)                              # its send began: never again
+        assert store.approval_notice_claim(second)
+        store.approval_notice_release(second)                                  # nothing started: back
+        assert [n["ref"] for n in store.approval_notices()] == [second]
+        assert store.approval_notice_claim(second)                             # and it can be taken again
 
 
 def test_the_notices_are_read_from_the_last_one_taken(ready, clock):

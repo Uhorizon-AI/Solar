@@ -2028,7 +2028,14 @@ def _wait_since(conn, task_id: str, pairs: list[list[str]]) -> Optional[str]:
 def _wait_start(pairs: list[list[str]]) -> Optional[str]:
     """When a wait that no claim has recorded yet began: at the approval. A recurring task's later occurrence
     has no start until the claim that finds it (None), so nothing is shown and nothing is owed before."""
-    return None if _field(pairs, "recurring_last_run") else (_field(pairs, "approved_at") or None)
+    if _field(pairs, "recurring_last_run"):
+        return None
+    start = _field(pairs, "approved_at") or ""
+    try:
+        datetime.fromisoformat(start.strip().replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        return None                       # an unreadable stamp is no start, never the year 1970
+    return start
 
 
 def _wait_info(conn, task_id: str, pairs: list[list[str]]) -> dict:
@@ -2649,7 +2656,7 @@ class Session:
         return self.task_claim_detail(task_id, worker)["claimed"]
 
     def task_claim_detail(self, task_id: str, worker: str, *,
-                          stamp_last_run: bool = False) -> dict:
+                          stamp_last_run: bool = False, now: Optional[datetime] = None) -> dict:
         """`task_claim` with the reason it was refused: `not_queued`, the
         `approval_digest_mismatch` reason (`absent`, `legacy`, `mismatch`), or what keeps it
         from starting (`maintenance`, `cancellation_requested`, `blocked_by_dependency`,
@@ -2673,7 +2680,7 @@ class Session:
             if maintenance_state(self.root) is not None:
                 return dict(claimed=False, reason="maintenance")
             pairs = json.loads(row["frontmatter"])
-            moment = datetime.now()
+            moment = now or datetime.now()
             reason = _eligibility(conn, row, pairs, moment, manual=True)
             if reason:
                 return dict(claimed=False, reason=reason)
@@ -3259,14 +3266,21 @@ class Session:
         pairs = json.loads(row["frontmatter"])
         return _wait_info(self.conn, task_id, pairs) if needs_run_authorization(pairs) else None
 
+    # A notice is taken when its `approval_notice` row exists and no later `approval_notice_released` names it.
+    _TAKEN = ("EXISTS (SELECT 1 FROM audit n WHERE n.event = 'approval_notice' AND json_extract(n.row, '$.ref') = {ref} "
+              "AND NOT EXISTS (SELECT 1 FROM audit r WHERE r.event = 'approval_notice_released' "
+              "AND json_extract(r.row, '$.ref') = {ref} AND r.seq > n.seq))")
+
     def approval_notices(self, limit: int = 20) -> list[dict]:
         """Waits and expiries in `audit` that nobody has been told about yet, oldest first."""
         marks = ",".join("?" for _ in _NOTICE_EVENTS)
         found = self.conn.execute(
-            f"SELECT a.seq, a.row FROM audit a WHERE a.event IN ({marks}) AND NOT EXISTS ("
-            "SELECT 1 FROM audit n WHERE n.event = 'approval_notice' AND json_extract(n.row, '$.ref') = a.seq) "
-            "AND a.seq > COALESCE((SELECT MAX(json_extract(m.row, '$.ref')) FROM audit m "
-            "WHERE m.event = 'approval_notice'), 0) "
+            f"SELECT a.seq, a.row FROM audit a WHERE a.event IN ({marks}) AND NOT "
+            + self._TAKEN.format(ref="a.seq") +
+            " AND a.seq > COALESCE((SELECT MAX(json_extract(m.row, '$.ref')) FROM audit m "
+            "WHERE m.event = 'approval_notice' AND NOT EXISTS (SELECT 1 FROM audit r "
+            "WHERE r.event = 'approval_notice_released' AND json_extract(r.row, '$.ref') = json_extract(m.row, '$.ref') "
+            "AND r.seq > m.seq)), 0) "
             "ORDER BY a.seq LIMIT ?", (*_NOTICE_EVENTS, limit)).fetchall()
         return [dict(ref=r["seq"], **json.loads(r["row"])) for r in found]
 
@@ -3277,8 +3291,7 @@ class Session:
         with _transaction(self.conn) as conn:
             event = conn.execute("SELECT row FROM audit WHERE seq = ?", (ref,)).fetchone()
             if event is None or conn.execute(
-                    "SELECT 1 FROM audit WHERE event = 'approval_notice' AND json_extract(row, '$.ref') = ?",
-                    (ref,)).fetchone():
+                    "SELECT " + self._TAKEN.format(ref="?"), (ref, ref)).fetchone()[0]:
                 return None
             data = json.loads(event[0])
             if data.get("event") not in _NOTICE_EVENTS:
@@ -3302,6 +3315,12 @@ class Session:
                    skipped=not current)
             return (dict(task_id=data["task_id"], kind=kind, title=task["title"], outcome=data.get("outcome"))
                     if current else None)
+
+    def approval_notice_release(self, ref: int) -> None:
+        """Give a notice back: it was taken but nothing was started (the supervisor was leaving), so
+        the next supervisor sends it. A notice whose send began is never released."""
+        with _transaction(self.conn) as conn:
+            _audit(conn, "approval_notice_released", ref=ref)
 
     def approval_notice_result(self, ref: int, sent: bool, reason: Optional[str] = None) -> None:
         with _transaction(self.conn) as conn:

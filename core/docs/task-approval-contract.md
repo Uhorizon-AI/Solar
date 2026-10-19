@@ -54,7 +54,7 @@ A wait is one approval (its digest and the row version it was made at, so approv
   detail and status views, and the console's waiting list (reason, `since`, `expires_at`).
 - **Recorded once.** The first claim that finds the wait writes `awaiting_approval` to `audit` (task, digest,
   occurrence, risk; never the instructions). Polling adds nothing. Before that record exists, `since` is `approved_at` (the wait began at the approval, and the first claim that finds it records that same start, so a task nobody claimed for longer than the limit ends at that first claim). A recurring task's later occurrence has no start until the claim that finds it, so the views show no dates before.
-- **Bounded.** `SOLAR_APPROVAL_WAIT_HOURS` (default 72; `0` or less turns it off; an unreadable value keeps the default)
+- **Bounded.** `SOLAR_APPROVAL_WAIT_HOURS` (default 72; `0` or less turns it off; an unreadable value keeps the default; set it in the environment of the supervisor, the MCP server and the console alike, because the supervisor applies the limit and the others only show it)
   is how long a wait may last. Past it, the claim ends the wait and writes `approval_wait_expired`:
   a one-off task goes back to draft (approval withdrawn, `task_approval_withdrawn` with reason
   `approval_wait_expired`); a recurring task skips only that occurrence (`recurring_last_run` is stamped, approval and
@@ -65,9 +65,14 @@ A wait is one approval (its digest and the row version it was made at, so approv
   (`approval_notice`) before it is sent, so a failure is recorded (`approval_notice_result`) and not retried; a wait
   that is already over (authorized, edited, cancelled) is marked and not announced, and so is an expiry that is no longer
   true (the task was approved or authorized again since). When the supervisor stops, a notice still being sent is ended
-  with its process group and its thread is collected before the supervisor leaves. Without a configured and allowed
+  with its process group and its thread is collected before the supervisor leaves.
+  A stop that arrives before a notice's send began, whether before it was taken or between taking it and starting the
+  sender, leaves the notice for the next supervisor (`approval_notice_released`): announcing late is better than not
+  announcing. A send that was already running when the supervisor stopped is ended and recorded as not delivered
+  (`reason: supervisor_stopping`); it is not retried, because it may have reached the chat. Without a configured and allowed
   chat nothing is sent. At most three notices go out per run of that thread, never while the supervisor drains, and a
   sender that hangs is ended after 30 seconds with its whole process group.
+- **Upgrade.** The wait counts from the approval, so a task that was already waiting for longer than the limit when this version is installed ends at its first claim, with one notice each.
 - **Limit.** A recurring task nobody ever authorizes starts a new wait, and sends a new notice, at each occurrence
   (about every `recurring_min_interval`); archive or cancel it to stop them. After a skipped occurrence the views show
   no dates until the next claim finds the new wait. Because the wait counts from the approval, a task out of its schedule window, blocked by a dependency or inside its recurring interval can already be past its limit when it first becomes claimable, and a task with a schedule window only ends on the first claim pass inside the window after the limit. Starting a task by name past its limit ends the wait the same way

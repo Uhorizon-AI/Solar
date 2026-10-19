@@ -16,7 +16,7 @@ source "$SCRIPT_DIR/task_lib.sh"
 
 TASK_ID="${1:-}"
 [[ -z "$TASK_ID" ]] && exit 0
-task_status_of "$TASK_ID" >/dev/null 2>&1 || exit 0
+task_status_of "$TASK_ID" >/dev/null 2>&1 || { [[ -n "${2:-}" ]] && exit 3; exit 0; }   # a notice for a task that is gone was not sent
 
 MODE="${2:-}"
 case "$MODE" in

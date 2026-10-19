@@ -236,6 +236,9 @@ def test_stopping_the_supervisor_ends_a_notice_that_is_still_being_sent(rig, tmp
     # the supervisor has drained: neither its sender nor the thread that waits for it may remain
     thread = getattr(sup, "_announcer", None)
     assert thread is None or not thread.is_alive()
+    with solar_state.session() as store:
+        result = store.audit_rows("approval_notice_result")
+        assert [(r["sent"], r["reason"]) for r in result] == [(False, "supervisor_stopping")]
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         try:
@@ -266,5 +269,26 @@ def test_a_stop_that_lands_after_a_notice_was_taken_starts_no_sender(rig, tmp_pa
     sup._send_notices()
     assert not (rig.workspace / "attempts.log").exists()       # no sender was started
     with solar_state.session() as store:
-        result = store.audit_rows("approval_notice_result")
-        assert [(r["sent"], r["reason"]) for r in result] == [(False, "supervisor_stopping")]
+        assert store.audit_rows("approval_notice_result") == []          # nothing was tried ...
+        assert len(store.audit_rows("approval_notice_released")) == 1
+        assert len(store.approval_notices()) == 1                        # ... so the next supervisor sends it
+
+
+def test_a_closing_supervisor_takes_no_notice_at_all(rig, tmp_path, monkeypatch):
+    _sender(tmp_path, monkeypatch, '#!/bin/bash\necho run >> "$SOLAR_WORKSPACE/attempts.log"\n')
+    _queue_waiting(rig)
+    sup = rig.build()
+    with solar_state.session() as store:
+        store.task_claim_next_detail("w")
+    sup._notice_closing = True
+    sup._send_notices()
+    assert not (rig.workspace / "attempts.log").exists()
+    with solar_state.session() as store:
+        assert store.audit_rows("approval_notice") == [] and len(store.approval_notices()) == 1
+
+
+def test_a_notice_for_a_task_that_is_gone_is_not_sent(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    waiting_task()
+    assert notify("no-such-task", "--waiting", env).returncode == 3
+    assert not (workspace / "sent.log").exists()
