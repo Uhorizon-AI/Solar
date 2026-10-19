@@ -118,6 +118,7 @@ def test_a_repeated_declaration_never_replaces_the_first_one():
 @pytest.mark.parametrize('text', [
     'Options:\n  -p, --print  Print\n      --mode  Mode [choices: "ask", "plan"]\n',
     'Options:\n  --mode <m>  Pick (choices: "plan", "ask")\n',
+    'Options:\n  --mode <m>  Pick (choices: plan, ask)\n',
     'Options:\n  --mode <m>  Pick\n              (choices: "plan", "ask")\n',
     'Options:\n  --mode <f>  Output format (only works with --print): "plan" | "ask" (default: "plan")\n',
     'Options:\n  --mode <m>\n          Possible values:\n          - ask:  read only\n          - plan: plans\n',
