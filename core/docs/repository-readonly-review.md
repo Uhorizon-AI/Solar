@@ -144,22 +144,27 @@ from bypassing HOME redirection by resolving the home through the OS user databa
 Every invocation probes the actual boundary before starting the CLI: reading an
 existing snapshot file must succeed, overwriting it, creating a snapshot file,
 and overwriting a separate disposable host sentinel must fail. Private state
-writes must succeed. Help is then checked under the same guard: each required
-option must be declared (an example or another option's description does not
-count) and the values Solar passes (`--mode`, `--sandbox`, `--output-format`)
-must be advertised in that option's own block in a recognised form (`Values:`, `Modes:`, `Formats:`, `Choices:` or `Possible values:`
-at the start of a description or sentence; a sentence starting `one of`; `[a|b]`, `<a|b>`
-or `{a,b}` groups; quoted `"a" | "b"` lists; bullet lists under `Possible values:`; `(choices: "a", "b")`; `Output format (...): a | b`; a closing
-`(a, b)` note on a description, as in the real Cursor and Antigravity help);
-lists introduced by a negation (`none of`, `not one of`, `removed`) and `[a|b]` right after such a word are ignored, and a closing `(a, b)` note counts only when nothing else is listed; prose such as "the ask mode was removed", `Not one of ask`, or
-`e.g. --mode ask` does not count, lines under an `Examples:`/`Usage:` header (any indentation; a title like `Usage of agy:` is not one) and options nested in
-another option's description column are not declarations, colour codes are ignored,
-and only the first option of a line is indexed (aliases after it are not). The CLI version is recorded in the
-result (`review_preflight.version`) and the audit log, and never blocks launch.
-A refusal carries `error_detail` with `provider`, `stage` and `reason` (for
-example `required_option_missing` with the option, `help_timeout`,
-`help_format_unknown`, `managed_policy_present`, `credentials_unavailable`,
-`boundary_unavailable`, `write_guard_probe_failed`), so causes are not merged.
+writes must succeed. Help is then checked under the same guard:
+
+- every required option must be declared (an example or another option's
+  description does not count);
+- every value Solar passes (`--mode`, `--sandbox` and `--output-format` where
+  they take values) must be listed in that option's own block, in a form seen in
+  the real Cursor and Antigravity help: `Values:`/`Modes:`/`Formats:` lists,
+  `(choices: "a", "b")`, `a | b`, `[a|b]` or a closing `(a, b)` note;
+- ignored: `Examples:`/`Usage:` sections, options nested in another option's
+  description, prose, `e.g.` and lists introduced by a negation (`none of`,
+  `not one of`, `removed`); unknown layouts are refused, never guessed. Colour
+  is disabled and ANSI codes are stripped; details in
+  `cli_capabilities.advertised_values`;
+- the CLI version is recorded (`review_preflight.version` in the result and audit
+  log) and never blocks launch.
+
+A refusal carries `error_detail` with `provider`, `stage`, `reason` and, for help
+checks, `option`. Reasons: `required_option_missing`, `required_value_unadvertised`,
+`help_failed`, `help_timeout`, `help_unavailable`, `help_format_unknown`,
+`managed_policy_present`, `credentials_unavailable`, `boundary_unavailable`,
+`write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`.
 A help text proves neither the effective configuration nor that a guard works. These adapters
 do not claim a doctor-style effective/cloud-policy attestation; their stronger
 write boundary is enforced externally. Network access remains available for the

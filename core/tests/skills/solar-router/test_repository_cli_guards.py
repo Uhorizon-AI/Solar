@@ -130,7 +130,7 @@ def test_unknown_help_refuses_and_launch_context_cleans_up(tmp_path, monkeypatch
     binary = tmp_path / provider; binary.write_text('#!/bin/sh\necho unknown\n'); binary.chmod(0o700)
     monkeypatch.setattr(PROVIDERS[provider], 'resolve_binary', lambda _: str(binary))
     seen = []
-    monkeypatch.setattr(guards, 'guard_prefix', lambda private, cwd: seen.append(private) or [])
+    monkeypatch.setattr(guards, 'guard_prefix', lambda private, cwd, *a: seen.append(private) or [])
     monkeypatch.setattr(guards, 'probe_guard', lambda *a: None)
     with pytest.raises(profiles.ProfileError):
         with repo.launch(PROVIDERS[provider], e['manifest'], e['review_input_digest'], lambda: None):
@@ -468,3 +468,43 @@ def test_real_help_output_of_each_cli_passes_the_real_requirements(tmp_path, mon
     argv, _ = guards.prepare(provider, str(binary), {'HOME': str(home)}, private, cwd,
                              dict(system_prompt='Review.', user_prompt='Version.', model='fixed'), metadata=metadata)
     assert metadata['version'] == '9.9.9' and '--print' in metadata['capabilities_checked']
+
+
+@pytest.mark.parametrize('provider', ['agent', 'agy'])
+def test_every_refusal_names_the_real_provider(tmp_path, monkeypatch, provider):
+    home = tmp_path / 'user'
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'file').write_text('x')
+    # No credentials in this fake home: the refusal must carry the provider.
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.prepare(provider, '/none', {'HOME': str(home)}, private, cwd,
+                       dict(system_prompt='x', user_prompt='y', model='m'))
+    assert error.value.detail['provider'] == provider and error.value.detail['reason'] == 'credentials_unavailable'
+    monkeypatch.setattr(guards.sys, 'platform', 'linux')
+    monkeypatch.setattr(guards.shutil, 'which', lambda *a, **k: None)
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.guard_prefix(private, cwd, provider)
+    assert error.value.detail['provider'] == provider
+    monkeypatch.setattr(guards.subprocess, 'run', lambda argv, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired(argv, 1)))
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.probe_guard([], dict(os.environ), private, cwd, provider)
+    assert error.value.detail['provider'] == provider
+
+
+@pytest.mark.parametrize('provider', ['agent', 'agy'])
+def test_prepare_passes_the_provider_to_the_boundary_and_probe_refusals(tmp_path, monkeypatch, provider):
+    home = tmp_path / 'user'; auth_fixture(home)
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'file').write_text('x')
+    manifest = dict(system_prompt='x', user_prompt='y', model='m')
+    elsewhere = tmp_path / 'elsewhere'; elsewhere.mkdir()
+    with pytest.raises(profiles.ProfileError) as error:  # snapshot not inside the private directory
+        guards.prepare(provider, '/none', {'HOME': str(home)}, private, elsewhere, manifest)
+    assert error.value.detail['provider'] == provider and error.value.detail['stage'] == 'boundary'
+    private2 = tmp_path / 'private2'; private2.mkdir(); cwd2 = private2 / 'repository'; cwd2.mkdir()
+    (cwd2 / 'file').write_text('x')
+    monkeypatch.setattr(guards, 'guard_prefix', lambda *a: [])
+    monkeypatch.setattr(guards.subprocess, 'run', lambda argv, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired(argv, 1)))
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.prepare(provider, '/none', {'HOME': str(home)}, private2, cwd2, manifest)
+    assert (error.value.detail['provider'], error.value.detail['reason']) == (provider, 'write_guard_probe_timeout')

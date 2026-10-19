@@ -121,7 +121,6 @@ def test_a_repeated_declaration_never_replaces_the_first_one():
     'Options:\n  --mode <m>  Pick (choices: plan, ask)\n',
     'Options:\n  --mode <m>  Pick\n              (choices: "plan", "ask")\n',
     'Options:\n  --mode <f>  Output format (only works with --print): "plan" | "ask" (default: "plan")\n',
-    'Options:\n  --mode <m>\n          Possible values:\n          - ask:  read only\n          - plan: plans\n',
 ])
 def test_common_help_layouts_are_recognised(text):
     blocks = option_blocks(text)
@@ -179,16 +178,23 @@ def test_an_examples_section_ends_at_a_header_of_the_same_or_shallower_indent_on
     ' <m>  Removed [ask|plan] in 2.0; modes: write',
     ' <m>  Values: none of ask, plan',
     ' <m>  Values: not one of ask, plan',
+    ' <m>  Values: not one of "ask", "plan"',
+    ' <m>  Values: none of "ask", "plan"',
+    ' <m>  Removed "ask" | "plan" in 2.0',
 ])
 def test_withdrawn_or_secondary_lists_never_prove_a_value(text):
     assert 'ask' not in advertised_values(text)
 
 
 @pytest.mark.parametrize('text,expected', [
-    (' <m>  {a,b} or {c}', {'a', 'b', 'c'}),
-    (' <m>  [a|b] | [c]', {'a', 'b', 'c'}),
+    (' <m>  {a,b} or {c}', {'a', 'b'}),  # an unknown layout fails closed, never guessed
     (' <m>  Values: write. May be one of ask, plan.', {'write', 'ask', 'plan'}),
     (' <m>  (choices: "plan") ask is deprecated (ask, legacy)', {'plan'}),
 ])
 def test_chained_groups_and_later_sentences_are_read_whole(text, expected):
     assert advertised_values(text) == expected
+
+
+def test_a_closing_note_is_ignored_when_a_list_exists_a_documented_trade_off():
+    assert advertised_values(' <m>  Modes: read. Defaults (read, write)') == {'read'}
+    assert advertised_values(' <m>  Set (accept-edits, plan)') == {'accept-edits', 'plan'}

@@ -20,7 +20,6 @@ _GROUP = re.compile(r'[\[<{]([\w.-]+(?:\s*[|,]\s*[\w.-]+)+)[\]>}]')
 # prose such as "(e.g., ask)".
 _PAREN = re.compile(r'(?<!like )(?<!not )(?<!unlike )(?<!except )(?<!without )\(([a-z0-9][\w-]*(?:\s*[|,]\s*[a-z0-9][\w-]*)+)\)(?=\s*(?:\(default|\.|$))', re.I)
 _QUOTED = re.compile(r'"[\w.-]+"(?:\s*[|,]\s*"[\w.-]+")+')
-_BULLETS = re.compile(r'(?:possible|allowed|supported|valid)?\s*values:\s*\n((?:\s*-\s*[\w.-]+\b[^\n]*\n?)+)', re.I)
 
 
 def unsupported(provider, stage, reason, *, option=None):
@@ -77,10 +76,7 @@ def option_blocks(help_text):
 
 
 _NEGATED = re.compile(r'^\s*(?:none\s+of|not\b|never\b|no\s+longer|removed|deprecated|unlike)', re.I)
-_WITHDRAWN = re.compile(r'(?:removed|deprecated|not|never|unlike|no\s+longer)[\s:]*$', re.I)
-_ONE = r'[\[<{][\w.-]+(?:\s*[|,]\s*[\w.-]+)*[\]>}]'
-_CHAIN = re.compile(_ONE + r'(?:\s*(?:or|\|)\s*' + _ONE + r')+')
-_INNER = re.compile(r'[\[<{]([^\]>}]+)[\]>}]')
+_WITHDRAWN = re.compile(r'(?:none\s+of|not\s+one\s+of|removed|deprecated|not|never|unlike|no\s+longer)[\s:]*$', re.I)
 
 
 def _until_unmatched_paren(text):
@@ -97,23 +93,20 @@ def _until_unmatched_paren(text):
 def advertised_values(block):
     """Values an option block lists in a recognised form (`Values: a, b`, `[a|b]`).
 
-    Recognised: `Values:`/`Modes:`/`Formats:`/`Choices:` (also `Possible values:`),
-    a sentence starting `one of`, `[a|b]`/`<a|b>`/`{a,b}` groups (also chained with
-    `or`), quoted `"a" | "b"` lists, bullet lists under `Possible values:` and, only
-    when nothing else is listed, a closing `(a, b)` note. Lists introduced by a
-    negation (`none of`, `not`, `removed`, ...) and groups right after such a word
-    are ignored. A word that merely appears in prose never counts as a supported value.
+    Recognised, as in the real Cursor and Antigravity help: `Values:`/`Modes:`/
+    `Formats:`/`Choices:` (also `Possible values:`, `Output format (...):`), a
+    sentence starting `one of`, `[a|b]`/`<a|b>`/`{a,b}` groups, quoted `"a" | "b"`
+    lists (including `(choices: "a", "b")`) and, only when nothing else is listed,
+    a closing `(a, b)` note. Lists or groups introduced by a negation (`none of`,
+    `not one of`, `removed`, ...) are ignored. A word that merely appears in prose
+    never counts as a supported value.
     """
     block = re.sub(r'([|,])[ \t]*\n\s*', r'\1 ', block)  # a list wrapped after its separator
     parts = [m[1] for pattern in (_LABEL, _ONE_OF) for m in pattern.finditer(block)]
     for match in _GROUP.finditer(block):
         if not _WITHDRAWN.search(block[:match.start()]):
             parts.append(match[1])
-    for match in _CHAIN.finditer(block):
-        if not _WITHDRAWN.search(block[:match.start()]):
-            parts += _INNER.findall(match[0])
-    parts += [m[0] for m in _QUOTED.finditer(block)]
-    parts += [re.sub(r'(?m)^\s*-\s*([\w.-]+)[^\n]*$', r'\1,', m[1]) for m in _BULLETS.finditer(block)]
+    parts += [m[0] for m in _QUOTED.finditer(block) if not _WITHDRAWN.search(block[:m.start()])]
     if not parts:
         parts = [m[1] for m in _PAREN.finditer(block)]
     found = set()

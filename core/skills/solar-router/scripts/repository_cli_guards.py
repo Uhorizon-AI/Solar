@@ -17,8 +17,8 @@ import sys
 from cli_capabilities import discover, unsupported
 
 
-def refused(reason='boundary_unavailable', stage='boundary'):
-    return unsupported('repository_reader', stage, reason)
+def refused(reason='boundary_unavailable', stage='boundary', provider='repository_reader'):
+    return unsupported(provider, stage, reason)
 
 
 def write_json(path, value):
@@ -27,34 +27,34 @@ def write_json(path, value):
     path.chmod(0o600)
 
 
-def credential(source, target):
+def credential(source, target, provider='repository_reader'):
     """Copy only a bounded regular auth file, without following links."""
     try:
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, 'rb') as file:
             info = os.fstat(file.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_size > 65536 or info.st_uid != os.getuid():
-                raise refused('credentials_unavailable', 'credentials')
+                raise refused('credentials_unavailable', 'credentials', provider)
             raw = file.read(65537)
         if not raw or len(raw) > 65536:
-            raise refused('credentials_unavailable', 'credentials')
+            raise refused('credentials_unavailable', 'credentials', provider)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         target.write_bytes(raw)
         target.chmod(0o600)
     except OSError:
-        raise refused('credentials_unavailable', 'credentials') from None
+        raise refused('credentials_unavailable', 'credentials', provider) from None
 
 
-def cursor_auth(origin, home):
+def cursor_auth(origin, home, provider='agent'):
     """Use subscription tokens only; never silently switch to API-key billing."""
     source = origin / ('.cursor' if sys.platform == 'darwin' else '.config/cursor') / 'auth.json'
     target = home / ('.cursor' if sys.platform == 'darwin' else '.config/cursor') / 'auth.json'
     if source.exists() or source.is_symlink():
-        credential(source, target)
+        credential(source, target, provider)
         try:
             auth = json.loads(target.read_text())
         except (ValueError, OSError):
-            raise refused('credentials_unavailable', 'credentials') from None
+            raise refused('credentials_unavailable', 'credentials', provider) from None
     elif sys.platform == 'darwin':
         # Read selected entries only. The CLI receives a private file store and
         # cannot refresh or update the user's real keychain entries.
@@ -64,33 +64,33 @@ def cursor_auth(origin, home):
                 done = subprocess.run(['/usr/bin/security', 'find-generic-password', '-a', 'cursor-user',
                                        '-s', service, '-w'], capture_output=True, text=True, timeout=10)
                 if done.returncode or not done.stdout.strip():
-                    raise refused('credentials_unavailable', 'credentials')
+                    raise refused('credentials_unavailable', 'credentials', provider)
                 auth[field] = done.stdout.strip()
             except (OSError, subprocess.SubprocessError):
-                raise refused('credentials_unavailable', 'credentials') from None
+                raise refused('credentials_unavailable', 'credentials', provider) from None
     else:
-        raise refused('credentials_unavailable', 'credentials')
+        raise refused('credentials_unavailable', 'credentials', provider)
     if not all(isinstance(auth.get(k), str) and auth[k] for k in ('accessToken', 'refreshToken')):
-        raise refused('credentials_unavailable', 'credentials')
+        raise refused('credentials_unavailable', 'credentials', provider)
     write_json(target, {k: auth[k] for k in ('accessToken', 'refreshToken')})
 
 
-def guard_prefix(private, cwd):
+def guard_prefix(private, cwd, provider='repository_reader'):
     """Read-only host and snapshot; writes allowed only in disposable CLI state."""
     private, cwd = Path(private).resolve(), Path(cwd).resolve()
     if cwd.parent != private or private == Path('/'):
-        raise refused()
+        raise refused(provider=provider)
     # HOME redirection is not enough if a CLI resolves its account's home via
     # the OS user database. Prevent reads of the real account's CLI/config trees
     # too. Binaries under .local/share remain readable.
     origin = Path.home().resolve()
     protected = [origin / name for name in ('.cursor', '.gemini', '.claude', '.codex', '.agy', '.config')]
     if any(private == path or path in private.parents for path in protected):
-        raise refused()
+        raise refused(provider=provider)
     if sys.platform == 'darwin':
         binary = '/usr/bin/sandbox-exec'
         if not Path(binary).is_file():
-            raise refused()
+            raise refused(provider=provider)
         # JSON quoting is also valid for SBPL string literals; never interpolate
         # an unquoted path into the policy language.
         profile = ('(version 1)(allow default)(deny file-write*)'
@@ -103,20 +103,20 @@ def guard_prefix(private, cwd):
     if sys.platform == 'linux':
         binary = shutil.which('bwrap', path='/usr/bin:/bin')
         if not binary:
-            raise refused()
+            raise refused(provider=provider)
         hidden = []
         for path in protected:
             if path.is_symlink():
-                raise refused()
+                raise refused(provider=provider)
             if path.is_dir():
                 hidden += ['--tmpfs', str(path)]
         return [binary, '--die-with-parent', '--new-session', '--unshare-pid', '--ro-bind', '/', '/',
                 '--bind', str(private), str(private), '--ro-bind', str(cwd), str(cwd),
                 '--proc', '/proc', '--dev', '/dev', *hidden, '--chdir', str(cwd), '--']
-    raise refused()
+    raise refused(provider=provider)
 
 
-def probe_guard(prefix, env, private, cwd):
+def probe_guard(prefix, env, private, cwd, provider='repository_reader'):
     """Exercise enforcement before any provider starts, not just config intent."""
     # One disposable sentinel outside the writable CLI state, owned by this
     # invocation. This tests host writes as well as snapshot writes.
@@ -146,11 +146,11 @@ state.write_text('allowed')
                                   capture_output=True, timeout=15)
             if (done.returncode or existing.read_bytes() != original or inside.exists()
                     or outside.read_text() != 'unchanged' or state.read_text() != 'allowed'):
-                raise refused('write_guard_probe_failed', 'write_guard')
+                raise refused('write_guard_probe_failed', 'write_guard', provider)
         except subprocess.TimeoutExpired:
-            raise refused('write_guard_probe_timeout', 'write_guard') from None
+            raise refused('write_guard_probe_timeout', 'write_guard', provider) from None
         except (OSError, subprocess.SubprocessError):
-            raise refused('write_guard_probe_failed', 'write_guard') from None
+            raise refused('write_guard_probe_failed', 'write_guard', provider) from None
         finally:
             state.unlink(missing_ok=True)
 
@@ -173,7 +173,7 @@ def prepare(provider, binary, original_env, private, cwd, manifest, *, metadata=
                    origin / '.cursor/managed']
         if any(p.exists() for p in managed):
             raise unsupported(provider, 'managed_policy', 'managed_policy_present')
-        cursor_auth(origin, home)
+        cursor_auth(origin, home, provider)
         config = home / '.cursor'
         write_json(config / 'cli-config.json', dict(version=1, editor=dict(vimMode=False),
                    approvalMode='allowlist', sandbox=dict(mode='enabled', readBoundary='workspace'),
@@ -190,20 +190,21 @@ def prepare(provider, binary, original_env, private, cwd, manifest, *, metadata=
         gemini = home / '.gemini'
         # The standalone subscription token, not Gemini API/ADC credentials or
         # history/state/config. Never copy the rest of the user's .gemini tree.
-        credential(origin / '.gemini/jetski-standalone-oauth-token', gemini / 'jetski-standalone-oauth-token')
+        credential(origin / '.gemini/jetski-standalone-oauth-token', gemini / 'jetski-standalone-oauth-token', provider)
         write_json(gemini / 'antigravity-cli/settings.json', dict(toolPermission='strict',
                    enableTerminalSandbox=True, allowNonWorkspaceAccess=False,
                    permissions=dict(allow=[f'read_file({cwd})'], ask=[], deny=[
                        'write_file(*)', 'command(*)', 'unsandboxed(*)', 'mcp(*)',
                        'read_url(*)', 'execute_url(*)'])))
         required = ['--print', '--mode', '--sandbox', '--model', '--output-format', '--disable-slash-commands']
+        # `--sandbox` is a bare switch in the Antigravity help: it has no values to check.
         values = {'--mode': 'plan', '--output-format': 'json'}
         argv = [binary, '--mode', 'plan', '--sandbox', '--disable-slash-commands',
                 '--model', manifest['model'], '--output-format', 'json', '--print', prompt]
     else:
         raise unsupported(provider, 'profile', 'provider_unsupported')
-    prefix = guard_prefix(private, cwd)
-    probe_guard(prefix, env, private, cwd)
+    prefix = guard_prefix(private, cwd, provider)
+    probe_guard(prefix, env, private, cwd, provider)
     discover(binary, env, cwd, provider=provider, prefix=prefix, required=required,
              values=values, metadata=metadata)
     return [*prefix, *argv], env
