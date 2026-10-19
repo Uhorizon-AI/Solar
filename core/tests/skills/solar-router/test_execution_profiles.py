@@ -13,6 +13,10 @@ from providers import PROVIDERS
 from review_inputs import create_parent
 
 
+REAL_POLICY = profiles._effective_managed_policy  # the fixture replaces it; this test needs the real one
+HELP = Path(__file__).parent / 'fixtures' / 'claude_2.1.303_help.txt'
+
+
 @pytest.fixture
 def review(tmp_path, monkeypatch):
     source = tmp_path / 'source.txt'
@@ -32,8 +36,10 @@ def fake_cli(tmp_path, monkeypatch):
     binary = tmp_path / 'claude-double'
     binary.write_text(f'''#!{sys.executable}
 import json, os, pathlib, stat, sys
-if '--help' in sys.argv:
-    print({repr(' '.join(profiles.FLAGS))})
+if '--version' in sys.argv:
+    print('9.9.9 (Claude Code)')
+elif '--help' in sys.argv:
+    print(pathlib.Path({str(HELP)!r}).read_text())
 else:
     pathlib.Path({str(record)!r}).write_text(json.dumps(dict(argv=sys.argv[1:], env=dict(os.environ), cwd=os.getcwd(), pgid=os.getpgrp(), files=os.listdir('.'), mode=stat.S_IMODE(os.stat('.').st_mode))))
     print(json.dumps(dict(result='<subtasks>untrusted text</subtasks>',usage=dict(input_tokens=12,output_tokens=4))))
@@ -113,11 +119,102 @@ def test_effective_policy_unknown_or_hostile_is_unsupported(review, fake_cli, mo
     assert not fake_cli.exists()
 
 
-def test_missing_cli_flag_is_unsupported(review, fake_cli, monkeypatch):
-    monkeypatch.setattr(profiles.subprocess, 'run', lambda *a, **k: type('Result', (), {'returncode': 0, 'stdout':'--print'})())
-    with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
-        PROVIDERS['claude'].run('', review=kwargs(review[1]))
+def run_with_help(monkeypatch, review, text, *, version='9.9.9 (Claude Code)'):
+    def fake(argv, **kwargs):
+        out = version if '--version' in argv else text if '--help' in argv else json.dumps(dict(result='ok'))
+        return type('Result', (), {'returncode': 0, 'stdout': out, 'stderr': ''})()
+    monkeypatch.setattr(profiles.subprocess, 'run', fake)
+    return PROVIDERS['claude'].run('', review=kwargs(review[1]))
+
+
+def refusal(monkeypatch, review, text, **options):
+    with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported') as caught:
+        run_with_help(monkeypatch, review, text, **options)
+    return caught.value.detail
+
+
+def test_real_claude_help_declares_every_required_option():
+    from cli_capabilities import advertised_values, option_blocks
+    blocks = option_blocks(HELP.read_text())
+    assert [flag for flag in profiles.FLAGS if flag not in blocks] == []
+    assert 'json' in advertised_values(blocks['--output-format'])
+
+
+@pytest.mark.parametrize('flag', profiles.FLAGS)
+def test_option_missing_from_help_names_it_even_if_prose_mentions_it(review, fake_cli, monkeypatch, flag):
+    # A flag quoted in another option's description is not a declaration.
+    lines = [line for line in HELP.read_text().splitlines()
+             if not line.lstrip().startswith((flag + ' ', flag + '<', '-p, ' + flag))]
+    text = '\n'.join(lines) + f'\nSee also {flag} in the docs.\n'
+    detail = refusal(monkeypatch, review, text)
+    assert detail == dict(provider='claude', stage='help', reason='required_option_missing', option=flag)
     assert not fake_cli.exists()
+
+
+def test_output_format_json_must_be_advertised(review, fake_cli, monkeypatch):
+    text = HELP.read_text().replace('"json"', '"xml"')
+    detail = refusal(monkeypatch, review, text)
+    assert detail == dict(provider='claude', stage='help', reason='required_value_unadvertised',
+                          option='--output-format')
+
+
+def test_version_never_decides_support(review, fake_cli, monkeypatch):
+    adapter = PROVIDERS['claude']
+    for version in ('0.0.1', '99.99.99 (Claude Code)'):
+        assert run_with_help(monkeypatch, review, HELP.read_text(), version=version) is not None
+        assert adapter.last_review_preflight['version'] == version
+
+
+def test_unknown_help_format_is_named(review, fake_cli, monkeypatch):
+    assert refusal(monkeypatch, review, 'no options here')['reason'] == 'help_format_unknown'
+
+
+@pytest.mark.parametrize('error, reason', [(profiles.subprocess.TimeoutExpired('claude', 1), 'help_timeout'),
+                                           (OSError('gone'), 'help_unavailable')])
+def test_help_that_cannot_run_is_named(review, fake_cli, monkeypatch, error, reason):
+    def fake(argv, **kwargs):
+        if '--help' in argv:
+            raise error
+        return type('Result', (), {'returncode': 0, 'stdout': '1.0', 'stderr': ''})()
+    monkeypatch.setattr(profiles.subprocess, 'run', fake)
+    with pytest.raises(profiles.ProfileError) as caught:
+        PROVIDERS['claude'].run('', review=kwargs(review[1]))
+    assert caught.value.detail == dict(provider='claude', stage='help', reason=reason)
+
+
+def test_help_with_nonzero_exit_is_named(review, fake_cli, monkeypatch):
+    monkeypatch.setattr(profiles.subprocess, 'run', lambda argv, **k: type(
+        'Result', (), {'returncode': 2, 'stdout': '', 'stderr': ''})())
+    with pytest.raises(profiles.ProfileError) as caught:
+        PROVIDERS['claude'].run('', review=kwargs(review[1]))
+    assert caught.value.detail['reason'] == 'help_failed'
+
+
+def test_policy_refusals_name_the_failed_check(review, fake_cli, monkeypatch):
+    monkeypatch.setattr(profiles, '_effective_managed_policy', REAL_POLICY)
+    monkeypatch.setattr(profiles, '_local_managed_policy', lambda: None)
+    with pytest.raises(profiles.ProfileError) as caught:
+        profiles.preflight(str(fake_cli.parent / 'claude-double'), {}, str(fake_cli.parent))
+    assert caught.value.detail == dict(provider='claude', stage='policy', reason='policy_local_unreadable')
+    monkeypatch.setattr(profiles, '_local_managed_policy', lambda: {'hooks': {}})
+    with pytest.raises(profiles.ProfileError) as caught:
+        profiles.preflight(str(fake_cli.parent / 'claude-double'), {}, str(fake_cli.parent))
+    assert caught.value.detail['reason'] == 'policy_local_present'
+
+
+@pytest.mark.parametrize('result, reason', [
+    (profiles.subprocess.TimeoutExpired('claude', 1), 'doctor_timeout'),
+    (OSError('gone'), 'doctor_unavailable'),
+    ((3, ''), 'doctor_failed'),
+    ((0, 'Something: else\n'), 'doctor_unrecognized'),
+    ((0, 'Managed settings (remote): not fetched\nOrganization policy: not applicable\n'), None)])
+def test_doctor_outcomes_have_fixed_reasons(result, reason, monkeypatch):
+    def fake(argv, **kwargs):
+        if isinstance(result, BaseException):
+            raise result
+        return type('Result', (), {'returncode': result[0], 'stdout': result[1], 'stderr': ''})()
+    monkeypatch.setattr(profiles.subprocess, 'run', fake)
+    assert profiles._doctor_check('claude', {}, '.') == reason
 
 
 def test_canonical_order_and_newlines_and_fixed_budget(review):

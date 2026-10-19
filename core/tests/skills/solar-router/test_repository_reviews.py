@@ -6,6 +6,7 @@ import sys
 
 import pytest
 import execution_profiles as profiles
+from claude_help import claude_help
 import repository_reviews as repo
 from providers import PROVIDERS
 from git_review_fixture import repository, git
@@ -66,7 +67,7 @@ def test_both_transports_share_commands_and_snapshot_then_clean_up(tmp_path, mon
     binary.write_text(f'''#!{sys.executable}
 import json, os, pathlib, sys
 if '--help' in sys.argv:
- print({repr(' '.join(profiles.FLAGS) + ' --sandbox read-only --json --ephemeral --ignore-user-config --ignore-rules --output-schema --output-last-message')})
+ print({repr(claude_help() + ' --sandbox read-only --json --ephemeral --ignore-user-config --ignore-rules --output-schema --output-last-message')})
 else:
  pathlib.Path({str(record)!r}).write_text(json.dumps(dict(argv=sys.argv[1:], cwd=os.getcwd(), env=dict(os.environ),
     operations=pathlib.Path('operations.md').read_text())))
@@ -179,7 +180,7 @@ def test_review_succeeds_with_unknown_freshness_and_model_prose_is_not_the_recor
     binary = tmp_path / 'claude'
     binary.write_text(f'''#!{sys.executable}
 import json, sys
-if '--help' in sys.argv: print({repr(' '.join(profiles.FLAGS))})
+if '--help' in sys.argv: print({claude_help()!r})
 else: print(json.dumps(dict(result='HEAD is deadbeef, the version is stale.')))
 ''')
     binary.chmod(0o700)
@@ -250,7 +251,7 @@ def test_real_router_uses_bound_repository_profile_before_ambient_context(tmp_pa
     binary=tmp_path/provider
     binary.write_text(f'''#!{sys.executable}
 import json,pathlib,sys
-if '--help' in sys.argv: print({repr(' '.join(profiles.FLAGS))})
+if '--help' in sys.argv: print({claude_help()!r})
 else:
  pathlib.Path({str(record)!r}).write_text(pathlib.Path('operations.md').read_text())
  if {provider!r}=='codex':

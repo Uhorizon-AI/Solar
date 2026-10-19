@@ -55,8 +55,13 @@ operational locale/path/home/certificate values and the adapter's API-key/OAuth
 credentials. Configuration, prompt, plugin, command-selection and shell-startup
 variables are excluded. `--bare` is deliberately absent to preserve OAuth.
 
-Help must advertise the required flags. Effective managed policy must also be
+Capabilities are read from `claude --help`, never from a version: each required
+option must be declared in an option block (a flag quoted in another option's
+description does not count) and `--output-format` must advertise `json`. The version
+is only recorded in `review_preflight`. Effective managed policy must also be
 validated: unknown or nonempty policy returns `execution_profile_unsupported`.
+Every refusal carries `error_detail` (`provider`, `stage` `help` or `policy`, a fixed
+`reason`, and the `option` when one is missing), shown in the task log.
 The inspection has two parts, and a launch needs both to say "no policy":
 
 - **Local sources**, read directly: `managed-settings.json`, the

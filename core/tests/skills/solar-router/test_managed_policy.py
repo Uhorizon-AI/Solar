@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import execution_profiles as profiles
+from claude_help import claude_help
 
 NO_POLICY = ("Claude Code doctor\n\nManaged settings (remote): not fetched — requires an Enterprise or Team "
              "subscription\nOrganization policy: not applicable to Pro and Max accounts\n")
@@ -17,7 +18,7 @@ def fake_claude(tmp_path, doctor_out=NO_POLICY, doctor_code=0, doctor_sleep=0):
     binary.write_text(f'''#!{sys.executable}
 import sys, time
 if '--help' in sys.argv:
-    print({' '.join(profiles.FLAGS)!r})
+    print({claude_help()!r})
 elif 'doctor' in sys.argv:
     time.sleep({doctor_sleep})
     sys.stdout.write({doctor_out!r})

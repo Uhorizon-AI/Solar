@@ -23,6 +23,8 @@ SYSTEM_PROMPT = (
 FLAGS = ("--print", "--no-session-persistence", "--safe-mode", "--restricted",
          "--setting-sources", "--tools", "--strict-mcp-config", "--mcp-config",
          "--settings", "--system-prompt", "--output-format", "--model")
+# Values Solar passes that the help must advertise for that option.
+REQUIRED_VALUES = {"--output-format": "json"}
 # HOME preserves the adapter's OAuth/keychain authentication. No configuration,
 # plugin, prompt, shell startup or command-selection variable is inherited.
 ENV_ALLOWLIST = frozenset({"HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL",
@@ -186,17 +188,22 @@ def _local_managed_policy():
     return found
 
 
-def _doctor_reports_no_org_policy(binary: str, env: dict, cwd: str) -> bool:
-    """`claude doctor` is the CLI's own read-only diagnosis of where policy loaded from, and it covers
+def _doctor_check(binary: str, env: dict, cwd: str):
+    """None when `claude doctor` reports an account with no organization policy, else the fixed reason
+    it could not be proven: doctor_unavailable, doctor_timeout, doctor_failed or doctor_unrecognized.
+
+    `claude doctor` is the CLI's own read-only diagnosis of where policy loaded from, and it covers
     what no local file can show (server-managed settings). Only the exact wording of an account with
     no organization policy counts; anything else, or any failure to ask, is not proof of absence."""
     try:
         result = subprocess.run([binary, "doctor"], env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=DOCTOR_TIMEOUT, check=False)
+    except subprocess.TimeoutExpired:
+        return "doctor_timeout"
     except (OSError, subprocess.SubprocessError):
-        return False
+        return "doctor_unavailable"
     if result.returncode:
-        return False
+        return "doctor_failed"
     lines = {}
     for line in result.stdout.splitlines():
         key, sep, value = line.partition(":")
@@ -204,33 +211,42 @@ def _doctor_reports_no_org_policy(binary: str, env: dict, cwd: str) -> bool:
             lines[key.strip().lower()] = value.strip().lower()
     remote = lines.get("managed settings (remote)", "")
     organization = lines.get("organization policy", "")
-    return remote.startswith("not fetched") and organization.startswith("not applicable")
+    if remote.startswith("not fetched") and organization.startswith("not applicable"):
+        return None
+    return "doctor_unrecognized"
 
 
-def _effective_managed_policy(binary: str, env: dict, cwd: str):
+def _effective_managed_policy(binary: str, env: dict, cwd: str, why: list | None = None):
     """The admin policy the next process would load: {} only when it is known to be empty.
 
     Local sources are read directly; server-managed policy, which no file shows, is taken from
     `claude doctor`. Help proves flag availability, not policy. None (unknown) rejects the launch; a
-    prompt, manifest or environment variable can never attest it. Tests replace this boundary."""
+    prompt, manifest or environment variable can never attest it. Tests replace this boundary.
+    When `why` is a list, the fixed reason of a rejection is appended to it."""
     local = _local_managed_policy()
-    if local is None or local:
+    if local is None:
+        why is None or why.append("policy_local_unreadable")
+        return None
+    if local:
+        why is None or why.append("policy_local_present")
         return local
-    return {} if _doctor_reports_no_org_policy(binary, env, cwd) else None
+    reason = _doctor_check(binary, env, cwd)
+    if reason:
+        why is None or why.append(reason)
+    return {} if reason is None else None
 
 
-def preflight(binary: str, env: dict, cwd: str) -> None:
-    try:
-        result = subprocess.run([binary, "--help"], env=env, cwd=cwd, capture_output=True,
-                                text=True, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError):
-        raise ProfileError("execution_profile_unsupported") from None
-    if result.returncode or any(flag not in result.stdout for flag in FLAGS):
-        raise ProfileError("execution_profile_unsupported")
+def preflight(binary: str, env: dict, cwd: str, metadata: dict | None = None) -> None:
+    """Capabilities come from `claude --help` option blocks, never from a version. A refusal carries
+    `detail` (provider, stage, reason, option) with fixed words only, as for the other readers."""
+    from cli_capabilities import discover, unsupported
+    discover(binary, env, cwd, provider="claude", prefix=[], required=list(FLAGS),
+             values=REQUIRED_VALUES, metadata={} if metadata is None else metadata)
     # A known empty effective managed policy is sufficient. Unknown or any
     # policy content is conservatively unsupported; do not override admin policy.
-    if _effective_managed_policy(binary, env, cwd) != {}:
-        raise ProfileError("execution_profile_unsupported")
+    why: list = []
+    if _effective_managed_policy(binary, env, cwd, why) != {}:
+        raise unsupported("claude", "policy", why[0] if why else "policy_unknown")
 
 
 def reject_project_overrides(root: Path) -> None:
@@ -273,7 +289,8 @@ def restricted_launch(adapter, manifest, expected: str, *, profile: str, extra_f
     binary = adapter.resolve_binary("claude")
     with tempfile.TemporaryDirectory(prefix="solar-review-") as cwd:
         os.chmod(cwd, 0o700)
-        preflight(binary, env, cwd)
+        adapter.last_review_preflight = dict(provider=adapter.name, version=None)
+        preflight(binary, env, cwd, adapter.last_review_preflight)
         argv = [binary, "-p", "--no-session-persistence", "--safe-mode", "--restricted",
                 "--setting-sources", "", "--tools", "", "--strict-mcp-config",
                 "--mcp-config", '{"mcpServers":{}}', "--settings", '{"disableAllHooks":true}',
