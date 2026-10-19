@@ -172,7 +172,6 @@ def find_tasks(query: str = "", state: str = "", limit: int = 10) -> dict:
     limit = max(1, min(limit, 50))
     with solar_state.read_session() as store:
         tasks = store.task_list(state or None)
-        waits = {task["id"]: store.approval_wait(task["id"]) for task in tasks if task["status"] == "queued"}
     ranked = []
     for task in tasks:
         haystack = f"{task['id']} {task['title'] or ''}".casefold()
@@ -183,6 +182,8 @@ def find_tasks(query: str = "", state: str = "", limit: int = 10) -> dict:
     ranked.sort(key=lambda item: item[1], reverse=True)   # newest first ...
     ranked.sort(key=lambda item: item[0])                  # ... then best match first
     shown = ranked[:limit]
+    with solar_state.read_session() as store:        # only the rows that are shown
+        waits = {task["id"]: store.approval_wait(task["id"]) for _, _, task in shown if task["status"] == "queued"}
     return dict(count=len(ranked), tasks=[_row(task, waits) for _, _, task in shown],
                 truncated=len(ranked) > len(shown))
 

@@ -2019,14 +2019,21 @@ def _wait_since(conn, task_id: str, pairs: list[list[str]]) -> Optional[str]:
         "AND json_extract(row, '$.digest') = ? AND json_extract(row, '$.occurrence') = ? "
         "AND json_extract(row, '$.approval') = ? ORDER BY seq LIMIT 1",
         (task_id, digest, occurrence, approval)).fetchone()
-    return json.loads(found[0])["ts"] if found else None
+    if not found:
+        return None
+    data = json.loads(found[0])
+    return data.get("since") or data["ts"]
+
+
+def _wait_start(pairs: list[list[str]]) -> Optional[str]:
+    """When a wait that no claim has recorded yet began: at the approval. A recurring task's later occurrence
+    has no start until the claim that finds it (None), so nothing is shown and nothing is owed before."""
+    return None if _field(pairs, "recurring_last_run") else (_field(pairs, "approved_at") or None)
 
 
 def _wait_info(conn, task_id: str, pairs: list[list[str]]) -> dict:
     """When the wait for authorization began and when it expires (None: never). Reads only."""
-    since = _wait_since(conn, task_id, pairs)
-    if since is None and not _field(pairs, "recurring_last_run"):
-        since = _field(pairs, "approved_at")       # a spent occurrence has no start until its claim finds it
+    since = _wait_since(conn, task_id, pairs) or _wait_start(pairs)
     limit = approval_wait_limit()
     expires = None
     if since and limit is not None:
@@ -2043,9 +2050,9 @@ def _awaiting(conn, row, pairs: list[list[str]], moment: datetime, record: bool)
     digest, occurrence, approval = _wait_ref(pairs)
     since = _wait_since(conn, task_id, pairs)
     if since is None:
+        since = _wait_start(pairs) or _now()          # the same start the views show before this record
         _audit(conn, "awaiting_approval", task_id=task_id, digest=digest, occurrence=occurrence,
-               approval=approval, risk=run_risk(pairs), row_version=row["row_version"])
-        since = _now()
+               approval=approval, since=since, risk=run_risk(pairs), row_version=row["row_version"])
     limit = approval_wait_limit()
     if limit is None or moment.timestamp() - _epoch(since) < limit:
         return "awaiting_approval"

@@ -244,6 +244,7 @@ def test_a_wait_that_is_already_over_is_not_announced(ready):
         assert store.approval_notice_claim(ref) is None
         assert store.approval_notices() == []
         assert events(store, "approval_notice")[0]["skipped"] is True
+        assert events(store, "approval_notice_result") == []                  # nothing was sent, nothing to report
 
 
 def test_the_notice_rows_carry_no_instructions(ready):
@@ -348,3 +349,25 @@ def test_the_notices_are_read_from_the_last_one_taken(ready, clock):
         store.approval_notice_claim(first[0]["ref"])
         assert [n["ref"] for n in store.approval_notices()] == sorted(n["ref"] for n in store.approval_notices())
         assert len(store.approval_notices()) == 2
+
+
+def test_a_task_nobody_claimed_for_longer_than_the_limit_ends_at_its_first_claim(ready, clock):
+    with solar_state.session() as store:
+        task_id = waiting(store)
+        approved = fm(store, task_id)["approved_at"]
+        clock.advance(100)
+        shown = store.approval_wait(task_id)
+        assert datetime.fromisoformat(shown["expires_at"].replace("Z", "+00:00")) < clock.at   # the view says it is over
+        assert claim(store, clock)["task"] is None
+        assert store.task_status(task_id) == "draft"                                           # and the claim agrees
+        assert events(store, "awaiting_approval")[0]["since"] == approved
+
+
+def test_the_view_and_the_limit_share_one_start(ready, clock):
+    with solar_state.session() as store:
+        task_id = waiting(store)
+        clock.advance(10)
+        before = store.approval_wait(task_id)
+        claim(store, clock)
+        after = store.approval_wait(task_id)
+        assert before == after                                                                  # recording changes nothing
