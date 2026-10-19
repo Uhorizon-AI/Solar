@@ -425,3 +425,26 @@ def test_a_skipped_occurrence_notice_follows_the_approval_it_names(ready, clock)
         ref = [n for n in store.approval_notices() if n["event"] == "approval_wait_expired"][0]["ref"]
         store.task_authorize_run(task_id, expected_row_version=store.task_get(task_id)["row_version"])
         assert store.approval_notice_claim(ref) is None                        # authorized: nothing waits any more
+
+
+def test_an_ended_wait_is_filed_under_authorization_in_the_console(ready):
+    import runtime_views
+    assert runtime_views.wait_kind("approval_wait_expired") == "authorization"
+    assert runtime_views.wait_kind("awaiting_approval") == "authorization"
+
+
+def test_notices_after_the_last_one_taken_are_offered_in_order_whatever_the_audit_holds(ready, clock):
+    with solar_state.session() as store:
+        for n in range(3):
+            waiting(store, title=f"W{n}")
+        claim(store, clock)
+        for noise in range(50):                                                # unrelated audit rows in between
+            store.conn.execute("INSERT INTO audit (ts, event, router_id, row) VALUES (?, ?, NULL, ?)",
+                               ("2026-01-01T00:00:00Z", "other", json.dumps({"event": "other"})))
+        store.conn.commit()
+        refs = [n["ref"] for n in store.approval_notices()]
+        assert len(refs) == 3 and refs == sorted(refs)
+        store.approval_notice_claim(refs[0])
+        store.approval_notice_claim(refs[1])
+        store.approval_notice_release(refs[1])                                 # only the newest taken can come back
+        assert [n["ref"] for n in store.approval_notices()] == refs[1:]

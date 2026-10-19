@@ -152,6 +152,7 @@ class Supervisor:
         self._notice_lock = threading.Lock()       # the approval-notice sender and the supervisor's exit
         self._notice_closing = False
         self._notice_proc: Optional[subprocess.Popen] = None
+        self._announcer: Optional[threading.Thread] = None
         self.draining = False
         self.drain_request: Optional[dict] = None
         self.state = "starting"
@@ -482,7 +483,7 @@ class Supervisor:
         heartbeat or a drain. Each audit row is announced once: the notice is taken before it is sent, so a
         failure is recorded and not retried. The message carries the title only, through the task notifier
         (`notify_if_configured.sh`); a sender that hangs is ended with its whole process group."""
-        current = getattr(self, "_announcer", None)
+        current = self._announcer
         if (current is not None and current.is_alive()) or self.draining or self.stop_event.is_set():
             return
         with self._session() as store:
@@ -503,7 +504,7 @@ class Supervisor:
                     os.killpg(proc.pid, signal.SIGKILL)
                 except OSError:
                     pass
-        thread = getattr(self, "_announcer", None)
+        thread = self._announcer
         if thread is not None and thread.is_alive():
             thread.join(10)
 

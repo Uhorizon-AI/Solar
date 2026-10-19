@@ -3271,17 +3271,27 @@ class Session:
               "AND NOT EXISTS (SELECT 1 FROM audit r WHERE r.event = 'approval_notice_released' "
               "AND json_extract(r.row, '$.ref') = {ref} AND r.seq > n.seq))")
 
+    def _notice_cursor(self) -> int:
+        """The `audit` row of the last notice taken and not given back. Notices are taken in order, one
+        thread at a time, so only the newest taken one can have been released; this reads from the newest
+        backwards and stops at the first that is still taken, so the cost does not grow with the audit."""
+        for seq, row in self.conn.execute(
+                "SELECT seq, row FROM audit WHERE event = 'approval_notice' ORDER BY seq DESC").fetchall():
+            ref = json.loads(row)["ref"]
+            if not self.conn.execute(
+                    "SELECT 1 FROM audit WHERE event = 'approval_notice_released' AND seq > ? "
+                    "AND json_extract(row, '$.ref') = ?", (seq, ref)).fetchone():
+                return int(ref)
+        return 0
+
     def approval_notices(self, limit: int = 20) -> list[dict]:
-        """Waits and expiries in `audit` that nobody has been told about yet, oldest first."""
+        """Waits and expiries in `audit` that nobody has been told about yet, oldest first: every row after
+        the last notice taken. Audit rows are written inside serialized transactions, so their order is the
+        order they committed in, and a row never lands behind a notice that was taken after it."""
         marks = ",".join("?" for _ in _NOTICE_EVENTS)
         found = self.conn.execute(
-            f"SELECT a.seq, a.row FROM audit a WHERE a.event IN ({marks}) AND NOT "
-            + self._TAKEN.format(ref="a.seq") +
-            " AND a.seq > COALESCE((SELECT MAX(json_extract(m.row, '$.ref')) FROM audit m "
-            "WHERE m.event = 'approval_notice' AND NOT EXISTS (SELECT 1 FROM audit r "
-            "WHERE r.event = 'approval_notice_released' AND json_extract(r.row, '$.ref') = json_extract(m.row, '$.ref') "
-            "AND r.seq > m.seq)), 0) "
-            "ORDER BY a.seq LIMIT ?", (*_NOTICE_EVENTS, limit)).fetchall()
+            f"SELECT seq, row FROM audit WHERE event IN ({marks}) AND seq > ? ORDER BY seq LIMIT ?",
+            (*_NOTICE_EVENTS, self._notice_cursor(), limit)).fetchall()
         return [dict(ref=r["seq"], **json.loads(r["row"])) for r in found]
 
     def approval_notice_claim(self, ref: int) -> Optional[dict]:

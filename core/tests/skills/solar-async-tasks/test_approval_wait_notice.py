@@ -292,3 +292,10 @@ def test_a_notice_for_a_task_that_is_gone_is_not_sent(tmp_path):
     waiting_task()
     assert notify("no-such-task", "--waiting", env).returncode == 3
     assert not (workspace / "sent.log").exists()
+
+
+def test_a_notice_without_a_task_id_is_not_sent_and_says_so(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    waiting_task()
+    assert notify("", "--waiting", env).returncode == 3
+    assert not (workspace / "sent.log").exists()
