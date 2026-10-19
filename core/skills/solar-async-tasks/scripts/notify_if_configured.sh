@@ -50,6 +50,10 @@ record_notify_failure() {
   echo "Task notification failed: $1 ($TASK_ID)" >&2
 }
 if [[ ! -x "$SEND_SCRIPT" ]]; then
+  if [[ -n "$MODE" ]]; then
+    echo "Task notification failed: sender_unavailable ($TASK_ID)" >&2   # an approval notice never touches the task
+    exit 1
+  fi
   record_notify_failure "sender_unavailable"
   exit 1
 fi

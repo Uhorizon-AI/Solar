@@ -4,6 +4,7 @@ It goes through the task notifier that already exists, to the configured chat on
 never the instructions, and it does not touch the task. The sender is a double that writes a log; no
 chat is reached."""
 import os
+import time
 import subprocess
 import time
 from pathlib import Path
@@ -70,7 +71,6 @@ def test_it_goes_to_the_configured_chat_never_to_the_one_the_task_names(tmp_path
     task_id, _ = waiting_task(origin="999")                  # allowed, but not the configured chat
     assert notify(task_id, "--waiting", env).returncode == 0
     assert (workspace / "sent.log").read_text().startswith("456|")
-    # and the completion notice, which does follow the origin, is unchanged
     assert "999" not in (workspace / "sent.log").read_text()
 
 
@@ -124,3 +124,57 @@ def test_the_supervisor_announces_a_wait_once_however_often_it_polls(rig, tmp_pa
     assert rig.status(task_id) == "queued"
     with solar_state.session() as store:
         assert [r["sent"] for r in store.audit_rows("approval_notice_result")] == [True]
+
+
+def test_a_missing_sender_fails_without_touching_the_task(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    (Path(env["SOLAR_ROOT"]) / "core/skills/solar-telegram/scripts/send_telegram.sh").unlink()
+    task_id, version = waiting_task()
+    assert notify(task_id, "--waiting", env).returncode == 1
+    with solar_state.session() as store:                      # the client's row_version is still good
+        assert store.task_get(task_id)["row_version"] == version
+        assert "notify_status" not in dict(store.task_get(task_id)["frontmatter"])
+
+
+def test_a_failed_notice_is_recorded_and_not_retried(rig, tmp_path, monkeypatch):
+    install = tmp_path / "install"
+    sender = install / "core/skills/solar-telegram/scripts/send_telegram.sh"
+    sender.parent.mkdir(parents=True)
+    sender.write_text('#!/bin/bash\necho run >> "$SOLAR_WORKSPACE/attempts.log"\nexit 7\n')
+    sender.chmod(0o755)
+    for key, value in (("SOLAR_ROOT", str(install)), ("TELEGRAM_CHAT_ID", "456"),
+                       ("TELEGRAM_ALLOWED_CHAT_IDS", "456"), ("TELEGRAM_BOT_TOKEN", "fake")):
+        monkeypatch.setenv(key, value)
+    task_id = rig.legacy("Needs approval")
+    with solar_state.session() as store:
+        store.task_return_to_draft(task_id, expected_row_version=store.task_get(task_id)["row_version"])
+        store.task_approve(task_id, expected_row_version=store.task_get(task_id)["row_version"], consent="client")
+    sup = rig.build()
+    for _ in range(3):
+        sup._fill()
+    assert (rig.workspace / "attempts.log").read_text().count("run") == 1
+    with solar_state.session() as store:
+        assert [r["sent"] for r in store.audit_rows("approval_notice_result")] == [False]
+
+
+def test_a_stuck_sender_is_ended_and_does_not_hold_the_supervisor(rig, tmp_path, monkeypatch):
+    install = tmp_path / "install"
+    sender = install / "core/skills/solar-telegram/scripts/send_telegram.sh"
+    sender.parent.mkdir(parents=True)
+    sender.write_text("#!/bin/bash\nsleep 60\n")
+    sender.chmod(0o755)
+    for key, value in (("SOLAR_ROOT", str(install)), ("TELEGRAM_CHAT_ID", "456"),
+                       ("TELEGRAM_ALLOWED_CHAT_IDS", "456"), ("TELEGRAM_BOT_TOKEN", "fake")):
+        monkeypatch.setenv(key, value)
+    task_id = rig.legacy("Needs approval")
+    with solar_state.session() as store:
+        store.task_return_to_draft(task_id, expected_row_version=store.task_get(task_id)["row_version"])
+        store.task_approve(task_id, expected_row_version=store.task_get(task_id)["row_version"], consent="client")
+    sup = rig.build()
+    sup.NOTIFY_TIMEOUT = 1.0
+    sup._fill()                                  # the claim finds the wait
+    started = time.monotonic()
+    sup._fill()                                  # and the next pass announces it, with a sender that hangs
+    assert time.monotonic() - started < 15
+    with solar_state.session() as store:
+        assert [r["sent"] for r in store.audit_rows("approval_notice_result")] == [False]

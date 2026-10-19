@@ -48,7 +48,7 @@ A recurring task keeps its authorization for every repeat, and `task.requeue` (e
 
 ### The wait is visible, bounded and announced
 
-A wait is one approved content (its digest) at one occurrence (a recurring task's `recurring_last_run`).
+A wait is one approval (its digest and the row version it was made at, so approving the same content again starts a new wait) at one occurrence (a recurring task's `recurring_last_run`).
 
 - **Visible.** `task list` in `solar_search` (`awaiting_approval`, `waiting_since`, `waiting_expires_at`), the task
   detail and status views, and the console's waiting list (reason, `since`, `expires_at`).
@@ -64,7 +64,11 @@ A wait is one approved content (its digest) at one occurrence (a recurring task'
   instructions, never the chat a task names, and the task is not touched. A notice is taken in `audit`
   (`approval_notice`) before it is sent, so a failure is recorded (`approval_notice_result`) and not retried; a wait
   that is already over (authorized, edited, cancelled) is marked and not announced. Without a configured and allowed
-  chat nothing is sent.
+  chat nothing is sent. At most three notices go out per supervisor pass, never while it drains, and a sender that
+  hangs is ended after 30 seconds with its whole process group.
+- **Limit.** A recurring task nobody ever authorizes starts a new wait, and sends a new notice, at each occurrence
+  (about every `recurring_min_interval`); archive or cancel it to stop them. After a skipped occurrence the views show
+  no dates until the next claim finds the new wait.
 
 ## Decisions and limits
 

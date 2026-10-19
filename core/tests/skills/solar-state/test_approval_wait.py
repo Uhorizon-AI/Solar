@@ -250,10 +250,12 @@ def test_the_notice_rows_carry_no_instructions(ready):
     with solar_state.session() as store:
         waiting(store)
         claim(store)
-        store.approval_notice_claim(store.approval_notices()[0]["ref"])
-        store.approval_notice_result(1, True)
+        ref = store.approval_notices()[0]["ref"]
+        store.approval_notice_claim(ref)
+        store.approval_notice_result(ref, True)
         text = "".join(store.audit_lines())
         assert "Do it." not in text
+        assert all("title" not in row for row in events(store, "approval_notice"))
 
 
 def test_a_notice_for_content_that_has_since_changed_is_not_sent(ready):
@@ -268,3 +270,56 @@ def test_a_notice_for_content_that_has_since_changed_is_not_sent(ready):
         assert store.approval_notice_claim(old) is None                       # the content it named is gone
         fresh = [n for n in store.approval_notices() if n["ref"] != old]
         assert len(fresh) == 1 and store.approval_notice_claim(fresh[0]["ref"])["kind"] == "waiting"
+
+
+def test_approving_the_same_content_again_after_the_wait_ended_starts_a_new_wait(ready, clock):
+    with solar_state.session() as store:
+        task_id = waiting(store)
+        claim(store, clock)
+        first = store.approval_wait(task_id)["since"]
+        claim(store, clock, 73)
+        assert store.task_status(task_id) == "draft"
+        store.task_approve(task_id, expected_row_version=store.task_get(task_id)["row_version"], consent="client")
+        assert store.approval_wait(task_id)["since"] != first                 # not the old wait's start
+        claim(store, clock, 1)
+        assert store.task_status(task_id) == "queued"                         # and not ended at once
+        assert len(events(store, "awaiting_approval")) == 2
+        assert claim(store, clock, 72)["task"] is None and store.task_status(task_id) == "draft"
+
+
+def test_a_skipped_occurrence_shows_no_false_dates_until_the_next_wait_begins(ready, clock):
+    with solar_state.session() as store:
+        task_id = waiting(store, recurring="true", recurring_min_interval="3600", scheduled_time="now")
+        claim(store, clock)
+        claim(store, clock, 73)
+        shown = store.approval_wait(task_id)
+        assert shown == dict(since=None, expires_at=None)
+        claim(store, clock, 2)                                                # the next occurrence is found
+        assert store.approval_wait(task_id)["since"] == events(store, "awaiting_approval")[-1]["ts"]
+
+
+def test_the_console_read_never_writes_or_ends_a_wait_even_when_an_exclusive_task_waits(ready, clock):
+    with solar_state.session() as store:
+        task_id = waiting(store)
+        claim(store, clock)
+        clock.advance(500)
+        before = len(store.audit_lines())
+        store.queue_waits(now=clock.local)
+        assert len(store.audit_lines()) == before and store.task_status(task_id) == "queued"
+
+
+def test_the_console_read_of_an_exclusive_waiter_writes_nothing(ready, clock):
+    """A task that has waited long for a place is the drain target's candidate; judging it for a read
+    must not record a wait, end one or write anything, which a read session could not do anyway."""
+    with solar_state.session() as store:
+        task_id = waiting(store)
+        store.conn.execute("INSERT INTO claim_waits (task_id, first_blocked_at, reason) VALUES (?, ?, ?)",
+                           (task_id, "2000-01-01T00:00:00Z", "global_capacity"))
+        store.conn.commit()
+        clock.advance(500)
+        later = clock.local
+    with solar_state.read_session() as reader:
+        item = next(w for w in reader.queue_waits(now=later) if w["id"] == task_id)
+        assert item["reason"] == "awaiting_approval"
+    with solar_state.session() as store:
+        assert events(store, "awaiting_approval") == [] and store.task_status(task_id) == "queued"

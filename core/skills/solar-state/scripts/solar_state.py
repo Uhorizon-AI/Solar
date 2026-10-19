@@ -2005,23 +2005,28 @@ def approval_wait_limit() -> Optional[float]:
     return hours * 3600.0
 
 
-def _wait_ref(pairs: list[list[str]]) -> tuple[str, str]:
-    """One wait is one approved content (its digest) at one occurrence (a recurring task's last run)."""
-    return _field(pairs, "approved_digest") or "", _field(pairs, "recurring_last_run") or ""
+def _wait_ref(pairs: list[list[str]]) -> tuple[str, str, str]:
+    """One wait is one approval (its digest and the row version it was made at, so approving the same
+    content again is a new wait) at one occurrence (a recurring task's last run)."""
+    return (_field(pairs, "approved_digest") or "", _field(pairs, "recurring_last_run") or "",
+            _field(pairs, "approved_row_version") or "")
 
 
 def _wait_since(conn, task_id: str, pairs: list[list[str]]) -> Optional[str]:
-    digest, occurrence = _wait_ref(pairs)
+    digest, occurrence, approval = _wait_ref(pairs)
     found = conn.execute(
         "SELECT row FROM audit WHERE event = 'awaiting_approval' AND json_extract(row, '$.task_id') = ? "
         "AND json_extract(row, '$.digest') = ? AND json_extract(row, '$.occurrence') = ? "
-        "ORDER BY seq LIMIT 1", (task_id, digest, occurrence)).fetchone()
+        "AND json_extract(row, '$.approval') = ? ORDER BY seq LIMIT 1",
+        (task_id, digest, occurrence, approval)).fetchone()
     return json.loads(found[0])["ts"] if found else None
 
 
 def _wait_info(conn, task_id: str, pairs: list[list[str]]) -> dict:
     """When the wait for authorization began and when it expires (None: never). Reads only."""
-    since = _wait_since(conn, task_id, pairs) or _field(pairs, "approved_at")
+    since = _wait_since(conn, task_id, pairs)
+    if since is None and not _field(pairs, "recurring_last_run"):
+        since = _field(pairs, "approved_at")       # a spent occurrence has no start until its claim finds it
     limit = approval_wait_limit()
     expires = None
     if since and limit is not None:
@@ -2035,11 +2040,11 @@ def _awaiting(conn, row, pairs: list[list[str]], moment: datetime, record: bool)
     if not record:
         return "awaiting_approval"
     task_id = row["id"]
-    digest, occurrence = _wait_ref(pairs)
+    digest, occurrence, approval = _wait_ref(pairs)
     since = _wait_since(conn, task_id, pairs)
     if since is None:
         _audit(conn, "awaiting_approval", task_id=task_id, digest=digest, occurrence=occurrence,
-               risk=run_risk(pairs), row_version=row["row_version"])
+               approval=approval, risk=run_risk(pairs), row_version=row["row_version"])
         since = _now()
     limit = approval_wait_limit()
     if limit is None or moment.timestamp() - _epoch(since) < limit:
@@ -2056,7 +2061,7 @@ def _awaiting(conn, row, pairs: list[list[str]], moment: datetime, record: bool)
               fields={BOUNDARY_KEY: boundary} if boundary else None)
         outcome = "returned_to_draft"
     _audit(conn, "approval_wait_expired", task_id=task_id, digest=digest, occurrence=occurrence,
-           outcome=outcome, waited_since=since)
+           approval=approval, outcome=outcome, waited_since=since)
     return "approval_wait_expired"
 
 
@@ -2115,7 +2120,7 @@ def _drain_target(conn, policy: dict, moment: datetime, exclude: Optional[str] =
         if now_epoch - _epoch(waits[row["id"]]["first_blocked_at"]) < policy["exclusive_wait_seconds"]:
             continue
         pairs = json.loads(row["frontmatter"])
-        if _access_of(pairs, profiles=policy["enabled_reader_profiles"]).exclusive and _eligibility(conn, row, pairs, moment, manual=False) is None:
+        if _access_of(pairs, profiles=policy["enabled_reader_profiles"]).exclusive and _eligibility(conn, row, pairs, moment, manual=False, record=False) is None:
             return row["id"]
     return None
 
@@ -3277,7 +3282,8 @@ class Session:
                 pairs = json.loads(task["frontmatter"])
                 current = (kind == "expired" or (task["status"] == "queued" and needs_run_authorization(pairs)
                                                  and _wait_ref(pairs) == (data.get("digest", ""),
-                                                                          data.get("occurrence", ""))))
+                                                                          data.get("occurrence", ""),
+                                                                          data.get("approval", ""))))
             _audit(conn, "approval_notice", ref=ref, task_id=data.get("task_id"), kind=kind,
                    skipped=not current)
             return (dict(task_id=data["task_id"], kind=kind, title=task["title"], outcome=data.get("outcome"))

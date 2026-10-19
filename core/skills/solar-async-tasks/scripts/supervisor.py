@@ -469,26 +469,39 @@ class Supervisor:
             del self.cooldown[tid]
         return excluded
 
-    NOTIFY_TIMEOUT = 90.0
+    NOTIFY_TIMEOUT = 30.0
+    NOTICES_PER_PASS = 3
 
     def _announce_approvals(self) -> None:
         """Tell the configured chat about a task that began waiting for authorization, or whose wait ended.
         Each audit row is announced once: the notice is taken before it is sent, so a failure is not retried.
-        The message carries the title only, through the task notifier (`notify_if_configured.sh`)."""
+        The message carries the title only, through the task notifier (`notify_if_configured.sh`). A few per
+        pass, never while draining, and a stuck sender is ended with its whole group: filling places comes first."""
         with self._session() as store:
-            pending = store.approval_notices()
+            pending = store.approval_notices(self.NOTICES_PER_PASS)
         for notice in pending:
+            if self.draining or self.stop_event.is_set():
+                return
             with self._session() as store:
                 taken = store.approval_notice_claim(notice["ref"])
             if taken is None:
                 continue
             mode = ("--waiting" if taken["kind"] == "waiting" else
                     "--expired-skipped" if taken.get("outcome") == "occurrence_skipped" else "--expired-draft")
+            done = False
             try:
-                done = subprocess.run(["bash", str(HERE / "notify_if_configured.sh"), taken["task_id"], mode],
-                                      stdin=subprocess.DEVNULL, capture_output=True, timeout=self.NOTIFY_TIMEOUT,
-                                      env={**os.environ}).returncode == 0
-            except (OSError, subprocess.SubprocessError):
+                proc = subprocess.Popen(["bash", str(HERE / "notify_if_configured.sh"), taken["task_id"], mode],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL, env={**os.environ}, start_new_session=True)
+                try:
+                    done = proc.wait(timeout=self.NOTIFY_TIMEOUT) == 0
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                    proc.wait()
+            except OSError:
                 done = False
             with self._session() as store:
                 store.approval_notice_result(notice["ref"], done)
