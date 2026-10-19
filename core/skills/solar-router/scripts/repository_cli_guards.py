@@ -17,7 +17,7 @@ import sys
 from cli_capabilities import discover, unsupported
 
 
-def refused(reason='boundary_unavailable', stage='write_guard'):
+def refused(reason='boundary_unavailable', stage='boundary'):
     return unsupported('repository_reader', stage, reason)
 
 
@@ -146,11 +146,11 @@ state.write_text('allowed')
                                   capture_output=True, timeout=15)
             if (done.returncode or existing.read_bytes() != original or inside.exists()
                     or outside.read_text() != 'unchanged' or state.read_text() != 'allowed'):
-                raise refused('write_guard_probe_failed')
+                raise refused('write_guard_probe_failed', 'write_guard')
         except subprocess.TimeoutExpired:
-            raise refused('write_guard_probe_timeout') from None
+            raise refused('write_guard_probe_timeout', 'write_guard') from None
         except (OSError, subprocess.SubprocessError):
-            raise refused('write_guard_probe_failed') from None
+            raise refused('write_guard_probe_failed', 'write_guard') from None
         finally:
             state.unlink(missing_ok=True)
 
@@ -201,7 +201,7 @@ def prepare(provider, binary, original_env, private, cwd, manifest, *, metadata=
         argv = [binary, '--mode', 'plan', '--sandbox', '--disable-slash-commands',
                 '--model', manifest['model'], '--output-format', 'json', '--print', prompt]
     else:
-        raise refused()
+        raise unsupported(provider, 'profile', 'provider_unsupported')
     prefix = guard_prefix(private, cwd)
     probe_guard(prefix, env, private, cwd)
     discover(binary, env, cwd, provider=provider, prefix=prefix, required=required,

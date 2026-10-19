@@ -351,14 +351,14 @@ def test_each_refusal_cause_has_its_own_reason(tmp_path, monkeypatch):
     monkeypatch.setattr(guards.shutil, 'which', lambda *a, **k: None)
     with pytest.raises(profiles.ProfileError) as error:
         guards.guard_prefix(private, cwd)
-    assert error.value.detail['reason'] == 'boundary_unavailable'
+    assert (error.value.detail['reason'], error.value.detail['stage']) == ('boundary_unavailable', 'boundary')
 
     def hang(argv, **kwargs):
         raise subprocess.TimeoutExpired(argv, 15)
     monkeypatch.setattr(guards.subprocess, 'run', hang)
     with pytest.raises(profiles.ProfileError) as error:
         guards.probe_guard([], dict(os.environ), private, cwd)
-    assert error.value.detail['reason'] == 'write_guard_probe_timeout'
+    assert (error.value.detail['reason'], error.value.detail['stage']) == ('write_guard_probe_timeout', 'write_guard')
 
 
 def test_present_managed_policy_is_reported_as_such(tmp_path, monkeypatch):
@@ -406,3 +406,11 @@ def test_each_required_agy_option_is_checked_before_inference(tmp_path, monkeypa
         guards.prepare('agy', str(binary), {'HOME': str(home)}, private, cwd,
                        dict(system_prompt='Review.', user_prompt='Version.', model='fixed'))
     assert error.value.detail['reason'] == 'required_option_missing' and error.value.detail['option'] == option
+
+
+def test_unknown_provider_is_reported_as_an_unsupported_profile(tmp_path):
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.prepare('other', '/none', {'HOME': str(tmp_path)}, private, cwd,
+                       dict(system_prompt='x', user_prompt='y', model='m'))
+    assert error.value.detail == dict(provider='other', stage='profile', reason='provider_unsupported')

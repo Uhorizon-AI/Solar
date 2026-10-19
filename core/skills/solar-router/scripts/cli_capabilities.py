@@ -6,6 +6,13 @@ import subprocess
 
 from execution_profiles import ProfileError
 
+_ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+_SECTION = re.compile(r'^\S[^\n]*:\s*$')
+_SKIPPED = re.compile(r'example|usage', re.I)
+_OPTION = re.compile(r'^(\s*)(?:-[A-Za-z?],?\s+)?(--[A-Za-z][\w-]*)(?=[\s=,]|$)(.*)$')
+_LABEL = re.compile(r'(?<![\w<-])(?:(?:values?|modes?|formats?|choices)\s*:|one of\b)\s*(.+?)(?:\.(?:\s|$)|$)', re.I | re.M)
+_GROUP = re.compile(r'[\[<{(]([\w.-]+(?:\s*[|,]\s*[\w.-]+)+)[\]>})]')
+
 
 def unsupported(provider, stage, reason, *, option=None):
     detail = dict(provider=provider, stage=stage, reason=reason)
@@ -17,23 +24,32 @@ def unsupported(provider, stage, reason, *, option=None):
 def option_blocks(help_text):
     """Index advertised option declarations, excluding examples and substring hits.
 
-    Values may be described on indented continuation lines. Unknown layouts fail
-    closed; neither an example nor another option's description proves support.
-    The first declaration wins; later lines naming the same option (examples) are
-    ignored. Only the first option of a line is indexed, so aliases or `--x[=V]`
-    layouts are rejected rather than guessed.
+    Colour codes are removed. Lines under an `Examples:`/`Usage:` header are never
+    declarations, and an option-looking line indented under another option is part
+    of that option's description. The first declaration wins. Only the first option
+    of a line is indexed, so aliases or `--x[=V]` layouts are rejected rather than
+    guessed. Unknown layouts fail closed.
     """
     blocks = {}
     current = None
     indent = 0
-    for line in help_text.splitlines():
-        match = re.match(r'^(\s*)(?:-[A-Za-z?],?\s+)?(--[A-Za-z][\w-]*)(?=[\s=,]|$)(.*)$', line)
-        if match and match[2] in blocks:
+    skipping = False
+    for line in _ANSI.sub('', help_text).splitlines():
+        if _SECTION.match(line) and not _OPTION.match(line):
+            skipping = bool(_SKIPPED.search(line))
             current = None
-        elif match:
-            indent = len(match[1])
-            current = match[2]
-            blocks[current] = match[3]
+            continue
+        if skipping:
+            continue
+        match = _OPTION.match(line)
+        nested = bool(match and current and len(match[1]) > indent)
+        if match and not nested:
+            if match[2] in blocks:
+                current = None
+            else:
+                indent = len(match[1])
+                current = match[2]
+                blocks[current] = match[3]
         elif current and line.strip() and len(line) - len(line.lstrip()) > indent:
             blocks[current] += '\n' + line.strip()
         elif line.strip():
@@ -41,9 +57,26 @@ def option_blocks(help_text):
     return blocks
 
 
+def advertised_values(block):
+    """Values an option block lists in a recognised form (`Values: a, b`, `[a|b]`).
+
+    A word that merely appears in prose never counts as a supported value.
+    """
+    found = set()
+    parts = [m[1] for m in _LABEL.finditer(block)] + [m[1] for m in _GROUP.finditer(block)]
+    for part in parts:
+        part = re.sub(r'\([^)]*\)', ' ', part)
+        for token in re.split(r'[,|/]|\bor\b', part):
+            token = token.strip(' \t`"\'[]<>{}')
+            if re.fullmatch(r'[\w.-]+', token):
+                found.add(token)
+    return found
+
+
 def discover(binary, env, cwd, *, provider, prefix, required, values, metadata):
     """Check only no-inference CLI commands inside the caller's tested guard."""
     metadata.update(provider=provider, version=None)
+    env = {**env, 'NO_COLOR': '1', 'TERM': 'dumb', 'CLICOLOR': '0'}
     try:
         version = subprocess.run([*prefix, binary, '--version'], cwd=cwd, env=env,
                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
@@ -68,6 +101,6 @@ def discover(binary, env, cwd, *, provider, prefix, required, values, metadata):
         if option not in blocks:
             raise unsupported(provider, 'help', 'required_option_missing', option=option)
     for option, value in values.items():
-        if not re.search(r'(?<![\w-])' + re.escape(value) + r'(?![\w-])', blocks.get(option, '')):
+        if value not in advertised_values(blocks.get(option, '')):
             raise unsupported(provider, 'help', 'required_value_unadvertised', option=option)
     metadata['capabilities_checked'] = list(required)
