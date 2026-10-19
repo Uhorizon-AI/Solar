@@ -14,14 +14,11 @@ import subprocess
 import sys
 
 
-# The file-store switch is not exposed in --help. Its implementation was
-# inspected in this release; unknown releases need an audit before enabling it.
-CURSOR_AUDITED_VERSIONS = frozenset({'2026.10.14-0f9edde'})
+from cli_capabilities import discover, unsupported
 
 
-def refused():
-    from execution_profiles import ProfileError
-    return ProfileError('execution_profile_unsupported')
+def refused(reason='boundary_unavailable', stage='write_guard'):
+    return unsupported('repository_reader', stage, reason)
 
 
 def write_json(path, value):
@@ -37,15 +34,15 @@ def credential(source, target):
         with os.fdopen(fd, 'rb') as file:
             info = os.fstat(file.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_size > 65536 or info.st_uid != os.getuid():
-                raise refused()
+                raise refused('credentials_unavailable', 'credentials')
             raw = file.read(65537)
         if not raw or len(raw) > 65536:
-            raise refused()
+            raise refused('credentials_unavailable', 'credentials')
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         target.write_bytes(raw)
         target.chmod(0o600)
     except OSError:
-        raise refused() from None
+        raise refused('credentials_unavailable', 'credentials') from None
 
 
 def cursor_auth(origin, home):
@@ -57,7 +54,7 @@ def cursor_auth(origin, home):
         try:
             auth = json.loads(target.read_text())
         except (ValueError, OSError):
-            raise refused() from None
+            raise refused('credentials_unavailable', 'credentials') from None
     elif sys.platform == 'darwin':
         # Read selected entries only. The CLI receives a private file store and
         # cannot refresh or update the user's real keychain entries.
@@ -67,14 +64,14 @@ def cursor_auth(origin, home):
                 done = subprocess.run(['/usr/bin/security', 'find-generic-password', '-a', 'cursor-user',
                                        '-s', service, '-w'], capture_output=True, text=True, timeout=10)
                 if done.returncode or not done.stdout.strip():
-                    raise refused()
+                    raise refused('credentials_unavailable', 'credentials')
                 auth[field] = done.stdout.strip()
             except (OSError, subprocess.SubprocessError):
-                raise refused() from None
+                raise refused('credentials_unavailable', 'credentials') from None
     else:
-        raise refused()
+        raise refused('credentials_unavailable', 'credentials')
     if not all(isinstance(auth.get(k), str) and auth[k] for k in ('accessToken', 'refreshToken')):
-        raise refused()
+        raise refused('credentials_unavailable', 'credentials')
     write_json(target, {k: auth[k] for k in ('accessToken', 'refreshToken')})
 
 
@@ -149,14 +146,17 @@ state.write_text('allowed')
                                   capture_output=True, timeout=15)
             if (done.returncode or existing.read_bytes() != original or inside.exists()
                     or outside.read_text() != 'unchanged' or state.read_text() != 'allowed'):
-                raise refused()
+                raise refused('write_guard_probe_failed')
+        except subprocess.TimeoutExpired:
+            raise refused('write_guard_probe_timeout') from None
         except (OSError, subprocess.SubprocessError):
-            raise refused() from None
+            raise refused('write_guard_probe_failed') from None
         finally:
             state.unlink(missing_ok=True)
 
 
-def prepare(provider, binary, original_env, private, cwd, manifest):
+def prepare(provider, binary, original_env, private, cwd, manifest, *, metadata=None):
+    metadata = metadata if metadata is not None else {}
     origin = Path(original_env.get('HOME', str(Path.home())))
     home = private / 'home'; home.mkdir(mode=0o700)
     temp = private / 'tmp'; temp.mkdir(mode=0o700)
@@ -172,7 +172,7 @@ def prepare(provider, binary, original_env, private, cwd, manifest):
         managed = [Path('/Library/Application Support/Cursor'), Path('/etc/cursor'),
                    origin / '.cursor/managed']
         if any(p.exists() for p in managed):
-            raise refused()
+            raise unsupported(provider, 'managed_policy', 'managed_policy_present')
         cursor_auth(origin, home)
         config = home / '.cursor'
         write_json(config / 'cli-config.json', dict(version=1, editor=dict(vimMode=False),
@@ -182,7 +182,8 @@ def prepare(provider, binary, original_env, private, cwd, manifest):
         write_json(config / 'hooks.json', dict(version=1, hooks={}))
         env.update(CURSOR_CONFIG_DIR=str(config), CURSOR_DATA_DIR=str(home / 'cursor-data'),
                    AGENT_CLI_CREDENTIAL_STORE='file')
-        required = ['--mode', 'read-only', '--sandbox', '--model', '--output-format', '--workspace', '--trust']
+        required = ['--print', '--mode', '--sandbox', '--model', '--output-format', '--workspace', '--trust']
+        values = {'--mode': 'ask', '--sandbox': 'enabled', '--output-format': 'json'}
         argv = [binary, '--print', '--mode', 'ask', '--sandbox', 'enabled', '--trust', '--workspace', str(cwd),
                 '--model', manifest['model'], '--output-format', 'json', '--', prompt]
     elif provider == 'agy':
@@ -195,24 +196,14 @@ def prepare(provider, binary, original_env, private, cwd, manifest):
                    permissions=dict(allow=[f'read_file({cwd})'], ask=[], deny=[
                        'write_file(*)', 'command(*)', 'unsandboxed(*)', 'mcp(*)',
                        'read_url(*)', 'execute_url(*)'])))
-        required = ['--mode', 'plan', '--sandbox', '--model', '--output-format', '--disable-slash-commands']
+        required = ['--print', '--mode', '--sandbox', '--model', '--output-format', '--disable-slash-commands']
+        values = {'--mode': 'plan', '--output-format': 'json'}
         argv = [binary, '--mode', 'plan', '--sandbox', '--disable-slash-commands',
                 '--model', manifest['model'], '--output-format', 'json', '--print', prompt]
     else:
         raise refused()
     prefix = guard_prefix(private, cwd)
     probe_guard(prefix, env, private, cwd)
-    try:
-        help_result = subprocess.run([*prefix, binary, '--help'], cwd=cwd, env=env,
-                                     capture_output=True, text=True, timeout=15)
-        help_text = help_result.stdout + help_result.stderr
-        if help_result.returncode or any(flag not in help_text for flag in required):
-            raise refused()
-        if provider == 'agent':
-            version = subprocess.run([*prefix, binary, '--version'], cwd=cwd, env=env,
-                                     capture_output=True, text=True, timeout=15)
-            if version.returncode or version.stdout.strip() not in CURSOR_AUDITED_VERSIONS:
-                raise refused()
-    except (OSError, subprocess.SubprocessError):
-        raise refused() from None
+    discover(binary, env, cwd, provider=provider, prefix=prefix, required=required,
+             values=values, metadata=metadata)
     return [*prefix, *argv], env

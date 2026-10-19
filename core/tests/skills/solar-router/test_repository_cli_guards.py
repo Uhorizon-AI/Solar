@@ -13,6 +13,18 @@ from providers import PROVIDERS
 from git_review_fixture import repository
 
 
+HELP = """Options:
+  --print                       Print the response
+  --mode <mode>                 Modes: ask (read-only), plan
+  --sandbox <mode>              Values: enabled, disabled
+  --model <model>               Select a model
+  --output-format <format>      Formats: json, text
+  --workspace <path>            Select the workspace
+  --trust                       Trust the workspace
+  --disable-slash-commands      Disable command expansion
+"""
+
+
 def auth_fixture(home):
     cursor = home / ('.cursor' if sys.platform == 'darwin' else '.config/cursor')
     guards.write_json(cursor / 'auth.json', dict(accessToken='fixture-access', refreshToken='fixture-refresh', apiKey='DO-NOT-COPY'))
@@ -44,8 +56,8 @@ def test_new_providers_use_native_router_bound_review_and_isolated_configuration
     binary = tmp_path / provider
     binary.write_text(f'''#!{sys.executable}
 import json,os,pathlib,sys
-if '--version' in sys.argv: print('2026.10.14-0f9edde')
-elif '--help' in sys.argv: print('--mode read-only plan --sandbox --model --output-format --workspace --trust --disable-slash-commands')
+if '--version' in sys.argv: print('2027.01.01-new-release')
+elif '--help' in sys.argv: print({HELP!r})
 else:
  home=pathlib.Path(os.environ['HOME'])
  config=home/('.cursor/cli-config.json' if {provider!r}=='agent' else '.gemini/antigravity-cli/settings.json')
@@ -71,6 +83,8 @@ else:
               if stream else router.route(json.dumps(payload)))
     assert result['status'] == 'success', result
     assert commit in result['reply_text']
+    assert result['review_preflight']['version'] == '2027.01.01-new-release'
+    assert '--print' in result['review_preflight']['capabilities_checked']
     called = json.loads(record.read_text())
     assert called['source'] == 'The maximum batch is five.\n'
     assert 'HOSTILE' not in called['env'].values()
@@ -82,6 +96,7 @@ else:
         assert called['env']['AGENT_CLI_CREDENTIAL_STORE'] == 'file'
         assert '--trust' in called['argv'] and '--approve-mcps' not in called['argv']
         assert called['argv'][called['argv'].index('--mode') + 1] == 'ask'
+        assert called['argv'][called['argv'].index('--sandbox') + 1] == 'enabled'
     else:
         assert called['config']['toolPermission'] == 'strict'
         assert 'write_file(*)' in called['config']['permissions']['deny']
@@ -201,16 +216,117 @@ def test_probe_refuses_a_guard_that_allows_snapshot_writes(tmp_path):
         guards.probe_guard([], dict(os.environ), private, cwd)
 
 
-def test_cursor_unknown_version_refuses_private_file_store(tmp_path, monkeypatch):
-    source, commit = repository(tmp_path)
-    e = repo.build(repository=str(source), commit=commit, provider='agent', model='fixed', instructions='Review.', rules=[])
-    home = tmp_path / 'user'; auth_fixture(home); monkeypatch.setenv('HOME', str(home))
-    binary = tmp_path / 'agent'
-    binary.write_text('#!/bin/sh\necho "--mode read-only --sandbox --model --output-format --workspace --trust unknown-version"\n')
+@pytest.mark.parametrize('provider', ['agent', 'agy'])
+@pytest.mark.parametrize('version', ['2027.01.01-unseen', ''])
+def test_version_is_optional_evidence_not_an_admission_rule(tmp_path, monkeypatch, provider, version):
+    from cli_capabilities import discover
+    binary = tmp_path / 'cli'
+    binary.write_text(f"#!{sys.executable}\nimport sys\nif '--help' in sys.argv: print({HELP!r})\nelse: print({version!r}); sys.exit({0 if version else 1})\n")
     binary.chmod(0o700)
-    monkeypatch.setattr(PROVIDERS['agent'], 'resolve_binary', lambda _: str(binary))
+    metadata = {}
+    discover(str(binary), dict(os.environ), str(tmp_path), provider=provider, prefix=[],
+             required=['--mode', '--print'], values={'--mode': 'ask' if provider == 'agent' else 'plan'},
+             metadata=metadata)
+    assert metadata['version'] == (version or None)
+
+
+@pytest.mark.parametrize('option', ['--print', '--mode', '--sandbox', '--model', '--output-format', '--workspace', '--trust'])
+def test_each_required_cursor_option_is_checked_before_inference(tmp_path, monkeypatch, option):
+    home = tmp_path / 'user'; auth_fixture(home)
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'file').write_text('unchanged')
+    missing_help = '\n'.join(line for line in HELP.splitlines() if not line.lstrip().startswith(option + ' '))
+    binary = tmp_path / 'agent'
+    binary.write_text(f"#!{sys.executable}\nimport sys\nif '--help' in sys.argv: print({missing_help!r})\nelif '--version' in sys.argv: print('new')\nelse: raise AssertionError('inference forbidden')\n")
+    binary.chmod(0o700)
     monkeypatch.setattr(guards, 'guard_prefix', lambda *a: [])
     monkeypatch.setattr(guards, 'probe_guard', lambda *a: None)
-    with pytest.raises(profiles.ProfileError):
-        with repo.launch(PROVIDERS['agent'], e['manifest'], e['review_input_digest'], lambda: None):
-            pytest.fail('unknown file-store behavior accepted')
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.prepare('agent', str(binary), {'HOME': str(home)}, private, cwd,
+                       dict(system_prompt='Review.', user_prompt='Version.', model='fixed'))
+    assert error.value.detail == dict(provider='agent', stage='help', reason='required_option_missing', option=option)
+
+
+def test_probe_refuses_a_guard_that_allows_only_host_writes(tmp_path):
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'source.md').write_text('unchanged')
+    # A subprocess double simulates successful snapshot protection but a host overwrite.
+    from unittest.mock import patch
+    def broken_probe(argv, **kwargs):
+        Path(argv[-2]).write_text('FORBIDDEN')
+        Path(argv[-1]).write_text('allowed')
+        return subprocess.CompletedProcess(argv, 0)
+    with patch.object(guards.subprocess, 'run', broken_probe):
+        with pytest.raises(profiles.ProfileError) as error:
+            guards.probe_guard([], dict(os.environ), private, cwd)
+    assert error.value.detail['reason'] == 'write_guard_probe_failed'
+
+
+@pytest.mark.parametrize('provider', ['agent', 'agy'])
+def test_router_failure_reports_the_concrete_cause_and_version_without_inference(tmp_path, monkeypatch, provider):
+    import router
+    import solar_state
+    source, commit = repository(tmp_path)
+    e = repo.build(repository=str(source), commit=commit, provider=provider, model='fixture-model',
+                   instructions='Review the committed version.', rules=[])
+    home = tmp_path / 'user'; auth_fixture(home); monkeypatch.setenv('HOME', str(home))
+    for key in list(os.environ):
+        if key.startswith(('SOLAR_ROUTER_' + provider.upper() + '_', 'SOLAR_AI_' + provider.upper() + '_')):
+            monkeypatch.delenv(key)
+    monkeypatch.setattr(guards, 'guard_prefix', lambda *a: [])
+    monkeypatch.setattr(guards, 'probe_guard', lambda *a: None)
+    inference = tmp_path / 'inference-ran'
+    help_text = '\n'.join(line for line in HELP.splitlines() if not line.lstrip().startswith('--print '))
+    binary = tmp_path / provider
+    binary.write_text(f'''#!{sys.executable}
+import pathlib,sys
+if '--version' in sys.argv: print('2027.02.02-renamed')
+elif '--help' in sys.argv: print({help_text!r})
+else: pathlib.Path({str(inference)!r}).write_text('ran')
+''')
+    binary.chmod(0o700)
+    monkeypatch.setattr(PROVIDERS[provider], 'resolve_binary', lambda _: str(binary))
+    fields = dict(provider=provider, execution_profile=repo.PROFILE,
+                  access_policy=profiles.canonical(dict(version=1, mode='read', scopes=[str(source)], resources=[])),
+                  review_input_manifest=profiles.canonical(e['manifest']), review_input_digest=e['review_input_digest'])
+    with solar_state.session() as store:
+        task = store.task_create([(k, json.dumps(v)) for k, v in fields.items()], 'Review.', status='queued')
+        claim = store.task_claim_detail(task, 'reader')
+    result = router.route(json.dumps(dict(text='x', provider=provider,
+                                          execution=dict(task_id=task, token=claim['token'], profile=repo.PROFILE))))
+    assert result['status'] == 'failed' and result['error_code'] == 'execution_profile_unsupported'
+    assert result['error_detail'] == dict(provider=provider, stage='help', reason='required_option_missing', option='--print')
+    assert result['review_preflight']['version'] == '2027.02.02-renamed'
+    assert result['error'] == 'execution_profile_unsupported: help required_option_missing --print'
+    assert not inference.exists()
+
+
+def test_each_refusal_cause_has_its_own_reason(tmp_path, monkeypatch):
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'file').write_text('x')
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.credential(tmp_path / 'missing', tmp_path / 'copy')
+    assert error.value.detail['reason'] == 'credentials_unavailable'
+    monkeypatch.setattr(guards.sys, 'platform', 'linux')
+    monkeypatch.setattr(guards.shutil, 'which', lambda *a, **k: None)
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.guard_prefix(private, cwd)
+    assert error.value.detail['reason'] == 'boundary_unavailable'
+
+    def hang(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, 15)
+    monkeypatch.setattr(guards.subprocess, 'run', hang)
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.probe_guard([], dict(os.environ), private, cwd)
+    assert error.value.detail['reason'] == 'write_guard_probe_timeout'
+
+
+def test_present_managed_policy_is_reported_as_such(tmp_path, monkeypatch):
+    home = tmp_path / 'user'; auth_fixture(home)
+    (home / '.cursor' / 'managed').mkdir(parents=True)
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'file').write_text('x')
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.prepare('agent', '/no-provider-should-run', {'HOME': str(home)}, private, cwd,
+                       dict(system_prompt='Review.', user_prompt='Version.', model='fixed'))
+    assert error.value.detail == dict(provider='agent', stage='managed_policy', reason='managed_policy_present')

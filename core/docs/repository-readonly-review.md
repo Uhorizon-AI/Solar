@@ -144,7 +144,16 @@ from bypassing HOME redirection by resolving the home through the OS user databa
 Every invocation probes the actual boundary before starting the CLI: reading an
 existing snapshot file must succeed, overwriting it, creating a snapshot file,
 and overwriting a separate disposable host sentinel must fail. Private state
-writes must succeed. Help is then checked under the same guard. These adapters
+writes must succeed. Help is then checked under the same guard: each required
+option must be declared (an example or another option's description does not
+count) and the values Solar passes (`--mode`, `--sandbox`, `--output-format`)
+must be advertised in that option's own block. The CLI version is recorded in the
+result (`review_preflight.version`) and the audit log, and never blocks launch.
+A refusal carries `error_detail` with `provider`, `stage` and `reason` (for
+example `required_option_missing` with the option, `help_timeout`,
+`help_format_unknown`, `managed_policy_present`, `credentials_unavailable`,
+`boundary_unavailable`, `write_guard_probe_failed`), so causes are not merged.
+A help text proves neither the effective configuration nor that a guard works. These adapters
 do not claim a doctor-style effective/cloud-policy attestation; their stronger
 write boundary is enforced externally. Network access remains available for the
 provider, so this is not an OS network-egress boundary or proof of absent
@@ -157,9 +166,12 @@ trust repository instructions as authority. Its trust record stays in the
 private HOME and is deleted on exit. Only subscription access/refresh tokens
 are copied, not API keys, settings, hooks, plugins, approvals or history. On
 macOS the two named Cursor keychain entries can be read into that private file;
-no keychain writes are made. The file-store switch was audited in Cursor
-`2026.10.14-0f9edde`; other versions refuse until explicitly audited, since this
-switch is not documented in CLI help. Known machine-managed Cursor directories cause a
+no keychain writes are made. The file-store switch is not documented in CLI
+help, so help discovery cannot confirm it and no version list gates it. It was
+inspected in Cursor `2026.10.14-0f9edde`; a later release that ignored it could
+read or refresh the user's real keychain entries. That residual risk is accepted
+for now and stays unverified without a real run; do not read it as a guarantee.
+Known machine-managed Cursor directories cause a
 refusal rather than overriding administrator policy. Enterprise/team accounts
 and hidden provider-side context are not accredited by these help checks.
 

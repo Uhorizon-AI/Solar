@@ -31,8 +31,9 @@ ENV_ALLOWLIST = frozenset({"HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL",
 
 
 class ProfileError(RuntimeError):
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, detail=None):
         self.code = code
+        self.detail = detail
         super().__init__(code)
 
 
