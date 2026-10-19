@@ -63,7 +63,6 @@ a provider without a verified profile) is high risk and waits as `awaiting_appro
 changes (`async_execution.*`) keep their form. Tasks approved before this existed, and by local scripts, keep
 running as they did.
 
-
 1. Prepare the exact operation, arguments and destination. For `telegram.send` include an
    explicit `chat_id` and final text; apply the relevant communication gate first. For an
    existing task, read it first and pass its `row_version`.

@@ -41,8 +41,9 @@ class _EveryProvider:
 
 
 @pytest.fixture
-def confined(monkeypatch):
-    """Stands in for a verified implementation of the read-only repository profile."""
+def every_provider_verified(monkeypatch):
+    """Negative cases only: pretends every provider has a verified implementation of the profile. The
+    positive case uses the registry that ships."""
     monkeypatch.setattr(solar_state, "VERIFIED_PROFILES", {"repository_readonly_v1": _EveryProvider()})
 
 
@@ -167,7 +168,7 @@ def test_a_task_confined_to_a_verified_read_only_profile_runs_without_asking(sol
 
 @pytest.mark.parametrize("mode,profile,provider", [("write", "repository_readonly_v1", "codex"),
                                                   ("read", "unknown_profile_v1", "codex")])
-def test_a_declared_profile_the_executor_does_not_enforce_is_not_low_risk(solar_env, confined, mode, profile, provider):
+def test_a_declared_profile_the_executor_does_not_enforce_is_not_low_risk(solar_env, every_provider_verified, mode, profile, provider):
     made = make("Claims to be safe", provider=provider)
     confine(made["id"], mode=mode, profile=profile, provider=provider)
     ask("task.approve", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
@@ -268,3 +269,10 @@ def test_approving_through_the_operation_says_when_the_task_will_wait(solar_env)
     result = run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
     assert result["risk"] == "high" and result["awaiting_approval"] is True and "task.authorize_run" in result["next"]
     assert search(scope="tasks", task_id=made["id"], view="status")["awaiting_approval"] is True
+
+
+def test_the_gate_audit_keeps_queue_true_and_the_consent_code(solar_env):
+    ask("task.create", dict(title="Audited", instructions="x", queue=True))
+    rows = [json.loads(l) for l in solar_env.gate_audit.read_text().splitlines()]
+    decision = [r for r in rows if r.get("kind") == "decision" and r["tool"] == "task.create"][-1]
+    assert decision["code"] == "client_consent" and decision["arguments"]["queue"] is True

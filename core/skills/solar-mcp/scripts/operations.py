@@ -193,12 +193,6 @@ def _review_batch_fields(arguments):
                 review_input_digest=json.dumps(digest(catalog)))
 
 
-def _prepare_review(arguments):
-    # Validate and compose before presenting a native approval. The handler
-    # recomposes afterwards: source changes cannot reuse the earlier attestation.
-    _review_fields(arguments)
-
-
 def _do_task_create(arguments: dict) -> dict:
     import solar_state
 
@@ -610,7 +604,6 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                   queue={"type": "boolean", "description": "Queue it right away, as task.approve would. For work "
                          "that should run now; a risky task still waits for task.authorize_run."}),
              required=("title", "instructions")),
-        pre_confirm=_prepare_review,   # runs only where a form is asked; the handler validates again
         errors=("task_not_found", "revision_unsupported", "access_policy_invalid", "review_input_invalid"),
         client_consent=True,
         effects="Writes one draft row. " + _APPROVED_ONLY + " revises_task_id copies "
@@ -623,7 +616,6 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                   priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
                   responsibility=SLUG, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH),
              required=("task_id", "expected_row_version")),
-        pre_confirm=_prepare_review,
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable", "review_input_invalid",
                 "no_changes", "access_policy_invalid"),
         client_consent=True,
