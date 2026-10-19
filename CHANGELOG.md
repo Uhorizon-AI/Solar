@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.54.2] - 2026-10-19
+
 ### Fixed
 - A task waiting for `task.authorize_run` no longer waits in silence. The wait shows when it began and when it ends in the task list, the task views and the console; it is written once to the audit; it expires (`SOLAR_APPROVAL_WAIT_HOURS`, default 72, `0` turns it off): a one-off task goes back to draft, a recurring one skips only that occurrence and keeps its schedule; and the configured Telegram chat is told once when it begins and once when it ends, through the existing task notifier (title only, never the chat a task names). `task.authorize_run` is unchanged.
 
