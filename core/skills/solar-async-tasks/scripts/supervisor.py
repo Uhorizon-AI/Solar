@@ -474,42 +474,65 @@ class Supervisor:
 
     def _announce_approvals(self) -> None:
         """Tell the configured chat about a task that began waiting for authorization, or whose wait ended.
-        Each audit row is announced once: the notice is taken before it is sent, so a failure is not retried.
-        The message carries the title only, through the task notifier (`notify_if_configured.sh`). A few per
-        pass, never while draining, and a stuck sender is ended with its whole group: filling places comes first."""
+        The sending runs on its own thread, one at a time, so a slow or hung sender never delays a claim, the
+        heartbeat or a drain. Each audit row is announced once: the notice is taken before it is sent, so a
+        failure is recorded and not retried. The message carries the title only, through the task notifier
+        (`notify_if_configured.sh`); a sender that hangs is ended with its whole process group."""
+        current = getattr(self, "_announcer", None)
+        if (current is not None and current.is_alive()) or self.draining or self.stop_event.is_set():
+            return
         with self._session() as store:
-            pending = store.approval_notices(self.NOTICES_PER_PASS)
-        for notice in pending:
-            if self.draining or self.stop_event.is_set():
+            if not store.approval_notices(1):
                 return
+        self._announcer = threading.Thread(target=self._send_notices, name="approval-notices", daemon=True)
+        self._announcer.start()
+
+    def _send_notices(self) -> None:
+        try:
             with self._session() as store:
-                taken = store.approval_notice_claim(notice["ref"])
-            if taken is None:
-                continue
-            mode = ("--waiting" if taken["kind"] == "waiting" else
-                    "--expired-skipped" if taken.get("outcome") == "occurrence_skipped" else "--expired-draft")
-            done = False
-            try:
-                proc = subprocess.Popen(["bash", str(HERE / "notify_if_configured.sh"), taken["task_id"], mode],
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL, env={**os.environ}, start_new_session=True)
+                pending = store.approval_notices(self.NOTICES_PER_PASS)
+            for notice in pending:
+                if self.draining or self.stop_event.is_set():
+                    return
+                with self._session() as store:
+                    taken = store.approval_notice_claim(notice["ref"])
+                if taken is None:
+                    continue
+                mode = ("--waiting" if taken["kind"] == "waiting" else
+                        "--expired-skipped" if taken.get("outcome") == "occurrence_skipped" else "--expired-draft")
+                code, reason = None, None
                 try:
-                    done = proc.wait(timeout=self.NOTIFY_TIMEOUT) == 0
-                except subprocess.TimeoutExpired:
+                    proc = subprocess.Popen(["bash", str(HERE / "notify_if_configured.sh"), taken["task_id"], mode],
+                                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL, env={**os.environ}, start_new_session=True)
                     try:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    except OSError:
-                        pass
-                    proc.wait()
-            except OSError:
-                done = False
-            with self._session() as store:
-                store.approval_notice_result(notice["ref"], done)
-            if not done:
-                log(f"approval notice for {taken['task_id']} was not delivered")
+                        code = proc.wait(timeout=self.NOTIFY_TIMEOUT)
+                    except subprocess.TimeoutExpired:
+                        reason = "timeout"
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+                        proc.wait()
+                except OSError:
+                    reason = "sender_unavailable"
+                if code == 3:
+                    reason = "not_configured"
+                done = code == 0
+                with self._session() as store:
+                    store.approval_notice_result(notice["ref"], done, None if done else (reason or "send_failed"))
+                if not done:
+                    log(f"approval notice for {taken['task_id']} was not delivered ({reason or 'send_failed'})")
+        except Exception as error:      # a notice must never take the supervisor down
+            log(f"approval notices stopped: {type(error).__name__}")
 
     def _fill(self) -> None:
-        self._announce_approvals()
+        try:
+            self._fill_places()
+        finally:
+            self._announce_approvals()
+
+    def _fill_places(self) -> None:
         for _ in range(MAX_PER_PASS):
             if self.draining or self.stop_event.is_set():
                 return

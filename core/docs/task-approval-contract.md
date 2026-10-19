@@ -61,14 +61,18 @@ A wait is one approval (its digest and the row version it was made at, so approv
   schedule are kept, nothing is owed later, and the next occurrence starts a wait of its own). Reading the queue never ends a wait.
 - **Announced once.** The async supervisor tells the configured chat, through `notify_if_configured.sh`
   (`--waiting`, `--expired-draft`, `--expired-skipped`), when a wait begins and when it ends: title only, never the
-  instructions, never the chat a task names, and the task is not touched. A notice is taken in `audit`
+  instructions, never the chat a task names, and the task is not touched. The sending runs on its own thread of the supervisor (a slow sender never delays a claim, the heartbeat or a drain); a chat that is not configured or not allowed is recorded as not delivered (`reason: not_configured`), not as sent. A notice is taken in `audit`
   (`approval_notice`) before it is sent, so a failure is recorded (`approval_notice_result`) and not retried; a wait
   that is already over (authorized, edited, cancelled) is marked and not announced. Without a configured and allowed
-  chat nothing is sent. At most three notices go out per supervisor pass, never while it drains, and a sender that
-  hangs is ended after 30 seconds with its whole process group.
+  chat nothing is sent. At most three notices go out per run of that thread, never while the supervisor drains, and a
+  sender that hangs is ended after 30 seconds with its whole process group.
 - **Limit.** A recurring task nobody ever authorizes starts a new wait, and sends a new notice, at each occurrence
   (about every `recurring_min_interval`); archive or cancel it to stop them. After a skipped occurrence the views show
-  no dates until the next claim finds the new wait.
+  no dates until the next claim finds the new wait. Before the claim records a wait, `expires_at` counts from
+  `approved_at`: a task that is out of its schedule window, blocked by a dependency or inside its recurring interval
+  has not started waiting yet, so its real end is later, and a task with a schedule window only expires on the first
+  claim pass inside the window after the limit. Starting a task by name past its limit ends the wait the same way
+  (`approval_wait_expired`).
 
 ## Decisions and limits
 

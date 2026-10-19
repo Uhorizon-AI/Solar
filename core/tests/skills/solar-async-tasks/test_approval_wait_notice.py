@@ -45,6 +45,14 @@ def waiting_task(origin=""):
         return task_id, store.task_get(task_id)["row_version"]
 
 
+def settle(sup, seconds=30):
+    """The notices go out on the supervisor's own thread: wait for it, as the loop's next passes would."""
+    thread = getattr(sup, "_announcer", None)
+    if thread is not None:
+        thread.join(seconds)
+        assert not thread.is_alive()
+
+
 def notify(task_id, mode, env):
     return subprocess.run(["bash", str(SCRIPTS / "notify_if_configured.sh"), task_id, mode], env=env,
                           text=True, capture_output=True, timeout=20)
@@ -78,7 +86,7 @@ def test_a_chat_that_is_not_allowed_receives_nothing(tmp_path):
     workspace, root, env = fixture_env(tmp_path)
     task_id, _ = waiting_task()
     env["TELEGRAM_ALLOWED_CHAT_IDS"] = "111"
-    assert notify(task_id, "--waiting", env).returncode == 0
+    assert notify(task_id, "--waiting", env).returncode == 3          # says it went nowhere
     assert not (workspace / "sent.log").exists()
 
 
@@ -118,6 +126,7 @@ def test_the_supervisor_announces_a_wait_once_however_often_it_polls(rig, tmp_pa
     sup = rig.build()
     for _ in range(4):
         sup._fill()
+        settle(sup)
     log = rig.workspace / "sent.log"
     text = log.read_text()
     assert text.count("Waiting for your approval") == 1 and text.startswith("456|") and "Needs approval" in text
@@ -152,29 +161,65 @@ def test_a_failed_notice_is_recorded_and_not_retried(rig, tmp_path, monkeypatch)
     sup = rig.build()
     for _ in range(3):
         sup._fill()
+        settle(sup)
     assert (rig.workspace / "attempts.log").read_text().count("run") == 1
     with solar_state.session() as store:
         assert [r["sent"] for r in store.audit_rows("approval_notice_result")] == [False]
 
 
-def test_a_stuck_sender_is_ended_and_does_not_hold_the_supervisor(rig, tmp_path, monkeypatch):
-    install = tmp_path / "install"
-    sender = install / "core/skills/solar-telegram/scripts/send_telegram.sh"
-    sender.parent.mkdir(parents=True)
-    sender.write_text("#!/bin/bash\nsleep 60\n")
-    sender.chmod(0o755)
-    for key, value in (("SOLAR_ROOT", str(install)), ("TELEGRAM_CHAT_ID", "456"),
-                       ("TELEGRAM_ALLOWED_CHAT_IDS", "456"), ("TELEGRAM_BOT_TOKEN", "fake")):
-        monkeypatch.setenv(key, value)
-    task_id = rig.legacy("Needs approval")
+def _queue_waiting(rig, title="Needs approval"):
+    task_id = rig.legacy(title)
     with solar_state.session() as store:
         store.task_return_to_draft(task_id, expected_row_version=store.task_get(task_id)["row_version"])
         store.task_approve(task_id, expected_row_version=store.task_get(task_id)["row_version"], consent="client")
+    return task_id
+
+
+def _sender(tmp_path, monkeypatch, script, chat="456"):
+    install = tmp_path / "install"
+    sender = install / "core/skills/solar-telegram/scripts/send_telegram.sh"
+    sender.parent.mkdir(parents=True)
+    sender.write_text(script)
+    sender.chmod(0o755)
+    for key, value in (("SOLAR_ROOT", str(install)), ("TELEGRAM_CHAT_ID", chat),
+                       ("TELEGRAM_ALLOWED_CHAT_IDS", chat), ("TELEGRAM_BOT_TOKEN", "fake")):
+        monkeypatch.setenv(key, value)
+
+
+def test_a_stuck_sender_never_holds_the_supervisor_and_is_ended_with_its_children(rig, tmp_path, monkeypatch):
+    pidfile = tmp_path / "child.pid"
+    _sender(tmp_path, monkeypatch, f'#!/bin/bash\nsleep 300 &\necho $! > "{pidfile}"\nwait\n')
+    _queue_waiting(rig)
     sup = rig.build()
-    sup.NOTIFY_TIMEOUT = 1.0
-    sup._fill()                                  # the claim finds the wait
+    sup.NOTIFY_TIMEOUT = 2.0
     started = time.monotonic()
-    sup._fill()                                  # and the next pass announces it, with a sender that hangs
-    assert time.monotonic() - started < 15
+    sup._fill()                                   # the claim finds the wait and the notice starts on its own thread
+    assert time.monotonic() - started < 1.5       # a sender that hangs for seconds does not hold the pass
+    settle(sup)
+    child = int(pidfile.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        os.kill(child, 9)
+        pytest.fail("the hung sender's child survived the timeout")
     with solar_state.session() as store:
-        assert [r["sent"] for r in store.audit_rows("approval_notice_result")] == [False]
+        result = store.audit_rows("approval_notice_result")
+        assert [(r["sent"], r["reason"]) for r in result] == [(False, "timeout")]
+
+
+def test_a_notice_with_nowhere_to_go_is_not_recorded_as_sent(rig, tmp_path, monkeypatch):
+    _sender(tmp_path, monkeypatch, "#!/bin/bash\nexit 0\n")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "111")           # the configured chat is not allowed
+    _queue_waiting(rig)
+    sup = rig.build()
+    for _ in range(2):
+        sup._fill()
+        settle(sup)
+    with solar_state.session() as store:
+        result = store.audit_rows("approval_notice_result")
+        assert [(r["sent"], r["reason"]) for r in result] == [(False, "not_configured")]

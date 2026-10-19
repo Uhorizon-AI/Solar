@@ -3258,6 +3258,8 @@ class Session:
         found = self.conn.execute(
             f"SELECT a.seq, a.row FROM audit a WHERE a.event IN ({marks}) AND NOT EXISTS ("
             "SELECT 1 FROM audit n WHERE n.event = 'approval_notice' AND json_extract(n.row, '$.ref') = a.seq) "
+            "AND a.seq > COALESCE((SELECT MAX(json_extract(m.row, '$.ref')) FROM audit m "
+            "WHERE m.event = 'approval_notice'), 0) "
             "ORDER BY a.seq LIMIT ?", (*_NOTICE_EVENTS, limit)).fetchall()
         return [dict(ref=r["seq"], **json.loads(r["row"])) for r in found]
 
@@ -3289,9 +3291,9 @@ class Session:
             return (dict(task_id=data["task_id"], kind=kind, title=task["title"], outcome=data.get("outcome"))
                     if current else None)
 
-    def approval_notice_result(self, ref: int, sent: bool) -> None:
+    def approval_notice_result(self, ref: int, sent: bool, reason: Optional[str] = None) -> None:
         with _transaction(self.conn) as conn:
-            _audit(conn, "approval_notice_result", ref=ref, sent=bool(sent))
+            _audit(conn, "approval_notice_result", ref=ref, sent=bool(sent), reason=reason)
 
     # -- provenance of a derived authorization -------------------------------
 

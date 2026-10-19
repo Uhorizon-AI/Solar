@@ -94,8 +94,11 @@ if [[ -z "$ORIGIN_CHAT" && -f "$PROFILE" ]]; then
   [[ -n "$PROFILE_CHAT" ]] && CHAT_ID="$PROFILE_CHAT"
 fi
 
-[[ -z "$CHAT_ID" ]] && exit 0
-telegram_chat_allowed "$CHAT_ID" || exit 0
+# An approval notice that has nowhere to go says so (3): the supervisor must not record it as sent.
+NOT_SENT=0
+[[ -n "$MODE" ]] && NOT_SENT=3
+[[ -z "$CHAT_ID" ]] && exit "$NOT_SENT"
+telegram_chat_allowed "$CHAT_ID" || exit "$NOT_SENT"
 
 export TELEGRAM_CHAT_ID="$CHAT_ID"
 

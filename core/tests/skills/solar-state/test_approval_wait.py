@@ -323,3 +323,28 @@ def test_the_console_read_of_an_exclusive_waiter_writes_nothing(ready, clock):
         assert item["reason"] == "awaiting_approval"
     with solar_state.session() as store:
         assert events(store, "awaiting_approval") == [] and store.task_status(task_id) == "queued"
+
+
+def test_starting_an_expired_task_by_name_ends_the_wait_and_says_so(ready, monkeypatch):
+    import time
+    monkeypatch.setenv(solar_state.APPROVAL_WAIT_ENV, "0.0006")             # 2.2 s, on the real clock
+    with solar_state.session() as store:
+        task_id = waiting(store)
+        assert store.task_claim_detail(task_id, "worker")["reason"] == "awaiting_approval"
+        time.sleep(3.0)
+        answer = store.task_claim_detail(task_id, "worker")
+        assert answer["claimed"] is False and answer["reason"] == "approval_wait_expired"
+        assert store.task_status(task_id) == "draft"
+        assert events(store, "approval_wait_expired")[0]["outcome"] == "returned_to_draft"
+
+
+def test_the_notices_are_read_from_the_last_one_taken(ready, clock):
+    with solar_state.session() as store:
+        for n in range(3):
+            waiting(store, title=f"Work {n}")
+        claim(store, clock)
+        first = store.approval_notices(1)
+        assert len(first) == 1
+        store.approval_notice_claim(first[0]["ref"])
+        assert [n["ref"] for n in store.approval_notices()] == sorted(n["ref"] for n in store.approval_notices())
+        assert len(store.approval_notices()) == 2
