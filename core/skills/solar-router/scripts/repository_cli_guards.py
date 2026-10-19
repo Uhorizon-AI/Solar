@@ -17,7 +17,7 @@ import sys
 from cli_capabilities import discover, unsupported
 
 
-def refused(reason='boundary_unavailable', stage='boundary', provider='repository_reader'):
+def refused(reason, stage, provider):
     return unsupported(provider, stage, reason)
 
 
@@ -27,7 +27,7 @@ def write_json(path, value):
     path.chmod(0o600)
 
 
-def credential(source, target, provider='repository_reader'):
+def credential(source, target, provider):
     """Copy only a bounded regular auth file, without following links."""
     try:
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
@@ -45,7 +45,7 @@ def credential(source, target, provider='repository_reader'):
         raise refused('credentials_unavailable', 'credentials', provider) from None
 
 
-def cursor_auth(origin, home, provider='agent'):
+def cursor_auth(origin, home, provider):
     """Use subscription tokens only; never silently switch to API-key billing."""
     source = origin / ('.cursor' if sys.platform == 'darwin' else '.config/cursor') / 'auth.json'
     target = home / ('.cursor' if sys.platform == 'darwin' else '.config/cursor') / 'auth.json'
@@ -75,22 +75,22 @@ def cursor_auth(origin, home, provider='agent'):
     write_json(target, {k: auth[k] for k in ('accessToken', 'refreshToken')})
 
 
-def guard_prefix(private, cwd, provider='repository_reader'):
+def guard_prefix(private, cwd, provider):
     """Read-only host and snapshot; writes allowed only in disposable CLI state."""
     private, cwd = Path(private).resolve(), Path(cwd).resolve()
     if cwd.parent != private or private == Path('/'):
-        raise refused(provider=provider)
+        raise refused('boundary_unavailable', 'boundary', provider)
     # HOME redirection is not enough if a CLI resolves its account's home via
     # the OS user database. Prevent reads of the real account's CLI/config trees
     # too. Binaries under .local/share remain readable.
     origin = Path.home().resolve()
     protected = [origin / name for name in ('.cursor', '.gemini', '.claude', '.codex', '.agy', '.config')]
     if any(private == path or path in private.parents for path in protected):
-        raise refused(provider=provider)
+        raise refused('boundary_unavailable', 'boundary', provider)
     if sys.platform == 'darwin':
         binary = '/usr/bin/sandbox-exec'
         if not Path(binary).is_file():
-            raise refused(provider=provider)
+            raise refused('boundary_unavailable', 'boundary', provider)
         # JSON quoting is also valid for SBPL string literals; never interpolate
         # an unquoted path into the policy language.
         profile = ('(version 1)(allow default)(deny file-write*)'
@@ -103,20 +103,20 @@ def guard_prefix(private, cwd, provider='repository_reader'):
     if sys.platform == 'linux':
         binary = shutil.which('bwrap', path='/usr/bin:/bin')
         if not binary:
-            raise refused(provider=provider)
+            raise refused('boundary_unavailable', 'boundary', provider)
         hidden = []
         for path in protected:
             if path.is_symlink():
-                raise refused(provider=provider)
+                raise refused('boundary_unavailable', 'boundary', provider)
             if path.is_dir():
                 hidden += ['--tmpfs', str(path)]
         return [binary, '--die-with-parent', '--new-session', '--unshare-pid', '--ro-bind', '/', '/',
                 '--bind', str(private), str(private), '--ro-bind', str(cwd), str(cwd),
                 '--proc', '/proc', '--dev', '/dev', *hidden, '--chdir', str(cwd), '--']
-    raise refused(provider=provider)
+    raise refused('boundary_unavailable', 'boundary', provider)
 
 
-def probe_guard(prefix, env, private, cwd, provider='repository_reader'):
+def probe_guard(prefix, env, private, cwd, provider):
     """Exercise enforcement before any provider starts, not just config intent."""
     # One disposable sentinel outside the writable CLI state, owned by this
     # invocation. This tests host writes as well as snapshot writes.

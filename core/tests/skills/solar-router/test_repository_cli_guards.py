@@ -116,7 +116,7 @@ def test_unavailable_guard_refuses_before_cli_or_inference(tmp_path, monkeypatch
     home = tmp_path / 'user'; auth_fixture(home)
     private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
     (cwd / 'file').write_text('unchanged')
-    monkeypatch.setattr(guards, 'guard_prefix', lambda *a: (_ for _ in ()).throw(guards.refused()))
+    monkeypatch.setattr(guards, 'guard_prefix', lambda *a: (_ for _ in ()).throw(guards.refused('boundary_unavailable', 'boundary', 'agent')))
     with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
         guards.prepare(provider, '/no-provider-should-run', {'HOME': str(home)}, private, cwd,
                        dict(system_prompt='Review.', user_prompt='Version.', model='fixed'))
@@ -141,14 +141,14 @@ def test_unknown_help_refuses_and_launch_context_cleans_up(tmp_path, monkeypatch
 def test_missing_or_linked_credentials_are_refused(tmp_path):
     source = tmp_path / 'auth'; source.write_text('token'); link = tmp_path / 'link'; link.symlink_to(source)
     for path in (link, tmp_path / 'missing'):
-        with pytest.raises(profiles.ProfileError): guards.credential(path, tmp_path / 'copy')
+        with pytest.raises(profiles.ProfileError): guards.credential(path, tmp_path / 'copy', 'agy')
     assert not (tmp_path / 'copy').exists()
 
 
 def test_cursor_copies_subscription_tokens_only(tmp_path):
     home = tmp_path / 'user'; auth_fixture(home)
     isolated = tmp_path / 'isolated'
-    guards.cursor_auth(home, isolated)
+    guards.cursor_auth(home, isolated, 'agent')
     path = isolated / ('.cursor' if sys.platform == 'darwin' else '.config/cursor') / 'auth.json'
     assert json.loads(path.read_text()) == dict(accessToken='fixture-access', refreshToken='fixture-refresh')
     assert path.stat().st_mode & 0o777 == 0o600
@@ -158,7 +158,7 @@ def test_guard_configuration_is_fail_closed_without_linux_helper(tmp_path, monke
     private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
     monkeypatch.setattr(guards.sys, 'platform', 'linux')
     monkeypatch.setattr(guards.shutil, 'which', lambda *a, **k: None)
-    with pytest.raises(profiles.ProfileError): guards.guard_prefix(private, cwd)
+    with pytest.raises(profiles.ProfileError): guards.guard_prefix(private, cwd, 'agent')
 
 
 @pytest.mark.skipif(os.getenv('SOLAR_TEST_REPOSITORY_CLI') != '1', reason='opt-in real OS guard; no inference')
@@ -168,8 +168,8 @@ def test_real_os_guard_blocks_overwrite_creation_and_host_writes(tmp_path, monke
     origin = tmp_path / 'real-user'
     guards.write_json(origin / '.cursor/cli-config.json', dict(untrusted=True))
     monkeypatch.setenv('HOME', str(origin))
-    prefix = guards.guard_prefix(private, cwd)
-    guards.probe_guard(prefix, dict(os.environ), private, cwd)
+    prefix = guards.guard_prefix(private, cwd, 'agent')
+    guards.probe_guard(prefix, dict(os.environ), private, cwd, 'agent')
     code = '''import pathlib,sys
 try: pathlib.Path(sys.argv[1]).read_text()
 except OSError: sys.exit(0)
@@ -205,7 +205,7 @@ def test_linux_guard_keeps_host_and_snapshot_read_only(tmp_path, monkeypatch):
     private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
     monkeypatch.setattr(guards.sys, 'platform', 'linux')
     monkeypatch.setattr(guards.shutil, 'which', lambda *a, **k: '/usr/bin/bwrap')
-    argv = guards.guard_prefix(private, cwd)
+    argv = guards.guard_prefix(private, cwd, 'agent')
     assert argv[:2] == ['/usr/bin/bwrap', '--die-with-parent']
     assert argv[argv.index('--bind') + 1:argv.index('--bind') + 3] == [str(private), str(private)]
     assert argv.count('--ro-bind') == 2
@@ -216,7 +216,7 @@ def test_probe_refuses_a_guard_that_allows_snapshot_writes(tmp_path):
     private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
     (cwd / 'source.md').write_text('unchanged')
     with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
-        guards.probe_guard([], dict(os.environ), private, cwd)
+        guards.probe_guard([], dict(os.environ), private, cwd, 'agent')
 
 
 @pytest.mark.parametrize('provider', ['agent', 'agy'])
@@ -261,7 +261,7 @@ def test_probe_refuses_a_guard_that_allows_only_host_writes(tmp_path):
         return subprocess.CompletedProcess(argv, 0)
     with patch.object(guards.subprocess, 'run', broken_probe):
         with pytest.raises(profiles.ProfileError) as error:
-            guards.probe_guard([], dict(os.environ), private, cwd)
+            guards.probe_guard([], dict(os.environ), private, cwd, 'agent')
     assert error.value.detail['reason'] == 'write_guard_probe_failed'
 
 
@@ -348,19 +348,19 @@ def test_each_refusal_cause_has_its_own_reason(tmp_path, monkeypatch):
     private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
     (cwd / 'file').write_text('x')
     with pytest.raises(profiles.ProfileError) as error:
-        guards.credential(tmp_path / 'missing', tmp_path / 'copy')
+        guards.credential(tmp_path / 'missing', tmp_path / 'copy', 'agy')
     assert error.value.detail['reason'] == 'credentials_unavailable'
     monkeypatch.setattr(guards.sys, 'platform', 'linux')
     monkeypatch.setattr(guards.shutil, 'which', lambda *a, **k: None)
     with pytest.raises(profiles.ProfileError) as error:
-        guards.guard_prefix(private, cwd)
+        guards.guard_prefix(private, cwd, 'agent')
     assert (error.value.detail['reason'], error.value.detail['stage']) == ('boundary_unavailable', 'boundary')
 
     def hang(argv, **kwargs):
         raise subprocess.TimeoutExpired(argv, 15)
     monkeypatch.setattr(guards.subprocess, 'run', hang)
     with pytest.raises(profiles.ProfileError) as error:
-        guards.probe_guard([], dict(os.environ), private, cwd)
+        guards.probe_guard([], dict(os.environ), private, cwd, 'agent')
     assert (error.value.detail['reason'], error.value.detail['stage']) == ('write_guard_probe_timeout', 'write_guard')
 
 
@@ -475,7 +475,9 @@ def test_every_refusal_names_the_real_provider(tmp_path, monkeypatch, provider):
     home = tmp_path / 'user'
     private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
     (cwd / 'file').write_text('x')
-    # No credentials in this fake home: the refusal must carry the provider.
+    # No credentials in this fake home, and the macOS keychain fallback is simulated
+    # as empty, so the test never reads the real keychain.
+    monkeypatch.setattr(guards.subprocess, 'run', lambda argv, **k: subprocess.CompletedProcess(argv, 44, '', ''))
     with pytest.raises(profiles.ProfileError) as error:
         guards.prepare(provider, '/none', {'HOME': str(home)}, private, cwd,
                        dict(system_prompt='x', user_prompt='y', model='m'))
