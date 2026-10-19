@@ -69,7 +69,9 @@ running as they did.
 2. Task lifecycle operations: call `solar_execute` and nothing else; the client's tool permission is the
    consent. `queue: true` on `task.create` is for work that should run now. If the answer says
    `awaiting_approval`, the task is not confined to a verified read-only profile: tell the user and call
-   `task.authorize_run` when they agree.
+   `task.authorize_run` when they agree. The wait shows `waiting_since` and `waiting_expires_at` in the task list and
+   the task; unauthorized, it ends on its own (a one-off task goes back to draft, a recurring one skips that run)
+   and the configured chat is told when it begins and when it ends.
 3. `task.authorize_run`, `async_execution.*` and `telegram.send`: call `solar_execute` without `approval_id`.
    On clients advertising MCP form elicitation, the runtime presents a compact summary of the exact
    operation for confirmation, creates the approval and executes internally. Do not ask the user to

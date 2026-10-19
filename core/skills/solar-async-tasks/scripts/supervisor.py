@@ -469,7 +469,34 @@ class Supervisor:
             del self.cooldown[tid]
         return excluded
 
+    NOTIFY_TIMEOUT = 90.0
+
+    def _announce_approvals(self) -> None:
+        """Tell the configured chat about a task that began waiting for authorization, or whose wait ended.
+        Each audit row is announced once: the notice is taken before it is sent, so a failure is not retried.
+        The message carries the title only, through the task notifier (`notify_if_configured.sh`)."""
+        with self._session() as store:
+            pending = store.approval_notices()
+        for notice in pending:
+            with self._session() as store:
+                taken = store.approval_notice_claim(notice["ref"])
+            if taken is None:
+                continue
+            mode = ("--waiting" if taken["kind"] == "waiting" else
+                    "--expired-skipped" if taken.get("outcome") == "occurrence_skipped" else "--expired-draft")
+            try:
+                done = subprocess.run(["bash", str(HERE / "notify_if_configured.sh"), taken["task_id"], mode],
+                                      stdin=subprocess.DEVNULL, capture_output=True, timeout=self.NOTIFY_TIMEOUT,
+                                      env={**os.environ}).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                done = False
+            with self._session() as store:
+                store.approval_notice_result(notice["ref"], done)
+            if not done:
+                log(f"approval notice for {taken['task_id']} was not delivered")
+
     def _fill(self) -> None:
+        self._announce_approvals()
         for _ in range(MAX_PER_PASS):
             if self.draining or self.stop_event.is_set():
                 return

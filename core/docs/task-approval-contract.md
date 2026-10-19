@@ -46,6 +46,26 @@ verified implementation for its provider, or not read-only) stays `queued` with 
 `awaiting_approval` until `run_authorized_digest` equals `approved_digest`. A confined task runs at once.
 A recurring task keeps its authorization for every repeat, and `task.requeue` (error to queued) keeps it too, while the digest does not change.
 
+### The wait is visible, bounded and announced
+
+A wait is one approved content (its digest) at one occurrence (a recurring task's `recurring_last_run`).
+
+- **Visible.** `task list` in `solar_search` (`awaiting_approval`, `waiting_since`, `waiting_expires_at`), the task
+  detail and status views, and the console's waiting list (reason, `since`, `expires_at`).
+- **Recorded once.** The first claim that finds the wait writes `awaiting_approval` to `audit` (task, digest,
+  occurrence, risk; never the instructions). Polling adds nothing. Before that record exists, `since` is `approved_at`.
+- **Bounded.** `SOLAR_APPROVAL_WAIT_HOURS` (default 72; `0` or less turns it off; an unreadable value keeps the default)
+  is how long a wait may last. Past it, the claim ends the wait and writes `approval_wait_expired`:
+  a one-off task goes back to draft (approval withdrawn, `task_approval_withdrawn` with reason
+  `approval_wait_expired`); a recurring task skips only that occurrence (`recurring_last_run` is stamped, approval and
+  schedule are kept, nothing is owed later, and the next occurrence starts a wait of its own). Reading the queue never ends a wait.
+- **Announced once.** The async supervisor tells the configured chat, through `notify_if_configured.sh`
+  (`--waiting`, `--expired-draft`, `--expired-skipped`), when a wait begins and when it ends: title only, never the
+  instructions, never the chat a task names, and the task is not touched. A notice is taken in `audit`
+  (`approval_notice`) before it is sent, so a failure is recorded (`approval_notice_result`) and not retried; a wait
+  that is already over (authorized, edited, cancelled) is marked and not announced. Without a configured and allowed
+  chat nothing is sent.
+
 ## Decisions and limits
 
 - **Title is a label.** Renaming keeps the approval. The title still reaches the provider

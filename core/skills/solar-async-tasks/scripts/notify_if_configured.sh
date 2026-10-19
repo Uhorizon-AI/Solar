@@ -5,7 +5,11 @@
 # `## Delivery` section, that is the message: the one-screen delivery the
 # executor wrote, ending in its own evidence line. Otherwise a brief line plus
 # the result location. Long text is chunked (~1s apart).
-# Usage: notify_if_configured.sh <task_id>
+# Usage: notify_if_configured.sh <task_id> [--waiting|--expired-draft|--expired-skipped]
+#
+# The optional mode announces a task that waits for `task.authorize_run`, or whose wait ended. It goes
+# to the configured chat only (never the origin chat a task names), carries the title and no
+# instructions, and does not touch the task.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
@@ -14,11 +18,19 @@ TASK_ID="${1:-}"
 [[ -z "$TASK_ID" ]] && exit 0
 task_status_of "$TASK_ID" >/dev/null 2>&1 || exit 0
 
-NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
-[[ "$NOTIFY_WHEN" != "completed" ]] && exit 0
+MODE="${2:-}"
+case "$MODE" in
+  ""|--waiting|--expired-draft|--expired-skipped) ;;
+  *) echo "Unknown notification mode: $MODE" >&2; exit 2 ;;
+esac
 
-if [[ "$(task_field "$TASK_ID" "notify_delivered")" == "true" ]]; then
-  exit 0
+if [[ -z "$MODE" ]]; then
+  NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
+  [[ "$NOTIFY_WHEN" != "completed" ]] && exit 0
+
+  if [[ "$(task_field "$TASK_ID" "notify_delivered")" == "true" ]]; then
+    exit 0
+  fi
 fi
 
 TITLE=$(task_field "$TASK_ID" "title")
@@ -65,7 +77,8 @@ if [[ -f "$SECRETS_LOADER" ]]; then
   solar_load_installation_secrets
 fi
 
-ORIGIN_CHAT=$(task_field "$TASK_ID" "origin_chat_id")
+ORIGIN_CHAT=""
+[[ -z "$MODE" ]] && ORIGIN_CHAT=$(task_field "$TASK_ID" "origin_chat_id")
 CHAT_ID="${ORIGIN_CHAT:-${TELEGRAM_CHAT_ID:-}}"
 
 PROFILE="$SUN_DIR/preferences/profile.md"
@@ -131,6 +144,19 @@ send_chunks() {
   done
   return 0
 }
+
+if [[ -n "$MODE" ]]; then
+  case "$MODE" in
+    --waiting)
+      MESSAGE="Waiting for your approval to run: ${TITLE}"$'\n'"Ask your assistant to review it and authorize it. If nobody does, the wait ends on its own." ;;
+    --expired-draft)
+      MESSAGE="Approval wait ended: ${TITLE}"$'\n'"The task went back to draft and will not run until it is approved again." ;;
+    --expired-skipped)
+      MESSAGE="Approval wait ended: ${TITLE}"$'\n'"This run was skipped; the schedule is kept and the next run waits for approval again." ;;
+  esac
+  send_chunks "$MESSAGE" || { echo "Task notification failed: telegram_send_failed ($TASK_ID)" >&2; exit 1; }
+  exit 0
+fi
 
 DELIVERY_EXPECTED=$(task_field "$TASK_ID" "delivery_expected")
 if [[ -n "$DELIVERY" ]]; then

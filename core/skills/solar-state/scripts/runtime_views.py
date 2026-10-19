@@ -534,7 +534,10 @@ def console_capacity(store, supervisor=None):
         if kind is None:
             continue
         by_kind[kind] = by_kind.get(kind, 0) + 1
-        waiting.append(dict(id=item['id'], title=titles.get(item['id']), reason=item['reason'], kind=kind))
+        entry = dict(id=item['id'], title=titles.get(item['id']), reason=item['reason'], kind=kind)
+        if item['reason'] == 'awaiting_approval':
+            entry.update(since=item.get('since'), expires_at=item.get('expires_at'))
+        waiting.append(entry)
     recovery = []
     if isinstance(supervisor, dict):
         for entry in supervisor.get('blocked') or []:

@@ -1985,6 +1985,81 @@ def needs_run_authorization(pairs: list[list[str]]) -> bool:
     return not digest or _field(pairs, "run_authorized_digest") != digest
 
 
+APPROVAL_WAIT_ENV = "SOLAR_APPROVAL_WAIT_HOURS"
+APPROVAL_WAIT_DEFAULT_HOURS = 72.0
+_NOTICE_EVENTS = ("awaiting_approval", "approval_wait_expired")
+
+
+def approval_wait_limit() -> Optional[float]:
+    """Seconds a task may wait for `task.authorize_run`; None when waiting never expires.
+    `SOLAR_APPROVAL_WAIT_HOURS` sets it (0 or less turns the expiry off); anything unreadable keeps the default."""
+    raw = (os.environ.get(APPROVAL_WAIT_ENV) or "").strip()
+    try:
+        hours = float(raw) if raw else APPROVAL_WAIT_DEFAULT_HOURS
+    except ValueError:
+        hours = APPROVAL_WAIT_DEFAULT_HOURS
+    if hours != hours:                      # NaN
+        hours = APPROVAL_WAIT_DEFAULT_HOURS
+    if hours <= 0 or hours == float("inf"):
+        return None
+    return hours * 3600.0
+
+
+def _wait_ref(pairs: list[list[str]]) -> tuple[str, str]:
+    """One wait is one approved content (its digest) at one occurrence (a recurring task's last run)."""
+    return _field(pairs, "approved_digest") or "", _field(pairs, "recurring_last_run") or ""
+
+
+def _wait_since(conn, task_id: str, pairs: list[list[str]]) -> Optional[str]:
+    digest, occurrence = _wait_ref(pairs)
+    found = conn.execute(
+        "SELECT row FROM audit WHERE event = 'awaiting_approval' AND json_extract(row, '$.task_id') = ? "
+        "AND json_extract(row, '$.digest') = ? AND json_extract(row, '$.occurrence') = ? "
+        "ORDER BY seq LIMIT 1", (task_id, digest, occurrence)).fetchone()
+    return json.loads(found[0])["ts"] if found else None
+
+
+def _wait_info(conn, task_id: str, pairs: list[list[str]]) -> dict:
+    """When the wait for authorization began and when it expires (None: never). Reads only."""
+    since = _wait_since(conn, task_id, pairs) or _field(pairs, "approved_at")
+    limit = approval_wait_limit()
+    expires = None
+    if since and limit is not None:
+        expires = datetime.fromtimestamp(_epoch(since) + limit, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dict(since=since, expires_at=expires)
+
+
+def _awaiting(conn, row, pairs: list[list[str]], moment: datetime, record: bool) -> str:
+    """The claim found a task that needs `task.authorize_run`. The first time for this content and
+    occurrence it is written to `audit` (once, whatever the polling); past the limit the wait ends."""
+    if not record:
+        return "awaiting_approval"
+    task_id = row["id"]
+    digest, occurrence = _wait_ref(pairs)
+    since = _wait_since(conn, task_id, pairs)
+    if since is None:
+        _audit(conn, "awaiting_approval", task_id=task_id, digest=digest, occurrence=occurrence,
+               risk=run_risk(pairs), row_version=row["row_version"])
+        since = _now()
+    limit = approval_wait_limit()
+    if limit is None or moment.timestamp() - _epoch(since) < limit:
+        return "awaiting_approval"
+    if str(_field(pairs, "recurring") or "").lower() == "true":
+        # Only this occurrence lapses: the schedule and the approval stay, the next one starts its own wait.
+        _set_pair(pairs, "recurring_last_run", " " + _now())
+        _write_task(conn, task_id, "queued", pairs, row["body"], insert=False)
+        outcome = "occurrence_skipped"
+    else:
+        Session._withdraw_approval(conn, task_id, pairs, "approval_wait_expired", "approval-wait")
+        boundary = _record_boundary(pairs, row["body"])
+        _move(conn, task_id, "draft", "approval-wait", drop=APPROVAL_KEYS,
+              fields={BOUNDARY_KEY: boundary} if boundary else None)
+        outcome = "returned_to_draft"
+    _audit(conn, "approval_wait_expired", task_id=task_id, digest=digest, occurrence=occurrence,
+           outcome=outcome, waited_since=since)
+    return "approval_wait_expired"
+
+
 def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual: bool,
                  record: bool = True) -> Optional[str]:
     """Why a queued task cannot be claimed for reasons of its own, or None.
@@ -2011,7 +2086,7 @@ def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual:
     if reason:
         return reason
     if needs_run_authorization(pairs):
-        return "awaiting_approval"
+        return _awaiting(conn, row, pairs, moment, record)
     problem = _provenance_problem(conn, task_id)
     if problem:
         return problem
@@ -3158,8 +3233,59 @@ class Session:
                     reason = _admission(access, held, policy)
                     if reason is None:
                         held = held + [access]       # it would start: the next one is judged beside it
-            out.append(dict(id=task_id, reason=reason))
+            item = dict(id=task_id, reason=reason)
+            if reason == "awaiting_approval":
+                item.update(_wait_info(conn, task_id, pairs))
+            out.append(item)
         return out
+
+    def approval_wait(self, task_id: str) -> Optional[dict]:
+        """`{since, expires_at}` of a queued task that waits for `task.authorize_run`, else None."""
+        row = self.conn.execute("SELECT status, frontmatter FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None or row["status"] != "queued":
+            return None
+        pairs = json.loads(row["frontmatter"])
+        return _wait_info(self.conn, task_id, pairs) if needs_run_authorization(pairs) else None
+
+    def approval_notices(self, limit: int = 20) -> list[dict]:
+        """Waits and expiries in `audit` that nobody has been told about yet, oldest first."""
+        marks = ",".join("?" for _ in _NOTICE_EVENTS)
+        found = self.conn.execute(
+            f"SELECT a.seq, a.row FROM audit a WHERE a.event IN ({marks}) AND NOT EXISTS ("
+            "SELECT 1 FROM audit n WHERE n.event = 'approval_notice' AND json_extract(n.row, '$.ref') = a.seq) "
+            "ORDER BY a.seq LIMIT ?", (*_NOTICE_EVENTS, limit)).fetchall()
+        return [dict(ref=r["seq"], **json.loads(r["row"])) for r in found]
+
+    def approval_notice_claim(self, ref: int) -> Optional[dict]:
+        """Take the one notice for an `audit` row before sending it: a second caller gets None, so a
+        notice is sent at most once. A wait that is already over (authorized, edited, cancelled) is
+        marked and not announced. Returns `{task_id, kind, title}` or None."""
+        with _transaction(self.conn) as conn:
+            event = conn.execute("SELECT row FROM audit WHERE seq = ?", (ref,)).fetchone()
+            if event is None or conn.execute(
+                    "SELECT 1 FROM audit WHERE event = 'approval_notice' AND json_extract(row, '$.ref') = ?",
+                    (ref,)).fetchone():
+                return None
+            data = json.loads(event[0])
+            if data.get("event") not in _NOTICE_EVENTS:
+                return None
+            task = conn.execute("SELECT title, status, frontmatter FROM tasks WHERE id = ?",
+                                (data.get("task_id"),)).fetchone()
+            kind = "waiting" if data["event"] == "awaiting_approval" else "expired"
+            current = False
+            if task is not None:
+                pairs = json.loads(task["frontmatter"])
+                current = (kind == "expired" or (task["status"] == "queued" and needs_run_authorization(pairs)
+                                                 and _wait_ref(pairs) == (data.get("digest", ""),
+                                                                          data.get("occurrence", ""))))
+            _audit(conn, "approval_notice", ref=ref, task_id=data.get("task_id"), kind=kind,
+                   skipped=not current)
+            return (dict(task_id=data["task_id"], kind=kind, title=task["title"], outcome=data.get("outcome"))
+                    if current else None)
+
+    def approval_notice_result(self, ref: int, sent: bool) -> None:
+        with _transaction(self.conn) as conn:
+            _audit(conn, "approval_notice_result", ref=ref, sent=bool(sent))
 
     # -- provenance of a derived authorization -------------------------------
 
