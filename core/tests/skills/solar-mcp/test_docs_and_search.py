@@ -16,7 +16,9 @@ def test_search_operations_lists_every_operation_with_its_authority(solar_env):
     assert set(rows) == set(operations.OPERATIONS)
     assert rows["telegram.send"]["external_communication"] is True
     assert rows["action.run"]["authority"] == "A3"
-    assert all(rows[n]["authority"] == "A2" for n in rows if n.startswith("task."))
+    assert all(rows[n]["authority"] == "A2" for n in rows
+               if n.startswith("task.") and n != "task.wait")
+    assert rows["task.wait"]["authority"] == "A0"
     assert [r["name"] for r in search(scope="operations", query="archive")["operations"]] == ["task.archive"]
 
 
