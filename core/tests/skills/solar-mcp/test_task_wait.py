@@ -351,6 +351,117 @@ def test_ping_during_a_wait_is_answered_and_the_wait_still_times_out(solar_env):
         assert not server.is_alive()
 
 
+def search_request(request_id: int) -> dict:
+    """A second, cheap request a client could send while a wait is running."""
+    return dict(jsonrpc='2.0', id=request_id, method='tools/call', params=dict(
+        name='solar_search', arguments=dict(scope='operations', query='wait')))
+
+
+def test_a_second_request_during_a_wait_runs_after_it_in_order(solar_env):
+    """A request that arrives while a task.wait holds the slice goes to
+    `deferred`, keeping its place: it runs after the wait answers, in the order
+    it arrived — never requeued ahead and never executed out of turn."""
+    made = new_task()
+    _activate(made["id"])
+    lines, stdin, output = _serve_pair()
+    server = threading.Thread(target=mcp_server.serve, args=(stdin, output), daemon=True)
+    server.start()
+    try:
+        lines.put(json.dumps(dict(jsonrpc='2.0', id=1, method='initialize',
+                                  params=dict(capabilities={'elicitation': {}}))))
+        lines.put(json.dumps(wait_request(made["id"], timeout_seconds=3)))
+        time.sleep(0.5)                      # the wait is inside its slices now
+        lines.put(json.dumps(search_request(8)))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            answers = [json.loads(line) for line in output.getvalue().splitlines()]
+            if any(message.get('id') == 7 for message in answers) and \
+               any(message.get('id') == 8 for message in answers):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('the deferred request was never answered')
+        order = [message.get('id') for message in answers if message.get('id') in (7, 8)]
+        assert order == [7, 8]               # the wait answered first
+        answer = next(message for message in answers if message.get('id') == 8)
+        payload = json.loads(answer['result']['content'][0]['text'])
+        assert any(row['name'] == 'task.wait' for row in payload['result']['operations'])
+    finally:
+        lines.put(None)
+        server.join(5)
+        assert not server.is_alive()
+
+
+def test_a_second_request_cancelled_during_a_wait_is_never_executed(solar_env):
+    """A request that arrives during the wait sits in `deferred`, which is
+    exactly where the cancellation looks: when the wait answers, the cancelled
+    request is dropped without ever running. Requeued to `incoming` instead, it
+    would have escaped the cancellation and executed after the wait."""
+    made = new_task()
+    _activate(made["id"])
+    lines, stdin, output = _serve_pair()
+    server = threading.Thread(target=mcp_server.serve, args=(stdin, output), daemon=True)
+    server.start()
+    try:
+        lines.put(json.dumps(dict(jsonrpc='2.0', id=1, method='initialize',
+                                  params=dict(capabilities={'elicitation': {}}))))
+        lines.put(json.dumps(wait_request(made["id"], timeout_seconds=6)))
+        time.sleep(0.5)                      # the wait holds the slice now
+        lines.put(json.dumps(search_request(8)))
+        time.sleep(0.2)
+        lines.put(json.dumps(dict(jsonrpc='2.0', method='notifications/cancelled',
+                                  params=dict(requestId=8))))
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            answers = [json.loads(line) for line in output.getvalue().splitlines()]
+            if any(message.get('id') == 7 for message in answers):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('task.wait never answered')
+    finally:
+        lines.put(None)
+        server.join(5)
+        assert not server.is_alive()
+    answers = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert not any(message.get('id') == 8 for message in answers), \
+        'a cancelled request was executed anyway'
+    with solar_state.session() as store:
+        assert store.task_get(made["id"])["status"] == "active"   # untouched by both
+
+
+# --------------------------------------------------------------------------
+# the deadline rules even taking the lock
+# --------------------------------------------------------------------------
+
+def test_wait_never_outlives_its_cap_when_the_state_lock_is_blocked(solar_env):
+    """A writer holding the state lock must not stretch the wait: the read gets
+    only the caller's remaining budget, the lock refusal is retried until the
+    deadline, and the wait answers inside `timeout_seconds` with what it last
+    saw — here, nothing, because it never got to read."""
+    import fcntl
+    made = new_task()
+    _activate(made["id"])
+    lock = open(solar_env.runtime / solar_state.LOCK_NAME, "a+", encoding="utf-8")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        started = time.monotonic()
+        body, error = execute("task.wait", dict(task_id=made["id"], timeout_seconds=1,
+                                                poll_seconds=1))
+        wall = time.monotonic() - started
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+    assert not error, body
+    result = body["result"]
+    assert result["waited"] is False and result["timeout_seconds"] == 1
+    assert result["status"] == "unknown" and result["row_version"] is None
+    assert result["elapsed_seconds"] <= 2
+    assert wall <= 3.5                       # the blocked read never outlived the cap
+    with solar_state.session() as store:     # releasing the lock still works
+        assert store.task_get(made["id"])["status"] == "active"
+
+
 # --------------------------------------------------------------------------
 # what the server announces and what the gate records
 # --------------------------------------------------------------------------

@@ -657,8 +657,11 @@ def serve(stdin=None, stdout=None) -> int:
             def drain(seconds: float) -> bool:
                 """Answer the transport while a long read-only handler sleeps:
                 a `ping` gets its reply now and a cancellation of the live
-                request ends the wait. Returns False only when the caller's
-                request was cancelled (or the stream closed)."""
+                request ends the wait. Anything else goes to `deferred`, where
+                `remember_cancel` can see it too; nothing is requeued to
+                `incoming`, so no message loses its place and no slice spins.
+                Returns False only when the caller's request was cancelled (or
+                the stream closed)."""
                 deadline = time.monotonic() + seconds
                 while True:
                     remaining = deadline - time.monotonic()
@@ -686,9 +689,7 @@ def serve(stdin=None, stdout=None) -> int:
                         if 'id' in response:
                             emit(dict(jsonrpc="2.0", id=response['id'], result={}))
                         continue
-                    # Anything else (another request, a late response) keeps
-                    # its original order: queue it back at the tail.
-                    incoming.put(raw)
+                    deferred.append(raw)
             if active_key is not None and message.get('method') == 'tools/call':
                 transport_pulse.install(drain)
             response = handle(message, callback)

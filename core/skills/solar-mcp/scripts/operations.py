@@ -471,7 +471,9 @@ def _do_task_wait(arguments: dict) -> dict:
 
     Sleeps in short slices and re-reads the row each slice; one read session per
     slice so a concurrent writer (worker, transition) is never held blocked by a
-    sleeping reader. Nothing here mutates: the gate sees an A0 read.
+    sleeping reader. The lock itself is taken with only the remaining budget, so
+    a blocked state never stretches the wait past the caller's cap. Nothing here
+    mutates: the gate sees an A0 read.
     """
     import time
 
@@ -489,9 +491,27 @@ def _do_task_wait(arguments: dict) -> dict:
     def elapsed() -> int:
         return round(time.monotonic() - started)
 
+    _last_status, last_version = "unknown", None
     while True:
-        with solar_state.read_session() as store:
-            task = _task(store, task_id)
+        if time.monotonic() >= deadline:
+            return dict(id=task_id, status=_last_status, row_version=last_version,
+                        waited=False, elapsed_seconds=elapsed(), timeout_seconds=timeout,
+                        next="Still %s. Call task.wait again to keep waiting." % _last_status)
+        # The deadline rules every step, including taking the lock: a read that
+        # waits for a blocked state gets only the caller's remaining budget, and
+        # a lock that is not granted inside it is retried next slice, not an error.
+        try:
+            with solar_state.read_session(
+                    timeout=max(0.05, deadline - time.monotonic())) as store:
+                task = _task(store, task_id)
+        except solar_state.StateBusy:
+            if not transport_pulse.wait(0.02):
+                return dict(id=task_id, status=_last_status, row_version=last_version,
+                            waited=False, elapsed_seconds=elapsed(), cancelled_by_client=True,
+                            next="The caller cancelled the request; the task is untouched. "
+                                 "Call task.wait again to keep waiting.")
+            continue
+        _last_status, last_version = task["status"], task["row_version"]
         if task["status"] in solar_state.TERMINAL_STATUSES:
             shown = task_views.view_task(task_id, "result")
             return dict(id=task_id, status=task["status"], row_version=task["row_version"],
@@ -499,10 +519,6 @@ def _do_task_wait(arguments: dict) -> dict:
                         result=dict(results=shown.get("results", []),
                                     execution_log=shown.get("execution_log"),
                                     recorded=shown.get("recorded", False)))
-        if time.monotonic() >= deadline:
-            return dict(id=task_id, status=task["status"], row_version=task["row_version"],
-                        waited=False, elapsed_seconds=elapsed(), timeout_seconds=timeout,
-                        next="Still %s. Call task.wait again to keep waiting." % task["status"])
         if task["status"] == "queued" and solar_state.needs_run_authorization(task["frontmatter"]):
             return dict(id=task_id, status="queued", row_version=task["row_version"],
                         waited=False, elapsed_seconds=elapsed(), awaiting_approval=True,
