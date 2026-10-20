@@ -358,9 +358,17 @@ def test_project_configuration_is_isolated_not_rejected(review, fake_cli, tmp_pa
     # checks run.
     seen = []
     real_preflight = profiles.preflight
-    monkeypatch.setattr(profiles, 'preflight',
-                        lambda binary, env, cwd, *rest: (seen.append(('preflight', cwd)), real_preflight(binary, env, cwd, *rest))[1])
-    monkeypatch.setattr(profiles, '_effective_managed_policy', lambda binary, env, cwd, *rest: seen.append(('doctor', cwd)) or {})
+
+    def recording_preflight(binary, env, cwd, *rest):
+        seen.append(('preflight', cwd))
+        return real_preflight(binary, env, cwd, *rest)
+
+    def recording_policy(binary, env, cwd, *rest):
+        seen.append(('doctor', cwd))
+        return {}
+
+    monkeypatch.setattr(profiles, 'preflight', recording_preflight)
+    monkeypatch.setattr(profiles, '_effective_managed_policy', recording_policy)
     assert PROVIDERS['claude'].run('', review=kwargs(review[1])) == '<subtasks>untrusted text</subtasks>'
     launched = json.loads(fake_cli.read_text())
     assert {kind for kind, _ in seen} == {'preflight', 'doctor'}
