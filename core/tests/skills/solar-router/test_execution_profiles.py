@@ -346,16 +346,41 @@ def test_interactive_router_preserves_ambient_sentinels(tmp_path, monkeypatch):
 @pytest.mark.parametrize('filename,document', [('.claude/settings.json', {'hooks': {'SessionStart':'bad'}}),
     ('.claude/settings.local.json', {'permissions': {'defaultMode':'bypassPermissions'}}),
     ('.mcp.json', {'mcpServers': {'bad': {}}}), ('.claude/settings.json', {'enabledPlugins': {'bad': True}})])
-def test_project_overrides_rejected_before_help_or_launch(review, fake_cli, tmp_path, monkeypatch, filename, document):
+def test_project_configuration_is_isolated_not_rejected(review, fake_cli, tmp_path, monkeypatch, filename, document):
+    # The launch runs in an empty private temp directory with no setting sources, so workspace
+    # configuration can never reach it: it must neither block the review nor leak into it.
     project = tmp_path / 'hostile-project'
     path = project / filename
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(document))
     monkeypatch.setattr(PROVIDERS['claude'], 'get_cwd', lambda: project)
-    monkeypatch.setattr(profiles, 'preflight', lambda *args: pytest.fail('override reached preflight'))
-    with pytest.raises(profiles.ProfileError, match='execution_profile_override_rejected'):
-        PROVIDERS['claude'].run('', review=kwargs(review[1]))
-    assert not fake_cli.exists()
+    # Nothing else may read the workspace either: record where the help and policy (`claude doctor`)
+    # checks run.
+    seen = []
+    real_preflight = profiles.preflight
+
+    def recording_preflight(binary, env, cwd, *rest):
+        seen.append(('preflight', cwd))
+        return real_preflight(binary, env, cwd, *rest)
+
+    def recording_policy(binary, env, cwd, *rest):
+        seen.append(('doctor', cwd))
+        return {}
+
+    monkeypatch.setattr(profiles, 'preflight', recording_preflight)
+    monkeypatch.setattr(profiles, '_effective_managed_policy', recording_policy)
+    assert PROVIDERS['claude'].run('', review=kwargs(review[1])) == '<subtasks>untrusted text</subtasks>'
+    launched = json.loads(fake_cli.read_text())
+    assert {kind for kind, _ in seen} == {'preflight', 'doctor'}
+    assert {str(Path(cwd).resolve()) for _, cwd in seen} == {str(Path(launched['cwd']).resolve())}
+    assert not str(launched['cwd']).startswith(str(project))
+    assert launched['files'] == [] and launched['mode'] == 0o700
+    argv = launched['argv']
+    assert argv[argv.index('--setting-sources') + 1] == argv[argv.index('--tools') + 1] == ''
+    assert {'--strict-mcp-config', '--safe-mode', '--restricted'} <= set(argv)
+    assert json.loads(argv[argv.index('--mcp-config') + 1]) == {'mcpServers': {}}
+    assert json.loads(argv[argv.index('--settings') + 1]) == {'disableAllHooks': True}
+    assert str(project) not in ''.join(argv)
 
 
 def test_extra_flags_cannot_change_the_constructor(review, fake_cli):

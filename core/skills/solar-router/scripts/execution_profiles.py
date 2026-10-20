@@ -252,21 +252,6 @@ def preflight(binary: str, env: dict, cwd: str, metadata: dict | None = None) ->
         raise unsupported("claude", "policy", why[0] if why else "policy_unknown")
 
 
-def reject_project_overrides(root: Path) -> None:
-    """Do not accept project configuration as an alternative execution profile."""
-    sensitive = {"tools", "allowedTools", "disallowedTools", "permissions", "hooks", "mcpServers",
-                 "enabledPlugins", "extraKnownMarketplaces", "env", "disableAllHooks"}
-    for path in (root / ".claude/settings.json", root / ".claude/settings.local.json", root / ".mcp.json"):
-        if not path.exists():
-            continue
-        try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            raise ProfileError("execution_profile_override_rejected") from None
-        if not isinstance(document, dict) or any(key in document for key in sensitive):
-            raise ProfileError("execution_profile_override_rejected")
-
-
 @contextmanager
 def restricted_launch(adapter, manifest, expected: str, *, profile: str, extra_flags=(),
                       before_launch=lambda: None):
@@ -286,7 +271,6 @@ def restricted_launch(adapter, manifest, expected: str, *, profile: str, extra_f
                          "FLAGS" in key or "ARGS" in key or "SETTINGS" in key)
                          for key in inherited):
         raise ProfileError("execution_profile_override_rejected")
-    reject_project_overrides(Path(adapter.get_cwd()))
     manifest = verify_envelope(manifest, expected, provider=adapter.name, profile=profile)
     env = {key: value for key, value in inherited.items() if key in ENV_ALLOWLIST}
     binary = adapter.resolve_binary("claude")

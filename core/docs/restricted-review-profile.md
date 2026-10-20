@@ -48,9 +48,12 @@ claude -p --no-session-persistence --safe-mode --restricted
   --output-format json -- <exact-user-prompt>
 ```
 
-Command overrides (new or legacy), extra flags/arguments/settings and project
-configuration for tools, permissions, hooks, MCP or plugins are rejected with
-`execution_profile_override_rejected`. The inherited environment is limited to
+Command overrides (new or legacy) and extra flags/arguments/settings are rejected
+with `execution_profile_override_rejected`. Project configuration (`.claude/settings*.json`,
+`.mcp.json`) is not read at all: the launch runs in an empty private temporary
+directory with `--setting-sources ""`, `--tools ""`, an empty MCP config and hooks
+disabled, so a workspace's own permissions or hooks neither reach the review nor block
+it. The inherited environment is limited to
 operational locale/path/home/certificate values and the adapter's API-key/OAuth
 credentials. Configuration, prompt, plugin, command-selection and shell-startup
 variables are excluded. `--bare` is deliberately absent to preserve OAuth.
