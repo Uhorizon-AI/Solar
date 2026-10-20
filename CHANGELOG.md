@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- The Codex repository reader now discovers its capabilities from `codex exec --help` option blocks (the same `cli_capabilities` check as Claude, Cursor and Antigravity) instead of looking for flag names anywhere in the help text; the version is only recorded.
+- A Codex refusal keeps `execution_profile_unsupported` and now carries `error_detail` (`provider`, `stage`, fixed `reason`, `option`), so the task log names the failed check.
+
 ## [0.54.5] - 2026-10-20
 
 ### Fixed

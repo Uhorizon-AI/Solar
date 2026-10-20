@@ -2,11 +2,14 @@
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 
 import pytest
 import execution_profiles as profiles
 from claude_help import claude_help
+from codex_help import codex_help
 import repository_reviews as repo
 from providers import PROVIDERS
 from git_review_fixture import repository, git
@@ -211,35 +214,134 @@ else: print(json.dumps(dict(result='HEAD is deadbeef, the version is stale.')))
     assert out.endswith('HEAD is deadbeef, the version is stale.')
 
 
-def test_codex_unknown_effective_policy_is_refused(tmp_path):
-    binary = tmp_path / 'codex'
-    binary.write_text('#!/bin/sh\necho "{}"\n'); binary.chmod(0o700)
-    with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
-        repo.codex_preflight(str(binary), dict(os.environ), str(tmp_path), [])
+def good_codex_checks():
+    return {'config.load': {'status': 'ok', 'details': {'mcp servers': '0', 'enabled feature flags': 'shell_tool',
+            'configuration scope': 'invocation config, including cloud-managed policy'}},
+            'sandbox.helpers': {'details': {'approval policy': 'Never', 'managed filesystem source': 'none'}}}
 
 
-@pytest.mark.parametrize('change', [None, 'mcp', 'hooks', 'managed', 'approval', 'unknown'])
-def test_codex_effective_policy_requires_known_isolated_configuration(tmp_path, change):
-    checks = {'config.load': {'status':'ok','details':{'mcp servers':'0',
-              'enabled feature flags':'shell_tool', 'configuration scope':'invocation config, including cloud-managed policy'}},
-              'sandbox.helpers': {'details': {'approval policy':'Never', 'managed filesystem source':'none'}}}
-    if change == 'mcp': checks['config.load']['details']['mcp servers'] = '1'
-    elif change == 'hooks': checks['config.load']['details']['enabled feature flags'] = 'shell_tool, hooks'
-    elif change == 'managed': checks['sandbox.helpers']['details']['managed filesystem source'] = 'policy'
-    elif change == 'approval': checks['sandbox.helpers']['details']['approval policy'] = 'OnRequest'
-    elif change == 'unknown': checks = {}
+def fake_codex(tmp_path, *, help_text=None, version='codex-cli 0.162.1', doctor=None):
+    """A double whose help is the real `codex exec --help` unless a test says otherwise."""
+    help_text = codex_help() if help_text is None else help_text
+    doctor = json.dumps({'checks': good_codex_checks()}) if doctor is None else doctor
     binary = tmp_path / 'codex'
     binary.write_text(f"""#!{sys.executable}
-import sys,json
-if '--help' in sys.argv: print('--sandbox read-only --model --json --ephemeral --ignore-user-config --ignore-rules --output-schema --output-last-message')
-else: print({json.dumps({'checks':checks})!r})
+import sys
+if '--version' in sys.argv: print({version!r})
+elif '--help' in sys.argv: sys.stdout.write({help_text!r})
+else: sys.stdout.write({doctor!r})
 """)
     binary.chmod(0o700)
-    if change is None:
-        repo.codex_preflight(str(binary), dict(os.environ), str(tmp_path), [])
-    else:
-        with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
-            repo.codex_preflight(str(binary), dict(os.environ), str(tmp_path), [])
+    return str(binary)
+
+
+def codex_preflight(binary, tmp_path, metadata=None):
+    repo.codex_preflight(binary, dict(os.environ), str(tmp_path), [], metadata)
+
+
+def codex_refusal(tmp_path, **kwargs):
+    with pytest.raises(profiles.ProfileError) as caught:
+        codex_preflight(fake_codex(tmp_path, **kwargs), tmp_path)
+    assert caught.value.code == 'execution_profile_unsupported'
+    return caught.value.detail
+
+
+def test_real_codex_help_declares_every_required_option():
+    from cli_capabilities import advertised_values, option_blocks
+    blocks = option_blocks(codex_help())
+    assert all(flag in blocks for flag in repo.CODEX_FLAGS)
+    assert 'read-only' in advertised_values(blocks['--sandbox'])
+
+
+def test_codex_capabilities_are_recorded_and_the_version_never_decides(tmp_path):
+    for version in ('codex-cli 0.0.1', 'codex-cli 99.99.99'):
+        metadata = {}
+        codex_preflight(fake_codex(tmp_path, version=version), tmp_path, metadata)
+        assert metadata['provider'] == 'codex' and metadata['version'] == version
+        assert metadata['capabilities_checked'] == list(repo.CODEX_FLAGS)
+
+
+@pytest.mark.parametrize('flag', repo.CODEX_FLAGS)
+def test_each_required_codex_option_is_named_when_missing_even_if_quoted_in_prose(tmp_path, flag):
+    original = codex_help().splitlines()
+    declaration = re.compile(r'^( {0,8}(?:-[A-Za-z],\s+)?)' + re.escape(flag) + r'(?=[\s<,=\[]|$)')
+    lines = [declaration.sub(r'\1--renamed-away', line) for line in original]
+    assert sum(a != b for a, b in zip(original, lines)) == 1, f'exactly the {flag} declaration must change'
+    text = '\n'.join(lines) + f'\nSee also {flag} in the docs.\n'
+    assert codex_refusal(tmp_path, help_text=text) == dict(provider='codex', stage='help',
+                                                           reason='required_option_missing', option=flag)
+
+
+def test_read_only_sandbox_must_be_advertised(tmp_path):
+    text = codex_help().replace('read-only', 'ro-mode')
+    assert codex_refusal(tmp_path, help_text=text) == dict(provider='codex', stage='help',
+                                                           reason='required_value_unadvertised', option='--sandbox')
+
+
+def test_unknown_codex_help_format_is_named(tmp_path):
+    assert codex_refusal(tmp_path, help_text='no options here')['reason'] == 'help_format_unknown'
+
+
+@pytest.mark.parametrize('error, reason', [(subprocess.TimeoutExpired('codex', 1), 'help_timeout'),
+                                           (OSError('gone'), 'help_unavailable')])
+def test_codex_help_that_cannot_run_is_named(tmp_path, monkeypatch, error, reason):
+    real = subprocess.run
+
+    def fake(argv, **kwargs):
+        if '--help' in argv:
+            raise error
+        return real(argv, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', fake)
+    assert codex_refusal(tmp_path) == dict(provider='codex', stage='help', reason=reason)
+
+
+def test_codex_help_with_nonzero_exit_is_named(tmp_path, monkeypatch):
+    real = subprocess.run
+    monkeypatch.setattr(subprocess, 'run', lambda argv, **kwargs: type(
+        'Result', (), {'returncode': 2, 'stdout': '', 'stderr': ''})() if '--help' in argv else real(argv, **kwargs))
+    assert codex_refusal(tmp_path)['reason'] == 'help_failed'
+
+
+def with_checks(change):
+    checks = good_codex_checks()
+    change(checks)
+    return json.dumps({'checks': checks})
+
+
+@pytest.mark.parametrize('doctor, reason', [
+    ('{}', 'doctor_unrecognized'),
+    ('not json', 'doctor_unrecognized'),
+    (with_checks(lambda c: c['config.load'].update(status='error')), 'config_not_loaded'),
+    (with_checks(lambda c: c['config.load']['details'].update({'mcp servers': '1'})), 'mcp_servers_present'),
+    (with_checks(lambda c: c['config.load']['details'].update({'configuration scope': 'invocation config'})),
+     'cloud_policy_unconfirmed'),
+    (with_checks(lambda c: c['config.load']['details'].update({'enabled feature flags': 'shell_tool, hooks'})),
+     'feature_enabled'),
+    (with_checks(lambda c: c['sandbox.helpers']['details'].update({'approval policy': 'OnRequest'})),
+     'approval_not_never'),
+    (with_checks(lambda c: c['sandbox.helpers']['details'].update({'managed filesystem source': 'policy'})),
+     'managed_filesystem_present'),
+])
+def test_codex_effective_policy_requires_known_isolated_configuration(tmp_path, doctor, reason):
+    assert codex_refusal(tmp_path, doctor=doctor) == dict(provider='codex', stage='policy', reason=reason)
+
+
+def test_codex_isolated_configuration_is_accepted(tmp_path):
+    codex_preflight(fake_codex(tmp_path), tmp_path)
+
+
+@pytest.mark.parametrize('error, reason', [(subprocess.TimeoutExpired('codex', 1), 'doctor_timeout'),
+                                           (OSError('gone'), 'doctor_unavailable'),
+                                           (UnicodeDecodeError('utf-8', b'\xff', 0, 1, 'bad'), 'doctor_unrecognized')])
+def test_codex_doctor_that_cannot_answer_is_named(tmp_path, monkeypatch, error, reason):
+    real = subprocess.run
+
+    def fake(argv, **kwargs):
+        if 'doctor' in argv:
+            raise error
+        return real(argv, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', fake)
+    assert codex_refusal(tmp_path) == dict(provider='codex', stage='policy', reason=reason)
 
 
 @pytest.mark.parametrize('provider', ['claude','codex'])
@@ -384,13 +486,6 @@ def test_codex_argv_requests_schema_and_final_message_file(tmp_path, monkeypatch
         assert out.parent != Path(cwd) and out.parent == Path(argv[argv.index('--output-schema') + 1]).parent
         assert not out.exists()
 
-
-def test_codex_preflight_requires_output_flags(tmp_path):
-    binary = tmp_path / 'codex'
-    binary.write_text(f"#!{sys.executable}\nprint('--sandbox read-only --model --json --ephemeral --ignore-user-config --ignore-rules')\n")
-    binary.chmod(0o700)
-    with pytest.raises(profiles.ProfileError, match='execution_profile_unsupported'):
-        repo.codex_preflight(str(binary), dict(os.environ), str(tmp_path), [])
 
 
 @pytest.mark.parametrize('argv', [['codex', '--output-last-message'], ['codex', '--output-last-message', '/nonexistent/dir/x.json']])

@@ -223,33 +223,50 @@ CODEX_REVIEW_SCHEMA = {'type': 'object', 'properties': {'review': {'type': 'stri
                        'required': ['review'], 'additionalProperties': False}
 
 
-def codex_preflight(binary, env, cwd, config):
-    """Inspect effective invocation configuration, including cloud policy; unknown fails closed."""
+# Options `codex exec --help` must declare, and the one value Solar passes that must be advertised.
+CODEX_FLAGS = ('--sandbox', '--model', '--json', '--ephemeral', '--ignore-user-config', '--ignore-rules',
+               '--output-schema', '--output-last-message')
+CODEX_VALUES = {'--sandbox': 'read-only'}
+CODEX_FEATURES = {'hooks', 'plugins', 'apps', 'multi_agent', 'browser_use', 'computer_use', 'remote_control',
+                  'skill_search', 'skill_mcp_dependency_install', 'remote_plugin', 'image_generation'}
+
+
+def codex_preflight(binary, env, cwd, config, metadata=None):
+    """Capabilities come from `codex exec --help` option blocks, never from a version. The effective
+    configuration, including cloud policy, comes from `codex doctor --json`; unknown fails closed.
+    A refusal carries `detail` (provider, stage, reason, option) with fixed words only."""
+    from cli_capabilities import discover, unsupported
+    discover(binary, env, cwd, provider='codex', prefix=[], subcommand=['exec'], required=list(CODEX_FLAGS),
+             values=CODEX_VALUES, metadata={} if metadata is None else metadata)
     try:
-        help_result = subprocess.run([binary, 'exec', '--help'], env=env, cwd=cwd,
-                                     capture_output=True, text=True, timeout=10)
-        if help_result.returncode or any(f not in help_result.stdout for f in
-                ('--sandbox', 'read-only', '--model', '--json', '--ephemeral',
-                 '--ignore-user-config', '--ignore-rules', '--output-schema',
-                 '--output-last-message')):
-            raise _error('execution_profile_unsupported')
         result = subprocess.run([binary, 'doctor', '--json', *config], env=env, cwd=cwd,
                                 capture_output=True, text=True, timeout=30)
-        # Overall status can reflect offline endpoint checks. These specific
-        # effective-config rows, not network reachability, attest this contract.
+    except subprocess.TimeoutExpired:
+        raise unsupported('codex', 'policy', 'doctor_timeout') from None
+    except UnicodeError:
+        raise unsupported('codex', 'policy', 'doctor_unrecognized') from None
+    except (OSError, subprocess.SubprocessError):
+        raise unsupported('codex', 'policy', 'doctor_unavailable') from None
+    # Overall status can reflect offline endpoint checks. These specific
+    # effective-config rows, not network reachability, attest this contract.
+    try:
         checks = json.loads(result.stdout)['checks']
         load = checks['config.load']
         details = load['details']
+        status, mcp, scope = load['status'], details['mcp servers'], details['configuration scope']
         active = set(details['enabled feature flags'].split(', '))
-        if (load['status'] not in {'ok', 'warning'} or details['mcp servers'] != '0'
-                or 'including cloud-managed policy' not in details['configuration scope']
-                or active & {'hooks', 'plugins', 'apps', 'multi_agent', 'browser_use', 'computer_use', 'remote_control', 'skill_search', 'skill_mcp_dependency_install',
-                             'remote_plugin', 'image_generation'}
-                or checks['sandbox.helpers']['details']['approval policy'] != 'Never'
-                or checks['sandbox.helpers']['details']['managed filesystem source'] != 'none'):
-            raise _error('execution_profile_unsupported')
-    except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError):
-        raise _error('execution_profile_unsupported') from None
+        approval = checks['sandbox.helpers']['details']['approval policy']
+        managed = checks['sandbox.helpers']['details']['managed filesystem source']
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise unsupported('codex', 'policy', 'doctor_unrecognized') from None
+    for broken, reason in ((status not in {'ok', 'warning'}, 'config_not_loaded'),
+                           (mcp != '0', 'mcp_servers_present'),
+                           ('including cloud-managed policy' not in scope, 'cloud_policy_unconfirmed'),
+                           (bool(active & CODEX_FEATURES), 'feature_enabled'),
+                           (approval != 'Never', 'approval_not_never'),
+                           (managed != 'none', 'managed_filesystem_present')):
+        if broken:
+            raise unsupported('codex', 'policy', reason)
 
 
 @contextmanager
@@ -294,14 +311,15 @@ def launch(adapter, manifest, expected, before_launch):
             origin = Path(os.environ.get('CODEX_HOME') or Path(env.get('HOME', '~')) / '.codex')
             auth = origin / 'auth.json'
             if not auth.is_file():
-                raise _error('execution_profile_unsupported')
+                from cli_capabilities import unsupported
+                raise unsupported('codex', 'credentials', 'credentials_unavailable')
             shutil.copyfile(auth, home / 'auth.json')
             os.chmod(home / 'auth.json', 0o600)
             env.pop('ANTHROPIC_API_KEY', None)
             env.pop('CLAUDE_CODE_OAUTH_TOKEN', None)
             env['CODEX_HOME'] = str(home)
             config = [arg for value in CODEX_CONFIG for arg in ('-c', value)]
-            codex_preflight(binary, env, str(cwd), config)
+            codex_preflight(binary, env, str(cwd), config, adapter.last_review_preflight)
             schema, last_message = private / 'review-schema.json', private / 'last-message.json'
             schema.write_text(json.dumps(CODEX_REVIEW_SCHEMA), encoding='utf-8')
             argv = [binary, 'exec', '--skip-git-repo-check', '--sandbox', 'read-only',
