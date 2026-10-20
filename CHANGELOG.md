@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.54.5] - 2026-10-20
+
 ### Fixed
 - The restricted Claude package review (`text_only_review_v1`) no longer fails with `execution_profile_override_rejected` because the workspace's own `.claude/settings*.json` or `.mcp.json` declares `permissions`, `hooks` or similar; the launch never reads them.
 - Command, flag and environment overrides are still rejected.
