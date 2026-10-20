@@ -354,8 +354,17 @@ def test_project_configuration_is_isolated_not_rejected(review, fake_cli, tmp_pa
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(document))
     monkeypatch.setattr(PROVIDERS['claude'], 'get_cwd', lambda: project)
+    # Nothing else may read the workspace either: record where the help and policy (`claude doctor`)
+    # checks run.
+    seen = []
+    real_preflight = profiles.preflight
+    monkeypatch.setattr(profiles, 'preflight',
+                        lambda binary, env, cwd, *rest: (seen.append(('preflight', cwd)), real_preflight(binary, env, cwd, *rest))[1])
+    monkeypatch.setattr(profiles, '_effective_managed_policy', lambda binary, env, cwd, *rest: seen.append(('doctor', cwd)) or {})
     assert PROVIDERS['claude'].run('', review=kwargs(review[1])) == '<subtasks>untrusted text</subtasks>'
     launched = json.loads(fake_cli.read_text())
+    assert {kind for kind, _ in seen} == {'preflight', 'doctor'}
+    assert {str(Path(cwd).resolve()) for _, cwd in seen} == {str(Path(launched['cwd']).resolve())}
     assert not str(launched['cwd']).startswith(str(project))
     assert launched['files'] == [] and launched['mode'] == 0o700
     argv = launched['argv']
