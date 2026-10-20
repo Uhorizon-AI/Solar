@@ -222,12 +222,31 @@ config home. Its auth mechanism may refresh the private credential copy; it is
 not copied back to the original. Keyring-only authentication is unsupported in
 this initial adapter. Review account/token lifecycle before production use.
 
-Codex preflight uses `exec --help` and the same config overrides in `doctor
---json`. Its effective config must include cloud-policy inspection, zero MCP
-servers, none of the prohibited features, approval policy `Never`, and no
-managed filesystem source. Missing/changed diagnostic fields or unreadable
-policy refuse launch. Overall network diagnostics may fail without changing
-these specific config checks; model access is not inferred from doctor output.
+Codex capabilities come from `codex exec --help` option blocks, never from a
+version (the same `cli_capabilities` check as Claude, Cursor and Antigravity):
+every option `launch` passes to `exec` (`CODEX_FLAGS`, including `--config` and
+`--skip-git-repo-check`) must be declared, and `--sandbox` must advertise
+`read-only`. The version is only recorded in `review_preflight`. The effective
+policy comes from the same config overrides in `doctor --json`. Its effective
+config must include cloud-policy inspection, zero MCP servers, none of the
+prohibited features, approval policy `Never`, and no managed filesystem source.
+Missing/changed diagnostic fields, fields of an unexpected type or unreadable
+policy refuse launch. The `doctor` exit code is deliberately not evidence: it
+exits 1 whenever its overall status is `fail` (missing credentials, an
+unreachable endpoint) even when `config.load` is sound, so only the specific
+rows above attest the contract; model access is not inferred from doctor
+output.
+
+The help and policy checks and the credentials check keep
+`execution_profile_unsupported` and carry `error_detail` (`provider`, `stage`, a
+fixed `reason`, `option`). Stage `help`: `help_unavailable`, `help_timeout`,
+`help_failed`, `help_format_unknown`, `required_option_missing` and
+`required_value_unadvertised`. Stage `policy`: `doctor_unavailable`,
+`doctor_timeout`, `doctor_unrecognized`, `config_not_loaded`,
+`mcp_servers_present`, `cloud_policy_unconfirmed`, `feature_enabled`,
+`approval_not_never` and `managed_filesystem_present`. Stage `credentials`:
+`credentials_unavailable`, when the CLI auth file is missing. Other launch
+refusals (an unknown provider, a command or flag override) keep the bare code.
 Never weaken this parser to turn an unsupported host into success.
 
 The inspected local CLI versions were Codex 0.162.1 and Claude Code 2.1.285.

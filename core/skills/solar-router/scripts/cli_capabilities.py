@@ -121,8 +121,11 @@ def advertised_values(block):
     return found
 
 
-def discover(binary, env, cwd, *, provider, prefix, required, values, metadata):
-    """Check only no-inference CLI commands inside the caller's tested guard."""
+def discover(binary, env, cwd, *, provider, prefix, required, values, metadata, subcommand=()):
+    """Check only no-inference CLI commands inside the caller's tested guard.
+
+    `subcommand` names the command whose `--help` declares the options (`exec` for Codex); the
+    version is always the binary's own."""
     metadata.update(provider=provider, version=None)
     env = {**env, 'NO_COLOR': '1', 'TERM': 'dumb', 'CLICOLOR': '0'}
     try:
@@ -134,7 +137,7 @@ def discover(binary, env, cwd, *, provider, prefix, required, values, metadata):
     except (OSError, subprocess.SubprocessError, UnicodeError):
         pass  # Version is optional evidence, never a safety capability.
     try:
-        result = subprocess.run([*prefix, binary, '--help'], cwd=cwd, env=env,
+        result = subprocess.run([*prefix, binary, *subcommand, '--help'], cwd=cwd, env=env,
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
         raise unsupported(provider, 'help', 'help_timeout') from None
