@@ -8,7 +8,10 @@ never an error.
 """
 from __future__ import annotations
 
+import json
 import threading
+import time
+from io import StringIO
 
 import mcp_server
 import solar_state
@@ -151,6 +154,41 @@ def test_wait_waits_for_a_cancel_requested_task_to_land(solar_env):
     assert body["result"]["row_version"] > version
 
 
+def test_wait_answers_at_once_when_the_task_waits_for_run_authorization(solar_env):
+    """A queued task that awaits `task.authorize_run` never becomes terminal by
+    itself; waiting would burn the whole timeout on a state that only an
+    authorization can leave."""
+    made = new_task("Waiting", "Steps.")
+    run("task.approve", dict(task_id=made["id"],
+                             expected_row_version=stored_version(made["id"])))
+    body, error = execute("task.wait", dict(task_id=made["id"], timeout_seconds=30,
+                                            poll_seconds=1))
+    assert not error, body
+    result = body["result"]
+    assert result["status"] == "queued" and result["awaiting_approval"] is True
+    assert result["waited"] is False and result["elapsed_seconds"] == 0
+    assert "task.authorize_run" in result["next"]
+
+
+def test_wait_counts_the_time_it_actually_spent(solar_env, monkeypatch):
+    """`elapsed_seconds` is wall-clock time, not the sum of the nominal slices:
+    a slow read does not extend the wait past `timeout_seconds` either."""
+    made = new_task()
+    _activate(made["id"])
+    real_sleep = time.sleep
+
+    def slow_sleep(seconds):
+        real_sleep(seconds + 0.4)          # each slice costs more than it claims
+
+    monkeypatch.setattr(time, "sleep", slow_sleep)
+    body, error = execute("task.wait", dict(task_id=made["id"], timeout_seconds=3,
+                                            poll_seconds=1))
+    assert not error, body
+    assert body["result"]["waited"] is False
+    assert body["result"]["elapsed_seconds"] <= 3   # never past the cap
+    assert body["result"]["elapsed_seconds"] >= 2   # it did wait roughly the cap
+
+
 # --------------------------------------------------------------------------
 # refusals: read-only, so the only failures are bad requests
 # --------------------------------------------------------------------------
@@ -178,6 +216,139 @@ def test_wait_rejects_an_out_of_range_timeout_or_poll(solar_env):
                       dict(task_id=made["id"], poll_seconds=31)):
         body, error = execute("task.wait", arguments)
         assert error and body["code"] == "invalid_arguments", arguments
+    for arguments in (dict(task_id=made["id"], timeout_seconds=90),
+                      dict(task_id=made["id"], poll_seconds=30)):
+        body, error = execute("task.wait", arguments)
+        assert not error, (arguments, body)   # both caps are inclusive
+
+
+# --------------------------------------------------------------------------
+# the transport stays alive during the wait
+# --------------------------------------------------------------------------
+
+def _serve_pair():
+    """A live serve() with a queue-based stdin and an Output that records."""
+    import queue
+    lines = queue.Queue()
+
+    class Input:
+        def __iter__(self):
+            # The reader must outlive quiet stretches: a wait of seconds sends
+            # nothing for a while, and a dead reader never delivers the end.
+            import queue as _queue
+            while True:
+                try:
+                    line = lines.get(timeout=5)
+                except _queue.Empty:
+                    continue
+                if line is None:
+                    return
+                yield line
+
+    class Output(StringIO):
+        def write(self, text):
+            result = super().write(text)
+            for message_line in text.splitlines():
+                message = json.loads(message_line)
+                if message.get('method') == 'elicitation/create':
+                    raise AssertionError('task.wait must not ask a form')
+            return result
+
+    return lines, Input(), Output()
+
+
+def wait_request(task_id: str, timeout_seconds: int = 60) -> dict:
+    return dict(jsonrpc='2.0', id=7, method='tools/call', params=dict(
+        name='solar_execute',
+        arguments=dict(operation='task.wait',
+                       arguments=dict(task_id=task_id, timeout_seconds=timeout_seconds,
+                                      poll_seconds=1))))
+
+
+def test_wait_does_not_deafen_the_transport(solar_env):
+    """A real serve() answering a task.wait: a ping sent during the wait is
+    answered before the wait ends, and a cancellation of the live request ends
+    the wait at once. The task itself is never touched."""
+    made = new_task()
+    _activate(made["id"])
+    lines, stdin, output = _serve_pair()
+    server = threading.Thread(target=mcp_server.serve, args=(stdin, output), daemon=True)
+    server.start()
+    try:
+        lines.put(json.dumps(dict(jsonrpc='2.0', id=1, method='initialize',
+                                  params=dict(capabilities={'elicitation': {}}))))
+        lines.put(json.dumps(wait_request(made["id"])))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:      # the wait is running
+            assert server.is_alive()
+            lines.put(json.dumps(dict(jsonrpc='2.0', id=2, method='ping')))
+            time.sleep(0.25)
+            answers = [json.loads(line) for line in output.getvalue().splitlines()]
+            if any(message.get('id') == 2 for message in answers):
+                break
+        else:
+            raise AssertionError('ping during task.wait was never answered')
+        lines.put(json.dumps(dict(jsonrpc='2.0', method='notifications/cancelled',
+                                  params=dict(requestId=7))))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            answers = [json.loads(line) for line in output.getvalue().splitlines()]
+            if any(message.get('id') == 7 for message in answers):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('cancelled task.wait never answered')
+        answer = next(message for message in answers if message.get('id') == 7)
+        payload = json.loads(answer['result']['content'][0]['text'])
+        result = payload['result']
+        assert result['cancelled_by_client'] is True
+        assert result['status'] == 'active' and result['waited'] is False
+    finally:
+        lines.put(None)
+        server.join(5)
+        assert not server.is_alive()
+    with solar_state.session() as store:
+        assert store.task_get(made["id"])["status"] == "active"   # untouched by the wait
+
+
+def test_ping_during_a_wait_is_answered_and_the_wait_still_times_out(solar_env):
+    """The drain answers pings without ending the wait: after the cancelled case
+    above, this pins the quiet path — the wait runs to its cap and answers."""
+    made = new_task()
+    _activate(made["id"])
+    lines, stdin, output = _serve_pair()
+    server = threading.Thread(target=mcp_server.serve, args=(stdin, output), daemon=True)
+    server.start()
+    try:
+        lines.put(json.dumps(dict(jsonrpc='2.0', id=1, method='initialize',
+                                  params=dict(capabilities={'elicitation': {}}))))
+        lines.put(json.dumps(wait_request(made["id"], timeout_seconds=3)))
+        lines.put(json.dumps(dict(jsonrpc='2.0', id=2, method='ping')))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            answers = [json.loads(line) for line in output.getvalue().splitlines()]
+            if any(message.get('id') == 2 for message in answers):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('ping during task.wait was never answered')
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            answers = [json.loads(line) for line in output.getvalue().splitlines()]
+            if any(message.get('id') == 7 for message in answers):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError('task.wait never answered')
+        answer = next(message for message in answers if message.get('id') == 7)
+        payload = json.loads(answer['result']['content'][0]['text'])
+        result = payload['result']
+        assert result['waited'] is False and result['status'] == 'active'
+        assert result['elapsed_seconds'] <= 60
+    finally:
+        lines.put(None)
+        server.join(10)
+        assert not server.is_alive()
 
 
 # --------------------------------------------------------------------------

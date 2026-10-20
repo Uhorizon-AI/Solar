@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- `task.wait` (A0, read-only) in `solar_execute`: one call sleeps in short slices up to `timeout_seconds` (max 90, default 60; `poll_seconds` 1-30, default 1) and answers with the final status plus the task's `result` view; a still-running task returns its status and a `next` hint, never an error. A queued task that still waits for `task.authorize_run` answers at once with `awaiting_approval` instead of burning the timeout. During the wait the stdio server keeps answering the transport: a `ping` gets its reply and cancelling the live request ends the wait (`cancelled_by_client`). It never claims, transitions or writes; the gate records it as `read_allowed`.
+
 ## [0.54.6] - 2026-10-20
 
 ### Changed

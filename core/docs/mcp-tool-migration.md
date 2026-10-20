@@ -11,7 +11,8 @@ removed, and no authority was added.
 | `solar_execute` | per operation | Run one registered operation with its own strict arguments |
 
 Operations: `task.create`, `task.update`, `task.schedule`, `task.approve`,
-`task.return_to_draft`, `task.cancel`, `task.requeue`, `task.archive`, `telegram.send`, `action.run`.
+`task.return_to_draft`, `task.cancel`, `task.requeue`, `task.wait`, `task.archive`,
+`telegram.send`, `action.run`.
 Find them with `solar_search scope=operations`; read a contract with
 `solar_docs id=operation:<name>`.
 

@@ -477,28 +477,45 @@ def _do_task_wait(arguments: dict) -> dict:
 
     import solar_state
     import task_views
+    import transport_pulse
 
     task_id = arguments["task_id"]
-    timeout = arguments.get("timeout_seconds") or 90
+    timeout = arguments.get("timeout_seconds") or 60
     poll = max(0.25, min(arguments.get("poll_seconds") or 1.0,
                          timeout / 2 if timeout > 1 else 1.0))
-    waited = 0.0
+    started = time.monotonic()
+    deadline = started + timeout
+
+    def elapsed() -> int:
+        return round(time.monotonic() - started)
+
     while True:
         with solar_state.read_session() as store:
             task = _task(store, task_id)
         if task["status"] in solar_state.TERMINAL_STATUSES:
             shown = task_views.view_task(task_id, "result")
             return dict(id=task_id, status=task["status"], row_version=task["row_version"],
-                        waited=True, elapsed_seconds=round(waited),
+                        waited=True, elapsed_seconds=elapsed(),
                         result=dict(results=shown.get("results", []),
                                     execution_log=shown.get("execution_log"),
                                     recorded=shown.get("recorded", False)))
-        if waited >= timeout:
+        if time.monotonic() >= deadline:
             return dict(id=task_id, status=task["status"], row_version=task["row_version"],
-                        waited=False, elapsed_seconds=round(waited), timeout_seconds=timeout,
+                        waited=False, elapsed_seconds=elapsed(), timeout_seconds=timeout,
                         next="Still %s. Call task.wait again to keep waiting." % task["status"])
-        time.sleep(poll)
-        waited += poll
+        if task["status"] == "queued" and solar_state.needs_run_authorization(task["frontmatter"]):
+            return dict(id=task_id, status="queued", row_version=task["row_version"],
+                        waited=False, elapsed_seconds=elapsed(), awaiting_approval=True,
+                        next="The task waits for task.authorize_run; waiting longer cannot finish it. "
+                             "Authorize the run (native confirmation) and call task.wait again.")
+        slice_seconds = max(0.0, min(poll, deadline - time.monotonic()))
+        if slice_seconds <= 0.0:
+            continue
+        if not transport_pulse.wait(slice_seconds):
+            return dict(id=task_id, status=task["status"], row_version=task["row_version"],
+                        waited=False, elapsed_seconds=elapsed(), cancelled_by_client=True,
+                        next="The caller cancelled the request; the task is untouched. "
+                             "Call task.wait again to keep waiting.")
 
 
 def _do_task_archive(arguments: dict) -> dict:
@@ -719,9 +736,10 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
     Operation(
         "task.wait", A0, "Wait for one task to reach a terminal status and return its result view.",
         _obj(dict(task_id=TASK_ID,
-                  timeout_seconds={"type": "integer", "minimum": 1, "maximum": 600,
-                                   "description": "Cap per call; a still-running task returns its "
-                                   "status and next, never an error."},
+                  timeout_seconds={"type": "integer", "minimum": 1, "maximum": 90,
+                                   "description": "Cap per call, below the client request "
+                                   "timeouts; a still-running task returns its status and "
+                                   "next, never an error. Default 60."},
                   poll_seconds={"type": "integer", "minimum": 1, "maximum": 30,
                                 "description": "Slice between reads; defaults to 1 s."}),
              required=("task_id",)),
