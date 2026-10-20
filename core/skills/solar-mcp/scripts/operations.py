@@ -543,8 +543,11 @@ def _do_task_wait(arguments: dict) -> dict:
                     if not yield_to_transport():
                         return cancelled_result()
             if shown is None:                # terminal row seen, its view unreachable in budget
-                return timeout_result("Still %s. Call task.wait again to keep waiting."
-                                      % _last_status)
+                return timeout_result(
+                    "The task already finished (%s); only its result view could not be "
+                    "read inside this budget. Call task.wait again, or read the result "
+                    "now with solar_search scope=tasks task_id=%s view=result."
+                    % (_last_status, task_id))
             return dict(id=task_id, status=task["status"], row_version=task["row_version"],
                         waited=True, elapsed_seconds=elapsed(),
                         result=dict(results=shown.get("results", []),
