@@ -462,6 +462,105 @@ def test_wait_never_outlives_its_cap_when_the_state_lock_is_blocked(solar_env):
         assert store.task_get(made["id"])["status"] == "active"
 
 
+def test_result_view_read_also_stays_inside_the_cap_when_blocked(solar_env, monkeypatch):
+    """The second read (the result view) takes the lock too: block the state
+    exactly between the row read and `view_task` and the wait must answer inside
+    its cap — with what it last saw, never a 30 s default-lock error."""
+    import fcntl
+    made = new_task()
+    _activate(made["id"])
+    with solar_state.session() as store:
+        _finish(store, made["id"], status="completed")
+
+    real_read_session = solar_state.read_session
+    gate_handle = open(solar_env.runtime / solar_state.LOCK_NAME, "a+", encoding="utf-8")
+    state = dict(seen_row=False, blocking=False)
+
+    def hooked_read_session(*args, **kwargs):
+        if not state["seen_row"]:
+            state["seen_row"] = True         # this one is the row read: unblocked
+            return real_read_session(*args, **kwargs)
+        # Every attempt at the view read happens under an exclusive block that
+        # is only released when the call is over (the finally below closes it).
+        if not state["blocking"]:
+            state["blocking"] = True
+            fcntl.flock(gate_handle, fcntl.LOCK_EX)
+        return real_read_session(*args, **kwargs)   # StateBusy inside the budget
+
+    monkeypatch.setattr(solar_state, "read_session", hooked_read_session)
+    started = time.monotonic()
+    try:
+        body, error = execute("task.wait", dict(task_id=made["id"], timeout_seconds=1,
+                                                poll_seconds=1))
+        wall = time.monotonic() - started
+    finally:
+        gate_handle.close()                  # closing releases the flock
+    assert not error, body
+    result = body["result"]
+    # The row read saw `completed`; the view read never landed inside the budget,
+    # so the wait answers with what it last saw instead of hanging 30 s or erroring.
+    assert result["waited"] is False and result["timeout_seconds"] == 1
+    assert result["status"] == "completed"
+    assert result["elapsed_seconds"] <= 2
+    assert wall <= 3.5
+    with solar_state.session() as store:
+        assert store.task_get(made["id"])["status"] == "completed"
+
+
+def test_blocked_state_still_answers_ping_and_cancellation_during_the_wait(solar_env):
+    """While the state lock is busy, the wait keeps serving the transport: the
+    lock is asked for in short steps with a drain between attempts, so a ping is
+    answered in a fraction of the budget and a cancellation ends the wait at
+    once — none of them waits for the whole cap (worse at timeout_seconds=90)."""
+    import fcntl
+    made = new_task()
+    _activate(made["id"])
+    lines, stdin, output = _serve_pair()
+    server = threading.Thread(target=mcp_server.serve, args=(stdin, output), daemon=True)
+    server.start()
+    lock = open(solar_env.runtime / solar_state.LOCK_NAME, "a+", encoding="utf-8")
+    fcntl.flock(lock, fcntl.LOCK_EX)         # the state is busy from before the wait
+    try:
+        lines.put(json.dumps(dict(jsonrpc='2.0', id=1, method='initialize',
+                                  params=dict(capabilities={'elicitation': {}}))))
+        lines.put(json.dumps(wait_request(made["id"], timeout_seconds=2)))
+        time.sleep(0.3)                      # the wait is already stuck on the lock
+        lines.put(json.dumps(dict(jsonrpc='2.0', id=2, method='ping')))
+        deadline = time.monotonic() + 1.5    # well before the 2 s cap ends
+        while time.monotonic() < deadline:
+            answers = [json.loads(line) for line in output.getvalue().splitlines()]
+            if any(message.get('id') == 2 for message in answers):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('a ping during a blocked state was not answered '
+                                 'within the budget: the lock attempts are not '
+                                 'serving the transport')
+        lines.put(json.dumps(dict(jsonrpc='2.0', method='notifications/cancelled',
+                                  params=dict(requestId=7))))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            answers = [json.loads(line) for line in output.getvalue().splitlines()]
+            if any(message.get('id') == 7 for message in answers):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('a cancelled wait under a blocked state never answered')
+        answer = next(message for message in answers if message.get('id') == 7)
+        payload = json.loads(answer['result']['content'][0]['text'])
+        result = payload['result']
+        assert result['cancelled_by_client'] is True
+        assert result['status'] == 'unknown' and result['waited'] is False
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+        lines.put(None)
+        server.join(5)
+        assert not server.is_alive()
+    with solar_state.session() as store:
+        assert store.task_get(made["id"])["status"] == "active"   # untouched by all of it
+
+
 # --------------------------------------------------------------------------
 # what the server announces and what the gate records
 # --------------------------------------------------------------------------
