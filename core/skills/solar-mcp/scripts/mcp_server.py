@@ -53,6 +53,7 @@ import docs_registry  # noqa: E402
 import op_schema  # noqa: E402
 import operations  # noqa: E402
 import task_views  # noqa: E402
+import transport_pulse  # noqa: E402
 from mcp_context import OperationError, WorkspaceUnresolved, action_skills, workspace  # noqa: E402
 from mcp_gate import A0, A2  # noqa: E402
 
@@ -103,8 +104,9 @@ TOOLS = {
     "solar_execute": dict(
         description=(
             "Run one registered operation: task.create, task.update, task.schedule, task.approve, "
-            "task.authorize_run, task.return_to_draft, task.cancel, task.requeue, task.archive, "
-            "async_execution.propose, async_execution.apply, telegram.send, action.run. Each has its own "
+            "task.authorize_run, task.return_to_draft, task.cancel, task.requeue, task.wait, "
+            "task.archive, async_execution.propose, async_execution.apply, telegram.send, action.run. "
+            "Each has its own "
             "strict arguments, authority and approval; see solar_docs id=operation:<name>. "
             "Task lifecycle operations run on the client's own tool permission (no form). "
             "task.authorize_run, async_execution.* and telegram.send ask the user for native confirmation "
@@ -651,6 +653,45 @@ def serve(stdin=None, stdout=None) -> int:
             params = message.get('params')
             request_meta = params.get('_meta') if isinstance(params, dict) else None
             callback = partial(confirm_and_record, request_meta=request_meta) if supports_confirmation else None
+
+            def drain(seconds: float) -> bool:
+                """Answer the transport while a long read-only handler sleeps:
+                a `ping` gets its reply now and a cancellation of the live
+                request ends the wait. Anything else goes to `deferred`, where
+                `remember_cancel` can see it too; nothing is requeued to
+                `incoming`, so no message loses its place and no slice spins.
+                Returns False only when the caller's request was cancelled (or
+                the stream closed)."""
+                deadline = time.monotonic() + seconds
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return True
+                    try:
+                        raw = incoming.get(timeout=remaining)
+                    except queue.Empty:
+                        return True
+                    if raw is None:
+                        incoming.put(None)
+                        return False
+                    try:
+                        response = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if not isinstance(response, dict):
+                        continue
+                    if remember_cancel(response):
+                        target = (response.get('params') or {}).get('requestId')
+                        if request_key(target) == active_key:
+                            return False
+                        continue
+                    if response.get('method') == 'ping':
+                        if 'id' in response:
+                            emit(dict(jsonrpc="2.0", id=response['id'], result={}))
+                        continue
+                    deferred.append(raw)
+            if active_key is not None and message.get('method') == 'tools/call':
+                transport_pulse.install(drain)
             response = handle(message, callback)
             if response and 'result' in response:
                 if message.get('method') == 'initialize':
@@ -666,6 +707,7 @@ def serve(stdin=None, stdout=None) -> int:
         except Exception as exc:
             response = _error(message.get("id"), -32603, str(exc)[:300])
         finally:
+            transport_pulse.clear()
             active_key = None
         if response is not None:
             emit(response)

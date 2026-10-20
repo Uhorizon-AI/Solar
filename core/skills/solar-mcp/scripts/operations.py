@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mcp_context  # noqa: E402
 import task_views  # noqa: E402
 from mcp_context import OperationError, workspace  # noqa: E402
-from mcp_gate import A2, A3  # noqa: E402
+from mcp_gate import A0, A2, A3  # noqa: E402
 
 _SKILLS = mcp_context._SKILLS
 
@@ -466,6 +466,105 @@ def _do_task_requeue(arguments: dict) -> dict:
     return dict(requeued=True, id=arguments["task_id"], from_status=came, to_status="queued")
 
 
+def _do_task_wait(arguments: dict) -> dict:
+    """One read-only call that waits for a terminal status, up to `timeout_seconds`.
+
+    Sleeps in short slices and re-reads the row each slice; one read session per
+    slice so a concurrent writer (worker, transition) is never held blocked by a
+    sleeping reader. The deadline rules every step, including taking the lock:
+    the lock is asked for in short steps, the transport is served between
+    attempts, and both the row read and the result-view read get only the
+    caller's remaining budget — a blocked state never stretches the wait past
+    the cap nor raises out of it. Nothing here mutates: the gate sees an A0 read.
+    """
+    import time
+
+    import solar_state
+    import task_views
+    import transport_pulse
+
+    task_id = arguments["task_id"]
+    timeout = arguments.get("timeout_seconds") or 60
+    poll = max(0.25, min(arguments.get("poll_seconds") or 1.0,
+                         timeout / 2 if timeout > 1 else 1.0))
+    started = time.monotonic()
+    deadline = started + timeout
+    # One bounded attempt at the lock. A blocked state is retried after a short
+    # transport pulse, so a ping sent while the state is busy is answered in a
+    # fraction of a second, not after the whole remaining budget.
+    lock_step = 0.1
+
+    def elapsed() -> int:
+        return round(time.monotonic() - started)
+
+    def budget() -> float:
+        return max(0.05, deadline - time.monotonic())
+
+    def cancelled_result() -> dict:
+        return dict(id=task_id, status=_last_status, row_version=last_version,
+                    waited=False, elapsed_seconds=elapsed(), cancelled_by_client=True,
+                    next="The caller cancelled the request; the task is untouched. "
+                         "Call task.wait again to keep waiting.")
+
+    def timeout_result(next_text: str) -> dict:
+        return dict(id=task_id, status=_last_status, row_version=last_version,
+                    waited=False, elapsed_seconds=elapsed(), timeout_seconds=timeout,
+                    next=next_text)
+
+    def yield_to_transport() -> bool:
+        """A short pause between lock attempts; False means the caller cancelled."""
+        return transport_pulse.wait(min(0.05, max(0.01, deadline - time.monotonic())))
+
+    _last_status, last_version = "unknown", None
+    while True:
+        if time.monotonic() >= deadline:
+            return timeout_result("Still %s. Call task.wait again to keep waiting." % _last_status)
+        # The row read: the lock is asked for in short steps until it is granted
+        # or the budget runs out; between attempts the drain answers.
+        task = None
+        while task is None and time.monotonic() < deadline:
+            try:
+                with solar_state.read_session(timeout=min(lock_step, budget())) as store:
+                    task = _task(store, task_id)
+            except solar_state.StateBusy:
+                if not yield_to_transport():
+                    return cancelled_result()
+        if task is None:                     # the budget was spent under a busy state
+            return timeout_result("The state lock stayed busy; call task.wait again "
+                                  "to keep waiting.")
+        _last_status, last_version = task["status"], task["row_version"]
+        if task["status"] in solar_state.TERMINAL_STATUSES:
+            shown = None
+            while shown is None and time.monotonic() < deadline:
+                try:
+                    shown = task_views.view_task(task_id, "result",
+                                                 lock_timeout=min(lock_step, budget()))
+                except solar_state.StateBusy:
+                    if not yield_to_transport():
+                        return cancelled_result()
+            if shown is None:                # terminal row seen, its view unreachable in budget
+                return timeout_result(
+                    "The task already finished (%s); only its result view could not be "
+                    "read inside this budget. Call task.wait again, or read the result "
+                    "now with solar_search scope=tasks task_id=%s view=result."
+                    % (_last_status, task_id))
+            return dict(id=task_id, status=task["status"], row_version=task["row_version"],
+                        waited=True, elapsed_seconds=elapsed(),
+                        result=dict(results=shown.get("results", []),
+                                    execution_log=shown.get("execution_log"),
+                                    recorded=shown.get("recorded", False)))
+        if task["status"] == "queued" and solar_state.needs_run_authorization(task["frontmatter"]):
+            return dict(id=task_id, status="queued", row_version=task["row_version"],
+                        waited=False, elapsed_seconds=elapsed(), awaiting_approval=True,
+                        next="The task waits for task.authorize_run; waiting longer cannot finish it. "
+                             "Authorize the run (native confirmation) and call task.wait again.")
+        slice_seconds = max(0.0, min(poll, deadline - time.monotonic()))
+        if slice_seconds <= 0.0:
+            continue
+        if not transport_pulse.wait(slice_seconds):
+            return cancelled_result()
+
+
 def _do_task_archive(arguments: dict) -> dict:
     import solar_state
 
@@ -682,6 +781,20 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         client_consent=True,
         effects="Drops the recorded execution error; instructions are unchanged."),
     Operation(
+        "task.wait", A0, "Wait for one task to reach a terminal status and return its result view.",
+        _obj(dict(task_id=TASK_ID,
+                  timeout_seconds={"type": "integer", "minimum": 1, "maximum": 90,
+                                   "description": "Cap per call, below the client request "
+                                   "timeouts; a still-running task returns its status and "
+                                   "next, never an error. Default 60."},
+                  poll_seconds={"type": "integer", "minimum": 1, "maximum": 30,
+                                "description": "Slice between reads; defaults to 1 s."}),
+             required=("task_id",)),
+        errors=("task_not_found", "invalid_arguments"),
+        effects="Read-only wait: no claim, no transition, no write. It waits inside one call up to "
+                "timeout_seconds and answers with the final status and the task's result view; the "
+                "result view is evidence of the run, not new authority."),
+    Operation(
         "task.archive", A2, "Archive a task, keeping its row, events and body.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION, reason=LINE(300)),
              required=("task_id", "expected_row_version", "reason")),
@@ -741,6 +854,7 @@ HANDLERS: dict[str, Callable[[dict], dict]] = {
     "task.return_to_draft": _do_task_return_to_draft,
     "task.cancel": _do_task_cancel,
     "task.requeue": _do_task_requeue,
+    "task.wait": _do_task_wait,
     "task.archive": _do_task_archive,
     "async_execution.propose": _do_async_propose,
     "async_execution.apply": _do_async_apply,

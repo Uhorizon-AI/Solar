@@ -253,14 +253,17 @@ def _execution_result(task: dict, values: dict) -> dict | None:
     return None
 
 
-def view_task(task_id: str, view: str = "detail", section: str = "") -> dict:
+def view_task(task_id: str, view: str = "detail", section: str = "",
+              lock_timeout: Optional[float] = None) -> dict:
     import solar_state
 
     if view not in _VIEWS:
         raise ViewError("invalid_arguments", f"view must be one of {', '.join(_VIEWS)}")
     if section and view != "instructions":
         raise ViewError("invalid_arguments", "section applies only to view=instructions")
-    with solar_state.read_session() as store:
+    session = (solar_state.read_session(timeout=lock_timeout) if lock_timeout is not None
+               else solar_state.read_session())
+    with session as store:
         task = _resolve(store, task_id)
         events = [dict(ts=r["ts"], from_status=r["from_status"], to_status=r["to_status"],
                        actor=r["actor"])

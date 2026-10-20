@@ -66,6 +66,16 @@ Git setup in `sun/` and `planets/*` is optional. See `core/AGENTS.md` for doctor
 
 Self-assess before responding: sufficient → execute directly; deferred/multiprovider/external/browser/MCP/long-running/blocking → use `solar-async-tasks`; insufficient but short/local/non-blocking → delegate to `solar-router`. Read/analysis tasks delegate automatically; data-modifying tasks require explicit user approval first. See `core/docs/jit-delegation-protocol.md` for subprocess invocation contract, provider invocation boundaries, and field rules.
 
+## Solar MCP tools — first choice over shell (Required)
+
+When you need Solar state or capabilities, use the three MCP tools, not shell scripts or direct provider calls:
+
+- `solar_search` — find and read tasks, capabilities, docs, operations and resources (read-only).
+- `solar_docs` — read a skill's contract, a framework document or an operation's schema before calling it.
+- `solar_execute` — run one registered operation (task lifecycle, async execution, communication).
+
+**Rule:** if Solar has a registered operation for what you need (check `solar_search scope=operations`), use `solar_execute` — do not shell out to `codex exec`, `agent -p`, `claude -p` or similar to reach Solar state or launch Solar work. Reading a task never needs approval; mutations follow each operation's authority (A2/A3) and ask their own confirmations. Contracts: `solar_docs id=operation:<name>`.
+
 ## Workflow Orchestration (Required)
 
 **Plan:** Enter planning mode for any non-trivial task (3+ steps or architectural decisions). If something fails, STOP and replan. Never mark done without real validation — run tests, check logs, ask "Would a senior engineer approve this?"
