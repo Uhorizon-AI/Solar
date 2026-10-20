@@ -503,6 +503,11 @@ def test_result_view_read_also_stays_inside_the_cap_when_blocked(solar_env, monk
     assert result["status"] == "completed"
     assert result["elapsed_seconds"] <= 2
     assert wall <= 3.5
+    # The hint must not say the task is "Still" running: it is terminal, only its
+    # result view is missing, and the hint names both ways to get it.
+    assert "Still" not in result["next"]
+    assert "already finished" in result["next"]
+    assert "view=result" in result["next"]
     with solar_state.session() as store:
         assert store.task_get(made["id"])["status"] == "completed"
 
