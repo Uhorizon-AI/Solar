@@ -220,7 +220,7 @@ def good_codex_checks():
             'sandbox.helpers': {'details': {'approval policy': 'Never', 'managed filesystem source': 'none'}}}
 
 
-def fake_codex(tmp_path, *, help_text=None, version='codex-cli 0.162.1', doctor=None):
+def fake_codex(tmp_path, *, help_text=None, version='codex-cli 0.162.1', doctor=None, doctor_exit=0):
     """A double whose help is the real `codex exec --help` unless a test says otherwise."""
     help_text = codex_help() if help_text is None else help_text
     doctor = json.dumps({'checks': good_codex_checks()}) if doctor is None else doctor
@@ -229,7 +229,9 @@ def fake_codex(tmp_path, *, help_text=None, version='codex-cli 0.162.1', doctor=
 import sys
 if '--version' in sys.argv: print({version!r})
 elif '--help' in sys.argv: sys.stdout.write({help_text!r})
-else: sys.stdout.write({doctor!r})
+else:
+    sys.stdout.write({doctor!r})
+    sys.exit({doctor_exit})
 """)
     binary.chmod(0o700)
     return str(binary)
@@ -312,6 +314,14 @@ def with_checks(change):
     ('{}', 'doctor_unrecognized'),
     ('not json', 'doctor_unrecognized'),
     (with_checks(lambda c: c['config.load'].update(status='error')), 'config_not_loaded'),
+    # Valid JSON of an unexpected type is unrecognized, never an uncaught error.
+    (with_checks(lambda c: c['config.load'].update(status=['ok'])), 'doctor_unrecognized'),
+    (with_checks(lambda c: c['config.load'].update(status=[])), 'doctor_unrecognized'),
+    (with_checks(lambda c: c['config.load']['details'].update({'configuration scope': None})),
+     'doctor_unrecognized'),
+    (with_checks(lambda c: c['config.load']['details'].update({'mcp servers': 0})), 'doctor_unrecognized'),
+    (with_checks(lambda c: c['sandbox.helpers']['details'].update({'approval policy': ['Never']})),
+     'doctor_unrecognized'),
     (with_checks(lambda c: c['config.load']['details'].update({'mcp servers': '1'})), 'mcp_servers_present'),
     (with_checks(lambda c: c['config.load']['details'].update({'configuration scope': 'invocation config'})),
      'cloud_policy_unconfirmed'),
@@ -328,6 +338,38 @@ def test_codex_effective_policy_requires_known_isolated_configuration(tmp_path, 
 
 def test_codex_isolated_configuration_is_accepted(tmp_path):
     codex_preflight(fake_codex(tmp_path), tmp_path)
+
+
+def test_codex_doctor_exit_code_is_not_evidence_of_the_policy(tmp_path):
+    # Real `codex doctor` exits 1 when its overall status is `fail` (credentials, network) while
+    # `config.load` is sound; the contract rests on the effective-config rows alone.
+    codex_preflight(fake_codex(tmp_path, doctor_exit=1), tmp_path)
+
+
+def test_launch_records_the_codex_capabilities_checked(tmp_path, monkeypatch):
+    root, commit = repository(tmp_path)
+    e = envelope(root, commit, 'codex')
+    auth = tmp_path / 'auth'; auth.mkdir(); (auth / 'auth.json').write_text('{}')
+    monkeypatch.setenv('CODEX_HOME', str(auth))
+    adapter = PROVIDERS['codex']
+    monkeypatch.setattr(adapter, 'resolve_binary', lambda _: fake_codex(tmp_path))
+    with repo.launch(adapter, e['manifest'], e['review_input_digest'], lambda: None):
+        assert adapter.last_review_preflight == dict(provider='codex', version='codex-cli 0.162.1',
+                                                     capabilities_checked=list(repo.CODEX_FLAGS))
+
+
+def test_launch_without_codex_credentials_names_the_stage(tmp_path, monkeypatch):
+    root, commit = repository(tmp_path)
+    e = envelope(root, commit, 'codex')
+    empty = tmp_path / 'no-auth'; empty.mkdir()
+    monkeypatch.setenv('CODEX_HOME', str(empty))
+    adapter = PROVIDERS['codex']
+    monkeypatch.setattr(adapter, 'resolve_binary', lambda _: fake_codex(tmp_path))
+    with pytest.raises(profiles.ProfileError) as caught:
+        with repo.launch(adapter, e['manifest'], e['review_input_digest'], lambda: None):
+            pytest.fail('launched without credentials')
+    assert caught.value.code == 'execution_profile_unsupported'
+    assert caught.value.detail == dict(provider='codex', stage='credentials', reason='credentials_unavailable')
 
 
 @pytest.mark.parametrize('error, reason', [(subprocess.TimeoutExpired('codex', 1), 'doctor_timeout'),
@@ -485,7 +527,6 @@ def test_codex_argv_requests_schema_and_final_message_file(tmp_path, monkeypatch
         out = Path(argv[argv.index('--output-last-message') + 1])
         assert out.parent != Path(cwd) and out.parent == Path(argv[argv.index('--output-schema') + 1]).parent
         assert not out.exists()
-
 
 
 @pytest.mark.parametrize('argv', [['codex', '--output-last-message'], ['codex', '--output-last-message', '/nonexistent/dir/x.json']])

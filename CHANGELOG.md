@@ -8,7 +8,7 @@ The format is based on Keep a Changelog.
 
 ### Changed
 - The Codex repository reader now discovers its capabilities from `codex exec --help` option blocks (the same `cli_capabilities` check as Claude, Cursor and Antigravity) instead of looking for flag names anywhere in the help text; the version is only recorded.
-- A Codex refusal keeps `execution_profile_unsupported` and now carries `error_detail` (`provider`, `stage`, fixed `reason`, `option`), so the task log names the failed check.
+- The Codex help, policy (`codex doctor --json`) and credentials refusals keep `execution_profile_unsupported` and now carry `error_detail` (`provider`, `stage`, fixed `reason`, `option`), so the task log names the failed check. A `doctor` field of an unexpected type is `doctor_unrecognized`; the `doctor` exit code is not evidence.
 
 ## [0.54.5] - 2026-10-20
 

@@ -9,6 +9,8 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 
+from cli_capabilities import discover, unsupported  # it imports execution_profiles, which imports this lazily
+
 PROFILE = 'repository_readonly_v1'
 PROVIDERS = frozenset({'claude', 'codex', 'agent', 'agy'})
 MAX_FILES = 10000
@@ -223,9 +225,10 @@ CODEX_REVIEW_SCHEMA = {'type': 'object', 'properties': {'review': {'type': 'stri
                        'required': ['review'], 'additionalProperties': False}
 
 
-# Options `codex exec --help` must declare, and the one value Solar passes that must be advertised.
+# Every option `launch` passes to `codex exec` must be declared by `codex exec --help`, plus the one
+# value that must be advertised.
 CODEX_FLAGS = ('--sandbox', '--model', '--json', '--ephemeral', '--ignore-user-config', '--ignore-rules',
-               '--output-schema', '--output-last-message')
+               '--output-schema', '--output-last-message', '--config', '--skip-git-repo-check')
 CODEX_VALUES = {'--sandbox': 'read-only'}
 CODEX_FEATURES = {'hooks', 'plugins', 'apps', 'multi_agent', 'browser_use', 'computer_use', 'remote_control',
                   'skill_search', 'skill_mcp_dependency_install', 'remote_plugin', 'image_generation'}
@@ -235,7 +238,6 @@ def codex_preflight(binary, env, cwd, config, metadata=None):
     """Capabilities come from `codex exec --help` option blocks, never from a version. The effective
     configuration, including cloud policy, comes from `codex doctor --json`; unknown fails closed.
     A refusal carries `detail` (provider, stage, reason, option) with fixed words only."""
-    from cli_capabilities import discover, unsupported
     discover(binary, env, cwd, provider='codex', prefix=[], subcommand=['exec'], required=list(CODEX_FLAGS),
              values=CODEX_VALUES, metadata={} if metadata is None else metadata)
     try:
@@ -247,16 +249,20 @@ def codex_preflight(binary, env, cwd, config, metadata=None):
         raise unsupported('codex', 'policy', 'doctor_unrecognized') from None
     except (OSError, subprocess.SubprocessError):
         raise unsupported('codex', 'policy', 'doctor_unavailable') from None
-    # Overall status can reflect offline endpoint checks. These specific
-    # effective-config rows, not network reachability, attest this contract.
+    # The exit code is deliberately not evidence: `codex doctor` exits 1 whenever its overall status is
+    # `fail` (missing credentials, an unreachable endpoint) while `config.load` is sound. Only these
+    # specific effective-config rows, not the exit code or network reachability, attest this contract.
     try:
         checks = json.loads(result.stdout)['checks']
         load = checks['config.load']
         details = load['details']
         status, mcp, scope = load['status'], details['mcp servers'], details['configuration scope']
-        active = set(details['enabled feature flags'].split(', '))
+        flags = details['enabled feature flags']
         approval = checks['sandbox.helpers']['details']['approval policy']
         managed = checks['sandbox.helpers']['details']['managed filesystem source']
+        if not all(isinstance(value, str) for value in (status, mcp, scope, flags, approval, managed)):
+            raise TypeError('unexpected doctor field type')
+        active = set(flags.split(', '))
     except (ValueError, TypeError, KeyError, AttributeError):
         raise unsupported('codex', 'policy', 'doctor_unrecognized') from None
     for broken, reason in ((status not in {'ok', 'warning'}, 'config_not_loaded'),
@@ -311,7 +317,6 @@ def launch(adapter, manifest, expected, before_launch):
             origin = Path(os.environ.get('CODEX_HOME') or Path(env.get('HOME', '~')) / '.codex')
             auth = origin / 'auth.json'
             if not auth.is_file():
-                from cli_capabilities import unsupported
                 raise unsupported('codex', 'credentials', 'credentials_unavailable')
             shutil.copyfile(auth, home / 'auth.json')
             os.chmod(home / 'auth.json', 0o600)
