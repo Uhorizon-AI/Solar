@@ -35,3 +35,9 @@ def test_quoted_secret_keys_are_redacted():
         out = redact(text)
         for leaked in ("demo-sensitive-value", "demo-password", "abc", "x1"):
             assert leaked not in out, (text, out)
+
+
+def test_escaped_quotes_inside_a_secret_do_not_leak_the_tail():
+    from review_failure import redact
+    for text in ('{"password":"prefix\\"private-tail"}', "{'token': 'a\\'private-tail'}"):
+        assert "private-tail" not in redact(text), text

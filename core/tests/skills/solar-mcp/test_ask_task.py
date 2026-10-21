@@ -178,3 +178,32 @@ def test_the_confirmation_shows_the_start_folder(solar_env, language):
     text = approval_text.render("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]),
                                 seconds=120, lang=language)[0]
     assert folder in text and "m-1" in text
+
+
+def test_a_question_cannot_be_mixed_with_a_valid_review_batch(solar_env, tmp_path):
+    from git_review_fixture import repository
+    root, commit = repository(tmp_path)
+    args = arguments(solar_env)
+    args.update(object=str(root), scope="Review", effect="One synthesis",
+                review_batch=dict(repository=str(root), commit=commit, reviews=[
+                    dict(key="r1", title="R1", instructions="Check.", provider="claude")]))
+    body, error = execute("task.create", args)
+    assert error and body["code"] == "review_input_invalid", body
+    with solar_state.read_session() as store:
+        assert store.task_list() == []
+
+
+def test_two_questions_do_not_run_at_the_same_time(solar_env):
+    first = run("task.create", arguments(solar_env))
+    second = run("task.create", dict(arguments(solar_env), title="Second"))
+    assert claim(first["id"])["claimed"]
+    assert not claim(second["id"])["claimed"]
+
+
+def test_without_a_known_workspace_a_question_is_not_low_risk(solar_env, monkeypatch):
+    made = run("task.create", arguments(solar_env))
+    pairs = stored(made["id"])["frontmatter"]
+    assert solar_state.run_risk(pairs) == "low"
+    monkeypatch.delenv("SOLAR_WORKSPACE")
+    assert solar_state.run_risk(pairs) == "high"
+

@@ -129,10 +129,10 @@ def _task(store, task_id: str) -> dict:
 
 def _review_fields(arguments: dict) -> dict:
     """Compose inputs through Router before native confirmation; never queue."""
-    if "review_batch" in arguments:
-        return _review_batch_fields(arguments)
     if "ask" in arguments:
         return _ask_fields(arguments)
+    if "review_batch" in arguments:
+        return _review_batch_fields(arguments)
     if "review" not in arguments:
         return {}
     router_scripts = str(_SKILLS / "solar-router" / "scripts")
