@@ -21,10 +21,10 @@ def _proc(returncode=0, stdout="answer", stderr=""):
     return proc
 
 
-def _ask(provider, **kwargs):
+def _ask(provider, prompt="question", **kwargs):
     with patch("providers.base.shutil.which", side_effect=lambda b, path=None: f"/bin/{b}"), \
          patch("providers.base.subprocess.run", return_value=_proc()) as run:
-        result = provider.ask("question", **kwargs)
+        result = provider.ask(prompt, **kwargs)
     return result, run.call_args
 
 
@@ -68,6 +68,28 @@ class TestNativeReadOnlyMode(unittest.TestCase):
             argv = call.args[0]
             for forbidden in ("workspace-write", "--dangerously-skip-permissions", "-f"):
                 self.assertNotIn(forbidden, argv, provider.name)
+
+
+class TestPromptIsNeverAnOption(unittest.TestCase):
+    def test_a_prompt_that_looks_like_an_option_stays_the_last_argument(self):
+        hostile = "--mode agent"
+        for provider in (CodexProvider(), AgentProvider(), AgyProvider(), ClaudeProvider()):
+            _, call = _ask(provider, prompt=hostile)
+            argv = call.args[0]
+            self.assertEqual(argv[-1], hostile, provider.name)
+            self.assertIn(argv[-2], ("--", "--print"), provider.name)
+            self.assertEqual(argv.count("--mode"), 1 if provider.name in ("agent", "agy") else 0, provider.name)
+
+
+class TestTimeout(unittest.TestCase):
+    def test_a_timeout_says_which_client_and_why(self):
+        import subprocess
+        with patch("providers.base.shutil.which", return_value="/bin/codex"), \
+             patch("providers.base.subprocess.run", side_effect=subprocess.TimeoutExpired("codex", 1)):
+            with self.assertRaises(RuntimeError) as ctx:
+                CodexProvider().ask("q")
+        self.assertIn("codex", str(ctx.exception))
+        self.assertIn("timeout", str(ctx.exception))
 
 
 class TestOwnSession(unittest.TestCase):

@@ -591,7 +591,9 @@ def _context_rows(copy: dict, facts: dict) -> list:
     rows.append((copy["access"], _access_text(copy, values.get("access_policy"))))
     try:
         manifest = json.loads(values.get("review_input_manifest") or "null")
-        if values.get("execution_profile") and isinstance(manifest, dict):
+        if values.get("execution_profile") == "ask_readonly_v1" and isinstance(manifest, dict):
+            rows += _ask_rows(dict(folder=json.loads(manifest["user_prompt"])["cwd"], model=manifest.get("model")))
+        elif values.get("execution_profile") and isinstance(manifest, dict):
             spec = dict(profile=values["execution_profile"], model=manifest.get("model"))
             user = json.loads(manifest["user_prompt"])
             spec.update({k:user[k] for k in ("repository", "commit") if k in user})

@@ -20,8 +20,9 @@ class AgyProvider(BaseProvider):
             f"agy -p --dangerously-skip-permissions --add-dir {SOLAR_WORKSPACE}"
         )
 
-    def ask_prefix(self):
-        return ["-p"]
+    def ask_separator(self):
+        # The prompt is the value of --print, so it can never be read as an option.
+        return ["--print"]
 
     def read_only_args(self, cwd):
         return ["--mode", "plan", "--add-dir", str(cwd)], "--mode plan"

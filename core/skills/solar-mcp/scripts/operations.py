@@ -179,12 +179,15 @@ def _ask_fields(arguments: dict) -> dict:
     try:
         if "review" in arguments or "review_batch" in arguments:
             raise OperationError("review_input_invalid", "A question is not a review.")
-        if not arguments.get("provider") or not arguments.get("instructions"):
-            raise OperationError("review_input_invalid", "A question needs an explicit client and a prompt.")
+        missing = [key for key in ("provider", "instructions") if not arguments.get(key)]
+        if missing:
+            raise OperationError("review_input_invalid",
+                                 "A question needs " + " and ".join(missing) + " in the same call; "
+                                 "send the client and the prompt again with the ask.")
+        folder = spec.get("folder") or str(workspace())
         envelope = build_ask_envelope(provider=arguments["provider"], prompt=arguments["instructions"],
-                                      cwd=spec.get("folder"), model=spec.get("model"))
-        access = arguments.get("access_policy", dict(
-            mode="read", scopes=[spec["folder"]] if spec.get("folder") else [str(workspace())], resources=[]))
+                                      cwd=folder, model=spec.get("model"))
+        access = arguments.get("access_policy", dict(mode="read", scopes=[folder], resources=[]))
         if access["mode"] != "read":
             raise OperationError("review_input_invalid", "A question can only read.")
         verify_sources(envelope["manifest"], access.get("scopes", []))
@@ -335,7 +338,7 @@ def _do_task_update(arguments: dict) -> dict:
     old_title = solar_state.value_of(dict((k, v) for k, v in current["frontmatter"]).get("title")) or ""
     current_fields = dict(current["frontmatter"])
     if ((current_fields.get("execution_profile") and "review_batch" in changes)
-            or (current_fields.get("subtask_policy") and "review" in changes)):
+            or (current_fields.get("subtask_policy") and ("review" in changes or "ask" in changes))):
         raise OperationError("review_input_invalid", "Changing between a review and a parent batch needs a new revision.")
     if (dict(current["frontmatter"]).get("execution_profile")
             and set(changes) & {"instructions", "provider", "access_policy"}

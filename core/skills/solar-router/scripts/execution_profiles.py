@@ -113,16 +113,15 @@ def build_review_envelope_v1(*, instructions: str, rules: list, evidence: list,
     return dict(manifest=manifest, review_input_digest=digest(manifest))
 
 
-def build_ask_envelope(*, provider: str, prompt: str, cwd: str | None, model: str | None = None) -> dict:
-    """A question for one client: the prompt, an optional absolute start folder and an optional model.
+def build_ask_envelope(*, provider: str, prompt: str, cwd: str, model: str | None = None) -> dict:
+    """A question for one client: the prompt, the absolute folder it starts in and an optional model.
 
     Nothing else is decided here. The client keeps its own login and is asked for its own read-only
     mode at launch; what to read and how to answer belong to the prompt."""
     if provider not in ASK_PROVIDERS:
         raise ProfileError("execution_profile_unsupported")
     if (not valid_model(model) or not isinstance(prompt, str) or not prompt.strip()
-            or (cwd is not None and (not isinstance(cwd, str) or not Path(cwd).is_absolute()
-                                     or any(ord(c) < 32 for c in cwd)))):
+            or not isinstance(cwd, str) or not Path(cwd).is_absolute() or any(ord(c) < 32 for c in cwd)):
         raise ProfileError("review_input_mismatch")
     user = canonical(dict(instructions=prompt, cwd=cwd))
     manifest = _normalize(dict(composition=ASK_COMPOSITION, execution_profile=ASK_PROFILE,
@@ -138,7 +137,7 @@ def ask_prompt(manifest: dict) -> str:
     return json.loads(manifest["user_prompt"])["instructions"]
 
 
-def ask_cwd(manifest: dict) -> str | None:
+def ask_cwd(manifest: dict) -> str:
     return json.loads(manifest["user_prompt"])["cwd"]
 
 
@@ -176,12 +175,11 @@ def verify_envelope(manifest, expected: str, *, provider: str, profile: str) -> 
 def verify_sources(manifest: dict, scopes: list[str]) -> None:
     """Worker-only reads within approved scopes; symlinks cannot widen access."""
     if manifest.get("execution_profile") == ASK_PROFILE:
-        cwd = ask_cwd(manifest)
-        if cwd is not None:
-            folder = Path(cwd).resolve()
-            if not folder.is_dir() or not any(folder == Path(s).resolve() or Path(s).resolve() in folder.parents
-                                              for s in scopes):
-                raise ProfileError("review_input_mismatch")
+        # The folder the client really starts in must be inside a scope the task declares.
+        folder = Path(ask_cwd(manifest)).resolve()
+        if not folder.is_dir() or not any(folder == Path(s).resolve() or Path(s).resolve() in folder.parents
+                                          for s in scopes):
+            raise ProfileError("review_input_mismatch")
         return
     if manifest.get("execution_profile") == "repository_readonly_v1":
         from repository_reviews import verify_scope

@@ -26,3 +26,12 @@ def test_prompt_copies_and_long_tokens_never_appear():
 def test_empty_output_and_bad_input_never_raise():
     assert rf.summarize(4, "") == "exit 4: no output"
     assert rf.summarize(5, None, 7).startswith("exit 5")
+
+
+def test_quoted_secret_keys_are_redacted():
+    from review_failure import redact
+    for text in ('{"api_key": "demo-sensitive-value"}', "{'password': 'demo-password'}",
+                 'token="abc"', "secret = 'x1'"):
+        out = redact(text)
+        for leaked in ("demo-sensitive-value", "demo-password", "abc", "x1"):
+            assert leaked not in out, (text, out)

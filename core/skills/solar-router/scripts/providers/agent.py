@@ -20,6 +20,9 @@ class AgentProvider(BaseProvider):
     def ask_prefix(self):
         return ["-p", "--trust"]
 
+    def ask_separator(self):
+        return ["--"]
+
     def read_only_args(self, cwd):
         return ["--mode", "ask", "--workspace", str(cwd)], "--mode ask"
 

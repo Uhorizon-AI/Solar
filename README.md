@@ -32,7 +32,7 @@
 - Applies governance in layers (workspace, then planet, then skill) and asks for approval before sending, publishing or committing.
 
 **What Solar does not do**
-- It has **no credentials and makes no LLM calls**. It never stores, copies or reads your logins.
+- It has **no credentials and makes no LLM calls**. It does not store or read your logins: a question runs the client with its own session as it is. Only the restricted review readers copy the minimum login file into a private temporary directory for one run.
 - It has no model of its own. The intelligence is always in a client.
 
 **How it finds the clients.** During setup you log in to each client once. Your `.env` lists which clients Solar may use, in order (`SOLAR_ROUTER_PROVIDER_PRIORITY`). If you do not name a client, Solar tries them in that order and moves to the next when one fails (for example, no tokens left). If you name a client that is not installed, it fails. The client's own session is the only credential involved.

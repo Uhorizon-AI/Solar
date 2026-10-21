@@ -693,7 +693,7 @@ def test_disabled_by_default_reads_nothing(ws, env, tmp_path):
     assert proc.returncode == 0
     assert "disabled" in proc.stdout
     assert not (ws / ".codex").exists()
-    assert not [s for s in seen if "/planets" in s[1] or ".codex" in s[1]], seen
+    assert not [s for s in seen if str(ws / "planets") in s[1] or ".codex" in s[1]], seen
 
 
 def test_disabled_publish_with_nonexistent_planets_dir(tmp_path, env):

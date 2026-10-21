@@ -359,3 +359,23 @@ policy evidence, account limits and bounded observation, then propose capacity
 explicitly in `enabled_reader_profiles` only after that separate authorization.
 Keep `text_only_review_v1` available for fixed evidence evaluations. Capacity 1
 with profiles disabled remains the default and the safe operational rollback.
+
+## Questions (`ask_readonly_v1`)
+
+A question is not a review: it has no repository, commit or evidence. `task.create`/`task.update` take `ask`
+(`folder`, `model`, both optional) plus the prompt in `instructions` and an explicit `provider`.
+
+- **Own session.** The client is launched with the caller's environment: no isolated HOME, no copied or linked
+  credentials, no `--help` preflight. A `SOLAR_ROUTER_<NAME>_CMD` override only supplies the binary; the flags
+  are imposed and the prompt always follows a separator (`--`, or `--print` for Antigravity).
+- **Read-only is a request, not a limit.** Each client is asked for its native mode (`--sandbox read-only`,
+  `--mode ask`, `--mode plan`, `--permission-mode plan`); Solar does not enforce it. The client may read beyond
+  its folder and inherits its own configuration, hooks and tools. Use `repository_readonly_v1` when that matters.
+- **Folder and risk.** The folder the client starts in is stored in the manifest (the workspace when omitted)
+  and must be inside a declared read scope. The task is low risk, so it runs without `task.authorize_run`, only
+  when that folder is the workspace or inside it. Any other folder, `/` and `$HOME` included, waits for
+  `task.authorize_run`: the user sees the folder in that confirmation.
+- **Concurrency.** The profile is not gated by `enabled_reader_profiles`, which only decides whether readers run
+  next to other tasks; an `ask` task runs alone until that changes.
+- **Failure.** A client that exits non-zero, or times out, fails with `<client> exit N: <reason>` or
+  `<client> exit timeout`; the audit records the read-only mode requested.

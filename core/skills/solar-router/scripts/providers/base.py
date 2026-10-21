@@ -143,6 +143,9 @@ class BaseProvider(ABC):
         directory are not replaced and no credential is copied or linked, so the
         client finds its login where it always does. Read-only is a request made
         in the client's own terms, not a guarantee; `mode` says what was asked.
+
+        A `SOLAR_ROUTER_<NAME>_CMD` override contributes only the binary: its own flags are not used,
+        `ask_prefix()` and `read_only_args()` are imposed. The prompt always follows a separator.
         """
         start = pathlib.Path(cwd) if cwd else self.get_cwd()
         flags, mode = self.read_only_args(start)
@@ -156,8 +159,11 @@ class BaseProvider(ABC):
                *(["--model", model] if model else []), *self.ask_separator(), prompt]
         env = self.prepare_env(os.environ.copy())
         self.log_prompt(prompt)
-        proc = subprocess.run(cmd, text=True, capture_output=True,
-                              timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300), cwd=start, env=env)
+        try:
+            proc = subprocess.run(cmd, text=True, capture_output=True,
+                                  timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300), cwd=start, env=env)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"{self.name} exit timeout") from None
         if proc.returncode != 0:
             from review_failure import summarize
             raise RuntimeError(f"{self.name} {summarize(proc.returncode, proc.stderr or '', proc.stdout or '', prompts=[prompt])}")

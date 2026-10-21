@@ -34,7 +34,7 @@ def test_a_changed_manifest_is_rejected(tmp_path, change):
         ep.verify_envelope(manifest, built["review_input_digest"], provider=provider, profile="ask_readonly_v1")
 
 
-@pytest.mark.parametrize("kwargs", [dict(prompt=""), dict(prompt="  "), dict(cwd="relative"),
+@pytest.mark.parametrize("kwargs", [dict(prompt=""), dict(prompt="  "), dict(cwd="relative"), dict(cwd=None),
                                     dict(model="-x"), dict(provider="ollama")])
 def test_invalid_input_is_refused(tmp_path, kwargs):
     base = dict(provider="codex", prompt="Hi", cwd=str(tmp_path), model=None)
@@ -44,8 +44,21 @@ def test_invalid_input_is_refused(tmp_path, kwargs):
 
 def test_too_large_a_prompt_is_refused(tmp_path):
     with pytest.raises(ep.ProfileError) as ctx:
-        ep.build_ask_envelope(provider="codex", prompt="x" * (ep.MAX_INPUT_BYTES + 1), cwd=None, model=None)
+        ep.build_ask_envelope(provider="codex", prompt="x" * (ep.MAX_INPUT_BYTES + 1), cwd="/tmp", model=None)
     assert ctx.value.code == "review_input_too_large"
+
+
+def test_the_start_folder_must_be_inside_an_approved_scope(tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    folder = tmp_path / "start"
+    folder.mkdir()
+    built = ep.build_ask_envelope(provider="codex", prompt="Hi", cwd=str(folder), model=None)
+    ep.verify_sources(built["manifest"], [str(tmp_path)])
+    with pytest.raises(ep.ProfileError):
+        ep.verify_sources(built["manifest"], [str(other)])
+    with pytest.raises(ep.ProfileError):
+        ep.verify_sources(built["manifest"], [])
 
 
 def test_the_folder_must_still_exist_before_launch(tmp_path):
@@ -79,7 +92,7 @@ def test_run_review_asks_with_the_clients_own_session(tmp_path, provider):
 
 
 def test_before_launch_runs_and_can_stop_the_launch(tmp_path):
-    built = ep.build_ask_envelope(provider="codex", prompt="Hi", cwd=None, model=None)
+    built = ep.build_ask_envelope(provider="codex", prompt="Hi", cwd="/tmp", model=None)
 
     def refuse():
         raise ep.ProfileError("review_input_mismatch")
@@ -92,7 +105,7 @@ def test_before_launch_runs_and_can_stop_the_launch(tmp_path):
 
 
 def test_a_failure_names_the_reason(tmp_path):
-    built = ep.build_ask_envelope(provider="agent", prompt="Hi", cwd=None, model=None)
+    built = ep.build_ask_envelope(provider="agent", prompt="Hi", cwd="/tmp", model=None)
     with patch("providers.base.shutil.which", return_value="/bin/agent"), \
          patch("providers.base.subprocess.run",
                return_value=_proc(stdout="", returncode=1, stderr="Error: not logged in")):
