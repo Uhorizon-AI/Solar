@@ -207,3 +207,15 @@ def test_without_a_known_workspace_a_question_is_not_low_risk(solar_env, monkeyp
     monkeypatch.delenv("SOLAR_WORKSPACE")
     assert solar_state.run_risk(pairs) == "high"
 
+
+
+def test_the_tool_descriptions_say_how_to_ask_a_client():
+    """An AI with no context must find the way from the descriptions alone, without a shell command."""
+    import mcp_server
+    import operations
+    text = mcp_server.TOOLS["solar_execute"]["description"]
+    for needle in ("ask", "task.create", "task.wait", "codex", "claude", "agy", "agent"):
+        assert needle in text, needle
+    assert "Antigravity" in text and "Cursor" in text
+    summary = operations.OPERATIONS["task.create"].summary
+    assert "ask" in summary and "Cursor" in summary

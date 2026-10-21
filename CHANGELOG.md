@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- An AI with no context could not find how to ask another client a question through the MCP: it concluded there was no operation and pointed to the router on the shell. The `solar_execute` description and the `task.create` summary now say how: `task.create` with `ask`, `provider` `codex`, `claude`, `agy` (Antigravity) or `agent` (Cursor), the prompt in `instructions`, `queue` true, then `task.wait`; one task per client, and a folder outside the workspace waits for `task.authorize_run`.
+
 ## [0.55.1] - 2026-10-21
 
 ### Fixed
