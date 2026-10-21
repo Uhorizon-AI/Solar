@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.55.1] - 2026-10-21
+
 ### Fixed
 - Restricted readers no longer require a model. `review.model` (and the batch child `model`) is optional for all four providers: when it is omitted no `--model` is passed and the CLI keeps the model it has already chosen (the `--model` help check is skipped too). For Cursor, only the model selection (`model`, `selectedModel`, `modelParameters`) of the user's `~/.cursor/cli-config.json` is copied into the private config. The manifest and digest record `model: null`, so a review with and without a model are different approved inputs, and the confirmation shows `client default`. Antigravity and Claude/Codex isolate their configuration, so their "default" is the CLI's own default, not a user setting.
 - A restricted reader that exits non-zero now says why instead of only `restricted provider returned non-zero`: the task log gets `exit N: <reason>` with a fixed word for the known causes (`not_logged_in`, `quota_or_rate_limit`, `model_unavailable`) or a short redacted tail of stderr (prompt copies, bearer and key=value secrets and token-shaped strings removed). Antigravity now writes its log to the private directory (`--log-file`) so the reason survives the launch directory; the help check requires that option.
