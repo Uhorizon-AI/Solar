@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.55.2] - 2026-10-21
+
 ### Fixed
 - The `solar_execute` description and the `task.create` summary now say how to ask another AI client a question through the MCP (`task.create` with `ask`, then `task.wait`); an agent with no context used to conclude there was no operation.
 
