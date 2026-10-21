@@ -220,5 +220,5 @@ def test_the_tool_descriptions_say_how_to_ask_a_client():
     assert "With ask" in summary and "agent (Cursor)" in summary
 
 
-def test_the_description_points_to_a_contract_that_resolves():
+def test_the_description_points_to_a_contract_that_resolves(solar_env):
     assert docs(id="operation:task.create")["id"] == "operation:task.create"
