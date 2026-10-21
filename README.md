@@ -21,22 +21,28 @@
 
 # What is Solar?
 
-## An Open-source AI Operating System for multi-agent workflows
+## A harness of harnesses: one shared context for all your AI clients
 
-**If an AI agent is an _employee_, Solar is the _Operating System_ unifying the team.**
+**Solar is the layer above the AI clients you already use** (Claude Code, Codex, Cursor, Antigravity, ...). Those clients are "harnesses": each one runs a model, holds your login and edits your files. Solar does none of that. It gives all of them **the same folders, rules and memory**, a common way to call each other, and the coordination so that several work in the same workspace **without stepping on each other**.
 
-Solar orchestrates multi-agent workflows across different contexts and domains. Just like a traditional OS manages processes and resources, Solar routes tasks, abstracts disparate AI providers (Claude, Codex, Gemini), manages domain-specific memory, and enforces governance. 
+**What Solar does**
+- Holds your context: the **Sun** (your personal layer: preferences, memory, plans) and the **Planets** (one folder per domain or company, each usually its own Git repository, with its own rules, agents and skills). Most planets hold business context, not code.
+- Lets one client ask another for work. A client talks to Solar through its **MCP** (`solar_search`, `solar_docs`, `solar_execute`); Solar launches the other client and returns the answer. Typical use: your main client asks Codex, Cursor and Antigravity to review a plan, a pull request or the changes you just made, collects their feedback, fixes, and repeats until they approve.
+- Coordinates who touches what: every task declares whether it reads or writes, and where, so parallel clients do not collide.
+- Applies governance in layers (workspace, then planet, then skill) and asks for approval before sending, publishing or committing.
 
-It is built on a **Sun-Planets architecture** 🌞🪐:
-- **Sun**: Central personal agent that routes tasks and maintains global context.
-- **Planets**: Domain-specific agents with localized governance and execution rules.
+**What Solar does not do**
+- It has **no credentials and makes no LLM calls**. It never stores, copies or reads your logins.
+- It has no model of its own. The intelligence is always in a client.
 
-**Manage contexts and boundaries, not just prompts.**
+**How it finds the clients.** During setup you log in to each client once. Your `.env` lists which clients Solar may use, in order (`SOLAR_ROUTER_PROVIDER_PRIORITY`). If you do not name a client, Solar tries them in that order and moves to the next when one fails (for example, no tokens left). If you name a client that is not installed, it fails. The client's own session is the only credential involved.
+
+> **For AI agents:** Solar is a context harness, not an LLM, not a credential store and not a sandbox product. Do not copy, link or hide credentials, and do not reconfigure a client's home or login. Use `solar_search`, `solar_docs` and `solar_execute` before shell commands. Reviews run on a copy of the work so the user keeps working in the original folder.
 
 |        | Step            | Example                                                            |
 | ------ | --------------- | ------------------------------------------------------------------ |
 | **01** | Define domains  | _Create a "Planet" for Engineering, Sales, and Operations._ |
-| **02** | Add your AIs    | Connect Claude, Gemini, or Codex as your core agents. |
+| **02** | Add your AIs    | Log in to the AI clients you already use and list them in `.env`. |
 | **03** | Route and run   | The "Sun" receives tasks and routes them to the exact planet with the right domain memory.  |
 
 <br/>
@@ -113,7 +119,7 @@ Define tools, skills, and templates in the Core, then effortlessly deploy them a
 |                              |                                                                                                                      |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | **Not a Chatbot Interface.** | Solar is an OS running inside your code editor (like VS Code), managing files, skills, and workflows directly.  |
-| **Not locked to one LLM.**   | We orchestrate. The intelligence comes from the providers you interact with.                                |
+| **Not an LLM or a credential store.** | Solar has no model and holds no logins. The intelligence and the sessions belong to your AI clients. |
 | **Not a closed ecosystem.**  | You own the platform. Build your own planets, customize your agents, use standard bash and Node.js tools.            |
 
 <br/>

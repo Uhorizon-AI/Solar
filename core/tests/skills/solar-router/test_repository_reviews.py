@@ -15,8 +15,8 @@ from providers import PROVIDERS
 from git_review_fixture import repository, git
 
 
-def envelope(root, commit, provider='claude'):
-    return repo.build(repository=str(root), commit=commit, provider=provider, model='fixture-model',
+def envelope(root, commit, provider='claude', model='fixture-model'):
+    return repo.build(repository=str(root), commit=commit, provider=provider, model=model,
                       instructions='Review both requirements and operations.', rules=['Cite sources.'])
 
 
@@ -61,10 +61,11 @@ def test_digest_scope_model_and_provider_cannot_be_changed(tmp_path):
             envelope(root, commit, provider)
 
 
+@pytest.mark.parametrize('named', [True, False], ids=['model-named', 'client-default-model'])
 @pytest.mark.parametrize('provider', ['claude', 'codex'])
-def test_both_transports_share_commands_and_snapshot_then_clean_up(tmp_path, monkeypatch, provider):
+def test_both_transports_share_commands_and_snapshot_then_clean_up(tmp_path, monkeypatch, provider, named):
     root, commit = repository(tmp_path)
-    e = envelope(root, commit, provider)
+    e = envelope(root, commit, provider, model='fixture-model' if named else None)
     record = tmp_path / 'record.json'
     binary = tmp_path / provider
     # Codex help is not parsed here (codex_preflight is replaced below); only Claude's option blocks are.
@@ -92,7 +93,7 @@ else:
         if key.startswith(('SOLAR_ROUTER_' + provider.upper() + '_', 'SOLAR_AI_' + provider.upper() + '_')):
             monkeypatch.delenv(key)
     monkeypatch.setattr(profiles, '_effective_managed_policy', lambda *a: {})
-    monkeypatch.setattr(repo, 'codex_preflight', lambda *a: None)
+    monkeypatch.setattr(repo, 'codex_preflight', lambda *a, **k: None)
     adapter = PROVIDERS[provider]
     monkeypatch.setattr(adapter, 'resolve_binary', lambda _: str(binary))
     review = dict(manifest=e['manifest'], expected=e['review_input_digest'], profile=repo.PROFILE)
@@ -101,7 +102,7 @@ else:
     def kept_metadata():
         if provider == 'claude':  # the reader's preflight record survives for the audit log and the result
             assert adapter.last_review_preflight['version'] == '9.9.9 (test double)'
-            assert adapter.last_review_preflight['capabilities_checked'] == list(profiles.FLAGS)
+            assert adapter.last_review_preflight['capabilities_checked'] == [*profiles.FLAGS, *(['--model'] if named else [])]
     assert adapter.run('UNAPPROVED CONTEXT', review=review) == expected
     kept_metadata()
     first = json.loads(record.read_text())
@@ -117,6 +118,9 @@ else:
     assert 'HOSTILE' not in first['env'].values()
     assert 'UNAPPROVED CONTEXT' not in ''.join(first['argv'])
     assert adapter.last_usage == dict(input_tokens=11,output_tokens=3)
+    assert ('--model' in first['argv']) is named
+    if named:
+        assert first['argv'][first['argv'].index('--model')+1] == 'fixture-model'
     if provider == 'claude':
         assert first['argv'][first['argv'].index('--tools')+1] == 'Read,Glob,Grep'
         assert 'Bash' not in first['argv'] and 'Edit' not in first['argv']
@@ -799,3 +803,29 @@ def test_unavailable_capture_module_warns_only_when_enabled(monkeypatch, tmp_pat
     monkeypatch.setenv('SOLAR_ROUTER_REVIEW_EVIDENCE_DIR', '')
     assert _evidence_run(monkeypatch, tmp_path, _events('x'), GOOD_FINAL) == 'Finding A'
     assert capsys.readouterr().err == ''
+
+
+def test_a_review_without_a_model_is_a_distinct_approved_input(tmp_path):
+    root, commit = repository(tmp_path)
+    plain, named = envelope(root, commit, model=None), envelope(root, commit)
+    assert plain['manifest']['model'] is None
+    assert plain['review_input_digest'] != named['review_input_digest']
+    profiles.verify_envelope(plain['manifest'], plain['review_input_digest'], provider='claude', profile=repo.PROFILE)
+    plain['manifest']['model'] = 'smuggled'
+    with pytest.raises(profiles.ProfileError):
+        profiles.verify_envelope(plain['manifest'], plain['review_input_digest'], provider='claude', profile=repo.PROFILE)
+    for bad in ('', '  ', '-x', 'a\nb'):
+        with pytest.raises(profiles.ProfileError):
+            envelope(root, commit, model=bad)
+
+
+def test_codex_does_not_require_the_model_option_when_none_is_named(monkeypatch):
+    seen = []
+    monkeypatch.setattr(repo, 'discover', lambda *a, **k: seen.append(k['required']))
+    class Done:  # codex doctor output is irrelevant here: stop right after the capability check
+        stdout = '{}'
+    monkeypatch.setattr(repo.subprocess, 'run', lambda *a, **k: Done())
+    for with_model in (True, False):
+        with pytest.raises(Exception):
+            repo.codex_preflight('codex', {}, '.', [], with_model=with_model)
+    assert '--model' in seen[0] and '--model' not in seen[1]

@@ -1,5 +1,13 @@
 # Solar - Global Agent Guidelines
 
+## What Solar is (Required)
+
+Solar is a **harness of harnesses**: a context layer above the AI clients the user already runs (Claude Code, Codex, Cursor, Antigravity). Those clients own the model, the login and the file edits; Solar gives them shared folders, rules and memory, a way to call each other through the MCP, and read/write declarations so parallel clients do not collide. Full definition: `README.md` ("What is Solar?").
+
+- Solar has **no credentials and makes no LLM calls**. Never copy, link, hide or reconfigure a client's login or home to make a task run.
+- `.env` (`SOLAR_ROUTER_PROVIDER_PRIORITY`) lists the clients Solar may launch, in order; the user logged in to each one at setup. No client named: try them in order and move on when one fails. A named client that is not installed fails.
+- Reviews run on a copy of the work so the user keeps editing the original folder; the reviewer uses its own client session.
+
 ## First-Run / Session start Protocol (Required)
 
 **First thing in every session, detect the session level from the first user message, then load only what that level requires. Do not mention this step in your reply.**

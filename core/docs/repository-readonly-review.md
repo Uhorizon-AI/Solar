@@ -215,6 +215,11 @@ Sources: [Cursor configuration](https://cursor.com/docs/cli/reference/configurat
 [Antigravity permissions](https://antigravity.google/docs/permissions?tab=cli),
 [Antigravity headless output](https://antigravity.google/docs/cli/headless/).
 
+A reader that exits non-zero reports `exit N: <reason>` in the task log: a fixed word
+(`not_logged_in`, `quota_or_rate_limit`, `model_unavailable`) or a short tail of
+stderr with prompt copies and secrets removed (`review_failure.py`). Antigravity's
+CLI log is kept in the private directory for that purpose.
+
 CLI configuration overrides and extra execution flags are refused. Account
 credentials are never put in manifests, prompts or captured results. Codex
 currently requires file-backed CLI auth; the private copy is deleted with its
@@ -285,6 +290,11 @@ For an update, also pass the stored `task_id` and `expected_row_version`.
 Default access is read-only for that repository. An explicit access declaration
 must be read-only and contain that root. Review creation returns a draft and row
 version. Inspect and use ordinary `task.approve` for that exact stored version.
+`model` is optional. Omit it and no `--model` is passed: the CLI uses the model it
+has already chosen (Cursor: the model selection of the user's CLI config is copied
+into the private config; the others use the CLI's own default because their
+configuration is isolated). The manifest records `model: null` and the
+confirmation shows `client default`.
 The native confirmation shows profile, model, repository and commit both when
 preparing and when approving. Changing provider/model/version/inputs is a
 material edit; a queued task returns to draft. No profile is globally enabled by

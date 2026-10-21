@@ -19,6 +19,15 @@ class CodexProvider(BaseProvider):
             f"-C {SOLAR_WORKSPACE} --"
         )
 
+    def ask_prefix(self):
+        return ["exec", "--skip-git-repo-check"]
+
+    def read_only_args(self, cwd):
+        return ["--sandbox", "read-only", "-C", str(cwd)], "--sandbox read-only"
+
+    def ask_separator(self):
+        return ["--"]
+
     def stream(self, prompt: str, *, review=None):
         if review is not None:
             yield from self.stream_review(**review)

@@ -108,13 +108,12 @@ def _files(repository, commit):
     return files
 
 
-def build(*, repository, commit, instructions, rules, provider, model):
-    from execution_profiles import canonical, digest, MAX_INPUT_BYTES
+def build(*, repository, commit, instructions, rules, provider, model=None):
+    from execution_profiles import canonical, digest, valid_model, MAX_INPUT_BYTES
     if provider not in PROVIDERS:
         raise _error('execution_profile_unsupported')
     if (not isinstance(repository, str) or not Path(repository).is_absolute()
-            or not isinstance(model, str) or not model.strip() or model.startswith('-')
-            or any(ord(c) < 32 for c in model)
+            or not valid_model(model)
             or not isinstance(instructions, str) or not instructions.strip()
             or not isinstance(rules, list) or not all(isinstance(r, str) for r in rules)):
         raise _error()
@@ -234,11 +233,12 @@ CODEX_FEATURES = {'hooks', 'plugins', 'apps', 'multi_agent', 'browser_use', 'com
                   'skill_search', 'skill_mcp_dependency_install', 'remote_plugin', 'image_generation'}
 
 
-def codex_preflight(binary, env, cwd, config, metadata=None):
+def codex_preflight(binary, env, cwd, config, metadata=None, *, with_model=True):
     """Capabilities come from `codex exec --help` option blocks, never from a version. The effective
     configuration, including cloud policy, comes from `codex doctor --json`; unknown fails closed.
     A refusal carries `detail` (provider, stage, reason, option) with fixed words only."""
-    discover(binary, env, cwd, provider='codex', prefix=[], subcommand=['exec'], required=list(CODEX_FLAGS),
+    required = [flag for flag in CODEX_FLAGS if with_model or flag != '--model']
+    discover(binary, env, cwd, provider='codex', prefix=[], subcommand=['exec'], required=required,
              values=CODEX_VALUES, metadata={} if metadata is None else metadata)
     try:
         result = subprocess.run([binary, 'doctor', '--json', *config], env=env, cwd=cwd,
@@ -279,7 +279,7 @@ def codex_preflight(binary, env, cwd, config, metadata=None):
 def launch(adapter, manifest, expected, before_launch):
     import shutil
     import tempfile
-    from execution_profiles import ENV_ALLOWLIST, preflight
+    from execution_profiles import ENV_ALLOWLIST, model_args, preflight
     provider = adapter.name
     adapter.last_review_preflight = dict(provider=provider, version=None)
     if provider not in PROVIDERS:
@@ -297,13 +297,14 @@ def launch(adapter, manifest, expected, before_launch):
         cwd.mkdir(mode=0o700)
         materialize(manifest, cwd)
         if provider == 'claude':
-            preflight(binary, env, str(cwd), adapter.last_review_preflight)
+            preflight(binary, env, str(cwd), adapter.last_review_preflight,
+                      **({} if manifest.get('model') else {'with_model': False}))
             argv = [binary, '-p', '--no-session-persistence', '--safe-mode', '--restricted',
                     '--setting-sources', '', '--tools', 'Read,Glob,Grep',
                     '--allowedTools', 'Read,Glob,Grep', '--permission-mode', 'plan',
                     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
                     '--settings', '{"disableAllHooks":true}', '--system-prompt', manifest['system_prompt'],
-                    '--model', manifest['model'], '--output-format', 'json', '--', manifest['user_prompt']]
+                    *model_args(manifest), '--output-format', 'json', '--', manifest['user_prompt']]
         elif provider in {'agent', 'agy'}:
             from repository_cli_guards import prepare
             argv, env = prepare(provider, binary, env, private, cwd, manifest,
@@ -324,13 +325,14 @@ def launch(adapter, manifest, expected, before_launch):
             env.pop('CLAUDE_CODE_OAUTH_TOKEN', None)
             env['CODEX_HOME'] = str(home)
             config = [arg for value in CODEX_CONFIG for arg in ('-c', value)]
-            codex_preflight(binary, env, str(cwd), config, adapter.last_review_preflight)
+            codex_preflight(binary, env, str(cwd), config, adapter.last_review_preflight,
+                            **({} if manifest.get('model') else {'with_model': False}))
             schema, last_message = private / 'review-schema.json', private / 'last-message.json'
             schema.write_text(json.dumps(CODEX_REVIEW_SCHEMA), encoding='utf-8')
             argv = [binary, 'exec', '--skip-git-repo-check', '--sandbox', 'read-only',
                     '--ignore-user-config', '--ignore-rules', '--ephemeral', '--json',
                     '--output-schema', str(schema), '--output-last-message', str(last_message),
-                    '--model', manifest['model'], *config, '-c',
+                    *model_args(manifest), *config, '-c',
                     'developer_instructions=' + json.dumps(manifest['system_prompt']), '--', manifest['user_prompt']]
         before_launch()
         verify(manifest, expected, provider)

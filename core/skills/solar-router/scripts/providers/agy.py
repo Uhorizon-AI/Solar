@@ -20,6 +20,12 @@ class AgyProvider(BaseProvider):
             f"agy -p --dangerously-skip-permissions --add-dir {SOLAR_WORKSPACE}"
         )
 
+    def ask_prefix(self):
+        return ["-p"]
+
+    def read_only_args(self, cwd):
+        return ["--mode", "plan", "--add-dir", str(cwd)], "--mode plan"
+
     def clean_output(self, output: str) -> str:
         cleaned = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", output)
         if (

@@ -1661,7 +1661,8 @@ def _overlaps(left: str, right: str) -> bool:
 # This registry neither enables it nor attests a host; enabled_reader_profiles starts empty.
 _REVIEW_PROFILE = "text_only_review_v1"
 VERIFIED_PROFILES: dict[str, frozenset] = {_REVIEW_PROFILE: frozenset({"claude"}),
-    "repository_readonly_v1": frozenset({"claude", "codex", "agent", "agy"})}
+    "repository_readonly_v1": frozenset({"claude", "codex", "agent", "agy"}),
+    "ask_readonly_v1": frozenset({"claude", "codex", "agent", "agy"})}
 
 
 def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,

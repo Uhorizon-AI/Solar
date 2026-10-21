@@ -98,3 +98,26 @@ def test_packet_review_can_be_prepared_without_changing_its_profile(solar_env, t
         assert store.task_field(made['id'],'execution_profile')=='text_only_review_v1'
         envelope=json.loads(store.task_field(made['id'],'review_input_manifest'))
         assert envelope['composition']=='review_envelope_v1'
+
+
+@pytest.mark.parametrize('language', ['en', 'es'])
+def test_a_review_may_omit_the_model_and_the_confirmation_says_so(solar_env, tmp_path, language):
+    import approval_text
+    args = arguments(tmp_path)
+    del args['review']['model']
+    text = approval_text.render('task.create', args, seconds=120, lang=language)[0]
+    assert 'client default' in text and args['review']['commit'] in text
+    made = run('task.create', args)
+    manifest = json.loads(solar_state.value_of(dict(stored(made['id'])['frontmatter'])['review_input_manifest']))
+    assert manifest['model'] is None
+    text = approval_text.render('task.approve', dict(task_id=made['id'], expected_row_version=made['row_version']),
+                                seconds=120, lang=language)[0]
+    assert 'client default' in text
+
+
+def test_a_review_batch_child_may_omit_the_model(solar_env, tmp_path):
+    root, commit = repository(tmp_path)
+    made = run('task.create', dict(title='Batch', instructions='Plan.', object='Plan', scope='Read only', effect='Text only',
+                                   review_batch=dict(repository=str(root), commit=commit, reviews=[
+                                       dict(key='one', title='One', instructions='Check.', provider='claude')])))
+    assert made['created']

@@ -22,6 +22,7 @@ HELP = """Options:
   --workspace <path>            Select the workspace
   --trust                       Trust the workspace
   --disable-slash-commands      Disable command expansion
+  --log-file <path>             Override CLI log file path
 """
 
 
@@ -394,7 +395,7 @@ def test_each_value_solar_passes_must_be_advertised(tmp_path, monkeypatch, provi
     assert error.value.detail == dict(provider=provider, stage='help', reason='required_value_unadvertised', option=option)
 
 
-@pytest.mark.parametrize('option', ['--print', '--mode', '--sandbox', '--model', '--output-format', '--disable-slash-commands'])
+@pytest.mark.parametrize('option', ['--print', '--mode', '--sandbox', '--model', '--output-format', '--disable-slash-commands', '--log-file'])
 def test_each_required_agy_option_is_checked_before_inference(tmp_path, monkeypatch, option):
     home = tmp_path / 'user'; auth_fixture(home)
     private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
@@ -510,3 +511,43 @@ def test_prepare_passes_the_provider_to_the_boundary_and_probe_refusals(tmp_path
     with pytest.raises(profiles.ProfileError) as error:
         guards.prepare(provider, '/none', {'HOME': str(home)}, private2, cwd2, manifest)
     assert (error.value.detail['provider'], error.value.detail['reason']) == (provider, 'write_guard_probe_timeout')
+
+
+def _prepare_without_model(tmp_path, monkeypatch, provider, help_text):
+    home = tmp_path / 'user'; auth_fixture(home)
+    guards.write_json(home / '.cursor/cli-config.json', dict(
+        model=dict(modelId='default', displayName='Auto'), selectedModel=dict(modelId='default', parameters=[]),
+        modelParameters={}, authInfo=dict(email='x@example.test'), hooks=dict(evil=1)))
+    private = tmp_path / 'private'; private.mkdir(); cwd = private / 'repository'; cwd.mkdir()
+    (cwd / 'file').write_text('x')
+    binary = tmp_path / provider
+    binary.write_text(f"#!{sys.executable}\nimport sys\nif '--help' in sys.argv: print({help_text!r})\nelse: raise AssertionError('inference forbidden')\n")
+    binary.chmod(0o700)
+    monkeypatch.setattr(guards, 'guard_prefix', lambda *a: [])
+    monkeypatch.setattr(guards, 'probe_guard', lambda *a: None)
+    metadata = {}
+    argv, env = guards.prepare(provider, str(binary), {'HOME': str(home)}, private, cwd,
+                               dict(system_prompt='Review.', user_prompt='Version.', model=None), metadata=metadata)
+    return argv, env, metadata
+
+
+@pytest.mark.parametrize('provider', ['agent', 'agy'])
+def test_without_a_model_none_is_passed_and_the_option_is_not_required(tmp_path, monkeypatch, provider):
+    no_model_help = '\n'.join(l for l in HELP.splitlines() if not l.lstrip().startswith('--model '))
+    argv, env, metadata = _prepare_without_model(tmp_path, monkeypatch, provider, no_model_help)
+    assert '--model' not in argv
+    assert '--model' not in metadata['capabilities_checked']
+
+
+def test_cursor_without_a_model_reuses_only_the_model_choice_of_the_client(tmp_path, monkeypatch):
+    argv, env, _ = _prepare_without_model(tmp_path, monkeypatch, 'agent', HELP)
+    config = json.loads((Path(env['HOME']) / '.cursor/cli-config.json').read_text())
+    assert config['model']['displayName'] == 'Auto' and config['selectedModel']['modelId'] == 'default'
+    assert 'authInfo' not in config and 'hooks' not in config
+    assert config['permissions']['deny'] == ['Write(**)', 'Shell(*)', 'Mcp(*:*)', 'WebFetch(*)']
+
+
+def test_agy_keeps_a_private_log_for_the_failure_reason(tmp_path, monkeypatch):
+    argv, env, _ = _prepare_without_model(tmp_path, monkeypatch, 'agy', HELP)
+    log = Path(argv[argv.index('--log-file') + 1])
+    assert Path(env['HOME']).parent in log.parents

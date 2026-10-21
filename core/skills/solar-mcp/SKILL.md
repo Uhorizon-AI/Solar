@@ -198,7 +198,7 @@ that the queue worker, console or transport is running.
 ## Repository review profile
 
 `repository_readonly_v1` explores a private copy of an approved Git commit through
-Router with an exact provider/model. Native `task.create`/`task.update` prepare
+Router with a provider and, optionally, an exact model (omit it to use the one the client CLI has chosen). Native `task.create`/`task.update` prepare
 `review` inputs or a bounded `review_batch`; approval and pool admission remain
 separate. Claude, Codex, Cursor (`agent`) and Antigravity (`agy`) have guarded constructors;
 unknown providers refuse.
