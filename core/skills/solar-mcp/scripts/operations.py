@@ -129,6 +129,8 @@ def _task(store, task_id: str) -> dict:
 
 def _review_fields(arguments: dict) -> dict:
     """Compose inputs through Router before native confirmation; never queue."""
+    if "ask" in arguments:
+        return _ask_fields(arguments)
     if "review_batch" in arguments:
         return _review_batch_fields(arguments)
     if "review" not in arguments:
@@ -142,7 +144,7 @@ def _review_fields(arguments: dict) -> dict:
     try:
         if not arguments.get("provider") or not arguments.get("instructions"):
             raise OperationError("review_input_invalid", "A review needs explicit provider and instructions.")
-        common = dict(provider=arguments["provider"], model=spec["model"],
+        common = dict(provider=arguments["provider"], model=spec.get("model"),
                       instructions=arguments["instructions"], rules=spec.get("rules", []))
         if spec["profile"] == REPOSITORY_PROFILE:
             if set(spec) - {"profile", "model", "rules", "repository", "commit"}:
@@ -166,6 +168,37 @@ def _review_fields(arguments: dict) -> dict:
         raise OperationError("review_input_invalid", getattr(exc, "code", "Review fields are incomplete.")) from None
 
 
+def _ask_fields(arguments: dict) -> dict:
+    """A question to one client: prompt, client, optional start folder. It reads, it never queues."""
+    router_scripts = str(_SKILLS / "solar-router" / "scripts")
+    if router_scripts not in sys.path:
+        sys.path.insert(0, router_scripts)
+    from execution_profiles import (build_ask_envelope, verify_sources, canonical, ProfileError,
+                                    ASK_PROFILE)
+    spec = arguments["ask"]
+    try:
+        if "review" in arguments or "review_batch" in arguments:
+            raise OperationError("review_input_invalid", "A question is not a review.")
+        missing = [key for key in ("provider", "instructions") if not arguments.get(key)]
+        if missing:
+            raise OperationError("review_input_invalid",
+                                 "A question needs " + " and ".join(missing) + " in the same call; "
+                                 "send the client and the prompt again with the ask.")
+        folder = spec.get("folder") or str(workspace())
+        envelope = build_ask_envelope(provider=arguments["provider"], prompt=arguments["instructions"],
+                                      cwd=folder, model=spec.get("model"))
+        access = arguments.get("access_policy", dict(mode="read", scopes=[folder], resources=[]))
+        if access["mode"] != "read":
+            raise OperationError("review_input_invalid", "A question can only read.")
+        verify_sources(envelope["manifest"], access.get("scopes", []))
+        return dict(execution_profile=json.dumps(ASK_PROFILE),
+                    review_input_manifest=json.dumps(canonical(envelope["manifest"])),
+                    review_input_digest=json.dumps(envelope["review_input_digest"]),
+                    access_policy=_access_text(access))
+    except (ProfileError, KeyError, ValueError, TypeError) as exc:
+        raise OperationError("review_input_invalid", getattr(exc, "code", "Question fields are incomplete.")) from None
+
+
 def _review_batch_fields(arguments):
     if "review" in arguments or any(not arguments.get(k) for k in ("object", "scope", "effect")):
         raise OperationError("review_input_invalid", "A review batch needs object/scope/effect and no single review.")
@@ -179,7 +212,7 @@ def _review_batch_fields(arguments):
         keys.add(child["key"]); titles.add(child["title"])
         fields = _review_fields(dict(provider=child["provider"], instructions=child["instructions"], review=dict(
             profile="repository_readonly_v1", repository=repository, commit=spec["commit"],
-            model=child["model"], rules=child.get("rules", []))))
+            model=child.get("model"), rules=child.get("rules", []))))
         manifest = json.loads(json.loads(fields["review_input_manifest"]))
         digest = json.loads(fields["review_input_digest"])
         entries.append(dict(key=child["key"], manifest=manifest, review_input_digest=digest))
@@ -305,10 +338,11 @@ def _do_task_update(arguments: dict) -> dict:
     old_title = solar_state.value_of(dict((k, v) for k, v in current["frontmatter"]).get("title")) or ""
     current_fields = dict(current["frontmatter"])
     if ((current_fields.get("execution_profile") and "review_batch" in changes)
-            or (current_fields.get("subtask_policy") and "review" in changes)):
+            or (current_fields.get("subtask_policy") and ("review" in changes or "ask" in changes))):
         raise OperationError("review_input_invalid", "Changing between a review and a parent batch needs a new revision.")
     if (dict(current["frontmatter"]).get("execution_profile")
-            and set(changes) & {"instructions", "provider", "access_policy"} and "review" not in changes):
+            and set(changes) & {"instructions", "provider", "access_policy"}
+            and "review" not in changes and "ask" not in changes):
         raise OperationError("review_input_invalid", "Restricted edits require fresh review inputs.")
     fields = {key: _fm(value) for key, value in changes.items() if key in _TEXT_FIELDS}
     fields.update(_review_fields(arguments))
@@ -675,21 +709,27 @@ _ACCESS = _obj(dict(
     required=("mode",))
 _REVIEW = _obj(dict(
     profile={"type": "string", "enum": ["text_only_review_v1", "repository_readonly_v1"]},
-    model=LINE(160), rules={"type": "array", "items": LINE(1000), "maxItems": 32},
+    model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."},
+    rules={"type": "array", "items": LINE(1000), "maxItems": 32},
     repository={"type": "string", "pattern": r"/[^\x00-\x1f\x7f]*", "maxLength": 1000},
     commit={"type": "string", "pattern": r"[0-9a-f]{40}|[0-9a-f]{64}"},
     evidence={"type": "array", "maxItems": 128, "items": _obj(dict(
         source_path={"type": "string", "pattern": r"/[^\x00-\x1f\x7f]*", "maxLength": 1000},
         content={"type": "string", "maxLength": 98304},
         sha256={"type": "string", "pattern": r"[0-9a-f]{64}"}), required=("source_path", "content", "sha256"))}),
-    required=("profile", "model"))
+    required=("profile",))
+
+_ASK = _obj(dict(
+    folder={"type": "string", "pattern": r"/[^\x00-\x1f\x7f]*", "maxLength": 1000,
+         "description": "Absolute folder the client starts in; any path, also outside Solar. Omit it for the workspace."},
+    model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."}))
 
 _REVIEW_BATCH = _obj(dict(repository=_REVIEW["properties"]["repository"],
     commit=_REVIEW["properties"]["commit"], reviews={"type": "array", "minItems": 1, "maxItems": 5,
         "items": _obj(dict(key=SLUG, title=_TITLE, instructions=_INSTRUCTIONS,
-                           provider={"type": "string", "enum": ["claude", "codex", "agent", "agy"]}, model=LINE(160),
+                           provider={"type": "string", "enum": ["claude", "codex", "agent", "agy"]}, model=_REVIEW["properties"]["model"],
                            rules=_REVIEW["properties"]["rules"]),
-                      required=("key", "title", "instructions", "provider", "model"))}),
+                      required=("key", "title", "instructions", "provider"))}),
     required=("repository", "commit", "reviews"))
 
 _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
@@ -699,7 +739,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),
                   effect=LINE(500), priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
-                  responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH,
+                  responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH, ask=_ASK,
                   queue={"type": "boolean", "description": "Queue it right away, as task.approve would. For work "
                          "that should run now; a risky task still waits for task.authorize_run."}),
              required=("title", "instructions")),
@@ -713,7 +753,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION, title=_TITLE,
                   instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500), effect=LINE(500),
                   priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
-                  responsibility=SLUG, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH),
+                  responsibility=SLUG, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH, ask=_ASK),
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable", "review_input_invalid",
                 "no_changes", "access_policy_invalid"),

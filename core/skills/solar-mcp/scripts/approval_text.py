@@ -337,18 +337,32 @@ def _archive(copy, args):
     return _head(copy, copy["archive_head"], rows, notes, [copy["archive_guard"]])
 
 
+# A review that names no model runs with the one the client CLI has already chosen.
+_NO_MODEL = "client default"
+
+
 def _review_rows(copy, spec):
     rows = []
     for key in ("profile", "model", "repository", "commit"):
         if spec.get(key):
             rows.append((key, _line(spec[key], 1000 if key == "repository" else _VALUE)))
+        elif key == "model" and "profile" in spec:
+            rows.append((key, _NO_MODEL))
     for child in spec.get("reviews", []):
-        rows.append(("review", _line(child["title"] + ": " + child["provider"] + " / " + child["model"], _VALUE)))
+        rows.append(("review", _line(child["title"] + ": " + child["provider"] + " / " + (child.get("model") or _NO_MODEL), _VALUE)))
         rows.append((copy["instructions"], _excerpt(copy, child["instructions"])))
         for key in ("repository", "commit"):
             if child.get(key):
                 rows.append((key, _line(child[key], 1000)))
     return rows
+
+
+def _ask_rows(spec):
+    """A question names the folder the client starts in and the model, nothing else."""
+    if not spec:
+        return []
+    return [("profile", "ask_readonly_v1"), ("folder", _line(spec.get("folder") or "workspace", 1000)),
+            ("model", _line(spec["model"], _VALUE) if spec.get("model") else _NO_MODEL)]
 
 
 def _create(copy, args):
@@ -367,6 +381,7 @@ def _create(copy, args):
     if "access_policy" in args:
         rows.append((copy["access"], _access_text(copy, dict(args["access_policy"], version=1))))
     rows += _review_rows(copy, args.get("review") or args.get("review_batch") or {})
+    rows += _ask_rows(args.get("ask"))
     rows.append((copy["instructions"], _excerpt(copy, args["instructions"])))
     rows.append((copy["effect"], copy["revise_effect" if source else "create_effect"]))
     return _head(copy, copy["revise_head" if source else "create_head"], rows, notes)
@@ -576,8 +591,10 @@ def _context_rows(copy: dict, facts: dict) -> list:
     rows.append((copy["access"], _access_text(copy, values.get("access_policy"))))
     try:
         manifest = json.loads(values.get("review_input_manifest") or "null")
-        if values.get("execution_profile") and isinstance(manifest, dict):
-            spec = dict(profile=values["execution_profile"], model=manifest["model"])
+        if values.get("execution_profile") == "ask_readonly_v1" and isinstance(manifest, dict):
+            rows += _ask_rows(dict(folder=json.loads(manifest["user_prompt"])["cwd"], model=manifest.get("model")))
+        elif values.get("execution_profile") and isinstance(manifest, dict):
+            spec = dict(profile=values["execution_profile"], model=manifest.get("model"))
             user = json.loads(manifest["user_prompt"])
             spec.update({k:user[k] for k in ("repository", "commit") if k in user})
             rows += _review_rows(copy, spec)
@@ -585,7 +602,7 @@ def _context_rows(copy: dict, facts: dict) -> list:
             children = []
             for entry in manifest["reviews"]:
                 m = entry["manifest"]; u = json.loads(m["user_prompt"])
-                children.append(dict(title=entry["key"],provider=m["provider"],model=m["model"],instructions=u["instructions"],
+                children.append(dict(title=entry["key"],provider=m["provider"],model=m.get("model"),instructions=u["instructions"],
                                      repository=u.get("repository"),commit=u.get("commit")))
             rows += _review_rows(copy, dict(reviews=children))
     except (KeyError, ValueError, TypeError):

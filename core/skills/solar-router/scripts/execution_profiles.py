@@ -12,6 +12,9 @@ import tempfile
 
 PROFILE = "text_only_review_v1"
 COMPOSITION = "review_envelope_v1"
+ASK_PROFILE = "ask_readonly_v1"
+ASK_COMPOSITION = "ask_envelope_v1"
+ASK_PROVIDERS = frozenset({"claude", "codex", "agent", "agy"})
 MAX_INPUT_BYTES = 98304  # Keep the user-prompt argv entry within portable OS limits.
 SYSTEM_PROMPT = (
     "Review only the supplied evidence against the supplied instructions and rules.\n"
@@ -22,7 +25,7 @@ SYSTEM_PROMPT = (
 )
 FLAGS = ("--print", "--no-session-persistence", "--safe-mode", "--restricted",
          "--setting-sources", "--tools", "--strict-mcp-config", "--mcp-config",
-         "--settings", "--system-prompt", "--output-format", "--model")
+         "--settings", "--system-prompt", "--output-format")
 # Values Solar passes that the help must advertise for that option.
 REQUIRED_VALUES = {"--output-format": "json"}
 # HOME preserves the adapter's OAuth/keychain authentication. No configuration,
@@ -37,6 +40,17 @@ class ProfileError(RuntimeError):
         self.code = code
         self.detail = detail
         super().__init__(code)
+
+
+def valid_model(model) -> bool:
+    """None (the CLI's own default) or a non-empty single-line id that cannot be read as an option."""
+    return model is None or (isinstance(model, str) and bool(model.strip()) and not model.startswith("-")
+                             and not any(ord(c) < 32 for c in model))
+
+
+def model_args(manifest: dict) -> list:
+    """`--model <id>` only when the approved review names one."""
+    return ["--model", manifest["model"]] if manifest.get("model") else []
 
 
 def _normalize(value):
@@ -59,7 +73,7 @@ def digest(value) -> str:
 
 
 def build_review_envelope_v1(*, instructions: str, rules: list, evidence: list,
-                             provider: str, model: str) -> dict:
+                             provider: str, model: str | None = None) -> dict:
     """Pure composition; raw source hashes are captured before newline normalization.
 
     The fixed byte budget covers both prompts. It is a conservative input bound,
@@ -67,7 +81,8 @@ def build_review_envelope_v1(*, instructions: str, rules: list, evidence: list,
     """
     if provider != "claude":
         raise ProfileError("execution_profile_unsupported")
-    if (not isinstance(model, str) or not model.strip() or model.startswith("-")
+    # `model` is optional: None leaves the choice to the CLI's own default and passes no --model.
+    if (not valid_model(model)
             or not isinstance(instructions, str) or not instructions.strip()
             or not isinstance(rules, list) or not all(isinstance(r, str) for r in rules)
             or not isinstance(evidence, list)):
@@ -98,8 +113,48 @@ def build_review_envelope_v1(*, instructions: str, rules: list, evidence: list,
     return dict(manifest=manifest, review_input_digest=digest(manifest))
 
 
+def build_ask_envelope(*, provider: str, prompt: str, cwd: str, model: str | None = None) -> dict:
+    """A question for one client: the prompt, the absolute folder it starts in and an optional model.
+
+    Nothing else is decided here. The client keeps its own login and is asked for its own read-only
+    mode at launch; what to read and how to answer belong to the prompt."""
+    if provider not in ASK_PROVIDERS:
+        raise ProfileError("execution_profile_unsupported")
+    if (not valid_model(model) or not isinstance(prompt, str) or not prompt.strip()
+            or not isinstance(cwd, str) or not Path(cwd).is_absolute() or any(ord(c) < 32 for c in cwd)):
+        raise ProfileError("review_input_mismatch")
+    user = canonical(dict(instructions=prompt, cwd=cwd))
+    manifest = _normalize(dict(composition=ASK_COMPOSITION, execution_profile=ASK_PROFILE,
+                               provider=provider, model=model, system_prompt="", user_prompt=user,
+                               sources=[], context_budget=dict(max_utf8_bytes=MAX_INPUT_BYTES,
+                                                               input_utf8_bytes=len(user.encode("utf-8")))))
+    if manifest["context_budget"]["input_utf8_bytes"] > MAX_INPUT_BYTES:
+        raise ProfileError("review_input_too_large")
+    return dict(manifest=manifest, review_input_digest=digest(manifest))
+
+
+def ask_prompt(manifest: dict) -> str:
+    return json.loads(manifest["user_prompt"])["instructions"]
+
+
+def ask_cwd(manifest: dict) -> str:
+    return json.loads(manifest["user_prompt"])["cwd"]
+
+
 def verify_envelope(manifest, expected: str, *, provider: str, profile: str) -> dict:
     """Recompose, including fixed prompt and budget, rather than trusting metadata."""
+    if profile == ASK_PROFILE:
+        try:
+            if isinstance(manifest, str):
+                manifest = json.loads(manifest)
+            user = json.loads(manifest["user_prompt"])
+            rebuilt = build_ask_envelope(provider=provider, prompt=user["instructions"], cwd=user["cwd"],
+                                         model=manifest["model"])
+            if manifest != rebuilt["manifest"] or expected != rebuilt["review_input_digest"]:
+                raise ProfileError("review_input_mismatch")
+            return rebuilt["manifest"]
+        except (KeyError, TypeError, ValueError):
+            raise ProfileError("review_input_mismatch") from None
     if profile == "repository_readonly_v1":
         from repository_reviews import verify
         return verify(manifest, expected, provider)
@@ -119,6 +174,13 @@ def verify_envelope(manifest, expected: str, *, provider: str, profile: str) -> 
 
 def verify_sources(manifest: dict, scopes: list[str]) -> None:
     """Worker-only reads within approved scopes; symlinks cannot widen access."""
+    if manifest.get("execution_profile") == ASK_PROFILE:
+        # The folder the client really starts in must be inside a scope the task declares.
+        folder = Path(ask_cwd(manifest)).resolve()
+        if not folder.is_dir() or not any(folder == Path(s).resolve() or Path(s).resolve() in folder.parents
+                                          for s in scopes):
+            raise ProfileError("review_input_mismatch")
+        return
     if manifest.get("execution_profile") == "repository_readonly_v1":
         from repository_reviews import verify_scope
         verify_scope(manifest, scopes)
@@ -238,11 +300,12 @@ def _effective_managed_policy(binary: str, env: dict, cwd: str, why: list | None
     return {} if reason is None else None
 
 
-def preflight(binary: str, env: dict, cwd: str, metadata: dict | None = None) -> None:
+def preflight(binary: str, env: dict, cwd: str, metadata: dict | None = None, *, with_model: bool = True) -> None:
     """Capabilities come from `claude --help` option blocks, never from a version. A refusal carries
     `detail` (provider, stage, reason, option) with fixed words only, as for the other readers."""
     from cli_capabilities import discover, unsupported
-    discover(binary, env, cwd, provider="claude", prefix=[], required=list(FLAGS),
+    discover(binary, env, cwd, provider="claude", prefix=[],
+             required=[*FLAGS, *(("--model",) if with_model else ())],
              values=REQUIRED_VALUES, metadata={} if metadata is None else metadata)
     # A known empty effective managed policy is sufficient. Unknown or any
     # policy content is conservatively unsupported; do not override admin policy.
@@ -277,11 +340,11 @@ def restricted_launch(adapter, manifest, expected: str, *, profile: str, extra_f
     with tempfile.TemporaryDirectory(prefix="solar-review-") as cwd:
         os.chmod(cwd, 0o700)
         adapter.last_review_preflight = {}  # discover fills provider, version and the checked options
-        preflight(binary, env, cwd, adapter.last_review_preflight)
+        preflight(binary, env, cwd, adapter.last_review_preflight, **({} if manifest.get("model") else {"with_model": False}))
         argv = [binary, "-p", "--no-session-persistence", "--safe-mode", "--restricted",
                 "--setting-sources", "", "--tools", "", "--strict-mcp-config",
                 "--mcp-config", '{"mcpServers":{}}', "--settings", '{"disableAllHooks":true}',
-                "--system-prompt", manifest["system_prompt"], "--model", manifest["model"],
+                "--system-prompt", manifest["system_prompt"], *model_args(manifest),
                 "--output-format", "json", "--", manifest["user_prompt"]]
         before_launch()
         verify_envelope(manifest, expected, provider=adapter.name, profile=profile)

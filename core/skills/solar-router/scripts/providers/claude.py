@@ -11,6 +11,15 @@ class ClaudeProvider(BaseProvider):
     default_cmd = "claude -p --permission-mode bypassPermissions --no-session-persistence"
     last_usage: dict | None = None
 
+    def ask_prefix(self):
+        return ["-p", "--no-session-persistence"]
+
+    def read_only_args(self, cwd):
+        return ["--permission-mode", "plan"], "--permission-mode plan"
+
+    def ask_separator(self):
+        return ["--"]
+
     def stream(self, prompt: str, *, review=None):
         if review is not None:
             yield from self.stream_review(**review)

@@ -17,6 +17,15 @@ class AgentProvider(BaseProvider):
             f"agent -p -f --approve-mcps --trust --workspace {SOLAR_WORKSPACE}"
         )
 
+    def ask_prefix(self):
+        return ["-p", "--trust"]
+
+    def ask_separator(self):
+        return ["--"]
+
+    def read_only_args(self, cwd):
+        return ["--mode", "ask", "--workspace", str(cwd)], "--mode ask"
+
     def stream(self, prompt: str, *, review=None):
         if review is not None:
             yield from self.stream_review(**review)

@@ -16,6 +16,9 @@ class OllamaProvider(BaseProvider):
     def build_default_cmd(self) -> str:
         return "ollama run solar --hidethinking --nowordwrap"
 
+    def ask_prefix(self):
+        return ["run", "solar", "--hidethinking", "--nowordwrap"]
+
     def clean_output(self, output: str) -> str:
         cleaned = self._ANSI_RE.sub("", output)
         cleaned = self._CONTROL_RE.sub("", cleaned)

@@ -162,9 +162,10 @@ def test_running_child_uses_existing_cancellation_protocol_when_authority_is_los
     assert store.task_status(child) == 'cancelled'
 
 
-def test_registry_keeps_packet_claude_only_and_adds_repository_readers_without_enabling_them(store):
+def test_registry_keeps_packet_claude_only_and_adds_repository_and_ask_readers_without_enabling_them(store):
     assert solar_state.VERIFIED_PROFILES == {'text_only_review_v1': frozenset({'claude'}),
-        'repository_readonly_v1': frozenset({'claude', 'codex', 'agent', 'agy'})}
+        'repository_readonly_v1': frozenset({'claude', 'codex', 'agent', 'agy'}),
+        'ask_readonly_v1': frozenset({'claude', 'codex', 'agent', 'agy'})}
     assert store.async_policy()['enabled_reader_profiles'] == []
 
 

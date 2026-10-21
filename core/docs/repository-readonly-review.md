@@ -215,6 +215,11 @@ Sources: [Cursor configuration](https://cursor.com/docs/cli/reference/configurat
 [Antigravity permissions](https://antigravity.google/docs/permissions?tab=cli),
 [Antigravity headless output](https://antigravity.google/docs/cli/headless/).
 
+A reader that exits non-zero reports `exit N: <reason>` in the task log: a fixed word
+(`not_logged_in`, `quota_or_rate_limit`, `model_unavailable`) or a short tail of
+stderr with prompt copies and secrets removed (`review_failure.py`). Antigravity's
+CLI log is kept in the private directory for that purpose.
+
 CLI configuration overrides and extra execution flags are refused. Account
 credentials are never put in manifests, prompts or captured results. Codex
 currently requires file-backed CLI auth; the private copy is deleted with its
@@ -285,6 +290,11 @@ For an update, also pass the stored `task_id` and `expected_row_version`.
 Default access is read-only for that repository. An explicit access declaration
 must be read-only and contain that root. Review creation returns a draft and row
 version. Inspect and use ordinary `task.approve` for that exact stored version.
+`model` is optional. Omit it and no `--model` is passed: the CLI uses the model it
+has already chosen (Cursor: the model selection of the user's CLI config is copied
+into the private config; the others use the CLI's own default because their
+configuration is isolated). The manifest records `model: null` and the
+confirmation shows `client default`.
 The native confirmation shows profile, model, repository and commit both when
 preparing and when approving. Changing provider/model/version/inputs is a
 material edit; a queued task returns to draft. No profile is globally enabled by
@@ -349,3 +359,23 @@ policy evidence, account limits and bounded observation, then propose capacity
 explicitly in `enabled_reader_profiles` only after that separate authorization.
 Keep `text_only_review_v1` available for fixed evidence evaluations. Capacity 1
 with profiles disabled remains the default and the safe operational rollback.
+
+## Questions (`ask_readonly_v1`)
+
+A question is not a review: it has no repository, commit or evidence. `task.create`/`task.update` take `ask`
+(`folder`, `model`, both optional) plus the prompt in `instructions` and an explicit `provider`.
+
+- **Own session.** The client is launched with the caller's environment: no isolated HOME, no copied or linked
+  credentials, no `--help` preflight. A `SOLAR_ROUTER_<NAME>_CMD` override only supplies the binary; the flags
+  are imposed and the prompt always follows a separator (`--`, or `--print` for Antigravity).
+- **Read-only is a request, not a limit.** Each client is asked for its native mode (`--sandbox read-only`,
+  `--mode ask`, `--mode plan`, `--permission-mode plan`); Solar does not enforce it. The client may read beyond
+  its folder and inherits its own configuration, hooks and tools. Use `repository_readonly_v1` when that matters.
+- **Folder and risk.** The folder the client starts in is stored in the manifest (the workspace when omitted)
+  and must be inside a declared read scope. The task is low risk, so it runs without `task.authorize_run`, only
+  when that folder is the workspace or inside it. Any other folder, `/` and `$HOME` included, waits for
+  `task.authorize_run`: the user sees the folder in that confirmation.
+- **Concurrency.** The profile is not gated by `enabled_reader_profiles`, which only decides whether readers run
+  next to other tasks; an `ask` task runs alone until that changes.
+- **Failure.** A client that exits non-zero, or times out, fails with `<client> exit N: <reason>` or
+  `<client> exit timeout`; the audit records the read-only mode requested.

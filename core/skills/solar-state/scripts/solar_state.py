@@ -1659,9 +1659,12 @@ def _overlaps(left: str, right: str) -> bool:
 # applied policy is not enough to run next to other tasks: the executor must really enforce it.
 # Router constructors enforce each profile and fail closed on unknown host policy.
 # This registry neither enables it nor attests a host; enabled_reader_profiles starts empty.
+# `ask_readonly_v1` is the exception to "enforces": the client is only asked for its read-only mode
+# (see run_risk), and the profile is not gated by enabled_reader_profiles, which governs concurrency only.
 _REVIEW_PROFILE = "text_only_review_v1"
 VERIFIED_PROFILES: dict[str, frozenset] = {_REVIEW_PROFILE: frozenset({"claude"}),
-    "repository_readonly_v1": frozenset({"claude", "codex", "agent", "agy"})}
+    "repository_readonly_v1": frozenset({"claude", "codex", "agent", "agy"}),
+    "ask_readonly_v1": frozenset({"claude", "codex", "agent", "agy"})}
 
 
 def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
@@ -1962,13 +1965,30 @@ def _claim_order(row) -> tuple:
     return (-_PRIORITY_RANK.get(row["priority"] or "", 0), row["created"] or "", row["id"])
 
 
+def _ask_inside_workspace(pairs: list[list[str]]) -> bool:
+    """True when the folder a question starts in is the workspace or below it. Anything unreadable is not."""
+    try:
+        manifest = json.loads(_field(pairs, "review_input_manifest") or "null")
+        folder = os.path.realpath(json.loads(manifest["user_prompt"])["cwd"])
+        workspace = os.path.realpath(os.environ.get("SOLAR_WORKSPACE", "").strip() or "\0")
+    except (KeyError, TypeError, ValueError):
+        return False
+    return os.path.isabs(workspace) and (folder == workspace or folder.startswith(workspace.rstrip(os.sep) + os.sep))
+
+
 def run_risk(pairs: list[list[str]]) -> str:
     """`low` only when the executor itself confines the run: a restricted execution profile that has a
     verified implementation for this provider, and read-only access. Everything else, a task with no
-    profile included, is `high`. What the task text says never counts."""
+    profile included, is `high`. What the task text says never counts.
+
+    `ask_readonly_v1` is `low` on a weaker basis: the client is asked for its own read-only mode and may
+    still read beyond its folder, so it is `low` only while the folder it starts in is the workspace or
+    inside it. Any other folder is the user's call and waits for `task.authorize_run`."""
     profile = (_field(pairs, "execution_profile") or "").strip()
     provider = (_field(pairs, "provider") or "").strip().lower()
     if not profile or provider not in VERIFIED_PROFILES.get(profile, frozenset()):
+        return "high"
+    if profile == "ask_readonly_v1" and not _ask_inside_workspace(pairs):
         return "high"
     try:
         access = parse_access_policy(_field(pairs, "access_policy"))

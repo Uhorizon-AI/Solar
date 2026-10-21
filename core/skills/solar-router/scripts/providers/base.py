@@ -10,7 +10,8 @@ import shutil
 import subprocess
 import sys
 from abc import ABC
-from typing import Dict, List
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1]
 _PATHS_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-paths" / "scripts"
@@ -53,6 +54,15 @@ def env_int(name: str, default: int) -> int:
         raise RuntimeError(
             f"invalid integer env {name}={raw!r} (expected e.g. {default})"
         ) from exc
+
+
+@dataclass(frozen=True)
+class AskResult:
+    """What a client answered to a question, and how it was asked to behave."""
+
+    provider: str
+    text: str
+    mode: str  # the client's native read-only switch, or "none" when it has none
 
 
 class BaseProvider(ABC):
@@ -122,6 +132,53 @@ class BaseProvider(ABC):
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(entry)
 
+    def read_only_args(self, cwd: pathlib.Path) -> Tuple[List[str], str]:
+        """The client's native read-only switches and their label; none by default."""
+        return [], "none"
+
+    def ask(self, prompt: str, *, cwd=None, model: Optional[str] = None) -> AskResult:
+        """Put one question to the client with the session the user logged in with.
+
+        The environment is the caller's own: HOME and the client's config
+        directory are not replaced and no credential is copied or linked, so the
+        client finds its login where it always does. Read-only is a request made
+        in the client's own terms, not a guarantee; `mode` says what was asked.
+
+        A `SOLAR_ROUTER_<NAME>_CMD` override contributes only the binary: its own flags are not used,
+        `ask_prefix()` and `read_only_args()` are imposed. The prompt always follows a separator.
+        """
+        start = pathlib.Path(cwd) if cwd else self.get_cwd()
+        flags, mode = self.read_only_args(start)
+        new_key = f"SOLAR_ROUTER_{self.name.upper()}_CMD"
+        old_key = f"SOLAR_AI_{self.name.upper()}_CMD"
+        raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
+        parts = shlex.split(raw)
+        if not parts:
+            raise RuntimeError(f"{new_key} is empty")
+        cmd = [self.resolve_binary(parts[0]), *self.ask_prefix(), *flags,
+               *(["--model", model] if model else []), *self.ask_separator(), prompt]
+        env = self.prepare_env(os.environ.copy())
+        self.log_prompt(prompt)
+        try:
+            proc = subprocess.run(cmd, text=True, capture_output=True,
+                                  timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300), cwd=start, env=env)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"{self.name} exit timeout") from None
+        if proc.returncode != 0:
+            from review_failure import summarize
+            raise RuntimeError(f"{self.name} {summarize(proc.returncode, proc.stderr or '', proc.stdout or '', prompts=[prompt])}")
+        output = proc.stdout.strip()
+        if not output:
+            raise RuntimeError("provider returned empty output")
+        return AskResult(self.name, self.clean_output(output), mode)
+
+    def ask_prefix(self) -> List[str]:
+        """Non-interactive entry switches of the client, before the read-only ones."""
+        return []
+
+    def ask_separator(self) -> List[str]:
+        return []
+
     def stream(self, prompt: str, *, review=None):
         """Default: single chunk via run(). Override for real streaming."""
         yield self.run(prompt, review=review)
@@ -152,8 +209,10 @@ class BaseProvider(ABC):
     def run_review(self, *, manifest, expected, profile, before_launch=lambda: None) -> str:
         """Restricted execution has one launch constructor and a fixed JSON output format."""
         import json
-        from execution_profiles import restricted_launch
+        from execution_profiles import restricted_launch, ASK_PROFILE
         self.last_usage = None
+        if profile == ASK_PROFILE:
+            return self._run_ask_profile(manifest, expected, before_launch)
         with restricted_launch(self, manifest, expected, profile=profile,
                                before_launch=before_launch) as (argv, env, cwd):
             # Inherit the router's process group: the worker owns that group and
@@ -166,6 +225,7 @@ class BaseProvider(ABC):
                 raise
             # Opt-in diagnostic copy, taken before the launch directory is removed.
             self._capture_evidence(manifest, argv, env, proc.stdout, proc.returncode)
+            failure = self._failure_reason(argv, proc) if proc.returncode else None
             # The launch directory is removed on exit: read the final-message file now.
             last_message = None
             if self.name == "codex" and "--output-last-message" in argv:
@@ -175,7 +235,7 @@ class BaseProvider(ABC):
                 except (OSError, ValueError, IndexError):  # ValueError: non-UTF-8 bytes
                     pass
         if proc.returncode:
-            raise RuntimeError("restricted provider returned non-zero")
+            raise RuntimeError("restricted provider returned non-zero (" + (failure or f"exit {proc.returncode}") + ")")
         if self.name == "codex":
             result = self._codex_final_review(proc.stdout, last_message)
         else:
@@ -205,6 +265,33 @@ class BaseProvider(ABC):
             return ("Reviewed commit: " + commit + "\n" + freshness_line(approved) + "\n\n"
                     + result["result"])
         return result["result"]
+
+    def _run_ask_profile(self, manifest, expected, before_launch) -> str:
+        """A question: verified twice around the launch, answered with the client's own session."""
+        from execution_profiles import verify_envelope, ask_prompt, ask_cwd, ASK_PROFILE
+        approved = verify_envelope(manifest, expected, provider=self.name, profile=ASK_PROFILE)
+        before_launch()
+        answer = self.ask(ask_prompt(approved), cwd=ask_cwd(approved), model=approved.get("model"))
+        self.last_review_preflight = dict(provider=self.name, read_only_mode=answer.mode)
+        return answer.text
+
+    @staticmethod
+    def _failure_reason(argv, proc) -> str:
+        """Short redacted reason from stderr and, for Antigravity, its private log (read before the
+        launch directory is removed). Never raises."""
+        try:
+            from review_failure import summarize
+            log = ""
+            if "--log-file" in argv:
+                try:
+                    with open(argv[argv.index("--log-file") + 1], encoding="utf-8", errors="replace") as fh:
+                        log = fh.read()[-20000:]
+                except (OSError, IndexError):
+                    pass
+            prompts = [a for a in argv if isinstance(a, str) and len(a) >= 20]
+            return summarize(proc.returncode, proc.stderr or "", log, prompts=prompts)
+        except Exception:  # noqa: BLE001
+            return f"exit {proc.returncode}"
 
     def _capture_evidence(self, manifest, argv, env, stdout, returncode, timed_out=False) -> None:
         """Diagnostic only: any failure here, import included, must not change the outcome."""

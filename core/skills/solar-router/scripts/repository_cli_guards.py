@@ -15,6 +15,7 @@ import sys
 
 
 from cli_capabilities import discover, unsupported
+from execution_profiles import model_args
 
 
 def refused(reason, stage, provider):
@@ -43,6 +44,24 @@ def credential(source, target, provider):
         target.chmod(0o600)
     except OSError:
         raise refused('credentials_unavailable', 'credentials', provider) from None
+
+
+def cursor_model_config(origin):
+    """Only the model selection of the user's Cursor CLI config, so a review with no model named
+    uses what the client already has chosen. Nothing else (auth cache, permissions, hooks) is read."""
+    source = origin / '.cursor' / 'cli-config.json'
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'rb') as file:
+            info = os.fstat(file.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 1048576 or info.st_uid != os.getuid():
+                return {}
+            document = json.loads(file.read(1048577))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(document, dict):
+        return {}
+    return {key: document[key] for key in ('model', 'selectedModel', 'modelParameters') if key in document}
 
 
 def cursor_auth(origin, home, provider):
@@ -175,17 +194,19 @@ def prepare(provider, binary, original_env, private, cwd, manifest, *, metadata=
             raise unsupported(provider, 'managed_policy', 'managed_policy_present')
         cursor_auth(origin, home, provider)
         config = home / '.cursor'
-        write_json(config / 'cli-config.json', dict(version=1, editor=dict(vimMode=False),
+        chosen = {} if manifest.get('model') else cursor_model_config(origin)
+        write_json(config / 'cli-config.json', dict(chosen, version=1, editor=dict(vimMode=False),
                    approvalMode='allowlist', sandbox=dict(mode='enabled', readBoundary='workspace'),
                    permissions=dict(allow=['Read(**)'], deny=['Write(**)', 'Shell(*)', 'Mcp(*:*)', 'WebFetch(*)'])))
         write_json(config / 'mcp.json', dict(mcpServers={}))
         write_json(config / 'hooks.json', dict(version=1, hooks={}))
         env.update(CURSOR_CONFIG_DIR=str(config), CURSOR_DATA_DIR=str(home / 'cursor-data'),
                    AGENT_CLI_CREDENTIAL_STORE='file')
-        required = ['--print', '--mode', '--sandbox', '--model', '--output-format', '--workspace', '--trust']
+        required = ['--print', '--mode', '--sandbox', '--output-format', '--workspace', '--trust']
+        required += ['--model'] if manifest.get('model') else []
         values = {'--mode': 'ask', '--sandbox': 'enabled', '--output-format': 'json'}
         argv = [binary, '--print', '--mode', 'ask', '--sandbox', 'enabled', '--trust', '--workspace', str(cwd),
-                '--model', manifest['model'], '--output-format', 'json', '--', prompt]
+                *model_args(manifest), '--output-format', 'json', '--', prompt]
     elif provider == 'agy':
         gemini = home / '.gemini'
         # The standalone subscription token, not Gemini API/ADC credentials or
@@ -196,11 +217,13 @@ def prepare(provider, binary, original_env, private, cwd, manifest, *, metadata=
                    permissions=dict(allow=[f'read_file({cwd})'], ask=[], deny=[
                        'write_file(*)', 'command(*)', 'unsandboxed(*)', 'mcp(*)',
                        'read_url(*)', 'execute_url(*)'])))
-        required = ['--print', '--mode', '--sandbox', '--model', '--output-format', '--disable-slash-commands']
+        required = ['--print', '--mode', '--sandbox', '--output-format', '--disable-slash-commands', '--log-file']
+        required += ['--model'] if manifest.get('model') else []
         # `--sandbox` is a bare switch in the Antigravity help: it has no values to check.
         values = {'--mode': 'plan', '--output-format': 'json'}
         argv = [binary, '--mode', 'plan', '--sandbox', '--disable-slash-commands',
-                '--model', manifest['model'], '--output-format', 'json', '--print', prompt]
+                *model_args(manifest), '--output-format', 'json',
+                '--log-file', str(private / 'agy.log'), '--print', prompt]
     else:
         raise unsupported(provider, 'profile', 'provider_unsupported')
     prefix = guard_prefix(private, cwd, provider)
