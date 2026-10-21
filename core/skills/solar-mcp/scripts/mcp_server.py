@@ -112,7 +112,13 @@ TOOLS = {
             "task.authorize_run, async_execution.* and telegram.send ask the user for native confirmation "
             "of this exact operation and arguments: omit approval_id. Editing or scheduling never queues "
             "a task; only task.approve or task.create with queue true does, and a task the executor does "
-            "not confine then waits for task.authorize_run."),
+            "not confine then waits for task.authorize_run. To ask another AI client a question, use "
+            "task.create with ask: provider is codex, claude, agy (Antigravity) or agent (Cursor); the "
+            "prompt goes in instructions; ask takes an optional folder (it starts there) and model; "
+            "queue true. Send provider and instructions in the same call; ask cannot be mixed with "
+            "review or review_batch (review_input_invalid). Then task.wait for its text. A question "
+            "runs alone, one at a time, and a folder outside the workspace waits for "
+            "task.authorize_run. See solar_docs id=operation:task.create."),
         inputSchema=dict(type="object", properties=dict(
             operation=dict(type="string", enum=list(operations.OPERATIONS)),
             arguments=dict(type="object", description="Exactly the arguments of that operation."),

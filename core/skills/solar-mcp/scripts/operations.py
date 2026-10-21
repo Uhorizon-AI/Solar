@@ -736,7 +736,8 @@ _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 
 OPERATIONS: dict[str, Operation] = {op.name: op for op in (
     Operation(
-        "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true.",
+        "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true. "
+        "With ask it puts a question to one AI client: provider codex, claude, agy (Antigravity) or agent (Cursor).",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),
                   effect=LINE(500), priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
                   responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH, ask=_ASK,

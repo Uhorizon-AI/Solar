@@ -4,9 +4,11 @@ the task waits for `task.authorize_run` like any task that is not confined."""
 import json
 import os
 
+import mcp_server
+import operations
 import pytest
 import solar_state
-from mcp_helpers import run, execute, stored, search
+from mcp_helpers import run, execute, stored, search, docs
 
 
 def arguments(env, folder="inside", **ask):
@@ -207,3 +209,16 @@ def test_without_a_known_workspace_a_question_is_not_low_risk(solar_env, monkeyp
     monkeypatch.delenv("SOLAR_WORKSPACE")
     assert solar_state.run_risk(pairs) == "high"
 
+
+def test_the_tool_descriptions_say_how_to_ask_a_client():
+    """An AI with no context must find the way from the descriptions alone, without a shell command."""
+    text = mcp_server.TOOLS["solar_execute"]["description"]
+    for needle in ("task.create with ask", "task.wait", "codex", "claude", "agy (Antigravity)", "agent (Cursor)",
+                   "provider and instructions", "review_input_invalid", "runs alone"):
+        assert needle in text, needle
+    summary = operations.OPERATIONS["task.create"].summary
+    assert "With ask" in summary and "agent (Cursor)" in summary
+
+
+def test_the_description_points_to_a_contract_that_resolves(solar_env):
+    assert docs(id="operation:task.create")["id"] == "operation:task.create"
