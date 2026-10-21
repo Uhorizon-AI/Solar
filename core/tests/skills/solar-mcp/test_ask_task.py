@@ -222,3 +222,13 @@ def test_the_tool_descriptions_say_how_to_ask_a_client():
 
 def test_the_description_points_to_a_contract_that_resolves(solar_env):
     assert docs(id="operation:task.create")["id"] == "operation:task.create"
+
+
+def test_the_descriptions_say_that_only_ask_makes_a_read_only_question(solar_env):
+    """Without ask a task is neither a question nor read-only; an AI must not have to guess it."""
+    assert "Without ask" in operations.OPERATIONS["task.create"].summary
+    assert "read-only" in mcp_server.TOOLS["solar_execute"]["description"]
+    contract = docs(id="operation:task.create")
+    described = contract["arguments"]["properties"]["ask"]["description"]
+    assert "read-only" in described and "Without ask" in described
+

@@ -78,13 +78,17 @@ def search_docs(query: str, limit: int = 10) -> dict:
     return dict(results=results, truncated=len(ranked) > len(results))
 
 
+_CLIENT_CONSENT = ("The client's own tool permission, with no form. A task that is not confined still waits "
+                   "for task.authorize_run (native confirmation) before it runs.")
+
+
 def operation_contract(name: str) -> dict:
     op = operations.OPERATIONS.get(name)
     if op is None:
         raise OperationError("unknown_operation", "Unknown operation. Known: "
                              + ", ".join(operations.OPERATIONS))
     contract = dict(id=OPERATION + name, type="operation", operation=name, summary=op.summary,
-                    authority=op.authority, effects=op.effects, approval=_APPROVAL[op.authority],
+                    authority=op.authority, effects=op.effects, approval=_CLIENT_CONSENT if op.client_consent else _APPROVAL[op.authority],
                     arguments=op.schema, errors=list(op.errors) + [
                         "invalid_arguments", "approval_required", "approval_unknown",
                         "approval_expired", "approval_consumed", "approval_scope_mismatch"],

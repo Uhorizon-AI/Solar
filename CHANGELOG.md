@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- The MCP descriptions now say that `ask` is what makes a task a read-only question (without it the task is neither), the `ask` argument describes itself, and the contract of the task lifecycle operations says they run on the client's own tool permission with no form instead of promising native confirmation; only `task.authorize_run` asks.
+
 ## [0.55.2] - 2026-10-21
 
 ### Fixed
