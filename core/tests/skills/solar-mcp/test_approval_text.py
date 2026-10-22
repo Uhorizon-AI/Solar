@@ -307,7 +307,7 @@ def test_archive_prompt_is_compact_single_and_still_binds_the_exact_call(solar_e
     shown = forms[0]["message"]
     assert shown.startswith("Archive task\nTask: Review plan: Gemini\nReason: stale review.")
     assert_clean(shown, made)
-    assert forms[0]["requestedSchema"]["properties"]["approve"] == dict(type="boolean", title="Approve this action", default=False)
+    assert forms[0]["requestedSchema"] == dict(type="object", properties={})
     assert final["result"]["isError"] is False
     assert stored(made["id"])["status"] == "archived"
     rows = [r for r in mcp_approve.listing() if r["tool"] == "task.archive"]
@@ -315,8 +315,7 @@ def test_archive_prompt_is_compact_single_and_still_binds_the_exact_call(solar_e
 
 
 @pytest.mark.parametrize("reply", [{"action": "decline"}, {"action": "cancel"},
-                                   {"action": "accept", "content": {"approve": False}},
-                                   {"action": "accept", "content": {}}])
+                                   {"action": "accept", "content": {"approve": False}}])
 def test_closing_or_rejecting_never_executes(solar_env, reply):
     made = new_task("Plan")
     forms, final = serve_once(dict(operation="task.archive", arguments=archive_args(made)), reply)

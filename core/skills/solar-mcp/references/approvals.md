@@ -6,7 +6,7 @@ The model proposes a tool call. For `task.authorize_run`, `async_execution.*` an
 `elicitation/create` only if the client advertised form elicitation; the task lifecycle operations
 (`client_consent`) do not use this path. The client
 must present the request to the human. Only an `accept` response to that pending
-server-generated request ID, with `content.approve` exactly `true`, grants consent.
+server-generated request ID grants consent (a client that still sends `content.approve` must send `true`).
 Decline, cancel, disconnect, timeout, errors and unrelated responses do not grant.
 While awaiting confirmation, ping requests are answered immediately and other
 requests/notifications are queued for processing afterwards. Cancellation of
@@ -80,7 +80,7 @@ operation name and its readable fields, without identifiers or row versions. The
 arguments, workspace, row version, expiry and single use.
 
 Limits: Solar controls the text, not the client's modal size, scrolling or
-buttons; the form is the one `approve` checkbox the protocol defines. Client
+buttons; the form has no fields, so the client shows the text with its own Accept and Decline buttons. Client
 rendering of multi-line text is unverified here.
 
 ## Connection diagnostics and native question tools

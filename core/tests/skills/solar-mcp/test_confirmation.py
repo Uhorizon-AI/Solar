@@ -97,7 +97,9 @@ def test_two_workers_cannot_reuse_approval(solar_env, monkeypatch):
 @pytest.mark.parametrize('reply,expected', [
     ({'action': 'accept', 'content': {'approve': True}}, True),
     ({'action': 'accept', 'content': {'approve': 'true'}}, False),
-    ({'action': 'accept', 'content': {}}, False),
+    ({'action': 'accept', 'content': {}}, True),
+    ({'action': 'accept'}, True),
+    ({'action': 'accept', 'content': {'approve': False}}, False),
     ({'action': 'decline'}, False),
     ({'action': 'cancel'}, False),
 ])
@@ -117,7 +119,7 @@ def test_transport_confirmation_matches_server_request(solar_env, monkeypatch, r
             result = super().write(text)
             message = json.loads(text)
             if message.get('method') == 'elicitation/create':
-                assert message['params']['requestedSchema']['properties']['approve']['default'] is False
+                assert message['params']['requestedSchema'] == dict(type='object', properties={})
                 lines.put(json.dumps(dict(jsonrpc='2.0', id=message['id'], result=reply)))
                 lines.put(None)
             return result

@@ -7,6 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Fixed
+- The approval form of `task.authorize_run`, `async_execution.*` and `telegram.send` no longer shows an `approve` checkbox: it sends the text with no fields, so the client shows its own Accept and Decline buttons, and `accept` is the grant. Decline, cancel, timeout and a client that sends `approve` other than `true` still do not grant.
 - The `ask` argument of `task.create` now describes itself, and the `task.create` summary and the `solar_execute` description say that `ask` is what makes a task a question that asks the client for its read-only mode (a request, not a guarantee); without it the task is neither.
 - The contract of the task lifecycle operations (`client_consent`) says they run on the client's own tool permission with no form, instead of promising native confirmation; only `task.authorize_run` asks.
 

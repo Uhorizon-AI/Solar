@@ -563,11 +563,9 @@ def serve(stdin=None, stdout=None) -> int:
         # The text is rendered here from the validated arguments and the stored
         # task, never from caller prose; the binding stays on the full arguments.
         elicitation_id = 'approval-' + uuid.uuid4().hex
-        message, checkbox = approval_text.render(name, arguments, seconds=CONFIRMATION_TIMEOUT)
-        form_params = dict(
-            message=message,
-            requestedSchema=dict(type="object", properties=dict(
-                approve=dict(type="boolean", title=checkbox, default=False)), required=["approve"]))
+        message, _title = approval_text.render(name, arguments, seconds=CONFIRMATION_TIMEOUT)
+        # No fields: the client shows the text with its own Accept / Decline buttons.
+        form_params = dict(message=message, requestedSchema=dict(type="object", properties={}))
         # Some hosts route native forms using the originating progress token.
         # Correlation is not authority; never forward other caller metadata.
         token = request_meta.get('progressToken') if isinstance(request_meta, dict) else None
@@ -597,8 +595,9 @@ def serve(stdin=None, stdout=None) -> int:
                 result = response.get('result') or {}
                 if not isinstance(result, dict) or not isinstance(result.get('content', {}), dict):
                     return False
+                # Accept is the grant. A client that still sends `approve` must send true.
                 return (not response.get('error') and result.get('action') == 'accept'
-                        and (result.get('content') or {}).get('approve') is True)
+                        and (result.get('content') or {}).get('approve', True) is True)
             if remember_cancel(response):
                 target = (response.get('params') or {}).get('requestId')
                 if request_key(target) == request_key(request_id):
