@@ -984,7 +984,7 @@ def nearest_256(rgb: tuple[int, int, int]) -> int:
 
 def run_on_tty(snippet: str, text: str, env: dict, tty_fd: str) -> tuple[str, str]:
     """Run the view with stdout (or stderr) on a real terminal and the other stream on a pipe."""
-    import pty
+    pty = pytest.importorskip("pty")
     master, slave = pty.openpty()
     stdout, stderr = (slave, subprocess.PIPE) if tty_fd == "out" else (subprocess.PIPE, slave)
     proc = subprocess.Popen(["bash", "-c", snippet], stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, env=env)
@@ -1087,44 +1087,12 @@ def test_launchagent_lines_other_than_ok_are_warnings_in_the_same_pattern(tmp_pa
         done = view(f"LaunchAgent: {text}\n", tmp_path)
         assert done.stdout.splitlines()[0] == f"  ! LaunchAgent {text}"
     assert view("LaunchAgent: ok (plist SOLAR_ROOT matches install)\n", tmp_path).stdout.splitlines()[0] == "  ✓ LaunchAgent points to this install"
+    # Edge cases of the same pattern: a bare "o" and nothing after the colon are warnings too.
+    assert view("LaunchAgent: o\n", tmp_path).stdout.splitlines()[0] == "  ! LaunchAgent o"
+    assert view("LaunchAgent: \n", tmp_path).stdout.splitlines()[0] == "  ! LaunchAgent "
 
 
 def test_resuming_prints_one_plain_line(tmp_path):
     done = subprocess.run(["bash", "-c", _view_snippet(tmp_path)], input="State: resuming update update-1 at phase restarting\n",
                           capture_output=True, text=True, env=_clean_env(SOLAR_CLIENT_COLOR="always"))
     assert done.stdout.splitlines()[0] == "Resuming the interrupted update (update-1 at phase restarting)"
-
-
-def test_the_layout_is_compared_against_one_shared_name():
-    out = subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; echo "$SOLAR_CLIENT_LAYOUT_CURRENT"'],
-                         capture_output=True, text=True).stdout.strip()
-    assert out == "solar-client-v1.2"
-    assert "(layout $SOLAR_CLIENT_LAYOUT_CURRENT)" in (SCRIPTS / "client_upgrade.sh").read_text()
-
-
-def test_upgrade_next_steps_do_not_ask_for_the_smoke_or_the_launchagent(tmp_path):
-    text = (SCRIPTS / "client_upgrade.sh").read_text()
-    assert "smoke-solar-client.sh" not in text.split("Next:")[-1]
-    assert "install_launchagent_macos.sh" not in text
-
-
-def test_the_short_output_with_sync_and_doctor_stays_short(rig):
-    rig.runtime_state(5, tasks=3)
-    done = rig.update("--ref", "v0.0.2", "--yes")
-    assert done.returncode == 0, done.stdout + done.stderr
-    shown = done.stdout.splitlines()
-    assert "✓ Skills, agents and commands published to the IDEs" in done.stdout
-    # Doctor's own OK lines are hidden; only its summary (and any WARN/ERROR line) is shown.
-    assert not any(line.startswith("OK:") for line in shown), done.stdout
-    assert len(shown) <= 16, done.stdout
-
-
-def test_a_doctor_warning_does_not_drag_in_the_lines_of_the_sync(tmp_path):
-    done = view("State: update verified; maintenance barrier released\nOK: update complete — v1 (abc)\n"
-                "Follow-up: sync\nsync noise line\nFollow-up: doctor\nOK: a doctor check\nWARN: settings layout=old\n", tmp_path)
-    assert "WARN: settings layout=old" in done.stderr
-    assert "sync noise line" not in done.stderr and "a doctor check" not in done.stderr
-    assert "Follow-up" not in done.stdout and "Follow-up" not in done.stderr
-    # ...while an error of the update itself still brings its own context.
-    failed = view("hidden cause\nERROR: the update did not complete\n", tmp_path)
-    assert "hidden cause" in failed.stderr

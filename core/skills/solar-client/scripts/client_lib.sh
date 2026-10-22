@@ -2698,13 +2698,14 @@ solar_client_update_view() {
         count="${line#OK: update complete}"; count="${count# — }"; count="${count# }"
         printf '  %s✓%s Update complete - %s%s%s%s\n' "$c_ok" "$c_off" "$c_info" "${count%% *}" "$c_off" "${count#"${count%% *}"}"
         continue ;;
-      "LaunchAgent: "[!o]*|"LaunchAgent: o"[!k]*)
-        # skipped / not installed / a stale binding: a warning in the same pattern
-        printf '  %s!%s LaunchAgent %s\n' "$c_warn" "$c_off" "${line#LaunchAgent: }"
-        continue ;;
-      "LaunchAgent: ok"*)
-        # "LaunchAgent: ok (plist SOLAR_ROOT matches install)": the check already says ok
-        printf '  %s✓%s LaunchAgent points to this install\n' "$c_ok" "$c_off"
+      "LaunchAgent: "*)
+        if [[ "$line" == "LaunchAgent: ok"* ]]; then
+          # "LaunchAgent: ok (plist SOLAR_ROOT matches install)": the check already says ok
+          printf '  %s✓%s LaunchAgent points to this install\n' "$c_ok" "$c_off"
+        else
+          # skipped / not installed / a stale binding / nothing after the colon: a warning in the same pattern
+          printf '  %s!%s LaunchAgent %s\n' "$c_warn" "$c_off" "${line#LaunchAgent: }"
+        fi
         continue ;;
       "ERROR:"*|"WARN"*|"FAIL"*|"fatal:"*|"error:"*|*"command not found"*|*"unbound variable"*|"Update in progress"*|"No update is in progress"*|"  Claims and launchers"*|"Start them with"*|"Services and ticks are stopped"*|*"solar client update --resume"*|"Next:"*|"  ✓"*|"  ✗"*|"  !"*)
         in_error=false
