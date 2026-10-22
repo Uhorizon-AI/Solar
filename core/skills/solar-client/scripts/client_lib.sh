@@ -2608,6 +2608,7 @@ solar_client_update_log_rotate() {
 solar_client_update_view() {
   local log="$1" line cur="" tgt="" stopped="" migrated=false in_error=false count
   local -a recent=()   # the last hidden lines: the cause of an error is usually just above it
+  local context=true   # off once the follow-up (sync, doctor) starts: its hidden lines are not a cause
   : > "$log" 2>/dev/null || log=/dev/null
   while IFS= read -r line; do
     printf '%s\n' "$line" >> "$log"
@@ -2644,6 +2645,7 @@ solar_client_update_view() {
           migrated=true
         fi
         continue ;;
+      "Follow-up:"*) context=false; recent=(); continue ;;
       "State: update verified"*)
         if [[ "$migrated" == false ]]; then
           echo "  ✓ runtime migrated"
@@ -2672,8 +2674,10 @@ solar_client_update_view() {
       printf '%s\n' "$line" >&2
     else
       in_error=false
-      recent+=("$line")
-      [[ ${#recent[@]} -le 6 ]] || recent=("${recent[@]:1}")
+      if [[ "$context" == true ]]; then
+        recent+=("$line")
+        [[ ${#recent[@]} -le 6 ]] || recent=("${recent[@]:1}")
+      fi
     fi
   done
   if [[ "$log" != /dev/null ]]; then

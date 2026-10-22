@@ -922,3 +922,25 @@ def test_upgrade_next_steps_do_not_ask_for_the_smoke_or_the_launchagent(tmp_path
     text = (SCRIPTS / "client_upgrade.sh").read_text()
     assert "smoke-solar-client.sh" not in text.split("Next:")[-1]
     assert "install_launchagent_macos.sh" not in text
+
+
+def test_the_short_output_with_sync_and_doctor_stays_short(rig):
+    rig.runtime_state(5, tasks=3)
+    done = rig.update("--ref", "v0.0.2", "--yes")
+    assert done.returncode == 0, done.stdout + done.stderr
+    shown = done.stdout.splitlines()
+    assert "✓ skills, agents and commands published to the IDEs" in done.stdout
+    # Doctor's own OK lines are hidden; only its summary (and any WARN/ERROR line) is shown.
+    assert not any(line.startswith("OK:") for line in shown), done.stdout
+    assert len(shown) <= 16, done.stdout
+
+
+def test_a_doctor_warning_does_not_drag_in_the_lines_of_the_sync(tmp_path):
+    done = view("State: update verified; maintenance barrier released\nOK: update complete — v1 (abc)\n"
+                "Follow-up: sync\nsync noise line\nFollow-up: doctor\nOK: a doctor check\nWARN: settings layout=old\n", tmp_path)
+    assert "WARN: settings layout=old" in done.stderr
+    assert "sync noise line" not in done.stderr and "a doctor check" not in done.stderr
+    assert "Follow-up" not in done.stdout and "Follow-up" not in done.stderr
+    # ...while an error of the update itself still brings its own context.
+    failed = view("hidden cause\nERROR: the update did not complete\n", tmp_path)
+    assert "hidden cause" in failed.stderr

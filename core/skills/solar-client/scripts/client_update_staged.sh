@@ -97,11 +97,13 @@ follow_up() {
     echo "Next: solar client sync"
     return 0
   fi
+  echo "Follow-up: sync"
   if (cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$client" client sync); then
     echo "  ✓ skills, agents and commands published to the IDEs"
   else
     echo "  ! solar client sync failed: run it in $WORKSPACE"
   fi
+  echo "Follow-up: doctor"
   doctor_out="$(cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$client" client doctor 2>&1)" || true
   printf '%s\n' "$doctor_out"
   doctor_summary="$(printf '%s\n' "$doctor_out" | grep '^Summary:' | tail -1 || true)"
