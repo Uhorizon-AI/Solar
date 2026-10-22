@@ -3,6 +3,7 @@
 the task waits for `task.authorize_run` like any task that is not confined."""
 import json
 import os
+import pathlib
 
 import mcp_server
 import operations
@@ -239,3 +240,17 @@ def test_an_empty_ask_is_a_question_in_the_workspace(solar_env):
     args["ask"] = {}
     made = run("task.create", args)
     assert made["status"] == "queued" and made["risk"] == "low" and made["awaiting_approval"] is False
+
+
+def test_the_descriptions_keep_ask_for_own_content_and_send_external_content_to_the_cage(solar_env):
+    """Read-only is a request: external content must not be given to ask."""
+    summary = operations.OPERATIONS["task.create"].summary
+    assert "own content" in summary and "external" in summary and "repository_readonly_v1" in summary
+    described = docs(id="operation:task.create")["arguments"]["properties"]["ask"]["description"]
+    assert "own content" in described and "repository_readonly_v1" in described
+
+
+def test_the_guide_says_which_content_may_go_to_ask():
+    guide = (pathlib.Path(__file__).resolve().parents[3] / "docs" / "repository-readonly-review.md").read_text()
+    section = guide.split("## Questions (`ask_readonly_v1`)", 1)[1]
+    assert "own content" in section and "external" in section and "repository_readonly_v1" in section

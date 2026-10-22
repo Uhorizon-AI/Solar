@@ -725,7 +725,9 @@ _ASK = {**_obj(dict(
     model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."})),
     "description": "What makes the task a question: the client is asked for its read-only mode (a request, not a "
                    "guarantee) and, inside the workspace, it needs no task.authorize_run. Pass {} to ask in the "
-                   "workspace. Without ask it is an ordinary task, not a question and not read-only."}
+                   "workspace. Without ask it is an ordinary task, not a question and not read-only. "
+                   "Use it for own content only: external or untrusted content needs review.profile "
+                   "repository_readonly_v1."}
 
 _REVIEW_BATCH = _obj(dict(repository=_REVIEW["properties"]["repository"],
     commit=_REVIEW["properties"]["commit"], reviews={"type": "array", "minItems": 1, "maxItems": 5,
@@ -742,7 +744,9 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true. "
         "With ask it puts a question to one AI client and asks it for its read-only mode (a request, not a "
         "guarantee): provider codex, claude, agy (Antigravity) or agent (Cursor). "
-        "Without ask it is not a question and not read-only.",
+        "Without ask it is not a question and not read-only. "
+        "Use ask for own content only; external or untrusted content goes through review with "
+        "profile repository_readonly_v1.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),
                   effect=LINE(500), priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
                   responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH, ask=_ASK,

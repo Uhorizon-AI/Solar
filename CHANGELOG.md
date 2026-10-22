@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- The `task.create` summary, the `ask` argument and `core/docs/repository-readonly-review.md` say that `ask` is for the user's own content only: a read-only request does not protect against instructions planted in external or untrusted content, which must go through `review` with `repository_readonly_v1`.
+
 ## [0.55.3] - 2026-10-22
 
 ### Fixed
