@@ -740,7 +740,8 @@ _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 OPERATIONS: dict[str, Operation] = {op.name: op for op in (
     Operation(
         "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true. "
-        "With ask it puts a read-only question to one AI client: provider codex, claude, agy (Antigravity) or agent (Cursor). "
+        "With ask it puts a question to one AI client and asks it for its read-only mode (a request, not a "
+        "guarantee): provider codex, claude, agy (Antigravity) or agent (Cursor). "
         "Without ask it is not a question and not read-only.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),
                   effect=LINE(500), priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
