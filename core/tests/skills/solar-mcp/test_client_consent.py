@@ -281,7 +281,7 @@ def test_the_gate_audit_keeps_queue_true_and_the_consent_code(solar_env):
 def test_the_contract_of_a_client_consent_operation_does_not_promise_a_form(solar_env):
     names = [name for name, op in operations.OPERATIONS.items() if op.client_consent]
     assert names and all(name.startswith("task.") for name in names)
-    for name in ("task.create", "task.schedule", "task.archive"):
+    for name in names:
         approval = docs(id="operation:" + name)["approval"]
         assert "no form" in approval and "task.authorize_run" in approval, name
     assert "Native client confirmation" in docs(id="operation:task.authorize_run")["approval"]
