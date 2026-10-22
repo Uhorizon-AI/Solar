@@ -22,7 +22,7 @@
 #   client_update_staged.sh --install-root P --workspace W --runtime-root R --stage-root S \
 #     --mode git|bundle [--target REF] [--apply-hook H] [--target-identity "V COMMIT"] \
 #     [--restart-mode auto|never|always] [--reinstall-launchagent] [--portable] \
-#     [--did-backup]
+#     [--did-backup] [--verbose] [--no-sync]
 #   client_update_staged.sh --resume --install-root P --workspace W --runtime-root R
 set -euo pipefail
 
@@ -43,6 +43,9 @@ REINSTALL_LAUNCHAGENT=false
 PORTABLE=false
 DID_BACKUP=false
 RESUME=false
+VERBOSE=false
+RUN_SYNC=true
+ORIG_ARGS=("$@")
 
 need() { [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }; }
 while [[ $# -gt 0 ]]; do
@@ -60,6 +63,8 @@ while [[ $# -gt 0 ]]; do
     --portable) PORTABLE=true; shift ;;
     --did-backup) DID_BACKUP=true; shift ;;
     --resume) RESUME=true; shift ;;
+    --verbose) VERBOSE=true; shift ;;
+    --no-sync) RUN_SYNC=false; shift ;;
     -h|--help) sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; /^set -euo/d'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
@@ -74,6 +79,42 @@ for name in INSTALL_ROOT WORKSPACE RUNTIME_ROOT; do
 done
 INSTALL_ROOT="$(cd "$INSTALL_ROOT" && pwd -P)"
 export SOLAR_ROOT="$INSTALL_ROOT" SOLAR_WORKSPACE="$WORKSPACE" SOLAR_RUNTIME_ROOT="$RUNTIME_ROOT"
+
+# Short view: run this script again with its output through the filter; the full output goes to
+# a log. The front updater may already have done it (SOLAR_CLIENT_UPDATE_VIEWED).
+if [[ "$VERBOSE" != true && "${SOLAR_CLIENT_VERBOSE:-}" != 1 && "${SOLAR_CLIENT_UPDATE_VIEWED:-}" != 1 ]]; then
+  export SOLAR_CLIENT_UPDATE_VIEWED=1
+  bash "${BASH_SOURCE[0]}" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"} 2>&1 | solar_client_update_view "$(solar_client_update_log_path "$RUNTIME_ROOT")"
+  exit "${PIPESTATUS[0]}"
+fi
+
+# What the person would run by hand after an update: publish skills to the IDEs and check the
+# workspace. Runs from the installed code (the staging copy is removed afterwards). A failure is
+# reported, never an update failure: the update itself is already verified.
+follow_up() {
+  local client="$INSTALL_ROOT/core/skills/solar-client/scripts/solar" doctor_out doctor_summary
+  if [[ "$RUN_SYNC" != true || ! -f "$(solar_client_settings_path "$WORKSPACE")" ]]; then
+    echo "Next: solar client sync"
+    return 0
+  fi
+  echo "Follow-up: sync"
+  if (cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$client" client sync); then
+    echo "  ✓ skills, agents and commands published to the IDEs"
+  else
+    echo "  ! solar client sync failed: run it in $WORKSPACE"
+  fi
+  echo "Follow-up: doctor"
+  doctor_out="$(cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$client" client doctor 2>&1)" || true
+  printf '%s\n' "$doctor_out"
+  doctor_summary="$(printf '%s\n' "$doctor_out" | grep '^Summary:' | tail -1 || true)"
+  if [[ "$doctor_summary" == *" 0 error(s)"* ]]; then
+    echo "  ✓ doctor: ${doctor_summary#Summary: }"
+  elif [[ -n "$doctor_summary" ]]; then
+    echo "  ! doctor: ${doctor_summary#Summary: } — run: solar client doctor"
+  else
+    echo "  ! doctor produced no summary — run: solar client doctor"
+  fi
+}
 
 echo "Solar Client update (staged entrypoint)"
 echo "  SOLAR_ROOT=$INSTALL_ROOT"
@@ -100,6 +141,9 @@ if [[ "$RESUME" == true ]]; then
     case "$(basename "$(dirname "$resumed_stage")")" in
       solar-update-staging.*) rm -rf "$(dirname "$resumed_stage")" ;;
     esac
+  fi
+  if ! solar_client_maintenance_held; then
+    follow_up
   fi
   exit 0
 fi
@@ -155,8 +199,8 @@ echo "OK: update complete — $new_ver (${new_commit:0:12})"
 if [[ "$DID_BACKUP" == true ]]; then
   solar_client_rotate_backups "$INSTALL_ROOT" 5 "$WORKSPACE"
 fi
-if ! solar_client_paths_equal "$INSTALL_ROOT" "$WORKSPACE"; then
-  echo "HINT: run solar client upgrade in SOLAR_WORKSPACE if install has IDE artifacts"
+if solar_client_upgrade_needed "$INSTALL_ROOT" "$WORKSPACE"; then
+  echo "  ! solar client upgrade is needed in this workspace (IDE artifacts or an older layout)"
 fi
 
 echo ""
@@ -184,10 +228,11 @@ if [[ "$PORTABLE" == true ]]; then
   fi
 fi
 
-echo "Next steps (per workspace):"
-echo "  cd \"$WORKSPACE\""
-echo "  solar client sync"
-echo "  solar client doctor"
+if solar_client_maintenance_held; then
+  echo "Next: solar client update --resume, then solar client sync"
+else
+  follow_up
+fi
 
 if solar_client_maintenance_held; then
   echo ""
