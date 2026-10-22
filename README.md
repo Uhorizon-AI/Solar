@@ -149,7 +149,7 @@ Requires macOS, Git, Bash, Python 3, and curl. Same shape as Claude Code / Codex
 
 <!-- solar-bootstrap-pin -->
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Uhorizon-AI/Solar/v0.56.0/core/skills/solar-client/scripts/bootstrap_solar_client.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Uhorizon-AI/Solar/v0.57.0/core/skills/solar-client/scripts/bootstrap_solar_client.sh | bash
 ```
 <!-- /solar-bootstrap-pin -->
 

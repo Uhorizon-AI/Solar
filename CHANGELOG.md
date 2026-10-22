@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-10-22
+
 ### Changed
 - The short output of `solar client update` uses the Solar Console colors (amber `Solar`, green `✓`, amber `!`, blue versions and `Next:`, red errors, grey `Log:`) when the output is a terminal. Without a terminal there are no escape codes, and the log stays plain text. `NO_COLOR` and `TERM=dumb` turn them off; `SOLAR_CLIENT_COLOR=always|never` is an explicit choice and wins over both. Truecolor is used when `COLORTERM` says so, else the nearest 256-color index.
 - The status lines of the update follow one pattern, `✓ Thing done`, with a capital first letter and no em dashes; the LaunchAgent line reads `✓ LaunchAgent points to this install` (a LaunchAgent that is skipped, not installed or stale shows as `! LaunchAgent …`). The header is now `Solar client update` (it was `Solar Client update`) and the log line starts at the first column. `WARN`, `ERROR` and `FAIL` lines, and the indented lines that follow them, keep their own text: only the line that starts the error is red, on stderr.
