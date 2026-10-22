@@ -15,7 +15,7 @@ import mcp_approve
 import mcp_server
 import operations
 import solar_state
-from mcp_helpers import call, execute, run, search, stored
+from mcp_helpers import call, docs, execute, run, search, stored
 
 CLIENT_CONSENT = True
 
@@ -276,3 +276,12 @@ def test_the_gate_audit_keeps_queue_true_and_the_consent_code(solar_env):
     rows = [json.loads(l) for l in solar_env.gate_audit.read_text().splitlines()]
     decision = [r for r in rows if r.get("kind") == "decision" and r["tool"] == "task.create"][-1]
     assert decision["code"] == "client_consent" and decision["arguments"]["queue"] is True
+
+
+def test_the_contract_of_a_client_consent_operation_does_not_promise_a_form(solar_env):
+    names = [name for name, op in operations.OPERATIONS.items() if op.client_consent]
+    assert names and all(name.startswith("task.") for name in names)
+    for name in names:
+        approval = docs(id="operation:" + name)["approval"]
+        assert "no form" in approval and "task.authorize_run" in approval, name
+    assert "Native client confirmation" in docs(id="operation:task.authorize_run")["approval"]

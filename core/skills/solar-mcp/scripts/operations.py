@@ -719,10 +719,13 @@ _REVIEW = _obj(dict(
         sha256={"type": "string", "pattern": r"[0-9a-f]{64}"}), required=("source_path", "content", "sha256"))}),
     required=("profile",))
 
-_ASK = _obj(dict(
+_ASK = {**_obj(dict(
     folder={"type": "string", "pattern": r"/[^\x00-\x1f\x7f]*", "maxLength": 1000,
          "description": "Absolute folder the client starts in; any path, also outside Solar. Omit it for the workspace."},
-    model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."}))
+    model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."})),
+    "description": "What makes the task a question: the client is asked for its read-only mode (a request, not a "
+                   "guarantee) and, inside the workspace, it needs no task.authorize_run. Pass {} to ask in the "
+                   "workspace. Without ask it is an ordinary task, not a question and not read-only."}
 
 _REVIEW_BATCH = _obj(dict(repository=_REVIEW["properties"]["repository"],
     commit=_REVIEW["properties"]["commit"], reviews={"type": "array", "minItems": 1, "maxItems": 5,
@@ -737,7 +740,9 @@ _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 OPERATIONS: dict[str, Operation] = {op.name: op for op in (
     Operation(
         "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true. "
-        "With ask it puts a question to one AI client: provider codex, claude, agy (Antigravity) or agent (Cursor).",
+        "With ask it puts a question to one AI client and asks it for its read-only mode (a request, not a "
+        "guarantee): provider codex, claude, agy (Antigravity) or agent (Cursor). "
+        "Without ask it is not a question and not read-only.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),
                   effect=LINE(500), priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
                   responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH, ask=_ASK,

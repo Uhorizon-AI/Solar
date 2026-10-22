@@ -222,3 +222,20 @@ def test_the_tool_descriptions_say_how_to_ask_a_client():
 
 def test_the_description_points_to_a_contract_that_resolves(solar_env):
     assert docs(id="operation:task.create")["id"] == "operation:task.create"
+
+
+def test_the_descriptions_say_that_only_ask_makes_a_read_only_question(solar_env):
+    """Without ask a task is neither a question nor read-only; an AI must not have to guess it."""
+    summary = operations.OPERATIONS["task.create"].summary
+    tool = mcp_server.TOOLS["solar_execute"]["description"]
+    assert "Without ask" in summary and "its read-only mode" in summary
+    assert "ask is what makes it a question" in tool and "its read-only mode" in tool
+    described = docs(id="operation:task.create")["arguments"]["properties"]["ask"]["description"]
+    assert "its read-only mode" in described and "Without ask" in described and "Pass {}" in described
+
+
+def test_an_empty_ask_is_a_question_in_the_workspace(solar_env):
+    args = arguments(solar_env)
+    args["ask"] = {}
+    made = run("task.create", args)
+    assert made["status"] == "queued" and made["risk"] == "low" and made["awaiting_approval"] is False
