@@ -726,8 +726,8 @@ _ASK = {**_obj(dict(
     "description": "What makes the task a question: the client is asked for its read-only mode (a request, not a "
                    "guarantee) and, inside the workspace, it needs no task.authorize_run. Pass {} to ask in the "
                    "workspace. Without ask it is an ordinary task, not a question and not read-only. "
-                   "Use it for own content only: external or untrusted content needs review.profile "
-                   "repository_readonly_v1."}
+                   "Use it for own content only: external or untrusted content goes through review with "
+                   "profile repository_readonly_v1."}
 
 _REVIEW_BATCH = _obj(dict(repository=_REVIEW["properties"]["repository"],
     commit=_REVIEW["properties"]["commit"], reviews={"type": "array", "minItems": 1, "maxItems": 5,
