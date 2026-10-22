@@ -84,10 +84,35 @@ export SOLAR_ROOT="$INSTALL_ROOT" SOLAR_WORKSPACE="$WORKSPACE" SOLAR_RUNTIME_ROO
 # a log. The front updater may already have done it (SOLAR_CLIENT_UPDATE_VIEWED).
 if [[ "$VERBOSE" != true && "${SOLAR_CLIENT_VERBOSE:-}" != 1 && "${SOLAR_CLIENT_UPDATE_VIEWED:-}" != 1 ]]; then
   export SOLAR_CLIENT_UPDATE_VIEWED=1
-  solar_client_update_log_rotate "$RUNTIME_ROOT"
-  bash "${BASH_SOURCE[0]}" "${ORIG_ARGS[@]}" 2>&1 | solar_client_update_view "$(solar_client_update_log_path "$RUNTIME_ROOT")"
+  bash "${BASH_SOURCE[0]}" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"} 2>&1 | solar_client_update_view "$(solar_client_update_log_path "$RUNTIME_ROOT")"
   exit "${PIPESTATUS[0]}"
 fi
+
+# What the person would run by hand after an update: publish skills to the IDEs and check the
+# workspace. Runs from the installed code (the staging copy is removed afterwards). A failure is
+# reported, never an update failure: the update itself is already verified.
+follow_up() {
+  local client="$INSTALL_ROOT/core/skills/solar-client/scripts/solar" doctor_out doctor_summary
+  if [[ "$RUN_SYNC" != true || ! -f "$(solar_client_settings_path "$WORKSPACE")" ]]; then
+    echo "Next: solar client sync"
+    return 0
+  fi
+  if (cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$client" client sync); then
+    echo "  ✓ skills, agents and commands published to the IDEs"
+  else
+    echo "  ! solar client sync failed: run it in $WORKSPACE"
+  fi
+  doctor_out="$(cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$client" client doctor 2>&1)" || true
+  printf '%s\n' "$doctor_out"
+  doctor_summary="$(printf '%s\n' "$doctor_out" | grep '^Summary:' | tail -1 || true)"
+  if [[ "$doctor_summary" == *" 0 error(s)"* ]]; then
+    echo "  ✓ doctor: ${doctor_summary#Summary: }"
+  elif [[ -n "$doctor_summary" ]]; then
+    echo "  ! doctor: ${doctor_summary#Summary: } — run: solar client doctor"
+  else
+    echo "  ! doctor produced no summary — run: solar client doctor"
+  fi
+}
 
 echo "Solar Client update (staged entrypoint)"
 echo "  SOLAR_ROOT=$INSTALL_ROOT"
@@ -114,6 +139,9 @@ if [[ "$RESUME" == true ]]; then
     case "$(basename "$(dirname "$resumed_stage")")" in
       solar-update-staging.*) rm -rf "$(dirname "$resumed_stage")" ;;
     esac
+  fi
+  if ! solar_client_maintenance_held; then
+    follow_up
   fi
   exit 0
 fi
@@ -198,26 +226,10 @@ if [[ "$PORTABLE" == true ]]; then
   fi
 fi
 
-# The follow-up the person would run by hand: publish skills to the IDEs and check the workspace.
-# A failure here is reported, never an update failure: the update itself is already verified.
 if solar_client_maintenance_held; then
   echo "Next: solar client update --resume, then solar client sync"
-elif [[ "$RUN_SYNC" == true && -f "$(solar_client_settings_path "$WORKSPACE")" ]]; then
-  if (cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$SCRIPT_DIR/solar" client sync); then
-    echo "  ✓ skills, agents and commands published to the IDEs"
-  else
-    echo "  ! solar client sync failed: run it in $WORKSPACE"
-  fi
-  doctor_out="$(cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$SCRIPT_DIR/solar" client doctor 2>&1)" || true
-  printf '%s\n' "$doctor_out"
-  doctor_summary="$(printf '%s\n' "$doctor_out" | grep '^Summary:' | tail -1 || true)"
-  if [[ -n "$doctor_summary" && "$doctor_summary" == *" 0 error(s)"* ]]; then
-    echo "  ✓ doctor: ${doctor_summary#Summary: }"
-  else
-    echo "  ! doctor: ${doctor_summary#Summary: } — run: solar client doctor"
-  fi
 else
-  echo "Next: solar client sync"
+  follow_up
 fi
 
 if solar_client_maintenance_held; then

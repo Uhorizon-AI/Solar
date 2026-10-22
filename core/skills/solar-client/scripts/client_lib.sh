@@ -2583,6 +2583,9 @@ solar_client_restructure_apply() {
 # are never hidden: ERROR/WARN lines, the way to resume and anything unrecognised in an error
 # block reach the terminal. --verbose (or SOLAR_CLIENT_VERBOSE=1) prints everything.
 
+# The layout `solar client init|upgrade|sync` write. Shell code compares against this one name.
+SOLAR_CLIENT_LAYOUT_CURRENT="solar-client-v1.2"
+
 solar_client_update_log_path() {
   local runtime="$1" dir
   dir="$runtime/update-logs"
@@ -2590,19 +2593,20 @@ solar_client_update_log_path() {
   printf '%s\n' "$dir/update-$(date +%Y%m%dT%H%M%S)-$$.log"
 }
 
-# Keep the last 10 logs; the log of a failed update is the first thing asked for.
+# Keep the last 10 logs (the new one included): the log of a failed update is the first thing
+# asked for. Args: the directory that holds the logs (the TMPDIR fallback is rotated too).
 solar_client_update_log_rotate() {
-  local runtime="$1"
-  [[ -d "$runtime/update-logs" ]] || return 0
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
   # shellcheck disable=SC2012
-  ls -1t "$runtime/update-logs"/update-*.log 2>/dev/null | sed -n '11,$p' | while IFS= read -r old; do
+  ls -1t "$dir"/update-*.log 2>/dev/null | sed -n '11,$p' | while IFS= read -r old; do
     rm -f "$old"
   done
 }
 
 # Reads the update output on stdin, writes all of it to the log and prints the short view.
 solar_client_update_view() {
-  local log="$1" line cur="" tgt="" stopped="" migrated=false in_error=false
+  local log="$1" line cur="" tgt="" stopped="" migrated=false in_error=false count
   local -a recent=()   # the last hidden lines: the cause of an error is usually just above it
   : > "$log" 2>/dev/null || log=/dev/null
   while IFS= read -r line; do
@@ -2622,10 +2626,17 @@ solar_client_update_view() {
       "State: stopping console") stopped="${stopped:+$stopped, }console"; continue ;;
       "State: stopping transport gateway") stopped="${stopped:+$stopped, }gateway"; continue ;;
       "State: migrating the runtime")
-        echo "  ✓ services stopped${stopped:+ ($stopped)}"
+        [[ -z "$stopped" ]] || echo "  ✓ services stopped ($stopped)"
+        stopped=""
         continue ;;
       "Legacy subtasks without a derived authorization:"*)
-        echo "  ! ${line#Legacy subtasks without a derived authorization: }"
+        count="${line#Legacy subtasks without a derived authorization: }"
+        count="${count%% *}"
+        if [[ "$count" =~ ^[0-9]+$ ]]; then
+          echo "  ! $count older subtasks have no authorization and will not run until approved again"
+        else
+          echo "  ! older subtasks have no authorization and will not run until approved again"
+        fi
         continue ;;
       "State: starting transport gateway"|"State: starting console")
         if [[ "$migrated" == false ]]; then
@@ -2633,15 +2644,21 @@ solar_client_update_view() {
           migrated=true
         fi
         continue ;;
-      "State: update verified"*) echo "  ✓ services started and verified"; continue ;;
+      "State: update verified"*)
+        if [[ "$migrated" == false ]]; then
+          echo "  ✓ runtime migrated"
+          migrated=true
+        fi
+        echo "  ✓ services started and verified"
+        continue ;;
       "State: resuming update"*) echo "Resuming the interrupted update (${line#State: resuming update })"; continue ;;
       "State: migrated. Services"*) echo "  ✓ runtime migrated; services left stopped (--no-restart)"; continue ;;
       "OK: update complete"*) echo "Update complete${line#OK: update complete}"; continue ;;
-      "LaunchAgent:"*|"ERROR:"*|"WARN"*|"FAIL"*|"Update in progress"*|"No update is in progress"*|"  Claims and launchers"*|"Start them with"*|"Services and ticks are stopped"*|*"solar client update --resume"*|"Next:"*|"  ✓"*|"  ✗"*|"  !"*)
+      "LaunchAgent:"*|"ERROR:"*|"WARN"*|"FAIL"*|"fatal:"*|"error:"*|*"command not found"*|*"unbound variable"*|"Update in progress"*|"No update is in progress"*|"  Claims and launchers"*|"Start them with"*|"Services and ticks are stopped"*|*"solar client update --resume"*|"Next:"*|"  ✓"*|"  ✗"*|"  !"*)
         in_error=false
         case "$line" in
-          "ERROR:"*|"WARN"*|"FAIL"*)
-            if [[ "$line" == "ERROR:"* && ${#recent[@]} -gt 0 ]]; then
+          "ERROR:"*|"WARN"*|"FAIL"*|"fatal:"*|"error:"*|*"command not found"*|*"unbound variable"*)
+            if [[ ${#recent[@]} -gt 0 ]]; then
               printf '%s\n' "${recent[@]}" >&2
             fi
             recent=()
@@ -2659,11 +2676,20 @@ solar_client_update_view() {
       [[ ${#recent[@]} -le 6 ]] || recent=("${recent[@]:1}")
     fi
   done
-  [[ "$log" == /dev/null ]] || echo "  Log: $log"
+  if [[ "$log" != /dev/null ]]; then
+    echo "  Log: $log"
+    solar_client_update_log_rotate "$(dirname "$log")"
+  fi
+}
+
+# True when the staged update entrypoint at $1 understands the option $2. A target older than the
+# option rejects it with "Unknown option", so the front updater passes it only when this holds.
+solar_client_staged_supports() {
+  [[ -f "$1" ]] && grep -q -e "$2" "$1"
 }
 
 # True when `solar client upgrade` has something to do: IDE artifacts in the install, an
-# obsolete .solar/core in the workspace, or a layout older than solar-client-v1.2.
+# obsolete .solar/core in the workspace, or a layout other than the current one.
 solar_client_upgrade_needed() {
   local install_root="$1" workspace="$2" settings layout
   if ! solar_client_paths_equal "$install_root" "$workspace"; then
@@ -2673,7 +2699,7 @@ solar_client_upgrade_needed() {
   settings="$(solar_client_settings_path "$workspace")"
   if [[ -f "$settings" ]]; then
     layout="$(solar_client_manifest_field "$settings" layout)"
-    [[ -n "$layout" && "$layout" != "solar-client-v1.2" ]] && return 0
+    [[ -n "$layout" && "$layout" != "$SOLAR_CLIENT_LAYOUT_CURRENT" ]] && return 0
   fi
   return 1
 }

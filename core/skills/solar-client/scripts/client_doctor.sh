@@ -74,7 +74,7 @@ if [[ -f "$MANIFEST" ]]; then
   if [[ "$layout" == "solar-client-v1.2" || "$layout" == "solar-client-v1.1" ]]; then
     ok "settings layout=$layout"
   elif [[ -n "$layout" ]]; then
-    warn "settings layout=$layout (expected solar-client-v1.2; run solar client sync or upgrade)"
+    warn "settings layout=$layout (expected $SOLAR_CLIENT_LAYOUT_CURRENT; run solar client sync or upgrade)"
   else
     warn "settings missing layout field (run solar client upgrade)"
   fi

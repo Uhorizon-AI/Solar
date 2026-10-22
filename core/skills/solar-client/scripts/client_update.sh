@@ -201,8 +201,7 @@ fi
 if [[ "$VERBOSE" != true && "${SOLAR_CLIENT_VERBOSE:-}" != 1 && "${SOLAR_CLIENT_UPDATE_VIEWED:-}" != 1 ]]; then
   export SOLAR_CLIENT_UPDATE_VIEWED=1
   _view_runtime="$(solar_runtime_root)"
-  solar_client_update_log_rotate "$_view_runtime"
-  bash "${BASH_SOURCE[0]}" "${ORIG_ARGS[@]}" 2>&1 | solar_client_update_view "$(solar_client_update_log_path "$_view_runtime")"
+  bash "${BASH_SOURCE[0]}" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"} 2>&1 | solar_client_update_view "$(solar_client_update_log_path "$_view_runtime")"
   exit "${PIPESTATUS[0]}"
 fi
 
@@ -228,7 +227,9 @@ if [[ "$RESUME" == true ]]; then
     exit 1
   fi
   _resume_args=()
-  [[ "$VERBOSE" == true ]] && _resume_args+=(--verbose)
+  # Only what the entrypoint to resume with understands: it may predate these options.
+  [[ "$VERBOSE" == true ]] && solar_client_staged_supports "$_resume_entry" "--verbose" && _resume_args+=(--verbose)
+  [[ "$NO_SYNC" == true ]] && solar_client_staged_supports "$_resume_entry" "--no-sync" && _resume_args+=(--no-sync)
   exec bash "$_resume_entry" --resume --install-root "$INSTALL_ROOT" --workspace "$SOLAR_WORKSPACE" \
     --runtime-root "$(solar_runtime_root)" --restart-mode "$RESTART_SERVICES" ${_resume_args[@]+"${_resume_args[@]}"}
 fi
@@ -323,8 +324,10 @@ STAGED_ARGS=(--install-root "$INSTALL_ROOT" --workspace "$SOLAR_WORKSPACE" --run
 [[ "$DID_BACKUP" == true ]] && STAGED_ARGS+=(--did-backup)
 [[ "$REINSTALL_LAUNCHAGENT" == true ]] && STAGED_ARGS+=(--reinstall-launchagent)
 [[ "$PORTABLE_UPDATE" == true ]] && STAGED_ARGS+=(--portable)
-[[ "$NO_SYNC" == true ]] && STAGED_ARGS+=(--no-sync)
-[[ "$VERBOSE" == true ]] && STAGED_ARGS+=(--verbose)
+# The target's entrypoint may predate these options; it would refuse them as unknown.
+_staged_entry="$STAGE_ROOT/core/skills/solar-client/scripts/client_update_staged.sh"
+[[ "$NO_SYNC" == true ]] && solar_client_staged_supports "$_staged_entry" "--no-sync" && STAGED_ARGS+=(--no-sync)
+[[ "$VERBOSE" == true ]] && solar_client_staged_supports "$_staged_entry" "--verbose" && STAGED_ARGS+=(--verbose)
 
 # From here the TARGET version's own entrypoint runs the sequence; this (possibly old) updater
 # never replaces code or stops a service itself.

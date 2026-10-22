@@ -96,7 +96,7 @@ fi
 
 [[ -d "$SOLAR_WORKSPACE/.solar/core" ]] && actions+=("remove .solar/core/")
 [[ -f "$SOLAR_WORKSPACE/.solar/.env" ]] && actions+=("remove orphan .solar/.env")
-actions+=("write .solar/settings.json (solar-client-v1.2)")
+actions+=("write .solar/settings.json ($SOLAR_CLIENT_LAYOUT_CURRENT)")
 [[ "$REPAIR_GOVERNANCE" == true ]] && actions+=("repair governance (AGENTS.md + IDE symlinks)")
 
 if [[ "$SKIP_PRUNE_INSTALL" != true ]] && ! solar_client_paths_equal "$SOLAR_ROOT" "$SOLAR_WORKSPACE"; then
@@ -125,7 +125,7 @@ if [[ -f "$SOLAR_WORKSPACE/.solar/.env" ]]; then
 fi
 
 solar_client_write_settings_v12 "$SOLAR_WORKSPACE" "$INSTALL_ROOT" preserve_synced=1
-echo "OK: updated .solar/settings.json (layout solar-client-v1.2)"
+echo "OK: updated .solar/settings.json (layout $SOLAR_CLIENT_LAYOUT_CURRENT)"
 
 if [[ "$REPAIR_GOVERNANCE" == true ]]; then
   tpl="$(solar_core_dir)/templates/workspace-AGENTS.md"
