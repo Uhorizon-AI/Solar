@@ -99,20 +99,20 @@ follow_up() {
   fi
   echo "Follow-up: sync"
   if (cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$client" client sync); then
-    echo "  ✓ skills, agents and commands published to the IDEs"
+    echo "  ✓ Skills, agents and commands published to the IDEs"
   else
-    echo "  ! solar client sync failed: run it in $WORKSPACE"
+    echo "  ! Sync failed: run solar client sync in $WORKSPACE"
   fi
   echo "Follow-up: doctor"
   doctor_out="$(cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$client" client doctor 2>&1)" || true
   printf '%s\n' "$doctor_out"
   doctor_summary="$(printf '%s\n' "$doctor_out" | grep '^Summary:' | tail -1 || true)"
   if [[ "$doctor_summary" == *" 0 error(s)"* ]]; then
-    echo "  ✓ doctor: ${doctor_summary#Summary: }"
+    echo "  ✓ Doctor: ${doctor_summary#Summary: }"
   elif [[ -n "$doctor_summary" ]]; then
-    echo "  ! doctor: ${doctor_summary#Summary: } — run: solar client doctor"
+    echo "  ! Doctor: ${doctor_summary#Summary: }; run: solar client doctor"
   else
-    echo "  ! doctor produced no summary — run: solar client doctor"
+    echo "  ! Doctor produced no summary; run: solar client doctor"
   fi
 }
 
@@ -200,7 +200,7 @@ if [[ "$DID_BACKUP" == true ]]; then
   solar_client_rotate_backups "$INSTALL_ROOT" 5 "$WORKSPACE"
 fi
 if solar_client_upgrade_needed "$INSTALL_ROOT" "$WORKSPACE"; then
-  echo "  ! solar client upgrade is needed in this workspace (IDE artifacts or an older layout)"
+  echo "  ! This workspace needs an upgrade (IDE artifacts or an older layout); run: solar client upgrade"
 fi
 
 echo ""

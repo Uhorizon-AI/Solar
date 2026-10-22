@@ -2604,11 +2604,48 @@ solar_client_update_log_rotate() {
   done
 }
 
+# Colors: the Solar Console palette (assets/app.css, dark theme), only when the stream is a terminal.
+# NO_COLOR and TERM=dumb turn them off; SOLAR_CLIENT_COLOR=always|never overrides the terminal test.
+# Truecolor when COLORTERM says so, else the nearest 256-color index (Terminal.app has no truecolor).
+# Args: the file descriptor that will carry the colors (1 or 2).
+solar_client_color_enabled() {
+  [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]] || return 1
+  case "${SOLAR_CLIENT_COLOR:-auto}" in always) return 0 ;; never) return 1 ;; esac
+  [[ -t "$1" ]]
+}
+
+# Args: role (brand|ok|warn|err|muted|info|bold). Prints the escape sequence that starts it.
+solar_client_sgr() {
+  local rgb="" idx=""
+  case "$1" in
+    brand) rgb="232;163;61";  idx=214 ;;   # --brand #E8A33D
+    ok)    rgb="95;191;127";  idx=78 ;;    # --ok    #5FBF7F
+    warn)  rgb="255;180;84";  idx=215 ;;   # --warn  #FFB454
+    err)   rgb="255;92;77";   idx=203 ;;   # --err   #FF5C4D
+    muted) rgb="139;139;150"; idx=245 ;;   # --muted #8B8B96
+    info)  rgb="168;196;255"; idx=153 ;;   # --info  #a8c4ff
+    bold)  printf '\033[1m'; return 0 ;;
+    *) return 0 ;;
+  esac
+  case "${COLORTERM:-}" in
+    *truecolor*|*24bit*) printf '\033[38;2;%sm' "$rgb" ;;
+    *) printf '\033[38;5;%sm' "$idx" ;;
+  esac
+}
+
 # Reads the update output on stdin, writes all of it to the log and prints the short view.
 solar_client_update_view() {
   local log="$1" line cur="" tgt="" stopped="" migrated=false in_error=false count
   local -a recent=()   # the last hidden lines: the cause of an error is usually just above it
   local context=true   # off once the follow-up (sync, doctor) starts: its hidden lines are not a cause
+  local c_brand="" c_ok="" c_warn="" c_err="" c_muted="" c_info="" c_off="" e_err="" e_off=""
+  if solar_client_color_enabled 1; then
+    c_brand="$(solar_client_sgr brand)" c_ok="$(solar_client_sgr ok)" c_warn="$(solar_client_sgr warn)"
+    c_muted="$(solar_client_sgr muted)" c_info="$(solar_client_sgr info)" c_off=$'\033[0m'
+  fi
+  if solar_client_color_enabled 2; then
+    e_err="$(solar_client_sgr err)" e_off=$'\033[0m'
+  fi
   : > "$log" 2>/dev/null || log=/dev/null
   while IFS= read -r line; do
     printf '%s\n' "$line" >> "$log"
@@ -2617,45 +2654,53 @@ solar_client_update_view() {
       "  target="*) tgt="${line#  target=}"; tgt="${tgt%% *}"; continue ;;
       "OK: staged and checked"*)
         if [[ -n "$cur" && -n "$tgt" ]]; then
-          echo "Solar Client update  $cur → $tgt"
+          printf '%s\n' "${c_brand}Solar${c_off} client update  ${c_info}$cur → $tgt${c_off}"
         else
-          echo "Solar Client update"
+          printf '%s\n' "${c_brand}Solar${c_off} client update"
         fi
-        echo "  ✓ target version prepared and checked"
+        printf '  %s✓%s Target version prepared and checked\n' "$c_ok" "$c_off"
         continue ;;
       "async-tasks supervisor: stopped"*) stopped="${stopped:+$stopped, }supervisor"; continue ;;
       "State: stopping console") stopped="${stopped:+$stopped, }console"; continue ;;
       "State: stopping transport gateway") stopped="${stopped:+$stopped, }gateway"; continue ;;
       "State: migrating the runtime")
-        [[ -z "$stopped" ]] || echo "  ✓ services stopped ($stopped)"
+        [[ -z "$stopped" ]] || printf '  %s✓%s Services stopped (%s)\n' "$c_ok" "$c_off" "$stopped"
         stopped=""
         continue ;;
       "Legacy subtasks without a derived authorization:"*)
         count="${line#Legacy subtasks without a derived authorization: }"
         count="${count%% *}"
         if [[ "$count" =~ ^[0-9]+$ ]]; then
-          echo "  ! $count older subtasks have no authorization and will not run until approved again"
+          printf '  %s!%s %s older subtasks need approval again before they can run\n' "$c_warn" "$c_off" "$count"
         else
-          echo "  ! older subtasks have no authorization and will not run until approved again"
+          printf '  %s!%s Older subtasks need approval again before they can run\n' "$c_warn" "$c_off"
         fi
         continue ;;
       "State: starting transport gateway"|"State: starting console")
         if [[ "$migrated" == false ]]; then
-          echo "  ✓ runtime migrated"
+          printf '  %s✓%s Runtime migrated\n' "$c_ok" "$c_off"
           migrated=true
         fi
         continue ;;
       "Follow-up:"*) context=false; recent=(); continue ;;
       "State: update verified"*)
         if [[ "$migrated" == false ]]; then
-          echo "  ✓ runtime migrated"
+          printf '  %s✓%s Runtime migrated\n' "$c_ok" "$c_off"
           migrated=true
         fi
-        echo "  ✓ services started and verified"
+        printf '  %s✓%s Services started and verified\n' "$c_ok" "$c_off"
         continue ;;
-      "State: resuming update"*) echo "Resuming the interrupted update (${line#State: resuming update })"; continue ;;
-      "State: migrated. Services"*) echo "  ✓ runtime migrated; services left stopped (--no-restart)"; continue ;;
-      "OK: update complete"*) echo "Update complete${line#OK: update complete}"; continue ;;
+      "State: resuming update"*) printf '%s\n' "${c_info}Resuming the interrupted update (${line#State: resuming update })${c_off}"; continue ;;
+      "State: migrated. Services"*) printf '  %s✓%s Runtime migrated; services left stopped (--no-restart)\n' "$c_ok" "$c_off"; continue ;;
+      "OK: update complete"*)
+        # "OK: update complete — v1 (abc)" -> "✓ Update complete - v1 (abc)", the version in blue
+        count="${line#OK: update complete}"; count="${count# — }"
+        printf '  %s✓%s Update complete - %s%s%s%s\n' "$c_ok" "$c_off" "$c_info" "${count%% *}" "$c_off" "${count#"${count%% *}"}"
+        continue ;;
+      "LaunchAgent: ok"*)
+        # "LaunchAgent: ok (plist SOLAR_ROOT matches install)": the check already says ok
+        printf '  %s✓%s LaunchAgent points to this install\n' "$c_ok" "$c_off"
+        continue ;;
       "LaunchAgent:"*|"ERROR:"*|"WARN"*|"FAIL"*|"fatal:"*|"error:"*|*"command not found"*|*"unbound variable"*|"Update in progress"*|"No update is in progress"*|"  Claims and launchers"*|"Start them with"*|"Services and ticks are stopped"*|*"solar client update --resume"*|"Next:"*|"  ✓"*|"  ✗"*|"  !"*)
         in_error=false
         case "$line" in
@@ -2664,7 +2709,10 @@ solar_client_update_view() {
               printf '%s\n' "${recent[@]}" >&2
             fi
             recent=()
-            in_error=true; printf '%s\n' "$line" >&2 ;;
+            in_error=true; printf '%s\n' "${e_err}${line}${e_off}" >&2 ;;
+          "  ✓"*) printf '  %s✓%s%s\n' "$c_ok" "$c_off" "${line#  ✓}" ;;
+          "  !"*) printf '  %s!%s%s\n' "$c_warn" "$c_off" "${line#  !}" ;;
+          "Next:"*) printf '%s\n' "${c_info}Next:${c_off}${line#Next:}" ;;
           *) printf '%s\n' "$line" ;;
         esac
         continue ;;
@@ -2681,7 +2729,7 @@ solar_client_update_view() {
     fi
   done
   if [[ "$log" != /dev/null ]]; then
-    echo "  Log: $log"
+    printf '%s\n' "${c_muted}Log: $log${c_off}"
     solar_client_update_log_rotate "$(dirname "$log")"
   fi
 }

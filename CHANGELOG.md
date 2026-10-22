@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- The short output of `solar client update` uses the Solar Console colors (amber `Solar`, green `✓`, amber `!`, blue versions and `Next:`, red errors, grey `Log:`) when the output is a terminal. `NO_COLOR` and `TERM=dumb` turn them off, `SOLAR_CLIENT_COLOR=always|never` overrides the terminal test, and the log stays plain text.
+- Every status line follows one pattern, `✓ Thing done`, with a capital first letter and no em dashes; the LaunchAgent line reads `✓ LaunchAgent points to this install`, and the log line starts at the first column.
+
 ## [0.56.0] - 2026-10-22
 
 ### Changed
