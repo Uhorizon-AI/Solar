@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -404,7 +405,7 @@ def test_no_restart_leaves_dispatch_suspended_until_an_explicit_resume(rig):
     assert rig.barrier() is None
     assert "Resuming the interrupted update" in resumed.stdout
     # The resume finishes the update the way a plain one does: the workspace is synced to the new version.
-    assert "✓ skills, agents and commands published to the IDEs" in resumed.stdout, resumed.stdout + resumed.stderr
+    assert "✓ Skills, agents and commands published to the IDEs" in resumed.stdout, resumed.stdout + resumed.stderr
     assert json.loads((rig.ws / ".solar" / "settings.json").read_text())["core_version"] == "v0.0.2"
 
 
@@ -737,8 +738,8 @@ def test_the_update_prints_a_short_summary_and_keeps_the_detail_in_a_log(rig):
     assert done.returncode == 0, done.stdout + done.stderr
     shown = done.stdout.splitlines()
     assert len(shown) <= 14, done.stdout
-    for wanted in ("→", "✓ target version prepared and checked", "✓ services stopped (console, gateway)",
-                   "✓ runtime migrated", "✓ services started and verified", "Update complete — v0.0.2"):
+    for wanted in ("→", "✓ Target version prepared and checked", "✓ Services stopped (console, gateway)",
+                   "✓ Runtime migrated", "✓ Services started and verified", "✓ Update complete - v0.0.2"):
         assert any(wanted in line for line in shown), (wanted, done.stdout)
     for noise in ("pid=", "action=kill", "State:", "legacy_children", "SOLAR_ROOT=", "staging", "{", "}"):
         assert noise not in done.stdout, (noise, done.stdout)
@@ -802,19 +803,19 @@ def test_the_view_infers_phases_without_inventing_them(tmp_path):
     # Nothing was running: no "services stopped" line; the migration is still reported when the
     # update is verified without any service having been started.
     quiet = view("State: migrating the runtime\nState: update verified; maintenance barrier released\n", tmp_path)
-    assert "services stopped" not in quiet.stdout
-    assert quiet.stdout.index("✓ runtime migrated") < quiet.stdout.index("✓ services started and verified")
+    assert "services stopped" not in quiet.stdout.lower()
+    assert quiet.stdout.index("✓ Runtime migrated") < quiet.stdout.index("✓ Services started and verified")
     # A repeated phase does not repeat the services of the first one.
     twice = view("State: stopping console\nState: migrating the runtime\nState: migrating the runtime\n", tmp_path)
-    assert twice.stdout.count("services stopped") == 1
+    assert twice.stdout.lower().count("services stopped") == 1
 
 
 def test_the_view_words_the_legacy_subtasks_in_plain_language(tmp_path):
     counted = view("Legacy subtasks without a derived authorization: 15 (15 not executable until approved again). Nothing was backfilled.\n", tmp_path)
-    assert "15 older subtasks have no authorization and will not run until approved again" in counted.stdout
+    assert "15 older subtasks need approval again before they can run" in counted.stdout
     assert "backfilled" not in counted.stdout and "(15" not in counted.stdout
     odd = view("Legacy subtasks without a derived authorization: many\n", tmp_path)
-    assert "older subtasks have no authorization" in odd.stdout and "many" not in odd.stdout
+    assert "Older subtasks need approval" in odd.stdout and "many" not in odd.stdout
 
 
 def test_a_bare_update_with_no_flags_runs_under_bash_3(rig):
@@ -827,7 +828,7 @@ def test_a_bare_update_with_no_flags_runs_under_bash_3(rig):
     done = subprocess.run(["bash", str(entry)], env=env, cwd=rig.ws, capture_output=True, text=True, timeout=300)
     assert "unbound variable" not in done.stderr and done.returncode != 127, done.stdout + done.stderr
     assert done.returncode == 0, done.stdout + done.stderr
-    assert "Update complete" in done.stdout
+    assert "✓ Update complete - " in done.stdout
 
 
 def retag(rig, tag: str, edits: dict[str, str]) -> None:
@@ -868,8 +869,8 @@ def test_a_plain_update_syncs_the_workspace_and_a_failing_sync_is_only_a_warning
     rig.runtime_state(5)
     done = rig.update("--ref", "v0.0.2", "--yes")
     assert done.returncode == 0, done.stdout + done.stderr
-    assert "✓ skills, agents and commands published to the IDEs" in done.stdout
-    assert "✓ doctor:" in done.stdout or "! doctor:" in done.stdout          # the doctor line is always there
+    assert "✓ Skills, agents and commands published to the IDEs" in done.stdout
+    assert "✓ Doctor:" in done.stdout or "! Doctor:" in done.stdout          # the doctor line is always there
     assert json.loads((rig.ws / ".solar" / "settings.json").read_text())["core_version"] == "v0.0.2"
     # A target whose sync fails: the update is still a success, and says what to run.
     rig.runtime_state(5)
@@ -877,7 +878,7 @@ def test_a_plain_update_syncs_the_workspace_and_a_failing_sync_is_only_a_warning
     rig.git("checkout", "-q", "-f", "v0.0.1")
     failed = rig.update("--ref", "v0.0.4", "--yes")
     assert failed.returncode == 0, failed.stdout + failed.stderr
-    assert "! solar client sync failed: run it in" in failed.stdout
+    assert "! Sync failed: run solar client sync in" in failed.stdout
 
 
 def test_no_sync_applies_to_a_resume_too(rig):
@@ -929,7 +930,7 @@ def test_the_short_output_with_sync_and_doctor_stays_short(rig):
     done = rig.update("--ref", "v0.0.2", "--yes")
     assert done.returncode == 0, done.stdout + done.stderr
     shown = done.stdout.splitlines()
-    assert "✓ skills, agents and commands published to the IDEs" in done.stdout
+    assert "✓ Skills, agents and commands published to the IDEs" in done.stdout
     # Doctor's own OK lines are hidden; only its summary (and any WARN/ERROR line) is shown.
     assert not any(line.startswith("OK:") for line in shown), done.stdout
     assert len(shown) <= 16, done.stdout
@@ -944,3 +945,154 @@ def test_a_doctor_warning_does_not_drag_in_the_lines_of_the_sync(tmp_path):
     # ...while an error of the update itself still brings its own context.
     failed = view("hidden cause\nERROR: the update did not complete\n", tmp_path)
     assert "hidden cause" in failed.stderr
+
+
+# --------------------------------------------------------------------------
+# colors: the Solar Console palette, only on a terminal
+# --------------------------------------------------------------------------
+
+APP_CSS = CORE / "skills" / "solar-app" / "assets" / "app.css"
+SAMPLE = ("  current=v0.1.0 (abc)\n  target=v0.2.0 (stable release)\nOK: staged and checked: x\nState: stopping console\nState: migrating the runtime\n"
+          "Legacy subtasks without a derived authorization: 15 (x)\nState: update verified; x\n"
+          "OK: update complete — v1 (abc)\nNext: solar client sync\nERROR: broken\n")
+
+
+def colored(tmp: Path, **env) -> subprocess.CompletedProcess:
+    base = {k: v for k, v in os.environ.items() if k not in ("NO_COLOR", "COLORTERM", "SOLAR_CLIENT_COLOR")}
+    base.update({"TERM": "xterm-256color", **env})
+    return subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; solar_client_update_view "{tmp}/c.log"'],
+                          input=SAMPLE, capture_output=True, text=True, env=base)
+
+
+def console_dark_palette() -> dict[str, str]:
+    dark = next(line for line in APP_CSS.read_text().splitlines() if line.startswith(".t-dark{"))
+    return dict(re.findall(r"(--[\w-]+):\s*(#[0-9a-fA-F]{6})", dark))
+
+
+def rgb_of(token: str) -> tuple[int, int, int]:
+    hexa = console_dark_palette()[token].lstrip("#")
+    return tuple(int(hexa[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def nearest_256(rgb: tuple[int, int, int]) -> int:
+    """The xterm-256 index closest to `rgb`: the 6x6x6 cube (16-231) and the grey ramp (232-255)."""
+    levels = (0, 95, 135, 175, 215, 255)
+    colors = {16 + 36 * r + 6 * g + b: (levels[r], levels[g], levels[b]) for r in range(6) for g in range(6) for b in range(6)}
+    colors.update({232 + n: (8 + 10 * n,) * 3 for n in range(24)})
+    return min(colors, key=lambda index: sum((a - b) ** 2 for a, b in zip(colors[index], rgb)))
+
+
+def run_on_tty(snippet: str, text: str, env: dict, tty_fd: str) -> tuple[str, str]:
+    """Run the view with stdout (or stderr) on a real terminal and the other stream on a pipe."""
+    pty = pytest.importorskip("pty")
+    master, slave = pty.openpty()
+    stdout, stderr = (slave, subprocess.PIPE) if tty_fd == "out" else (subprocess.PIPE, slave)
+    proc = subprocess.Popen(["bash", "-c", snippet], stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, env=env)
+    os.close(slave)                      # the child holds the only other copy: the read below ends with it
+    proc.stdin.write(text.encode())
+    proc.stdin.close()
+    tty_text = b""
+    try:
+        while True:
+            chunk = os.read(master, 4096)
+            if not chunk:
+                break
+            tty_text += chunk
+    except OSError:                      # EIO: the child closed its side
+        pass
+    os.close(master)
+    piped = (proc.stdout if tty_fd == "err" else proc.stderr).read().decode()
+    proc.wait(timeout=60)
+    return tty_text.decode().replace("\r\n", "\n"), piped
+
+
+def test_there_are_no_colors_when_the_output_is_not_a_terminal(tmp_path):
+    done = colored(tmp_path)                       # captured by the test: not a tty
+    assert "\x1b" not in done.stdout + done.stderr
+    assert "✓ Runtime migrated" in done.stdout
+
+
+def test_colors_use_the_solar_console_palette(tmp_path):
+    done = colored(tmp_path, SOLAR_CLIENT_COLOR="always", COLORTERM="truecolor")
+
+    def rgb(token: str) -> str:
+        return ";".join(str(part) for part in rgb_of(token))
+    assert f"\x1b[38;2;{rgb('--ok')}m✓\x1b[0m Runtime migrated" in done.stdout          # ✓ in --ok
+    header = done.stdout.splitlines()[0]
+    assert header.startswith(f"\x1b[38;2;{rgb('--brand')}mSolar\x1b[0m client update")   # only "Solar" in --brand, not bold
+    assert f"\x1b[38;2;{rgb('--info')}m" in header                                      # the versions in --info
+    assert f"  \x1b[38;2;{rgb('--warn')}m!\x1b[0m 15 older subtasks" in done.stdout          # only the ! in --warn
+    assert f"\x1b[38;2;{rgb('--info')}mNext:\x1b[0m solar client sync" in done.stdout   # only "Next:" in --info
+    assert f"\x1b[38;2;{rgb('--err')}mERROR: broken\x1b[0m" in done.stderr             # errors in --err, on stderr
+    assert "\x1b" not in (tmp_path / "c.log").read_text()                              # the log stays plain
+
+
+ROLES = {"brand": "--brand", "ok": "--ok", "warn": "--warn", "err": "--err", "muted": "--muted", "info": "--info"}
+
+
+@pytest.mark.parametrize("role,token", ROLES.items())
+def test_each_role_falls_back_to_the_nearest_256_color(role, token):
+    env = {k: v for k, v in os.environ.items() if k != "COLORTERM"}
+    done = subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; solar_client_sgr {role}'],
+                          capture_output=True, text=True, env=env)
+    assert done.stdout == f"\x1b[38;5;{nearest_256(rgb_of(token))}m"
+
+
+def test_an_explicit_choice_wins_and_the_environment_decides_the_rest(tmp_path):
+    # SOLAR_CLIENT_COLOR is explicit: it wins over NO_COLOR and TERM=dumb, as a flag would.
+    assert "\x1b[38;5;72m✓" in colored(tmp_path, SOLAR_CLIENT_COLOR="always").stdout
+    assert "\x1b" in colored(tmp_path, SOLAR_CLIENT_COLOR="always", NO_COLOR="1").stdout
+    assert "\x1b" in colored(tmp_path, SOLAR_CLIENT_COLOR="always", TERM="dumb").stdout
+    assert "\x1b" not in colored(tmp_path, SOLAR_CLIENT_COLOR="never").stdout
+    assert "\x1b" not in colored(tmp_path, SOLAR_CLIENT_COLOR="never", COLORTERM="truecolor").stdout
+
+
+def _view_snippet(tmp: Path) -> str:
+    return f'source "{SCRIPTS}/client_lib.sh"; solar_client_update_view "{tmp}/t.log"'
+
+
+def _clean_env(**env) -> dict:
+    base = {k: v for k, v in os.environ.items() if k not in ("NO_COLOR", "COLORTERM", "SOLAR_CLIENT_COLOR")}
+    base.update({"TERM": "xterm-256color", **env})
+    return base
+
+
+def test_on_a_terminal_the_environment_decides(tmp_path):
+    on, _ = run_on_tty(_view_snippet(tmp_path), SAMPLE, _clean_env(), "out")
+    assert "\x1b[38;5;72m✓" in on
+    off, _ = run_on_tty(_view_snippet(tmp_path), SAMPLE, _clean_env(NO_COLOR="1"), "out")
+    assert "\x1b" not in off
+    dumb, _ = run_on_tty(_view_snippet(tmp_path), SAMPLE, _clean_env(TERM="dumb"), "out")
+    assert "\x1b" not in dumb
+
+
+def test_each_stream_is_colored_by_whether_it_is_a_terminal(tmp_path):
+    # stdout on a terminal, stderr captured: the summary has colors, the captured ERROR has none.
+    out_tty, err_pipe = run_on_tty(_view_snippet(tmp_path), SAMPLE, _clean_env(), "out")
+    assert "\x1b[38;5;72m✓" in out_tty and "ERROR: broken" in err_pipe and "\x1b" not in err_pipe
+    # the reverse: stderr on a terminal gets the red ERROR, the captured stdout has no escapes.
+    err_tty, out_pipe = run_on_tty(_view_snippet(tmp_path), SAMPLE, _clean_env(), "err")
+    assert "\x1b[38;5;203mERROR: broken\x1b[0m" in err_tty and "\x1b" not in out_pipe
+
+
+def test_the_version_is_still_colored_when_the_complete_line_has_no_dash(tmp_path):
+    done = subprocess.run(["bash", "-c", _view_snippet(tmp_path)], input="OK: update complete v1 (abc)\n",
+                          capture_output=True, text=True, env=_clean_env(SOLAR_CLIENT_COLOR="always", COLORTERM="truecolor"))
+    assert "Update complete - \x1b[38;2;" in done.stdout and "v1\x1b[0m (abc)" in done.stdout
+    assert "-  v1" not in done.stdout
+
+
+def test_launchagent_lines_other_than_ok_are_warnings_in_the_same_pattern(tmp_path):
+    for text in ("skipped (solar-system helpers missing under install)", "not installed (optional on this machine)"):
+        done = view(f"LaunchAgent: {text}\n", tmp_path)
+        assert done.stdout.splitlines()[0] == f"  ! LaunchAgent {text}"
+    assert view("LaunchAgent: ok (plist SOLAR_ROOT matches install)\n", tmp_path).stdout.splitlines()[0] == "  ✓ LaunchAgent points to this install"
+    # Edge cases of the same pattern: a bare "o" and nothing after the colon are warnings too.
+    assert view("LaunchAgent: o\n", tmp_path).stdout.splitlines()[0] == "  ! LaunchAgent o"
+    assert view("LaunchAgent: \n", tmp_path).stdout.splitlines()[0] == "  ! LaunchAgent "
+
+
+def test_resuming_prints_one_plain_line(tmp_path):
+    done = subprocess.run(["bash", "-c", _view_snippet(tmp_path)], input="State: resuming update update-1 at phase restarting\n",
+                          capture_output=True, text=True, env=_clean_env(SOLAR_CLIENT_COLOR="always"))
+    assert done.stdout.splitlines()[0] == "Resuming the interrupted update (update-1 at phase restarting)"
