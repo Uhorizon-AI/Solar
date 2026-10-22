@@ -75,7 +75,7 @@ def test_only_valid_transport_token_is_forwarded(solar_env, monkeypatch, meta, e
         assert '_meta' not in forms[0]['params']
     else:
         assert forms[0]['params']['_meta'] == expected
-    assert forms[0]['params']['requestedSchema'] == dict(type='object', properties={})
+    assert forms[0]['params']['requestedSchema']['properties']['approve']['default'] is False
     result = next(item['result'] for item in responses if item.get('id') == 2)
     assert result['isError'] is not accepted
     assert len(effects) == int(accepted)

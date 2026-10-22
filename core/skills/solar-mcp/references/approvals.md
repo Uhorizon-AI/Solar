@@ -6,7 +6,8 @@ The model proposes a tool call. For `task.authorize_run`, `async_execution.*` an
 `elicitation/create` only if the client advertised form elicitation; the task lifecycle operations
 (`client_consent`) do not use this path. The client
 must present the request to the human. Only an `accept` response to that pending
-server-generated request ID grants consent (a client that still sends `content.approve` must send `true`).
+server-generated request ID, with `content.approve` exactly `true`, grants consent.
+A client listed as verified for the form without fields (see below) needs only `accept`.
 Decline, cancel, disconnect, timeout, errors and unrelated responses do not grant.
 While awaiting confirmation, ping requests are answered immediately and other
 requests/notifications are queued for processing afterwards. Cancellation of
@@ -41,7 +42,7 @@ existing form request. No other metadata is copied, and deferred calls retain
 their own token rather than inheriting one from a previous call.
 
 This is routing compatibility, not consent: the token never replaces the
-server-generated elicitation ID, explicit `accept` with `approve: true`, scoped
+server-generated elicitation ID, explicit `accept` (with `approve: true` unless the client is verified for the form without fields), scoped
 approval, expiry, cancellation or single-use checks. Tool arguments cannot set it.
 The MCP specification defines progress tokens for optional progress reporting;
 using the originating token to route a form is a host compatibility requirement,
@@ -80,8 +81,18 @@ operation name and its readable fields, without identifiers or row versions. The
 arguments, workspace, row version, expiry and single use.
 
 Limits: Solar controls the text, not the client's modal size, scrolling or
-buttons; the form has no fields, so the client shows the text with its own Accept and Decline buttons. Client
-rendering of multi-line text is unverified here.
+buttons; the form is the one `approve` checkbox the protocol defines, except for the verified clients below.
+Client rendering of multi-line text is unverified here.
+
+## Form without fields
+
+A form with no fields shows the text with the client's own Accept and Decline buttons.
+Solar sends it only to a client verified for it, named in `FIELDLESS_FORM_CLIENTS` or, to try one, in
+`SOLAR_MCP_FIELDLESS_FORM_CLIENTS` (comma-separated `clientInfo.name`, any case). Every other client gets the checkbox.
+Without a field nothing proves that a person looked, so a client is listed only after two checks:
+it shows Accept and Decline, and it does not answer `accept` on its own.
+For a listed client `accept` is the grant, an absent `approve` counts as `true`, and `null`, `false` and `"true"` refuse.
+No client is listed yet: Claude Code and Codex are still to be checked.
 
 ## Connection diagnostics and native question tools
 

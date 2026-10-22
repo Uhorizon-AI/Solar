@@ -97,9 +97,7 @@ def test_two_workers_cannot_reuse_approval(solar_env, monkeypatch):
 @pytest.mark.parametrize('reply,expected', [
     ({'action': 'accept', 'content': {'approve': True}}, True),
     ({'action': 'accept', 'content': {'approve': 'true'}}, False),
-    ({'action': 'accept', 'content': {}}, True),
-    ({'action': 'accept'}, True),
-    ({'action': 'accept', 'content': {'approve': False}}, False),
+    ({'action': 'accept', 'content': {}}, False),
     ({'action': 'decline'}, False),
     ({'action': 'cancel'}, False),
 ])
@@ -119,7 +117,7 @@ def test_transport_confirmation_matches_server_request(solar_env, monkeypatch, r
             result = super().write(text)
             message = json.loads(text)
             if message.get('method') == 'elicitation/create':
-                assert message['params']['requestedSchema'] == dict(type='object', properties={})
+                assert message['params']['requestedSchema']['properties']['approve']['default'] is False
                 lines.put(json.dumps(dict(jsonrpc='2.0', id=message['id'], result=reply)))
                 lines.put(None)
             return result
@@ -134,6 +132,75 @@ def test_transport_confirmation_matches_server_request(solar_env, monkeypatch, r
     diagnostic = json.loads(messages[-1]['result']['content'][0]['text'])['confirmation']
     assert diagnostic == dict(client_form_advertised=True, transport='mcp-form', attempted=True,
                               outcome='accepted' if expected else 'not_accepted')
+    assert bool(mcp_approve.listing()) is expected
+
+
+FIELDLESS_REPLIES = [
+    ({'action': 'accept', 'content': {'approve': True}}, True),
+    ({'action': 'accept', 'content': {}}, True),
+    ({'action': 'accept'}, True),
+    ({'action': 'accept', 'content': {'approve': None}}, False),   # a null mark is not consent
+    ({'action': 'accept', 'content': {'approve': False}}, False),
+    ({'action': 'accept', 'content': {'approve': 'true'}}, False),
+    ({'action': 'decline'}, False),
+    ({'action': 'cancel'}, False),
+]
+
+
+def run_confirmation(monkeypatch, reply, client_name, env_clients=None):
+    import queue
+    if env_clients is not None:
+        monkeypatch.setenv('SOLAR_MCP_FIELDLESS_FORM_CLIENTS', env_clients)
+    lines, forms = queue.Queue(), []
+    class Input:
+        def __iter__(self):
+            while True:
+                line = lines.get(timeout=5)
+                if line is None:
+                    return
+                yield line
+    class Output(StringIO):
+        def write(self, text):
+            result = super().write(text)
+            message = json.loads(text)
+            if message.get('method') == 'elicitation/create':
+                forms.append(message['params'])
+                lines.put(json.dumps(dict(jsonrpc='2.0', id=message['id'], result=reply)))
+                lines.put(None)
+            return result
+    monkeypatch.setitem(operations.HANDLERS, 'task.create', lambda args: {'ok': True})
+    init = dict(capabilities={'elicitation': {}})
+    if client_name is not None:
+        init['clientInfo'] = dict(name=client_name, version='1')
+    lines.put(json.dumps(dict(jsonrpc='2.0', id=1, method='initialize', params=init)))
+    lines.put(json.dumps(request()))
+    output = Output()
+    mcp_server.serve(Input(), output)
+    messages = [json.loads(line) for line in output.getvalue().splitlines()]
+    return forms, messages[-1]
+
+
+@pytest.mark.parametrize('reply,expected', FIELDLESS_REPLIES)
+def test_a_listed_client_gets_the_form_without_fields(solar_env, monkeypatch, reply, expected):
+    forms, final = run_confirmation(monkeypatch, reply, 'Claude-Code', env_clients=' claude-code , codex ')
+    assert [form['requestedSchema'] for form in forms] == [dict(type='object', properties={})]
+    assert final['result']['isError'] is not expected
+    assert bool(mcp_approve.listing()) is expected
+
+
+@pytest.mark.parametrize('client_name', [None, 'claude-code', 'unknown', ''])
+@pytest.mark.parametrize('reply,expected', [
+    ({'action': 'accept', 'content': {'approve': True}}, True),
+    ({'action': 'accept', 'content': {}}, False),                  # an unlisted client must tick the box
+    ({'action': 'accept'}, False),
+    ({'action': 'accept', 'content': {'approve': None}}, False),
+])
+def test_any_other_client_keeps_the_explicit_checkbox(solar_env, monkeypatch, client_name, reply, expected):
+    monkeypatch.delenv('SOLAR_MCP_FIELDLESS_FORM_CLIENTS', raising=False)
+    forms, final = run_confirmation(monkeypatch, reply, client_name)
+    assert forms[0]['requestedSchema']['required'] == ['approve']
+    assert forms[0]['requestedSchema']['properties']['approve']['default'] is False
+    assert final['result']['isError'] is not expected
     assert bool(mcp_approve.listing()) is expected
 
 

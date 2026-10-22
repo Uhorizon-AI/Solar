@@ -31,6 +31,7 @@ that file, and a browser session already logged in is not covered at all.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import sys
@@ -519,6 +520,17 @@ class ConfirmationCancelled(Exception):
 
 CONFIRMATION_TIMEOUT = 120
 
+# Clients whose form without fields was checked to show the text with its own Accept and Decline
+# buttons and never to answer `accept` without a person. Every other client gets the explicit
+# `approve` checkbox, the only thing that proves a person looked. SOLAR_MCP_FIELDLESS_FORM_CLIENTS
+# (comma-separated `clientInfo.name`, any case) adds clients to try before listing them here.
+FIELDLESS_FORM_CLIENTS = frozenset()
+
+
+def fieldless_form_clients():
+    extra = os.environ.get('SOLAR_MCP_FIELDLESS_FORM_CLIENTS', '')
+    return FIELDLESS_FORM_CLIENTS | {name.strip().lower() for name in extra.split(',') if name.strip()}
+
 
 def serve(stdin=None, stdout=None) -> int:
     stdin = stdin or sys.stdin
@@ -530,6 +542,7 @@ def serve(stdin=None, stdout=None) -> int:
         incoming.put(None)
     threading.Thread(target=read_lines, daemon=True).start()
     supports_confirmation = False
+    client_fieldless = False
     confirmation = dict(client_form_advertised=False, transport='unavailable',
                         attempted=False, outcome='not_requested')
     deferred = deque()
@@ -563,9 +576,14 @@ def serve(stdin=None, stdout=None) -> int:
         # The text is rendered here from the validated arguments and the stored
         # task, never from caller prose; the binding stays on the full arguments.
         elicitation_id = 'approval-' + uuid.uuid4().hex
-        message, _title = approval_text.render(name, arguments, seconds=CONFIRMATION_TIMEOUT)
-        # No fields: the client shows the text with its own Accept / Decline buttons.
-        form_params = dict(message=message, requestedSchema=dict(type="object", properties={}))
+        message, checkbox = approval_text.render(name, arguments, seconds=CONFIRMATION_TIMEOUT)
+        if client_fieldless:
+            # The client shows the text with its own Accept / Decline buttons.
+            schema = dict(type="object", properties={})
+        else:
+            schema = dict(type="object", properties=dict(
+                approve=dict(type="boolean", title=checkbox, default=False)), required=["approve"])
+        form_params = dict(message=message, requestedSchema=schema)
         # Some hosts route native forms using the originating progress token.
         # Correlation is not authority; never forward other caller metadata.
         token = request_meta.get('progressToken') if isinstance(request_meta, dict) else None
@@ -595,9 +613,14 @@ def serve(stdin=None, stdout=None) -> int:
                 result = response.get('result') or {}
                 if not isinstance(result, dict) or not isinstance(result.get('content', {}), dict):
                     return False
-                # Accept is the grant. A client that still sends `approve` must send true.
-                return (not response.get('error') and result.get('action') == 'accept'
-                        and (result.get('content') or {}).get('approve', True) is True)
+                if response.get('error') or result.get('action') != 'accept':
+                    return False
+                content = result.get('content') or {}
+                if not client_fieldless:
+                    return content.get('approve') is True
+                # Fieldless form: accept is the grant and an absent `approve` is fine. A client
+                # that sends one anyway must send true: null, false and "true" refuse (intended).
+                return content.get('approve', True) is True
             if remember_cancel(response):
                 target = (response.get('params') or {}).get('requestId')
                 if request_key(target) == request_key(request_id):
@@ -651,6 +674,9 @@ def serve(stdin=None, stdout=None) -> int:
             elicitation = capabilities.get('elicitation') if isinstance(capabilities, dict) else None
             supports_confirmation = (isinstance(elicitation, dict) and
                                      (not elicitation or isinstance(elicitation.get('form'), dict)))
+            info = (message.get('params') or {}).get('clientInfo')
+            name = info.get('name') if isinstance(info, dict) else None
+            client_fieldless = isinstance(name, str) and name.strip().lower() in fieldless_form_clients()
             confirmation.update(client_form_advertised=supports_confirmation,
                                 transport='mcp-form' if supports_confirmation else 'unavailable')
         active_key = request_key(message['id']) if 'id' in message else None

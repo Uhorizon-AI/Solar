@@ -268,7 +268,7 @@ def test_rendering_failure_falls_back_without_blocking_the_prompt(solar_env, mon
 
 # ---- wire level: the controls are untouched -----------------------------------------------
 
-def serve_once(call, reply, workspace_lang=None):
+def serve_once(call, reply, workspace_lang=None, client=None):
     lines, forms = queue.Queue(), []
 
     class Input:
@@ -292,7 +292,10 @@ def serve_once(call, reply, workspace_lang=None):
                 lines.put(None)             # the answer is out: end the session
             return result
 
-    lines.put(json.dumps(dict(jsonrpc="2.0", id=1, method="initialize", params=dict(capabilities={"elicitation": {}}))))
+    init = dict(capabilities={"elicitation": {}})
+    if client:
+        init["clientInfo"] = dict(name=client, version="1")
+    lines.put(json.dumps(dict(jsonrpc="2.0", id=1, method="initialize", params=init)))
     lines.put(json.dumps(dict(jsonrpc="2.0", id=2, method="tools/call", params=dict(name="solar_execute", arguments=call))))
     output = Output()
     mcp_server.serve(Input(), output)
@@ -307,6 +310,18 @@ def test_archive_prompt_is_compact_single_and_still_binds_the_exact_call(solar_e
     shown = forms[0]["message"]
     assert shown.startswith("Archive task\nTask: Review plan: Gemini\nReason: stale review.")
     assert_clean(shown, made)
+    assert forms[0]["requestedSchema"]["properties"]["approve"] == dict(type="boolean", title="Approve this action", default=False)
+    assert final["result"]["isError"] is False
+    assert stored(made["id"])["status"] == "archived"
+    rows = [r for r in mcp_approve.listing() if r["tool"] == "task.archive"]
+    assert len(rows) == 1 and rows[0]["consumed_at"]
+
+
+def test_a_listed_client_that_accepts_without_content_runs_archive_end_to_end(solar_env, monkeypatch):
+    monkeypatch.setenv("SOLAR_MCP_FIELDLESS_FORM_CLIENTS", "fieldless-client")
+    made = new_task("Plan")
+    args = archive_args(made)
+    forms, final = serve_once(dict(operation="task.archive", arguments=args), {"action": "accept"}, client="Fieldless-Client")
     assert forms[0]["requestedSchema"] == dict(type="object", properties={})
     assert final["result"]["isError"] is False
     assert stored(made["id"])["status"] == "archived"
@@ -315,7 +330,8 @@ def test_archive_prompt_is_compact_single_and_still_binds_the_exact_call(solar_e
 
 
 @pytest.mark.parametrize("reply", [{"action": "decline"}, {"action": "cancel"},
-                                   {"action": "accept", "content": {"approve": False}}])
+                                   {"action": "accept", "content": {"approve": False}},
+                                   {"action": "accept", "content": {}}])
 def test_closing_or_rejecting_never_executes(solar_env, reply):
     made = new_task("Plan")
     forms, final = serve_once(dict(operation="task.archive", arguments=archive_args(made)), reply)
