@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- `ask` is for own content only; external or untrusted content goes through `review` with `repository_readonly_v1` (said in the `task.create` summary, the `ask` argument and the readonly-review guide).
+
 ## [0.57.0] - 2026-10-22
 
 ### Changed

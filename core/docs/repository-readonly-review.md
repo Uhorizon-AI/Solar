@@ -371,6 +371,11 @@ A question is not a review: it has no repository, commit or evidence. `task.crea
 - **Read-only is a request, not a limit.** Each client is asked for its native mode (`--sandbox read-only`,
   `--mode ask`, `--mode plan`, `--permission-mode plan`); Solar does not enforce it. The client may read beyond
   its folder and inherits its own configuration, hooks and tools. Use `repository_readonly_v1` when that matters.
+- **Own content only.** Use `ask` for the user's own content (their plans, code and folders). Content that is
+  external or untrusted (downloaded files, a third party's text, a web page, someone else's repository) goes
+  through `review` with `repository_readonly_v1`: a request does not stop the client from obeying an
+  instruction planted in that content or from reading beyond its folder. The choice is the calling harness's;
+  Solar does not tell the two apart.
 - **Folder and risk.** The folder the client starts in is stored in the manifest (the workspace when omitted)
   and must be inside a declared read scope. The task is low risk, so it runs without `task.authorize_run`, only
   when that folder is the workspace or inside it. Any other folder, `/` and `$HOME` included, waits for
