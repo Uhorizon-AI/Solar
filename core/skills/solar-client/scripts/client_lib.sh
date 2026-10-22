@@ -2605,12 +2605,13 @@ solar_client_update_log_rotate() {
 }
 
 # Colors: the Solar Console palette (assets/app.css, dark theme), only when the stream is a terminal.
-# NO_COLOR and TERM=dumb turn them off; SOLAR_CLIENT_COLOR=always|never overrides the terminal test.
+# SOLAR_CLIENT_COLOR=always|never is an explicit choice and wins over everything else; otherwise
+# NO_COLOR and TERM=dumb turn them off, and the rest depends on the stream being a terminal.
 # Truecolor when COLORTERM says so, else the nearest 256-color index (Terminal.app has no truecolor).
 # Args: the file descriptor that will carry the colors (1 or 2).
 solar_client_color_enabled() {
-  [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]] || return 1
   case "${SOLAR_CLIENT_COLOR:-auto}" in always) return 0 ;; never) return 1 ;; esac
+  [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]] || return 1
   [[ -t "$1" ]]
 }
 
@@ -2618,8 +2619,8 @@ solar_client_color_enabled() {
 solar_client_sgr() {
   local rgb="" idx=""
   case "$1" in
-    brand) rgb="232;163;61";  idx=214 ;;   # --brand #E8A33D
-    ok)    rgb="95;191;127";  idx=78 ;;    # --ok    #5FBF7F
+    brand) rgb="232;163;61";  idx=179 ;;   # --brand #E8A33D
+    ok)    rgb="95;191;127";  idx=72 ;;    # --ok    #5FBF7F
     warn)  rgb="255;180;84";  idx=215 ;;   # --warn  #FFB454
     err)   rgb="255;92;77";   idx=203 ;;   # --err   #FF5C4D
     muted) rgb="139;139;150"; idx=245 ;;   # --muted #8B8B96
@@ -2638,7 +2639,7 @@ solar_client_update_view() {
   local log="$1" line cur="" tgt="" stopped="" migrated=false in_error=false count
   local -a recent=()   # the last hidden lines: the cause of an error is usually just above it
   local context=true   # off once the follow-up (sync, doctor) starts: its hidden lines are not a cause
-  local c_brand="" c_ok="" c_warn="" c_err="" c_muted="" c_info="" c_off="" e_err="" e_off=""
+  local c_brand="" c_ok="" c_warn="" c_muted="" c_info="" c_off="" e_err="" e_off=""
   if solar_client_color_enabled 1; then
     c_brand="$(solar_client_sgr brand)" c_ok="$(solar_client_sgr ok)" c_warn="$(solar_client_sgr warn)"
     c_muted="$(solar_client_sgr muted)" c_info="$(solar_client_sgr info)" c_off=$'\033[0m'
@@ -2690,18 +2691,22 @@ solar_client_update_view() {
         fi
         printf '  %s✓%s Services started and verified\n' "$c_ok" "$c_off"
         continue ;;
-      "State: resuming update"*) printf '%s\n' "${c_info}Resuming the interrupted update (${line#State: resuming update })${c_off}"; continue ;;
+      "State: resuming update"*) echo "Resuming the interrupted update (${line#State: resuming update })"; continue ;;
       "State: migrated. Services"*) printf '  %s✓%s Runtime migrated; services left stopped (--no-restart)\n' "$c_ok" "$c_off"; continue ;;
       "OK: update complete"*)
         # "OK: update complete — v1 (abc)" -> "✓ Update complete - v1 (abc)", the version in blue
-        count="${line#OK: update complete}"; count="${count# — }"
+        count="${line#OK: update complete}"; count="${count# — }"; count="${count# }"
         printf '  %s✓%s Update complete - %s%s%s%s\n' "$c_ok" "$c_off" "$c_info" "${count%% *}" "$c_off" "${count#"${count%% *}"}"
+        continue ;;
+      "LaunchAgent: "[!o]*|"LaunchAgent: o"[!k]*)
+        # skipped / not installed / a stale binding: a warning in the same pattern
+        printf '  %s!%s LaunchAgent %s\n' "$c_warn" "$c_off" "${line#LaunchAgent: }"
         continue ;;
       "LaunchAgent: ok"*)
         # "LaunchAgent: ok (plist SOLAR_ROOT matches install)": the check already says ok
         printf '  %s✓%s LaunchAgent points to this install\n' "$c_ok" "$c_off"
         continue ;;
-      "LaunchAgent:"*|"ERROR:"*|"WARN"*|"FAIL"*|"fatal:"*|"error:"*|*"command not found"*|*"unbound variable"*|"Update in progress"*|"No update is in progress"*|"  Claims and launchers"*|"Start them with"*|"Services and ticks are stopped"*|*"solar client update --resume"*|"Next:"*|"  ✓"*|"  ✗"*|"  !"*)
+      "ERROR:"*|"WARN"*|"FAIL"*|"fatal:"*|"error:"*|*"command not found"*|*"unbound variable"*|"Update in progress"*|"No update is in progress"*|"  Claims and launchers"*|"Start them with"*|"Services and ticks are stopped"*|*"solar client update --resume"*|"Next:"*|"  ✓"*|"  ✗"*|"  !"*)
         in_error=false
         case "$line" in
           "ERROR:"*|"WARN"*|"FAIL"*|"fatal:"*|"error:"*|*"command not found"*|*"unbound variable"*)
@@ -2717,7 +2722,8 @@ solar_client_update_view() {
         esac
         continue ;;
     esac
-    # Indented continuation of an error block keeps the error whole.
+    # Indented continuation of an error block keeps the error whole. The lines of the block stay
+    # plain on purpose: only the line that starts the error is red.
     if [[ "$in_error" == true && "$line" == " "* ]]; then
       printf '%s\n' "$line" >&2
     else
