@@ -396,10 +396,16 @@ def test_no_restart_leaves_dispatch_suspended_until_an_explicit_resume(rig):
                             env=rig.env(SOLAR_TASK_WORKER_LOCK=str(rig.tmp / "worker.lock")), cwd=rig.ws,
                             capture_output=True, text=True, timeout=120)
     assert ensure.returncode == 20 and "\"reason\": \"maintenance\"" in ensure.stdout
+    assert "services left stopped" in done.stdout and "Next: solar client update --resume" in done.stdout
+    assert "published to the IDEs" not in done.stdout          # nothing is synced while the barrier is held
     resumed = rig.update("--resume")
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert subsequence(rig.names(), ["held-no-restart", "resume", "host-start", "readiness-ok", "launchctl-bootstrap", "release"])
     assert rig.barrier() is None
+    assert "Resuming the interrupted update" in resumed.stdout
+    # The resume finishes the update the way a plain one does: the workspace is synced to the new version.
+    assert "✓ skills, agents and commands published to the IDEs" in resumed.stdout, resumed.stdout + resumed.stderr
+    assert json.loads((rig.ws / ".solar" / "settings.json").read_text())["core_version"] == "v0.0.2"
 
 
 def tree_digest(*roots: Path) -> str:
@@ -719,3 +725,222 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
         (double / "gates/release").touch()
         if original.poll() is None:
             original.wait(timeout=30)
+
+
+# --------------------------------------------------------------------------
+# the short output
+# --------------------------------------------------------------------------
+
+def test_the_update_prints_a_short_summary_and_keeps_the_detail_in_a_log(rig):
+    rig.runtime_state(5, tasks=3)
+    done = rig.update("--ref", "v0.0.2", "--yes", "--no-sync")
+    assert done.returncode == 0, done.stdout + done.stderr
+    shown = done.stdout.splitlines()
+    assert len(shown) <= 14, done.stdout
+    for wanted in ("→", "✓ target version prepared and checked", "✓ services stopped (console, gateway)",
+                   "✓ runtime migrated", "✓ services started and verified", "Update complete — v0.0.2"):
+        assert any(wanted in line for line in shown), (wanted, done.stdout)
+    for noise in ("pid=", "action=kill", "State:", "legacy_children", "SOLAR_ROOT=", "staging", "{", "}"):
+        assert noise not in done.stdout, (noise, done.stdout)
+    log = Path(next(line for line in shown if line.strip().startswith("Log: ")).split("Log: ")[1])
+    assert log.parent == rig.rt / "update-logs" and log.exists()
+    text = log.read_text()
+    assert "State: migrating the runtime" in text and "State: update verified" in text
+
+
+def test_verbose_prints_everything_and_writes_no_log(rig):
+    rig.runtime_state(5)
+    done = rig.update("--ref", "v0.0.2", "--yes", "--no-sync", "--verbose")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "State: migrating the runtime" in done.stdout and "State: update verified" in done.stdout
+    assert not (rig.rt / "update-logs").exists()
+
+
+def test_a_failed_update_shows_the_error_with_its_cause_and_how_to_resume(rig):
+    rig.runtime_state(5)
+    no_supervisor = dict(SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host", SOLAR_CLIENT_DRAIN_TIMEOUT="1")
+    failed = rig.update("--ref", "v0.0.2", "--yes", env_extra=no_supervisor)
+    assert failed.returncode != 0
+    assert "ERROR:" in failed.stderr and "still running after 1s" in failed.stderr
+    assert "solar client update --resume" in failed.stdout + failed.stderr
+    assert "State: pausing LaunchAgent" in failed.stderr          # the lines before the error come with it
+
+
+def test_the_log_directory_keeps_the_last_ten_logs_including_the_new_one(rig):
+    logs = rig.rt / "update-logs"
+    logs.mkdir(parents=True)
+    for index in range(14):
+        path = logs / f"update-2026010{index % 10}T00000{index}-{index}.log"
+        path.write_text("x")
+        os.utime(path, (1000 + index, 1000 + index))
+    new = logs / "update-new.log"
+    subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; echo "State: x" | solar_client_update_view "{new}"'],
+                   check=True, capture_output=True, text=True)
+    left = list(logs.glob("update-*.log"))
+    assert len(left) == 10 and new in left and new.read_text() == "State: x\n"
+    assert min(p.stat().st_mtime for p in left if p != new) == 1005
+
+
+def view(text: str, tmp: Path) -> subprocess.CompletedProcess:
+    """The short view over `text`, with the log it wrote."""
+    return subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; solar_client_update_view "{tmp}/v.log"'],
+                          input=text, capture_output=True, text=True)
+
+
+def test_the_view_shows_failures_that_do_not_start_with_error(tmp_path):
+    for bad in ("fatal: not a git repository", "error: pathspec 'x' did not match", "/x/y.sh: line 9: nope: command not found",
+                "/x/y.sh: line 9: ORIG_ARGS[@]: unbound variable"):
+        done = view(f"State: migrating the runtime\nhidden cause line\n{bad}\n", tmp_path)
+        assert bad in done.stderr and "hidden cause line" in done.stderr, (bad, done.stderr)
+        assert bad not in done.stdout
+    for level in ("WARN: something odd", "FAIL: a check"):
+        done = view(f"hidden cause line\n{level}\n", tmp_path)
+        assert "hidden cause line" in done.stderr and level in done.stderr
+
+
+def test_the_view_infers_phases_without_inventing_them(tmp_path):
+    # Nothing was running: no "services stopped" line; the migration is still reported when the
+    # update is verified without any service having been started.
+    quiet = view("State: migrating the runtime\nState: update verified; maintenance barrier released\n", tmp_path)
+    assert "services stopped" not in quiet.stdout
+    assert quiet.stdout.index("✓ runtime migrated") < quiet.stdout.index("✓ services started and verified")
+    # A repeated phase does not repeat the services of the first one.
+    twice = view("State: stopping console\nState: migrating the runtime\nState: migrating the runtime\n", tmp_path)
+    assert twice.stdout.count("services stopped") == 1
+
+
+def test_the_view_words_the_legacy_subtasks_in_plain_language(tmp_path):
+    counted = view("Legacy subtasks without a derived authorization: 15 (15 not executable until approved again). Nothing was backfilled.\n", tmp_path)
+    assert "15 older subtasks have no authorization and will not run until approved again" in counted.stdout
+    assert "backfilled" not in counted.stdout and "(15" not in counted.stdout
+    odd = view("Legacy subtasks without a derived authorization: many\n", tmp_path)
+    assert "older subtasks have no authorization" in odd.stdout and "many" not in odd.stdout
+
+
+def test_a_bare_update_with_no_flags_runs_under_bash_3(rig):
+    """`solar client update` with no arguments left the re-launch with an empty array: bash 3.2
+    (macOS) aborts on that under set -u."""
+    rig.runtime_state(5)
+    env = rig.env(SOLAR_STABLE_RELEASE_TAG="v0.0.2")
+    rig.guard(env)
+    entry = rig.install / "core" / "skills" / "solar-client" / "scripts" / "client_update.sh"
+    done = subprocess.run(["bash", str(entry)], env=env, cwd=rig.ws, capture_output=True, text=True, timeout=300)
+    assert "unbound variable" not in done.stderr and done.returncode != 127, done.stdout + done.stderr
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "Update complete" in done.stdout
+
+
+def retag(rig, tag: str, edits: dict[str, str]) -> None:
+    """A tag on top of v0.0.2 whose files were rewritten: `edits` maps a path under core/skills/solar-client/scripts to its text."""
+    rig.git("checkout", "-q", "v0.0.2")
+    for name, text in edits.items():
+        (rig.install / "core" / "skills" / "solar-client" / "scripts" / name).write_text(text)
+    rig.git("commit", "-q", "-am", tag)
+    rig.git("tag", tag)
+    rig.git("checkout", "-q", "v0.0.1")
+
+
+def old_staged_text() -> str:
+    """The staged entrypoint as published before the short output: it rejects --verbose and --no-sync."""
+    kept = [line for line in (SCRIPTS / "client_update_staged.sh").read_text().splitlines(keepends=True)
+            if "--verbose" not in line and "--no-sync" not in line]
+    return "".join(kept)
+
+
+@pytest.mark.parametrize("flags", [("--no-sync",), ("--verbose",), ("--no-sync", "--verbose")])
+def test_a_target_that_predates_the_options_is_not_given_them(rig, flags):
+    rig.runtime_state(5)
+    retag(rig, "v0.0.3", {"client_update_staged.sh": old_staged_text()})
+    done = rig.update("--ref", "v0.0.3", "--yes", *flags)
+    assert "Unknown option" not in done.stdout + done.stderr
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_staged_support_is_read_from_the_entrypoint_of_the_target(tmp_path):
+    new, old = tmp_path / "new.sh", tmp_path / "old.sh"
+    new.write_text("--no-sync) RUN_SYNC=false ;;\n")
+    old.write_text("--did-backup) x ;;\n")
+    check = lambda script, flag: subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; solar_client_staged_supports "{script}" "{flag}"']).returncode
+    assert check(new, "--no-sync") == 0 and check(old, "--no-sync") != 0 and check(tmp_path / "missing.sh", "--no-sync") != 0
+
+
+def test_a_plain_update_syncs_the_workspace_and_a_failing_sync_is_only_a_warning(rig):
+    rig.runtime_state(5)
+    done = rig.update("--ref", "v0.0.2", "--yes")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "✓ skills, agents and commands published to the IDEs" in done.stdout
+    assert "✓ doctor:" in done.stdout or "! doctor:" in done.stdout          # the doctor line is always there
+    assert json.loads((rig.ws / ".solar" / "settings.json").read_text())["core_version"] == "v0.0.2"
+    # A target whose sync fails: the update is still a success, and says what to run.
+    rig.runtime_state(5)
+    retag(rig, "v0.0.4", {"client_sync.sh": "#!/usr/bin/env bash\necho boom >&2\nexit 1\n"})
+    rig.git("checkout", "-q", "-f", "v0.0.1")
+    failed = rig.update("--ref", "v0.0.4", "--yes")
+    assert failed.returncode == 0, failed.stdout + failed.stderr
+    assert "! solar client sync failed: run it in" in failed.stdout
+
+
+def test_no_sync_applies_to_a_resume_too(rig):
+    rig.runtime_state(5)
+    rig.busy.unlink()
+    assert rig.update("--ref", "v0.0.2", "--yes", "--no-restart", "--no-sync").returncode == 0
+    resumed = rig.update("--resume", "--no-sync")
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert "published to the IDEs" not in resumed.stdout and "Next: solar client sync" in resumed.stdout
+
+
+def _upgrade_needed(install: Path, workspace: Path) -> bool:
+    done = subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; solar_client_upgrade_needed "{install}" "{workspace}"'],
+                          capture_output=True, text=True)
+    return done.returncode == 0
+
+
+def test_upgrade_is_hinted_only_when_there_is_something_to_upgrade(tmp_path):
+    install, ws = tmp_path / "install", tmp_path / "ws"
+    (ws / ".solar").mkdir(parents=True)
+    install.mkdir()
+    (ws / ".solar" / "settings.json").write_text(json.dumps(dict(layout="solar-client-v1.2")))
+    assert not _upgrade_needed(install, ws)                       # a clean global install: no hint
+    (install / ".cursor").mkdir()
+    assert _upgrade_needed(install, ws)                           # IDE artifacts under the install
+    (install / ".cursor").rmdir()
+    (ws / ".solar" / "core").mkdir()
+    assert _upgrade_needed(install, ws)                           # the obsolete .solar/core
+    (ws / ".solar" / "core").rmdir()
+    (ws / ".solar" / "settings.json").write_text(json.dumps(dict(layout="solar-client-v1.0")))
+    assert _upgrade_needed(install, ws)                           # an older layout
+
+
+def test_the_layout_is_compared_against_one_shared_name():
+    out = subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; echo "$SOLAR_CLIENT_LAYOUT_CURRENT"'],
+                         capture_output=True, text=True).stdout.strip()
+    assert out == "solar-client-v1.2"
+    assert "(layout $SOLAR_CLIENT_LAYOUT_CURRENT)" in (SCRIPTS / "client_upgrade.sh").read_text()
+
+
+def test_upgrade_next_steps_do_not_ask_for_the_smoke_or_the_launchagent(tmp_path):
+    text = (SCRIPTS / "client_upgrade.sh").read_text()
+    assert "smoke-solar-client.sh" not in text.split("Next:")[-1]
+    assert "install_launchagent_macos.sh" not in text
+
+
+def test_the_short_output_with_sync_and_doctor_stays_short(rig):
+    rig.runtime_state(5, tasks=3)
+    done = rig.update("--ref", "v0.0.2", "--yes")
+    assert done.returncode == 0, done.stdout + done.stderr
+    shown = done.stdout.splitlines()
+    assert "✓ skills, agents and commands published to the IDEs" in done.stdout
+    # Doctor's own OK lines are hidden; only its summary (and any WARN/ERROR line) is shown.
+    assert not any(line.startswith("OK:") for line in shown), done.stdout
+    assert len(shown) <= 16, done.stdout
+
+
+def test_a_doctor_warning_does_not_drag_in_the_lines_of_the_sync(tmp_path):
+    done = view("State: update verified; maintenance barrier released\nOK: update complete — v1 (abc)\n"
+                "Follow-up: sync\nsync noise line\nFollow-up: doctor\nOK: a doctor check\nWARN: settings layout=old\n", tmp_path)
+    assert "WARN: settings layout=old" in done.stderr
+    assert "sync noise line" not in done.stderr and "a doctor check" not in done.stderr
+    assert "Follow-up" not in done.stdout and "Follow-up" not in done.stderr
+    # ...while an error of the update itself still brings its own context.
+    failed = view("hidden cause\nERROR: the update did not complete\n", tmp_path)
+    assert "hidden cause" in failed.stderr

@@ -161,6 +161,8 @@ solar client update [options]
 # common: --check | --repair | --ref/--tag | --bundle | --reinstall-launchagent | --no-restart | --restart | --resume
 # --check is read-only (incompatible with --reinstall-launchagent; never restarts services,
 #   so --restart / --no-restart do not apply to it)
+# Output is a short summary; the full output is in <runtime>/update-logs/ (--verbose prints it).
+# After a verified update, sync and doctor run in the workspace (--no-sync skips them).
 solar client upgrade [--check|--restructure]
 solar client sync profile show
 solar client sync profile set discovery --codex-only --dry-run

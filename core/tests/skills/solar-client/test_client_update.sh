@@ -87,7 +87,7 @@ EOF
     solar_test_guard --services
     bash "$stage/core/skills/solar-client/scripts/client_update_staged.sh" \
       --install-root "$install" --workspace "$ws" --runtime-root "$rt" \
-      --stage-root "$stage" --mode git --apply-hook "$TMP/unused-apply-hook" --restart-mode never
+      --stage-root "$stage" --mode git --apply-hook "$TMP/unused-apply-hook" --restart-mode never --verbose
   )" || status=$?
   assert_ok "staged update waits for identity helpers and exits 0" test "$status" -eq 0
   assert_ok "staged update announces the collected version and commit" \
@@ -883,7 +883,7 @@ ok_out="$(
   SOLAR_CLIENT_LAUNCHCTL="$TMP/portable-ok-launch.sh" \
   SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
   SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none \
-  bash "$UPDATE_SCRIPT" --workspace "$PORT_OK_WS" --ref v0.0.2 --yes 2>&1
+  bash "$UPDATE_SCRIPT" --workspace "$PORT_OK_WS" --ref v0.0.2 --yes --verbose 2>&1
 )"
 ok_ec=$?
 set -e
@@ -1113,7 +1113,7 @@ ng_out="$(
   SOLAR_CLIENT_LAUNCHCTL="$TMP/portable-nongit-launch.sh" \
   SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
   SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none \
-  bash "$UPDATE_SCRIPT" --workspace "$PORT_NG_WS" --bundle --yes 2>&1
+  bash "$UPDATE_SCRIPT" --workspace "$PORT_NG_WS" --bundle --yes --verbose 2>&1
 )"
 ng_ec=$?
 set -e
@@ -1234,7 +1234,7 @@ trap_new_out="$(
   SOLAR_CLIENT_LAUNCHAGENT_STATUS_OVERRIDE=ok \
   SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=none \
   bash "$TRAP_GLOBAL/core/skills/solar-client/scripts/client_update.sh" \
-    --workspace "$TRAP_WS" --ref v0.0.2 --yes 2>&1
+    --workspace "$TRAP_WS" --ref v0.0.2 --yes --verbose 2>&1
 )"
 trap_new_ec=$?
 set -e
