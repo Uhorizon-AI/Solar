@@ -719,3 +719,81 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
         (double / "gates/release").touch()
         if original.poll() is None:
             original.wait(timeout=30)
+
+
+# --------------------------------------------------------------------------
+# the short output
+# --------------------------------------------------------------------------
+
+def test_the_update_prints_a_short_summary_and_keeps_the_detail_in_a_log(rig):
+    rig.runtime_state(5, tasks=3)
+    done = rig.update("--ref", "v0.0.2", "--yes", "--no-sync")
+    assert done.returncode == 0, done.stdout + done.stderr
+    shown = done.stdout.splitlines()
+    assert len(shown) <= 14, done.stdout
+    for wanted in ("→", "✓ target version prepared and checked", "✓ services stopped (console, gateway)",
+                   "✓ runtime migrated", "✓ services started and verified", "Update complete — v0.0.2"):
+        assert any(wanted in line for line in shown), (wanted, done.stdout)
+    for noise in ("pid=", "action=kill", "State:", "legacy_children", "SOLAR_ROOT=", "staging", "{", "}"):
+        assert noise not in done.stdout, (noise, done.stdout)
+    log = Path(next(line for line in shown if line.strip().startswith("Log: ")).split("Log: ")[1])
+    assert log.parent == rig.rt / "update-logs" and log.exists()
+    text = log.read_text()
+    assert "State: migrating the runtime" in text and "State: update verified" in text
+
+
+def test_verbose_prints_everything_and_writes_no_log(rig):
+    rig.runtime_state(5)
+    done = rig.update("--ref", "v0.0.2", "--yes", "--no-sync", "--verbose")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "State: migrating the runtime" in done.stdout and "State: update verified" in done.stdout
+    assert not (rig.rt / "update-logs").exists()
+
+
+def test_a_failed_update_shows_the_error_with_its_cause_and_how_to_resume(rig):
+    rig.runtime_state(5)
+    no_supervisor = dict(SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host", SOLAR_CLIENT_DRAIN_TIMEOUT="1")
+    failed = rig.update("--ref", "v0.0.2", "--yes", env_extra=no_supervisor)
+    assert failed.returncode != 0
+    assert "ERROR:" in failed.stderr and "still running after 1s" in failed.stderr
+
+
+def test_the_log_directory_keeps_only_the_last_ten_logs(rig):
+    logs = rig.rt / "update-logs"
+    logs.mkdir(parents=True)
+    for index in range(14):
+        path = logs / f"update-2026010{index % 10}T00000{index}-{index}.log"
+        path.write_text("x")
+        os.utime(path, (1000 + index, 1000 + index))
+    subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; solar_client_update_log_rotate "{rig.rt}"'],
+                   check=True, capture_output=True, text=True)
+    left = sorted(p.stat().st_mtime for p in logs.glob("update-*.log"))
+    assert len(left) == 10 and left[0] == 1004
+
+
+def _upgrade_needed(install: Path, workspace: Path) -> bool:
+    done = subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; solar_client_upgrade_needed "{install}" "{workspace}"'],
+                          capture_output=True, text=True)
+    return done.returncode == 0
+
+
+def test_upgrade_is_hinted_only_when_there_is_something_to_upgrade(tmp_path):
+    install, ws = tmp_path / "install", tmp_path / "ws"
+    (ws / ".solar").mkdir(parents=True)
+    install.mkdir()
+    (ws / ".solar" / "settings.json").write_text(json.dumps(dict(layout="solar-client-v1.2")))
+    assert not _upgrade_needed(install, ws)                       # a clean global install: no hint
+    (install / ".cursor").mkdir()
+    assert _upgrade_needed(install, ws)                           # IDE artifacts under the install
+    (install / ".cursor").rmdir()
+    (ws / ".solar" / "core").mkdir()
+    assert _upgrade_needed(install, ws)                           # the obsolete .solar/core
+    (ws / ".solar" / "core").rmdir()
+    (ws / ".solar" / "settings.json").write_text(json.dumps(dict(layout="solar-client-v1.0")))
+    assert _upgrade_needed(install, ws)                           # an older layout
+
+
+def test_upgrade_next_steps_do_not_ask_for_the_smoke_or_the_launchagent(tmp_path):
+    text = (SCRIPTS / "client_upgrade.sh").read_text()
+    assert "smoke-solar-client.sh" not in text.split("Next:")[-1]
+    assert "install_launchagent_macos.sh" not in text

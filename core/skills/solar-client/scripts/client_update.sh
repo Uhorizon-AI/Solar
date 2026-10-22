@@ -18,6 +18,9 @@ CHANNEL=""
 REINSTALL_LAUNCHAGENT=false
 RESTART_SERVICES=auto
 RESUME=false
+VERBOSE=false
+NO_SYNC=false
+ORIG_ARGS=("$@")
 
 usage() {
   cat <<'EOF'
@@ -77,13 +80,14 @@ Options:
   --resume             Continue an update that was interrupted, failed or was left
                        held by --no-restart: same operation, recorded phase
   --restart            Restart running services even if the version did not change
+  --no-sync            Do not run solar client sync and doctor after the update
+  --verbose            Print everything the update does (by default a short summary is
+                       printed and the full output goes to <runtime>/update-logs/)
   --yes, -y            Proceed if SOLAR_ROOT git working tree is dirty
   -h, --help           Show help
 
-After update:
-  solar client upgrade   (if IDE artifacts under install)
-  solar client sync      (in each active workspace)
-  solar client doctor
+After the update, sync and doctor run in this workspace; the update says when
+`solar client upgrade` is needed. In other workspaces run: solar client sync
 EOF
 }
 
@@ -118,6 +122,8 @@ while [[ $# -gt 0 ]]; do
     --reinstall-launchagent) REINSTALL_LAUNCHAGENT=true; shift ;;
     --no-restart) RESTART_SERVICES=never; shift ;;
     --resume) RESUME=true; shift ;;
+    --verbose) VERBOSE=true; shift ;;
+    --no-sync) NO_SYNC=true; shift ;;
     --restart) RESTART_SERVICES=always; shift ;;
     --yes|-y) AUTO_YES=true; shift ;;
     --workspace|--home)
@@ -191,6 +197,15 @@ if [[ "$CHECK_ONLY" == true ]]; then
   exit 0
 fi
 
+# Short view: the same command again with its output through the filter (full output in a log).
+if [[ "$VERBOSE" != true && "${SOLAR_CLIENT_VERBOSE:-}" != 1 && "${SOLAR_CLIENT_UPDATE_VIEWED:-}" != 1 ]]; then
+  export SOLAR_CLIENT_UPDATE_VIEWED=1
+  _view_runtime="$(solar_runtime_root)"
+  solar_client_update_log_rotate "$_view_runtime"
+  bash "${BASH_SOURCE[0]}" "${ORIG_ARGS[@]}" 2>&1 | solar_client_update_view "$(solar_client_update_log_path "$_view_runtime")"
+  exit "${PIPESTATUS[0]}"
+fi
+
 if ! solar_client_claim_workspace "$SOLAR_WORKSPACE" false "$INSTALL_ROOT" >/dev/null; then
   echo "ERROR: this runtime refused workspace $SOLAR_WORKSPACE. Install, settings and services were left unchanged." >&2
   exit 1
@@ -212,8 +227,10 @@ if [[ "$RESUME" == true ]]; then
     echo "ERROR: the entrypoint to resume with is gone ($_resume_entry). Nothing was changed; the barrier stays." >&2
     exit 1
   fi
+  _resume_args=()
+  [[ "$VERBOSE" == true ]] && _resume_args+=(--verbose)
   exec bash "$_resume_entry" --resume --install-root "$INSTALL_ROOT" --workspace "$SOLAR_WORKSPACE" \
-    --runtime-root "$(solar_runtime_root)" --restart-mode "$RESTART_SERVICES"
+    --runtime-root "$(solar_runtime_root)" --restart-mode "$RESTART_SERVICES" ${_resume_args[@]+"${_resume_args[@]}"}
 fi
 
 if solar_client_maintenance_held; then
@@ -306,6 +323,8 @@ STAGED_ARGS=(--install-root "$INSTALL_ROOT" --workspace "$SOLAR_WORKSPACE" --run
 [[ "$DID_BACKUP" == true ]] && STAGED_ARGS+=(--did-backup)
 [[ "$REINSTALL_LAUNCHAGENT" == true ]] && STAGED_ARGS+=(--reinstall-launchagent)
 [[ "$PORTABLE_UPDATE" == true ]] && STAGED_ARGS+=(--portable)
+[[ "$NO_SYNC" == true ]] && STAGED_ARGS+=(--no-sync)
+[[ "$VERBOSE" == true ]] && STAGED_ARGS+=(--verbose)
 
 # From here the TARGET version's own entrypoint runs the sequence; this (possibly old) updater
 # never replaces code or stops a service itself.

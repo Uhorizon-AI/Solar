@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- `solar client update` prints a short summary (version change, one line per phase, the result) instead of the full output: the git, drain, gateway and console output and the runtime migration JSON go to `<runtime>/update-logs/` (the last 10 are kept). Errors still reach the terminal with the lines above them, and `--verbose` prints everything. After a verified update it runs `solar client sync` and `solar client doctor` in the workspace (`--no-sync` skips them).
+- The `solar client upgrade` hint after an update appears only when there is something to upgrade (IDE artifacts in the install, an obsolete `.solar/core`, or a layout older than `solar-client-v1.2`). `solar client upgrade` no longer lists the smoke test and the LaunchAgent installer as next steps.
+
 ## [0.55.3] - 2026-10-22
 
 ### Fixed

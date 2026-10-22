@@ -22,7 +22,7 @@
 #   client_update_staged.sh --install-root P --workspace W --runtime-root R --stage-root S \
 #     --mode git|bundle [--target REF] [--apply-hook H] [--target-identity "V COMMIT"] \
 #     [--restart-mode auto|never|always] [--reinstall-launchagent] [--portable] \
-#     [--did-backup]
+#     [--did-backup] [--verbose] [--no-sync]
 #   client_update_staged.sh --resume --install-root P --workspace W --runtime-root R
 set -euo pipefail
 
@@ -43,6 +43,9 @@ REINSTALL_LAUNCHAGENT=false
 PORTABLE=false
 DID_BACKUP=false
 RESUME=false
+VERBOSE=false
+RUN_SYNC=true
+ORIG_ARGS=("$@")
 
 need() { [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }; }
 while [[ $# -gt 0 ]]; do
@@ -60,6 +63,8 @@ while [[ $# -gt 0 ]]; do
     --portable) PORTABLE=true; shift ;;
     --did-backup) DID_BACKUP=true; shift ;;
     --resume) RESUME=true; shift ;;
+    --verbose) VERBOSE=true; shift ;;
+    --no-sync) RUN_SYNC=false; shift ;;
     -h|--help) sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; /^set -euo/d'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
@@ -74,6 +79,15 @@ for name in INSTALL_ROOT WORKSPACE RUNTIME_ROOT; do
 done
 INSTALL_ROOT="$(cd "$INSTALL_ROOT" && pwd -P)"
 export SOLAR_ROOT="$INSTALL_ROOT" SOLAR_WORKSPACE="$WORKSPACE" SOLAR_RUNTIME_ROOT="$RUNTIME_ROOT"
+
+# Short view: run this script again with its output through the filter; the full output goes to
+# a log. The front updater may already have done it (SOLAR_CLIENT_UPDATE_VIEWED).
+if [[ "$VERBOSE" != true && "${SOLAR_CLIENT_VERBOSE:-}" != 1 && "${SOLAR_CLIENT_UPDATE_VIEWED:-}" != 1 ]]; then
+  export SOLAR_CLIENT_UPDATE_VIEWED=1
+  solar_client_update_log_rotate "$RUNTIME_ROOT"
+  bash "${BASH_SOURCE[0]}" "${ORIG_ARGS[@]}" 2>&1 | solar_client_update_view "$(solar_client_update_log_path "$RUNTIME_ROOT")"
+  exit "${PIPESTATUS[0]}"
+fi
 
 echo "Solar Client update (staged entrypoint)"
 echo "  SOLAR_ROOT=$INSTALL_ROOT"
@@ -155,8 +169,8 @@ echo "OK: update complete — $new_ver (${new_commit:0:12})"
 if [[ "$DID_BACKUP" == true ]]; then
   solar_client_rotate_backups "$INSTALL_ROOT" 5 "$WORKSPACE"
 fi
-if ! solar_client_paths_equal "$INSTALL_ROOT" "$WORKSPACE"; then
-  echo "HINT: run solar client upgrade in SOLAR_WORKSPACE if install has IDE artifacts"
+if solar_client_upgrade_needed "$INSTALL_ROOT" "$WORKSPACE"; then
+  echo "  ! solar client upgrade is needed in this workspace (IDE artifacts or an older layout)"
 fi
 
 echo ""
@@ -184,10 +198,27 @@ if [[ "$PORTABLE" == true ]]; then
   fi
 fi
 
-echo "Next steps (per workspace):"
-echo "  cd \"$WORKSPACE\""
-echo "  solar client sync"
-echo "  solar client doctor"
+# The follow-up the person would run by hand: publish skills to the IDEs and check the workspace.
+# A failure here is reported, never an update failure: the update itself is already verified.
+if solar_client_maintenance_held; then
+  echo "Next: solar client update --resume, then solar client sync"
+elif [[ "$RUN_SYNC" == true && -f "$(solar_client_settings_path "$WORKSPACE")" ]]; then
+  if (cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$SCRIPT_DIR/solar" client sync); then
+    echo "  ✓ skills, agents and commands published to the IDEs"
+  else
+    echo "  ! solar client sync failed: run it in $WORKSPACE"
+  fi
+  doctor_out="$(cd "$WORKSPACE" && SOLAR_ROOT="$INSTALL_ROOT" bash "$SCRIPT_DIR/solar" client doctor 2>&1)" || true
+  printf '%s\n' "$doctor_out"
+  doctor_summary="$(printf '%s\n' "$doctor_out" | grep '^Summary:' | tail -1 || true)"
+  if [[ -n "$doctor_summary" && "$doctor_summary" == *" 0 error(s)"* ]]; then
+    echo "  ✓ doctor: ${doctor_summary#Summary: }"
+  else
+    echo "  ! doctor: ${doctor_summary#Summary: } — run: solar client doctor"
+  fi
+else
+  echo "Next: solar client sync"
+fi
 
 if solar_client_maintenance_held; then
   echo ""

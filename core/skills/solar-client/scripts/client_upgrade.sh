@@ -158,11 +158,5 @@ if [[ "$RESTRUCTURE_APPLIED" == true ]]; then
   echo ""
   echo "init is idempotent: it adds workspace AGENTS.md, IDE symlinks, and .env.example without touching sun/ or planets/."
 else
-  echo "Next steps:"
-  echo "  solar client sync"
-  echo "  solar client doctor"
-fi
-echo "  bash \"$(solar_core_dir)/skills/solar-client/scripts/smoke-solar-client.sh\" \"$SOLAR_ROOT\""
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  echo "  bash \"$(solar_core_dir)/skills/solar-system/scripts/install_launchagent_macos.sh\""
+  echo "Next: solar client sync && solar client doctor"
 fi

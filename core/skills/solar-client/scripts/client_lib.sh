@@ -2576,3 +2576,104 @@ solar_client_restructure_apply() {
     return 1
   fi
 }
+
+# --- Short update output -------------------------------------------------------------------
+# `solar client update` prints a handful of lines; everything else (git, the supervisor drain, the
+# gateway and console scripts, the runtime migration and its JSON) goes to a log file. Problems
+# are never hidden: ERROR/WARN lines, the way to resume and anything unrecognised in an error
+# block reach the terminal. --verbose (or SOLAR_CLIENT_VERBOSE=1) prints everything.
+
+solar_client_update_log_path() {
+  local runtime="$1" dir
+  dir="$runtime/update-logs"
+  mkdir -p "$dir" 2>/dev/null || dir="${TMPDIR:-/tmp}"
+  printf '%s\n' "$dir/update-$(date +%Y%m%dT%H%M%S)-$$.log"
+}
+
+# Keep the last 10 logs; the log of a failed update is the first thing asked for.
+solar_client_update_log_rotate() {
+  local runtime="$1"
+  [[ -d "$runtime/update-logs" ]] || return 0
+  # shellcheck disable=SC2012
+  ls -1t "$runtime/update-logs"/update-*.log 2>/dev/null | sed -n '11,$p' | while IFS= read -r old; do
+    rm -f "$old"
+  done
+}
+
+# Reads the update output on stdin, writes all of it to the log and prints the short view.
+solar_client_update_view() {
+  local log="$1" line cur="" tgt="" stopped="" migrated=false in_error=false
+  local -a recent=()   # the last hidden lines: the cause of an error is usually just above it
+  : > "$log" 2>/dev/null || log=/dev/null
+  while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$log"
+    case "$line" in
+      "  current="*) cur="${line#  current=}"; cur="${cur%% *}"; continue ;;
+      "  target="*) tgt="${line#  target=}"; tgt="${tgt%% *}"; continue ;;
+      "OK: staged and checked"*)
+        if [[ -n "$cur" && -n "$tgt" ]]; then
+          echo "Solar Client update  $cur → $tgt"
+        else
+          echo "Solar Client update"
+        fi
+        echo "  ✓ target version prepared and checked"
+        continue ;;
+      "async-tasks supervisor: stopped"*) stopped="${stopped:+$stopped, }supervisor"; continue ;;
+      "State: stopping console") stopped="${stopped:+$stopped, }console"; continue ;;
+      "State: stopping transport gateway") stopped="${stopped:+$stopped, }gateway"; continue ;;
+      "State: migrating the runtime")
+        echo "  ✓ services stopped${stopped:+ ($stopped)}"
+        continue ;;
+      "Legacy subtasks without a derived authorization:"*)
+        echo "  ! ${line#Legacy subtasks without a derived authorization: }"
+        continue ;;
+      "State: starting transport gateway"|"State: starting console")
+        if [[ "$migrated" == false ]]; then
+          echo "  ✓ runtime migrated"
+          migrated=true
+        fi
+        continue ;;
+      "State: update verified"*) echo "  ✓ services started and verified"; continue ;;
+      "State: resuming update"*) echo "Resuming the interrupted update (${line#State: resuming update })"; continue ;;
+      "State: migrated. Services"*) echo "  ✓ runtime migrated; services left stopped (--no-restart)"; continue ;;
+      "OK: update complete"*) echo "Update complete${line#OK: update complete}"; continue ;;
+      "LaunchAgent:"*|"ERROR:"*|"WARN"*|"FAIL"*|"Update in progress"*|"No update is in progress"*|"  Claims and launchers"*|"Start them with"*|"Services and ticks are stopped"*|*"solar client update --resume"*|"Next:"*|"  ✓"*|"  ✗"*|"  !"*)
+        in_error=false
+        case "$line" in
+          "ERROR:"*|"WARN"*|"FAIL"*)
+            if [[ "$line" == "ERROR:"* && ${#recent[@]} -gt 0 ]]; then
+              printf '%s\n' "${recent[@]}" >&2
+            fi
+            recent=()
+            in_error=true; printf '%s\n' "$line" >&2 ;;
+          *) printf '%s\n' "$line" ;;
+        esac
+        continue ;;
+    esac
+    # Indented continuation of an error block keeps the error whole.
+    if [[ "$in_error" == true && "$line" == " "* ]]; then
+      printf '%s\n' "$line" >&2
+    else
+      in_error=false
+      recent+=("$line")
+      [[ ${#recent[@]} -le 6 ]] || recent=("${recent[@]:1}")
+    fi
+  done
+  [[ "$log" == /dev/null ]] || echo "  Log: $log"
+}
+
+# True when `solar client upgrade` has something to do: IDE artifacts in the install, an
+# obsolete .solar/core in the workspace, or a layout older than solar-client-v1.2.
+solar_client_upgrade_needed() {
+  local install_root="$1" workspace="$2" settings layout
+  if ! solar_client_paths_equal "$install_root" "$workspace"; then
+    [[ -n "$(solar_client_list_install_artifacts "$install_root")" ]] && return 0
+  fi
+  [[ -d "$workspace/.solar/core" ]] && return 0
+  settings="$(solar_client_settings_path "$workspace")"
+  if [[ -f "$settings" ]]; then
+    layout="$(solar_client_manifest_field "$settings" layout)"
+    [[ -n "$layout" && "$layout" != "solar-client-v1.2" ]] && return 0
+  fi
+  return 1
+}
