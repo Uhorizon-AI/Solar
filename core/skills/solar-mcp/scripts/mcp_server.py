@@ -116,8 +116,7 @@ TOOLS = {
             "task.create with ask; ask is what makes it a question that asks the client for its read-only "
             "mode, and without it the task is not one. Provider is codex, claude, agy (Antigravity) or "
             "agent (Cursor); the prompt goes in instructions; ask takes an optional folder (it starts "
-            "there) and model; "
-            "queue true. Send provider and instructions in the same call; ask cannot be mixed with "
+            "there) and model; queue true. Send provider and instructions in the same call; ask cannot be mixed with "
             "review or review_batch (review_input_invalid). Then task.wait for its text. A question "
             "runs alone, one at a time, and a folder outside the workspace waits for "
             "task.authorize_run. See solar_docs id=operation:task.create."),
