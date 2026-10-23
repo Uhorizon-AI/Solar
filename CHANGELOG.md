@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-10-23
+
 ### Added
 - Path zones (`path_zones.py` in `solar-state`): a declared path is classified as installation, planet, workspace or outside, and a task takes the outermost zone of its paths. Containment is decided by file identity (device and inode), so it is right on any volume: symlinks, `..`, whole directories, targets that do not exist yet, case variants of one folder, an installation nested in a planet. The zone is declared, not verified: it does not confine the client.
 - `task.create` returns `zone` (aggregate plus path to zone list, labelled `declared, not verified`) for a task that declares access or asks a question, and the approval text of `task.create` and `task.authorize_run` shows it. It is informational.
