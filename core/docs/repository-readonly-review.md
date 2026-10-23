@@ -385,7 +385,14 @@ A question is not a review: it has no repository, commit or evidence. `task.crea
 - **Declared read.** A read declared with `access_policy` (mode read), a provider and instructions, and no
   `ask`, `review`, `review_batch`, schedule or exclusive resources, is the same question: same profile,
   manifest and digest as `ask`. A revision of a task is never turned into a question this way.
-- **Concurrency.** The profile is not gated by `enabled_reader_profiles`, which only decides whether readers run
-  next to other tasks; an `ask` task runs alone until that changes.
+- **Concurrency.** A question runs alone until `ask_readonly_v1` is listed in `enabled_reader_profiles`
+  (an `async_execution` change, the user's call). Once listed, questions to any of the four clients share places
+  under the global and per-provider limits, mixed providers included. Nothing here enforces own content or
+  confines the client: external content still goes through `review` with `repository_readonly_v1`, and
+  two questions over the same scope do not conflict because both are declared reads. Global capacity 1, or
+  removing the profile from the list, serializes new starts again (capacity 1 alone leaves the profile listed, so
+  raising the capacity later shares places again; the full way back is both, as in `async-rollout.md`); questions already running keep their place
+  (a per-provider limit of 1 does not serialize different providers). Anything that declares no profile
+  still runs alone.
 - **Failure.** A client that exits non-zero, or times out, fails with `<client> exit N: <reason>` or
   `<client> exit timeout`; the audit records the read-only mode requested.
