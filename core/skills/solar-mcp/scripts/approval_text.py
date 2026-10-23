@@ -361,7 +361,7 @@ def _review_rows(copy, spec):
 
 def _ask_rows(spec):
     """A question names the folder the client starts in and the model, nothing else."""
-    if not spec:
+    if spec is None:
         return []
     return [("profile", "ask_readonly_v1"), ("folder", _line(spec.get("folder") or "workspace", 1000)),
             ("model", _line(spec["model"], _VALUE) if spec.get("model") else _NO_MODEL)]

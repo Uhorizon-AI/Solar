@@ -127,13 +127,18 @@ def _task(store, task_id: str) -> dict:
     return task
 
 
+_SCHEDULE_FIELDS = ("scheduled_time", "scheduled_weekdays", "scheduled_timezone", "recurring",
+                    "recurring_max_runs", "recurring_min_interval")
+
+
 def _is_derived_question(arguments: dict) -> bool:
     """A declared read with a client and a prompt is a question: the client is asked for its read-only
-    mode exactly as `ask` does. A review, a review batch and a write are never derived."""
+    mode exactly as `ask` does. Never derived: a review, a review batch, a write, a task that holds
+    exclusive resources or has a schedule (those are not a one-off question and keep their own wait)."""
     access = arguments.get("access_policy")
     return bool(access and access.get("mode") == "read" and arguments.get("provider")
-                and arguments.get("instructions")
-                and not any(key in arguments for key in ("ask", "review", "review_batch")))
+                and arguments.get("instructions") and not access.get("resources")
+                and not any(key in arguments for key in ("ask", "review", "review_batch") + _SCHEDULE_FIELDS))
 
 
 def _review_fields(arguments: dict, derive: bool = True) -> dict:
@@ -214,6 +219,12 @@ def _ask_fields(arguments: dict, derived: bool = False) -> dict:
                                  "A question needs " + " and ".join(missing) + " in the same call; "
                                  "send the client and the prompt again with the ask.")
         folder = spec.get("folder") or str(workspace())
+        for path in (arguments.get("access_policy") or {}).get("scopes", []):
+            if os.path.realpath(path) != os.path.realpath(os.path.normpath(path)):
+                raise OperationError(
+                    "review_input_invalid",
+                    "A declared path changes meaning when its '..' is collapsed (a link comes before it). "
+                    "Declare the real path.")
         envelope = build_ask_envelope(provider=arguments["provider"], prompt=arguments["instructions"],
                                       cwd=folder, model=spec.get("model"))
         access = arguments.get("access_policy", dict(mode="read", scopes=[folder], resources=[]))
@@ -269,8 +280,13 @@ def _do_task_create(arguments: dict) -> dict:
     fields = [("title", json.dumps(arguments["title"], ensure_ascii=False)),
               ("created", json.dumps(_now_iso())),
               ("updated", json.dumps(_now_iso()))]
-    review_fields = _review_fields(arguments)
     source_id = arguments.get("revises_task_id")
+    derive = True
+    if source_id:
+        with solar_state.read_session() as store:
+            source_profile = solar_state.value_of(dict(_task(store, source_id)["frontmatter"]).get("execution_profile") or "")
+        derive = source_profile == "ask_readonly_v1"   # a revision never turns into a question by derivation
+    review_fields = _review_fields(arguments, derive=derive)
     copied: dict = {}
     with solar_state.session() as store:
         if source_id:
@@ -782,7 +798,9 @@ _ASK = {**_obj(dict(
     model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."})),
     "description": "What makes the task a question: the client is asked for its read-only mode (a request, not a "
                    "guarantee) and, inside the workspace, it needs no task.authorize_run. Pass {} to ask in the "
-                   "workspace. Without ask it is an ordinary task, not a question and not read-only. "
+                   "workspace. A declared read (access_policy mode read) with a provider and instructions, no schedule and no "
+                   "exclusive resources, is treated as the same question. Any other task without ask is an ordinary task, "
+                   "not a question and not read-only. "
                    "Use it for own content only: external or untrusted content goes through review with "
                    "profile repository_readonly_v1."}
 
@@ -801,7 +819,8 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true. "
         "With ask it puts a question to one AI client and asks it for its read-only mode (a request, not a "
         "guarantee): provider codex, claude, agy (Antigravity) or agent (Cursor). "
-        "Without ask it is not a question and not read-only. "
+        "A declared read with a provider and instructions is the same question; any other task without ask "
+        "is not a question and not read-only. "
         "Use ask for own content only; external or untrusted content goes through review with "
         "profile repository_readonly_v1.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),

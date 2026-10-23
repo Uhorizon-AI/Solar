@@ -115,3 +115,16 @@ def test_impact_uses_physical_containment_not_zone_name(tree):
     assert not z.physically_inside_workspace(str(tree["glob_inst"]), ws)
     assert z.physically_inside_workspace(str(tree["inst_copy"]), ws)
     assert z.physically_inside_workspace(str(tree["planet"]), ws)
+
+
+def test_global_installation_plus_workspace_aggregates_to_outside(tree):
+    got = z.describe([str(tree["ws"] / "sun"), str(tree["glob_inst"])], **tree["roots"])
+    assert got["zone"] == z.OUTSIDE
+    assert [zone for _, zone in got["paths"]] == [z.WORKSPACE, z.INSTALLATION]
+
+
+def test_a_planet_linked_outside_the_workspace_is_outside(tree):
+    linked = tree["ws"] / "planets" / "linked"
+    os.symlink(tree["out"], linked)
+    roots = dict(tree["roots"], planet_roots=tree["roots"]["planet_roots"] + [str(linked)])
+    assert z.zone_of(str(linked / "kb"), **roots) == z.OUTSIDE

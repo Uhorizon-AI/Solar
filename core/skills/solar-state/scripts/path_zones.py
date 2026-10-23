@@ -35,14 +35,15 @@ def zone_of(path: str, *, workspace: str, installation_roots: Iterable[str] = ()
             planet_roots: Iterable[str] = (), case_insensitive: Optional[bool] = None) -> str:
     """The most specific zone of one path. `planet_roots` are the configured planets of the
     workspace, not any folder called `planets`. The installation can sit inside a planet inside the
-    workspace; it wins there because it is the most specific."""
+    workspace; it wins there because it is the most specific. A planet counts only while it is
+    physically inside the workspace (a planet linked to a folder outside is `outside`)."""
     if any(is_inside(path, root, case_insensitive) for root in installation_roots):
         return INSTALLATION
+    if not is_inside(path, workspace, case_insensitive):
+        return OUTSIDE
     if any(is_inside(path, root, case_insensitive) for root in planet_roots):
         return PLANET
-    if is_inside(path, workspace, case_insensitive):
-        return WORKSPACE
-    return OUTSIDE
+    return WORKSPACE
 
 
 def aggregate_zone(zones: Iterable[str]) -> str:
@@ -52,9 +53,15 @@ def aggregate_zone(zones: Iterable[str]) -> str:
 
 
 def describe(paths: Iterable[str], **roots) -> dict:
-    """Aggregate zone plus the path -> zone list the approval text shows."""
+    """Aggregate zone plus the path -> zone list the approval text shows. The aggregate is the outermost
+    zone, and `outside` as soon as any path is physically outside the workspace, even one whose own zone
+    is `installation` (the global installation): that is what decides the wait."""
     listed = [(path, zone_of(path, **roots)) for path in paths]
-    return {"zone": aggregate_zone(z for _, z in listed), "paths": listed}
+    aggregate = aggregate_zone(z for _, z in listed)
+    case = roots.get("case_insensitive")
+    if any(not is_inside(path, roots["workspace"], case) for path, _ in listed):
+        aggregate = OUTSIDE
+    return {"zone": aggregate, "paths": listed}
 
 
 def physically_inside_workspace(path: str, workspace: str, case_insensitive: Optional[bool] = None) -> bool:

@@ -1966,29 +1966,21 @@ def _claim_order(row) -> tuple:
 
 
 def _ask_inside_workspace(pairs: list[list[str]]) -> bool:
-    """True when the folder a question starts in is the workspace or below it. Anything unreadable is not."""
+    """True when the folder a question starts in, and every path it declares, are the workspace or below it.
+    One physical-containment test (path_zones), the same one the zone shown to the user uses: real paths,
+    whole directories, case folded where the volume is. Anything unreadable is not inside."""
+    import path_zones
     try:
         manifest = json.loads(_field(pairs, "review_input_manifest") or "null")
-        folder = os.path.realpath(json.loads(manifest["user_prompt"])["cwd"])
-        workspace = os.path.realpath(os.environ.get("SOLAR_WORKSPACE", "").strip() or "\0")
-    except (KeyError, TypeError, ValueError):
-        return False
-
-    def inside(path: str) -> bool:
-        return folder_inside(os.path.realpath(path))
-
-    def folder_inside(real: str) -> bool:
-        return os.path.isabs(workspace) and (real == workspace or real.startswith(workspace.rstrip(os.sep) + os.sep))
-
-    if not folder_inside(folder):
-        return False
-    # Provisional rule (plan simplificar-ask, step 5): every declared path must also be inside the workspace,
-    # not only the folder the client starts in. Physical containment, not the zone's name.
-    try:
+        folder = json.loads(manifest["user_prompt"])["cwd"]
+        workspace = os.environ.get("SOLAR_WORKSPACE", "").strip()
         access = parse_access_policy(_field(pairs, "access_policy"))
-    except FormatError:
+    except (KeyError, TypeError, ValueError, FormatError):
         return False
-    return all(inside(path) for path in (access or {}).get("scopes", []))
+    if not workspace or not os.path.isabs(workspace):
+        return False
+    return all(path_zones.physically_inside_workspace(path, workspace)
+               for path in [folder, *(access or {}).get("scopes", [])])
 
 
 def run_risk(pairs: list[list[str]]) -> str:
