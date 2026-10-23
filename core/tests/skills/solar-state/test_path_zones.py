@@ -82,22 +82,40 @@ def test_missing_target_below_a_symlink_follows_the_link(tree):
     assert zone(tree, link / "new" / "file") == z.OUTSIDE
 
 
-def test_case_follows_the_volume_not_the_platform(tree):
-    probe = z.volume_is_case_insensitive(str(tree["ws"]))
-    upper = str(tree["ws"]).upper() + "/SUN"
-    expected = z.WORKSPACE if probe else z.OUTSIDE
-    assert z.zone_of(upper, **tree["roots"]) == expected
+def test_case_variants_are_inside_exactly_when_the_disk_says_they_are_the_same_folder(tree):
+    variant = str(tree["ws"]).upper() + "/SUN"
+    same_folder = os.path.exists(str(tree["ws"]).upper()) and os.path.samefile(str(tree["ws"]).upper(), tree["ws"])
+    assert z.is_inside(variant, str(tree["ws"])) == same_folder
 
 
-def test_the_probe_agrees_with_the_volume(tree):
-    mixed = tree["tmp"] / "CaseProbe"
-    mixed.mkdir()
-    same = os.path.exists(tree["tmp"] / "caseprobe") and os.path.samefile(tree["tmp"] / "caseprobe", mixed)
-    assert z.volume_is_case_insensitive(str(mixed)) is same
+def test_identity_not_text_decides_containment(tree):
+    inner = tree["ws"] / "sun"
+    inner.mkdir()
+    link = tree["tmp"] / "back" 
+    os.symlink(tree["ws"], link)
+    assert z.is_inside(str(link / "sun"), str(tree["ws"]))
+    assert not z.is_inside(str(tree["out"]), str(tree["ws"]))
+    assert not z.is_inside(str(tree["ws"]), str(inner))
 
 
-def test_a_path_that_does_not_exist_yet_uses_its_ancestor_for_the_probe(tree):
-    assert z.volume_is_case_insensitive(str(tree["ws"] / "no" / "such")) == z.volume_is_case_insensitive(str(tree["ws"]))
+def test_a_target_that_does_not_exist_yet_is_inside_through_its_existing_ancestor(tree):
+    assert z.is_inside(str(tree["ws"] / "new" / "deep" / "file.md"), str(tree["ws"]))
+    assert not z.is_inside(str(tree["out"] / "new" / "file.md"), str(tree["ws"]))
+
+
+def test_a_root_that_does_not_exist_contains_nothing(tree):
+    assert not z.is_inside(str(tree["ws"]), str(tree["tmp"] / "missing"))
+
+
+def test_a_name_that_differs_only_in_case_is_another_folder_when_the_disk_says_so(tree):
+    other = tree["tmp"] / "Case"
+    mine = tree["tmp"] / "case"
+    other.mkdir()
+    if mine.exists():
+        pytest.skip("case-insensitive volume: both names are one folder")
+    mine.mkdir()
+    assert not z.is_inside(str(mine / "x"), str(other))
+    assert z.is_inside(str(other / "x"), str(other))
 
 
 def test_case_is_significant_when_not_case_insensitive(tree):

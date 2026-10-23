@@ -429,21 +429,13 @@ def test_a_planet_linked_outside_the_workspace_is_outside_and_waits(solar_env):
 
 
 def test_the_start_folder_and_declared_paths_use_the_same_containment_as_the_zone(solar_env):
-    import path_zones
     workspace = solar_env.workspace
     upper = pathlib.Path(str(workspace).upper())
-    if not path_zones.volume_is_case_insensitive(str(workspace)):
-        # a case-sensitive volume: a path that differs only by case is another folder, so it waits
-        made = run("task.create", derived(solar_env, [str(workspace), str(upper)]))
-        assert made["risk"] == "high" and made["zone"]["zone"] == "outside"
-        return
+    same_folder = upper.exists() and os.path.samefile(upper, workspace)
     made = run("task.create", dict(arguments(solar_env), ask={}, access_policy=dict(
         mode="read", scopes=[str(workspace), str(upper)], resources=[])))
-    assert made["zone"]["zone"] == "workspace" and made["risk"] == "low"
-    shouted = dict(arguments(solar_env))
-    shouted["ask"] = dict(folder=str(upper))
-    shouted["access_policy"] = dict(mode="read", scopes=[str(upper)], resources=[])
-    assert run("task.create", shouted)["risk"] == "low"
+    # the disk decides: the upper-case spelling is the workspace itself, or another folder that waits
+    assert (made["zone"]["zone"], made["risk"]) == (("workspace", "low") if same_folder else ("outside", "high"))
 
 
 def test_an_empty_ask_is_listed_in_the_confirmation(solar_env):
@@ -462,14 +454,19 @@ def test_editing_the_access_of_a_question_re_derives_and_can_make_it_wait(solar_
     assert search(scope="tasks", task_id=made["id"], view="detail")["risk"] == "high"
 
 
-def test_a_sneaky_start_folder_is_refused_end_to_end(solar_env):
+def test_a_sneaky_start_folder_waits_when_it_exists_and_is_refused_when_it_does_not(solar_env):
     workspace = solar_env.workspace
     outside = solar_env.tmp_path / "elsewhere" / "child"
     outside.mkdir(parents=True)
+    (outside.parent / "secret").mkdir()
+    (workspace / "secret").mkdir(exist_ok=True)
     os.symlink(outside, workspace / "hop")
     args = arguments(solar_env)
     args["ask"] = dict(folder=str(workspace / "hop" / ".." / "secret"))
-    body, error = execute("task.create", args)
+    made = run("task.create", args)   # the real folder is outside the workspace: it waits for the user
+    assert made["risk"] == "high" and made["awaiting_approval"] is True and made["zone"]["zone"] == "outside"
+    args["ask"] = dict(folder=str(workspace / "hop" / ".." / "missing"))
+    body, error = execute("task.create", args)   # it does not exist: refused outright
     assert error and body["code"] == "review_input_invalid", body
 
 
@@ -479,7 +476,7 @@ def test_authorizing_a_question_shows_its_declared_zone(solar_env, language, lab
     made = run("task.create", arguments(solar_env, folder="outside"))
     text = approval_text.render("task.authorize_run", dict(task_id=made["id"], expected_row_version=made["row_version"]),
                                 seconds=120, lang=language)[0]
-    assert label in text and "outside" in text
+    assert label in text and "outside" in text and ("declared, not verified" in text or "declarada, no verificada" in text)
 
 
 def test_the_ask_schema_says_every_declared_path_counts(solar_env):

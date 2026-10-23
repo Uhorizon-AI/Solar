@@ -379,7 +379,7 @@ A question is not a review: it has no repository, commit or evidence. `task.crea
 - **Folder and risk.** The folder the client starts in is stored in the manifest (the workspace when omitted)
   and must be inside a declared read scope. The task is low risk, so it runs without `task.authorize_run`, only
   when that folder **and every declared path** are the workspace or inside it, by physical containment (real
-  paths, whole directories, case folded on macOS), the same test the declared zone shown to the user uses. Any
+  paths, decided by file identity, so case is judged by the volume itself), the same test the declared zone shown to the user uses. Any
   other folder or path, `/` and `$HOME` included, the global installation too, waits for `task.authorize_run`:
   the user sees the folder and the zone in that confirmation. The zone is declared, not verified.
 - **Declared read.** A read declared with `access_policy` (mode read), a provider and instructions, and no

@@ -15,43 +15,40 @@ INSTALLATION, PLANET, WORKSPACE, OUTSIDE = "installation", "planet", "workspace"
 ZONES = (INSTALLATION, PLANET, WORKSPACE, OUTSIDE)
 
 
-def volume_is_case_insensitive(path: str) -> bool:
-    """Whether the volume holding `path` ignores case, found by asking the volume itself (not the OS name):
-    the nearest existing ancestor with a letter in its name is looked up with the case swapped."""
-    here = os.path.realpath(os.path.expanduser(path))
-    while not os.path.exists(here) and os.path.dirname(here) != here:
-        here = os.path.dirname(here)
-    while True:
-        parent, name = os.path.split(here)
-        if not name or parent == here:
-            return False
-        swapped = name.swapcase()
-        if swapped != name:
-            other = os.path.join(parent, swapped)
-            try:
-                return os.path.exists(other) and os.path.samefile(other, here)
-            except OSError:
-                return False
-        here = parent
-
-
-def resolve(path: str, case_insensitive: Optional[bool] = None) -> str:
-    """Real path (symlinks, `..`), comparable. A target that does not exist yet resolves through its
-    nearest existing ancestor. Case-folded only where the volume is case-insensitive; `case_insensitive`
-    overrides the probe."""
-    if case_insensitive is None:
-        case_insensitive = volume_is_case_insensitive(path)
+def resolve(path: str, case_insensitive: bool = False) -> str:
+    """Real path (symlinks, `..`) as text. A target that does not exist yet resolves through its nearest
+    existing ancestor. Used for display and for an explicit text comparison; containment itself is decided
+    by file identity (`is_inside`), never by folding case."""
     real = os.path.realpath(os.path.expanduser(path))
     return real.casefold() if case_insensitive else real
 
 
 def is_inside(path: str, root: str, case_insensitive: Optional[bool] = None) -> bool:
-    """True when `path` is `root` or below it, by whole directory components (not a text prefix). Case is
-    judged by the root's volume, for both sides."""
-    if case_insensitive is None:
-        case_insensitive = volume_is_case_insensitive(root)
-    p, r = resolve(path, case_insensitive), resolve(root, case_insensitive)
-    return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
+    """True when `path` is `root` or below it.
+
+    By default this is decided by file identity: climb from the real path, through a target that does not
+    exist yet, until an ancestor is the same file (device and inode) as `root`. That is right on any volume:
+    the case variants of one directory are the same file, and a folder on another volume that only differs
+    in case is not. A `root` that does not exist contains nothing. Pass `case_insensitive` to force a plain
+    text comparison by whole directory components instead (used by tests)."""
+    if case_insensitive is not None:
+        p, r = resolve(path, case_insensitive), resolve(root, case_insensitive)
+        return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
+    try:
+        root_stat = os.stat(os.path.expanduser(root))
+    except OSError:
+        return False
+    here = os.path.realpath(os.path.expanduser(path))
+    while True:
+        try:
+            if os.path.samestat(os.stat(here), root_stat):
+                return True
+        except OSError:
+            pass   # a component that does not exist yet: keep climbing
+        parent = os.path.dirname(here)
+        if parent == here:
+            return False
+        here = parent
 
 
 def zone_of(path: str, *, workspace: str, installation_roots: Iterable[str] = (),
