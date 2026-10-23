@@ -82,10 +82,22 @@ def test_missing_target_below_a_symlink_follows_the_link(tree):
     assert zone(tree, link / "new" / "file") == z.OUTSIDE
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="case-insensitive filesystem convention of macOS")
-def test_case_differences_do_not_change_the_zone_on_macos(tree):
+def test_case_follows_the_volume_not_the_platform(tree):
+    probe = z.volume_is_case_insensitive(str(tree["ws"]))
     upper = str(tree["ws"]).upper() + "/SUN"
-    assert z.zone_of(upper, **tree["roots"]) == z.WORKSPACE
+    expected = z.WORKSPACE if probe else z.OUTSIDE
+    assert z.zone_of(upper, **tree["roots"]) == expected
+
+
+def test_the_probe_agrees_with_the_volume(tree):
+    mixed = tree["tmp"] / "CaseProbe"
+    mixed.mkdir()
+    same = os.path.exists(tree["tmp"] / "caseprobe") and os.path.samefile(tree["tmp"] / "caseprobe", mixed)
+    assert z.volume_is_case_insensitive(str(mixed)) is same
+
+
+def test_a_path_that_does_not_exist_yet_uses_its_ancestor_for_the_probe(tree):
+    assert z.volume_is_case_insensitive(str(tree["ws"] / "no" / "such")) == z.volume_is_case_insensitive(str(tree["ws"]))
 
 
 def test_case_is_significant_when_not_case_insensitive(tree):
@@ -128,3 +140,21 @@ def test_a_planet_linked_outside_the_workspace_is_outside(tree):
     os.symlink(tree["out"], linked)
     roots = dict(tree["roots"], planet_roots=tree["roots"]["planet_roots"] + [str(linked)])
     assert z.zone_of(str(linked / "kb"), **roots) == z.OUTSIDE
+
+
+def test_a_workspace_inside_the_install_root_marks_only_core_as_installation(tmp_path):
+    root = tmp_path / "legacy"
+    (root / "core").mkdir(parents=True)
+    (root / "sun").mkdir()
+    roots = z.roots_for(str(root), str(root))
+    assert z.zone_of(str(root / "sun"), **roots) == z.WORKSPACE
+    assert z.zone_of(str(root / "core" / "skills"), **roots) == z.INSTALLATION
+
+
+def test_a_separate_install_root_is_the_whole_installation(tmp_path):
+    ws, install = tmp_path / "ws", tmp_path / "home" / "solar"
+    (install / "core").mkdir(parents=True)
+    ws.mkdir()
+    roots = z.roots_for(str(ws), str(install))
+    assert z.zone_of(str(install / "docs"), **roots) == z.INSTALLATION
+    assert z.describe([str(ws), str(install / "docs")], **roots)["zone"] == z.OUTSIDE

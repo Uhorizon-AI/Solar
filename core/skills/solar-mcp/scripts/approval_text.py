@@ -367,6 +367,13 @@ def _ask_rows(spec):
             ("model", _line(spec["model"], _VALUE) if spec.get("model") else _NO_MODEL)]
 
 
+def _zone_text(copy, got) -> str:
+    text = f"{got['zone']} ({copy['zone_note']})"
+    if len(got["paths"]) > 1:
+        text += ": " + "; ".join(f"{item['path']} → {item['zone']}" for item in got["paths"])
+    return _line(text, 2 * _VALUE)
+
+
 def _zone_rows(copy, args):
     """The zone of what the task declares, never presented as checked."""
     if not args.get("access_policy") and args.get("ask") is None:
@@ -376,12 +383,19 @@ def _zone_rows(copy, args):
         got = operations._zone_report(args)
     except Exception:
         return []
-    if not got:
+    return [(copy["path_zone"], _zone_text(copy, got))] if got else []
+
+
+def _stored_zone_rows(copy, values, folder):
+    """The zone of a stored question: its declared paths, else the folder it starts in."""
+    import solar_state
+    try:
+        import operations
+        policy = solar_state.parse_access_policy(values.get("access_policy"))
+        got = operations._zone_report_for((policy or {}).get("scopes") or [folder])
+    except Exception:
         return []
-    text = f"{got['zone']} ({copy['zone_note']})"
-    if len(got["paths"]) > 1:
-        text += ": " + "; ".join(f"{item['path']} → {item['zone']}" for item in got["paths"])
-    return [(copy["path_zone"], _line(text, 2 * _VALUE))]
+    return [(copy["path_zone"], _zone_text(copy, got))] if got else []
 
 
 def _create(copy, args):
@@ -612,7 +626,9 @@ def _context_rows(copy: dict, facts: dict) -> list:
     try:
         manifest = json.loads(values.get("review_input_manifest") or "null")
         if values.get("execution_profile") == "ask_readonly_v1" and isinstance(manifest, dict):
-            rows += _ask_rows(dict(folder=json.loads(manifest["user_prompt"])["cwd"], model=manifest.get("model")))
+            folder = json.loads(manifest["user_prompt"])["cwd"]
+            rows += _ask_rows(dict(folder=folder, model=manifest.get("model")))
+            rows += _stored_zone_rows(copy, values, folder)
         elif values.get("execution_profile") and isinstance(manifest, dict):
             spec = dict(profile=values["execution_profile"], model=manifest.get("model"))
             user = json.loads(manifest["user_prompt"])

@@ -411,7 +411,7 @@ def test_a_path_that_changes_meaning_when_normalized_is_refused(solar_env):
     assert error and body["code"] == "review_input_invalid", body
 
 
-def test_mixed_paths_with_the_global_installation_wait_and_say_outside(solar_env):
+def test_mixed_paths_with_a_folder_outside_wait_and_say_outside(solar_env):
     workspace = str(solar_env.workspace)
     install = solar_env.tmp_path / "home" / ".local" / "share" / "solar"
     install.mkdir(parents=True)
@@ -429,11 +429,21 @@ def test_a_planet_linked_outside_the_workspace_is_outside_and_waits(solar_env):
 
 
 def test_the_start_folder_and_declared_paths_use_the_same_containment_as_the_zone(solar_env):
-    upper = str(solar_env.workspace).upper() if os.path.samefile(str(solar_env.workspace), str(solar_env.workspace).upper()) else None
-    if upper is None:
-        pytest.skip("case-sensitive volume")
-    made = run("task.create", derived(solar_env, [str(solar_env.workspace), upper]))
+    import path_zones
+    workspace = solar_env.workspace
+    upper = pathlib.Path(str(workspace).upper())
+    if not path_zones.volume_is_case_insensitive(str(workspace)):
+        # a case-sensitive volume: a path that differs only by case is another folder, so it waits
+        made = run("task.create", derived(solar_env, [str(workspace), str(upper)]))
+        assert made["risk"] == "high" and made["zone"]["zone"] == "outside"
+        return
+    made = run("task.create", dict(arguments(solar_env), ask={}, access_policy=dict(
+        mode="read", scopes=[str(workspace), str(upper)], resources=[])))
     assert made["zone"]["zone"] == "workspace" and made["risk"] == "low"
+    shouted = dict(arguments(solar_env))
+    shouted["ask"] = dict(folder=str(upper))
+    shouted["access_policy"] = dict(mode="read", scopes=[str(upper)], resources=[])
+    assert run("task.create", shouted)["risk"] == "low"
 
 
 def test_an_empty_ask_is_listed_in_the_confirmation(solar_env):
@@ -450,3 +460,28 @@ def test_editing_the_access_of_a_question_re_derives_and_can_make_it_wait(solar_
                             access_policy=dict(mode="read", scopes=[str(solar_env.workspace / "notes"), str(outside)])))
     queued = run("task.approve", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
     assert search(scope="tasks", task_id=made["id"], view="detail")["risk"] == "high"
+
+
+def test_a_sneaky_start_folder_is_refused_end_to_end(solar_env):
+    workspace = solar_env.workspace
+    outside = solar_env.tmp_path / "elsewhere" / "child"
+    outside.mkdir(parents=True)
+    os.symlink(outside, workspace / "hop")
+    args = arguments(solar_env)
+    args["ask"] = dict(folder=str(workspace / "hop" / ".." / "secret"))
+    body, error = execute("task.create", args)
+    assert error and body["code"] == "review_input_invalid", body
+
+
+@pytest.mark.parametrize("language,label", [("en", "Path zone"), ("es", "Zona de la ruta")])
+def test_authorizing_a_question_shows_its_declared_zone(solar_env, language, label):
+    import approval_text
+    made = run("task.create", arguments(solar_env, folder="outside"))
+    text = approval_text.render("task.authorize_run", dict(task_id=made["id"], expected_row_version=made["row_version"]),
+                                seconds=120, lang=language)[0]
+    assert label in text and "outside" in text
+
+
+def test_the_ask_schema_says_every_declared_path_counts(solar_env):
+    described = docs(id="operation:task.create")["arguments"]["properties"]["ask"]["description"]
+    assert "every declared path" in described

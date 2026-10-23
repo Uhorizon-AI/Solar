@@ -184,20 +184,29 @@ def _review_fields(arguments: dict, derive: bool = True) -> dict:
         raise OperationError("review_input_invalid", getattr(exc, "code", "Review fields are incomplete.")) from None
 
 
-def _zone_report(arguments: dict) -> Optional[dict]:
-    """Zone of what the task declares it touches (declared, not verified). Informational: nothing waits
-    or stops waiting because of it. None when the task declares no access and is not a question."""
+def _zone_report_for(paths: list) -> Optional[dict]:
+    """Zone of declared paths (declared, not verified). Informational for the person: the wait is decided
+    by run_risk with the same containment test."""
     try:
         import path_zones
         from solar_paths import resolve_solar_paths
-        access = arguments.get("access_policy")
-        ask = arguments.get("ask")
-        if not access and ask is None:
-            return None
         ws, install = resolve_solar_paths()
-        paths = path_zones.declared_paths((access or {}).get("scopes", []),
-                                          (ask or {}).get("folder"), str(ws))
         return path_zones.report(paths, str(ws), str(install))
+    except Exception:
+        return None
+
+
+def _zone_report(arguments: dict) -> Optional[dict]:
+    """Zone of what a new task declares it touches. None when it declares no access and is not a question."""
+    access = arguments.get("access_policy")
+    ask = arguments.get("ask")
+    if not access and ask is None:
+        return None
+    try:
+        import path_zones
+        ws = workspace()
+        return _zone_report_for(path_zones.declared_paths((access or {}).get("scopes", []),
+                                                          (ask or {}).get("folder"), str(ws)))
     except Exception:
         return None
 
@@ -797,7 +806,8 @@ _ASK = {**_obj(dict(
          "description": "Absolute folder the client starts in; any path, also outside Solar. Omit it for the workspace."},
     model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."})),
     "description": "What makes the task a question: the client is asked for its read-only mode (a request, not a "
-                   "guarantee) and, inside the workspace, it needs no task.authorize_run. Pass {} to ask in the "
+                   "guarantee) and it needs no task.authorize_run only while the folder it starts in and every declared "
+                   "path are the workspace or inside it; anything else waits. Pass {} to ask in the "
                    "workspace. A declared read (access_policy mode read) with a provider and instructions, no schedule and no "
                    "exclusive resources, is treated as the same question. Any other task without ask is an ordinary task, "
                    "not a question and not read-only. "

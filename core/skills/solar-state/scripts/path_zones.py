@@ -9,24 +9,47 @@ zone; a task with several paths takes the outermost one (`aggregate_zone`).
 from __future__ import annotations
 
 import os
-import sys
 from typing import Iterable, Optional
 
 INSTALLATION, PLANET, WORKSPACE, OUTSIDE = "installation", "planet", "workspace", "outside"
 ZONES = (INSTALLATION, PLANET, WORKSPACE, OUTSIDE)
 
 
+def volume_is_case_insensitive(path: str) -> bool:
+    """Whether the volume holding `path` ignores case, found by asking the volume itself (not the OS name):
+    the nearest existing ancestor with a letter in its name is looked up with the case swapped."""
+    here = os.path.realpath(os.path.expanduser(path))
+    while not os.path.exists(here) and os.path.dirname(here) != here:
+        here = os.path.dirname(here)
+    while True:
+        parent, name = os.path.split(here)
+        if not name or parent == here:
+            return False
+        swapped = name.swapcase()
+        if swapped != name:
+            other = os.path.join(parent, swapped)
+            try:
+                return os.path.exists(other) and os.path.samefile(other, here)
+            except OSError:
+                return False
+        here = parent
+
+
 def resolve(path: str, case_insensitive: Optional[bool] = None) -> str:
     """Real path (symlinks, `..`), comparable. A target that does not exist yet resolves through its
-    nearest existing ancestor. Case-folded where the filesystem is case-insensitive (macOS)."""
+    nearest existing ancestor. Case-folded only where the volume is case-insensitive; `case_insensitive`
+    overrides the probe."""
     if case_insensitive is None:
-        case_insensitive = sys.platform == "darwin"
+        case_insensitive = volume_is_case_insensitive(path)
     real = os.path.realpath(os.path.expanduser(path))
     return real.casefold() if case_insensitive else real
 
 
 def is_inside(path: str, root: str, case_insensitive: Optional[bool] = None) -> bool:
-    """True when `path` is `root` or below it, by whole directory components (not a text prefix)."""
+    """True when `path` is `root` or below it, by whole directory components (not a text prefix). Case is
+    judged by the root's volume, for both sides."""
+    if case_insensitive is None:
+        case_insensitive = volume_is_case_insensitive(root)
     p, r = resolve(path, case_insensitive), resolve(root, case_insensitive)
     return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
 
@@ -55,7 +78,8 @@ def aggregate_zone(zones: Iterable[str]) -> str:
 def describe(paths: Iterable[str], **roots) -> dict:
     """Aggregate zone plus the path -> zone list the approval text shows. The aggregate is the outermost
     zone, and `outside` as soon as any path is physically outside the workspace, even one whose own zone
-    is `installation` (the global installation): that is what decides the wait."""
+    is `installation` (the global installation). It is a label for the person: the wait itself is decided
+    by `physically_inside_workspace` in `run_risk`, with the same test."""
     listed = [(path, zone_of(path, **roots)) for path in paths]
     aggregate = aggregate_zone(z for _, z in listed)
     case = roots.get("case_insensitive")
@@ -81,7 +105,9 @@ def roots_for(workspace: str, solar_root: Optional[str]) -> dict:
         planets = []
     installs = [os.path.join(planets_dir, "solar", "core")]
     if solar_root:
-        installs.append(solar_root)
+        # SOLAR_ROOT contains core/. When the workspace sits inside SOLAR_ROOT (legacy layout) only core/
+        # is the installation, or every path of the workspace would read as installation.
+        installs.append(os.path.join(solar_root, "core") if is_inside(workspace, solar_root) else solar_root)
     return dict(workspace=workspace, installation_roots=installs, planet_roots=planets)
 
 
