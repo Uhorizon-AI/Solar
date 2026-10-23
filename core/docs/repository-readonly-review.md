@@ -378,8 +378,13 @@ A question is not a review: it has no repository, commit or evidence. `task.crea
   Solar does not tell the two apart.
 - **Folder and risk.** The folder the client starts in is stored in the manifest (the workspace when omitted)
   and must be inside a declared read scope. The task is low risk, so it runs without `task.authorize_run`, only
-  when that folder is the workspace or inside it. Any other folder, `/` and `$HOME` included, waits for
-  `task.authorize_run`: the user sees the folder in that confirmation.
+  when that folder **and every declared path** are the workspace or inside it, by physical containment (real
+  paths, decided by file identity, so case is judged by the volume itself), the same test the declared zone shown to the user uses. Any
+  other folder or path, `/` and `$HOME` included, the global installation too, waits for `task.authorize_run`:
+  the user sees the folder and the zone in that confirmation. The zone is declared, not verified.
+- **Declared read.** A read declared with `access_policy` (mode read), a provider and instructions, and no
+  `ask`, `review`, `review_batch`, schedule or exclusive resources, is the same question: same profile,
+  manifest and digest as `ask`. A revision of a task is never turned into a question this way.
 - **Concurrency.** The profile is not gated by `enabled_reader_profiles`, which only decides whether readers run
   next to other tasks; an `ask` task runs alone until that changes.
 - **Failure.** A client that exits non-zero, or times out, fails with `<client> exit N: <reason>` or

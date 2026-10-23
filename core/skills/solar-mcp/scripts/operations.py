@@ -127,10 +127,26 @@ def _task(store, task_id: str) -> dict:
     return task
 
 
-def _review_fields(arguments: dict) -> dict:
+_SCHEDULE_FIELDS = ("scheduled_time", "scheduled_weekdays", "scheduled_timezone", "recurring",
+                    "recurring_max_runs", "recurring_min_interval")
+
+
+def _is_derived_question(arguments: dict) -> bool:
+    """A declared read with a client and a prompt is a question: the client is asked for its read-only
+    mode exactly as `ask` does. Never derived: a review, a review batch, a write, a task that holds
+    exclusive resources or has a schedule (those are not a one-off question and keep their own wait)."""
+    access = arguments.get("access_policy")
+    return bool(access and access.get("mode") == "read" and arguments.get("provider")
+                and arguments.get("instructions") and not access.get("resources")
+                and not any(key in arguments for key in ("ask", "review", "review_batch") + _SCHEDULE_FIELDS))
+
+
+def _review_fields(arguments: dict, derive: bool = True) -> dict:
     """Compose inputs through Router before native confirmation; never queue."""
     if "ask" in arguments:
         return _ask_fields(arguments)
+    if derive and _is_derived_question(arguments):
+        return _ask_fields(dict(arguments, ask={}), derived=True)
     if "review_batch" in arguments:
         return _review_batch_fields(arguments)
     if "review" not in arguments:
@@ -168,7 +184,34 @@ def _review_fields(arguments: dict) -> dict:
         raise OperationError("review_input_invalid", getattr(exc, "code", "Review fields are incomplete.")) from None
 
 
-def _ask_fields(arguments: dict) -> dict:
+def _zone_report_for(paths: list) -> Optional[dict]:
+    """Zone of declared paths (declared, not verified). Informational for the person: the wait is decided
+    by run_risk with the same containment test."""
+    try:
+        import path_zones
+        from solar_paths import resolve_solar_paths
+        ws, install = resolve_solar_paths()
+        return path_zones.report(paths, str(ws), str(install))
+    except Exception:
+        return None
+
+
+def _zone_report(arguments: dict) -> Optional[dict]:
+    """Zone of what a new task declares it touches. None when it declares no access and is not a question."""
+    access = arguments.get("access_policy")
+    ask = arguments.get("ask")
+    if not access and ask is None:
+        return None
+    try:
+        import path_zones
+        ws = workspace()
+        return _zone_report_for(path_zones.declared_paths((access or {}).get("scopes", []),
+                                                          (ask or {}).get("folder"), str(ws)))
+    except Exception:
+        return None
+
+
+def _ask_fields(arguments: dict, derived: bool = False) -> dict:
     """A question to one client: prompt, client, optional start folder. It reads, it never queues."""
     router_scripts = str(_SKILLS / "solar-router" / "scripts")
     if router_scripts not in sys.path:
@@ -185,12 +228,26 @@ def _ask_fields(arguments: dict) -> dict:
                                  "A question needs " + " and ".join(missing) + " in the same call; "
                                  "send the client and the prompt again with the ask.")
         folder = spec.get("folder") or str(workspace())
+        for path in (arguments.get("access_policy") or {}).get("scopes", []):
+            if os.path.realpath(path) != os.path.realpath(os.path.normpath(path)):
+                raise OperationError(
+                    "review_input_invalid",
+                    "A declared path changes meaning when its '..' is collapsed (a link comes before it). "
+                    "Declare the real path.")
         envelope = build_ask_envelope(provider=arguments["provider"], prompt=arguments["instructions"],
                                       cwd=folder, model=spec.get("model"))
         access = arguments.get("access_policy", dict(mode="read", scopes=[folder], resources=[]))
         if access["mode"] != "read":
             raise OperationError("review_input_invalid", "A question can only read.")
-        verify_sources(envelope["manifest"], access.get("scopes", []))
+        try:
+            verify_sources(envelope["manifest"], access.get("scopes", []))
+        except ProfileError:
+            if not derived:
+                raise
+            raise OperationError(
+                "review_input_invalid",
+                "A declared read starts the client in the workspace unless ask.folder says otherwise, and "
+                "that folder must be inside the declared paths. Declare the workspace too or give ask.folder.") from None
         return dict(execution_profile=json.dumps(ASK_PROFILE),
                     review_input_manifest=json.dumps(canonical(envelope["manifest"])),
                     review_input_digest=json.dumps(envelope["review_input_digest"]),
@@ -232,8 +289,13 @@ def _do_task_create(arguments: dict) -> dict:
     fields = [("title", json.dumps(arguments["title"], ensure_ascii=False)),
               ("created", json.dumps(_now_iso())),
               ("updated", json.dumps(_now_iso()))]
-    review_fields = _review_fields(arguments)
     source_id = arguments.get("revises_task_id")
+    derive = True
+    if source_id:
+        with solar_state.read_session() as store:
+            source_profile = solar_state.value_of(dict(_task(store, source_id)["frontmatter"]).get("execution_profile") or "")
+        derive = source_profile == "ask_readonly_v1"   # a revision never turns into a question by derivation
+    review_fields = _review_fields(arguments, derive=derive)
     copied: dict = {}
     with solar_state.session() as store:
         if source_id:
@@ -270,6 +332,9 @@ def _do_task_create(arguments: dict) -> dict:
     result = dict(created=True, id=task_id, status="draft", row_version=task["row_version"],
                   digest=digest, activated=False,
                   next="Review it with solar_search, then approve it with task.approve.")
+    declared = _zone_report(arguments)
+    if declared:
+        result["zone"] = declared
     if arguments.get("queue"):
         try:
             with solar_state.session() as store:
@@ -326,6 +391,20 @@ def _edit(task_id: str, expected: int, fields: dict, body: Optional[str], operat
     return result
 
 
+def _requote_question(current_fields: dict, changes: dict) -> dict:
+    """Fresh question inputs for an edit of a question: what changed, over what the task already says."""
+    import solar_state
+    manifest = json.loads(solar_state.value_of(current_fields["review_input_manifest"]))
+    user = json.loads(manifest["user_prompt"])
+    stored = solar_state.parse_access_policy(solar_state.value_of(current_fields["access_policy"]))
+    access = changes.get("access_policy") or dict(mode=stored["mode"], scopes=stored["scopes"],
+                                                  resources=stored["resources"])
+    return _ask_fields(dict(provider=changes.get("provider", manifest["provider"]),
+                            instructions=changes.get("instructions", user["instructions"]),
+                            access_policy=access, ask=dict(folder=user["cwd"], model=manifest.get("model"))),
+                       derived=True)
+
+
 def _do_task_update(arguments: dict) -> dict:
     import solar_state
 
@@ -340,12 +419,15 @@ def _do_task_update(arguments: dict) -> dict:
     if ((current_fields.get("execution_profile") and "review_batch" in changes)
             or (current_fields.get("subtask_policy") and ("review" in changes or "ask" in changes))):
         raise OperationError("review_input_invalid", "Changing between a review and a parent batch needs a new revision.")
+    is_question = solar_state.value_of(current_fields.get("execution_profile") or "") == "ask_readonly_v1"
+    requote = (is_question and set(changes) & {"instructions", "provider", "access_policy"}
+               and "review" not in changes and "ask" not in changes)
     if (dict(current["frontmatter"]).get("execution_profile")
             and set(changes) & {"instructions", "provider", "access_policy"}
-            and "review" not in changes and "ask" not in changes):
+            and "review" not in changes and "ask" not in changes and not requote):
         raise OperationError("review_input_invalid", "Restricted edits require fresh review inputs.")
     fields = {key: _fm(value) for key, value in changes.items() if key in _TEXT_FIELDS}
-    fields.update(_review_fields(arguments))
+    fields.update(_requote_question(current_fields, changes) if requote else _review_fields(arguments, derive=False))
     if "priority" in changes:
         fields["priority"] = changes["priority"]
     if "access_policy" in changes:
@@ -724,8 +806,11 @@ _ASK = {**_obj(dict(
          "description": "Absolute folder the client starts in; any path, also outside Solar. Omit it for the workspace."},
     model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."})),
     "description": "What makes the task a question: the client is asked for its read-only mode (a request, not a "
-                   "guarantee) and, inside the workspace, it needs no task.authorize_run. Pass {} to ask in the "
-                   "workspace. Without ask it is an ordinary task, not a question and not read-only. "
+                   "guarantee) and it needs no task.authorize_run only while the folder it starts in and every declared "
+                   "path are the workspace or inside it; anything else waits. Pass {} to ask in the "
+                   "workspace. A declared read (access_policy mode read) with a provider and instructions, no schedule and no "
+                   "exclusive resources, is treated as the same question. Any other task without ask is an ordinary task, "
+                   "not a question and not read-only. "
                    "Use it for own content only: external or untrusted content goes through review with "
                    "profile repository_readonly_v1."}
 
@@ -744,7 +829,8 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true. "
         "With ask it puts a question to one AI client and asks it for its read-only mode (a request, not a "
         "guarantee): provider codex, claude, agy (Antigravity) or agent (Cursor). "
-        "Without ask it is not a question and not read-only. "
+        "A declared read with a provider and instructions is the same question; any other task without ask "
+        "is not a question and not read-only. "
         "Use ask for own content only; external or untrusted content goes through review with "
         "profile repository_readonly_v1.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),

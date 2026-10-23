@@ -91,6 +91,7 @@ COPY = {
         unreadable="The task could not be read, so the effect below could not be verified.",
         access="Access", access_none="not declared: the task runs alone, with nothing else active",
         access_read="reads", access_write="writes", access_resources="holds exclusively",
+        path_zone="Path zone", zone_note="declared, not verified",
         async_propose_head="Prepare the async execution configuration",
         async_apply_head="Apply the async execution configuration",
         async_capacity="Simultaneous tasks", async_providers="Limit per provider",
@@ -154,6 +155,7 @@ COPY = {
         unreadable="No se pudo leer la tarea, así que no se pudo verificar el efecto de abajo.",
         access="Acceso", access_none="sin declarar: la tarea se ejecuta sola, sin nada más activo",
         access_read="lee", access_write="escribe", access_resources="reserva en exclusiva",
+        path_zone="Zona de la ruta", zone_note="declarada, no verificada",
         async_propose_head="Preparar la configuración de ejecución async",
         async_apply_head="Aplicar la configuración de ejecución async",
         async_capacity="Tareas simultáneas", async_providers="Límite por proveedor",
@@ -359,10 +361,41 @@ def _review_rows(copy, spec):
 
 def _ask_rows(spec):
     """A question names the folder the client starts in and the model, nothing else."""
-    if not spec:
+    if spec is None:
         return []
     return [("profile", "ask_readonly_v1"), ("folder", _line(spec.get("folder") or "workspace", 1000)),
             ("model", _line(spec["model"], _VALUE) if spec.get("model") else _NO_MODEL)]
+
+
+def _zone_text(copy, got) -> str:
+    text = f"{got['zone']} ({copy['zone_note']})"
+    if len(got["paths"]) > 1:
+        text += ": " + "; ".join(f"{item['path']} → {item['zone']}" for item in got["paths"])
+    return _line(text, 2 * _VALUE)
+
+
+def _zone_rows(copy, args):
+    """The zone of what the task declares, never presented as checked."""
+    if not args.get("access_policy") and args.get("ask") is None:
+        return []
+    try:
+        import operations
+        got = operations._zone_report(args)
+    except Exception:
+        return []
+    return [(copy["path_zone"], _zone_text(copy, got))] if got else []
+
+
+def _stored_zone_rows(copy, values, folder):
+    """The zone of a stored question: its declared paths, else the folder it starts in."""
+    import solar_state
+    try:
+        import operations
+        policy = solar_state.parse_access_policy(values.get("access_policy"))
+        got = operations._zone_report_for((policy or {}).get("scopes") or [folder])
+    except Exception:
+        return []
+    return [(copy["path_zone"], _zone_text(copy, got))] if got else []
 
 
 def _create(copy, args):
@@ -382,6 +415,7 @@ def _create(copy, args):
         rows.append((copy["access"], _access_text(copy, dict(args["access_policy"], version=1))))
     rows += _review_rows(copy, args.get("review") or args.get("review_batch") or {})
     rows += _ask_rows(args.get("ask"))
+    rows += _zone_rows(copy, args)
     rows.append((copy["instructions"], _excerpt(copy, args["instructions"])))
     rows.append((copy["effect"], copy["revise_effect" if source else "create_effect"]))
     return _head(copy, copy["revise_head" if source else "create_head"], rows, notes)
@@ -592,7 +626,9 @@ def _context_rows(copy: dict, facts: dict) -> list:
     try:
         manifest = json.loads(values.get("review_input_manifest") or "null")
         if values.get("execution_profile") == "ask_readonly_v1" and isinstance(manifest, dict):
-            rows += _ask_rows(dict(folder=json.loads(manifest["user_prompt"])["cwd"], model=manifest.get("model")))
+            folder = json.loads(manifest["user_prompt"])["cwd"]
+            rows += _ask_rows(dict(folder=folder, model=manifest.get("model")))
+            rows += _stored_zone_rows(copy, values, folder)
         elif values.get("execution_profile") and isinstance(manifest, dict):
             spec = dict(profile=values["execution_profile"], model=manifest.get("model"))
             user = json.loads(manifest["user_prompt"])
