@@ -806,7 +806,7 @@ _ASK = {**_obj(dict(
          "description": "Absolute folder the client starts in; any path, also outside Solar. Omit it for the workspace."},
     model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."})),
     "description": "What makes the task a question: the client is asked for its read-only mode (a request, not a "
-                   "guarantee) and it needs no task.authorize_run only while the folder it starts in and every declared "
+                   "guarantee: a client's own settings can still allow writes, e.g. Codex with on-request approvals) and it needs no task.authorize_run only while the folder it starts in and every declared "
                    "path are the workspace or inside it; anything else waits. Pass {} to ask in the "
                    "workspace. A declared read (access_policy mode read) with a provider and instructions, no schedule and no "
                    "exclusive resources, is treated as the same question. Any other task without ask is an ordinary task, "
@@ -828,7 +828,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
     Operation(
         "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true. "
         "With ask it puts a question to one AI client and asks it for its read-only mode (a request, not a "
-        "guarantee): provider codex, claude, agy (Antigravity) or agent (Cursor). "
+        "guarantee: a client's own settings can still allow writes, e.g. Codex with on-request approvals): provider codex, claude, agy (Antigravity) or agent (Cursor). "
         "A declared read with a provider and instructions is the same question; any other task without ask "
         "is not a question and not read-only. "
         "Use ask for own content only; external or untrusted content goes through review with "

@@ -368,7 +368,7 @@ A question is not a review: it has no repository, commit or evidence. `task.crea
 - **Own session.** The client is launched with the caller's environment: no isolated HOME, no copied or linked
   credentials, no `--help` preflight. A `SOLAR_ROUTER_<NAME>_CMD` override only supplies the binary; the flags
   are imposed and the prompt always follows a separator (`--`, or `--print` for Antigravity).
-- **Read-only is a request, not a limit.** Each client is asked for its native mode (`--sandbox read-only`,
+- **Read-only is a request, not a limit, and it depends on each client.** Solar can only ask for what the client's CLI offers, and the client's own configuration decides the rest. Measured on 23/10/2026 (Codex 0.162.1): a question to Codex was launched with `sandbox_policy: read-only` and still created a file, because the user's Codex has `approval_policy = "on-request"` and an automatic approvals reviewer, which can approve leaving the sandbox (in Codex, read-only means «not without approval»). Cursor (Ask mode) and Claude (plan mode) did not write. Solar does not override a client's approval policy. Each client is asked for its native mode (`--sandbox read-only`,
   `--mode ask`, `--mode plan`, `--permission-mode plan`); Solar does not enforce it. The client may read beyond
   its folder and inherits its own configuration, hooks and tools. Use `repository_readonly_v1` when that matters.
 - **Own content only.** Use `ask` for the user's own content (their plans, code and folders). Content that is

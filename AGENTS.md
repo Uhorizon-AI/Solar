@@ -6,7 +6,7 @@ Solar is a **harness of harnesses**: a context layer above the AI clients the us
 
 - Solar has **no credentials and makes no LLM calls**. Never copy, link, hide or reconfigure a client's login or home to make a question run: `ask` uses the client's own session as it is. The restricted review readers are the one exception: they copy only the minimum login file into a private temporary directory, never anything else.
 - `.env` (`SOLAR_ROUTER_PROVIDER_PRIORITY`) lists the clients Solar may launch, in order; the user logged in to each one at setup. No client named: try them in order and move on when one fails. A named client that is not installed fails.
-- Reviews run on a copy of the work so the user keeps editing the original folder. A question (`ask`) runs the client with its own session, started in the folder you give it; a folder outside the workspace waits for the user's `task.authorize_run`.
+- Reviews run on a copy of the work so the user keeps editing the original folder. A question (`ask`) is a request for the client's read-only mode, not a confinement: Solar depends on the arguments each client offers, and a client's own settings can still allow writes (Codex with on-request approvals and an automatic reviewer can leave its read-only sandbox). It runs the client with its own session, started in the folder you give it; a folder outside the workspace waits for the user's `task.authorize_run`.
 
 ## First-Run / Session start Protocol (Required)
 
