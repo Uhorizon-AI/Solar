@@ -1973,7 +1973,22 @@ def _ask_inside_workspace(pairs: list[list[str]]) -> bool:
         workspace = os.path.realpath(os.environ.get("SOLAR_WORKSPACE", "").strip() or "\0")
     except (KeyError, TypeError, ValueError):
         return False
-    return os.path.isabs(workspace) and (folder == workspace or folder.startswith(workspace.rstrip(os.sep) + os.sep))
+
+    def inside(path: str) -> bool:
+        return folder_inside(os.path.realpath(path))
+
+    def folder_inside(real: str) -> bool:
+        return os.path.isabs(workspace) and (real == workspace or real.startswith(workspace.rstrip(os.sep) + os.sep))
+
+    if not folder_inside(folder):
+        return False
+    # Provisional rule (plan simplificar-ask, step 5): every declared path must also be inside the workspace,
+    # not only the folder the client starts in. Physical containment, not the zone's name.
+    try:
+        access = parse_access_policy(_field(pairs, "access_policy"))
+    except FormatError:
+        return False
+    return all(inside(path) for path in (access or {}).get("scopes", []))
 
 
 def run_risk(pairs: list[list[str]]) -> str:
@@ -1982,8 +1997,8 @@ def run_risk(pairs: list[list[str]]) -> str:
     profile included, is `high`. What the task text says never counts.
 
     `ask_readonly_v1` is `low` on a weaker basis: the client is asked for its own read-only mode and may
-    still read beyond its folder, so it is `low` only while the folder it starts in is the workspace or
-    inside it. Any other folder is the user's call and waits for `task.authorize_run`."""
+    still read beyond its folder, so it is `low` only while the folder it starts in and every declared
+    path are the workspace or inside it. Anything else is the user's call and waits for `task.authorize_run`."""
     profile = (_field(pairs, "execution_profile") or "").strip()
     provider = (_field(pairs, "provider") or "").strip().lower()
     if not profile or provider not in VERIFIED_PROFILES.get(profile, frozenset()):

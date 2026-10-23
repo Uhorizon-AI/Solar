@@ -127,10 +127,21 @@ def _task(store, task_id: str) -> dict:
     return task
 
 
-def _review_fields(arguments: dict) -> dict:
+def _is_derived_question(arguments: dict) -> bool:
+    """A declared read with a client and a prompt is a question: the client is asked for its read-only
+    mode exactly as `ask` does. A review, a review batch and a write are never derived."""
+    access = arguments.get("access_policy")
+    return bool(access and access.get("mode") == "read" and arguments.get("provider")
+                and arguments.get("instructions")
+                and not any(key in arguments for key in ("ask", "review", "review_batch")))
+
+
+def _review_fields(arguments: dict, derive: bool = True) -> dict:
     """Compose inputs through Router before native confirmation; never queue."""
     if "ask" in arguments:
         return _ask_fields(arguments)
+    if derive and _is_derived_question(arguments):
+        return _ask_fields(dict(arguments, ask={}), derived=True)
     if "review_batch" in arguments:
         return _review_batch_fields(arguments)
     if "review" not in arguments:
@@ -186,7 +197,7 @@ def _zone_report(arguments: dict) -> Optional[dict]:
         return None
 
 
-def _ask_fields(arguments: dict) -> dict:
+def _ask_fields(arguments: dict, derived: bool = False) -> dict:
     """A question to one client: prompt, client, optional start folder. It reads, it never queues."""
     router_scripts = str(_SKILLS / "solar-router" / "scripts")
     if router_scripts not in sys.path:
@@ -208,7 +219,15 @@ def _ask_fields(arguments: dict) -> dict:
         access = arguments.get("access_policy", dict(mode="read", scopes=[folder], resources=[]))
         if access["mode"] != "read":
             raise OperationError("review_input_invalid", "A question can only read.")
-        verify_sources(envelope["manifest"], access.get("scopes", []))
+        try:
+            verify_sources(envelope["manifest"], access.get("scopes", []))
+        except ProfileError:
+            if not derived:
+                raise
+            raise OperationError(
+                "review_input_invalid",
+                "A declared read starts the client in the workspace unless ask.folder says otherwise, and "
+                "that folder must be inside the declared paths. Declare the workspace too or give ask.folder.") from None
         return dict(execution_profile=json.dumps(ASK_PROFILE),
                     review_input_manifest=json.dumps(canonical(envelope["manifest"])),
                     review_input_digest=json.dumps(envelope["review_input_digest"]),
@@ -347,6 +366,20 @@ def _edit(task_id: str, expected: int, fields: dict, body: Optional[str], operat
     return result
 
 
+def _requote_question(current_fields: dict, changes: dict) -> dict:
+    """Fresh question inputs for an edit of a question: what changed, over what the task already says."""
+    import solar_state
+    manifest = json.loads(solar_state.value_of(current_fields["review_input_manifest"]))
+    user = json.loads(manifest["user_prompt"])
+    stored = solar_state.parse_access_policy(solar_state.value_of(current_fields["access_policy"]))
+    access = changes.get("access_policy") or dict(mode=stored["mode"], scopes=stored["scopes"],
+                                                  resources=stored["resources"])
+    return _ask_fields(dict(provider=changes.get("provider", manifest["provider"]),
+                            instructions=changes.get("instructions", user["instructions"]),
+                            access_policy=access, ask=dict(folder=user["cwd"], model=manifest.get("model"))),
+                       derived=True)
+
+
 def _do_task_update(arguments: dict) -> dict:
     import solar_state
 
@@ -361,12 +394,15 @@ def _do_task_update(arguments: dict) -> dict:
     if ((current_fields.get("execution_profile") and "review_batch" in changes)
             or (current_fields.get("subtask_policy") and ("review" in changes or "ask" in changes))):
         raise OperationError("review_input_invalid", "Changing between a review and a parent batch needs a new revision.")
+    is_question = solar_state.value_of(current_fields.get("execution_profile") or "") == "ask_readonly_v1"
+    requote = (is_question and set(changes) & {"instructions", "provider", "access_policy"}
+               and "review" not in changes and "ask" not in changes)
     if (dict(current["frontmatter"]).get("execution_profile")
             and set(changes) & {"instructions", "provider", "access_policy"}
-            and "review" not in changes and "ask" not in changes):
+            and "review" not in changes and "ask" not in changes and not requote):
         raise OperationError("review_input_invalid", "Restricted edits require fresh review inputs.")
     fields = {key: _fm(value) for key, value in changes.items() if key in _TEXT_FIELDS}
-    fields.update(_review_fields(arguments))
+    fields.update(_requote_question(current_fields, changes) if requote else _review_fields(arguments, derive=False))
     if "priority" in changes:
         fields["priority"] = changes["priority"]
     if "access_policy" in changes:

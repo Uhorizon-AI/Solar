@@ -294,3 +294,83 @@ def test_the_confirmation_shows_the_zone_as_declared(solar_env, language, label,
     import approval_text
     text = approval_text.render("task.create", arguments(solar_env, folder="outside"), seconds=120, lang=language)[0]
     assert label in text and "outside" in text and note in text
+
+
+def derived(env, scopes, **extra):
+    """The same question without `ask`: only a declared read, a client and a prompt."""
+    return dict(title="Question", instructions="What does this file say?", provider="codex", queue=True,
+                access_policy=dict(mode="read", scopes=scopes, resources=[]), **extra)
+
+
+def same_configuration(first, second):
+    one, two = fields(first), fields(second)
+    for key in ("execution_profile", "review_input_manifest", "review_input_digest", "access_policy"):
+        assert one[key] == two[key], key
+
+
+def test_a_declared_read_gets_the_same_profile_and_fingerprint_as_ask(solar_env):
+    workspace = str(solar_env.workspace)
+    by_ask = run("task.create", dict(arguments(solar_env), ask={}, access_policy=dict(
+        mode="read", scopes=[workspace], resources=[])))
+    by_read = run("task.create", derived(solar_env, [workspace]))
+    same_configuration(by_ask["id"], by_read["id"])
+    assert by_read["risk"] == "low" and by_read["awaiting_approval"] is False
+
+
+def test_the_alias_keeps_an_explicit_declaration_whole(solar_env):
+    workspace, notes = str(solar_env.workspace), str(solar_env.workspace / "notes")
+    (solar_env.workspace / "notes").mkdir(exist_ok=True)
+    access = dict(mode="read", scopes=[workspace, notes], resources=["browser"])
+    by_ask = run("task.create", dict(arguments(solar_env), ask={}, access_policy=access))
+    by_read = run("task.create", dict(derived(solar_env, [workspace]), access_policy=access))
+    same_configuration(by_ask["id"], by_read["id"])
+    stored = solar_state.parse_access_policy(fields(by_read["id"])["access_policy"])
+    assert stored["scopes"] == sorted([workspace, notes]) and stored["resources"] == ["browser"]
+
+
+def test_declaring_only_a_planet_without_the_workspace_is_refused_like_ask(solar_env):
+    planet = solar_env.workspace / "planets" / "acme"
+    planet.mkdir(parents=True)
+    body, error = execute("task.create", derived(solar_env, [str(planet)]))
+    assert error and body["code"] == "review_input_invalid" and "ask.folder" in json.dumps(body), body
+    body, error = execute("task.create", dict(arguments(solar_env), ask={}, access_policy=dict(
+        mode="read", scopes=[str(planet)], resources=[])))
+    assert error and body["code"] == "review_input_invalid", body
+
+
+def test_a_declared_write_or_a_read_without_client_is_not_a_question(solar_env):
+    workspace = str(solar_env.workspace)
+    write = run("task.create", dict(derived(solar_env, [workspace]), access_policy=dict(
+        mode="write", scopes=[workspace], resources=[])))
+    assert "execution_profile" not in fields(write["id"]) and write["risk"] == "high"
+    no_client = dict(derived(solar_env, [workspace]))
+    del no_client["provider"]
+    made = run("task.create", no_client)
+    assert "execution_profile" not in fields(made["id"])
+
+
+@pytest.mark.parametrize("through", ["ask", "declared read"])
+def test_a_declared_path_outside_the_workspace_waits_even_when_it_starts_inside(solar_env, through):
+    workspace, outside = str(solar_env.workspace), str(solar_env.tmp_path / "Downloads")
+    (solar_env.tmp_path / "Downloads").mkdir(exist_ok=True)
+    scopes = [workspace, outside]
+    if through == "ask":
+        args = dict(arguments(solar_env), ask={}, access_policy=dict(mode="read", scopes=scopes, resources=[]))
+    else:
+        args = derived(solar_env, scopes)
+    made = run("task.create", args)
+    assert made["risk"] == "high" and made["awaiting_approval"] is True
+    assert made["zone"]["zone"] == "outside"
+
+
+def test_editing_a_question_refreshes_its_inputs_and_keeps_its_folder_and_model(solar_env):
+    made = run("task.create", dict(arguments(solar_env, model="m-1"), queue=False))
+    folder = json.loads(manifest_of(made["id"])["user_prompt"])["cwd"]
+    run("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                            instructions="A different question?"))
+    after = manifest_of(made["id"])
+    assert json.loads(after["user_prompt"]) == dict(instructions="A different question?", cwd=folder)
+    assert after["model"] == "m-1"
+    fresh = run("task.create", dict(arguments(solar_env, model="m-1"), queue=False,
+                                    instructions="A different question?"))
+    assert fields(made["id"])["review_input_digest"] == fields(fresh["id"])["review_input_digest"]
