@@ -387,8 +387,12 @@ A question is not a review: it has no repository, commit or evidence. `task.crea
   manifest and digest as `ask`. A revision of a task is never turned into a question this way.
 - **Concurrency.** A question runs alone until `ask_readonly_v1` is listed in `enabled_reader_profiles`
   (an `async_execution` change, the user's call). Once listed, questions to any of the four clients share places
-  under the global and per-provider limits; mixed providers are allowed, for the user's own content only, because
-  a read-only request is not a confinement. Capacity 1, or removing the profile from the list, serializes them
-  again. Anything that declares no profile still runs alone.
+  under the global and per-provider limits, mixed providers included. Nothing here enforces own content or
+  confines the client: external content still goes through `review` with `repository_readonly_v1`, and
+  two questions over the same scope do not conflict because both are declared reads. Global capacity 1, or
+  removing the profile from the list, serializes new starts again (capacity 1 alone leaves the profile listed, so
+  raising the capacity later shares places again; the full way back is both, as in `async-rollout.md`); questions already running keep their place
+  (a per-provider limit of 1 does not serialize different providers). Anything that declares no profile
+  still runs alone.
 - **Failure.** A client that exits non-zero, or times out, fails with `<client> exit N: <reason>` or
   `<client> exit timeout`; the audit records the read-only mode requested.

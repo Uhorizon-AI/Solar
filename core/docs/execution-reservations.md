@@ -65,11 +65,13 @@ permissions (`bypassPermissions`, `workspace-write`), so `read` does not stop a 
 task is admitted next to others only when its `execution_profile` is listed in the applied
 policy's `enabled_reader_profiles`, which starts empty; any other task runs alone, declared or not,
 and readers and writers with disjoint scopes alike. Raising the capacity therefore changes nothing
-until a profile whose confinement was verified is enabled.
+until a profile verified for the provider is enabled.
 
-Enabling is necessary but not sufficient: the profile must also have an enforcing
-adapter for the task's provider (`VERIFIED_PROFILES` in `solar_state.py`). The registry
-contains `text_only_review_v1` for Claude only; Codex, Agent and Agy stay unsupported.
+Enabling is necessary but not sufficient: the profile must also be verified for the task's
+provider (`VERIFIED_PROFILES` in `solar_state.py`). The registry lists `text_only_review_v1` for
+Claude only, `repository_readonly_v1` and `ask_readonly_v1` for Claude, Codex, Agent and Agy.
+`ask_readonly_v1` is the one entry that does not confine: the client is only asked for its
+read-only mode, so listing it shares places between questions without protecting one from another.
 The constructor separately rejects a CLI whose flags or effective managed policy
 cannot be validated. No reader profile is enabled in production. See
 `restricted-review-profile.md` for the guarded adapter and remaining real-CLI validation.

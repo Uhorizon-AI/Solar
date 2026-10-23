@@ -63,11 +63,13 @@ def test_questions_run_alone_until_the_profile_is_enabled(store):
     assert store.reservation_for(first)["access_class"] == "exclusive"
 
 
-def test_three_different_clients_run_at_the_same_time_once_enabled(store):
-    set_policy(store, global_capacity=3, provider_capacity={"agent": 1}, enabled_reader_profiles=[ASK])
-    ids = [question(store, f"Q {p}", p) for p in ("codex", "claude", "agent")]
+def test_the_four_clients_run_at_the_same_time_once_enabled(store):
+    set_policy(store, global_capacity=4, enabled_reader_profiles=[ASK])
+    ids = [question(store, f"Q {p}", p) for p in PROVIDERS]
     assert all(claim(store, t)["claimed"] for t in ids)
     assert {r["access_class"] for r in store.reservations()} == {"declared"}
+    fifth = question(store, "Fifth", "codex")
+    assert claim(store, fifth)["reason"] == "global_capacity"
 
 
 def test_three_questions_to_the_same_client_run_together_within_its_limit(store):
@@ -95,11 +97,21 @@ def test_going_back_to_capacity_one_serializes_questions_again(store):
 
 
 def test_removing_the_profile_from_the_policy_is_the_other_way_back(store):
-    set_policy(store, global_capacity=3, enabled_reader_profiles=[ASK])
-    set_policy(store, enabled_reader_profiles=[])
+    set_policy(store, global_capacity=3, enabled_reader_profiles=[ASK, "repository_readonly_v1"])
+    set_policy(store, enabled_reader_profiles=["repository_readonly_v1"])
+    assert store.async_policy()["enabled_reader_profiles"] == ["repository_readonly_v1"]
     first, second = question(store, "First", "codex"), question(store, "Second", "claude")
     assert claim(store, first)["claimed"]
     assert claim(store, second)["reason"] == "exclusive_needs_idle"
+
+
+def test_going_back_does_not_stop_a_question_that_is_already_running(store):
+    set_policy(store, global_capacity=3, enabled_reader_profiles=[ASK])
+    running = question(store, "Running", "codex")
+    assert claim(store, running)["claimed"]
+    set_policy(store, enabled_reader_profiles=[])
+    assert store.reservation_for(running)["access_class"] == "declared"
+    assert store.task_status(running) == "active"
 
 
 def test_a_task_that_declares_nothing_still_runs_alone_next_to_questions(store):
