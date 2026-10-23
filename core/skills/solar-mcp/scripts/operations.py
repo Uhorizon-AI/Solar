@@ -211,6 +211,17 @@ def _zone_report(arguments: dict) -> Optional[dict]:
         return None
 
 
+def _queued_next(frontmatter, risk: str) -> str:
+    """What a queued task says about itself: a question is only asked for its read-only mode."""
+    import solar_state
+    if risk != "low":
+        return "Queued but waiting: it is not confined, so run task.authorize_run to let it run."
+    if solar_state.value_of(dict(frontmatter).get("execution_profile") or "") == "ask_readonly_v1":
+        return ("Queued. The client is asked for its read-only mode (a request, not a guarantee) "
+                "and it runs when a place is free.")
+    return "Queued. It is confined to a verified read-only profile and runs when a place is free."
+
+
 def _ask_fields(arguments: dict, derived: bool = False) -> dict:
     """A question to one client: prompt, client, optional start folder. It reads, it never queues."""
     router_scripts = str(_SKILLS / "solar-router" / "scripts")
@@ -345,9 +356,7 @@ def _do_task_create(arguments: dict) -> dict:
             risk = solar_state.run_risk(queued["frontmatter"])
             result.update(status="queued", queued=True, row_version=queued["row_version"], digest=digest,
                           risk=risk, awaiting_approval=solar_state.needs_run_authorization(queued["frontmatter"]),
-                          next=("Queued. It is confined to a verified read-only profile and runs when a place is free."
-                                if risk == "low" else
-                                "Queued but waiting: it is not confined, so run task.authorize_run to let it run."))
+                          next=_queued_next(queued["frontmatter"], risk))
         except solar_state.StateError as exc:
             result.update(queued=False, queue_refused=str(exc)[:300])
     if source_id:
@@ -806,7 +815,7 @@ _ASK = {**_obj(dict(
          "description": "Absolute folder the client starts in; any path, also outside Solar. Omit it for the workspace."},
     model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."})),
     "description": "What makes the task a question: the client is asked for its read-only mode (a request, not a "
-                   "guarantee: a client's own settings can still allow writes, e.g. Codex with on-request approvals) and it needs no task.authorize_run only while the folder it starts in and every declared "
+                   "guarantee: a client's own settings can still allow writes, e.g. Codex with on-request approvals and an automatic reviewer) and it needs no task.authorize_run only while the folder it starts in and every declared "
                    "path are the workspace or inside it; anything else waits. Pass {} to ask in the "
                    "workspace. A declared read (access_policy mode read) with a provider and instructions, no schedule and no "
                    "exclusive resources, is treated as the same question. Any other task without ask is an ordinary task, "
@@ -828,7 +837,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
     Operation(
         "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true. "
         "With ask it puts a question to one AI client and asks it for its read-only mode (a request, not a "
-        "guarantee: a client's own settings can still allow writes, e.g. Codex with on-request approvals): provider codex, claude, agy (Antigravity) or agent (Cursor). "
+        "guarantee: a client's own settings can still allow writes, e.g. Codex with on-request approvals and an automatic reviewer): provider codex, claude, agy (Antigravity) or agent (Cursor). "
         "A declared read with a provider and instructions is the same question; any other task without ask "
         "is not a question and not read-only. "
         "Use ask for own content only; external or untrusted content goes through review with "

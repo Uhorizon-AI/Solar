@@ -92,7 +92,7 @@ COPY = {
         access="Access", access_none="not declared: the task runs alone, with nothing else active",
         access_read="reads", access_write="writes", access_resources="holds exclusively",
         path_zone="Path zone", zone_note="declared, not verified",
-        ask_note="read-only is a request to the client; its own settings can still allow writes (Codex with on-request approvals, for example)",
+        ask_note="read-only is a request to the client; its own settings can still allow writes (Codex with on-request approvals and an automatic reviewer, for example)",
         async_propose_head="Prepare the async execution configuration",
         async_apply_head="Apply the async execution configuration",
         async_capacity="Simultaneous tasks", async_providers="Limit per provider",
@@ -157,7 +157,7 @@ COPY = {
         access="Acceso", access_none="sin declarar: la tarea se ejecuta sola, sin nada más activo",
         access_read="lee", access_write="escribe", access_resources="reserva en exclusiva",
         path_zone="Zona de la ruta", zone_note="declarada, no verificada",
-        ask_note="solo lectura es una petición al cliente; su propia configuración aún puede permitir escribir (Codex con aprobaciones on-request, por ejemplo)",
+        ask_note="«solo lectura» es una petición al cliente; su propia configuración aún puede permitir escribir (Codex con aprobaciones on-request y un revisor automático, por ejemplo)",
         async_propose_head="Preparar la configuración de ejecución async",
         async_apply_head="Aplicar la configuración de ejecución async",
         async_capacity="Tareas simultáneas", async_providers="Límite por proveedor",
@@ -361,14 +361,13 @@ def _review_rows(copy, spec):
     return rows
 
 
-def _ask_rows(spec, copy=None):
+def _ask_rows(spec, copy):
     """A question names the folder the client starts in and the model, plus the one-line limit of the request."""
     if spec is None:
         return []
     rows = [("profile", "ask_readonly_v1"), ("folder", _line(spec.get("folder") or "workspace", 1000)),
             ("model", _line(spec["model"], _VALUE) if spec.get("model") else _NO_MODEL)]
-    if copy:
-        rows.append(("note", _line(copy["ask_note"], 2 * _VALUE)))
+    rows.append(("note", _line(copy["ask_note"], 2 * _VALUE)))
     return rows
 
 
@@ -377,6 +376,15 @@ def _zone_text(copy, got) -> str:
     if len(got["paths"]) > 1:
         text += ": " + "; ".join(f"{item['path']} → {item['zone']}" for item in got["paths"])
     return _line(text, 2 * _VALUE)
+
+
+def _derived_ask(args):
+    """A declared read with a client and a prompt is the same question as `ask: {}`."""
+    try:
+        import operations
+        return {} if operations._is_derived_question(args) else None
+    except Exception:
+        return None
 
 
 def _zone_rows(copy, args):
@@ -419,7 +427,7 @@ def _create(copy, args):
     if "access_policy" in args:
         rows.append((copy["access"], _access_text(copy, dict(args["access_policy"], version=1))))
     rows += _review_rows(copy, args.get("review") or args.get("review_batch") or {})
-    rows += _ask_rows(args.get("ask"), copy)
+    rows += _ask_rows(args.get("ask") if args.get("ask") is not None else _derived_ask(args), copy)
     rows += _zone_rows(copy, args)
     rows.append((copy["instructions"], _excerpt(copy, args["instructions"])))
     rows.append((copy["effect"], copy["revise_effect" if source else "create_effect"]))

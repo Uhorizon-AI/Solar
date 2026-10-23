@@ -114,7 +114,7 @@ TOOLS = {
             "a task; only task.approve or task.create with queue true does, and a task the executor does "
             "not confine then waits for task.authorize_run. To ask another AI client a question, use "
             "task.create with ask, or with a declared read (access_policy mode read) plus provider and "
-            "instructions; either asks the client for its read-only mode, and any other task is not one. Provider is codex, claude, agy (Antigravity) or "
+            "instructions; either asks the client for its read-only mode (a request: a client's own settings can still allow writes), and any other task is not one. Provider is codex, claude, agy (Antigravity) or "
             "agent (Cursor); the prompt goes in instructions; ask takes an optional folder (it starts "
             "there) and model; queue true. Send provider and instructions in the same call; ask cannot be mixed with "
             "review or review_batch (review_input_invalid). Then task.wait for its text. A question "
