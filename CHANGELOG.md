@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- An opt-in, fixture-only Code Mode MCP experiment with search, restricted JavaScript execution, host-validated read-only calls, negative tests and an adoption evaluation. The production Solar MCP and installed clients are unchanged.
+
 ## [0.57.1] - 2026-10-22
 
 ### Fixed
