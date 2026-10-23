@@ -97,7 +97,9 @@ limits and reader list. A changed/missing proposal or uncertain response require
 read-only state inspection before retrying; never manufacture an approval.
 Only a compatible verified Claude profile can share places; other tasks remain
 exclusive even when a provider limit is high. Do not change the verified registry
-to make another provider concurrent.
+to make another provider concurrent. The one deliberate exception is `ask_readonly_v1`: it is verified for all
+four clients and a question shares places only after the profile is listed in `enabled_reader_profiles`, for
+the user's own content (see `repository-readonly-review.md`, "Concurrency").
 
 ## Observe, then propose 5 separately
 

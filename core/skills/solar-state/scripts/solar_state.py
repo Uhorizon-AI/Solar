@@ -1660,7 +1660,10 @@ def _overlaps(left: str, right: str) -> bool:
 # Router constructors enforce each profile and fail closed on unknown host policy.
 # This registry neither enables it nor attests a host; enabled_reader_profiles starts empty.
 # `ask_readonly_v1` is the exception to "enforces": the client is only asked for its read-only mode
-# (see run_risk), and the profile is not gated by enabled_reader_profiles, which governs concurrency only.
+# (see run_risk). It is verified for all four clients, so listing it in enabled_reader_profiles is the whole
+# switch for questions to share places (global and per-provider limits apply); until it is listed, a question
+# runs alone. Capacity 1, or removing it from the list, is the way back. Mixed providers are allowed on purpose,
+# for the user's own content only: a request for read-only is not a confinement.
 _REVIEW_PROFILE = "text_only_review_v1"
 VERIFIED_PROFILES: dict[str, frozenset] = {_REVIEW_PROFILE: frozenset({"claude"}),
     "repository_readonly_v1": frozenset({"claude", "codex", "agent", "agy"}),
@@ -1672,7 +1675,7 @@ def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
     """What the task asks for. A declaration alone never makes a task concurrent: the providers
     still run with their own permissions, so the declaration is trusted only for an
     `execution_profile` that the applied policy lists in `enabled_reader_profiles` (it starts empty)
-    AND that `VERIFIED_PROFILES` says the adapter enforces (Claude only; runtime preflight also gates launches).
+    AND that `VERIFIED_PROFILES` lists the provider for it (runtime preflight also gates launches).
     Any other task, declared or not, keeps running alone."""
     provider = (_field(pairs, "provider") or "").strip().lower()
     resources = set(_csv(_field(pairs, "resources")))
