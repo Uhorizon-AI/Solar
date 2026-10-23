@@ -141,6 +141,18 @@ def _is_derived_question(arguments: dict) -> bool:
                 and not any(key in arguments for key in ("ask", "review", "review_batch") + _SCHEDULE_FIELDS))
 
 
+def _derive_allowed(arguments: dict) -> bool:
+    """A revision never turns into a question by derivation: only the revision of a question can be one.
+    The executor and the approval text ask this same thing, so they cannot disagree."""
+    import solar_state
+    source_id = arguments.get("revises_task_id")
+    if not source_id:
+        return True
+    with solar_state.read_session() as store:
+        profile = solar_state.value_of(dict(_task(store, source_id)["frontmatter"]).get("execution_profile") or "")
+    return profile == "ask_readonly_v1"
+
+
 def _review_fields(arguments: dict, derive: bool = True) -> dict:
     """Compose inputs through Router before native confirmation; never queue."""
     if "ask" in arguments:
@@ -301,12 +313,7 @@ def _do_task_create(arguments: dict) -> dict:
               ("created", json.dumps(_now_iso())),
               ("updated", json.dumps(_now_iso()))]
     source_id = arguments.get("revises_task_id")
-    derive = True
-    if source_id:
-        with solar_state.read_session() as store:
-            source_profile = solar_state.value_of(dict(_task(store, source_id)["frontmatter"]).get("execution_profile") or "")
-        derive = source_profile == "ask_readonly_v1"   # a revision never turns into a question by derivation
-    review_fields = _review_fields(arguments, derive=derive)
+    review_fields = _review_fields(arguments, derive=_derive_allowed(arguments))
     copied: dict = {}
     with solar_state.session() as store:
         if source_id:

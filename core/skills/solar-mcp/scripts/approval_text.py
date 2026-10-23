@@ -379,12 +379,16 @@ def _zone_text(copy, got) -> str:
 
 
 def _derived_ask(args):
-    """A declared read with a client and a prompt is the same question as `ask: {}`."""
-    try:
-        import operations
-        return {} if operations._is_derived_question(args) else None
-    except Exception:
+    """A declared read with a client and a prompt is the same question as `ask: {}`, unless it revises a
+    task that was not a question (the executor decides that with the same helper)."""
+    import operations
+    if not operations._is_derived_question(args):
         return None
+    try:
+        allowed = operations._derive_allowed(args)
+    except Exception:  # noqa: BLE001 - cannot read the source: warn rather than stay silent
+        allowed = True
+    return {} if allowed else None
 
 
 def _zone_rows(copy, args):

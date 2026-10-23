@@ -534,3 +534,35 @@ def test_a_queued_question_does_not_claim_to_be_confined(solar_env):
 def test_the_published_description_says_that_a_clients_settings_can_still_allow_writes(solar_env):
     published = json.dumps(docs(id="operation:task.create"))
     assert "can still allow writes" in published and "automatic reviewer" in published
+
+
+def test_the_revision_of_an_ordinary_task_is_not_turned_into_a_question(solar_env):
+    import approval_text
+    ordinary = run("task.create", dict(title="Plain", instructions="Do it.", provider="codex"))
+    args = dict(derived(solar_env, [str(solar_env.workspace)]), queue=False, revises_task_id=ordinary["id"])
+    assert "read-only is a request" not in approval_text.render("task.create", args, seconds=120, lang="en")[0]
+    revised = run("task.create", args)
+    assert "execution_profile" not in fields(revised["id"])
+
+
+def test_the_revision_of_a_question_keeps_the_note_and_the_profile(solar_env):
+    import approval_text
+    question = run("task.create", arguments(solar_env))
+    args = dict(derived(solar_env, [str(solar_env.workspace)]), queue=False, revises_task_id=question["id"])
+    assert "read-only is a request" in approval_text.render("task.create", args, seconds=120, lang="en")[0]
+    assert fields(run("task.create", args)["id"])["execution_profile"] == "ask_readonly_v1"
+
+
+@pytest.mark.parametrize("operation", ["task.approve", "task.authorize_run"])
+def test_a_stored_declared_read_shows_the_note_when_it_is_approved(solar_env, operation):
+    import approval_text
+    made = run("task.create", dict(derived(solar_env, [str(solar_env.workspace)]), queue=False))
+    text = approval_text.render(operation, dict(task_id=made["id"], expected_row_version=made["row_version"]),
+                                seconds=120, lang="en")[0]
+    assert "read-only is a request to the client" in text
+
+
+def test_a_queued_review_still_says_it_is_confined(solar_env):
+    frontmatter = [("execution_profile", json.dumps("repository_readonly_v1"))]
+    assert "confined" in operations._queued_next(frontmatter, "low")
+    assert "not confined" in operations._queued_next(frontmatter, "high")
