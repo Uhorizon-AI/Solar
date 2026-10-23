@@ -255,3 +255,42 @@ def test_the_guide_says_which_content_may_go_to_ask():
     guide = (pathlib.Path(__file__).resolve().parents[3] / "docs" / "repository-readonly-review.md").read_text()
     section = guide.split("## Questions (`ask_readonly_v1`)", 1)[1].split("\n## ", 1)[0]
     assert "**Own content only.**" in section and "external" in section and "repository_readonly_v1" in section
+
+
+def test_the_response_shows_the_zone_as_declared_and_not_verified(solar_env):
+    inside = run("task.create", arguments(solar_env))
+    assert inside["zone"]["zone"] == "workspace" and inside["zone"]["verified"] is False
+    assert inside["zone"]["note"] == "declared, not verified"
+    outside = run("task.create", arguments(solar_env, folder="outside"))
+    assert outside["zone"]["zone"] == "outside"
+    assert outside["zone"]["paths"][0]["path"] == str(solar_env.tmp_path / "Downloads")
+
+
+def test_a_task_without_declared_access_shows_no_zone(solar_env):
+    made = run("task.create", dict(title="Write", instructions="Edit files.", provider="codex", queue=True))
+    assert "zone" not in made
+
+
+def test_showing_the_zone_changes_nobody_s_wait(solar_env):
+    inside = run("task.create", arguments(solar_env))
+    outside = run("task.create", arguments(solar_env, folder="outside"))
+    assert (inside["risk"], inside["awaiting_approval"]) == ("low", False)
+    assert (outside["risk"], outside["awaiting_approval"]) == ("high", True)
+
+
+def test_mixed_declared_paths_show_the_outermost_and_each_path(solar_env):
+    args = arguments(solar_env)
+    mixed = [str(solar_env.workspace / "notes"), str(solar_env.tmp_path)]
+    args["access_policy"] = dict(mode="read", scopes=mixed, resources=[])
+    args["ask"] = dict(folder=str(solar_env.workspace / "notes"))
+    made = run("task.create", args)
+    assert made["zone"]["zone"] == "outside"
+    assert [item["zone"] for item in made["zone"]["paths"]] == ["workspace", "outside"]
+
+
+@pytest.mark.parametrize("language,label,note", [("en", "Path zone", "declared, not verified"),
+                                                 ("es", "Zona de la ruta", "declarada, no verificada")])
+def test_the_confirmation_shows_the_zone_as_declared(solar_env, language, label, note):
+    import approval_text
+    text = approval_text.render("task.create", arguments(solar_env, folder="outside"), seconds=120, lang=language)[0]
+    assert label in text and "outside" in text and note in text

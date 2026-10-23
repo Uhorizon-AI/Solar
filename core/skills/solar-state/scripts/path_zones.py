@@ -61,3 +61,31 @@ def physically_inside_workspace(path: str, workspace: str, case_insensitive: Opt
     """Impact is decided by physical containment, not by the zone's name: the global installation is
     outside the workspace even though its zone is `installation`; the copy inside a planet is inside."""
     return is_inside(path, workspace, case_insensitive)
+
+
+def roots_for(workspace: str, solar_root: Optional[str]) -> dict:
+    """The roots `zone_of` needs for one workspace: the global installation, the copy of the framework
+    inside the `solar` planet, and the configured planets (the folders directly under `planets/`)."""
+    planets_dir = os.path.join(workspace, "planets")
+    try:
+        planets = sorted(os.path.join(planets_dir, name) for name in os.listdir(planets_dir)
+                         if not name.startswith(".") and os.path.isdir(os.path.join(planets_dir, name)))
+    except OSError:
+        planets = []
+    installs = [os.path.join(planets_dir, "solar", "core")]
+    if solar_root:
+        installs.append(solar_root)
+    return dict(workspace=workspace, installation_roots=installs, planet_roots=planets)
+
+
+def declared_paths(access_scopes: Iterable[str], folder: Optional[str], workspace: str) -> list:
+    """What a task declares it touches: its access paths, else the folder it starts in, else the workspace."""
+    scopes = list(access_scopes)
+    return scopes or [folder or workspace]
+
+
+def report(paths: Iterable[str], workspace: str, solar_root: Optional[str]) -> dict:
+    """Aggregate zone and path -> zone list, always labelled as declared and not verified."""
+    got = describe(list(paths), **roots_for(workspace, solar_root))
+    return dict(zone=got["zone"], paths=[dict(path=p, zone=zn) for p, zn in got["paths"]],
+                verified=False, note="declared, not verified")

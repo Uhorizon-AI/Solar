@@ -168,6 +168,24 @@ def _review_fields(arguments: dict) -> dict:
         raise OperationError("review_input_invalid", getattr(exc, "code", "Review fields are incomplete.")) from None
 
 
+def _zone_report(arguments: dict) -> Optional[dict]:
+    """Zone of what the task declares it touches (declared, not verified). Informational: nothing waits
+    or stops waiting because of it. None when the task declares no access and is not a question."""
+    try:
+        import path_zones
+        from solar_paths import resolve_solar_paths
+        access = arguments.get("access_policy")
+        ask = arguments.get("ask")
+        if not access and ask is None:
+            return None
+        ws, install = resolve_solar_paths()
+        paths = path_zones.declared_paths((access or {}).get("scopes", []),
+                                          (ask or {}).get("folder"), str(ws))
+        return path_zones.report(paths, str(ws), str(install))
+    except Exception:
+        return None
+
+
 def _ask_fields(arguments: dict) -> dict:
     """A question to one client: prompt, client, optional start folder. It reads, it never queues."""
     router_scripts = str(_SKILLS / "solar-router" / "scripts")
@@ -270,6 +288,9 @@ def _do_task_create(arguments: dict) -> dict:
     result = dict(created=True, id=task_id, status="draft", row_version=task["row_version"],
                   digest=digest, activated=False,
                   next="Review it with solar_search, then approve it with task.approve.")
+    declared = _zone_report(arguments)
+    if declared:
+        result["zone"] = declared
     if arguments.get("queue"):
         try:
             with solar_state.session() as store:

@@ -91,6 +91,7 @@ COPY = {
         unreadable="The task could not be read, so the effect below could not be verified.",
         access="Access", access_none="not declared: the task runs alone, with nothing else active",
         access_read="reads", access_write="writes", access_resources="holds exclusively",
+        path_zone="Path zone", zone_note="declared, not verified",
         async_propose_head="Prepare the async execution configuration",
         async_apply_head="Apply the async execution configuration",
         async_capacity="Simultaneous tasks", async_providers="Limit per provider",
@@ -154,6 +155,7 @@ COPY = {
         unreadable="No se pudo leer la tarea, así que no se pudo verificar el efecto de abajo.",
         access="Acceso", access_none="sin declarar: la tarea se ejecuta sola, sin nada más activo",
         access_read="lee", access_write="escribe", access_resources="reserva en exclusiva",
+        path_zone="Zona de la ruta", zone_note="declarada, no verificada",
         async_propose_head="Preparar la configuración de ejecución async",
         async_apply_head="Aplicar la configuración de ejecución async",
         async_capacity="Tareas simultáneas", async_providers="Límite por proveedor",
@@ -365,6 +367,23 @@ def _ask_rows(spec):
             ("model", _line(spec["model"], _VALUE) if spec.get("model") else _NO_MODEL)]
 
 
+def _zone_rows(copy, args):
+    """The zone of what the task declares, never presented as checked."""
+    if not args.get("access_policy") and args.get("ask") is None:
+        return []
+    try:
+        import operations
+        got = operations._zone_report(args)
+    except Exception:
+        return []
+    if not got:
+        return []
+    text = f"{got['zone']} ({copy['zone_note']})"
+    if len(got["paths"]) > 1:
+        text += ": " + "; ".join(f"{item['path']} → {item['zone']}" for item in got["paths"])
+    return [(copy["path_zone"], _line(text, 2 * _VALUE))]
+
+
 def _create(copy, args):
     rows = [(copy["task"], _line(args["title"], _VALUE))]
     notes = []
@@ -382,6 +401,7 @@ def _create(copy, args):
         rows.append((copy["access"], _access_text(copy, dict(args["access_policy"], version=1))))
     rows += _review_rows(copy, args.get("review") or args.get("review_batch") or {})
     rows += _ask_rows(args.get("ask"))
+    rows += _zone_rows(copy, args)
     rows.append((copy["instructions"], _excerpt(copy, args["instructions"])))
     rows.append((copy["effect"], copy["revise_effect" if source else "create_effect"]))
     return _head(copy, copy["revise_head" if source else "create_head"], rows, notes)
