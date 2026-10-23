@@ -6,6 +6,15 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Path zones (`path_zones.py` in `solar-state`): a declared path is classified as installation, planet, workspace or outside, and a task takes the outermost zone of its paths. Containment is decided by file identity (device and inode), so it is right on any volume: symlinks, `..`, whole directories, targets that do not exist yet, case variants of one folder, an installation nested in a planet. The zone is declared, not verified: it does not confine the client.
+- `task.create` returns `zone` (aggregate plus path to zone list, labelled `declared, not verified`) for a task that declares access or asks a question, and the approval text of `task.create` and `task.authorize_run` shows it. It is informational.
+
+### Changed
+- A read declared with `access_policy` (mode read), a provider and instructions, with no `ask`, `review`, `review_batch` or exclusive resources, is the same question as `ask`: same profile, manifest, digest and access text. `ask` stays as an alias and keeps an explicit declaration whole. A declared read that does not cover the workspace and has no `ask.folder` is refused with a clear reason, as `ask` already did. A revision is only derived when its source is already a question. `task.update` of a question re-derives its inputs and keeps its folder and model.
+- A question now waits for `task.authorize_run` when any declared path, not only the folder it starts in, is outside the workspace. This also applies to `ask`: it is stricter than before and never looser.
+- The `task.create` summary, the `ask` argument, `solar_execute`, `SKILL.md` and the readonly-review guide describe a declared read as a question and say that every declared path counts.
+
 ## [0.57.1] - 2026-10-22
 
 ### Fixed
