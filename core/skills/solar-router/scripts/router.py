@@ -1327,7 +1327,7 @@ def _restricted_route(payload, *, stream=False):
                 raise ProfileError("review_input_mismatch")
             verify_sources(manifest, access["scopes"])
 
-        audit_log(router_id, "start", request_id=request_id, task_id=task_id,
+        audit_log(router_id, "start", request_id=request_id, task_id=task_id, channel="mcp",
                   execution_profile=profile, review_input_digest=fields["review_input_digest"], stream=stream)
         review = dict(manifest=manifest, expected=fields["review_input_digest"],
                       profile=profile, before_launch=before_launch)

@@ -286,6 +286,8 @@ def test_restricted_router_never_loads_or_writes_interactive_context(tmp_path, m
     with solar_state.session() as store:
         assert store.continuity_get()['active_task'] == sentinels[0]
         assert len(store.task_list()) == 4  # <subtasks> in output was inert
+        start = store.conn.execute("SELECT json_extract(row, '$.channel') FROM audit WHERE event = 'start'").fetchone()
+        assert start[0] == 'mcp'
 
 
 @pytest.mark.parametrize('change', ['source', 'missing', 'manifest', 'profile', 'digest', 'token'])
