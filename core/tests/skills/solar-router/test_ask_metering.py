@@ -210,3 +210,31 @@ def test_aggregate_without_breakdown_does_not_inherit_one_of_multiple_models(tmp
     cmd = process(tmp_path,'for e in '+repr(events)+': print(json.dumps(e),flush=True)\n')
     assert run('claude',cmd,cwd=tmp_path,env=None,timeout=3,observer=receiver) == 'FINAL'
     assert not receiver.events[-1][1].get('model')
+
+
+@pytest.mark.parametrize('failed_usage', [None, {'input_tokens':7,'output_tokens':1}])
+@pytest.mark.parametrize('completed_first', [False, True])
+def test_codex_failed_terminal_survives_transport_and_prevents_ambiguous_metrics(tmp_path, failed_usage, completed_first):
+    from token_usage import project
+    failed = {'type':'turn.failed','error':{'message':'synthetic failure'}}
+    if failed_usage is not None:
+        failed['usage'] = failed_usage
+    events = ([{'type':'turn.completed','usage':{'input_tokens':10,'output_tokens':2}}]
+              if completed_first else []) + [failed]
+    receiver = Observer()
+    cmd = process(tmp_path,'for e in '+repr(events)+': print(json.dumps(e),flush=True)\n')
+    with pytest.raises(RuntimeError):
+        run('codex',cmd,cwd=tmp_path,env=None,timeout=3,observer=receiver)
+    terminal = receiver.events[-1][1]
+    assert terminal['event_type'] == 'turn.failed'
+    assert terminal['terminal'] is True and terminal['successful'] is False
+    assert ('usage' in terminal) == (failed_usage is not None)
+    attempt = dict(id='fixture',provider='codex',status='failed',finished_at='done',
+                   capture_error=None,cli_version='fixture',
+                   observations=[{'original':o} for _,o in receiver.events])
+    data = project([attempt])
+    assert all(value is None for value in data['attempts'][0]['metrics'].values())
+    assert not data['subtotals']
+    if completed_first:
+        assert data['attempts'][0]['reason'] == 'ambiguous_terminals'
+        assert data['attempts'][0]['coverage'] == 'partial'

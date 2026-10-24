@@ -27,9 +27,13 @@ def selection(provider, event):
     typ = event.get('type', event.get('event', 'unknown'))
     payload = event.get('result') if provider == 'agy' and typ == 'result' else event
     payload = payload if isinstance(payload, dict) else {}
-    terminal = typ == ('turn.completed' if provider == 'codex' else 'result')
-    success = terminal and (provider == 'codex' or (payload.get('status') == 'SUCCESS' if provider == 'agy'
-                            else payload.get('subtype') == 'success' and not payload.get('is_error')))
+    if provider == 'codex':
+        terminal = typ in {'turn.completed', 'turn.failed'}
+        success = typ == 'turn.completed'
+    else:
+        terminal = typ == 'result'
+        success = terminal and (payload.get('status') == 'SUCCESS' if provider == 'agy'
+                                else payload.get('subtype') == 'success' and not payload.get('is_error'))
     source = payload
     path = 'result.usage' if provider == 'agy' and terminal else 'usage'
     if provider == 'claude' and typ == 'assistant':

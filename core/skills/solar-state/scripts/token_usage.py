@@ -90,8 +90,8 @@ def project(attempts):
                                'partial' if any(o['original'].get('usage') or o['original'].get('model_usage') for o in obs) else 'not_available')
         attempt['reason'] = (attempt.get('capture_error') or
                              ('terminal_missing' if not attempt.get('finished_at') else
-                              attempt['status'] if attempt['status'] != 'success' else
                               'ambiguous_terminals' if len(finals) > 1 else
+                              attempt['status'] if attempt['status'] != 'success' else
                               'no_validated_counters' if not any(v is not None for v in attempt['metrics'].values()) else None))
         # Terminal aggregates spanning models cannot belong to the last intermediate model.
         final = finals[0] if len(finals) == 1 else {}
