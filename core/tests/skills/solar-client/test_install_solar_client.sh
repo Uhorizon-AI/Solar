@@ -223,8 +223,8 @@ BOOT_SRC="$TMP/boot-src"
 BOOT_INSTALL="$TMP/boot-sha-install"
 BOOT_BIN="$TMP/boot-sha-bin"
 mkdir -p "$BOOT_BIN"
-# The checkout and TMP may be on different filesystems on CI runners.
-# Copy objects instead of requiring hardlinks, and retain clone errors in CI logs.
+# Avoid depending on hardlinks when preparing the bootstrap fixture.
+# Retain clone errors in CI logs; the original exit 128 cause is unconfirmed.
 git -c core.hooksPath=/dev/null clone --local --no-hardlinks "$FRAMEWORK_ROOT" "$BOOT_SRC" >/dev/null
 cp "$INSTALL_SCRIPT" "$BOOT_SRC/core/skills/solar-client/scripts/install_solar_client.sh"
 cp "$BOOTSTRAP_SCRIPT" "$BOOT_SRC/core/skills/solar-client/scripts/bootstrap_solar_client.sh"
