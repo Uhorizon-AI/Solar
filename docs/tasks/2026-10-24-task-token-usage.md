@@ -27,21 +27,46 @@ The first three returned terminal usage; Antigravity returned a quota error and
 zero counters, so its successful measurement is not validated. No live installation,
 release, host-session measurement or real-provider integration claim is included.
 
-A separate backlog issue was not created because the approval reviewer declined
-that additional publication. The authorized implementation and draft PR continue.
+## Review corrections and validation checkpoint
 
-## Local validation and review checkpoint
+Code corrections: `1ef14cf19c9817525c4fd7c0f58724479e11df3b`.
+Main integration: `864a25b` (preserves the upstream restricted-router channel fix).
 
-- 2026-10-24: 24 focused storage/transport/integration tests pass after the final
-  corrections, including injected measurement-write failures and timeout with an
-  earlier malformed event. Console tests: 33 pass. Async executor/reservation tests:
-  24 pass. MCP task-view tests also pass (15 tests). No model calls in these checks.
-- The broad combined run reached 1,605 passing tests and four skips, then was
-  interrupted during an unrelated MCP transport wait. It is not a completed suite.
-- All four skill packages validate; JavaScript syntax and whitespace checks pass.
-- Claude reviewed `37e263e` and `f2ac657`. Confirmed capture/error-handling findings
-  were corrected and regression-tested. The last corrections have not received a
-  further Claude approval; two review rounds were used. Cursor review is pending.
-- Evidence pagination remains deferred. Antigravity successful real measurement and
-  live router-to-Console acceptance remain unvalidated. No installation/client sync
-  was performed; deployment is a separate authorized operation.
+- Reject every ambiguous terminal sequence, including terminals without usage.
+- Keep multi-model aggregates separate from single-model subtotals, including when
+  intermediate observations carry different models without a terminal breakdown.
+- Drain oversized JSONL events within bounded memory, retain partial-capture status,
+  and return a later valid final response.
+- Reject simultaneous attempts on one activation. Distinct later CLI invocations
+  remain distinct real consumption, not duplicate copies of the same observation.
+- Include CLI version in Console subtotal labels, distinguish finished failures
+  from unfinished capture, and return row_version in MCP usage reads.
+- Use an explicit public attempt field selection; exclude local binary paths.
+- Verify populated MCP/Console equality and read-only behavior; upgrade v7 with an
+  existing reservation; retain adoption identity coverage already present.
+
+The `--version` probe is kept per invocation to avoid stale identity after a CLI
+upgrade. It performs no inference; failed probes leave version unavailable. This
+choice and its failure test address the version-probe review finding.
+
+Validation commands from the repository root (isolated runtime fixtures):
+
+```sh
+python -m pytest core/tests/skills/solar-state core/tests/skills/solar-router core/tests/skills/solar-app core/tests/skills/solar-mcp/test_task_views.py -q --tb=short
+python -m pytest core/tests/skills/solar-router/test_execution_profiles.py core/tests/skills/solar-router/test_ask_metering.py -q --tb=short
+```
+
+On fixed commit `864a25b06758c571e24f3c0582baca9cab7f6bf9`, the first command
+passes **1,341 tests**, with **4 skips** and **50 passing subtests** (213.36 s).
+The second command passes **106 tests** on the same commit. Four skill packages, JavaScript syntax and diff
+whitespace checks pass. GitHub reports no CI checks for this branch; these are
+local results. The final documentation-only commit does not change tested code. Tests use fake CLIs and isolated databases, not real models.
+
+Independent review of `6b78bc6`: Codex 88%, Claude 82%, both require changes;
+Agent has not returned at this checkpoint. Revalidation of `1ef14cf` is requested
+from Codex and Claude; no final approval is claimed. Review results are evidence,
+not a substitute for the tests above.
+
+Evidence pagination remains deferred. Antigravity successful real measurement and
+live router-to-Console acceptance remain unvalidated. No installation/client sync
+was performed; deployment is a separate authorized operation.
