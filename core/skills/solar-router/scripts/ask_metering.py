@@ -5,6 +5,7 @@ import json
 import os
 import selectors
 import subprocess
+import tempfile
 import time
 
 MAX_LINE = 1024 * 1024
@@ -91,7 +92,7 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
     position = 0
     metadata = {}
     observed_models = set()
-    discarding_line = False
+    large_record = None
     selector = selectors.DefaultSelector()
     try:
         observer.launched(cmd[0], version)
@@ -106,7 +107,7 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
                     selector.unregister(key.fileobj)
-                    if key.fileobj is proc.stdout and stdout.strip():
+                    if key.fileobj is proc.stdout and (stdout.strip() or large_record is not None):
                         # JSONL's final record need not end with a newline.
                         chunk = b'\n'
                     else:
@@ -118,21 +119,36 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
                 while b'\n' in stdout:
                     line, stdout = stdout.split(b'\n', 1)
                     position += 1
-                    if discarding_line:
-                        discarding_line = False
-                        continue
-                    if len(line) > MAX_LINE:
-                        observer.capture_problem('event_too_large')
-                        continue
-                    if not line.strip():
+                    oversized = large_record is not None or len(line) > MAX_LINE
+                    if large_record is None and not line.strip():
                         continue
                     try:
-                        event = json.loads(line)
+                        if large_record is not None:
+                            large_record.write(line)
+                            large_record.seek(0)
+                            event = json.load(large_record)
+                        else:
+                            event = json.loads(line)
                     except (ValueError, UnicodeError):
                         observer.capture_problem('malformed_event')
                         continue
+                    finally:
+                        if large_record is not None:
+                            large_record.close()
+                            large_record = None
                     if not isinstance(event, dict):
                         observer.capture_problem('unknown_event_shape')
+                        continue
+                    event_type = event.get('type', event.get('event'))
+                    if provider == 'codex':
+                        item = event.get('item')
+                        answer_record = (event_type in {'turn.completed', 'turn.failed'} or
+                                         event_type == 'item.completed' and isinstance(item, dict)
+                                         and item.get('type') == 'agent_message')
+                    else:
+                        answer_record = event_type == 'result'
+                    if oversized and not answer_record:
+                        observer.capture_problem('event_too_large')
                         continue
                     source_meta = event.get('init', event) if isinstance(event.get('init', event), dict) else event
                     for name, val in {'session_id': event.get('session_id', event.get('conversation_id', event.get('thread_id'))),
@@ -171,10 +187,12 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
                         successful_terminal = event.get('subtype') == 'success' and not event.get('is_error')
                         failed_terminal = not successful_terminal
                         final_text = event.get('result')
-                if len(stdout) > MAX_LINE:
-                    observer.capture_problem('event_too_large')
+                if large_record is not None or len(stdout) > MAX_LINE:
+                    if large_record is None:
+                        # Anonymous/private, removed on close; never a retained raw-event log.
+                        large_record = tempfile.TemporaryFile(mode='w+b')
+                    large_record.write(stdout)
                     stdout = b''
-                    discarding_line = True
         code = proc.wait(timeout=max(.01, deadline - time.monotonic()))
         if code or failed_terminal:
             from review_failure import summarize
@@ -184,6 +202,8 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
             raise RuntimeError('cli_final_response_missing')
         return final_text.strip()
     finally:
+        if large_record is not None:
+            large_record.close()
         selector.close()
         if proc.poll() is None:
             proc.terminate()
@@ -218,6 +238,8 @@ class StateObserver:
         try:
             with self.state.session() as store:
                 store.token_observe(self.id, self.token, position, observation)
+        except (self.state.FormatError, ValueError):
+            self.capture_problem('observation_rejected')
         except Exception as exc:
             self.capture_problem('persistence_failed')
             raise CaptureError('token_capture_persistence_failed') from exc

@@ -35,6 +35,13 @@
       usage_evidence: "Original measurement evidence",
       usage_subtotal: "Known subtotal by provider, observed model and CLI version",
       usage_pending: "Incomplete or interrupted capture",
+      usage_reason_failed: "Execution failed",
+      usage_reason_timeout: "Execution timed out",
+      usage_reason_ambiguous_terminals: "Conflicting terminal events",
+      usage_reason_no_validated_counters: "No validated counters reported",
+      usage_reason_terminal_missing: "Terminal event not received",
+      usage_reason_unfinished: "Final measurement status was not saved",
+      usage_reason_not_launched: "CLI was not launched",
       page_title: "Solar local console",
       gap: "available once Solar knows who is speaking",
       delegation: "Solar acts without asking you, only inside a written permission with limits and an expiry.",
@@ -222,6 +229,13 @@
       usage_evidence: "Evidencia original de medición",
       usage_subtotal: "Subtotal conocido por proveedor, modelo observado y versión CLI",
       usage_pending: "Captura incompleta o interrumpida",
+      usage_reason_failed: "La ejecución falló",
+      usage_reason_timeout: "La ejecución agotó el tiempo",
+      usage_reason_ambiguous_terminals: "Eventos finales contradictorios",
+      usage_reason_no_validated_counters: "Sin contadores validados",
+      usage_reason_terminal_missing: "No se recibió el evento final",
+      usage_reason_unfinished: "No se guardó el cierre de la medición",
+      usage_reason_not_launched: "No se inició el CLI",
       page_title: "Consola local de Solar",
       gap: "disponible cuando Solar sepa quién le habla",
       delegation: "Solar actúa sin preguntarte, solo dentro de un permiso escrito con límites y caducidad.",
@@ -1154,7 +1168,7 @@
         '<p>' + esc(t("usage_execution") + ": " + a.execution_id + " · " + a.status) + '</p>' +
         '<p>' + esc(t("usage_model") + ": " + (a.model || t("usage_not_available"))) + '</p>';
       if (!a.finished_at || a.capture_error) html += '<p class="note">' + esc(t("usage_pending")) + '</p>';
-      else if (a.reason) html += '<p class="note">' + esc(a.reason) + '</p>';
+      else if (a.reason) html += '<p class="note">' + esc(t('usage_reason_' + a.reason)) + '</p>';
       html += counters(a.metrics) + '<details><summary>' + esc(t("usage_evidence")) + '</summary><pre>' +
         esc(JSON.stringify(a.observations || [], null, 2)) + '</pre></details></details>';
     });

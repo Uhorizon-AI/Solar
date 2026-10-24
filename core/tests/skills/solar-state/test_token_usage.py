@@ -119,13 +119,28 @@ def test_adoption_preserves_execution_but_rotates_private_owner(ready):
         task, token = active(store)
         attempt = store.token_attempt_start(task, token, 'r', 'codex')
         execution = store.task_token_usage(task)['attempts'][0]['execution_id']
+        store.token_attempt_launch(attempt, token, binary='fixture', cli_version='1')
+        store.token_observe(attempt, token, 1, dict(usage={'input_tokens':1}, terminal=False))
         store.conn.execute("UPDATE execution_reservations SET lease_expires_at = '2000-01-01T00:00:00Z'")
         taken = store.task_adopt(task, 'replacement', identity=lambda pid: None, groups=lambda pgid: [])
         assert taken['adopted'] and taken['token'] != token
         assert store.reservation_for(task)['execution_id'] == execution
         with pytest.raises(st.StaleToken):
             store.token_observe(attempt, token, 1, observation(input_tokens=1))
-        store.token_observe(attempt, taken['token'], 1, observation(input_tokens=1))
+        with pytest.raises(st.StateError, match='token_attempt_finished'):
+            store.token_observe(attempt, taken['token'], 2, observation(input_tokens=1))
+        abandoned = store.task_token_usage(task)['attempts'][0]
+        assert abandoned['capture_error'] == 'owner_lost'
+        assert abandoned['status'] == 'failed' and abandoned['coverage'] == 'partial'
+        assert abandoned['observations'][0]['original']['usage']['input_tokens'] == 1
+        retry = store.token_attempt_start(task, taken['token'], 'retry', 'codex')
+        store.token_attempt_launch(retry, taken['token'], binary='fixture', cli_version='1')
+        store.token_observe(retry, taken['token'], 1, observation(input_tokens=2))
+        store.token_attempt_finish(retry, taken['token'], 'success')
+        data = store.task_token_usage(task)
+        assert len(data['attempts']) == 2
+        assert {a['execution_id'] for a in data['attempts']} == {execution}
+        assert data['subtotals'][0]['metrics']['input_tokens']['subtotal'] == 2
 
 
 @pytest.mark.parametrize('second_success', [True, False])
@@ -185,3 +200,36 @@ def test_v7_existing_reservations_receive_public_identity_and_accept_measurement
         assert all(r['execution_id'] and r['execution_id'] != r['token'] for r in reservations)
         attempt = store.token_attempt_start(task, token, 'after-upgrade', 'codex')
         assert store.task_token_usage(task)['attempts'][0]['id'] == attempt
+
+
+@pytest.mark.parametrize('odd_model', ['claude-opus[1m]', 'model@version', 'invalid model'])
+def test_model_key_selection_never_turns_multimodel_usage_into_single_model(ready, odd_model):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store, 'claude')
+        attempt = store.token_attempt_start(task, token, 'r', 'claude')
+        store.token_attempt_launch(attempt, token, binary='fixture', cli_version='1')
+        store.token_observe(attempt, token, 1, dict(terminal=True,successful=True,usage={'input_tokens':20},
+            model_usage={odd_model:{'input_tokens':10},'model-b':{'input_tokens':10}}))
+        store.token_attempt_finish(attempt, token, 'success')
+        data = store.task_token_usage(task)
+        a = data['attempts'][0]
+        assert a['model'] is None and data['subtotals'][0]['model'] is None
+        original = a['observations'][0]['original']
+        if ' ' in odd_model:
+            assert original['model_usage_keys_dropped'] == 1
+        else:
+            assert odd_model in original['model_usage']
+
+
+def test_partial_attempt_keeps_native_counters_only_in_evidence(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        a = store.token_attempt_start(task, token, 'r', 'codex')
+        store.token_attempt_launch(a, token, binary='fixture', cli_version='1')
+        store.token_observe(a, token, 1, observation(input_tokens=10))
+        store.token_attempt_finish(a, token, 'failed')
+        data = store.task_token_usage(task)
+        assert data['attempts'][0]['coverage'] == 'partial'
+        assert all(v is None for v in data['attempts'][0]['metrics'].values())
+        assert data['attempts'][0]['observations'][0]['original']['usage']['input_tokens'] == 10
+        assert not data['subtotals']

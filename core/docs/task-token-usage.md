@@ -11,10 +11,18 @@ The router requests JSON events from Codex and streaming JSON from Claude,
 Cursor and Antigravity. Existing permission flags, selected sessions and the final
 plain-text answer remain unchanged. A per-invocation observer writes selected
 measurement fields through `solar-state`, before reading the next event. It drains
-stderr concurrently, discards oversized events through their next newline while
-marking measurement incomplete, and enforces the question's wall deadline.
-A persistence failure during event capture stops the invocation; previously committed
-observations stay. If only the final measurement-status write fails after a complete
+stderr concurrently and enforces the question's wall deadline. The transport keeps
+at most about 1 MiB of each unfinished record in its byte buffer; larger records
+spill into a private anonymous temporary file, closed on every exit path. Complete
+JSON records are decoded at their boundary, so decoding and the returned answer
+still require memory proportional to that record/answer. This is not a hard cap on
+answer length. Large terminal/answer records retain their text and measurement;
+large intermediate records are skipped and mark measurement incomplete. Temporary
+raw data is not a retained measurement archive.
+An I/O or ownership failure during event persistence stops the invocation;
+previously committed observations stay. A deterministic validation rejection (for
+example a selection over 64 KiB) marks `observation_rejected` and continues reading
+the answer, without pretending the rejected evidence was saved. If only the final measurement-status write fails after a complete
 answer, the answer is returned and the unclosed attempt remains incomplete.
 
 Schema 8 adds a public random execution ID to each activation reservation and
@@ -22,15 +30,21 @@ separate attempt/observation tables. Reservation adoption preserves that ID; a n
 activation receives another. Each invocation gets an attempt ID and router ID.
 Only one unfinished attempt may own an activation at a time. A repeated dispatch
 is rejected before launching another CLI; finished attempts permit an explicit
-later invocation. An unclosed attempt after a crash is retained, not silently
-replaced; a new activation is the recovery boundary for a new invocation.
+later invocation. Once adoption has proved the old owner and its command group
+gone, the same adoption transaction closes its unfinished attempts as failed with
+`owner_lost` (preserving an earlier capture error). Evidence stays visible; the new
+owner can start another attempt on the same public execution ID. The old private
+token cannot write, and completed/abandoned attempts cannot be modified.
 The reservation's secret token authorizes writes but is never part of the public
 measurement projection. Task configuration and approval snapshots are unchanged.
 
 Each observation has a position, capture timestamp, sanitized original measurement
 selection and digest. Replaying an identical position is idempotent; replacing it
 with different evidence is rejected. Selected fields retain native counter names,
-model/session/event identity and CLI version. Prompts, answer text, tool arguments
+model/session/event identity and CLI version. Native model names allow brackets
+and `@`. If a model key cannot be retained or a model breakdown exceeds the selection
+limit, `model_usage_keys_dropped` records that loss and forbids single-model
+attribution even if only one model key survives. Prompts, answer text, tool arguments
 and arbitrary usage strings are excluded. Numerical future usage fields are kept
 within bounded selections; this is not a full raw-event archive.
 
@@ -45,8 +59,10 @@ within bounded selections; this is not a full raw-event archive.
   multiple terminals are never treated as complete or summed.
 - An attempt is complete only after successful execution without capture errors.
   Failed, interrupted or ambiguous attempts retain their observations as partial
-  evidence. They do not enter successful subtotals. Unfinished attempts survive a
-  process crash and remain visibly incomplete.
+  evidence. Their normalized counters are null and they do not enter successful
+  subtotals. Unfinished attempts survive a process crash and remain visibly
+  incomplete. `terminal_missing` means no terminal was received; `unfinished` means
+  a terminal was received but the final measurement-status write is missing.
 - Coverage is reported per metric against launched attempts. Compatible successful
   subtotals are grouped by provider, observed model and CLI version. An unknown
   model keeps that attempt separate. A multi-model aggregate has no single observed

@@ -3208,6 +3208,12 @@ class Session:
                         pgids.update(hold.get("pgids") or [])
                 if (res["owner_pid"] is not None and not pgids) or any(groups(g) != [] for g in pgids):
                     return dict(adopted=False, reason="cleanup_unverifiable")
+                # The old owner is proved gone above. Preserve its evidence, but release
+                # the one-live-attempt guard so the adopting worker can invoke the CLI.
+                conn.execute("UPDATE token_attempts SET status = 'failed', finished_at = ?, "
+                             "capture_error = COALESCE(capture_error, 'owner_lost') "
+                             "WHERE execution_id = ? AND finished_at IS NULL",
+                             (_now(), res["execution_id"]))
                 conn.execute("DELETE FROM execution_lifecycle WHERE token = ?", (res["token"],))
                 conn.execute("DELETE FROM execution_groups WHERE token = ?", (res["token"],))
                 conn.execute("UPDATE execution_reservations SET token = ?, worker = ?, handoff = 0, "

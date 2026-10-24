@@ -494,7 +494,7 @@ async function settled() {
   need(view, "model-fixture · version-one", "first subtotal identifies CLI version");
   need(view, "model-fixture · version-two", "second subtotal identifies CLI version");
   const failedCapture = view.slice(view.indexOf("failed-fixture"));
-  need(failedCapture, '<p class="note">failed</p>', "finished failure explains status");
+  need(failedCapture, '<p class="note">Execution failed</p>', "finished failure explains status");
   lack(failedCapture, "Incomplete or interrupted capture", "finished failure is not a pending capture");
   lack(view, "<script>unsafe()", "evidence is escaped");
 

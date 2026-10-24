@@ -15,6 +15,7 @@ METRICS = {
     'reasoning_tokens': ('reasoning_output_tokens', 'thinking_tokens'),
 }
 _SAFE = re.compile(r'^[A-Za-z0-9_.:/-]{1,160}$')
+_MODEL = re.compile(r'^[A-Za-z0-9_.:/@\[\]-]{1,160}$')
 
 
 def _number(value):
@@ -22,13 +23,13 @@ def _number(value):
             or isinstance(value, float) and math.isfinite(value) and value >= 0)
 
 
-def _measurement(value, depth=0):
+def _measurement(value, depth=0, *, model_keys=False):
     """Keep numerical future fields, not arbitrary text smuggled inside a usage object."""
     if depth > 6 or not isinstance(value, dict):
         return {}
     result = {}
     for key, val in list(value.items())[:128]:
-        if not isinstance(key, str) or not _SAFE.fullmatch(key):
+        if not isinstance(key, str) or not (_MODEL if model_keys else _SAFE).fullmatch(key):
             continue
         if _number(val) or val is None:
             result[key] = val
@@ -48,14 +49,18 @@ def clean_observation(value):
     result = {'selection_version': 1}
     for key in ('event_type', 'event_id', 'session_id', 'model', 'source'):
         val = value.get(key)
-        if isinstance(val, str) and _SAFE.fullmatch(val):
+        if isinstance(val, str) and (_MODEL if key == 'model' else _SAFE).fullmatch(val):
             result[key] = val
     for key in ('terminal', 'successful'):
         if isinstance(value.get(key), bool):
             result[key] = value[key]
     for key in ('usage', 'model_usage'):
         if isinstance(value.get(key), dict):
-            result[key] = _measurement(value[key])
+            result[key] = _measurement(value[key], model_keys=(key == 'model_usage'))
+            if key == 'model_usage':
+                dropped = len(value[key]) - len(result[key])
+                if dropped:
+                    result['model_usage_keys_dropped'] = dropped
     if _number(value.get('reported_estimate_usd')):
         result['reported_estimate_usd'] = value['reported_estimate_usd']
     return result
@@ -88,16 +93,25 @@ def project(attempts):
         attempt['coverage'] = ('available' if attempt['status'] == 'success' and not attempt.get('capture_error') and len(finals) == 1
                                and any(v is not None for v in attempt['metrics'].values()) else
                                'partial' if any(o['original'].get('usage') or o['original'].get('model_usage') for o in obs) else 'not_available')
-        attempt['reason'] = (attempt.get('capture_error') or
-                             ('terminal_missing' if not attempt.get('finished_at') else
-                              'ambiguous_terminals' if len(finals) > 1 else
-                              attempt['status'] if attempt['status'] != 'success' else
-                              'no_validated_counters' if not any(v is not None for v in attempt['metrics'].values()) else None))
+        if attempt['coverage'] != 'available':
+            # Partial native counters remain evidence, never validated normalized metrics.
+            attempt['metrics'] = {key: None for key in METRICS}
+        reason = attempt.get('capture_error')
+        if not reason:
+            if len(finals) > 1:
+                reason = 'ambiguous_terminals'
+            elif not attempt.get('finished_at'):
+                reason = 'unfinished' if finals else 'terminal_missing'
+            elif attempt['status'] != 'success':
+                reason = attempt['status']
+            elif not any(v is not None for v in attempt['metrics'].values()):
+                reason = 'no_validated_counters'
+        attempt['reason'] = reason
         # Terminal aggregates spanning models cannot belong to the last intermediate model.
         final = finals[0] if len(finals) == 1 else {}
         breakdown = final.get('model_usage') or {}
         model = final.get('model')
-        if len(breakdown) > 1:
+        if len(breakdown) > 1 or final.get('model_usage_keys_dropped'):
             model = None
         elif len(breakdown) == 1:
             only_model = next(iter(breakdown))

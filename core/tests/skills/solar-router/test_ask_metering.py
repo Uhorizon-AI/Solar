@@ -95,7 +95,7 @@ def test_metadata_only_and_unknown_fields_are_not_reply_text():
 
 
 @pytest.mark.parametrize('fails', [False, True])
-@pytest.mark.parametrize('capture_failure', ['none', 'observation', 'finish', 'timeout'])
+@pytest.mark.parametrize('capture_failure', ['none', 'observation', 'finish', 'timeout', 'oversized', 'io', 'oversized_observation'])
 def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime, tmp_path, monkeypatch, fails, capture_failure):
     import router
     import solar_state as st
@@ -120,9 +120,14 @@ def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime,
     # Failure case emits a native Codex terminal counter before exiting nonzero.
     if fails:
         events=[{'type':'turn.completed','usage':{'input_tokens':5,'output_tokens':2}}]
+    if capture_failure == 'oversized_observation':
+        events.insert(0, {'type':'turn.started','usage':{'input_tokens':3}})
+        events[-1]['usage']['oversized_measurement'] = {
+            str(i): {str(j):j for j in range(128)} for i in range(128)}
     stub.write_text('#!'+sys.executable+'\nimport sys,json,time\n'
                     'if "--version" in sys.argv: print("fixture-1");sys.exit()\n'+
                     ('print("malformed",flush=True)\n' if capture_failure == 'timeout' else '')+
+                    ('print(json.dumps({"type":"tool_result","text":"x"*(2*1024*1024)}),flush=True)\n' if capture_failure == 'oversized' else '')+
                     'for x in '+repr(events)+': print(json.dumps(x),flush=True)\n'+
                     ('time.sleep(5)\n' if capture_failure == 'timeout' else '')+
                     'sys.exit('+str(int(fails))+')\n')
@@ -132,11 +137,14 @@ def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime,
                  provider='codex',execution=dict(task_id=task,token=token,profile='ask_readonly_v1'))
     if capture_failure == 'timeout':
         monkeypatch.setenv('SOLAR_ROUTER_TIMEOUT_SEC', '1')
-    if capture_failure == 'observation':
+    if capture_failure in ('observation', 'io'):
         original = st.Session.token_observe
         def write_then_fail(self, *args, **kwargs):
             original(self, *args, **kwargs)
-            raise st.FormatError('token_observation_too_large')
+            if capture_failure == 'observation':
+                raise st.FormatError('token_observation_too_large')
+            import sqlite3
+            raise sqlite3.OperationalError('fixture unavailable')
         monkeypatch.setattr(st.Session, 'token_observe', write_then_fail)
     elif capture_failure == 'finish':
         import sqlite3
@@ -144,7 +152,7 @@ def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime,
             raise sqlite3.OperationalError('fixture busy')
         monkeypatch.setattr(st.Session, 'token_attempt_finish', finish_unavailable)
     result=router.route(json.dumps(payload))
-    failed = fails or capture_failure in ('observation', 'timeout')
+    failed = fails or capture_failure in ('io', 'timeout')
     assert result['status']==('failed' if failed else 'success'),result
     assert not result.get('claim_released')
     if not failed:
@@ -156,9 +164,18 @@ def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime,
         assert a['status']==('running' if capture_failure == 'finish' else 'timeout' if capture_failure == 'timeout' else 'failed' if failed else 'success')
         if capture_failure == 'timeout':
             assert a['capture_error'] == 'malformed_event'
-        assert a['observations'][0]['original']['usage']['input_tokens']==(5 if fails else 0)
+        if capture_failure == 'finish':
+            assert a['reason'] == 'unfinished'
+        if capture_failure == 'oversized':
+            assert a['capture_error'] == 'event_too_large'
+        if capture_failure in ('observation', 'oversized_observation'):
+            assert a['capture_error'] == 'observation_rejected'
+        if failed or capture_failure in ('finish', 'observation', 'oversized', 'oversized_observation'):
+            assert not usage['subtotals']
+            assert all(v is None for v in a['metrics'].values())
+        assert a['observations'][0]['original']['usage']['input_tokens']==(3 if capture_failure == 'oversized_observation' else 5 if fails else 0)
         assert token not in json.dumps(usage)
-        incomplete = failed or capture_failure == 'finish'
+        incomplete = failed or capture_failure in ('finish', 'observation', 'oversized', 'oversized_observation')
         assert a['coverage']==('partial' if incomplete else 'available')
         assert usage['coverage']['input_tokens']['available'] == int(not incomplete)
 
@@ -238,3 +255,34 @@ def test_codex_failed_terminal_survives_transport_and_prevents_ambiguous_metrics
     if completed_first:
         assert data['attempts'][0]['reason'] == 'ambiguous_terminals'
         assert data['attempts'][0]['coverage'] == 'partial'
+    else:
+        assert data['attempts'][0]['reason'] == 'failed'
+        assert data['attempts'][0]['coverage'] == ('partial' if failed_usage is not None else 'not_available')
+
+
+@pytest.mark.parametrize('provider', ['codex', 'claude', 'agent', 'agy'])
+@pytest.mark.parametrize('newline', [True, False])
+def test_large_final_answer_is_preserved_and_measurement_still_selected(tmp_path, monkeypatch, provider, newline):
+    # Generate the answer inside the child, not as an oversized OS command argument.
+    import ask_metering
+    original = ask_metering.tempfile.TemporaryFile
+    files = []
+    def tracked_file(*args, **kwargs):
+        stream = original(*args, **kwargs)
+        files.append(stream)
+        return stream
+    monkeypatch.setattr(ask_metering.tempfile, 'TemporaryFile', tracked_file)
+    if provider == 'codex':
+        body = 'events=[{"type":"item.completed","item":{"type":"agent_message","text":answer}},{"type":"turn.completed","usage":{"input_tokens":2}}]\n'
+    elif provider == 'agy':
+        body = 'events=[{"event":"result","result":{"status":"SUCCESS","response":answer,"usage":{"input_tokens":2}}}]\n'
+    else:
+        body = 'events=[{"type":"result","subtype":"success","result":answer,"usage":{"input_tokens":2}}]\n'
+    body = 'answer="x"*(2*1024*1024)+"FINAL"\n'+body
+    body += 'sys.stdout.write("\\n".join(json.dumps(e) for e in events)'+(' + "\\n"' if newline else '')+');sys.stdout.flush()\n'
+    receiver = Observer()
+    result = run(provider,process(tmp_path,body),cwd=tmp_path,env=None,timeout=4,observer=receiver)
+    assert len(result) == 2*1024*1024+5 and result.endswith('FINAL')
+    assert files and all(stream.closed for stream in files)
+    assert receiver.problem is None
+    assert receiver.events[-1][1]['usage']['input_tokens'] == 2
