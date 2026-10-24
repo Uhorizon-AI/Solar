@@ -11,7 +11,8 @@ The router requests JSON events from Codex and streaming JSON from Claude,
 Cursor and Antigravity. Existing permission flags, selected sessions and the final
 plain-text answer remain unchanged. A per-invocation observer writes selected
 measurement fields through `solar-state`, before reading the next event. It drains
-stderr concurrently, bounds event size and enforces the question's wall deadline.
+stderr concurrently, discards oversized events through their next newline while
+marking measurement incomplete, and enforces the question's wall deadline.
 A persistence failure during event capture stops the invocation; previously committed
 observations stay. If only the final measurement-status write fails after a complete
 answer, the answer is returned and the unclosed attempt remains incomplete.
@@ -19,6 +20,10 @@ answer, the answer is returned and the unclosed attempt remains incomplete.
 Schema 8 adds a public random execution ID to each activation reservation and
 separate attempt/observation tables. Reservation adoption preserves that ID; a new
 activation receives another. Each invocation gets an attempt ID and router ID.
+Only one unfinished attempt may own an activation at a time. A repeated dispatch
+is rejected before launching another CLI; finished attempts permit an explicit
+later invocation. An unclosed attempt after a crash is retained, not silently
+replaced; a new activation is the recovery boundary for a new invocation.
 The reservation's secret token authorizes writes but is never part of the public
 measurement projection. Task configuration and approval snapshots are unchanged.
 
@@ -34,16 +39,19 @@ within bounded selections; this is not a full raw-event archive.
 - Zero means the CLI actually reported zero. Missing counters are `null`.
 - Input, output, cache read/write and reasoning remain separate native categories.
   Cache and reasoning may overlap other categories; there is no grand token total.
-- Exactly one successful terminal usage event can supply normalized counters.
+- Exactly one terminal event, successful and containing usage, can supply normalized counters.
   Intermediate events and model breakdowns remain evidence and are never added to
-  terminal counters. Multiple terminal candidates are ambiguous, not summed.
+  terminal counters. Every terminal counts towards ambiguity, even without usage;
+  multiple terminals are never treated as complete or summed.
 - An attempt is complete only after successful execution without capture errors.
   Failed, interrupted or ambiguous attempts retain their observations as partial
   evidence. They do not enter successful subtotals. Unfinished attempts survive a
   process crash and remain visibly incomplete.
 - Coverage is reported per metric against launched attempts. Compatible successful
   subtotals are grouped by provider, observed model and CLI version. An unknown
-  model keeps that attempt separate. Requested and observed model are distinct.
+  model keeps that attempt separate. A multi-model aggregate has no single observed
+  model; it never inherits an intermediate model or enters that model's subtotal.
+  Requested and observed model are distinct.
 - Subscription quota is account-wide and is never attributed through differences.
   A CLI-reported monetary estimate may survive as original evidence; it is neither
   a subscription charge nor an invoice. Manual prices and monetary totals are deferred.
@@ -59,6 +67,9 @@ Solar Console's task detail includes a token-usage panel: scope, metric coverage
 successful subtotals, execution/attempt identity and expandable measurement evidence.
 The same read-only projection is available through Solar MCP:
 `solar_search(scope="tasks", task_id="…", view="usage")`.
+The usage read also returns the task row_version; this versions the task definition,
+not measurement freshness. Public attempts use an explicit field selection and do
+not expose the local binary path. Session and router identities remain provenance.
 An empty panel means no observed attempts in this scope; it never claims zero use.
 
 ## Upgrade and verification
@@ -76,3 +87,8 @@ real model. Prior real CLI probes establish the shapes, not a live integrated cl
 Evidence reads currently load all stored observations; pagination is deferred.
 A successful Antigravity run remains unvalidated until quota permits an authorized
 smoke test. A live end-to-end check belongs after an explicitly authorized install.
+
+The CLI version probe invokes only `--version`, under the same wall deadline (at
+most five seconds), never a prompt or inference command. Failure leaves version
+unavailable and does not fail the question. It is checked per invocation to avoid
+assigning a cached version to a replaced binary.

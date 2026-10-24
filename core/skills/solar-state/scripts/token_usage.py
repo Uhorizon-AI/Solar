@@ -81,10 +81,9 @@ def project(attempts):
     for attempt in attempts:
         obs = attempt['observations']
         # A terminal event may precede cancellation. Its counters are evidence, not success.
-        finals = [o['original'] for o in obs if o['original'].get('terminal')
-                  and o['original'].get('successful') and isinstance(o['original'].get('usage'), dict)]
+        finals = [o['original'] for o in obs if o['original'].get('terminal')]
         attempt['metrics'] = {key: None for key in METRICS}
-        if len(finals) == 1:
+        if len(finals) == 1 and finals[0].get('successful') and isinstance(finals[0].get('usage'), dict):
             attempt['metrics'] = metrics(finals[0]['usage'])
         attempt['coverage'] = ('available' if attempt['status'] == 'success' and not attempt.get('capture_error') and len(finals) == 1
                                and any(v is not None for v in attempt['metrics'].values()) else
@@ -94,7 +93,16 @@ def project(attempts):
                               attempt['status'] if attempt['status'] != 'success' else
                               'ambiguous_terminals' if len(finals) > 1 else
                               'no_validated_counters' if not any(v is not None for v in attempt['metrics'].values()) else None))
-        attempt['model'] = next((o['original']['model'] for o in reversed(obs) if o['original'].get('model')), None)
+        # Terminal aggregates spanning models cannot belong to the last intermediate model.
+        final = finals[0] if len(finals) == 1 else {}
+        breakdown = final.get('model_usage') or {}
+        model = final.get('model')
+        if len(breakdown) > 1:
+            model = None
+        elif len(breakdown) == 1:
+            only_model = next(iter(breakdown))
+            model = only_model if not model or model == only_model else None
+        attempt['model'] = model
         launched = attempt['status'] not in {'prepared', 'not_launched'}
         for name in METRICS:
             coverage[name]['launched'] += int(launched)

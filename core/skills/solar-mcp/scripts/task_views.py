@@ -266,7 +266,7 @@ def view_task(task_id: str, view: str = "detail", section: str = "",
     with session as store:
         task = _resolve(store, task_id)
         if view == "usage":
-            return dict(id=task["id"], view=view, token_usage=store.task_token_usage(task["id"]))
+            return dict(id=task["id"], row_version=task["row_version"], view=view, token_usage=store.task_token_usage(task["id"]))
         events = [dict(ts=r["ts"], from_status=r["from_status"], to_status=r["to_status"],
                        actor=r["actor"])
                   for r in store.conn.execute(

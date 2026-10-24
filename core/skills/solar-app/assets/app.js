@@ -33,7 +33,7 @@
       usage_not_available: "Not available",
       usage_coverage: "Attempts with data / launched",
       usage_evidence: "Original measurement evidence",
-      usage_subtotal: "Known subtotal by provider and observed model",
+      usage_subtotal: "Known subtotal by provider, observed model and CLI version",
       usage_pending: "Incomplete or interrupted capture",
       page_title: "Solar local console",
       gap: "available once Solar knows who is speaking",
@@ -220,7 +220,7 @@
       usage_not_available: "No disponible",
       usage_coverage: "Intentos con datos / lanzados",
       usage_evidence: "Evidencia original de medición",
-      usage_subtotal: "Subtotal conocido por proveedor y modelo observado",
+      usage_subtotal: "Subtotal conocido por proveedor, modelo observado y versión CLI",
       usage_pending: "Captura incompleta o interrumpida",
       page_title: "Consola local de Solar",
       gap: "disponible cuando Solar sepa quién le habla",
@@ -1147,13 +1147,14 @@
     (usage.subtotals || []).forEach(function (group) {
       var vals = {};
       metrics.forEach(function (key) { vals[key] = asObject(asObject(group.metrics)[key]).subtotal; });
-      html += '<details><summary>' + esc(t("usage_subtotal") + " · " + group.provider + " · " + (group.model || t("usage_not_available"))) + '</summary>' + counters(vals) + '</details>';
+      html += '<details><summary>' + esc(t("usage_subtotal") + " · " + group.provider + " · " + (group.model || t("usage_not_available")) + " · " + (group.cli_version || t("usage_not_available"))) + '</summary>' + counters(vals) + '</details>';
     });
     attempts.forEach(function (a) {
       html += '<details><summary>' + esc(t("usage_attempt") + " " + a.id + " · " + a.provider + " · " + t("usage_" + a.coverage)) + '</summary>' +
         '<p>' + esc(t("usage_execution") + ": " + a.execution_id + " · " + a.status) + '</p>' +
         '<p>' + esc(t("usage_model") + ": " + (a.model || t("usage_not_available"))) + '</p>';
-      if (!a.finished_at || a.reason) html += '<p class="note">' + esc(t("usage_pending")) + '</p>';
+      if (!a.finished_at || a.capture_error) html += '<p class="note">' + esc(t("usage_pending")) + '</p>';
+      else if (a.reason) html += '<p class="note">' + esc(a.reason) + '</p>';
       html += counters(a.metrics) + '<details><summary>' + esc(t("usage_evidence")) + '</summary><pre>' +
         esc(JSON.stringify(a.observations || [], null, 2)) + '</pre></details></details>';
     });

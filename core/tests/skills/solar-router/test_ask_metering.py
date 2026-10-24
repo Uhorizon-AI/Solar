@@ -171,3 +171,42 @@ def test_final_record_without_newline_and_recoverable_codex_error(tmp_path):
     receiver = Observer()
     assert run('codex',cmd,cwd=tmp_path,env=None,timeout=2,observer=receiver) == 'FINAL'
     assert receiver.events[-1][1]['terminal'] and receiver.problem is None
+
+
+def test_oversized_tool_event_is_discarded_without_losing_final_answer(tmp_path):
+    cmd = process(tmp_path, 'print(json.dumps({"type":"tool_result","text":"x"*(2*1024*1024)}),flush=True)\n'
+                  'print(json.dumps({"type":"result","subtype":"success","result":"FINAL","usage":{"input_tokens":2}}),flush=True)\n')
+    receiver = Observer()
+    assert run('claude',cmd,cwd=tmp_path,env=None,timeout=3,observer=receiver) == 'FINAL'
+    assert receiver.problem == 'event_too_large'
+    assert receiver.events[-1][1]['usage']['input_tokens'] == 2
+
+
+def test_multimodel_terminal_does_not_inherit_intermediate_model(tmp_path):
+    events = [{'type':'assistant','message':{'model':'model-a','usage':{'input_tokens':1}}},
+              {'type':'result','subtype':'success','result':'FINAL','usage':{'input_tokens':20},
+               'modelUsage':{'model-a':{'inputTokens':10},'model-b':{'inputTokens':10}}}]
+    cmd = process(tmp_path,'for e in '+repr(events)+': print(json.dumps(e),flush=True)\n')
+    receiver = Observer()
+    assert run('claude',cmd,cwd=tmp_path,env=None,timeout=3,observer=receiver) == 'FINAL'
+    assert not receiver.events[-1][1].get('model')
+
+
+def test_version_probe_failure_does_not_lose_answer(tmp_path):
+    stub = tmp_path/'client'
+    stub.write_text('#!'+sys.executable+'\nimport sys,json\n'
+        'if "--version" in sys.argv: print("untrusted failed version");sys.exit(3)\n'
+        'print(json.dumps({"type":"result","subtype":"success","result":"FINAL","usage":{"input_tokens":0}}))\n')
+    stub.chmod(0o700)
+    receiver = Observer()
+    assert run('claude',[str(stub)],cwd=tmp_path,env=None,timeout=3,observer=receiver) == 'FINAL'
+    assert receiver.launch[1] is None
+
+
+def test_aggregate_without_breakdown_does_not_inherit_one_of_multiple_models(tmp_path):
+    events = [{'type':'assistant','message':{'model':m,'usage':{'input_tokens':1}}} for m in ['model-a','model-b']]
+    events.append({'type':'result','subtype':'success','result':'FINAL','usage':{'input_tokens':20}})
+    receiver = Observer()
+    cmd = process(tmp_path,'for e in '+repr(events)+': print(json.dumps(e),flush=True)\n')
+    assert run('claude',cmd,cwd=tmp_path,env=None,timeout=3,observer=receiver) == 'FINAL'
+    assert not receiver.events[-1][1].get('model')

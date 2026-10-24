@@ -313,6 +313,7 @@ MIGRATIONS += ("""
         cli_version TEXT
     );
     CREATE INDEX token_attempts_task ON token_attempts(task_id, started_at);
+    CREATE UNIQUE INDEX token_attempts_live ON token_attempts(execution_id) WHERE finished_at IS NULL;
     CREATE TABLE token_observations (
         attempt_id TEXT NOT NULL REFERENCES token_attempts(id),
         position INTEGER NOT NULL,
@@ -3620,6 +3621,9 @@ class Session:
                 raise ReviewInputsInvalid("review_input_mismatch")
             execution_id = conn.execute(
                 "SELECT execution_id FROM execution_reservations WHERE task_id = ?", (task_id,)).fetchone()[0]
+            if conn.execute("SELECT 1 FROM token_attempts WHERE execution_id = ? AND finished_at IS NULL",
+                            (execution_id,)).fetchone():
+                raise StateError("token_attempt_already_active")
             attempt_id = uuid.uuid4().hex
             conn.execute("INSERT INTO token_attempts "
                          "(id, task_id, execution_id, router_id, provider, requested_model, started_at) "
@@ -3677,7 +3681,9 @@ class Session:
         import token_usage
         attempts = []
         for row in self.conn.execute("SELECT * FROM token_attempts WHERE task_id = ? ORDER BY started_at, id", (task_id,)):
-            item = dict(row)
+            public_fields = ("id", "task_id", "execution_id", "router_id", "provider", "requested_model",
+                             "started_at", "finished_at", "status", "capture_error", "cli_version")
+            item = {key: row[key] for key in public_fields}
             item["observations"] = [dict(position=r["position"], captured_at=r["captured_at"],
                                          sha256=r["sha256"], original=json.loads(r["payload"]))
                                     for r in self.conn.execute("SELECT * FROM token_observations "

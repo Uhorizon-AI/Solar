@@ -72,7 +72,8 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
     deadline = time.monotonic() + timeout
     try:
         version = subprocess.run([cmd[0], '--version'], capture_output=True, text=True,
-                                 timeout=min(5, max(.01, timeout)), env=env, cwd=cwd).stdout.strip()[:160]
+                                 timeout=min(5, max(.01, timeout)), env=env, cwd=cwd)
+        version = version.stdout.strip()[:160] if version.returncode == 0 else None
     except (OSError, subprocess.SubprocessError):
         version = None
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -85,6 +86,8 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
     stdout = b''
     position = 0
     metadata = {}
+    observed_models = set()
+    discarding_line = False
     selector = selectors.DefaultSelector()
     try:
         observer.launched(cmd[0], version)
@@ -111,6 +114,9 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
                 while b'\n' in stdout:
                     line, stdout = stdout.split(b'\n', 1)
                     position += 1
+                    if discarding_line:
+                        discarding_line = False
+                        continue
                     if len(line) > MAX_LINE:
                         observer.capture_problem('event_too_large')
                         continue
@@ -129,9 +135,18 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
                                       'model': source_meta.get('model')}.items():
                         if isinstance(val, str):
                             metadata[name] = val
+                            if name == 'model':
+                                observed_models.add(val)
                     observation = selection(provider, event)
                     if observation is not None:
+                        explicit_model = observation.get('model')
+                        if explicit_model:
+                            observed_models.add(explicit_model)
+                            metadata['model'] = explicit_model
                         observation = dict(metadata, **observation)
+                        if observation.get('terminal') and not explicit_model and (
+                                len(observed_models) > 1 or len(observation.get('model_usage') or {}) > 1):
+                            observation.pop('model', None)
                         observer(position, observation)
                     typ = event.get('type', event.get('event'))
                     if provider == 'codex':
@@ -153,7 +168,9 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
                         failed_terminal = not successful_terminal
                         final_text = event.get('result')
                 if len(stdout) > MAX_LINE:
-                    raise RuntimeError('cli_event_too_large')
+                    observer.capture_problem('event_too_large')
+                    stdout = b''
+                    discarding_line = True
         code = proc.wait(timeout=max(.01, deadline - time.monotonic()))
         if code or failed_terminal:
             from review_failure import summarize

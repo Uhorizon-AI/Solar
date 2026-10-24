@@ -126,3 +126,62 @@ def test_adoption_preserves_execution_but_rotates_private_owner(ready):
         with pytest.raises(st.StaleToken):
             store.token_observe(attempt, token, 1, observation(input_tokens=1))
         store.token_observe(attempt, taken['token'], 1, observation(input_tokens=1))
+
+
+@pytest.mark.parametrize('second_success', [True, False])
+def test_every_terminal_counts_towards_ambiguity_even_without_usage(ready, second_success):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        attempt = store.token_attempt_start(task, token, 'r', 'codex')
+        store.token_attempt_launch(attempt, token, binary='codex', cli_version='1')
+        store.token_observe(attempt, token, 1, observation(input_tokens=10))
+        store.token_observe(attempt, token, 2, dict(terminal=True, successful=second_success))
+        store.token_attempt_finish(attempt, token, 'success')
+        data = store.task_token_usage(task)
+        assert data['attempts'][0]['reason'] == 'ambiguous_terminals'
+        assert data['attempts'][0]['coverage'] == 'partial'
+        assert data['attempts'][0]['metrics']['input_tokens'] is None
+        assert not data['subtotals']
+
+
+def test_multimodel_aggregate_never_belongs_to_last_intermediate_model(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store, 'claude')
+        attempt = store.token_attempt_start(task, token, 'r', 'claude')
+        store.token_attempt_launch(attempt, token, binary='/private/path/client', cli_version='1')
+        store.token_observe(attempt, token, 1, dict(model='model-a', usage={'input_tokens':1}))
+        store.token_observe(attempt, token, 2, dict(terminal=True,successful=True,model='model-a',
+            usage={'input_tokens':20},model_usage={'model-a':{'inputTokens':10},'model-b':{'inputTokens':10}}))
+        store.token_attempt_finish(attempt, token, 'success')
+        data = store.task_token_usage(task)
+        assert data['attempts'][0]['model'] is None
+        assert data['subtotals'][0]['model'] is None
+        assert data['subtotals'][0]['metrics']['input_tokens']['subtotal'] == 20
+        assert '/private/path/client' not in json.dumps(data)
+
+
+def test_same_activation_cannot_launch_two_live_attempts(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        attempt = store.token_attempt_start(task, token, 'first', 'codex')
+        with pytest.raises(st.StateError, match='token_attempt_already_active'):
+            store.token_attempt_start(task, token, 'duplicate', 'codex')
+        store.token_attempt_finish(attempt, token, 'not_launched')
+        other = store.token_attempt_start(task, token, 'retry', 'codex')
+        assert other != attempt
+
+
+def test_v7_existing_reservations_receive_public_identity_and_accept_measurement(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        store.conn.execute('DROP TABLE token_observations')
+        store.conn.execute('DROP TABLE token_attempts')
+        store.conn.execute('ALTER TABLE execution_reservations DROP COLUMN execution_id')
+        store.conn.execute('PRAGMA user_version = 7')
+    with st.cutover(ready) as cut:
+        cut.upgrade_schema()
+    with st.session(ready, auto_backup=False) as store:
+        reservations = store.reservations()
+        assert all(r['execution_id'] and r['execution_id'] != r['token'] for r in reservations)
+        attempt = store.token_attempt_start(task, token, 'after-upgrade', 'codex')
+        assert store.task_token_usage(task)['attempts'][0]['id'] == attempt
