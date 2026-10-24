@@ -117,7 +117,7 @@ def project(attempts):
             only_model = next(iter(breakdown))
             model = only_model if not model or model == only_model else None
         attempt['model'] = model
-        launched = attempt['status'] not in {'prepared', 'not_launched'}
+        launched = attempt.get('launch_confirmed', attempt['status'] not in {'prepared', 'not_launched'})
         for name in METRICS:
             coverage[name]['launched'] += int(launched)
             coverage[name]['available'] += int(launched and attempt['coverage'] == 'available' and attempt['metrics'][name] is not None)

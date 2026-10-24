@@ -233,3 +233,16 @@ def test_partial_attempt_keeps_native_counters_only_in_evidence(ready):
         assert all(v is None for v in data['attempts'][0]['metrics'].values())
         assert data['attempts'][0]['observations'][0]['original']['usage']['input_tokens'] == 10
         assert not data['subtotals']
+
+
+def test_adopting_prepared_attempt_does_not_invent_a_confirmed_launch(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        store.token_attempt_start(task, token, 'before-launch', 'codex')
+        store.conn.execute("UPDATE execution_reservations SET lease_expires_at = '2000-01-01T00:00:00Z'")
+        assert store.task_adopt(task, 'replacement', identity=lambda pid: None, groups=lambda pgid: [])['adopted']
+        data = store.task_token_usage(task)
+        assert data['attempts'][0]['status'] == 'failed'
+        assert data['attempts'][0]['launch_confirmed'] is False
+        assert data['coverage']['input_tokens']['launched'] == 0
+        assert data['attempts'][0]['metrics']['input_tokens'] is None

@@ -3690,6 +3690,7 @@ class Session:
             public_fields = ("id", "task_id", "execution_id", "router_id", "provider", "requested_model",
                              "started_at", "finished_at", "status", "capture_error", "cli_version")
             item = {key: row[key] for key in public_fields}
+            item["launch_confirmed"] = row["binary"] is not None
             item["observations"] = [dict(position=r["position"], captured_at=r["captured_at"],
                                          sha256=r["sha256"], original=json.loads(r["payload"]))
                                     for r in self.conn.execute("SELECT * FROM token_observations "

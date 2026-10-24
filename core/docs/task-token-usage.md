@@ -63,7 +63,9 @@ within bounded selections; this is not a full raw-event archive.
   subtotals. Unfinished attempts survive a process crash and remain visibly
   incomplete. `terminal_missing` means no terminal was received; `unfinished` means
   a terminal was received but the final measurement-status write is missing.
-- Coverage is reported per metric against launched attempts. Compatible successful
+- Coverage is reported per metric against confirmed CLI launches. The public
+  `launch_confirmed` flag uses saved launch metadata, not terminal status: an
+  abandoned prepared attempt never invents a confirmed launch. Compatible successful
   subtotals are grouped by provider, observed model and CLI version. An unknown
   model keeps that attempt separate. A multi-model aggregate has no single observed
   model; it never inherits an intermediate model or enters that model's subtotal.
