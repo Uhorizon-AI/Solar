@@ -73,7 +73,7 @@ TOOLS = {
             "scope=operations: what solar_execute can run, with authority and summary. "
             "scope=resources: the open solar:// resources (uri reads one). "
             "scope=tasks: list/filter tasks (query, state, limit), or one task with task_id and "
-            "view=detail|instructions|config|status|result|error|history (default detail). "
+            "view=detail|instructions|config|status|result|error|history|usage (default detail). "
             "Task reads return row_version, which mutating operations require."),
         inputSchema=dict(type="object", properties=dict(
             scope=dict(type="string", enum=_SCOPES),

@@ -124,13 +124,14 @@ def test_every_view_reads_and_none_writes(solar_env):
                                      ("scheduled_timezone", '"Europe/Madrid"')], body)
         before = store.task_export(task_id)
     views = {view: read(task_id=task_id, view=view) for view in
-             ("detail", "instructions", "config", "status", "result", "error", "history")}
+             ("detail", "instructions", "config", "status", "result", "error", "history", "usage")}
     assert all(not error for _, error in views.values())
     instructions = views["instructions"][0]["result"]["instructions"]
     assert "Do it." in instructions and "Boom." not in instructions
     assert views["result"][0]["result"]["results"][0]["text"].startswith("## Result")
     assert views["error"][0]["result"]["errors"][0]["text"].startswith("## Execution Error")
     assert views["config"][0]["result"]["config"]["scheduled_timezone"] == "Europe/Madrid"
+    assert views["usage"][0]["result"]["token_usage"]["attempt_count"] == 0
     assert views["history"][0]["result"]["count"] == 1
     section, error = read(task_id=task_id, view="instructions", section="Steps")
     assert not error and section["result"]["instructions"].startswith("## Steps")
@@ -152,8 +153,40 @@ def test_scope_closes_its_own_arguments(solar_env):
 def test_tool_description_names_the_task_views():
     tool = mcp_server.TOOLS["solar_search"]
     description = tool["description"]
-    for view in ("detail", "instructions", "config", "status", "result", "error", "history"):
+    for view in ("detail", "instructions", "config", "status", "result", "error", "history", "usage"):
         assert view in description
     assert "row_version" in description and "grants no authority" in description
     assert set(tool["inputSchema"]["properties"]) == {
         "scope", "query", "limit", "preferred_namespace", "state", "task_id", "view", "section", "uri"}
+
+
+def test_usage_matches_console_with_zero_missing_and_partial_failure_without_writes(solar_env):
+    import runtime_views
+    from reservation_tokens import token_of
+    with solar_state.session() as store:
+        task = store.task_create([('title',json.dumps('Measured question')),('provider',json.dumps('codex')),
+            ('access_policy',json.dumps(dict(version=1,mode='read',scopes=[str(solar_env.workspace)],resources=[]))),
+            ('execution_profile',json.dumps('ask_readonly_v1'))], 'Fixture only.\n')
+        store.task_approve(task, expected_row_version=store.task_get(task)['row_version'])
+        assert store.task_claim_detail(task,'worker')['claimed']
+        token = token_of(store,task)
+        for n, successful in enumerate([True, False]):
+            a = store.token_attempt_start(task,token,'router-'+str(n),'codex')
+            store.token_attempt_launch(a,token,binary='fixture',cli_version='1')
+            store.token_observe(a,token,1,dict(terminal=successful,successful=successful,
+                usage={'input_tokens':0} if successful else {'output_tokens':3}))
+            store.token_attempt_finish(a,token,'success' if successful else 'failed')
+        before = store.conn.serialize()
+        expected = runtime_views.console_task_detail(store,task)['token_usage']
+        version = store.task_get(task)['row_version']
+    reply,error = read(task_id=task,view='usage')
+    assert not error
+    assert reply['result']['row_version'] == version
+    assert reply['result']['token_usage'] == expected
+    complete = next(a for a in expected['attempts'] if a['status'] == 'success')
+    partial = next(a for a in expected['attempts'] if a['status'] == 'failed')
+    assert complete['metrics']['input_tokens'] == 0
+    assert complete['metrics']['output_tokens'] is None
+    assert partial['coverage'] == 'partial'
+    with solar_state.read_session() as store:
+        assert store.conn.serialize() == before

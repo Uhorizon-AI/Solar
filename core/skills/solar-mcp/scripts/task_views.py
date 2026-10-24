@@ -19,7 +19,7 @@ from mcp_context import OperationError  # noqa: E402
 import runtime_views  # noqa: E402  (solar-state/scripts is on sys.path via mcp_context)
 
 _UTC = datetime.timezone.utc
-_VIEWS = ("detail", "instructions", "config", "status", "result", "error", "history")
+_VIEWS = ("detail", "instructions", "config", "status", "result", "error", "history", "usage")
 _LEGACY_STATE = {"drafts": "draft"}
 _RUNTIME_SECTIONS = ("Execution Error", "Subtask results", "Delivery")
 _RESULT_SECTIONS = ("Result", "Resultado", "Delivery", "Subtask results")
@@ -265,6 +265,8 @@ def view_task(task_id: str, view: str = "detail", section: str = "",
                else solar_state.read_session())
     with session as store:
         task = _resolve(store, task_id)
+        if view == "usage":
+            return dict(id=task["id"], row_version=task["row_version"], view=view, token_usage=store.task_token_usage(task["id"]))
         events = [dict(ts=r["ts"], from_status=r["from_status"], to_status=r["to_status"],
                        actor=r["actor"])
                   for r in store.conn.execute(

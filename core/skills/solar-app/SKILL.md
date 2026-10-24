@@ -254,3 +254,7 @@ its frontmatter folded until opened.
 
 Landing these sources does not mean installed acceptance: install and client
 publication are still required before claiming it.
+
+## Task token usage
+
+Task detail renders the read-only token usage projection, including unavailable metrics and partial coverage. See [scope and semantics](../../docs/task-token-usage.md).

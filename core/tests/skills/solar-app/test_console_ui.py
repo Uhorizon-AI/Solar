@@ -444,6 +444,24 @@ async function settled() {
       recurring_max_runs: 5, resources: ["res-a", "res-b"],
     },
   };
+  curated.token_usage = {
+    coverage: { input_tokens: { available: 1, launched: 2 } },
+    subtotals: [
+      { provider: "codex", model: "model-fixture", cli_version: "version-one", metrics: {} },
+      { provider: "codex", model: "model-fixture", cli_version: "version-two", metrics: {} }
+    ],
+    attempts: [{ id: "attempt-fixture", execution_id: "activation-fixture", provider: "codex", model: "model-fixture",
+      status: "success", coverage: "available", finished_at: "2026-10-24", metrics: { input_tokens: 0, output_tokens: 13 },
+      observations: [{ original: { usage: { output_tokens: 13 }, event_id: "<script>unsafe()</script>" } }] },
+      { id: "partial-fixture", execution_id: "activation-fixture", provider: "agent", coverage: "partial",
+        status: "running", reason: "unfinished", metrics: {}, observations: [] },
+      { id: "terminal-missing-fixture", execution_id: "activation-fixture", provider: "agent", coverage: "partial",
+        status: "running", reason: "terminal_missing", metrics: {}, observations: [] },
+      { id: "owner-lost-fixture", execution_id: "activation-fixture", provider: "agent", coverage: "partial",
+        status: "failed", finished_at: "2026-10-25", capture_error: "owner_lost", reason: "owner_lost", metrics: {}, observations: [] },
+      { id: "failed-fixture", execution_id: "activation-fixture", provider: "agent", coverage: "partial",
+        status: "failed", finished_at: "2026-10-24", reason: "failed", metrics: {}, observations: [] }]
+  };
   const complete = Object.assign({}, curated, {
     record: {
       id: "err-1", agent: "fixture",
@@ -469,6 +487,24 @@ async function settled() {
   await settled();
   let view = page.els.health.innerHTML;
   need(view, "Context and follow-up", "curated title");
+  need(view, "Token consumption", "token panel appears in task detail");
+  need(view, "attempt-fixture", "attempt identity");
+  need(view, "activation-fixture", "public activation identity");
+  need(view, "<dd>0</dd>", "observed zero stays visible");
+  need(view, "Not available", "missing counter stays absent");
+  need(view, "Partial", "incomplete capture label");
+  need(view, "Final measurement status was not saved", "unfinished reason remains visible");
+  need(view, "Terminal event not received", "missing terminal reason remains visible");
+  need(view, "Previous execution owner was lost", "capture error reason remains visible");
+  need(view, "1 / 2", "coverage denominator is launched attempts");
+  need(view, "Original measurement evidence", "evidence is expandable");
+  need(view, "model-fixture · version-one", "first subtotal identifies CLI version");
+  need(view, "model-fixture · version-two", "second subtotal identifies CLI version");
+  const failedCapture = view.slice(view.indexOf("failed-fixture"));
+  need(failedCapture, '<p class="note">Execution failed</p>', "finished failure explains status");
+  lack(failedCapture, "Incomplete or interrupted capture", "finished failure is not a pending capture");
+  lack(view, "<script>unsafe()", "evidence is escaped");
+
   need(view, "<dt class=\"k\">Agent</dt><dd>fixture-agent</dd>", "curated agent");
   need(view, "Compare the weekly report", "next check");
   need(view, "2026-10-13", "check date");

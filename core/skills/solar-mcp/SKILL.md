@@ -205,3 +205,7 @@ unknown providers refuse.
 The packet profile is unchanged and production profiles remain disabled. See
 [repository review](../../docs/repository-readonly-review.md) for scope, host
 policy checks, CLI restrictions, limitations and the opt-in inference-free probe.
+
+## Task token usage
+
+Task reads accept `view="usage"` for the same token counters, evidence and coverage shown in Console. See [scope and semantics](../../docs/task-token-usage.md).

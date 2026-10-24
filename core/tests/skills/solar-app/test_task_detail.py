@@ -160,6 +160,7 @@ class TaskDetailTests(unittest.TestCase):
             body='# Private instructions')
         handler = self.get({'task_id': [task_id]})
         self.assertEqual(handler.status, 200)
+        self.assertEqual(handler.payload.pop('token_usage')['attempt_count'], 0)
         self.assertEqual(handler.payload, {
             'id': task_id, 'context_error': None,
             'context': {'agent': 'fixture', 'continuity_checkpoint': checkpoint},
@@ -182,7 +183,7 @@ class TaskDetailTests(unittest.TestCase):
         self.assertEqual(record['future_column'], 'new value')
         self.assertIn(['future_field', ' {broken JSON'], record['frontmatter'])
         self.assertEqual(handler.payload['body_html'], '<h1>Hello</h1><p>&lt;script&gt;alert(1)&lt;/script&gt;</p>')
-        self.assertEqual(set(handler.payload), {'id', 'context', 'context_error', 'configuration', 'record', 'body_html'})
+        self.assertEqual(set(handler.payload), {'id', 'context', 'context_error', 'configuration', 'record', 'body_html', 'token_usage'})
 
     def test_bad_requests_and_missing_task(self):
         self.assertEqual(self.get({}).status, 400)
@@ -237,6 +238,7 @@ class TaskDetailTests(unittest.TestCase):
             store.conn.execute('UPDATE tasks SET frontmatter = ? WHERE id = ?', ('[broken', task_id))
         handler = self.get({'task_id': [task_id]})
         self.assertEqual(handler.status, 200)
+        self.assertEqual(handler.payload.pop('token_usage')['attempt_count'], 0)
         self.assertEqual(handler.payload, {'id': task_id, 'context': None,
                                            'context_error': 'frontmatter_unreadable', 'configuration': {}})
         handler = self.get({'task_id': [task_id], 'full': ['1']})

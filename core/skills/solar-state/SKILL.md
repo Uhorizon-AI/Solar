@@ -234,3 +234,7 @@ unknown providers refuse.
 The packet profile is unchanged and production profiles remain disabled. See
 [repository review](../../docs/repository-readonly-review.md) for scope, host
 policy checks, CLI restrictions, limitations and the opt-in inference-free probe.
+
+## Task token usage
+
+`token_usage.py` is an internal, side-effect-free measurement selector/projector; the router writes through Session methods, never directly to SQLite. See [scope and semantics](../../docs/task-token-usage.md).

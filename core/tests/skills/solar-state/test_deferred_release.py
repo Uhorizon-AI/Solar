@@ -93,6 +93,9 @@ def test_queued_recurrence_cannot_claim_itself_before_ending_is_released(store):
 
 
 def v6(store):
+    store.conn.execute("DROP TABLE token_observations")
+    store.conn.execute("DROP TABLE token_attempts")
+    store.conn.execute("ALTER TABLE execution_reservations DROP COLUMN execution_id")
     store.conn.execute("DROP TABLE execution_lifecycle")
     store.conn.execute("DROP TABLE execution_groups")
     store.conn.execute("DROP TABLE execution_cleanup_holds")
@@ -111,7 +114,7 @@ def test_v6_cutover_imports_legacy_holds_once_and_preserves_applied_policy(ready
     legacy.write_text("{broken" if bad else json.dumps(dict(holds=[held])))
     with st.cutover(ready) as cut:
         result = cut.upgrade_schema()
-    assert result["from_version"] == 6 and result["to_version"] == 7 and result["backup"]
+    assert result["from_version"] == 6 and result["to_version"] == st.SCHEMA_VERSION and result["backup"]
     assert not legacy.exists() and legacy.with_suffix(".json.migrated-v7").exists()
     holds = st.cleanup_holds(ready)
     assert holds[0].get("unreadable") if bad else holds == [held]

@@ -344,7 +344,7 @@ def _downgrade(runtime: Path, to: int) -> None:
     `queued -> draft` row the v5 migration inserted). Older bases are modelled with _v1_base."""
     assert to in (4, 5), "model older bases with _v1_base or a real dump"
     conn = sqlite3.connect(st.db_path(runtime))
-    for table in ("execution_lifecycle", "execution_groups", "execution_cleanup_holds", *V6_TABLES):
+    for table in ("token_observations", "token_attempts", "execution_lifecycle", "execution_groups", "execution_cleanup_holds", *V6_TABLES):
         conn.execute(f"DROP TABLE {table}")
     if to == 4:
         conn.execute("DELETE FROM transitions WHERE from_status = 'queued' AND to_status = 'draft'")
@@ -1176,7 +1176,7 @@ def test_every_supported_source_version_reaches_the_reservations_schema(runtime,
     expected = _base_at(runtime, source)
     result = cut.migrate(runtime, lister=quiet)
     assert result["already"] is True
-    assert _schema(runtime)[0] == st.SCHEMA_VERSION == 7
+    assert _schema(runtime)[0] == st.SCHEMA_VERSION == 8
     assert _counts(runtime) == expected                              # tasks, links, audit, events kept
     assert _policy(runtime) == INITIAL_POLICY                        # capacity 1, nothing reserved
     conn = sqlite3.connect(st.db_path(runtime))
@@ -1235,7 +1235,7 @@ def test_a_policy_other_than_the_initial_one_right_after_the_upgrade_is_refused(
     ("DELETE FROM async_policy", "execution policy has 0 rows"),
     ("UPDATE async_policy SET provider_capacity = 'not json'", "unreadable JSON"),
     ("UPDATE tasks SET status = 'active' WHERE id = 'p1'; "
-     "INSERT INTO execution_reservations VALUES ('t', 'zz', 'w', '', 'exclusive', 0, 0, 'a', 'a', 'a', NULL, NULL)",
+     "INSERT INTO execution_reservations VALUES ('t', 'zz', 'w', '', 'exclusive', 0, 0, 'a', 'a', 'a', NULL, NULL, 'exec-test')",
      "do not belong to an active task"),
 ])
 def test_the_records_of_the_migration_are_validated(runtime, damage, message):
@@ -1424,7 +1424,7 @@ def test_v6_to_v7_keeps_an_already_applied_noninitial_policy(runtime):
         conn.execute("UPDATE async_policy SET revision = 4, global_capacity = 3")
     before = _policy(runtime)
     assert cut.migrate(runtime, lister=quiet)["already"] is True
-    assert _schema(runtime)[0] == 7 and _policy(runtime) == before
+    assert _schema(runtime)[0] == st.SCHEMA_VERSION and _policy(runtime) == before
 
 
 @pytest.mark.parametrize("kind", ["ending", "hold"])

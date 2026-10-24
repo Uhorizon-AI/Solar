@@ -413,6 +413,7 @@ def console_task_detail(store, task_id, full=False):
     except (TypeError, ValueError):
         pass
     result = {'id': task_id, 'context': None, 'context_error': None, 'configuration': {}}
+    result['token_usage'] = store.task_token_usage(task_id)
     if not isinstance(task.get('frontmatter'), (list, tuple)):
         result['context_error'] = 'frontmatter_unreadable'
     else:
