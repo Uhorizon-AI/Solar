@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.58.4] - 2026-10-24
+### Fixed
+- fix(router): honor payload channel on restricted run start row
+- fix(router): record channel=mcp for restricted runs
+
+
 ## [0.58.3] - 2026-10-24
 ### Fixed
 - fix(ci): avoid hardlinks in install test bootstrap clone
