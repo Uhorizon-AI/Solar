@@ -482,3 +482,87 @@ def test_authorizing_a_question_shows_its_declared_zone(solar_env, language, lab
 def test_the_ask_schema_says_every_declared_path_counts(solar_env):
     described = docs(id="operation:task.create")["arguments"]["properties"]["ask"]["description"]
     assert "every declared path" in described
+
+
+@pytest.mark.parametrize("language,fragment", [("en", "read-only is a request to the client"),
+                                               ("es", "«solo lectura» es una petición al cliente")])
+def test_the_confirmation_says_that_read_only_is_a_request(solar_env, language, fragment):
+    import approval_text
+    args = arguments(solar_env)
+    assert fragment in approval_text.render("task.create", args, seconds=120, lang=language)[0]
+    made = run("task.create", args)
+    text = approval_text.render("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]),
+                                seconds=120, lang=language)[0]
+    assert fragment in text
+
+
+def test_the_descriptions_say_that_a_clients_settings_can_still_allow_writes(solar_env):
+    schema = operations.OPERATIONS["task.create"].summary
+    assert "Codex with on-request approvals" in schema
+    assert "Codex with on-request approvals" in operations._ASK["description"]
+
+
+@pytest.mark.parametrize("language,fragment", [("en", "read-only is a request to the client"),
+                                               ("es", "«solo lectura» es una petición al cliente")])
+def test_a_declared_read_shows_the_same_note_as_ask(solar_env, language, fragment):
+    import approval_text
+    args = derived(solar_env, [str(solar_env.workspace)])
+    assert fragment in approval_text.render("task.create", args, seconds=120, lang=language)[0]
+
+
+@pytest.mark.parametrize("language,fragment", [("en", "read-only is a request to the client"),
+                                               ("es", "«solo lectura» es una petición al cliente")])
+def test_authorizing_a_question_shows_the_note(solar_env, language, fragment):
+    import approval_text
+    made = run("task.create", arguments(solar_env, folder="outside"))
+    text = approval_text.render("task.authorize_run", dict(task_id=made["id"], expected_row_version=made["row_version"]),
+                                seconds=120, lang=language)[0]
+    assert fragment in text
+
+
+def test_a_task_that_is_not_a_question_shows_no_note(solar_env):
+    import approval_text
+    plain = dict(title="Write", instructions="Edit files.", provider="codex")
+    assert "read-only is a request" not in approval_text.render("task.create", plain, seconds=120, lang="en")[0]
+
+
+def test_a_queued_question_does_not_claim_to_be_confined(solar_env):
+    made = run("task.create", arguments(solar_env))
+    assert "request, not a guarantee" in made["next"] and "confined" not in made["next"]
+
+
+def test_the_published_description_says_that_a_clients_settings_can_still_allow_writes(solar_env):
+    published = json.dumps(docs(id="operation:task.create"))
+    assert "can still allow writes" in published and "automatic reviewer" in published
+
+
+def test_the_revision_of_an_ordinary_task_is_not_turned_into_a_question(solar_env):
+    import approval_text
+    ordinary = run("task.create", dict(title="Plain", instructions="Do it.", provider="codex"))
+    args = dict(derived(solar_env, [str(solar_env.workspace)]), queue=False, revises_task_id=ordinary["id"])
+    assert "read-only is a request" not in approval_text.render("task.create", args, seconds=120, lang="en")[0]
+    revised = run("task.create", args)
+    assert "execution_profile" not in fields(revised["id"])
+
+
+def test_the_revision_of_a_question_keeps_the_note_and_the_profile(solar_env):
+    import approval_text
+    question = run("task.create", arguments(solar_env))
+    args = dict(derived(solar_env, [str(solar_env.workspace)]), queue=False, revises_task_id=question["id"])
+    assert "read-only is a request" in approval_text.render("task.create", args, seconds=120, lang="en")[0]
+    assert fields(run("task.create", args)["id"])["execution_profile"] == "ask_readonly_v1"
+
+
+@pytest.mark.parametrize("operation", ["task.approve", "task.authorize_run"])
+def test_a_stored_declared_read_shows_the_note_when_it_is_approved(solar_env, operation):
+    import approval_text
+    made = run("task.create", dict(derived(solar_env, [str(solar_env.workspace)]), queue=False))
+    text = approval_text.render(operation, dict(task_id=made["id"], expected_row_version=made["row_version"]),
+                                seconds=120, lang="en")[0]
+    assert "read-only is a request to the client" in text
+
+
+def test_a_queued_review_still_says_it_is_confined(solar_env):
+    frontmatter = [("execution_profile", json.dumps("repository_readonly_v1"))]
+    assert "confined" in operations._queued_next(frontmatter, "low")
+    assert "not confined" in operations._queued_next(frontmatter, "high")

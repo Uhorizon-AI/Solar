@@ -92,6 +92,7 @@ COPY = {
         access="Access", access_none="not declared: the task runs alone, with nothing else active",
         access_read="reads", access_write="writes", access_resources="holds exclusively",
         path_zone="Path zone", zone_note="declared, not verified",
+        ask_note="read-only is a request to the client; its own settings can still allow writes (Codex with on-request approvals and an automatic reviewer, for example)",
         async_propose_head="Prepare the async execution configuration",
         async_apply_head="Apply the async execution configuration",
         async_capacity="Simultaneous tasks", async_providers="Limit per provider",
@@ -156,6 +157,7 @@ COPY = {
         access="Acceso", access_none="sin declarar: la tarea se ejecuta sola, sin nada más activo",
         access_read="lee", access_write="escribe", access_resources="reserva en exclusiva",
         path_zone="Zona de la ruta", zone_note="declarada, no verificada",
+        ask_note="«solo lectura» es una petición al cliente; su propia configuración aún puede permitir escribir (Codex con aprobaciones on-request y un revisor automático, por ejemplo)",
         async_propose_head="Preparar la configuración de ejecución async",
         async_apply_head="Aplicar la configuración de ejecución async",
         async_capacity="Tareas simultáneas", async_providers="Límite por proveedor",
@@ -359,12 +361,14 @@ def _review_rows(copy, spec):
     return rows
 
 
-def _ask_rows(spec):
-    """A question names the folder the client starts in and the model, nothing else."""
+def _ask_rows(spec, copy):
+    """A question names the folder the client starts in and the model, plus the one-line limit of the request."""
     if spec is None:
         return []
-    return [("profile", "ask_readonly_v1"), ("folder", _line(spec.get("folder") or "workspace", 1000)),
+    rows = [("profile", "ask_readonly_v1"), ("folder", _line(spec.get("folder") or "workspace", 1000)),
             ("model", _line(spec["model"], _VALUE) if spec.get("model") else _NO_MODEL)]
+    rows.append(("note", _line(copy["ask_note"], 2 * _VALUE)))
+    return rows
 
 
 def _zone_text(copy, got) -> str:
@@ -372,6 +376,19 @@ def _zone_text(copy, got) -> str:
     if len(got["paths"]) > 1:
         text += ": " + "; ".join(f"{item['path']} → {item['zone']}" for item in got["paths"])
     return _line(text, 2 * _VALUE)
+
+
+def _derived_ask(args):
+    """A declared read with a client and a prompt is the same question as `ask: {}`, unless it revises a
+    task that was not a question (the executor decides that with the same helper)."""
+    import operations
+    if not operations._is_derived_question(args):
+        return None
+    try:
+        allowed = operations._derive_allowed(args)
+    except Exception:  # noqa: BLE001 - cannot read the source: warn rather than stay silent
+        allowed = True
+    return {} if allowed else None
 
 
 def _zone_rows(copy, args):
@@ -414,7 +431,7 @@ def _create(copy, args):
     if "access_policy" in args:
         rows.append((copy["access"], _access_text(copy, dict(args["access_policy"], version=1))))
     rows += _review_rows(copy, args.get("review") or args.get("review_batch") or {})
-    rows += _ask_rows(args.get("ask"))
+    rows += _ask_rows(args.get("ask") if args.get("ask") is not None else _derived_ask(args), copy)
     rows += _zone_rows(copy, args)
     rows.append((copy["instructions"], _excerpt(copy, args["instructions"])))
     rows.append((copy["effect"], copy["revise_effect" if source else "create_effect"]))
@@ -627,7 +644,7 @@ def _context_rows(copy: dict, facts: dict) -> list:
         manifest = json.loads(values.get("review_input_manifest") or "null")
         if values.get("execution_profile") == "ask_readonly_v1" and isinstance(manifest, dict):
             folder = json.loads(manifest["user_prompt"])["cwd"]
-            rows += _ask_rows(dict(folder=folder, model=manifest.get("model")))
+            rows += _ask_rows(dict(folder=folder, model=manifest.get("model")), copy)
             rows += _stored_zone_rows(copy, values, folder)
         elif values.get("execution_profile") and isinstance(manifest, dict):
             spec = dict(profile=values["execution_profile"], model=manifest.get("model"))
