@@ -70,3 +70,23 @@ not a substitute for the tests above.
 Evidence pagination remains deferred. Antigravity successful real measurement and
 live router-to-Console acceptance remain unvalidated. No installation/client sync
 was performed; deployment is a separate authorized operation.
+
+## Codex failed-terminal correction — 2026-10-25
+
+Code commit: `ca9d550`. `turn.failed` is now retained as a Codex terminal with
+`successful=False`, whether or not it carries usage. A completed/failed terminal
+sequence is ambiguous; all normalized counters are null and no subtotal is added.
+The ambiguity reason takes precedence over the generic failed status.
+
+Four subprocess regressions cover a failed terminal alone and after completion,
+with and without counters, through transport, selection and projection. On this
+code, **86 tests pass** (10.14 s): router `test_ask_metering.py`, state
+`test_token_usage.py`, MCP `test_task_views.py`, Console `test_console_ui.py` and
+`test_task_detail.py`. Router/state skill packages and diff whitespace checks pass.
+No real provider was invoked by these tests. Earlier broad results above apply
+to `864a25b`, not to this later code commit.
+
+Completed review results: Claude approved `1ef14cf` at 94%; Codex required this
+additional correction at 89%. Agent's 86% review concerns the older `6b78bc6`;
+its findings were already addressed in `1ef14cf`. None is a final approval of
+`ca9d550`. The PR remains draft pending revalidation.
