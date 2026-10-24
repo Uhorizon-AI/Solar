@@ -223,7 +223,9 @@ BOOT_SRC="$TMP/boot-src"
 BOOT_INSTALL="$TMP/boot-sha-install"
 BOOT_BIN="$TMP/boot-sha-bin"
 mkdir -p "$BOOT_BIN"
-git -c core.hooksPath=/dev/null clone --local "$FRAMEWORK_ROOT" "$BOOT_SRC" >/dev/null 2>&1
+# The checkout and TMP may be on different filesystems on CI runners.
+# Copy objects instead of requiring hardlinks, and retain clone errors in CI logs.
+git -c core.hooksPath=/dev/null clone --local --no-hardlinks "$FRAMEWORK_ROOT" "$BOOT_SRC" >/dev/null
 cp "$INSTALL_SCRIPT" "$BOOT_SRC/core/skills/solar-client/scripts/install_solar_client.sh"
 cp "$BOOTSTRAP_SCRIPT" "$BOOT_SRC/core/skills/solar-client/scripts/bootstrap_solar_client.sh"
 cp "$CORE_ROOT/skills/solar-client/scripts/client_lib.sh" \
