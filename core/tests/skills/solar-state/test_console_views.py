@@ -214,6 +214,7 @@ def test_console_task_detail_returns_curated_context_and_configuration(ready):
     ])
     with st.read_session(ready) as store:
         result = runtime_views.console_task_detail(store, task_id)
+    assert result.pop("token_usage")["attempt_count"] == 0
     assert result == {
         "id": task_id, "context_error": None,
         "context": {"agent": "fixture", "planet": "solar", "continuity_checkpoint": checkpoint},
@@ -237,6 +238,7 @@ def test_console_task_detail_unreadable_frontmatter(ready):
         store.conn.execute("UPDATE tasks SET frontmatter = ? WHERE id = ?", ("[broken", task_id))
     with st.read_session(ready) as store:
         result = runtime_views.console_task_detail(store, task_id)
+        assert result.pop("token_usage")["attempt_count"] == 0
         assert result == {"id": task_id, "context": None, "context_error": "frontmatter_unreadable",
                           "configuration": {}}
         full = runtime_views.console_task_detail(store, task_id, full=True)

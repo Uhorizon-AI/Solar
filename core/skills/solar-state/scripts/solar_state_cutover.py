@@ -542,7 +542,8 @@ def _read_stamp(base: Path) -> str:
 # What the reservation migration adds to a base, and what each must hold.
 ASYNC_TABLES = ("async_policy", "execution_reservations", "reservation_scopes",
                 "reservation_resources", "task_authorizations", "claim_waits",
-                "execution_lifecycle", "execution_groups", "execution_cleanup_holds")
+                "execution_lifecycle", "execution_groups", "execution_cleanup_holds",
+                "token_attempts", "token_observations")
 
 
 def _check_async_records(conn: sqlite3.Connection, *, initial: bool) -> list[str]:

@@ -1301,6 +1301,7 @@ def _restricted_route(payload, *, stream=False):
     task_id = token = None
     provider = None
     adapter = None
+    observation_sink = None
     try:
         if not isinstance(identity, dict) or set(identity) != {"task_id", "token", "profile"}:
             raise ProfileError("review_input_mismatch")
@@ -1331,12 +1332,19 @@ def _restricted_route(payload, *, stream=False):
                   execution_profile=profile, review_input_digest=fields["review_input_digest"], stream=stream)
         review = dict(manifest=manifest, expected=fields["review_input_digest"],
                       profile=profile, before_launch=before_launch)
+        if profile == "ask_readonly_v1":
+            from ask_metering import StateObserver
+            observation_sink = StateObserver(solar_state, task_id, token, router_id, provider, manifest.get("model"))
+            review["observation_sink"] = observation_sink
         adapter = PROVIDERS[provider]
         adapter.last_review_preflight = {}
         if stream:
             output = "".join(adapter.stream("", review=review))
         else:
             output = adapter.run("", review=review)
+        if observation_sink is not None:
+            observation_sink.finish("success")
+            observation_sink = None
         audit_log(router_id, "end", status="success", task_id=task_id,
                   provider=provider, execution_profile=profile, stream=stream,
                   usage=getattr(adapter, "last_usage", None),
@@ -1378,10 +1386,20 @@ def _restricted_route(payload, *, stream=False):
                   stream=stream, review_preflight=metadata)
         return dict(_failed(request_id, "state_unavailable", str(exc), provider), review_preflight=metadata)
     except Exception as exc:
+        if observation_sink is not None and isinstance(exc, TimeoutError):
+            observation_sink.capture_problem("cli_timeout")
         metadata = getattr(adapter, "last_review_preflight", {})
         audit_log(router_id, "end", status="failed", task_id=task_id,
                   error_code="provider_locked_failed", stream=stream, review_preflight=metadata)
         return dict(_failed(request_id, "provider_locked_failed", str(exc), provider), review_preflight=metadata)
+
+    finally:
+        if observation_sink is not None:
+            try:
+                observation_sink.finish("timeout" if observation_sink.problem == "cli_timeout" else "failed")
+            except solar_state.StateError:
+                # Already committed observations remain; unfinished attempts project as partial.
+                pass
 
 
 # ---------------------------------------------------------------------------

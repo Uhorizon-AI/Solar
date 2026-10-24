@@ -473,7 +473,7 @@ def test_migration_inserts_queued_to_draft_on_existing_db(ready):
         task_id = queued(store)
         rows_before = [tuple(r) for r in store.conn.execute("SELECT id, row_version, frontmatter FROM tasks")]
         store.conn.execute("DELETE FROM transitions WHERE from_status='queued' AND to_status='draft'")
-        for table in ("execution_groups", "execution_lifecycle", "execution_cleanup_holds", "reservation_resources", "reservation_scopes", "execution_reservations",
+        for table in ("token_observations", "token_attempts", "execution_groups", "execution_lifecycle", "execution_cleanup_holds", "reservation_resources", "reservation_scopes", "execution_reservations",
                       "task_authorizations", "claim_waits", "async_policy"):
             store.conn.execute(f"DROP TABLE {table}")        # the v6 tables: this base is a v4
         store.conn.execute("PRAGMA user_version = 4")
@@ -483,7 +483,7 @@ def test_migration_inserts_queued_to_draft_on_existing_db(ready):
     with solar_state.cutover(ready) as cut:
         result = cut.upgrade_schema()
         again = cut.upgrade_schema()
-    assert result["from_version"] == 4 and result["to_version"] == solar_state.SCHEMA_VERSION == 7
+    assert result["from_version"] == 4 and result["to_version"] == solar_state.SCHEMA_VERSION == 8
     assert result["backup"], "an existing base is copied first"
     assert again["from_version"] == solar_state.SCHEMA_VERSION and again["backup"] is None     # idempotent
     with solar_state.session() as store:

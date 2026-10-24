@@ -136,7 +136,7 @@ class BaseProvider(ABC):
         """The client's native read-only switches and their label; none by default."""
         return [], "none"
 
-    def ask(self, prompt: str, *, cwd=None, model: Optional[str] = None) -> AskResult:
+    def ask(self, prompt: str, *, cwd=None, model: Optional[str] = None, observer=None) -> AskResult:
         """Put one question to the client with the session the user logged in with.
 
         The environment is the caller's own: HOME and the client's config
@@ -156,9 +156,18 @@ class BaseProvider(ABC):
         if not parts:
             raise RuntimeError(f"{new_key} is empty")
         cmd = [self.resolve_binary(parts[0]), *self.ask_prefix(), *flags,
-               *(["--model", model] if model else []), *self.ask_separator(), prompt]
+               *(["--model", model] if model else []),
+               *(self._measurement_flags() if observer is not None else []), *self.ask_separator(), prompt]
         env = self.prepare_env(os.environ.copy())
         self.log_prompt(prompt)
+        if observer is not None:
+            from ask_metering import run
+            try:
+                output = run(self.name, cmd, cwd=start, env=env,
+                             timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300), observer=observer)
+            except (TimeoutError, subprocess.TimeoutExpired):
+                raise TimeoutError(f"{self.name} exit timeout") from None
+            return AskResult(self.name, self.clean_output(output), mode)
         try:
             proc = subprocess.run(cmd, text=True, capture_output=True,
                                   timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300), cwd=start, env=env)
@@ -171,6 +180,10 @@ class BaseProvider(ABC):
         if not output:
             raise RuntimeError("provider returned empty output")
         return AskResult(self.name, self.clean_output(output), mode)
+
+    def _measurement_flags(self):
+        from ask_metering import output_flags
+        return output_flags(self.name)
 
     def ask_prefix(self) -> List[str]:
         """Non-interactive entry switches of the client, before the read-only ones."""
@@ -206,13 +219,13 @@ class BaseProvider(ABC):
             raise RuntimeError("provider returned empty output")
         return self.clean_output(output)
 
-    def run_review(self, *, manifest, expected, profile, before_launch=lambda: None) -> str:
+    def run_review(self, *, manifest, expected, profile, before_launch=lambda: None, observation_sink=None) -> str:
         """Restricted execution has one launch constructor and a fixed JSON output format."""
         import json
         from execution_profiles import restricted_launch, ASK_PROFILE
         self.last_usage = None
         if profile == ASK_PROFILE:
-            return self._run_ask_profile(manifest, expected, before_launch)
+            return self._run_ask_profile(manifest, expected, before_launch, observation_sink)
         with restricted_launch(self, manifest, expected, profile=profile,
                                before_launch=before_launch) as (argv, env, cwd):
             # Inherit the router's process group: the worker owns that group and
@@ -266,12 +279,15 @@ class BaseProvider(ABC):
                     + result["result"])
         return result["result"]
 
-    def _run_ask_profile(self, manifest, expected, before_launch) -> str:
+    def _run_ask_profile(self, manifest, expected, before_launch, observation_sink=None) -> str:
         """A question: verified twice around the launch, answered with the client's own session."""
         from execution_profiles import verify_envelope, ask_prompt, ask_cwd, ASK_PROFILE
         approved = verify_envelope(manifest, expected, provider=self.name, profile=ASK_PROFILE)
         before_launch()
-        answer = self.ask(ask_prompt(approved), cwd=ask_cwd(approved), model=approved.get("model"))
+        kwargs = dict(cwd=ask_cwd(approved), model=approved.get("model"))
+        if observation_sink is not None:
+            kwargs["observer"] = observation_sink
+        answer = self.ask(ask_prompt(approved), **kwargs)
         self.last_review_preflight = dict(provider=self.name, read_only_mode=answer.mode)
         return answer.text
 

@@ -294,6 +294,35 @@ MIGRATIONS += ("""
     )
 """,)
 
+# v8: public activation identity and durable CLI token evidence, outside task approval fields.
+MIGRATIONS += ("""
+    ALTER TABLE execution_reservations ADD COLUMN execution_id TEXT;
+    UPDATE execution_reservations SET execution_id = lower(hex(randomblob(16)));
+    CREATE TABLE token_attempts (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id),
+        execution_id TEXT NOT NULL,
+        router_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        requested_model TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL DEFAULT 'prepared',
+        capture_error TEXT,
+        binary TEXT,
+        cli_version TEXT
+    );
+    CREATE INDEX token_attempts_task ON token_attempts(task_id, started_at);
+    CREATE TABLE token_observations (
+        attempt_id TEXT NOT NULL REFERENCES token_attempts(id),
+        position INTEGER NOT NULL,
+        captured_at TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        PRIMARY KEY (attempt_id, position)
+    )
+""",)
+
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -1786,10 +1815,10 @@ def _reserve_with(conn, task_id: str, pairs: list[list[str]], worker: Optional[s
     now = _now()
     conn.execute(
         "INSERT INTO execution_reservations (token, task_id, worker, provider, access_class, "
-        "policy_revision, handoff, claimed_at, heartbeat_at, lease_expires_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "policy_revision, handoff, claimed_at, heartbeat_at, lease_expires_at, execution_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (token, task_id, worker, access.provider, "exclusive" if access.exclusive else "declared",
-         policy["revision"], 1 if handoff else 0, now, now, _lease_expiry()))
+         policy["revision"], 1 if handoff else 0, now, now, _lease_expiry(), uuid.uuid4().hex))
     for path, mode in access.scopes:
         conn.execute("INSERT OR IGNORE INTO reservation_scopes (token, path, mode) VALUES (?, ?, ?)",
                      (token, path, mode))
@@ -3581,6 +3610,80 @@ class Session:
         return found
 
     # -- audit -------------------------------------------------------------
+
+    def token_attempt_start(self, task_id: str, token: str, router_id: str,
+                            provider: str, requested_model=None) -> str:
+        """Bind evidence to the live activation without touching its approved snapshot."""
+        with _transaction(self.conn) as conn:
+            snap = _execution_snapshot(conn, task_id, token, "ask_readonly_v1")
+            if snap["fields"]["provider"] != provider:
+                raise ReviewInputsInvalid("review_input_mismatch")
+            execution_id = conn.execute(
+                "SELECT execution_id FROM execution_reservations WHERE task_id = ?", (task_id,)).fetchone()[0]
+            attempt_id = uuid.uuid4().hex
+            conn.execute("INSERT INTO token_attempts "
+                         "(id, task_id, execution_id, router_id, provider, requested_model, started_at) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (attempt_id, task_id, execution_id, router_id, provider, requested_model, _now()))
+        return attempt_id
+
+    def _token_attempt_owner(self, conn, attempt_id, token):
+        row = conn.execute("SELECT * FROM token_attempts WHERE id = ?", (attempt_id,)).fetchone()
+        if row is None:
+            raise StateError("token_attempt_unknown")
+        res = conn.execute("SELECT token, execution_id FROM execution_reservations WHERE task_id = ?",
+                           (row["task_id"],)).fetchone()
+        if not res or not token or res["token"] != token or res["execution_id"] != row["execution_id"]:
+            raise StaleToken("token attempt owner is not current")
+        if row["finished_at"]:
+            raise StateError("token_attempt_finished")
+        return row
+
+    def token_attempt_launch(self, attempt_id, token, *, binary, cli_version):
+        with _transaction(self.conn) as conn:
+            self._token_attempt_owner(conn, attempt_id, token)
+            conn.execute("UPDATE token_attempts SET status = 'running', binary = ?, cli_version = ? WHERE id = ?",
+                         (str(binary)[:1000], str(cli_version)[:160] if cli_version else None, attempt_id))
+
+    def token_observe(self, attempt_id, token, position, observation):
+        """A committed selection of original measurement fields; replay is idempotent."""
+        import token_usage
+        payload = token_usage.clean_observation(observation)
+        if not isinstance(position, int) or isinstance(position, bool) or position < 1:
+            raise FormatError("token_position_invalid")
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if len(raw.encode()) > 65536:
+            raise FormatError("token_observation_too_large")
+        digest = hashlib.sha256(raw.encode()).hexdigest()
+        with _transaction(self.conn) as conn:
+            self._token_attempt_owner(conn, attempt_id, token)
+            prior = conn.execute("SELECT sha256 FROM token_observations WHERE attempt_id = ? AND position = ?",
+                                 (attempt_id, position)).fetchone()
+            if prior and prior[0] != digest:
+                raise FormatError("token_observation_conflict")
+            conn.execute("INSERT OR IGNORE INTO token_observations VALUES (?, ?, ?, ?, ?)",
+                         (attempt_id, position, _now(), raw, digest))
+
+    def token_attempt_finish(self, attempt_id, token, status, capture_error=None):
+        if status not in {"success", "failed", "timeout", "not_launched"}:
+            raise FormatError("token_status_invalid")
+        with _transaction(self.conn) as conn:
+            self._token_attempt_owner(conn, attempt_id, token)
+            conn.execute("UPDATE token_attempts SET status = ?, finished_at = ?, capture_error = ? WHERE id = ?",
+                         (status, _now(), capture_error, attempt_id))
+
+    def task_token_usage(self, task_id):
+        """Read-only projection used by both Console and MCP, never a second ledger."""
+        import token_usage
+        attempts = []
+        for row in self.conn.execute("SELECT * FROM token_attempts WHERE task_id = ? ORDER BY started_at, id", (task_id,)):
+            item = dict(row)
+            item["observations"] = [dict(position=r["position"], captured_at=r["captured_at"],
+                                         sha256=r["sha256"], original=json.loads(r["payload"]))
+                                    for r in self.conn.execute("SELECT * FROM token_observations "
+                                    "WHERE attempt_id = ? ORDER BY position", (row["id"],))]
+            attempts.append(item)
+        return token_usage.project(attempts)
 
     def audit_append(self, row: dict) -> int:
         line = json.dumps(row, ensure_ascii=True)

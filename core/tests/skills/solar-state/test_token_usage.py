@@ -1,0 +1,114 @@
+"""Durable native counters: approvals unchanged, partial failures, replay and reactivation."""
+import json
+import sqlite3
+
+import pytest
+import solar_state as st
+import runtime_views
+from reservation_tokens import token_of
+from test_ask_concurrency import question
+
+
+def active(store, provider='codex'):
+    task = question(store, 'Meter', provider)
+    assert store.task_claim_detail(task, 'worker')['claimed']
+    token = token_of(store, task)
+    return task, token
+
+
+def observation(**usage):
+    return dict(event_type='turn.completed', terminal=True, successful=True, usage=usage,
+                model='model-a', session_id='synthetic-session')
+
+
+def test_commit_reopen_replay_and_snapshot_unchanged(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        before = store.execution_snapshot(task, token)
+        attempt = store.token_attempt_start(task, token, 'router-a', 'codex')
+        store.token_attempt_launch(attempt, token, binary='/synthetic/codex', cli_version='1')
+        item = observation(input_tokens=0, output_tokens=13, cached_input_tokens=8, future_counter=9)
+        store.token_observe(attempt, token, 1, item)
+        store.token_observe(attempt, token, 1, item)
+        assert store.execution_snapshot(task, token) == before
+        store.token_attempt_finish(attempt, token, 'success')
+    with st.read_session(ready) as store:
+        data = store.task_token_usage(task)
+        assert len(data['attempts'][0]['observations']) == 1
+        counts = data['attempts'][0]['metrics']
+        assert counts['input_tokens'] == 0 and counts['output_tokens'] == 13
+        assert counts['cache_write_tokens'] is None
+        assert data['coverage']['cache_write_tokens'] == dict(available=0, launched=1)
+        assert data['subtotals'][0]['metrics']['output_tokens']['subtotal'] == 13
+        assert runtime_views.console_task_detail(store, task)['token_usage'] == data
+
+
+def test_partial_crash_survives_without_terminal_and_never_becomes_zero(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        attempt = store.token_attempt_start(task, token, 'r', 'codex')
+        store.token_attempt_launch(attempt, token, binary='codex', cli_version='1')
+        store.token_observe(attempt, token, 1, dict(usage={'input_tokens': 8}, terminal=False))
+    with st.read_session(ready) as store:
+        d = store.task_token_usage(task)
+        assert d['attempts'][0]['coverage'] == 'partial'
+        assert d['attempts'][0]['reason'] == 'terminal_missing'
+        assert d['attempts'][0]['metrics']['output_tokens'] is None
+        assert not d['subtotals']
+
+
+def test_error_zero_is_preserved_but_not_a_validated_success(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store, 'agy')
+        attempt = store.token_attempt_start(task, token, 'r', 'agy')
+        store.token_attempt_launch(attempt, token, binary='agy', cli_version='1')
+        store.token_observe(attempt, token, 1, dict(terminal=True, successful=False,
+                           usage={'input_tokens': 0, 'output_tokens': 0}))
+        store.token_attempt_finish(attempt, token, 'failed')
+        data = store.task_token_usage(task)
+        assert data['attempts'][0]['observations'][0]['original']['usage']['input_tokens'] == 0
+        assert data['attempts'][0]['metrics']['input_tokens'] is None
+        assert not data['subtotals']
+
+
+def test_privacy_conflicting_replay_and_stale_owner(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        attempt = store.token_attempt_start(task, token, 'r', 'codex')
+        store.token_observe(attempt, token, 1, dict(usage={'input_tokens': 2, 'secret': 'hidden'},
+                            result='private response', tools=['private']))
+        original = store.task_token_usage(task)['attempts'][0]['observations'][0]['original']
+        assert 'private' not in json.dumps(original) and 'hidden' not in json.dumps(original)
+        with pytest.raises(st.FormatError, match='conflict'):
+            store.token_observe(attempt, token, 1, observation(input_tokens=5))
+        with pytest.raises(st.StaleToken):
+            store.token_observe(attempt, 'old-token', 2, observation(input_tokens=5))
+        store.task_release(task, 'worker', token=token)
+        assert store.task_claim_detail(task, 'worker')['claimed']
+        second = store.token_attempt_start(task, token_of(store, task), 'r2', 'codex')
+        data = store.task_token_usage(task)['attempts']
+        assert data[0]['execution_id'] != data[1]['execution_id']
+        assert second != attempt
+
+
+def test_rejected_launch_not_in_coverage_and_schema_unknown(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        attempt = store.token_attempt_start(task, token, 'r', 'codex')
+        store.token_attempt_finish(attempt, token, 'not_launched')
+        assert store.task_token_usage(task)['coverage']['input_tokens']['launched'] == 0
+
+
+def test_v7_upgrade_is_new_backed_up_migration(ready):
+    with st.session(ready, auto_backup=False) as store:
+        store.conn.execute('DROP TABLE token_observations')
+        store.conn.execute('DROP TABLE token_attempts')
+        store.conn.execute('ALTER TABLE execution_reservations DROP COLUMN execution_id')
+        store.conn.execute('PRAGMA user_version = 7')
+    with st.cutover(ready) as cut:
+        result = cut.upgrade_schema()
+    assert result['from_version'] == 7 and result['to_version'] == st.SCHEMA_VERSION
+    assert result['backup']
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        assert store.reservation_for(task)['execution_id'] != token

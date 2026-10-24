@@ -444,6 +444,14 @@ async function settled() {
       recurring_max_runs: 5, resources: ["res-a", "res-b"],
     },
   };
+  curated.token_usage = {
+    coverage: { input_tokens: { available: 1, launched: 2 } }, subtotals: [],
+    attempts: [{ id: "attempt-fixture", execution_id: "activation-fixture", provider: "codex", model: "model-fixture",
+      status: "success", coverage: "available", finished_at: "2026-10-24", metrics: { input_tokens: 0, output_tokens: 13 },
+      observations: [{ original: { usage: { output_tokens: 13 }, event_id: "<script>unsafe()</script>" } }] },
+      { id: "partial-fixture", execution_id: "activation-fixture", provider: "agent", coverage: "partial",
+        status: "running", metrics: {}, observations: [] }]
+  };
   const complete = Object.assign({}, curated, {
     record: {
       id: "err-1", agent: "fixture",
@@ -469,6 +477,16 @@ async function settled() {
   await settled();
   let view = page.els.health.innerHTML;
   need(view, "Context and follow-up", "curated title");
+  need(view, "Token consumption", "token panel appears in task detail");
+  need(view, "attempt-fixture", "attempt identity");
+  need(view, "activation-fixture", "public activation identity");
+  need(view, "<dd>0</dd>", "observed zero stays visible");
+  need(view, "Not available", "missing counter stays absent");
+  need(view, "Partial", "incomplete capture label");
+  need(view, "1 / 2", "coverage denominator is launched attempts");
+  need(view, "Original measurement evidence", "evidence is expandable");
+  lack(view, "<script>unsafe()", "evidence is escaped");
+
   need(view, "<dt class=\"k\">Agent</dt><dd>fixture-agent</dd>", "curated agent");
   need(view, "Compare the weekly report", "next check");
   need(view, "2026-10-13", "check date");

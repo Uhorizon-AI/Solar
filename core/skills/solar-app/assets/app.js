@@ -15,6 +15,26 @@
   var LANG = "en";
   var COPY = {
     en: {
+      usage_title: "Token consumption",
+      usage_scope: "CLI-reported tokens from Solar async questions only. Other client activity is not observed.",
+      usage_empty: "No token data recorded for this task.",
+      usage_native: "Categories follow each CLI. Cache or reasoning may be included in other counts; no combined total or subscription price is inferred.",
+      usage_attempt: "Attempt",
+      usage_execution: "Execution",
+      usage_provider: "Provider",
+      usage_model: "Observed model",
+      usage_input_tokens: "Input",
+      usage_output_tokens: "Output",
+      usage_cache_read_tokens: "Cache read",
+      usage_cache_write_tokens: "Cache write",
+      usage_reasoning_tokens: "Reasoning",
+      usage_available: "Available",
+      usage_partial: "Partial",
+      usage_not_available: "Not available",
+      usage_coverage: "Attempts with data / launched",
+      usage_evidence: "Original measurement evidence",
+      usage_subtotal: "Known subtotal by provider and observed model",
+      usage_pending: "Incomplete or interrupted capture",
       page_title: "Solar local console",
       gap: "available once Solar knows who is speaking",
       delegation: "Solar acts without asking you, only inside a written permission with limits and an expiry.",
@@ -182,6 +202,26 @@
       decisions_word: "decisions"
     },
     es: {
+      usage_title: "Consumo de tokens",
+      usage_scope: "Tokens informados por los CLI de preguntas async de Solar. La actividad fuera de Solar no se observa.",
+      usage_empty: "No hay datos de tokens registrados para esta tarea.",
+      usage_native: "Las categorías siguen a cada CLI. Caché o razonamiento pueden estar incluidos en otros contadores; no se deduce un total combinado ni precio de suscripción.",
+      usage_attempt: "Intento",
+      usage_execution: "Ejecución",
+      usage_provider: "Proveedor",
+      usage_model: "Modelo observado",
+      usage_input_tokens: "Entrada",
+      usage_output_tokens: "Salida",
+      usage_cache_read_tokens: "Lectura de caché",
+      usage_cache_write_tokens: "Escritura de caché",
+      usage_reasoning_tokens: "Razonamiento",
+      usage_available: "Disponible",
+      usage_partial: "Parcial",
+      usage_not_available: "No disponible",
+      usage_coverage: "Intentos con datos / lanzados",
+      usage_evidence: "Evidencia original de medición",
+      usage_subtotal: "Subtotal conocido por proveedor y modelo observado",
+      usage_pending: "Captura incompleta o interrumpida",
       page_title: "Consola local de Solar",
       gap: "disponible cuando Solar sepa quién le habla",
       delegation: "Solar actúa sin preguntarte, solo dentro de un permiso escrito con límites y caducidad.",
@@ -1084,6 +1124,42 @@
     return t("tc_this_task_s_context_could_not_be_read");
   }
 
+  function taskTokenUsage(usage) {
+    usage = asObject(usage);
+    var attempts = usage.attempts || [];
+    var metrics = ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens"];
+    var html = '<section class="token-usage" aria-label="' + esc(t("usage_title")) + '"><h3>' + esc(t("usage_title")) + '</h3>';
+    html += '<p class="note">' + esc(t("usage_scope")) + '</p>';
+    if (!attempts.length) return html + '<p class="note">' + esc(t("usage_empty")) + '</p></section>';
+    function counters(values) {
+      return '<dl class="kv wide">' + metrics.map(function (key) {
+        var value = asObject(values)[key];
+        return '<dt class="k">' + esc(t("usage_" + key)) + '</dt><dd>' +
+          esc(value == null ? t("usage_not_available") : String(value)) + '</dd>';
+      }).join("") + '</dl>';
+    }
+    html += '<p class="note">' + esc(t("usage_native")) + '</p><dl class="kv wide">';
+    metrics.forEach(function (key) {
+      var c = asObject(asObject(usage.coverage)[key]);
+      html += '<dt class="k">' + esc(t("usage_" + key)) + '</dt><dd>' + esc(String(c.available || 0) + " / " + String(c.launched || 0) + " · " + t("usage_coverage")) + '</dd>';
+    });
+    html += '</dl>';
+    (usage.subtotals || []).forEach(function (group) {
+      var vals = {};
+      metrics.forEach(function (key) { vals[key] = asObject(asObject(group.metrics)[key]).subtotal; });
+      html += '<details><summary>' + esc(t("usage_subtotal") + " · " + group.provider + " · " + (group.model || t("usage_not_available"))) + '</summary>' + counters(vals) + '</details>';
+    });
+    attempts.forEach(function (a) {
+      html += '<details><summary>' + esc(t("usage_attempt") + " " + a.id + " · " + a.provider + " · " + t("usage_" + a.coverage)) + '</summary>' +
+        '<p>' + esc(t("usage_execution") + ": " + a.execution_id + " · " + a.status) + '</p>' +
+        '<p>' + esc(t("usage_model") + ": " + (a.model || t("usage_not_available"))) + '</p>';
+      if (!a.finished_at || a.reason) html += '<p class="note">' + esc(t("usage_pending")) + '</p>';
+      html += counters(a.metrics) + '<details><summary>' + esc(t("usage_evidence")) + '</summary><pre>' +
+        esc(JSON.stringify(a.observations || [], null, 2)) + '</pre></details></details>';
+    });
+    return html + '</section>';
+  }
+
   function taskContext(task) {
     var title = t("tc_context_and_follow_up");
     var stamp = task.updated_at || "";
@@ -1149,7 +1225,7 @@
     else if (!contextFields) message = '<p class="note">' + esc(t(unshown ? "tc_context_shape_note" : (fields.length ? "tc_no_recorded_checkpoint" : "tc_no_recorded_context_execution_state_and"))) + '</p>';
     return heading + message + (fields.length ? '<dl class="kv wide">' + fields.join("") + '</dl>' : '') +
       '<p class="note">' + esc(t("tc_reading_this_record_does_not_verify_an_e")) + '</p>' +
-      fullRecord(task) + '</section>';
+      fullRecord(task) + '</section>' + taskTokenUsage(data.token_usage);
   }
 
   function fullRecord(task) {
