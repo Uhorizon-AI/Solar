@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.58.2] - 2026-10-24
+
 ### Changed
 - Say that the read-only mode of `ask` is a request that depends on each client, in the README, `AGENTS.md`, the readonly-review guide, the `task.create`, `ask` and `solar_execute` descriptions, and one line in the approval text (English and Spanish) shown for `ask` and for a declared read. Measured on 2026-10-23: Codex, launched with its read-only sandbox, created a file because its own settings (`on-request` approvals with an automatic reviewer) allow leaving the sandbox; Cursor (Ask mode) and Claude (plan mode) did not write. Solar does not override a client's approval policy.
 - Questions can share places once `ask_readonly_v1` is listed in `enabled_reader_profiles` (the registry already verifies it for the four clients); nine tests with the real registry cover mixed providers, per-provider limits and the two ways back (capacity 1, or removing the profile). Docs and comments no longer say that only Claude can share places.
