@@ -1,6 +1,6 @@
 # Task token usage
 
-Status: local implementation; review and PR validation pending.
+Status: implemented in draft PR #74; review of the latest corrections remains pending.
 
 ## Outcome
 
@@ -29,3 +29,19 @@ release, host-session measurement or real-provider integration claim is included
 
 A separate backlog issue was not created because the approval reviewer declined
 that additional publication. The authorized implementation and draft PR continue.
+
+## Local validation and review checkpoint
+
+- 2026-10-24: 24 focused storage/transport/integration tests pass after the final
+  corrections, including injected measurement-write failures and timeout with an
+  earlier malformed event. Console tests: 33 pass. Async executor/reservation tests:
+  24 pass. MCP task-view tests also pass (15 tests). No model calls in these checks.
+- The broad combined run reached 1,605 passing tests and four skips, then was
+  interrupted during an unrelated MCP transport wait. It is not a completed suite.
+- All four skill packages validate; JavaScript syntax and whitespace checks pass.
+- Claude reviewed `37e263e` and `f2ac657`. Confirmed capture/error-handling findings
+  were corrected and regression-tested. The last corrections have not received a
+  further Claude approval; two review rounds were used. Cursor review is pending.
+- Evidence pagination remains deferred. Antigravity successful real measurement and
+  live router-to-Console acceptance remain unvalidated. No installation/client sync
+  was performed; deployment is a separate authorized operation.

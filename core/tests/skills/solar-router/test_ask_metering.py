@@ -41,7 +41,7 @@ def test_native_shapes_preserve_zero_and_return_text_under_original_permissions(
     if provider == 'codex':
         events.insert(0, {'type':'item.completed','item':{'type':'agent_message','text':'SOLAR-METER-OK'}})
     stub = tmp_path/'client'
-    stub.write_text('#!'+sys.executable+'\nimport sys,json\n'
+    stub.write_text('#!'+sys.executable+'\nimport sys,json,time\n'
                     'if "--version" in sys.argv: print("fixture-1");sys.exit()\n'
                     'for x in '+repr(events)+': print(json.dumps(x),flush=True)\n')
     stub.chmod(0o700)
@@ -95,7 +95,7 @@ def test_metadata_only_and_unknown_fields_are_not_reply_text():
 
 
 @pytest.mark.parametrize('fails', [False, True])
-@pytest.mark.parametrize('capture_failure', ['none', 'observation', 'finish'])
+@pytest.mark.parametrize('capture_failure', ['none', 'observation', 'finish', 'timeout'])
 def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime, tmp_path, monkeypatch, fails, capture_failure):
     import router
     import solar_state as st
@@ -120,14 +120,18 @@ def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime,
     # Failure case emits a native Codex terminal counter before exiting nonzero.
     if fails:
         events=[{'type':'turn.completed','usage':{'input_tokens':5,'output_tokens':2}}]
-    stub.write_text('#!'+sys.executable+'\nimport sys,json\n'
-                    'if "--version" in sys.argv: print("fixture-1");sys.exit()\n'
-                    'for x in '+repr(events)+': print(json.dumps(x),flush=True)\n'
+    stub.write_text('#!'+sys.executable+'\nimport sys,json,time\n'
+                    'if "--version" in sys.argv: print("fixture-1");sys.exit()\n'+
+                    ('print("malformed",flush=True)\n' if capture_failure == 'timeout' else '')+
+                    'for x in '+repr(events)+': print(json.dumps(x),flush=True)\n'+
+                    ('time.sleep(5)\n' if capture_failure == 'timeout' else '')+
                     'sys.exit('+str(int(fails))+')\n')
     stub.chmod(0o700)
     monkeypatch.setattr(PROVIDERS['codex'],'resolve_binary',lambda _:str(stub))
     payload=dict(request_id='meter-fixture',text='not injected',channel='async-task',mode='direct_only',
                  provider='codex',execution=dict(task_id=task,token=token,profile='ask_readonly_v1'))
+    if capture_failure == 'timeout':
+        monkeypatch.setenv('SOLAR_ROUTER_TIMEOUT_SEC', '1')
     if capture_failure == 'observation':
         original = st.Session.token_observe
         def write_then_fail(self, *args, **kwargs):
@@ -140,7 +144,7 @@ def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime,
             raise sqlite3.OperationalError('fixture busy')
         monkeypatch.setattr(st.Session, 'token_attempt_finish', finish_unavailable)
     result=router.route(json.dumps(payload))
-    failed = fails or capture_failure != 'none'
+    failed = fails or capture_failure in ('observation', 'timeout')
     assert result['status']==('failed' if failed else 'success'),result
     assert not result.get('claim_released')
     if not failed:
@@ -149,11 +153,14 @@ def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime,
         usage=runtime_views.console_task_detail(store,task)['token_usage']
         a=usage['attempts'][0]
         assert store.reservation_for(task) is not None
-        assert a['status']==('running' if capture_failure == 'finish' else 'failed' if failed else 'success')
+        assert a['status']==('running' if capture_failure == 'finish' else 'timeout' if capture_failure == 'timeout' else 'failed' if failed else 'success')
+        if capture_failure == 'timeout':
+            assert a['capture_error'] == 'malformed_event'
         assert a['observations'][0]['original']['usage']['input_tokens']==(5 if fails else 0)
         assert token not in json.dumps(usage)
-        assert a['coverage']==('partial' if failed else 'available')
-        assert usage['coverage']['input_tokens']['available'] == int(not failed)
+        incomplete = failed or capture_failure == 'finish'
+        assert a['coverage']==('partial' if incomplete else 'available')
+        assert usage['coverage']['input_tokens']['available'] == int(not incomplete)
 
 
 def test_final_record_without_newline_and_recoverable_codex_error(tmp_path):

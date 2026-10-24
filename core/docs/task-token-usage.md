@@ -12,7 +12,9 @@ Cursor and Antigravity. Existing permission flags, selected sessions and the fin
 plain-text answer remain unchanged. A per-invocation observer writes selected
 measurement fields through `solar-state`, before reading the next event. It drains
 stderr concurrently, bounds event size and enforces the question's wall deadline.
-A persistence failure stops the invocation; previously committed observations stay.
+A persistence failure during event capture stops the invocation; previously committed
+observations stay. If only the final measurement-status write fails after a complete
+answer, the answer is returned and the unclosed attempt remains incomplete.
 
 Schema 8 adds a public random execution ID to each activation reservation and
 separate attempt/observation tables. Reservation adoption preserves that ID; a new
@@ -71,5 +73,6 @@ provider event shapes. It covers final-answer compatibility, missing versus zero
 partial failures, timeout/pipe draining, replay, owner changes, privacy selection,
 existing-version cutover and the shared Console/MCP read model. No test invokes a
 real model. Prior real CLI probes establish the shapes, not a live integrated claim.
+Evidence reads currently load all stored observations; pagination is deferred.
 A successful Antigravity run remains unvalidated until quota permits an authorized
 smoke test. A live end-to-end check belongs after an explicitly authorized install.
