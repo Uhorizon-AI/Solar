@@ -95,7 +95,8 @@ def test_metadata_only_and_unknown_fields_are_not_reply_text():
 
 
 @pytest.mark.parametrize('fails', [False, True])
-def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime, tmp_path, monkeypatch, fails):
+@pytest.mark.parametrize('capture_failure', ['none', 'observation', 'finish'])
+def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime, tmp_path, monkeypatch, fails, capture_failure):
     import router
     import solar_state as st
     import runtime_views
@@ -127,14 +128,39 @@ def test_router_to_durable_console_projection_with_actual_pipe(isolated_runtime,
     monkeypatch.setattr(PROVIDERS['codex'],'resolve_binary',lambda _:str(stub))
     payload=dict(request_id='meter-fixture',text='not injected',channel='async-task',mode='direct_only',
                  provider='codex',execution=dict(task_id=task,token=token,profile='ask_readonly_v1'))
+    if capture_failure == 'observation':
+        original = st.Session.token_observe
+        def write_then_fail(self, *args, **kwargs):
+            original(self, *args, **kwargs)
+            raise st.FormatError('token_observation_too_large')
+        monkeypatch.setattr(st.Session, 'token_observe', write_then_fail)
+    elif capture_failure == 'finish':
+        import sqlite3
+        def finish_unavailable(*args, **kwargs):
+            raise sqlite3.OperationalError('fixture busy')
+        monkeypatch.setattr(st.Session, 'token_attempt_finish', finish_unavailable)
     result=router.route(json.dumps(payload))
-    assert result['status']==('failed' if fails else 'success'),result
-    if not fails:
+    failed = fails or capture_failure != 'none'
+    assert result['status']==('failed' if failed else 'success'),result
+    assert not result.get('claim_released')
+    if not failed:
         assert result['reply_text']=='SOLAR-METER-OK'
     with st.read_session() as store:
         usage=runtime_views.console_task_detail(store,task)['token_usage']
         a=usage['attempts'][0]
-        assert a['status']==('failed' if fails else 'success')
+        assert store.reservation_for(task) is not None
+        assert a['status']==('running' if capture_failure == 'finish' else 'failed' if failed else 'success')
         assert a['observations'][0]['original']['usage']['input_tokens']==(5 if fails else 0)
         assert token not in json.dumps(usage)
-        assert a['coverage']==('partial' if fails else 'available')
+        assert a['coverage']==('partial' if failed else 'available')
+        assert usage['coverage']['input_tokens']['available'] == int(not failed)
+
+
+def test_final_record_without_newline_and_recoverable_codex_error(tmp_path):
+    events = [{'type':'error','message':'reconnecting'},
+              {'type':'item.completed','item':{'type':'agent_message','text':'FINAL'}},
+              {'type':'turn.completed','usage':{'input_tokens':1}}]
+    cmd = process(tmp_path, 'sys.stdout.write("\\n".join(json.dumps(e) for e in '+repr(events)+'));sys.stdout.flush()\n')
+    receiver = Observer()
+    assert run('codex',cmd,cwd=tmp_path,env=None,timeout=2,observer=receiver) == 'FINAL'
+    assert receiver.events[-1][1]['terminal'] and receiver.problem is None

@@ -10,6 +10,11 @@ import time
 MAX_LINE = 1024 * 1024
 
 
+class CaptureError(RuntimeError):
+    """Measurement I/O failed; never an invalid approved task definition."""
+
+
+
 def output_flags(provider):
     if provider == 'codex':
         return ['--json']
@@ -95,8 +100,10 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
                 if not chunk:
                     selector.unregister(key.fileobj)
                     if key.fileobj is proc.stdout and stdout.strip():
-                        observer.capture_problem('unterminated_event')
-                    continue
+                        # JSONL's final record need not end with a newline.
+                        chunk = b'\n'
+                    else:
+                        continue
                 if key.fileobj is proc.stderr:
                     stderr = (stderr + chunk)[-16384:]
                     continue
@@ -133,7 +140,7 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
                         if typ == 'turn.completed':
                             successful_terminal = True
                             final_text = text
-                        if typ in ('error', 'turn.failed'):
+                        if typ == 'turn.failed':
                             failed_terminal = True
                     elif provider == 'agy':
                         if typ == 'result':
@@ -179,20 +186,28 @@ class StateObserver:
 
     def launched(self, binary, version):
         self.started = True
-        with self.state.session() as store:
-            store.token_attempt_launch(self.id, self.token, binary=binary, cli_version=version)
+        try:
+            with self.state.session() as store:
+                store.token_attempt_launch(self.id, self.token, binary=binary, cli_version=version)
+        except Exception as exc:
+            self.capture_problem('persistence_failed')
+            raise CaptureError('token_capture_persistence_failed') from exc
 
     def __call__(self, position, observation):
         try:
             with self.state.session() as store:
                 store.token_observe(self.id, self.token, position, observation)
-        except Exception:
-            self.problem = 'persistence_failed'
-            raise
+        except Exception as exc:
+            self.capture_problem('persistence_failed')
+            raise CaptureError('token_capture_persistence_failed') from exc
 
     def capture_problem(self, code):
-        self.problem = code
+        self.problem = self.problem or code
 
     def finish(self, status):
-        with self.state.session() as store:
-            store.token_attempt_finish(self.id, self.token, status if self.started else 'not_launched', self.problem)
+        try:
+            with self.state.session() as store:
+                store.token_attempt_finish(self.id, self.token, status if self.started else 'not_launched', self.problem)
+        except Exception as exc:
+            self.capture_problem('persistence_failed')
+            raise CaptureError('token_capture_persistence_failed') from exc

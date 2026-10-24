@@ -112,3 +112,17 @@ def test_v7_upgrade_is_new_backed_up_migration(ready):
     with st.session(ready, auto_backup=False) as store:
         task, token = active(store)
         assert store.reservation_for(task)['execution_id'] != token
+
+
+def test_adoption_preserves_execution_but_rotates_private_owner(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        attempt = store.token_attempt_start(task, token, 'r', 'codex')
+        execution = store.task_token_usage(task)['attempts'][0]['execution_id']
+        store.conn.execute("UPDATE execution_reservations SET lease_expires_at = '2000-01-01T00:00:00Z'")
+        taken = store.task_adopt(task, 'replacement', identity=lambda pid: None, groups=lambda pgid: [])
+        assert taken['adopted'] and taken['token'] != token
+        assert store.reservation_for(task)['execution_id'] == execution
+        with pytest.raises(st.StaleToken):
+            store.token_observe(attempt, token, 1, observation(input_tokens=1))
+        store.token_observe(attempt, taken['token'], 1, observation(input_tokens=1))

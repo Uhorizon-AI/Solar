@@ -88,16 +88,17 @@ def project(attempts):
             attempt['metrics'] = metrics(finals[0]['usage'])
         attempt['coverage'] = ('available' if attempt['status'] == 'success' and not attempt.get('capture_error') and len(finals) == 1
                                and any(v is not None for v in attempt['metrics'].values()) else
-                               'partial' if any(o['original'].get('usage') for o in obs) else 'not_available')
+                               'partial' if any(o['original'].get('usage') or o['original'].get('model_usage') for o in obs) else 'not_available')
         attempt['reason'] = (attempt.get('capture_error') or
                              ('terminal_missing' if not attempt.get('finished_at') else
+                              attempt['status'] if attempt['status'] != 'success' else
                               'ambiguous_terminals' if len(finals) > 1 else
                               'no_validated_counters' if not any(v is not None for v in attempt['metrics'].values()) else None))
         attempt['model'] = next((o['original']['model'] for o in reversed(obs) if o['original'].get('model')), None)
         launched = attempt['status'] not in {'prepared', 'not_launched'}
         for name in METRICS:
             coverage[name]['launched'] += int(launched)
-            coverage[name]['available'] += int(launched and attempt['metrics'][name] is not None)
+            coverage[name]['available'] += int(launched and attempt['coverage'] == 'available' and attempt['metrics'][name] is not None)
         # Do not blend models or parser semantics. No cross-provider total, no cache double count.
         if attempt['coverage'] == 'available':
             group_key = (attempt['provider'], attempt['model'], attempt.get('cli_version'), None if attempt['model'] else attempt['id'])

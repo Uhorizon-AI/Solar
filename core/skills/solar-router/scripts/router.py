@@ -1397,9 +1397,13 @@ def _restricted_route(payload, *, stream=False):
         if observation_sink is not None:
             try:
                 observation_sink.finish("timeout" if observation_sink.problem == "cli_timeout" else "failed")
-            except solar_state.StateError:
-                # Already committed observations remain; unfinished attempts project as partial.
-                pass
+            except Exception:
+                # Never mask the route outcome if final measurement persistence also fails.
+                # Already committed observations remain and project as incomplete.
+                try:
+                    audit_log(router_id, "token_capture_incomplete", task_id=task_id)
+                except Exception:
+                    pass
 
 
 # ---------------------------------------------------------------------------
