@@ -1297,6 +1297,9 @@ def _restricted_route(payload, *, stream=False):
     from execution_profiles import ProfileError, verify_envelope, verify_sources
     request_id = str(payload.get("request_id") or "unknown")
     identity = payload.get("execution")
+    channel = str(payload.get("channel") or "other").strip().lower()
+    if channel not in VALID_CHANNELS:
+        channel = "other"
     router_id = str(uuid.uuid4())
     task_id = token = None
     provider = None
@@ -1327,7 +1330,7 @@ def _restricted_route(payload, *, stream=False):
                 raise ProfileError("review_input_mismatch")
             verify_sources(manifest, access["scopes"])
 
-        audit_log(router_id, "start", request_id=request_id, task_id=task_id, channel="mcp",
+        audit_log(router_id, "start", request_id=request_id, task_id=task_id, channel=channel,
                   execution_profile=profile, review_input_digest=fields["review_input_digest"], stream=stream)
         review = dict(manifest=manifest, expected=fields["review_input_digest"],
                       profile=profile, before_launch=before_launch)

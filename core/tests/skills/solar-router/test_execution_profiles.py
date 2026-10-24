@@ -287,7 +287,10 @@ def test_restricted_router_never_loads_or_writes_interactive_context(tmp_path, m
         assert store.continuity_get()['active_task'] == sentinels[0]
         assert len(store.task_list()) == 4  # <subtasks> in output was inert
         start = store.conn.execute("SELECT json_extract(row, '$.channel') FROM audit WHERE event = 'start'").fetchone()
-        assert start[0] == 'mcp'
+        assert start[0] == 'async-task'  # the payload's channel, not a hardcoded label
+        import runtime_views
+        runs = runtime_views.console_executions(store)
+        assert {row['channel'] for row in runs['channels']} == {'async-task'}
 
 
 @pytest.mark.parametrize('change', ['source', 'missing', 'manifest', 'profile', 'digest', 'token'])
