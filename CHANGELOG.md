@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.58.3] - 2026-10-24
+### Fixed
+- fix(ci): avoid hardlinks in install test bootstrap clone
+
+
 ## [0.58.2] - 2026-10-24
 
 ### Changed
