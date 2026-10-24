@@ -9,6 +9,12 @@ The format is based on Keep a Changelog.
 ### Added
 - Capture provider-reported token usage for asynchronous questions through solar-state schema 8, preserving partial measurement evidence and exposing coverage and counters in Console task details and MCP task view `usage`. Missing counters stay distinct from zero; subscription quota and monetary pricing are outside this delivery.
 
+## [0.58.4] - 2026-10-24
+### Fixed
+- fix(router): honor payload channel on restricted run start row
+- fix(router): record channel=mcp for restricted runs
+
+
 ## [0.58.3] - 2026-10-24
 ### Fixed
 - fix(ci): avoid hardlinks in install test bootstrap clone

@@ -8,6 +8,7 @@ import pytest
 
 import execution_profiles as profiles
 import router
+import runtime_views
 import solar_state
 from providers import PROVIDERS
 from review_inputs import create_parent
@@ -252,6 +253,28 @@ def bound_child(tmp_path):
     return source, raw, catalog['reviews'][0]['manifest']
 
 
+def restricted_start_channels(store):
+    rows = store.conn.execute("SELECT json_extract(row, '$.channel') FROM audit "
+                              "WHERE event = 'start' AND json_extract(row, '$.execution_profile') IS NOT NULL "
+                              "ORDER BY seq").fetchall()
+    return [row[0] for row in rows]
+
+
+@pytest.mark.parametrize('given, expected', [
+    ('async-task', 'async-task'), (' Telegram ', 'telegram'), (None, 'other'), ('', 'other'),
+    ('bogus', 'other'), ('mcp', 'other'), ('absent', 'other')])
+def test_restricted_start_channel_is_the_validated_payload_channel(tmp_path, fake_cli, given, expected):
+    _, payload, _ = bound_child(tmp_path)
+    if given == 'absent':
+        payload.pop('channel')
+    else:
+        payload['channel'] = given
+    assert router.route(json.dumps(payload))['status'] == 'success'
+    with solar_state.session() as store:
+        assert restricted_start_channels(store) == [expected]
+        assert runtime_views.console_executions(store)['channels'] == [{'channel': expected, 'n': 1}]
+
+
 @pytest.mark.parametrize('stream', [False, True])
 def test_restricted_router_never_loads_or_writes_interactive_context(tmp_path, monkeypatch, fake_cli, stream):
     _, payload, manifest = bound_child(tmp_path)
@@ -286,6 +309,8 @@ def test_restricted_router_never_loads_or_writes_interactive_context(tmp_path, m
     with solar_state.session() as store:
         assert store.continuity_get()['active_task'] == sentinels[0]
         assert len(store.task_list()) == 4  # <subtasks> in output was inert
+        assert restricted_start_channels(store) == ['async-task']  # the payload's channel, not a hardcoded label
+        assert runtime_views.console_executions(store)['channels'] == [{'channel': 'async-task', 'n': 1}]
 
 
 @pytest.mark.parametrize('change', ['source', 'missing', 'manifest', 'profile', 'digest', 'token'])
