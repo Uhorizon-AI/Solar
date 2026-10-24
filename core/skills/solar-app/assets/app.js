@@ -42,6 +42,13 @@
       usage_reason_terminal_missing: "Terminal event not received",
       usage_reason_unfinished: "Final measurement status was not saved",
       usage_reason_not_launched: "CLI was not launched",
+      usage_reason_owner_lost: "Previous execution owner was lost",
+      usage_reason_observation_rejected: "Measurement exceeded validation limits",
+      usage_reason_event_too_large: "An intermediate event exceeded capture limits",
+      usage_reason_persistence_failed: "Measurement could not be saved",
+      usage_reason_malformed_event: "An invalid measurement event was received",
+      usage_reason_unknown_event_shape: "An unrecognized measurement event was received",
+      usage_reason_cli_timeout: "CLI execution timed out",
       page_title: "Solar local console",
       gap: "available once Solar knows who is speaking",
       delegation: "Solar acts without asking you, only inside a written permission with limits and an expiry.",
@@ -236,6 +243,13 @@
       usage_reason_terminal_missing: "No se recibió el evento final",
       usage_reason_unfinished: "No se guardó el cierre de la medición",
       usage_reason_not_launched: "No se inició el CLI",
+      usage_reason_owner_lost: "Se perdió el responsable de la ejecución anterior",
+      usage_reason_observation_rejected: "La medición superó los límites de validación",
+      usage_reason_event_too_large: "Un evento intermedio superó los límites de captura",
+      usage_reason_persistence_failed: "No se pudo guardar la medición",
+      usage_reason_malformed_event: "Se recibió un evento de medición inválido",
+      usage_reason_unknown_event_shape: "Se recibió un evento de medición no reconocido",
+      usage_reason_cli_timeout: "El CLI agotó el tiempo de ejecución",
       page_title: "Consola local de Solar",
       gap: "disponible cuando Solar sepa quién le habla",
       delegation: "Solar actúa sin preguntarte, solo dentro de un permiso escrito con límites y caducidad.",
@@ -1168,7 +1182,7 @@
         '<p>' + esc(t("usage_execution") + ": " + a.execution_id + " · " + a.status) + '</p>' +
         '<p>' + esc(t("usage_model") + ": " + (a.model || t("usage_not_available"))) + '</p>';
       if (!a.finished_at || a.capture_error) html += '<p class="note">' + esc(t("usage_pending")) + '</p>';
-      else if (a.reason) html += '<p class="note">' + esc(t('usage_reason_' + a.reason)) + '</p>';
+      if (a.reason) html += '<p class="note">' + esc(t('usage_reason_' + a.reason)) + '</p>';
       html += counters(a.metrics) + '<details><summary>' + esc(t("usage_evidence")) + '</summary><pre>' +
         esc(JSON.stringify(a.observations || [], null, 2)) + '</pre></details></details>';
     });

@@ -454,7 +454,11 @@ async function settled() {
       status: "success", coverage: "available", finished_at: "2026-10-24", metrics: { input_tokens: 0, output_tokens: 13 },
       observations: [{ original: { usage: { output_tokens: 13 }, event_id: "<script>unsafe()</script>" } }] },
       { id: "partial-fixture", execution_id: "activation-fixture", provider: "agent", coverage: "partial",
-        status: "running", metrics: {}, observations: [] },
+        status: "running", reason: "unfinished", metrics: {}, observations: [] },
+      { id: "terminal-missing-fixture", execution_id: "activation-fixture", provider: "agent", coverage: "partial",
+        status: "running", reason: "terminal_missing", metrics: {}, observations: [] },
+      { id: "owner-lost-fixture", execution_id: "activation-fixture", provider: "agent", coverage: "partial",
+        status: "failed", finished_at: "2026-10-25", capture_error: "owner_lost", reason: "owner_lost", metrics: {}, observations: [] },
       { id: "failed-fixture", execution_id: "activation-fixture", provider: "agent", coverage: "partial",
         status: "failed", finished_at: "2026-10-24", reason: "failed", metrics: {}, observations: [] }]
   };
@@ -489,6 +493,9 @@ async function settled() {
   need(view, "<dd>0</dd>", "observed zero stays visible");
   need(view, "Not available", "missing counter stays absent");
   need(view, "Partial", "incomplete capture label");
+  need(view, "Final measurement status was not saved", "unfinished reason remains visible");
+  need(view, "Terminal event not received", "missing terminal reason remains visible");
+  need(view, "Previous execution owner was lost", "capture error reason remains visible");
   need(view, "1 / 2", "coverage denominator is launched attempts");
   need(view, "Original measurement evidence", "evidence is expandable");
   need(view, "model-fixture · version-one", "first subtotal identifies CLI version");
