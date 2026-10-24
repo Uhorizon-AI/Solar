@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-10-25
+
 ### Added
 - Capture provider-reported token usage for asynchronous questions through solar-state schema 8, preserving partial measurement evidence and exposing coverage and counters in Console task details and MCP task view `usage`. Missing counters stay distinct from zero; subscription quota and monetary pricing are outside this delivery.
 
