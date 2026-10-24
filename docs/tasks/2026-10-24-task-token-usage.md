@@ -90,3 +90,44 @@ Completed review results: Claude approved `1ef14cf` at 94%; Codex required this
 additional correction at 89%. Agent's 86% review concerns the older `6b78bc6`;
 its findings were already addressed in `1ef14cf`. None is a final approval of
 `ca9d550`. The PR remains draft pending revalidation.
+
+## Final-review corrections — 2026-10-25
+
+Code commits: `5578ff4`, `0aecfa3`, `409af6e`.
+
+- Retain model IDs with brackets/`@`; mark dropped/truncated model keys so a
+  surviving key can never receive an incomplete multi-model aggregate.
+- Preserve large answer/terminal records using anonymous private temporary files;
+  close them on normal, malformed and error paths. Transport buffering is bounded;
+  JSON decoding and the final answer still consume memory proportional to size.
+- Close abandoned attempts only after the existing adoption checks prove the old
+  owner/groups gone; keep evidence and execution identity while allowing a new
+  attempt. Count confirmed launch metadata, not failed status, in coverage. A
+  prepared attempt abandoned before launch cannot inflate the denominator.
+- Continue after deterministic observation rejection, including a real >64 KiB
+  selection; stop on persistence I/O or ownership failures.
+- Keep normalized counters null for partial attempts; retain native counters as
+  evidence. Show translated missing-terminal, unfinished and capture-error reasons
+  alongside the generic incomplete-capture notice in Console.
+
+Validation (isolated runtime and fake CLIs, no real inference):
+
+| Commit | Scope | Result |
+|---|---|---|
+| `5578ff4` | Full solar-state, solar-router, solar-app; MCP task views; approved/reservation worker integration | 1,387 passed, 4 skipped, 50 passing subtests (230.57 s) |
+| `0aecfa3` | Full solar-state; router metering; MCP task views; Console UI/task detail | 628 passed, 1 skipped (28.33 s) |
+| `409af6e` | Router metering, state token usage, MCP task views, Console UI/task detail | 105 passed (10.38 s) |
+
+All four skill packages, JavaScript syntax and whitespace checks pass. The final
+documentation-only commit does not change tested code. Broad results are not
+silently attributed to later code revisions.
+
+Latest independent reviews of `5578ff4`: Codex 89% (prepared-adoption coverage
+issue, corrected and regression-tested in `0aecfa3`); Claude 95% (the same coverage
+issue and hidden UI reasons, corrected in `0aecfa3` and `409af6e`); Cursor review
+is still pending at this checkpoint. No independent approval of the last two code
+commits is claimed. The default two review rounds were used; PR remains draft.
+
+Revalidation tasks: Codex `ba520857-0874-4c3c-971d-39c934100301`, Claude
+`5f020115-884d-45d7-bc2f-ed4ead3d1eec`, Cursor
+`28fd5746-7efa-47eb-83d3-c685ca31e79c`. No live installation or migration occurred.
