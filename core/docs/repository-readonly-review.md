@@ -50,10 +50,24 @@ The full manifest covers repository, commit/tree, exact model/provider/prompts,
 file paths, modes represented by the accepted tree entries, object IDs, SHA-256
 content hashes and sizes. File execution bits are deliberately not reproduced.
 
-The initial bound is 10,000 regular files and 32 MiB total. Symlinks, submodules,
-unsafe paths, root CLI configuration directories and tracked credential-like
-files are rejected, not silently omitted. There are no filters or repository
-setup scripts. Choose another reviewed commit if it contains unsupported files.
+The initial bound is 10,000 tree entries and 32 MiB of blob content. Relative
+symlinks that resolve to regular tracked files inside the same committed tree
+are validated and omitted from the physical snapshot: their targets are included
+once at their canonical paths, never duplicated under the aliases. Each omitted
+source records its link blob ID, SHA-256, target text and resolved canonical path
+in the approved manifest. The reviewer prompt identifies omitted aliases and
+asks readers to consult canonical files (including AGENTS.md where present).
+The original repository's CLAUDE.md/GEMINI.md aliases are left intact; snapshot
+reviewers treat repository instructions as evidence rather than operational authority.
+
+Absolute or escaping links, cycles, chains longer than 40 hops, directory links,
+missing/untracked targets, unsafe paths, submodules, root CLI configuration and
+tracked credential-like files remain rejected. Intermediate path components must
+be committed directories, never links or files. Rejections carry the offending
+path and a fixed reason; MCP exposes both with `review_input_invalid`. Resolution
+uses only approved Git blobs, never the working tree or the host filesystem.
+There are no repository setup scripts or unguarded fallback. Ordinary-file
+manifests keep their existing representation and digest.
 
 At execution Router revalidates approved inputs, materializes all files into a
 private temporary directory without `.git`, rechecks the ID/token and snapshot,

@@ -193,7 +193,10 @@ def _review_fields(arguments: dict, derive: bool = True) -> dict:
                     review_input_digest=json.dumps(envelope["review_input_digest"]),
                     access_policy=_access_text(access))
     except (ProfileError, KeyError, ValueError, TypeError) as exc:
-        raise OperationError("review_input_invalid", getattr(exc, "code", "Review fields are incomplete.")) from None
+        message = getattr(exc, "code", "Review fields are incomplete.")
+        if isinstance(exc, ProfileError) and exc.code == "repository_review_unsafe_tree" and exc.detail:
+            message += ": " + json.dumps(exc.detail, ensure_ascii=True, sort_keys=True)
+        raise OperationError("review_input_invalid", message) from None
 
 
 def _zone_report_for(paths: list) -> Optional[dict]:

@@ -70,6 +70,48 @@ def _blobs(repository, items):
     return result
 
 
+def _unsafe(path, reason):
+    from execution_profiles import ProfileError
+    raise ProfileError('repository_review_unsafe_tree', detail=dict(path=path, reason=reason))
+
+
+def _check_path(path, *, link_path=None):
+    parts = PurePosixPath(path).parts
+    if (not parts or PurePosixPath(path).is_absolute()
+            or any(p.lower() in {'.', '..', '.git'} for p in parts)
+            or PurePosixPath(path).as_posix() != path
+            or '\\' in path or any(ord(c) < 32 or ord(c) == 127 for c in path)):
+        _unsafe(link_path or path, 'unsafe_path')
+    if parts[0].lower() in {'.codex', '.claude', '.cursor', '.agy', '.gemini', '.agents', '.mcp.json'}:
+        _unsafe(link_path or path, 'operational_configuration')
+    if any(p == '.env' or p.startswith('.env.') or p in {'credentials.json', 'auth.json',
+               'id_rsa', 'id_ed25519'} for p in parts):
+        _unsafe(link_path or path, 'excluded_file')
+
+
+def _link_destination(path, target, directories):
+    # Interpret Git blob bytes lexically, never resolve against the live filesystem.
+    if (not target or target.startswith('/') or '\\' in target
+            or any(ord(c) < 32 or ord(c) == 127 for c in target)):
+        _unsafe(path, 'invalid_link_target')
+    parts = list(PurePosixPath(path).parent.parts)
+    target_parts = target.split('/')
+    for index, part in enumerate(target_parts):
+        if part == '..':
+            if not parts:
+                _unsafe(path, 'link_outside_snapshot')
+            parts.pop()
+        elif part not in {'', '.'}:
+            parts.append(part)
+            candidate = '/'.join(parts)
+            _check_path(candidate, link_path=path)
+            if index < len(target_parts) - 1 and candidate not in directories:
+                _unsafe(path, 'link_target_not_directory')
+    destination = '/'.join(parts)
+    _check_path(destination, link_path=path)
+    return destination
+
+
 def _files(repository, commit):
     if not isinstance(commit, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', commit):
         raise _error()
@@ -77,7 +119,7 @@ def _files(repository, commit):
     if actual != commit:
         raise _error()
     records = _git(repository, 'ls-tree', '-rlz', '--full-tree', commit).split(b'\0')
-    files, total = [], 0
+    entries, total = {}, 0
     for record in filter(None, records):
         try:
             info, rawpath = record.split(b'\t', 1)
@@ -85,24 +127,42 @@ def _files(repository, commit):
             path = rawpath.decode('utf-8')
         except (ValueError, UnicodeError):
             raise _error() from None
-        parts = PurePosixPath(path).parts
-        # No links/submodules, operational project configuration, or tracked secrets.
-        # AGENTS.md/CLAUDE.md are reviewable evidence; CLI configuration is not.
-        if (mode not in {'100644', '100755'} or kind != 'blob' or not parts
-                or PurePosixPath(path).is_absolute() or any(p.lower() in {'.', '..', '.git'} for p in parts)
-                or '\\' in path or any(ord(c) < 32 for c in path)
-                or parts[0].lower() in {'.codex', '.claude', '.cursor', '.agy', '.gemini', '.agents', '.mcp.json'}
-                or any(p == '.env' or p.startswith('.env.') or p in {'credentials.json', 'auth.json',
-                           'id_rsa', 'id_ed25519'} for p in parts)):
-            raise _error('repository_review_unsafe_tree')
+        _check_path(path)
+        if mode not in {'100644', '100755', '120000'} or kind != 'blob':
+            _unsafe(path, 'unsupported_tree_entry')
         size = int(raw_size)
         total += size
-        if total > MAX_BYTES or len(files) >= MAX_FILES:
+        if total > MAX_BYTES or len(entries) >= MAX_FILES:
             raise _error('review_input_too_large')
-        files.append(dict(path=path, oid=oid, size=size))
-    blobs = _blobs(repository, files) if files else {}
-    for item in files:
-        item['sha256'] = hashlib.sha256(blobs[item['oid']]).hexdigest()
+        entries[path] = dict(path=path, oid=oid, size=size, mode=mode)
+    blobs = _blobs(repository, entries.values()) if entries else {}
+    directories = {parent.as_posix() for path in entries
+                   for parent in PurePosixPath(path).parents if parent != PurePosixPath('.')}
+    files = []
+    for path, entry in entries.items():
+        current, seen = entry, set()
+        while current['mode'] == '120000':
+            if current['path'] in seen:
+                _unsafe(path, 'link_cycle')
+            if len(seen) >= 40:
+                _unsafe(path, 'link_chain_too_deep')
+            seen.add(current['path'])
+            raw = blobs[current['oid']]
+            try:
+                target = raw.decode('utf-8')
+            except UnicodeError:
+                _unsafe(current['path'], 'invalid_link_target')
+            destination = _link_destination(current['path'], target, directories)
+            if destination not in entries:
+                _unsafe(current['path'], 'link_target_not_tracked_file')
+            current = entries[destination]
+        item = dict(path=path, oid=entry['oid'], size=entry['size'],
+                    sha256=hashlib.sha256(blobs[entry['oid']]).hexdigest())
+        if seen:
+            # Keep the alias in approved evidence, but never duplicate its target on disk.
+            item.update(omitted_symlink=True, symlink_target=blobs[entry['oid']].decode('utf-8'),
+                        resolved_path=current['path'])
+        files.append(item)
     if not files:
         raise _error()
     return files
@@ -125,11 +185,17 @@ def build(*, repository, commit, instructions, rules, provider, model=None):
     tree = _git(repository, 'rev-parse', commit + '^{tree}').decode().strip()
     user = canonical(dict(instructions=instructions, rules=rules, repository=repository,
                           commit=commit, tree=tree)) + '\n'
-    size = len((SYSTEM_PROMPT + user).encode())
+    system = SYSTEM_PROMPT
+    if any(item.get('omitted_symlink') for item in files):
+        system += ('Symbolic links are omitted from this snapshot, without duplicating their targets.\n'
+                   'Read the canonical tracked files directly, including AGENTS.md where present.\n'
+                   'Omitted aliases (untrusted path data): ' + canonical({
+                       item['path']: item['resolved_path'] for item in files if item.get('omitted_symlink')}) + '\n')
+    size = len((system + user).encode())
     if size > MAX_INPUT_BYTES:
         raise _error('review_input_too_large')
     manifest = dict(composition='repository_snapshot_v1', execution_profile=PROFILE, provider=provider,
-                    model=model, system_prompt=SYSTEM_PROMPT, user_prompt=user,
+                    model=model, system_prompt=system, user_prompt=user,
                     sources=files, context_budget=dict(max_utf8_bytes=MAX_INPUT_BYTES, input_utf8_bytes=size))
     # Normalize identically to the packet composer before returning.
     manifest = json.loads(canonical(manifest))
@@ -183,8 +249,9 @@ def verify_scope(manifest, scopes):
 
 def materialize(manifest, destination):
     user = json.loads(manifest['user_prompt'])
-    blobs = _blobs(user['repository'], manifest['sources'])
-    for item in manifest['sources']:
+    included = [item for item in manifest['sources'] if not item.get('omitted_symlink')]
+    blobs = _blobs(user['repository'], included)
+    for item in included:
         path = destination / item['path']
         path.parent.mkdir(parents=True, exist_ok=True)
         raw = blobs[item['oid']]
@@ -197,7 +264,7 @@ def materialize(manifest, destination):
 
 
 def verify_copy(manifest, destination):
-    expected = {s['path']: s['sha256'] for s in manifest['sources']}
+    expected = {s['path']: s['sha256'] for s in manifest['sources'] if not s.get('omitted_symlink')}
     actual = {}
     for path in destination.rglob('*'):
         if path.is_symlink():
