@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.59.1] - 2026-10-25
+
 ### Fixed
 - Keep task dates, optional tokens and latest recorded run duration visible under When on mobile; preserve labelled Runs columns with horizontal scrolling at narrow widths.
 - Align provider and channel run breakdowns with Runs, percentage and measured average duration columns.
