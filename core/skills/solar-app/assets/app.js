@@ -16,6 +16,9 @@
   var COPY = {
     en: {
       usage_title: "Token consumption",
+      usage_technical: "Measurement details",
+      duration_timestamps: "Approximate duration calculated from recorded start and end times",
+      usage_no_counts: "Tokens: not available",
       usage_scope: "CLI-reported tokens from Solar async questions only. Other client activity is not observed.",
       usage_empty: "No token data recorded for this task.",
       usage_native: "Categories follow each CLI. Cache or reasoning may be included in other counts; no combined total or subscription price is inferred.",
@@ -181,7 +184,7 @@
       mm_mismatch: "it changed after it was approved",
       mm_text: "The worker will not start this task: ", mm_fix: ". Approve it again to queue it.",
       no_provider: "no provider", no_tasks: "No tasks.", showing: "Showing ", of: " of ",
-      col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "Created", col_requester: "Requester",
+      col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "Created · Tokens", col_requester: "Requester",
       state_machine: "State machine", no_history: "No history.", detail: "Detail", recurring: "recurring",
       parent: "Parent", root: "root", history: "History", final_state: "final", can_go: "Can move to",
       total: "Total", atypical: "unusual", by_provider: "By provider", runs_short: "Runs", average: "Average",
@@ -217,6 +220,9 @@
     },
     es: {
       usage_title: "Consumo de tokens",
+      usage_technical: "Detalles de medición",
+      duration_timestamps: "Duración aproximada calculada a partir del inicio y fin registrados",
+      usage_no_counts: "Tokens: sin datos",
       usage_scope: "Tokens informados por los CLI de preguntas async de Solar. La actividad fuera de Solar no se observa.",
       usage_empty: "No hay datos de tokens registrados para esta tarea.",
       usage_native: "Las categorías siguen a cada CLI. Caché o razonamiento pueden estar incluidos en otros contadores; no se deduce un total combinado ni precio de suscripción.",
@@ -382,7 +388,7 @@
       mm_mismatch: "cambió después de aprobarse",
       mm_text: "El worker no arrancará esta tarea: ", mm_fix: ". Apruébala de nuevo para ponerla en cola.",
       no_provider: "sin proveedor", no_tasks: "Sin tareas.", showing: "Mostrando ", of: " de ",
-      col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Creada", col_requester: "Solicitante",
+      col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Creada · Tokens", col_requester: "Solicitante",
       state_machine: "Máquina de estados", no_history: "Sin historia.", detail: "Detalle", recurring: "recurrente",
       parent: "Padre", root: "raíz", history: "Historia", final_state: "final", can_go: "Puede pasar a",
       total: "Total", atypical: "atípico", by_provider: "Por proveedor", runs_short: "Ejec.", average: "Media",
@@ -429,7 +435,6 @@
     { key: "closed", label: "f_closed", statuses: ["cancelled", "archived"] }
   ];
   var FILTER_KEYS = GROUPS.map(function (group) { return group.key; }).concat(["all"]);
-  var RANK = { error: 0, active: 1, queued: 2, planned: 3, draft: 4, completed: 5, archived: 6, cancelled: 7 };
 
   function t(key) {
     var table = COPY[LANG] || COPY.en;
@@ -562,9 +567,9 @@
   function fmt(value, withSeconds) {
     var date = parseTs(value);
     if (!date) return t("no_data");
-    var opts = { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: TZ };
+    var opts = { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: true, timeZone: TZ };
     if (withSeconds) opts.second = "2-digit";
-    return date.toLocaleString(LANG === "es" ? "es-ES" : "en-GB", opts);
+    return date.toLocaleString(LANG === "es" ? "es-ES" : "en-US", opts);
   }
   function fmtDay(value) {
     var date = parseTs(value);
@@ -988,7 +993,11 @@
       var source = task.revises_task_id;
       if (source && source !== task.id && byId[source]) (successors[source] = successors[source] || []).push(task);
     });
-    function newestFirst(a, b) { return String(b.created_at || "").localeCompare(String(a.created_at || "")) || String(a.id).localeCompare(String(b.id)); }
+    function newestFirst(a, b) {
+      var first = parseTs(a.created_at), second = parseTs(b.created_at);
+      var aTime = first ? first.getTime() : -Infinity, bTime = second ? second.getTime() : -Infinity;
+      return (aTime === bTime ? 0 : (aTime > bTime ? -1 : 1)) || String(a.id).localeCompare(String(b.id));
+    }
     function headOf(task) {
       var seen = {}, current = task;
       while (current && !seen[current.id]) {
@@ -1010,9 +1019,7 @@
       (versions[head.id] = versions[head.id] || []).push(task);
     });
     Object.keys(versions).forEach(function (id) { versions[id].sort(newestFirst); });
-    var roots = tasks.filter(function (task) { return !folded[task.id] && (!task.parent_id || !byId[task.parent_id]); }).slice().sort(function (a, b) {
-      return ((b.status === "active") - (a.status === "active")) || (RANK[a.status] - RANK[b.status]) || String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
-    });
+    var roots = tasks.filter(function (task) { return !folded[task.id] && (!task.parent_id || !byId[task.parent_id]); }).slice().sort(newestFirst);
     var planned = [];
     // "Showing N" counts only tasks that match the group; a parent kept as context for a
     // matching child is drawn dimmed but is not a member of the group.
@@ -1020,7 +1027,7 @@
     roots.forEach(function (parent) {
       var children = (kids[parent.id] || []).map(function (id) { return byId[id]; }).filter(Boolean);
       var parentMatch = match(parent);
-      var childMatch = children.filter(match);
+      var childMatch = children.filter(match).sort(newestFirst);
       if (parentMatch || childMatch.length) {
         if (parentMatch) visible += 1;
         visible += childMatch.length;
@@ -1044,7 +1051,7 @@
         (task.approval_digest_mismatch ? ' <span class="pill warn">⚠ ' + esc(t("not_approved")) + "</span>" : "") + "</div></div>" +
         '<div class="' + (task.provider ? "" : "note") + '">' + esc(task.provider || t("no_provider")) + "</div>" +
         '<div class="opt ' + (task.channel ? "" : "note") + '">' + esc(channelLabel(task.channel)) + "</div>" +
-        '<div class="opt note">' + esc(fmtDay(task.created_at)) + "</div>" +
+        '<div class="opt note">' + esc(fmt(task.created_at)) + tokenGroups(task.token_groups, true) + "</div>" +
         '<div class="opt req" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
     });
     var selected = ui.task ? byId[ui.task] : null;
@@ -1152,6 +1159,34 @@
     return t("tc_this_task_s_context_could_not_be_read");
   }
 
+  function tokenCount(group, key) {
+    var metric = asObject(asObject(group.metrics)[key]);
+    return metric.subtotal == null ? "—" : nf(metric.subtotal) + (metric.available < group.attempts ? " · " + t("usage_partial") : "");
+  }
+
+  function tokenLabel(group) {
+    return (group.provider === "agent" ? "Cursor" : group.provider) + " · " + (group.model || t("usage_not_available")) + " · " + (group.cli_version || t("usage_not_available"));
+  }
+
+  function tokenColumn(groups, key) {
+    return (groups || []).map(function (group) {
+      return '<div title="' + esc(tokenLabel(group)) + '">' +
+        (groups.length > 1 ? '<div class="note">' + esc(tokenLabel(group)) + '</div>' : '') + esc(tokenCount(group, key)) + '</div>';
+    }).join("");
+  }
+
+  function tokenGroups(groups, compact) {
+    return (groups || []).map(function (group) {
+      var input = tokenCount(group, "input_tokens"), output = tokenCount(group, "output_tokens");
+      var title = t("usage_input_tokens") + ": " + input + " · " + t("usage_output_tokens") + ": " + output;
+      return '<div class="token-summary' + (compact ? ' compact' : '') + '" title="' + esc(title) + '">' +
+        (groups.length > 1 || !compact ? '<div class="note">' + esc(tokenLabel(group)) + '</div>' : '') +
+        (compact ? '<span>' + esc(input + " → " + output) + '</span>' :
+          '<span>' + esc(t("usage_input_tokens")) + ' <strong>' + esc(input) + '</strong></span>' +
+          '<span>' + esc(t("usage_output_tokens")) + ' <strong>' + esc(output) + '</strong></span>') + '</div>';
+    }).join("");
+  }
+
   function taskTokenUsage(usage) {
     usage = asObject(usage);
     var attempts = usage.attempts || [];
@@ -1166,6 +1201,7 @@
           esc(value == null ? t("usage_not_available") : String(value)) + '</dd>';
       }).join("") + '</dl>';
     }
+    html += (tokenGroups(usage.subtotals, false) || '<p class="note">' + esc(t("usage_no_counts")) + '</p>') + '<details class="token-technical"><summary>' + esc(t("usage_technical")) + '</summary>';
     html += '<p class="note">' + esc(t("usage_native")) + '</p><dl class="kv wide">';
     metrics.forEach(function (key) {
       var c = asObject(asObject(usage.coverage)[key]);
@@ -1186,7 +1222,7 @@
       html += counters(a.metrics) + '<details><summary>' + esc(t("usage_evidence")) + '</summary><pre>' +
         esc(JSON.stringify(a.observations || [], null, 2)) + '</pre></details></details>';
     });
-    return html + '</section>';
+    return html + '</details></section>';
   }
 
   function taskContext(task) {
@@ -1513,10 +1549,10 @@
     }).join("");
     var recent = (data.recent || []).slice().reverse().map(function (row) {
       var spec = execRow(row.status);
-      return '<div class="row' + (row.status === "failed" ? " err" : "") + '" style="grid-template-columns:130px 120px 90px 100px 100px minmax(0,1fr)">' +
-        '<div class="note">' + esc(fmt(row.ts, true)) + "</div><div>" + pill(spec[0], spec[1], spec[2]) + "</div><div>" +
+      return '<div class="row' + (row.status === "failed" ? " err" : "") + '" style="grid-template-columns:145px 110px 80px 90px minmax(70px,1fr) minmax(70px,1fr) 120px minmax(0,1fr)">' +
+        '<div class="note">' + esc(fmt(row.ts)) + "</div><div>" + pill(spec[0], spec[1], spec[2]) + "</div><div>" +
         esc(row.provider || t("no_provider")) + '</div><div class="opt ' + (row.channel ? "" : "note") + '">' + esc(channelLabel(row.channel)) +
-        '</div><div class="mono">' + esc(dur(row.duration_ms)) + '</div><div class="opt req" style="max-width:240px" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
+        '</div><div class="mono">' + tokenColumn(row.token_groups, 'input_tokens') + '</div><div class="mono">' + tokenColumn(row.token_groups, 'output_tokens') + '</div><div class="mono" title="' + esc(row.duration_source === 'timestamps' ? t('duration_timestamps') : '') + '">' + esc(dur(row.duration_ms)) + '</div><div class="opt req" style="max-width:240px" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
     }).join("");
     return '<div class="tiles"><div class="card"><div class="lbl">' + esc(t("total")) + '</div><div class="big">' + nf(total) + '</div><div class="note">' +
       esc(fmtYear(data.first)) + " – " + esc(fmtYear(data.last)) + "</div></div>" + statusHtml + "</div>" +
@@ -1538,7 +1574,7 @@
       '<div style="display:flex;align-items:flex-end;height:140px;gap:2px;border-bottom:1px solid var(--muted)">' + dayHtml + "</div>" +
       '<div class="dlabels" style="display:flex;gap:2px;margin-top:3px">' + dayLabels + "</div></div>" +
       '<div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("recent_runs")) + "</div>" +
-      '<div class="row hd" style="grid-template-columns:130px 120px 90px 100px 100px minmax(0,1fr)"><div>' + esc(t("when")) + "</div><div>" + esc(t("result")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("duration")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
+      '<div class="row hd" style="grid-template-columns:145px 110px 80px 90px minmax(70px,1fr) minmax(70px,1fr) 120px minmax(0,1fr)"><div>' + esc(t("when")) + "</div><div>" + esc(t("result")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("usage_input_tokens")) + "</div><div>" + esc(t("usage_output_tokens")) + "</div><div>" + esc(t("duration")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
       t("gap") + "</div></div></div>" + recent + "</div>";
   }
 

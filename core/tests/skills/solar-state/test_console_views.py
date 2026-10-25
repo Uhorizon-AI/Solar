@@ -293,3 +293,21 @@ def test_console_tasks_project_revisions_and_the_approval_mismatch(ready):
         data = runtime_views.console_tasks(store)
     assert "approval_digest_mismatch" not in {t["id"]: t for t in data["tasks"]}[stuck]
     assert ["queued", "draft"] in data["transitions"]
+
+
+def test_duration_uses_measured_time_or_labelled_matching_timestamps(ready):
+    with st.session(ready, auto_backup=False) as store:
+        for rid, start, end, duration, status in [
+            ('historical', '2026-10-24T23:26:16Z', '2026-10-24T23:26:28Z', None, 'success'),
+            ('measured', '2026-10-24T23:26:16Z', '2026-10-24T23:26:28Z', 1234, 'success'),
+            ('zero', '2026-10-24T23:26:16Z', '2026-10-24T23:26:16Z', 0, 'success'),
+            ('backwards', '2026-10-24T23:26:28Z', '2026-10-24T23:26:16Z', None, 'failed'),
+            ('reconciled', '2026-10-24T23:26:16Z', '2026-10-24T23:26:28Z', 9000, 'reconciled'),
+            ('missing-start', None, '2026-10-24T23:26:28Z', None, 'success'),
+        ]:
+            if start:
+                store.audit_append(dict(event='start', router_id=rid, ts=start))
+            store.audit_append(dict(event='end', router_id=rid, ts=end, duration_ms=duration, status=status, provider='codex'))
+        rows = runtime_views.console_executions(store)['recent']
+        assert [(r['duration_ms'], r['duration_source']) for r in rows] == [
+            (12000, 'timestamps'), (1234, 'measured'), (0, 'measured'), (None, None), (None, None), (None, None)]

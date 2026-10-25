@@ -299,6 +299,9 @@ def test_restricted_router_never_loads_or_writes_interactive_context(tmp_path, m
     else:
         result = router.route(json.dumps(payload))
     assert result['status'] == 'success', result
+    with solar_state.read_session() as store:
+        end = json.loads(store.conn.execute("SELECT row FROM audit WHERE event = 'end' ORDER BY seq DESC LIMIT 1").fetchone()[0])
+        assert isinstance(end['duration_ms'], int) and end['duration_ms'] >= 0
     record = json.loads(fake_cli.read_text())
     argv = record['argv']
     system, user = argv[argv.index('--system-prompt') + 1], argv[-1]
@@ -334,6 +337,9 @@ def test_tampering_aborts_before_provider_and_releases_only_current_claim(tmp_pa
     result = ([json.loads(line) for line in router.route_stream(json.dumps(payload))][-1]
               if stream else router.route(json.dumps(payload)))
     assert result['error_code'] == 'review_input_mismatch', result
+    with solar_state.read_session() as store:
+        end = json.loads(store.conn.execute("SELECT row FROM audit WHERE event = 'end' ORDER BY seq DESC LIMIT 1").fetchone()[0])
+        assert isinstance(end['duration_ms'], int) and end['duration_ms'] >= 0
     assert not fake_cli.exists()
     with solar_state.session() as store:
         assert store.task_status(child) == ('active' if change == 'token' else 'draft')

@@ -1049,6 +1049,8 @@ async function settled() {
   if (!contextRows.includes("ce")) throw new Error("matching child must list: " + JSON.stringify(contextRows));
   need(view, "Context-parent", "parent kept as context for the matching child");
   need(view, "Showing 1 of 1", "the context parent is not counted as a member");
+  if (!same(contextRows, ["cp", "ce"])) throw new Error("context parent must precede child in Errors");
+  lack(view, 'class="task-parent"', "no redundant parent link on children");
   // The "N subtasks" on a parent counts every child, filtered or not (the detail lists them all).
   const many = {
     tasks: [mk("pe", "error", { title: "Parent-error" }), mk("k1", "completed", { parent_id: "pe" }), mk("k2", "completed", { parent_id: "pe" }), mk("k3", "completed", { parent_id: "pe" })],
@@ -1107,14 +1109,27 @@ async function settled() {
   page.click({ "data-recurring": "1" });
   need(page.els.health.innerHTML, 'aria-label="All, 11 tasks"', "switch off restores the counts");
 
-  // Active tasks first inside any group that holds them.
-  const mixed = fixture([mk("q9", "queued", { updated_at: "2026-09-09" }), mk("a9", "active", { updated_at: "2026-01-01" }), mk("p9", "planned", { updated_at: "2026-09-08" }), mk("a8", "active", { updated_at: "2026-02-01" })]);
-  page = await open(mixed);
-  page.click({ "data-filter": "all" });
-  const order = rowsOf(page.els.health.innerHTML).filter((id) => /^(a|p|q)\d$/.test(id));
-  if (order.slice(0, 2).sort().join() !== "a8,a9") throw new Error("active first: " + order.join());
-  page.click({ "data-filter": "running" });
-  if (!same(rowsOf(page.els.health.innerHTML), ["a8", "a9"])) throw new Error("running lists active tasks newest first: " + rowsOf(page.els.health.innerHTML).join());
+  // Every filter uses Created, independent of state, updates, parent or timezone offset.
+  const chronological = fixture(STATES.flatMap((status, index) => [
+    mk(status + "-old", status, { created_at: "2026-10-24T09:00:00Z", updated_at: "2026-10-26" }),
+    mk(status + "-new", status, { created_at: "2026-10-24T12:00:00+02:00", updated_at: "2026-01-01" })
+  ]));
+  page = await open(chronological);
+  for (const filter of ["errors", "running", "drafts", "queue", "done", "closed", "all"]) {
+    page.click({ "data-filter": filter });
+    const ids = rowsOf(page.els.health.innerHTML);
+    const firstOld = ids.findIndex((id) => id.endsWith("-old"));
+    const lastNew = ids.reduce((last, id, i) => id.endsWith("-new") ? i : last, -1);
+    if (lastNew >= firstOld) throw new Error("Created descending in " + filter + ": " + ids.join());
+  }
+  const family = fixture([
+    mk("parent", "completed", { created_at: "2026-10-24T08:00:00Z" }),
+    mk("child", "completed", { parent_id: "parent", created_at: "2026-10-24T10:00:00Z" }),
+    mk("other", "completed", { created_at: "2026-10-24T09:00:00Z" })
+  ]);
+  page = await open(family);
+  page.click({ "data-filter": "done" });
+  if (!same(rowsOf(page.els.health.innerHTML), ["other", "parent", "child"])) throw new Error("parent stays before child within its date-sorted family");
 
   // URL hash: the selection survives a reload and nothing else does.
   page = await open(everything);

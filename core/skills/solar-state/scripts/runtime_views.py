@@ -427,12 +427,40 @@ def console_task_detail(store, task_id, full=False):
     return result
 
 
+def _console_token_groups(store, router_ids=None):
+    """Reuse the canonical projection; lists expose counters, never raw evidence.
+
+    Run rows are matched by router_id, not by task (which can have multiple runs).
+    """
+    import token_usage
+    tasks, runs = {}, {}
+    sql = "SELECT DISTINCT task_id FROM token_attempts"
+    args = ()
+    if router_ids is not None:
+        if not router_ids:
+            return tasks, runs
+        sql += " WHERE router_id IN (" + ",".join("?" for _ in router_ids) + ")"
+        args = tuple(router_ids)
+    for row in store.conn.execute(sql, args):
+        usage = store.task_token_usage(row[0])
+        tasks[row[0]] = usage['subtotals']
+        by_router = {}
+        for attempt in usage['attempts']:
+            key = attempt.get('router_id')
+            if key and (router_ids is None or key in router_ids):
+                by_router.setdefault(key, []).append(attempt)
+        for key, attempts in by_router.items():
+            runs[key] = token_usage.project(attempts)['subtotals']
+    return tasks, runs
+
+
 def console_tasks(store):
     """Every task, including archived and planned, plus history and subtasks.
 
     Reads the tables. Does not touch the v4 views.
     """
     tasks = []
+    token_groups, _ = _console_token_groups(store)
     by_status = {}
     # What the worker will refuse is read from the stored approval itself, so a queued
     # task shows it right after an upgrade, before any poll, and a rename does not hide it.
@@ -453,6 +481,7 @@ def console_tasks(store):
             parent_id=row['parent_task_id'],
             revises_task_id=solar_state.value_of(row['revises']) or None,
         )
+        item['token_groups'] = token_groups.get(row['id'], [])
         if row['id'] in unapproved:
             item['approval_digest_mismatch'] = dict(reason=unapproved[row['id']])
         tasks.append(item)
@@ -589,6 +618,26 @@ def _execution_identity(start, end):
     return channel, start.get("user_id")
 
 
+def _execution_duration(start, end):
+    """Prefer the measured clock; historical wall-clock differences are labelled."""
+    if end.get('status') == 'reconciled':
+        return None, None
+    measured = _duration(end.get('duration_ms'))
+    if measured is not None and measured >= 0:
+        return measured, 'measured'
+    # An explicit but invalid measurement must not silently turn into a valid one.
+    if end.get('duration_ms') not in (None, '') or not start:
+        return None, None
+    try:
+        first = datetime.fromisoformat(str(start.get('ts')).replace('Z', '+00:00'))
+        last = datetime.fromisoformat(str(end.get('ts')).replace('Z', '+00:00'))
+        if first.tzinfo is None or last.tzinfo is None or last < first:
+            return None, None
+        return int((last - first).total_seconds() * 1000), 'timestamps'
+    except (TypeError, ValueError, OverflowError):
+        return None, None
+
+
 def console_executions(store):
     """End events, grouped. Reconciled durations stay out of every average.
 
@@ -599,12 +648,15 @@ def console_executions(store):
     row with the same router_id.
     """
     starts = {}
+    start_counts = {}
     for router_id, raw in store.conn.execute(
             "SELECT router_id, row FROM audit WHERE event = 'start' ORDER BY seq").fetchall():
         body = _audit_body(raw)
         key = _router_key(router_id, body)
-        if key and key not in starts:
-            starts[key] = body
+        if key:
+            start_counts[key] = start_counts.get(key, 0) + 1
+            if key not in starts:
+                starts[key] = body
     ends = []
     for ts, router_id, raw in store.conn.execute(
             "SELECT ts, router_id, row FROM audit WHERE event = 'end' ORDER BY seq").fetchall():
@@ -612,6 +664,9 @@ def console_executions(store):
         body["ts"] = ts or body.get("ts")
         key = _router_key(router_id, body)
         channel, user_id = _execution_identity(starts.get(key) if key else None, body)
+        body["duration_ms"], body["duration_source"] = _execution_duration(
+            starts.get(key) if start_counts.get(key) == 1 else None, body)
+        body["router_id"] = key
         body["channel"] = channel
         body["user_id"] = user_id
         ends.append(body)
@@ -634,7 +689,8 @@ def console_executions(store):
         user_id = body.get('user_id')
         if user_id not in (None, ''):
             user_ids.add(str(user_id))
-        duration = _duration(body.get('duration_ms'))
+        duration = (_duration(body.get('duration_ms'))
+                    if body.get('duration_source') == 'measured' else None)
         if status == 'reconciled':
             reconciled_n += 1
             continue
@@ -655,9 +711,12 @@ def console_executions(store):
          'avg_duration_ms': _average(bucket['duration_ms'], bucket['duration_n'])}
         for name, bucket in sorted(providers.items())
     ]
+    _, token_groups = _console_token_groups(store, {b.get('router_id') for b in ends[-20:] if b.get('router_id')})
     recent = [
         {'ts': body.get('ts'), 'status': body.get('status'), 'provider': body.get('provider') or None,
-         'channel': body.get('channel'), 'duration_ms': _duration(body.get('duration_ms'))}
+         'channel': body.get('channel'), 'duration_ms': _duration(body.get('duration_ms')),
+         'token_groups': token_groups.get(body.get('router_id'), []),
+         'duration_source': body.get('duration_source')}
         for body in ends[-20:]
     ]
     return dict(

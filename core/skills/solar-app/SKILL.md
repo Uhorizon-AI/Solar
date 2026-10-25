@@ -177,7 +177,7 @@ group hides at 0 unless selected. The default filter is the first non-empty of
 Errors, Running and Drafts, else All, decided at each opening and never remembered
 between sessions; only the URL hash (`#tasks/<group>` with `+recurring`) carries it
 over a reload. The Recurring checkbox intersects the group and the chip counts
-follow it. Active tasks sort first inside any group that holds them. Rows show all
+follow it. Task families sort by the parent creation time, newest first; each parent stays immediately before its matching children, which also sort newest first. A parent outside the selected status remains visible as context. Status and update time never change that order. Rows show all
 eight states as a pill with glyph and text (red only for `error`, blue only for
 `active`); recurring tasks carry a "↻" mark after the id. A parent row counts every
 subtask ("3 subtasks"), filtered or not; the detail lists them all.

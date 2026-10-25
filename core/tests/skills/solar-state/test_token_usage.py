@@ -246,3 +246,21 @@ def test_adopting_prepared_attempt_does_not_invent_a_confirmed_launch(ready):
         assert data['attempts'][0]['launch_confirmed'] is False
         assert data['coverage']['input_tokens']['launched'] == 0
         assert data['attempts'][0]['metrics']['input_tokens'] is None
+
+
+def test_console_lists_match_each_router_without_repeating_task_totals(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task, token = active(store)
+        for router, count in [('run-one', 0), ('run-two', 21)]:
+            attempt = store.token_attempt_start(task, token, router, 'codex')
+            store.token_attempt_launch(attempt, token, binary='codex', cli_version='1')
+            store.token_observe(attempt, token, 1, observation(input_tokens=count, output_tokens=3))
+            store.token_attempt_finish(attempt, token, 'success')
+            store.audit_append(dict(event='end', router_id=router, status='success', provider='codex', ts=router))
+        store.audit_append(dict(event='end', router_id='unmeasured', status='success', provider='codex', ts='later'))
+        tasks = runtime_views.console_tasks(store)['tasks']
+        runs = runtime_views.console_executions(store)['recent']
+        assert next(row for row in tasks if row['id'] == task)['token_groups'][0]['metrics']['input_tokens']['subtotal'] == 21
+        assert [row['token_groups'][0]['metrics']['input_tokens']['subtotal'] for row in runs[:2]] == [0, 21]
+        assert runs[-1]['token_groups'] == []
+        assert 'observations' not in json.dumps(tasks)

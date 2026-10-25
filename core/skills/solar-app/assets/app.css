@@ -107,11 +107,11 @@ body{margin:0}
 .rmark{color:var(--muted);margin-left:4px}
 .split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
 .sticky{position:sticky;top:76px;max-height:calc(100vh - 92px);overflow:auto}
-.trow{grid-template-columns:108px minmax(0,1fr) 68px 76px 52px 112px}
+.trow{grid-template-columns:108px minmax(0,1fr) 68px 76px 130px 112px}
 /* Up to 1600 px of viewport the list is about half of the content width (~490 px at
    1280, ~570 px at 1440): keep Status, Task and Created; hide Provider (3rd
    cell), Channel (4th) and Requester (6th). Above 1600 px every column shows. */
-@media (max-width:1600px){.trow{grid-template-columns:108px minmax(0,1fr) 64px}.trow>div:nth-child(3),.trow>div:nth-child(4),.trow>div:nth-child(6){display:none}}
+@media (max-width:1600px){.trow{grid-template-columns:108px minmax(0,1fr) 130px}.trow>div:nth-child(3),.trow>div:nth-child(4),.trow>div:nth-child(6){display:none}}
 dl.kv{margin:0}
 .kv.wide{grid-template-columns:150px minmax(0,1fr)}
 .kv dt.k,.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;word-break:break-word}
@@ -193,3 +193,10 @@ dl.kv{margin:0}
 .token-usage details { margin: 12px 0; }
 .token-usage summary { cursor: pointer; overflow-wrap: anywhere; }
 .token-usage pre { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Native token categories are kept separate; details stay optional. */
+.token-summary{display:flex;flex-wrap:wrap;gap:10px 24px;margin:12px 0;padding:14px;background:var(--panel2);border-radius:6px}
+.token-summary>.note{flex-basis:100%}
+.token-summary strong{font-variant-numeric:tabular-nums;font-size:20px;margin-left:8px}
+.token-summary.compact{background:none;padding:0;margin:4px 0;gap:4px 12px;font-size:11px;font-weight:400;color:var(--muted)}
+.token-technical{margin-top:14px}

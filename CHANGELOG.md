@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Record elapsed duration for restricted router executions, including failures; show labelled timestamp-derived durations for historical Runs when both endpoints are recorded.
+- Show input and output token counts directly in Console Tasks and recent Runs; keep measurement coverage and evidence under optional details, and match run counters by router ID.
+
 ## [0.59.0] - 2026-10-25
 
 ### Added
