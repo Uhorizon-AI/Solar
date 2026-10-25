@@ -7,6 +7,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 import runtime_views
 import solar_state as st
 
@@ -376,3 +378,28 @@ def test_ambiguous_start_does_not_infer_duration_or_pollute_averages(ready):
         assert data['recent'][0]['duration_ms'] is None
         assert data['recent'][0]['duration_source'] is None
         assert data['providers'][0]['avg_duration_ms'] == 300
+
+
+@pytest.mark.parametrize("start,end,duration", [
+    ("2026-10-24T10:00:00", "2026-10-24T10:00:05Z", None),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05", None),
+    ("2026-10-24T10:00:00", "2026-10-24T10:00:05", None),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", -1),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", "-50"),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", "invalid"),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", {"unexpected": 100}),
+])
+def test_invalid_duration_or_naive_timestamp_does_not_fallback_or_enter_averages(ready, start, end, duration):
+    with st.session(ready, auto_backup=False) as store:
+        for rid, first, last, measured in [
+            ("invalid", start, end, duration),
+            ("valid", "2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", 200),
+        ]:
+            store.audit_append(dict(event="start", router_id=rid, ts=first, channel="async-task"))
+            store.audit_append(dict(event="end", router_id=rid, ts=last, provider="codex",
+                                    status="success", duration_ms=measured))
+        runs = runtime_views.console_executions(store)
+        invalid = runs["recent"][0]  # first appended end belongs to the invalid sample
+        assert (invalid["duration_ms"], invalid["duration_source"]) == (None, None)
+        assert runs["providers"] == [dict(provider="codex", n=2, avg_duration_ms=200)]
+        assert runs["channels"] == [dict(channel="async-task", n=2, avg_duration_ms=200)]

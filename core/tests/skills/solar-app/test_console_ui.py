@@ -150,6 +150,22 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertEqual(columns(media), 3, "three columns up to 1600 px")
         self.assertEqual(columns(css.replace(media, "")), 6, "six columns when wider")
 
+    def test_mobile_task_metrics_and_run_headers_survive_generic_row_rules(self):
+        css = (ASSETS / "app.css").read_text(encoding="utf-8")
+        # Match the small dedicated mobile override rather than another breakpoint.
+        self.assertRegex(css, r"@media\s*\(max-width:760px\)\s*\{\s*\.task-when\s*\{[^}]*flex:1\s+1\s+100%")
+        self.assertRegex(css, r"\.runs-scroll\s*\{[^}]*overflow-x:auto")
+        rules = {selector.strip(): body for selector, body in
+                 re.findall(r"([^{}]+)\{([^{}]*)\}", css)}
+        # Both competing declarations are important. The runs-specific selectors
+        # have more classes, so their grid headers win even inside the mobile media.
+        for generic, specific in [(".row", ".runs-table .run-row"),
+                                  (".row.hd", ".runs-table .run-row.hd")]:
+            self.assertRegex(rules[generic], r"display:(?:flex|none)!important")
+            self.assertRegex(rules[specific], r"display:grid!important")
+            self.assertGreater(specific.count("."), generic.count("."))
+        self.assertRegex(rules[".runs-table .run-row .opt"], r"display:block")
+
     def test_dashboard_cards_are_styled_for_the_dark_theme(self):
         css = (ASSETS / "app.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\.rep a\{[^}]*color:var\(--info\)", "dashboard links use a theme token, not the browser blue")
@@ -235,7 +251,7 @@ const tasks = {
 };
 const ingress = { claim_telegram: false, stamp: null, hostname: null };
 
-function boot(routes, hash) {
+function boot(routes, hash, clipboardMode) {
   const els = {};
   const clicks = [];
   const keys = [];
@@ -289,7 +305,10 @@ function boot(routes, hash) {
     },
     location,
     history,
-    navigator: { clipboard: { writeText(text) { copied.push(text); return Promise.resolve(); } } },
+    navigator: clipboardMode === "missing" ? {} : { clipboard: { writeText(text) {
+      if (clipboardMode === "rejected") return Promise.reject(new Error("clipboard denied"));
+      copied.push(text); return Promise.resolve();
+    } } },
     fetch(url) {
       requests.push(url);
       let hit = routes[url];
@@ -921,7 +940,7 @@ async function settled() {
     return { tasks: list, by_status: by, links: [], history: [], statuses: STATES, transitions: [] };
   };
   const open = async (body, options) => {
-    const opened = boot(Object.assign({ "/api/console/tasks": { body: options && options.language ? Object.assign({}, body, { language: options.language }) : body } }, calm), options && options.hash);
+    const opened = boot(Object.assign({ "/api/console/tasks": { body: options && options.language ? Object.assign({}, body, { language: options.language }) : body } }, calm), options && options.hash, options && options.clipboardMode);
     await settled();
     opened.click({ "data-screen": "tareas" });
     await settled();
@@ -1179,6 +1198,17 @@ async function settled() {
   lack(view, '<img src=x', "search value is escaped");
   need(view, "No matching tasks.", "Errors search does not claim no tasks are in error");
 
+  // Clipboard failures must never announce a successful copy or record a copied ID.
+  for (const clipboardMode of ["missing", "rejected"]) {
+    page = await open(searchable, { clipboardMode });
+    page.els.live.textContent = "";
+    page.click({ "data-copy-id": "child-abc" });
+    await settled();
+    need(page.els.live.textContent, "Copy failed", "copy failure is announced: " + clipboardMode);
+    lack(page.els.live.textContent, "Copied", "no false copy success: " + clipboardMode);
+    if (page.copied.length) throw new Error("failed copy recorded an ID: " + clipboardMode);
+  }
+
   // Optional When statistics preserve zero, missing data and partial coverage.
   const tokenGroup = (input, output, available = 1, attempts = 1) => ({ provider: "codex", model: "m", cli_version: "1", attempts,
     metrics: { input_tokens: { subtotal: input, available }, output_tokens: { subtotal: output, available } } });
@@ -1218,7 +1248,9 @@ async function settled() {
   for (const block of [providerBlock, channelBlock]) {
     need(block, '<div>Runs</div><div>%</div><div>Average</div>', "same breakdown columns");
     need(block, "3 min 20 s", "measured breakdown average");
-    need(block, "other", "unknown identities appear in both breakdowns");
+    const identities = [...block.matchAll(/<div style="font-weight:500">([^<]+)<\/div>/g)].map(match => match[1]);
+    const expected = block === providerBlock ? ["codex", "other"] : ["async-task", "other"];
+    if (!same(identities, expected)) throw new Error("other must be the final breakdown row: " + JSON.stringify(identities));
     lack(block, "excluded from this breakdown", "no obsolete no-provider note");
   }
 
