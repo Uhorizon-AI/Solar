@@ -272,7 +272,7 @@ def test_restricted_start_channel_is_the_validated_payload_channel(tmp_path, fak
     assert router.route(json.dumps(payload))['status'] == 'success'
     with solar_state.session() as store:
         assert restricted_start_channels(store) == [expected]
-        assert runtime_views.console_executions(store)['channels'] == [{'channel': expected, 'n': 1}]
+        assert [(r['channel'], r['n']) for r in runtime_views.console_executions(store)['channels']] == [(expected, 1)]
 
 
 @pytest.mark.parametrize('stream', [False, True])
@@ -299,6 +299,9 @@ def test_restricted_router_never_loads_or_writes_interactive_context(tmp_path, m
     else:
         result = router.route(json.dumps(payload))
     assert result['status'] == 'success', result
+    with solar_state.read_session() as store:
+        end = json.loads(store.conn.execute("SELECT row FROM audit WHERE event = 'end' ORDER BY seq DESC LIMIT 1").fetchone()[0])
+        assert isinstance(end['duration_ms'], int) and end['duration_ms'] >= 0
     record = json.loads(fake_cli.read_text())
     argv = record['argv']
     system, user = argv[argv.index('--system-prompt') + 1], argv[-1]
@@ -310,7 +313,7 @@ def test_restricted_router_never_loads_or_writes_interactive_context(tmp_path, m
         assert store.continuity_get()['active_task'] == sentinels[0]
         assert len(store.task_list()) == 4  # <subtasks> in output was inert
         assert restricted_start_channels(store) == ['async-task']  # the payload's channel, not a hardcoded label
-        assert runtime_views.console_executions(store)['channels'] == [{'channel': 'async-task', 'n': 1}]
+        assert [(r['channel'], r['n']) for r in runtime_views.console_executions(store)['channels']] == [('async-task', 1)]
 
 
 @pytest.mark.parametrize('change', ['source', 'missing', 'manifest', 'profile', 'digest', 'token'])
@@ -334,6 +337,9 @@ def test_tampering_aborts_before_provider_and_releases_only_current_claim(tmp_pa
     result = ([json.loads(line) for line in router.route_stream(json.dumps(payload))][-1]
               if stream else router.route(json.dumps(payload)))
     assert result['error_code'] == 'review_input_mismatch', result
+    with solar_state.read_session() as store:
+        end = json.loads(store.conn.execute("SELECT row FROM audit WHERE event = 'end' ORDER BY seq DESC LIMIT 1").fetchone()[0])
+        assert isinstance(end['duration_ms'], int) and end['duration_ms'] >= 0
     assert not fake_cli.exists()
     with solar_state.session() as store:
         assert store.task_status(child) == ('active' if change == 'token' else 'draft')

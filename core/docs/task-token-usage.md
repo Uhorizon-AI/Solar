@@ -110,3 +110,26 @@ The CLI version probe invokes only `--version`, under the same wall deadline (at
 most five seconds), never a prompt or inference command. Failure leaves version
 unavailable and does not fail the question. It is checked per invocation to avoid
 assigning a cached version to a replaced binary.
+
+## Console presentation
+
+Tasks show known input and output subtotals as `input → output` below the creation timestamp in the task list’s When column and immediately
+in the detail. Coverage, individual attempts, cache, reasoning and original
+evidence remain under Measurement details. Distinct provider/model/CLI groups
+remain separate. Unmeasured list entries are blank; missing metrics within a measured group use a dash, never zero. Task details explain unavailable measurements. The same When cell shows the latest recorded run duration when known, independently of token availability. Its tooltip identifies the last run and any timestamp-derived approximation; a newer unknown or reconciled duration stays blank rather than reusing an older value.
+
+Recent Runs show separate Input and Output columns matched by the audit router ID. They
+never repeat the complete task subtotal on every execution. At narrow widths, the labelled columns remain available in a keyboard-focusable horizontal scroll region. These read-only lists
+reuse the canonical solar-state projection and contain no raw observations.
+
+Runs duration is elapsed router time, separate from token consumption. Restricted
+routes record monotonic elapsed milliseconds on success and failure. Historical
+rows missing that measurement can display a duration labelled as approximate in its tooltip when one
+matching start and an end have valid timezone-aware timestamps from the canonical audit columns in chronological
+order. This is a read-only derivation; saved audit rows are not rewritten.
+Reconciled rows keep no duration, and provider and channel averages use measured durations only. Both breakdowns display Runs, percentage of all runs, and Average in the same column order.
+
+The provider breakdown assigns missing provider identities to `other`. The channel
+breakdown uses its existing unknown-channel identity `other`. Both place this row
+last and include every end event once in their counts, including reconciled events;
+reconciled durations remain excluded from averages. No missing provider is inferred.

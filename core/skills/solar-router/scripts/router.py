@@ -1301,6 +1301,11 @@ def _restricted_route(payload, *, stream=False):
     if channel not in VALID_CHANNELS:
         channel = "other"
     router_id = str(uuid.uuid4())
+    t_start = time.monotonic()
+
+    def end_audit(**fields):
+        audit_log(router_id, "end", duration_ms=int((time.monotonic() - t_start) * 1000), **fields)
+
     task_id = token = None
     provider = None
     adapter = None
@@ -1357,7 +1362,7 @@ def _restricted_route(payload, *, stream=False):
                 except Exception:
                     pass
             observation_sink = None
-        audit_log(router_id, "end", status="success", task_id=task_id,
+        end_audit(status="success", task_id=task_id,
                   provider=provider, execution_profile=profile, stream=stream,
                   usage=getattr(adapter, "last_usage", None),
                   review_preflight=getattr(adapter, "last_review_preflight", {}))
@@ -1367,7 +1372,7 @@ def _restricted_route(payload, *, stream=False):
                     review_preflight=getattr(adapter, "last_review_preflight", {}))
     except solar_state.StaleToken:
         # The identity is not the current one: nothing to release, and nothing of this caller's to withdraw.
-        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="review_input_mismatch", stream=stream)
+        end_audit(status="failed", task_id=task_id, error_code="review_input_mismatch", stream=stream)
         return _failed(request_id, "review_input_mismatch", "review_input_mismatch", provider)
     except (ProfileError, solar_state.ReviewInputsInvalid, solar_state.FormatError, ValueError, TypeError, KeyError) as exc:
         code = getattr(exc, "code", "review_input_mismatch")
@@ -1381,7 +1386,7 @@ def _restricted_route(payload, *, stream=False):
                 pass  # a stale caller cannot release another execution's reservation
         detail = getattr(exc, "detail", None)
         metadata = getattr(adapter, "last_review_preflight", {})
-        audit_log(router_id, "end", status="failed", task_id=task_id, error_code=code, stream=stream,
+        end_audit(status="failed", task_id=task_id, error_code=code, stream=stream,
                   error_detail=detail, review_preflight=metadata)
         message = code
         if isinstance(detail, dict) and detail.get("reason"):
@@ -1394,7 +1399,7 @@ def _restricted_route(payload, *, stream=False):
         # A busy or unavailable base (a cutover is running) says nothing about the review inputs:
         # the approval and the claim stay as they are and the caller sees a transient failure.
         metadata = getattr(adapter, "last_review_preflight", {})
-        audit_log(router_id, "end", status="failed", task_id=task_id, error_code="state_unavailable",
+        end_audit(status="failed", task_id=task_id, error_code="state_unavailable",
                   stream=stream, review_preflight=metadata)
         return dict(_failed(request_id, "state_unavailable", str(exc), provider), review_preflight=metadata)
     except Exception as exc:
@@ -1402,7 +1407,7 @@ def _restricted_route(payload, *, stream=False):
             metering_timed_out = True
             observation_sink.capture_problem("cli_timeout")
         metadata = getattr(adapter, "last_review_preflight", {})
-        audit_log(router_id, "end", status="failed", task_id=task_id,
+        end_audit(status="failed", task_id=task_id,
                   error_code="provider_locked_failed", stream=stream, review_preflight=metadata)
         return dict(_failed(request_id, "provider_locked_failed", str(exc), provider), review_preflight=metadata)
 

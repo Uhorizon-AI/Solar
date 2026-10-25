@@ -150,6 +150,22 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertEqual(columns(media), 3, "three columns up to 1600 px")
         self.assertEqual(columns(css.replace(media, "")), 6, "six columns when wider")
 
+    def test_mobile_task_metrics_and_run_headers_survive_generic_row_rules(self):
+        css = (ASSETS / "app.css").read_text(encoding="utf-8")
+        # Match the small dedicated mobile override rather than another breakpoint.
+        self.assertRegex(css, r"@media\s*\(max-width:760px\)\s*\{\s*\.task-when\s*\{[^}]*flex:1\s+1\s+100%")
+        self.assertRegex(css, r"\.runs-scroll\s*\{[^}]*overflow-x:auto")
+        rules = {selector.strip(): body for selector, body in
+                 re.findall(r"([^{}]+)\{([^{}]*)\}", css)}
+        # Both competing declarations are important. The runs-specific selectors
+        # have more classes, so their grid headers win even inside the mobile media.
+        for generic, specific in [(".row", ".runs-table .run-row"),
+                                  (".row.hd", ".runs-table .run-row.hd")]:
+            self.assertRegex(rules[generic], r"display:(?:flex|none)!important")
+            self.assertRegex(rules[specific], r"display:grid!important")
+            self.assertGreater(specific.count("."), generic.count("."))
+        self.assertRegex(rules[".runs-table .run-row .opt"], r"display:block")
+
     def test_dashboard_cards_are_styled_for_the_dark_theme(self):
         css = (ASSETS / "app.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\.rep a\{[^}]*color:var\(--info\)", "dashboard links use a theme token, not the browser blue")
@@ -235,10 +251,12 @@ const tasks = {
 };
 const ingress = { claim_telegram: false, stamp: null, hostname: null };
 
-function boot(routes, hash) {
+function boot(routes, hash, clipboardMode) {
   const els = {};
   const clicks = [];
   const keys = [];
+  const inputs = [];
+  const copied = [];
   const location = { host: "127.0.0.1:9000", hash: hash || "" };
   const history = { replaceState(state, title, url) { location.hash = url; } };
   const requests = [];
@@ -253,8 +271,10 @@ function boot(routes, hash) {
   // against the chips the current innerHTML holds.
   const chipsFrom = (html) => (html.match(/data-filter="([a-z]+)" data-chip="1"/g) || []).map((m) => m.match(/data-filter="([a-z]+)"/)[1]);
   const fake = (target) => {
-    const attrs = target.kind === "recurring" ? { "data-recurring": "1", "data-chip": null } : { "data-filter": target.key, "data-chip": "1" };
+    const attrs = target.kind === "search" ? { "data-task-search": "1" } : target.kind === "recurring" ? { "data-recurring": "1", "data-chip": null } : { "data-filter": target.key, "data-chip": "1" };
     return {
+      selectionStart: target.start, selectionEnd: target.end,
+      setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; },
       focus() { sandbox.document.activeElement = this; },
       getAttribute(name) { return attrs[name] == null ? null : attrs[name]; },
     };
@@ -267,6 +287,7 @@ function boot(routes, hash) {
       // Replacing the block drops any focused node inside it, as the real DOM does.
       set innerHTML(value) { html = value; if (sandbox.document.activeElement) sandbox.document.activeElement = null; },
       querySelector(sel) {
+        if (/\[data-task-search\]/.test(sel)) return fake({ kind: "search" });
         if (/\[data-recurring\]/.test(sel)) return fake({ kind: "recurring" });
         const m = sel.match(/\[data-filter="([a-z]+)"\]/);
         return m && chipsFrom(html).includes(m[1]) ? fake({ kind: "filter", key: m[1] }) : null;
@@ -280,10 +301,14 @@ function boot(routes, hash) {
     document: {
       activeElement: null,
       getElementById(id) { return els[id] || make(id); },
-      addEventListener(type, fn) { if (type === "click") clicks.push(fn); if (type === "keydown") keys.push(fn); },
+      addEventListener(type, fn) { if (type === "click") clicks.push(fn); if (type === "keydown") keys.push(fn); if (type === "input") inputs.push(fn); },
     },
     location,
     history,
+    navigator: clipboardMode === "missing" ? {} : { clipboard: { writeText(text) {
+      if (clipboardMode === "rejected") return Promise.reject(new Error("clipboard denied"));
+      copied.push(text); return Promise.resolve();
+    } } },
     fetch(url) {
       requests.push(url);
       let hit = routes[url];
@@ -304,10 +329,20 @@ function boot(routes, hash) {
     document: sandbox.document,
     els,
     requests,
+    copied,
+    input(value, caret) {
+      const target = fake({ kind: "search", start: caret == null ? value.length : caret, end: caret == null ? value.length : caret });
+      target.value = value;
+      target.focus();
+      inputs.forEach((fn) => fn({ target }));
+    },
+    get focusedSearch() { const a = sandbox.document.activeElement; return a && a.getAttribute("data-task-search") != null; },
+    get searchCaret() { return sandbox.document.activeElement && sandbox.document.activeElement.selectionStart; },
     get focusedFilter() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-filter") : null; },
     get focusedRecurring() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-recurring") != null : false; },
     click(attrs) {
       const target = {
+        setAttribute(name, value) { attrs[name] = value; },
         getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
         closest(sel) {
           const name = (String(sel).match(/\[([^\]=\s]+)/) || [])[1];
@@ -905,7 +940,7 @@ async function settled() {
     return { tasks: list, by_status: by, links: [], history: [], statuses: STATES, transitions: [] };
   };
   const open = async (body, options) => {
-    const opened = boot(Object.assign({ "/api/console/tasks": { body: options && options.language ? Object.assign({}, body, { language: options.language }) : body } }, calm), options && options.hash);
+    const opened = boot(Object.assign({ "/api/console/tasks": { body: options && options.language ? Object.assign({}, body, { language: options.language }) : body } }, calm), options && options.hash, options && options.clipboardMode);
     await settled();
     opened.click({ "data-screen": "tareas" });
     await settled();
@@ -1049,6 +1084,8 @@ async function settled() {
   if (!contextRows.includes("ce")) throw new Error("matching child must list: " + JSON.stringify(contextRows));
   need(view, "Context-parent", "parent kept as context for the matching child");
   need(view, "Showing 1 of 1", "the context parent is not counted as a member");
+  if (!same(contextRows, ["cp", "ce"])) throw new Error("context parent must precede child in Errors");
+  lack(view, 'class="task-parent"', "no redundant parent link on children");
   // The "N subtasks" on a parent counts every child, filtered or not (the detail lists them all).
   const many = {
     tasks: [mk("pe", "error", { title: "Parent-error" }), mk("k1", "completed", { parent_id: "pe" }), mk("k2", "completed", { parent_id: "pe" }), mk("k3", "completed", { parent_id: "pe" })],
@@ -1107,14 +1144,115 @@ async function settled() {
   page.click({ "data-recurring": "1" });
   need(page.els.health.innerHTML, 'aria-label="All, 11 tasks"', "switch off restores the counts");
 
-  // Active tasks first inside any group that holds them.
-  const mixed = fixture([mk("q9", "queued", { updated_at: "2026-09-09" }), mk("a9", "active", { updated_at: "2026-01-01" }), mk("p9", "planned", { updated_at: "2026-09-08" }), mk("a8", "active", { updated_at: "2026-02-01" })]);
-  page = await open(mixed);
+  // Every filter uses Created, independent of state, updates, parent or timezone offset.
+  const chronological = fixture(STATES.flatMap((status, index) => [
+    mk(status + "-old", status, { created_at: "2026-10-24T09:00:00Z", updated_at: "2026-10-26" }),
+    mk(status + "-new", status, { created_at: "2026-10-24T12:00:00+02:00", updated_at: "2026-01-01" })
+  ]));
+  page = await open(chronological);
+  for (const filter of ["errors", "running", "drafts", "queue", "done", "closed", "all"]) {
+    page.click({ "data-filter": filter });
+    const ids = rowsOf(page.els.health.innerHTML);
+    const firstOld = ids.findIndex((id) => id.endsWith("-old"));
+    const lastNew = ids.reduce((last, id, i) => id.endsWith("-new") ? i : last, -1);
+    if (lastNew >= firstOld) throw new Error("Created descending in " + filter + ": " + ids.join());
+  }
+  const family = fixture([
+    mk("parent", "completed", { created_at: "2026-10-24T08:00:00Z" }),
+    mk("child", "completed", { parent_id: "parent", created_at: "2026-10-24T10:00:00Z" }),
+    mk("other", "completed", { created_at: "2026-10-24T09:00:00Z" })
+  ]);
+  page = await open(family);
+  page.click({ "data-filter": "done" });
+  if (!same(rowsOf(page.els.health.innerHTML), ["other", "parent", "child"])) throw new Error("parent stays before child within its date-sorted family");
+
+  // Search intersects status, preserves parent context and input caret during repaint.
+  const searchable = fixture([
+    mk("parent-100", "completed", { title: "Parent work" }),
+    mk("child-abc", "error", { title: "Review Consumer", parent_id: "parent-100" }),
+    mk("other-200", "completed", { title: "Other delivery" })
+  ]);
+  page = await open(searchable);
   page.click({ "data-filter": "all" });
-  const order = rowsOf(page.els.health.innerHTML).filter((id) => /^(a|p|q)\d$/.test(id));
-  if (order.slice(0, 2).sort().join() !== "a8,a9") throw new Error("active first: " + order.join());
-  page.click({ "data-filter": "running" });
-  if (!same(rowsOf(page.els.health.innerHTML), ["a8", "a9"])) throw new Error("running lists active tasks newest first: " + rowsOf(page.els.health.innerHTML).join());
+  page.input("CONSUM", 3);
+  view = page.els.health.innerHTML;
+  if (!same(rowsOf(view), ["parent-100", "child-abc"])) throw new Error("search must keep the matching child's parent");
+  need(view, '1 / 3', "compact count excludes context parents");
+  if (!page.focusedSearch || page.searchCaret !== 3) throw new Error("search lost focus or caret");
+  need(view, 'title="Copy" aria-label="Copy"', "copy is an accessible icon-only control");
+  page.click({ "data-copy-id": "child-abc" });
+  await settled();
+  if (!same(page.copied, ["child-abc"])) throw new Error("copy must use the complete ID");
+  need(page.els.live.textContent, "Copied", "copy success is announced");
+  page.input("ABC");
+  if (!same(rowsOf(page.els.health.innerHTML), ["parent-100", "child-abc"])) throw new Error("partial case-insensitive ID search");
+  page.click({ "data-filter": "done" });
+  view = page.els.health.innerHTML;
+  if (rowsOf(view).length) throw new Error("search must respect Done");
+  need(view, "No matching tasks.", "query empty-state is not the errors good-news state");
+  page.input("");
+  if (rowsOf(page.els.health.innerHTML).length !== 2) throw new Error("clearing search restores status group");
+  page.click({ "data-filter": "errors" });
+  page.input('<img src=x onerror=alert(1)>');
+  view = page.els.health.innerHTML;
+  lack(view, '<img src=x', "search value is escaped");
+  need(view, "No matching tasks.", "Errors search does not claim no tasks are in error");
+
+  // Clipboard failures must never announce a successful copy or record a copied ID.
+  for (const clipboardMode of ["missing", "rejected"]) {
+    page = await open(searchable, { clipboardMode });
+    page.els.live.textContent = "";
+    page.click({ "data-copy-id": "child-abc" });
+    await settled();
+    need(page.els.live.textContent, "Copy failed", "copy failure is announced: " + clipboardMode);
+    lack(page.els.live.textContent, "Copied", "no false copy success: " + clipboardMode);
+    if (page.copied.length) throw new Error("failed copy recorded an ID: " + clipboardMode);
+  }
+
+  // Optional When statistics preserve zero, missing data and partial coverage.
+  const tokenGroup = (input, output, available = 1, attempts = 1) => ({ provider: "codex", model: "m", cli_version: "1", attempts,
+    metrics: { input_tokens: { subtotal: input, available }, output_tokens: { subtotal: output, available } } });
+  page = await open(fixture([mk("metered", "completed", { token_groups: [tokenGroup(0, 5)], duration_ms: 200000, duration_source: "timestamps" })]));
+  view = page.els.health.innerHTML;
+  need(view, 'class="task-when note"', "When is not an optional cell hidden on mobile");
+  need(view, "0 → 5", "zero input is a measurement, not absence");
+  need(view, "3 min 20 s", "When includes known duration");
+  need(view, "Last recorded run duration", "task duration describes the last run");
+  page = await open(fixture([mk("partial", "completed", { token_groups: [tokenGroup(null, 5, 1, 2)], duration_ms: 0 })]));
+  view = page.els.health.innerHTML;
+  need(view, "— → 5 · Partial", "missing counter and partial coverage are distinct");
+  need(view, "0 ms", "zero duration is visible");
+  page = await open(fixture([mk("unmeasured", "draft")]));
+  lack(page.els.health.innerHTML, 'class="token-summary compact"', "no token placeholder without measurements");
+  lack(page.els.health.innerHTML, 'class="task-run-duration"', "no duration placeholder without recorded time");
+
+  const execData = { total: 3, by_status: { success: 3 },
+    providers: [{ provider: "codex", n: 2, avg_duration_ms: 200000 }, { provider: "other", n: 1, avg_duration_ms: null }],
+    channels: [{ channel: "async-task", n: 2, avg_duration_ms: 200000 }, { channel: "other", n: 1, avg_duration_ms: null }],
+    recent: [{ ts: "2026-10-24T10:00:00Z", provider: "codex", status: "success", token_groups: [tokenGroup(0, 5)], duration_ms: 200000, duration_source: "timestamps" },
+             { ts: "2026-10-24T11:00:00Z", status: "success", token_groups: [], duration_ms: null }] };
+  page = boot(Object.assign({}, calm, { "/api/console/executions": { body: execData }, "/api/console/capacity": { body: {} } }));
+  await settled();
+  page.click({ "data-screen": "ejecuciones" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, 'class="runs-scroll" role="region" tabindex="0"', "recent runs scroll region is keyboard accessible");
+  const recentRuns = view.slice(view.indexOf('class="runs-scroll"'));
+  need(recentRuns, '<div>Input</div><div>Output</div>', "distinct persistent column labels");
+  need(recentRuns, 'title="Approximate duration calculated from recorded start and end times"', "derived duration is labelled");
+  need(recentRuns, 'title=""', "non-derived duration has no approximation tooltip");
+  need(recentRuns, '</div><div class="mono"></div><div class="mono"></div>', "empty token cells without a measurement");
+  lack(recentRuns, "≈", "no approximation symbol in values");
+  const providerBlock = view.slice(view.indexOf("By provider"), view.indexOf("By channel"));
+  const channelBlock = view.slice(view.indexOf("By channel"), view.indexOf("By day"));
+  for (const block of [providerBlock, channelBlock]) {
+    need(block, '<div>Runs</div><div>%</div><div>Average</div>', "same breakdown columns");
+    need(block, "3 min 20 s", "measured breakdown average");
+    const identities = [...block.matchAll(/<div style="font-weight:500">([^<]+)<\/div>/g)].map(match => match[1]);
+    const expected = block === providerBlock ? ["codex", "other"] : ["async-task", "other"];
+    if (!same(identities, expected)) throw new Error("other must be the final breakdown row: " + JSON.stringify(identities));
+    lack(block, "excluded from this breakdown", "no obsolete no-provider note");
+  }
 
   // URL hash: the selection survives a reload and nothing else does.
   page = await open(everything);

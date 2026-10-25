@@ -16,6 +16,13 @@
   var COPY = {
     en: {
       usage_title: "Token consumption",
+      task_search: "Search by name or ID",
+      task_no_matches: "No matching tasks.",
+      copy: "Copy", copied: "Copied", copy_failed: "Copy failed",
+      usage_technical: "Measurement details",
+      duration_timestamps: "Approximate duration calculated from recorded start and end times",
+      task_run_duration: "Last recorded run duration",
+      usage_no_counts: "Tokens: not available",
       usage_scope: "CLI-reported tokens from Solar async questions only. Other client activity is not observed.",
       usage_empty: "No token data recorded for this task.",
       usage_native: "Categories follow each CLI. Cache or reasoning may be included in other counts; no combined total or subscription price is inferred.",
@@ -181,13 +188,11 @@
       mm_mismatch: "it changed after it was approved",
       mm_text: "The worker will not start this task: ", mm_fix: ". Approve it again to queue it.",
       no_provider: "no provider", no_tasks: "No tasks.", showing: "Showing ", of: " of ",
-      col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "Created", col_requester: "Requester",
+      col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "When", col_requester: "Requester",
       state_machine: "State machine", no_history: "No history.", detail: "Detail", recurring: "recurring",
       parent: "Parent", root: "root", history: "History", final_state: "final", can_go: "Can move to",
       total: "Total", atypical: "unusual", by_provider: "By provider", runs_short: "Runs", average: "Average",
-      no_provider_note: "No provider · before a provider is chosen", failed_n: "failed", reconciled_n: "reconciled",
-      no_duration: "no run duration", mean: "average ", by_channel: "By channel", weight: "Weight",
-      by_day: "By day ", day_note: "· days with activity · square-root scale", recent_runs: "Latest runs",
+      by_channel: "By channel", by_day: "By day ", day_note: "· days with activity · square-root scale", recent_runs: "Latest runs",
       when: "When", result: "Result", duration: "Duration",
       pending: "Pending", decisions: "Decisions", next_owner: "Next owner", unassigned: "unassigned",
       updated_label: "Updated", channels_seen: "Channels seen", summaries: "Summaries by channel",
@@ -217,6 +222,13 @@
     },
     es: {
       usage_title: "Consumo de tokens",
+      task_search: "Buscar por nombre o ID",
+      task_no_matches: "No hay tareas coincidentes.",
+      copy: "Copy", copied: "Copiado", copy_failed: "No se pudo copiar",
+      usage_technical: "Detalles de medición",
+      duration_timestamps: "Duración aproximada calculada a partir del inicio y fin registrados",
+      task_run_duration: "Duración de la última ejecución registrada",
+      usage_no_counts: "Tokens: sin datos",
       usage_scope: "Tokens informados por los CLI de preguntas async de Solar. La actividad fuera de Solar no se observa.",
       usage_empty: "No hay datos de tokens registrados para esta tarea.",
       usage_native: "Las categorías siguen a cada CLI. Caché o razonamiento pueden estar incluidos en otros contadores; no se deduce un total combinado ni precio de suscripción.",
@@ -382,13 +394,11 @@
       mm_mismatch: "cambió después de aprobarse",
       mm_text: "El worker no arrancará esta tarea: ", mm_fix: ". Apruébala de nuevo para ponerla en cola.",
       no_provider: "sin proveedor", no_tasks: "Sin tareas.", showing: "Mostrando ", of: " de ",
-      col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Creada", col_requester: "Solicitante",
+      col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Cuándo", col_requester: "Solicitante",
       state_machine: "Máquina de estados", no_history: "Sin historia.", detail: "Detalle", recurring: "recurrente",
       parent: "Padre", root: "raíz", history: "Historia", final_state: "final", can_go: "Puede pasar a",
       total: "Total", atypical: "atípico", by_provider: "Por proveedor", runs_short: "Ejec.", average: "Media",
-      no_provider_note: "Sin proveedor · antes de elegir proveedor", failed_n: "fallidas", reconciled_n: "reconciliadas",
-      no_duration: "sin duración de ejecución", mean: "media ", by_channel: "Por canal", weight: "Peso",
-      by_day: "Por día ", day_note: "· días con actividad · escala raíz", recent_runs: "Últimas ejecuciones",
+      by_channel: "Por canal", by_day: "Por día ", day_note: "· días con actividad · escala raíz", recent_runs: "Últimas ejecuciones",
       when: "Cuándo", result: "Resultado", duration: "Duración",
       pending: "Pendientes", decisions: "Decisiones", next_owner: "Siguiente responsable", unassigned: "sin asignar",
       updated_label: "Actualizada", channels_seen: "Canales vistos", summaries: "Resúmenes por canal",
@@ -429,7 +439,6 @@
     { key: "closed", label: "f_closed", statuses: ["cancelled", "archived"] }
   ];
   var FILTER_KEYS = GROUPS.map(function (group) { return group.key; }).concat(["all"]);
-  var RANK = { error: 0, active: 1, queued: 2, planned: 3, draft: 4, completed: 5, archived: 6, cancelled: 7 };
 
   function t(key) {
     var table = COPY[LANG] || COPY.en;
@@ -498,6 +507,7 @@
     filter: null,
     filterAuto: true,
     recurring: false,
+    search: "",
     focusKey: null,
     refocus: null,
     announce: null,
@@ -562,9 +572,9 @@
   function fmt(value, withSeconds) {
     var date = parseTs(value);
     if (!date) return t("no_data");
-    var opts = { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: TZ };
+    var opts = { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: true, timeZone: TZ };
     if (withSeconds) opts.second = "2-digit";
-    return date.toLocaleString(LANG === "es" ? "es-ES" : "en-GB", opts);
+    return date.toLocaleString(LANG === "es" ? "es-ES" : "en-US", opts);
   }
   function fmtDay(value) {
     var date = parseTs(value);
@@ -682,6 +692,7 @@
   function focusedTarget() {
     var active = (typeof document !== "undefined" && document.activeElement) || null;
     if (!active || !active.getAttribute) return null;
+    if (active.getAttribute("data-task-search") != null) return { kind: "search", start: active.selectionStart, end: active.selectionEnd };
     if (active.getAttribute("data-recurring") != null) return { kind: "recurring" };
     if (active.getAttribute("data-chip") != null) return { kind: "filter", key: active.getAttribute("data-filter") };
     return null;
@@ -694,8 +705,9 @@
     var want = (ui.refocus === "recurring" ? { kind: "recurring" } : (ui.refocus === "filter" ? { kind: "filter", key: ui.focusKey } : null)) || target;
     ui.refocus = null;
     if (!want || !box || !box.querySelector) return;
-    var el = box.querySelector(want.kind === "recurring" ? "[data-recurring]" : '[data-filter="' + String(want.key || "") + '"][data-chip]');
+    var el = box.querySelector(want.kind === "search" ? "[data-task-search]" : want.kind === "recurring" ? "[data-recurring]" : '[data-filter="' + String(want.key || "") + '"][data-chip]');
     if (el && el.focus) el.focus();
+    if (el && want.kind === "search" && typeof want.start === "number" && el.setSelectionRange) el.setSelectionRange(want.start, want.end);
   }
   // A live region outside the repainted block, so a filter change still announces the count.
   // When the group is empty the count says nothing useful, so the empty-state title is what
@@ -975,7 +987,12 @@
       '<span class="fbreak" aria-hidden="true"></span>' + rest +
       '<label class="rsw"><input type="checkbox" data-recurring="1"' + (ui.recurring ? " checked" : "") + '> <span>' + esc(t("f_recurring")) + "</span></label></div></div>";
     ui.chipKeys = filters.map(function (filter) { return filter.key; });
+    var query = String(ui.search || "").trim().toLocaleLowerCase();
+    function matchesText(task) {
+      return !query || String(task.id || "").toLocaleLowerCase().indexOf(query) >= 0 || String(task.title || "").toLocaleLowerCase().indexOf(query) >= 0;
+    }
     function match(task) {
+      if (!matchesText(task)) return false;
       if (ui.recurring && !task.recurring) return false;
       return !activeFilter.statuses || activeFilter.statuses.indexOf(task.status) >= 0;
     }
@@ -988,7 +1005,11 @@
       var source = task.revises_task_id;
       if (source && source !== task.id && byId[source]) (successors[source] = successors[source] || []).push(task);
     });
-    function newestFirst(a, b) { return String(b.created_at || "").localeCompare(String(a.created_at || "")) || String(a.id).localeCompare(String(b.id)); }
+    function newestFirst(a, b) {
+      var first = parseTs(a.created_at), second = parseTs(b.created_at);
+      var aTime = first ? first.getTime() : -Infinity, bTime = second ? second.getTime() : -Infinity;
+      return (aTime === bTime ? 0 : (aTime > bTime ? -1 : 1)) || String(a.id).localeCompare(String(b.id));
+    }
     function headOf(task) {
       var seen = {}, current = task;
       while (current && !seen[current.id]) {
@@ -1002,7 +1023,7 @@
     var FOLDS = { completed: true, cancelled: true, archived: true };
     var folded = {}, versions = {}, headId = {};
     tasks.forEach(function (task) {
-      if (!FOLDS[task.status] || (kids[task.id] || []).length) return;
+      if (!FOLDS[task.status] || (kids[task.id] || []).length || (query && matchesText(task))) return;
       var head = headOf(task);
       if (!head) return;
       folded[task.id] = true;
@@ -1010,9 +1031,7 @@
       (versions[head.id] = versions[head.id] || []).push(task);
     });
     Object.keys(versions).forEach(function (id) { versions[id].sort(newestFirst); });
-    var roots = tasks.filter(function (task) { return !folded[task.id] && (!task.parent_id || !byId[task.parent_id]); }).slice().sort(function (a, b) {
-      return ((b.status === "active") - (a.status === "active")) || (RANK[a.status] - RANK[b.status]) || String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
-    });
+    var roots = tasks.filter(function (task) { return !folded[task.id] && (!task.parent_id || !byId[task.parent_id]); }).slice().sort(newestFirst);
     var planned = [];
     // "Showing N" counts only tasks that match the group; a parent kept as context for a
     // matching child is drawn dimmed but is not a member of the group.
@@ -1020,7 +1039,7 @@
     roots.forEach(function (parent) {
       var children = (kids[parent.id] || []).map(function (id) { return byId[id]; }).filter(Boolean);
       var parentMatch = match(parent);
-      var childMatch = children.filter(match);
+      var childMatch = children.filter(match).sort(newestFirst);
       if (parentMatch || childMatch.length) {
         if (parentMatch) visible += 1;
         visible += childMatch.length;
@@ -1031,7 +1050,7 @@
     var visibleIds = planned.map(function (row) { return row[0].id; });
     // An older version opened from its newer one's detail stays selected while that one is listed.
     var keepFolded = folded[ui.task] && visibleIds.indexOf(headId[ui.task]) >= 0;
-    if (visibleIds.indexOf(ui.task) < 0 && !keepFolded) ui.task = visibleIds[0] || null;
+    if (visibleIds.indexOf(ui.task) < 0 && !keepFolded) ui.task = (planned.filter(function (row) { return !row[3]; }).map(function (row) { return row[0].id; })[0]) || visibleIds[0] || null;
     var rows = planned.map(function (row) {
       var task = row[0], level = row[1], nKids = row[2], dim = row[3];
       var spec = ts(task.status);
@@ -1044,7 +1063,8 @@
         (task.approval_digest_mismatch ? ' <span class="pill warn">⚠ ' + esc(t("not_approved")) + "</span>" : "") + "</div></div>" +
         '<div class="' + (task.provider ? "" : "note") + '">' + esc(task.provider || t("no_provider")) + "</div>" +
         '<div class="opt ' + (task.channel ? "" : "note") + '">' + esc(channelLabel(task.channel)) + "</div>" +
-        '<div class="opt note">' + esc(fmtDay(task.created_at)) + "</div>" +
+        '<div class="task-when note">' + esc(fmt(task.created_at)) + tokenGroups(task.token_groups, true) +
+        (task.duration_ms == null ? "" : '<div class="task-run-duration" title="' + esc(t("task_run_duration") + (task.duration_source === "timestamps" ? " · " + t("duration_timestamps") : "")) + '">' + esc(dur(task.duration_ms)) + '</div>') + '</div>' +
         '<div class="opt req" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
     });
     var selected = ui.task ? byId[ui.task] : null;
@@ -1052,7 +1072,10 @@
     var empty = "";
     var emptyTitle = "";
     if (!visible) {
-      if (activeFilter.key === "errors") {
+      if (query) {
+        emptyTitle = t("task_no_matches");
+        empty = '<div class="note" style="padding:12px">' + esc(emptyTitle) + "</div>";
+      } else if (activeFilter.key === "errors") {
         var nextGroup = filters.filter(function (filter) { return ["running", "drafts", "queue"].indexOf(filter.key) >= 0 && filter.n > 0; })[0];
         // With the Recurring switch on, an empty Errors group means no recurring error, not no error at all.
         var errorTitle = ui.recurring ? t("f_no_error_rec") : t("f_no_error");
@@ -1069,7 +1092,9 @@
     // When the group is empty the count says nothing useful; #live then announces this title.
     ui.empty = emptyTitle;
     return filterHtml +
-      '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div style="padding:10px 12px" class="note">' + esc(ui.announce) + "</div>" +
+      '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div class="task-list-tools">' +
+      '<input type="search" data-task-search="1" aria-label="' + esc(t("task_search")) + '" placeholder="' + esc(t("task_search")) + '" value="' + esc(ui.search) + '">' +
+      '<span class="note" title="' + esc(ui.announce) + '">' + visible + ' / ' + activeFilter.n + '</span></div>' +
       '<div class="row hd trow"><div>' + esc(t("col_status")) + "</div><div>" + esc(t("col_task")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("col_created")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
       t("gap") + "</div></div></div>" + rows.join("") + empty + "</div>" + detail + "</div>" +
       '<div class="card" style="padding:0;overflow:hidden"><button type="button" class="chip" style="margin:10px 12px" data-machine="1" aria-expanded="' +
@@ -1103,7 +1128,7 @@
       esc(task.title || task.id) + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">' + pill(spec.tone, spec.glyph, spec.label) +
       '<span class="tag' + (task.recurring ? "" : " gap-hide") + '">↻ ' + esc(t("recurring")) + "</span></div>" +
       '<div class="kv" style="grid-template-columns:88px minmax(0,1fr)">' +
-      kv("Id", task.id, "mono") + kv(t("col_provider"), task.provider || t("no_provider"), task.provider ? "" : "note") +
+      '<div class="k">Id</div><div class="task-id"><span class="mono">' + esc(task.id) + '</span><button type="button" class="copy-id" data-copy-id="' + esc(task.id) + '" title="Copy" aria-label="Copy"><span aria-hidden="true">⧉</span></button></div>' + kv(t("col_provider"), task.provider || t("no_provider"), task.provider ? "" : "note") +
       kv(t("col_channel"), channelLabel(task.channel), task.channel ? "" : "note") +
       kv(t("parent"), task.parent_id ? String(task.parent_id).slice(0, 8) : t("root"), task.parent_id ? "mono" : "note") +
       '<div class="k">' + esc(t("col_requester")) + '</div><div><span class="gap">' + t("gap") + "</span></div></div>" +
@@ -1152,6 +1177,34 @@
     return t("tc_this_task_s_context_could_not_be_read");
   }
 
+  function tokenCount(group, key) {
+    var metric = asObject(asObject(group.metrics)[key]);
+    return metric.subtotal == null ? "—" : nf(metric.subtotal) + (metric.available < group.attempts ? " · " + t("usage_partial") : "");
+  }
+
+  function tokenLabel(group) {
+    return (group.provider === "agent" ? "Cursor" : group.provider) + " · " + (group.model || t("usage_not_available")) + " · " + (group.cli_version || t("usage_not_available"));
+  }
+
+  function tokenColumn(groups, key) {
+    return (groups || []).map(function (group) {
+      return '<div title="' + esc(tokenLabel(group)) + '">' +
+        (groups.length > 1 ? '<div class="note">' + esc(tokenLabel(group)) + '</div>' : '') + esc(tokenCount(group, key)) + '</div>';
+    }).join("");
+  }
+
+  function tokenGroups(groups, compact) {
+    return (groups || []).map(function (group) {
+      var input = tokenCount(group, "input_tokens"), output = tokenCount(group, "output_tokens");
+      var title = t("usage_input_tokens") + ": " + input + " · " + t("usage_output_tokens") + ": " + output;
+      return '<div class="token-summary' + (compact ? ' compact' : '') + '" title="' + esc(title) + '">' +
+        (groups.length > 1 || !compact ? '<div class="note">' + esc(tokenLabel(group)) + '</div>' : '') +
+        (compact ? '<span>' + esc(input + " → " + output) + '</span>' :
+          '<span>' + esc(t("usage_input_tokens")) + ' <strong>' + esc(input) + '</strong></span>' +
+          '<span>' + esc(t("usage_output_tokens")) + ' <strong>' + esc(output) + '</strong></span>') + '</div>';
+    }).join("");
+  }
+
   function taskTokenUsage(usage) {
     usage = asObject(usage);
     var attempts = usage.attempts || [];
@@ -1166,6 +1219,7 @@
           esc(value == null ? t("usage_not_available") : String(value)) + '</dd>';
       }).join("") + '</dl>';
     }
+    html += (tokenGroups(usage.subtotals, false) || '<p class="note">' + esc(t("usage_no_counts")) + '</p>') + '<details class="token-technical"><summary>' + esc(t("usage_technical")) + '</summary>';
     html += '<p class="note">' + esc(t("usage_native")) + '</p><dl class="kv wide">';
     metrics.forEach(function (key) {
       var c = asObject(asObject(usage.coverage)[key]);
@@ -1186,7 +1240,7 @@
       html += counters(a.metrics) + '<details><summary>' + esc(t("usage_evidence")) + '</summary><pre>' +
         esc(JSON.stringify(a.observations || [], null, 2)) + '</pre></details></details>';
     });
-    return html + '</section>';
+    return html + '</details></section>';
   }
 
   function taskContext(task) {
@@ -1478,7 +1532,6 @@
     var success = byStatus.success || 0;
     var failed = byStatus.failed || 0;
     var reconciled = byStatus.reconciled || 0;
-    var noProv = data.no_provider || {};
     var statusHtml = ["success", "failed", "reconciled"].map(function (key) {
       var spec = execRow(key);
       var n = byStatus[key] || 0;
@@ -1493,11 +1546,10 @@
         '</span><span class="pill sm warn' + (avg > 86400000 ? "" : " gap-hide") + '" title="' + esc(t("unusual_tip")) + '">▲ ' + esc(t("atypical")) + "</span></div></div>";
     }).join("");
     var channels = data.channels || [];
-    var widest = channels.reduce(function (max, row) { return Math.max(max, row.n || 0); }, 0) || 1;
     var channelHtml = channels.map(function (row) {
-      return '<div class="row" style="grid-template-columns:90px 56px minmax(0,1fr)"><div style="font-weight:500">' + esc(channelLabel(row.channel)) +
-        '</div><div class="mono">' + nf(row.n) + '</div><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="flex:1"><div style="background:var(--info);width:' +
-        ((row.n / widest) * 100) + '%"></div></div><span class="note" style="width:44px;text-align:right">' + pc(row.n, total) + "</span></div></div>";
+      return '<div class="row" style="grid-template-columns:100px 64px 56px minmax(0,1fr)"><div style="font-weight:500">' + esc(row.channel === "other" ? "other" : channelLabel(row.channel)) +
+        '</div><div class="mono">' + nf(row.n) + '</div><div class="note">' + pc(row.n, total) +
+        '</div><div class="mono">' + esc(dur(row.avg_duration_ms)) + '</div></div>';
     }).join("");
     var days = data.days || [];
     var peak = days.reduce(function (max, row) { return Math.max(max, row.n || 0); }, 0) || 1;
@@ -1513,10 +1565,10 @@
     }).join("");
     var recent = (data.recent || []).slice().reverse().map(function (row) {
       var spec = execRow(row.status);
-      return '<div class="row' + (row.status === "failed" ? " err" : "") + '" style="grid-template-columns:130px 120px 90px 100px 100px minmax(0,1fr)">' +
-        '<div class="note">' + esc(fmt(row.ts, true)) + "</div><div>" + pill(spec[0], spec[1], spec[2]) + "</div><div>" +
+      return '<div class="row run-row' + (row.status === "failed" ? " err" : "") + '">' +
+        '<div class="note">' + esc(fmt(row.ts)) + "</div><div>" + pill(spec[0], spec[1], spec[2]) + "</div><div>" +
         esc(row.provider || t("no_provider")) + '</div><div class="opt ' + (row.channel ? "" : "note") + '">' + esc(channelLabel(row.channel)) +
-        '</div><div class="mono">' + esc(dur(row.duration_ms)) + '</div><div class="opt req" style="max-width:240px" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
+        '</div><div class="mono">' + tokenColumn(row.token_groups, 'input_tokens') + '</div><div class="mono">' + tokenColumn(row.token_groups, 'output_tokens') + '</div><div class="mono" title="' + esc(row.duration_source === 'timestamps' ? t('duration_timestamps') : '') + '">' + esc(dur(row.duration_ms)) + '</div><div class="opt req" style="max-width:240px" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
     }).join("");
     return '<div class="tiles"><div class="card"><div class="lbl">' + esc(t("total")) + '</div><div class="big">' + nf(total) + '</div><div class="note">' +
       esc(fmtYear(data.first)) + " – " + esc(fmtYear(data.last)) + "</div></div>" + statusHtml + "</div>" +
@@ -1526,20 +1578,16 @@
       '<div class="seg-rec" style="width:' + (total ? reconciled / total * 100 : 0) + '%"></div></div>' +
       '<div class="tiles2"><div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("by_provider")) + "</div>" +
       '<div class="row hd" style="grid-template-columns:100px 64px 56px minmax(0,1fr)"><div>' + esc(t("col_provider")) + "</div><div>" + esc(t("runs_short")) + "</div><div>%</div><div>" + esc(t("average")) + "</div></div>" +
-      providers + '<div style="padding:12px 16px 4px" class="lbl">' + esc(t("no_provider_note")) + "</div>" +
-      '<div class="row" style="grid-template-columns:150px minmax(0,1fr) 90px"><div>' + pill("err", "▲", (noProv.failed || 0) + " " + t("failed_n")) +
-      '</div><div class="note w100">' + esc(t("mean")) + esc(dur(noProv.failed_avg_duration_ms)) + '</div><div class="mono"></div></div>' +
-      '<div class="row" style="grid-template-columns:150px minmax(0,1fr) 90px"><div>' + pill("warn", "⇄", (noProv.reconciled || 0) + " " + t("reconciled_n")) +
-      '</div><div class="note w100">' + esc(t("no_duration")) + '</div><div class="mono muted">—</div></div></div>' +
+      providers + '</div>' +
       '<div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("by_channel")) + "</div>" +
-      '<div class="row hd" style="grid-template-columns:90px 56px minmax(0,1fr)"><div>' + esc(t("channel")) + "</div><div>" + esc(t("runs_short")) + "</div><div>" + esc(t("weight")) + "</div></div>" +
+      '<div class="row hd" style="grid-template-columns:100px 64px 56px minmax(0,1fr)"><div>' + esc(t("channel")) + "</div><div>" + esc(t("runs_short")) + "</div><div>%</div><div>" + esc(t("average")) + "</div></div>" +
       channelHtml + "</div></div>" +
       '<div class="card"><div class="h3" style="margin-bottom:10px">' + esc(t("by_day")) + '<span class="note" style="font-family:\'Inter\',sans-serif;font-weight:400">' + esc(t("day_note")) + "</span></div>" +
       '<div style="display:flex;align-items:flex-end;height:140px;gap:2px;border-bottom:1px solid var(--muted)">' + dayHtml + "</div>" +
       '<div class="dlabels" style="display:flex;gap:2px;margin-top:3px">' + dayLabels + "</div></div>" +
       '<div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("recent_runs")) + "</div>" +
-      '<div class="row hd" style="grid-template-columns:130px 120px 90px 100px 100px minmax(0,1fr)"><div>' + esc(t("when")) + "</div><div>" + esc(t("result")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("duration")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
-      t("gap") + "</div></div></div>" + recent + "</div>";
+      '<div class="runs-scroll" role="region" tabindex="0" aria-label="' + esc(t("recent_runs")) + '"><div class="runs-table"><div class="row hd run-row"><div>' + esc(t("when")) + "</div><div>" + esc(t("result")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("usage_input_tokens")) + "</div><div>" + esc(t("usage_output_tokens")) + "</div><div>" + esc(t("duration")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
+      t("gap") + "</div></div></div>" + recent + "</div></div></div>";
   }
 
   function mandateMode(item) {
@@ -1704,6 +1752,17 @@
       if (cache.tareas) paint("tareas", cache.tareas);
       return;
     }
+    var copy = event.target.closest("[data-copy-id]");
+    if (copy) {
+      var clipboard = typeof navigator !== "undefined" && navigator.clipboard;
+      if (!clipboard || !clipboard.writeText) { $("live").textContent = t("copy_failed"); return; }
+      clipboard.writeText(copy.getAttribute("data-copy-id")).then(function () {
+        copy.innerHTML = '<span aria-hidden="true">✓</span>';
+        copy.setAttribute("aria-label", t("copied"));
+        $("live").textContent = t("copied");
+      }).catch(function () { $("live").textContent = t("copy_failed"); });
+      return;
+    }
     var task = event.target.closest("[data-task]");
     if (task) {
       ui.task = task.getAttribute("data-task");
@@ -1724,6 +1783,13 @@
       ui.machine = !ui.machine;
       if (cache.tareas) paint("tareas", cache.tareas);
     }
+  });
+
+  document.addEventListener("input", function (event) {
+    var input = event.target;
+    if (!input || !input.getAttribute || input.getAttribute("data-task-search") == null || event.isComposing) return;
+    ui.search = input.value;
+    if (cache.tareas) paint("tareas", cache.tareas);
   });
 
   // Roving tabindex: one tab stop in the toolbar; arrows move between chips, Enter and Space

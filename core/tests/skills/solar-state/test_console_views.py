@@ -7,6 +7,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 import runtime_views
 import solar_state as st
 
@@ -66,7 +68,7 @@ def test_queries_cover_every_status_and_keep_reconciled_out_of_averages(ready, m
     assert tasks["by_status"]["planned"]["n"] == 1
     assert any(row["task_id"] == "arch" for row in tasks["history"])
     claude = next(row for row in runs["providers"] if row["provider"] == "claude")
-    assert claude == {"provider": "claude", "n": 2, "avg_duration_ms": 200}
+    assert claude == {"provider": "claude", "n": 3, "avg_duration_ms": 200}
     codex = next(row for row in runs["providers"] if row["provider"] == "codex")
     assert codex["n"] == 1
     assert codex["avg_duration_ms"] == 10
@@ -76,6 +78,9 @@ def test_queries_cover_every_status_and_keep_reconciled_out_of_averages(ready, m
     assert runs["by_status"]["reconciled"] == 1
     assert runs["total"] == 5
     assert sum(row["n"] for row in runs["channels"]) == 5
+    assert sum(row["n"] for row in runs["providers"]) == 5
+    assert runs["providers"][-1] == dict(provider="other", n=1, avg_duration_ms=50)
+    assert runs["channels"][-1]["channel"] == "other"
     assert events["calendar-busy-sync"]["shadow"] == 1
     data = console_data.mandates(workspace)
     assert data["modes"]["calendar-busy-sync"] == "active"
@@ -293,3 +298,108 @@ def test_console_tasks_project_revisions_and_the_approval_mismatch(ready):
         data = runtime_views.console_tasks(store)
     assert "approval_digest_mismatch" not in {t["id"]: t for t in data["tasks"]}[stuck]
     assert ["queued", "draft"] in data["transitions"]
+
+
+def test_duration_uses_measured_time_or_labelled_matching_timestamps(ready):
+    with st.session(ready, auto_backup=False) as store:
+        for rid, start, end, duration, status in [
+            ('historical', '2026-10-24T23:26:16Z', '2026-10-24T23:26:28Z', None, 'success'),
+            ('measured', '2026-10-24T23:26:16Z', '2026-10-24T23:26:28Z', 1234, 'success'),
+            ('zero', '2026-10-24T23:26:16Z', '2026-10-24T23:26:16Z', 0, 'success'),
+            ('backwards', '2026-10-24T23:26:28Z', '2026-10-24T23:26:16Z', None, 'failed'),
+            ('reconciled', '2026-10-24T23:26:16Z', '2026-10-24T23:26:28Z', 9000, 'reconciled'),
+            ('missing-start', None, '2026-10-24T23:26:28Z', None, 'success'),
+        ]:
+            if start:
+                store.audit_append(dict(event='start', router_id=rid, ts=start))
+            store.audit_append(dict(event='end', router_id=rid, ts=end, duration_ms=duration, status=status, provider='codex'))
+        rows = runtime_views.console_executions(store)['recent']
+        assert [(r['duration_ms'], r['duration_source']) for r in rows] == [
+            (12000, 'timestamps'), (1234, 'measured'), (0, 'measured'), (None, None), (None, None), (None, None)]
+
+
+def test_channel_average_uses_only_measured_non_reconciled_runs(ready):
+    with st.session(ready, auto_backup=False) as store:
+        samples = [
+            ('one', 'async-task', 'success', 100),
+            ('two', 'async-task', 'failed', 300),
+            ('three', 'async-task', 'success', None),
+            ('four', 'async-task', 'reconciled', 9999),
+            ('five', 'telegram', 'success', None),
+            ('six', 'voice', 'success', 0),
+        ]
+        for rid, channel, status, duration in samples:
+            store.audit_append(dict(event='start', router_id=rid, channel=channel, ts='2026-10-24T10:00:00Z'))
+            end = dict(event='end', router_id=rid, status=status, provider='codex', ts='2026-10-24T10:00:05Z')
+            if duration is not None:
+                end['duration_ms'] = duration
+            store.audit_append(end)
+        runs = runtime_views.console_executions(store)
+        channels = {row['channel']: row for row in runs['channels']}
+        assert channels['async-task'] == dict(channel='async-task', n=4, avg_duration_ms=200)
+        assert channels['telegram'] == dict(channel='telegram', n=1, avg_duration_ms=None)
+        assert channels['voice'] == dict(channel='voice', n=1, avg_duration_ms=0)
+
+
+def test_task_when_uses_latest_recorded_execution_and_preserves_zero(ready):
+    with st.session(ready, auto_backup=False) as store:
+        for tid in ['zero-duration', 'historical-duration', 'never-run', 'last-unknown']:
+            store.task_import(_task(tid, 'completed', tid), status='completed')
+        for rid, tid, status, duration in [
+            ('zero', 'zero-duration', 'success', 0),
+            ('history', 'historical-duration', 'success', None),
+            ('before', 'last-unknown', 'success', 1234),
+            ('latest', 'last-unknown', 'reconciled', None),
+        ]:
+            store.audit_append(dict(event='start', router_id=rid, task_id=tid, ts='2026-10-24T10:00:00Z'))
+            end = dict(event='end', router_id=rid, status=status, ts='2026-10-24T10:03:20Z')
+            if duration is not None:
+                end['duration_ms'] = duration
+            store.audit_append(end)
+        # Imported start timestamp stored only in the canonical column.
+        store.conn.execute("UPDATE audit SET row = ? WHERE event = 'start' AND router_id = 'history'",
+                           (json.dumps(dict(event='start', router_id='history', task_id='historical-duration')),))
+        rows = {row['id']: row for row in runtime_views.console_tasks(store)['tasks']}
+        assert (rows['zero-duration']['duration_ms'], rows['zero-duration']['duration_source']) == (0, 'measured')
+        assert (rows['historical-duration']['duration_ms'], rows['historical-duration']['duration_source']) == (200000, 'timestamps')
+        assert rows['never-run']['duration_ms'] is None
+        assert rows['last-unknown']['duration_ms'] is None  # never reuse an older valid run
+
+
+def test_ambiguous_start_does_not_infer_duration_or_pollute_averages(ready):
+    with st.session(ready, auto_backup=False) as store:
+        for _ in range(2):
+            store.audit_append(dict(event='start', router_id='duplicate', ts='2026-10-24T10:00:00Z'))
+        store.audit_append(dict(event='end', router_id='duplicate', provider='codex', status='success', ts='2026-10-24T10:00:05Z'))
+        store.audit_append(dict(event='end', router_id='measured', provider='codex', status='success', ts='2026-10-24T10:00:05Z', duration_ms=300))
+        store.audit_append(dict(event='start', router_id='derived', ts='2026-10-24T10:00:00Z'))
+        store.audit_append(dict(event='end', router_id='derived', provider='codex', status='success', ts='2026-10-24T10:00:05Z'))
+        data = runtime_views.console_executions(store)
+        assert data['recent'][0]['duration_ms'] is None
+        assert data['recent'][0]['duration_source'] is None
+        assert data['providers'][0]['avg_duration_ms'] == 300
+
+
+@pytest.mark.parametrize("start,end,duration", [
+    ("2026-10-24T10:00:00", "2026-10-24T10:00:05Z", None),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05", None),
+    ("2026-10-24T10:00:00", "2026-10-24T10:00:05", None),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", -1),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", "-50"),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", "invalid"),
+    ("2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", {"unexpected": 100}),
+])
+def test_invalid_duration_or_naive_timestamp_does_not_fallback_or_enter_averages(ready, start, end, duration):
+    with st.session(ready, auto_backup=False) as store:
+        for rid, first, last, measured in [
+            ("invalid", start, end, duration),
+            ("valid", "2026-10-24T10:00:00Z", "2026-10-24T10:00:05Z", 200),
+        ]:
+            store.audit_append(dict(event="start", router_id=rid, ts=first, channel="async-task"))
+            store.audit_append(dict(event="end", router_id=rid, ts=last, provider="codex",
+                                    status="success", duration_ms=measured))
+        runs = runtime_views.console_executions(store)
+        invalid = runs["recent"][0]  # first appended end belongs to the invalid sample
+        assert (invalid["duration_ms"], invalid["duration_source"]) == (None, None)
+        assert runs["providers"] == [dict(provider="codex", n=2, avg_duration_ms=200)]
+        assert runs["channels"] == [dict(channel="async-task", n=2, avg_duration_ms=200)]

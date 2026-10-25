@@ -177,7 +177,7 @@ group hides at 0 unless selected. The default filter is the first non-empty of
 Errors, Running and Drafts, else All, decided at each opening and never remembered
 between sessions; only the URL hash (`#tasks/<group>` with `+recurring`) carries it
 over a reload. The Recurring checkbox intersects the group and the chip counts
-follow it. Active tasks sort first inside any group that holds them. Rows show all
+follow it. Task families sort by the parent creation time, newest first; each parent stays immediately before its matching children, which also sort newest first. A parent outside the selected status remains visible as context. Status and update time never change that order. Rows show all
 eight states as a pill with glyph and text (red only for `error`, blue only for
 `active`); recurring tasks carry a "↻" mark after the id. A parent row counts every
 subtask ("3 subtasks"), filtered or not; the detail lists them all.
@@ -245,15 +245,25 @@ warning can print twice (accepted). Other console routes answer a fixed "Console
 data unavailable" on unexpected read errors.
 
 Tasks screen layout: list and detail share the width evenly and stack below 900
-px. The list keeps Status, Task and Created up to 1600 px of viewport width,
+px. The list keeps Status, Task and When up to 1600 px of viewport width,
 where the list is about half of the content (measured: 490 px at 1280 and
 570 px at 1440), and hides Provider, Channel and Requester; wider than 1600 px every
-column shows. The detail shows the newest history event first. Schedule days
+column shows. The When cell stays visible on mobile and includes optional token counts and the latest recorded run duration; unavailable values add no placeholder. Narrow Runs tables keep labelled columns accessible through horizontal scrolling. The detail shows the newest history event first. Schedule days
 show names, a run limit of 0 shows as unlimited, and the complete record keeps
 its frontmatter folded until opened.
 
 Landing these sources does not mean installed acceptance: install and client
 publication are still required before claiming it.
+
+## Task search and ID copy
+
+The task list header contains a client-side name/ID substring search and a compact
+visible/group count. Search is case-insensitive, intersects the selected status
+and Recurring filter, and keeps a parent as context when its child matches. A
+matching historical revision remains searchable by its own name or ID. Search
+focus and selection survive detail loading and repaints. No runtime state changes.
+An icon-only button next to the full detail ID copies that ID to the browser
+clipboard; its tooltip is `Copy`, with a live success/failure announcement.
 
 ## Task token usage
 
