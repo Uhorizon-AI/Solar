@@ -461,6 +461,10 @@ def console_tasks(store):
     """
     tasks = []
     token_groups, _ = _console_token_groups(store)
+    last_runs = {}
+    for run in _console_execution_ends(store):
+        if run.get('task_id'):
+            last_runs[run['task_id']] = run
     by_status = {}
     # What the worker will refuse is read from the stored approval itself, so a queued
     # task shows it right after an upgrade, before any poll, and a rename does not hide it.
@@ -482,6 +486,9 @@ def console_tasks(store):
             revises_task_id=solar_state.value_of(row['revises']) or None,
         )
         item['token_groups'] = token_groups.get(row['id'], [])
+        last = last_runs.get(row['id'], {})
+        item['duration_ms'] = last.get('duration_ms')
+        item['duration_source'] = last.get('duration_source')
         if row['id'] in unapproved:
             item['approval_digest_mismatch'] = dict(reason=unapproved[row['id']])
         tasks.append(item)
@@ -638,19 +645,14 @@ def _execution_duration(start, end):
         return None, None
 
 
-def console_executions(store):
-    """End events, grouped. Reconciled durations stay out of every average.
-
-    Every end is counted once in both breakdowns. Missing provider identities
-    go to other; other is last in both lists. Reconciled rows count toward the
-    totals but never the measured averages. Channel and user_id are read from
-    the start row with the same router_id.
-    """
+def _console_execution_ends(store):
+    """Shared read-only execution identity and duration projection for Console."""
     starts = {}
     start_counts = {}
-    for router_id, raw in store.conn.execute(
-            "SELECT router_id, row FROM audit WHERE event = 'start' ORDER BY seq").fetchall():
+    for ts, router_id, raw in store.conn.execute(
+            "SELECT ts, router_id, row FROM audit WHERE event = 'start' ORDER BY seq").fetchall():
         body = _audit_body(raw)
+        body["ts"] = ts or body.get("ts")
         key = _router_key(router_id, body)
         if key:
             start_counts[key] = start_counts.get(key, 0) + 1
@@ -665,10 +667,24 @@ def console_executions(store):
         channel, user_id = _execution_identity(starts.get(key) if key else None, body)
         body["duration_ms"], body["duration_source"] = _execution_duration(
             starts.get(key) if start_counts.get(key) == 1 else None, body)
+        if not body.get("task_id") and start_counts.get(key) == 1:
+            body["task_id"] = starts[key].get("task_id")
         body["router_id"] = key
         body["channel"] = channel
         body["user_id"] = user_id
         ends.append(body)
+    return ends
+
+
+def console_executions(store):
+    """End events, grouped. Reconciled durations stay out of every average.
+
+    Every end is counted once in both breakdowns. Missing provider identities
+    go to other; other is last in both lists. Reconciled rows count toward the
+    totals but never the measured averages. Channel and user_id are read from
+    the start row with the same router_id.
+    """
+    ends = _console_execution_ends(store)
     providers = {}
     no_provider_failed = {'n': 0, 'duration_ms': 0, 'duration_n': 0}
     reconciled_n = 0

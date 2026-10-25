@@ -264,3 +264,4 @@ def test_console_lists_match_each_router_without_repeating_task_totals(ready):
         assert [row['token_groups'][0]['metrics']['input_tokens']['subtotal'] for row in runs[:2]] == [0, 21]
         assert runs[-1]['token_groups'] == []
         assert 'observations' not in json.dumps(tasks)
+        assert 'observations' not in json.dumps(runs)

@@ -21,6 +21,7 @@
       copy: "Copy", copied: "Copied", copy_failed: "Copy failed",
       usage_technical: "Measurement details",
       duration_timestamps: "Approximate duration calculated from recorded start and end times",
+      task_run_duration: "Last recorded run duration",
       usage_no_counts: "Tokens: not available",
       usage_scope: "CLI-reported tokens from Solar async questions only. Other client activity is not observed.",
       usage_empty: "No token data recorded for this task.",
@@ -187,13 +188,11 @@
       mm_mismatch: "it changed after it was approved",
       mm_text: "The worker will not start this task: ", mm_fix: ". Approve it again to queue it.",
       no_provider: "no provider", no_tasks: "No tasks.", showing: "Showing ", of: " of ",
-      col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "When · Tokens", col_requester: "Requester",
+      col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "When", col_requester: "Requester",
       state_machine: "State machine", no_history: "No history.", detail: "Detail", recurring: "recurring",
       parent: "Parent", root: "root", history: "History", final_state: "final", can_go: "Can move to",
       total: "Total", atypical: "unusual", by_provider: "By provider", runs_short: "Runs", average: "Average",
-      no_provider_note: "Runs without a provider are excluded from this breakdown.", failed_n: "failed", reconciled_n: "reconciled",
-      no_duration: "no run duration", mean: "average ", by_channel: "By channel", weight: "Weight",
-      by_day: "By day ", day_note: "· days with activity · square-root scale", recent_runs: "Latest runs",
+      by_channel: "By channel", by_day: "By day ", day_note: "· days with activity · square-root scale", recent_runs: "Latest runs",
       when: "When", result: "Result", duration: "Duration",
       pending: "Pending", decisions: "Decisions", next_owner: "Next owner", unassigned: "unassigned",
       updated_label: "Updated", channels_seen: "Channels seen", summaries: "Summaries by channel",
@@ -228,6 +227,7 @@
       copy: "Copy", copied: "Copiado", copy_failed: "No se pudo copiar",
       usage_technical: "Detalles de medición",
       duration_timestamps: "Duración aproximada calculada a partir del inicio y fin registrados",
+      task_run_duration: "Duración de la última ejecución registrada",
       usage_no_counts: "Tokens: sin datos",
       usage_scope: "Tokens informados por los CLI de preguntas async de Solar. La actividad fuera de Solar no se observa.",
       usage_empty: "No hay datos de tokens registrados para esta tarea.",
@@ -394,13 +394,11 @@
       mm_mismatch: "cambió después de aprobarse",
       mm_text: "El worker no arrancará esta tarea: ", mm_fix: ". Apruébala de nuevo para ponerla en cola.",
       no_provider: "sin proveedor", no_tasks: "Sin tareas.", showing: "Mostrando ", of: " de ",
-      col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Cuándo · Tokens", col_requester: "Solicitante",
+      col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Cuándo", col_requester: "Solicitante",
       state_machine: "Máquina de estados", no_history: "Sin historia.", detail: "Detalle", recurring: "recurrente",
       parent: "Padre", root: "raíz", history: "Historia", final_state: "final", can_go: "Puede pasar a",
       total: "Total", atypical: "atípico", by_provider: "Por proveedor", runs_short: "Ejec.", average: "Media",
-      no_provider_note: "Las ejecuciones sin proveedor se excluyen de este desglose.", failed_n: "fallidas", reconciled_n: "reconciliadas",
-      no_duration: "sin duración de ejecución", mean: "media ", by_channel: "Por canal", weight: "Peso",
-      by_day: "Por día ", day_note: "· días con actividad · escala raíz", recent_runs: "Últimas ejecuciones",
+      by_channel: "Por canal", by_day: "Por día ", day_note: "· días con actividad · escala raíz", recent_runs: "Últimas ejecuciones",
       when: "Cuándo", result: "Resultado", duration: "Duración",
       pending: "Pendientes", decisions: "Decisiones", next_owner: "Siguiente responsable", unassigned: "sin asignar",
       updated_label: "Actualizada", channels_seen: "Canales vistos", summaries: "Resúmenes por canal",
@@ -1065,7 +1063,8 @@
         (task.approval_digest_mismatch ? ' <span class="pill warn">⚠ ' + esc(t("not_approved")) + "</span>" : "") + "</div></div>" +
         '<div class="' + (task.provider ? "" : "note") + '">' + esc(task.provider || t("no_provider")) + "</div>" +
         '<div class="opt ' + (task.channel ? "" : "note") + '">' + esc(channelLabel(task.channel)) + "</div>" +
-        '<div class="opt note">' + esc(fmt(task.created_at)) + tokenGroups(task.token_groups, true) + "</div>" +
+        '<div class="task-when note">' + esc(fmt(task.created_at)) + tokenGroups(task.token_groups, true) +
+        (task.duration_ms == null ? "" : '<div class="task-run-duration" title="' + esc(t("task_run_duration") + (task.duration_source === "timestamps" ? " · " + t("duration_timestamps") : "")) + '">' + esc(dur(task.duration_ms)) + '</div>') + '</div>' +
         '<div class="opt req" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
     });
     var selected = ui.task ? byId[ui.task] : null;
@@ -1566,7 +1565,7 @@
     }).join("");
     var recent = (data.recent || []).slice().reverse().map(function (row) {
       var spec = execRow(row.status);
-      return '<div class="row' + (row.status === "failed" ? " err" : "") + '" style="grid-template-columns:145px 110px 80px 90px minmax(70px,1fr) minmax(70px,1fr) 120px minmax(0,1fr)">' +
+      return '<div class="row run-row' + (row.status === "failed" ? " err" : "") + '">' +
         '<div class="note">' + esc(fmt(row.ts)) + "</div><div>" + pill(spec[0], spec[1], spec[2]) + "</div><div>" +
         esc(row.provider || t("no_provider")) + '</div><div class="opt ' + (row.channel ? "" : "note") + '">' + esc(channelLabel(row.channel)) +
         '</div><div class="mono">' + tokenColumn(row.token_groups, 'input_tokens') + '</div><div class="mono">' + tokenColumn(row.token_groups, 'output_tokens') + '</div><div class="mono" title="' + esc(row.duration_source === 'timestamps' ? t('duration_timestamps') : '') + '">' + esc(dur(row.duration_ms)) + '</div><div class="opt req" style="max-width:240px" title="' + esc(t("col_requester")) + ": " + t("gap") + '"></div></div>';
@@ -1587,8 +1586,8 @@
       '<div style="display:flex;align-items:flex-end;height:140px;gap:2px;border-bottom:1px solid var(--muted)">' + dayHtml + "</div>" +
       '<div class="dlabels" style="display:flex;gap:2px;margin-top:3px">' + dayLabels + "</div></div>" +
       '<div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("recent_runs")) + "</div>" +
-      '<div class="row hd" style="grid-template-columns:145px 110px 80px 90px minmax(70px,1fr) minmax(70px,1fr) 120px minmax(0,1fr)"><div>' + esc(t("when")) + "</div><div>" + esc(t("result")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("usage_input_tokens")) + "</div><div>" + esc(t("usage_output_tokens")) + "</div><div>" + esc(t("duration")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
-      t("gap") + "</div></div></div>" + recent + "</div>";
+      '<div class="runs-scroll" role="region" tabindex="0" aria-label="' + esc(t("recent_runs")) + '"><div class="runs-table"><div class="row hd run-row"><div>' + esc(t("when")) + "</div><div>" + esc(t("result")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("usage_input_tokens")) + "</div><div>" + esc(t("usage_output_tokens")) + "</div><div>" + esc(t("duration")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
+      t("gap") + "</div></div></div>" + recent + "</div></div></div>";
   }
 
   function mandateMode(item) {

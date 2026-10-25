@@ -7,6 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Fixed
+- Keep task dates, optional tokens and latest recorded run duration visible under When on mobile; preserve labelled Runs columns with horizontal scrolling at narrow widths.
 - Align provider and channel run breakdowns with Runs, percentage and measured average duration columns.
 - Add compact task name/ID search beside the list count and an icon-only Copy action for the full detail ID, preserving status filters and parent context.
 - Record elapsed duration for restricted router executions, including failures; show labelled timestamp-derived durations for historical Runs when both endpoints are recorded.

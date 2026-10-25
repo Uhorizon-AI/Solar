@@ -1179,6 +1179,49 @@ async function settled() {
   lack(view, '<img src=x', "search value is escaped");
   need(view, "No matching tasks.", "Errors search does not claim no tasks are in error");
 
+  // Optional When statistics preserve zero, missing data and partial coverage.
+  const tokenGroup = (input, output, available = 1, attempts = 1) => ({ provider: "codex", model: "m", cli_version: "1", attempts,
+    metrics: { input_tokens: { subtotal: input, available }, output_tokens: { subtotal: output, available } } });
+  page = await open(fixture([mk("metered", "completed", { token_groups: [tokenGroup(0, 5)], duration_ms: 200000, duration_source: "timestamps" })]));
+  view = page.els.health.innerHTML;
+  need(view, 'class="task-when note"', "When is not an optional cell hidden on mobile");
+  need(view, "0 → 5", "zero input is a measurement, not absence");
+  need(view, "3 min 20 s", "When includes known duration");
+  need(view, "Last recorded run duration", "task duration describes the last run");
+  page = await open(fixture([mk("partial", "completed", { token_groups: [tokenGroup(null, 5, 1, 2)], duration_ms: 0 })]));
+  view = page.els.health.innerHTML;
+  need(view, "— → 5 · Partial", "missing counter and partial coverage are distinct");
+  need(view, "0 ms", "zero duration is visible");
+  page = await open(fixture([mk("unmeasured", "draft")]));
+  lack(page.els.health.innerHTML, 'class="token-summary compact"', "no token placeholder without measurements");
+  lack(page.els.health.innerHTML, 'class="task-run-duration"', "no duration placeholder without recorded time");
+
+  const execData = { total: 3, by_status: { success: 3 },
+    providers: [{ provider: "codex", n: 2, avg_duration_ms: 200000 }, { provider: "other", n: 1, avg_duration_ms: null }],
+    channels: [{ channel: "async-task", n: 2, avg_duration_ms: 200000 }, { channel: "other", n: 1, avg_duration_ms: null }],
+    recent: [{ ts: "2026-10-24T10:00:00Z", provider: "codex", status: "success", token_groups: [tokenGroup(0, 5)], duration_ms: 200000, duration_source: "timestamps" },
+             { ts: "2026-10-24T11:00:00Z", status: "success", token_groups: [], duration_ms: null }] };
+  page = boot(Object.assign({}, calm, { "/api/console/executions": { body: execData }, "/api/console/capacity": { body: {} } }));
+  await settled();
+  page.click({ "data-screen": "ejecuciones" });
+  await settled();
+  view = page.els.health.innerHTML;
+  need(view, 'class="runs-scroll" role="region" tabindex="0"', "recent runs scroll region is keyboard accessible");
+  const recentRuns = view.slice(view.indexOf('class="runs-scroll"'));
+  need(recentRuns, '<div>Input</div><div>Output</div>', "distinct persistent column labels");
+  need(recentRuns, 'title="Approximate duration calculated from recorded start and end times"', "derived duration is labelled");
+  need(recentRuns, 'title=""', "non-derived duration has no approximation tooltip");
+  need(recentRuns, '</div><div class="mono"></div><div class="mono"></div>', "empty token cells without a measurement");
+  lack(recentRuns, "≈", "no approximation symbol in values");
+  const providerBlock = view.slice(view.indexOf("By provider"), view.indexOf("By channel"));
+  const channelBlock = view.slice(view.indexOf("By channel"), view.indexOf("By day"));
+  for (const block of [providerBlock, channelBlock]) {
+    need(block, '<div>Runs</div><div>%</div><div>Average</div>', "same breakdown columns");
+    need(block, "3 min 20 s", "measured breakdown average");
+    need(block, "other", "unknown identities appear in both breakdowns");
+    lack(block, "excluded from this breakdown", "no obsolete no-provider note");
+  }
+
   // URL hash: the selection survives a reload and nothing else does.
   page = await open(everything);
   page.click({ "data-filter": "queue" });

@@ -337,3 +337,42 @@ def test_channel_average_uses_only_measured_non_reconciled_runs(ready):
         assert channels['async-task'] == dict(channel='async-task', n=4, avg_duration_ms=200)
         assert channels['telegram'] == dict(channel='telegram', n=1, avg_duration_ms=None)
         assert channels['voice'] == dict(channel='voice', n=1, avg_duration_ms=0)
+
+
+def test_task_when_uses_latest_recorded_execution_and_preserves_zero(ready):
+    with st.session(ready, auto_backup=False) as store:
+        for tid in ['zero-duration', 'historical-duration', 'never-run', 'last-unknown']:
+            store.task_import(_task(tid, 'completed', tid), status='completed')
+        for rid, tid, status, duration in [
+            ('zero', 'zero-duration', 'success', 0),
+            ('history', 'historical-duration', 'success', None),
+            ('before', 'last-unknown', 'success', 1234),
+            ('latest', 'last-unknown', 'reconciled', None),
+        ]:
+            store.audit_append(dict(event='start', router_id=rid, task_id=tid, ts='2026-10-24T10:00:00Z'))
+            end = dict(event='end', router_id=rid, status=status, ts='2026-10-24T10:03:20Z')
+            if duration is not None:
+                end['duration_ms'] = duration
+            store.audit_append(end)
+        # Imported start timestamp stored only in the canonical column.
+        store.conn.execute("UPDATE audit SET row = ? WHERE event = 'start' AND router_id = 'history'",
+                           (json.dumps(dict(event='start', router_id='history', task_id='historical-duration')),))
+        rows = {row['id']: row for row in runtime_views.console_tasks(store)['tasks']}
+        assert (rows['zero-duration']['duration_ms'], rows['zero-duration']['duration_source']) == (0, 'measured')
+        assert (rows['historical-duration']['duration_ms'], rows['historical-duration']['duration_source']) == (200000, 'timestamps')
+        assert rows['never-run']['duration_ms'] is None
+        assert rows['last-unknown']['duration_ms'] is None  # never reuse an older valid run
+
+
+def test_ambiguous_start_does_not_infer_duration_or_pollute_averages(ready):
+    with st.session(ready, auto_backup=False) as store:
+        for _ in range(2):
+            store.audit_append(dict(event='start', router_id='duplicate', ts='2026-10-24T10:00:00Z'))
+        store.audit_append(dict(event='end', router_id='duplicate', provider='codex', status='success', ts='2026-10-24T10:00:05Z'))
+        store.audit_append(dict(event='end', router_id='measured', provider='codex', status='success', ts='2026-10-24T10:00:05Z', duration_ms=300))
+        store.audit_append(dict(event='start', router_id='derived', ts='2026-10-24T10:00:00Z'))
+        store.audit_append(dict(event='end', router_id='derived', provider='codex', status='success', ts='2026-10-24T10:00:05Z'))
+        data = runtime_views.console_executions(store)
+        assert data['recent'][0]['duration_ms'] is None
+        assert data['recent'][0]['duration_source'] is None
+        assert data['providers'][0]['avg_duration_ms'] == 300

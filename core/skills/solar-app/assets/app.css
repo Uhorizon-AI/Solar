@@ -209,3 +209,12 @@ dl.kv{margin:0}
 .task-id>.mono{min-width:0;overflow-wrap:anywhere}
 .copy-id{flex:none;border:0;border-radius:4px;padding:0 4px;min-width:24px;min-height:24px;background:none;color:var(--muted);font-size:18px;cursor:pointer}
 .copy-id:hover{color:var(--text)}
+
+.task-run-duration{margin-top:4px;font-size:11px;font-variant-numeric:tabular-nums}
+.runs-scroll{overflow-x:auto;max-width:100%}
+.runs-table{min-width:900px}
+.runs-table .run-row{display:grid!important;grid-template-columns:145px 110px 80px 90px minmax(70px,1fr) minmax(70px,1fr) 120px minmax(90px,1fr)}
+.runs-table .run-row>div{min-width:0;overflow-wrap:anywhere}
+.runs-table .run-row.hd{display:grid!important}
+.runs-table .run-row .opt{display:block}
+@media (max-width:760px){.task-when{flex:1 1 100%}}

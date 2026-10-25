@@ -245,10 +245,10 @@ warning can print twice (accepted). Other console routes answer a fixed "Console
 data unavailable" on unexpected read errors.
 
 Tasks screen layout: list and detail share the width evenly and stack below 900
-px. The list keeps Status, Task and Created up to 1600 px of viewport width,
+px. The list keeps Status, Task and When up to 1600 px of viewport width,
 where the list is about half of the content (measured: 490 px at 1280 and
 570 px at 1440), and hides Provider, Channel and Requester; wider than 1600 px every
-column shows. The detail shows the newest history event first. Schedule days
+column shows. The When cell stays visible on mobile and includes optional token counts and the latest recorded run duration; unavailable values add no placeholder. Narrow Runs tables keep labelled columns accessible through horizontal scrolling. The detail shows the newest history event first. Schedule days
 show names, a run limit of 0 shows as unlimited, and the complete record keeps
 its frontmatter folded until opened.
 
