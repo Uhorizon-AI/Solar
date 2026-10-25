@@ -16,6 +16,9 @@
   var COPY = {
     en: {
       usage_title: "Token consumption",
+      task_search: "Search by name or ID",
+      task_no_matches: "No matching tasks.",
+      copy: "Copy", copied: "Copied", copy_failed: "Copy failed",
       usage_technical: "Measurement details",
       duration_timestamps: "Approximate duration calculated from recorded start and end times",
       usage_no_counts: "Tokens: not available",
@@ -184,7 +187,7 @@
       mm_mismatch: "it changed after it was approved",
       mm_text: "The worker will not start this task: ", mm_fix: ". Approve it again to queue it.",
       no_provider: "no provider", no_tasks: "No tasks.", showing: "Showing ", of: " of ",
-      col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "Created · Tokens", col_requester: "Requester",
+      col_status: "Status", col_task: "Task", col_provider: "Provider", col_channel: "Channel", col_created: "When · Tokens", col_requester: "Requester",
       state_machine: "State machine", no_history: "No history.", detail: "Detail", recurring: "recurring",
       parent: "Parent", root: "root", history: "History", final_state: "final", can_go: "Can move to",
       total: "Total", atypical: "unusual", by_provider: "By provider", runs_short: "Runs", average: "Average",
@@ -220,6 +223,9 @@
     },
     es: {
       usage_title: "Consumo de tokens",
+      task_search: "Buscar por nombre o ID",
+      task_no_matches: "No hay tareas coincidentes.",
+      copy: "Copy", copied: "Copiado", copy_failed: "No se pudo copiar",
       usage_technical: "Detalles de medición",
       duration_timestamps: "Duración aproximada calculada a partir del inicio y fin registrados",
       usage_no_counts: "Tokens: sin datos",
@@ -388,7 +394,7 @@
       mm_mismatch: "cambió después de aprobarse",
       mm_text: "El worker no arrancará esta tarea: ", mm_fix: ". Apruébala de nuevo para ponerla en cola.",
       no_provider: "sin proveedor", no_tasks: "Sin tareas.", showing: "Mostrando ", of: " de ",
-      col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Creada · Tokens", col_requester: "Solicitante",
+      col_status: "Estado", col_task: "Tarea", col_provider: "Proveedor", col_channel: "Canal", col_created: "Cuándo · Tokens", col_requester: "Solicitante",
       state_machine: "Máquina de estados", no_history: "Sin historia.", detail: "Detalle", recurring: "recurrente",
       parent: "Padre", root: "raíz", history: "Historia", final_state: "final", can_go: "Puede pasar a",
       total: "Total", atypical: "atípico", by_provider: "Por proveedor", runs_short: "Ejec.", average: "Media",
@@ -503,6 +509,7 @@
     filter: null,
     filterAuto: true,
     recurring: false,
+    search: "",
     focusKey: null,
     refocus: null,
     announce: null,
@@ -687,6 +694,7 @@
   function focusedTarget() {
     var active = (typeof document !== "undefined" && document.activeElement) || null;
     if (!active || !active.getAttribute) return null;
+    if (active.getAttribute("data-task-search") != null) return { kind: "search", start: active.selectionStart, end: active.selectionEnd };
     if (active.getAttribute("data-recurring") != null) return { kind: "recurring" };
     if (active.getAttribute("data-chip") != null) return { kind: "filter", key: active.getAttribute("data-filter") };
     return null;
@@ -699,8 +707,9 @@
     var want = (ui.refocus === "recurring" ? { kind: "recurring" } : (ui.refocus === "filter" ? { kind: "filter", key: ui.focusKey } : null)) || target;
     ui.refocus = null;
     if (!want || !box || !box.querySelector) return;
-    var el = box.querySelector(want.kind === "recurring" ? "[data-recurring]" : '[data-filter="' + String(want.key || "") + '"][data-chip]');
+    var el = box.querySelector(want.kind === "search" ? "[data-task-search]" : want.kind === "recurring" ? "[data-recurring]" : '[data-filter="' + String(want.key || "") + '"][data-chip]');
     if (el && el.focus) el.focus();
+    if (el && want.kind === "search" && typeof want.start === "number" && el.setSelectionRange) el.setSelectionRange(want.start, want.end);
   }
   // A live region outside the repainted block, so a filter change still announces the count.
   // When the group is empty the count says nothing useful, so the empty-state title is what
@@ -980,7 +989,12 @@
       '<span class="fbreak" aria-hidden="true"></span>' + rest +
       '<label class="rsw"><input type="checkbox" data-recurring="1"' + (ui.recurring ? " checked" : "") + '> <span>' + esc(t("f_recurring")) + "</span></label></div></div>";
     ui.chipKeys = filters.map(function (filter) { return filter.key; });
+    var query = String(ui.search || "").trim().toLocaleLowerCase();
+    function matchesText(task) {
+      return !query || String(task.id || "").toLocaleLowerCase().indexOf(query) >= 0 || String(task.title || "").toLocaleLowerCase().indexOf(query) >= 0;
+    }
     function match(task) {
+      if (!matchesText(task)) return false;
       if (ui.recurring && !task.recurring) return false;
       return !activeFilter.statuses || activeFilter.statuses.indexOf(task.status) >= 0;
     }
@@ -1011,7 +1025,7 @@
     var FOLDS = { completed: true, cancelled: true, archived: true };
     var folded = {}, versions = {}, headId = {};
     tasks.forEach(function (task) {
-      if (!FOLDS[task.status] || (kids[task.id] || []).length) return;
+      if (!FOLDS[task.status] || (kids[task.id] || []).length || (query && matchesText(task))) return;
       var head = headOf(task);
       if (!head) return;
       folded[task.id] = true;
@@ -1038,7 +1052,7 @@
     var visibleIds = planned.map(function (row) { return row[0].id; });
     // An older version opened from its newer one's detail stays selected while that one is listed.
     var keepFolded = folded[ui.task] && visibleIds.indexOf(headId[ui.task]) >= 0;
-    if (visibleIds.indexOf(ui.task) < 0 && !keepFolded) ui.task = visibleIds[0] || null;
+    if (visibleIds.indexOf(ui.task) < 0 && !keepFolded) ui.task = (planned.filter(function (row) { return !row[3]; }).map(function (row) { return row[0].id; })[0]) || visibleIds[0] || null;
     var rows = planned.map(function (row) {
       var task = row[0], level = row[1], nKids = row[2], dim = row[3];
       var spec = ts(task.status);
@@ -1059,7 +1073,10 @@
     var empty = "";
     var emptyTitle = "";
     if (!visible) {
-      if (activeFilter.key === "errors") {
+      if (query) {
+        emptyTitle = t("task_no_matches");
+        empty = '<div class="note" style="padding:12px">' + esc(emptyTitle) + "</div>";
+      } else if (activeFilter.key === "errors") {
         var nextGroup = filters.filter(function (filter) { return ["running", "drafts", "queue"].indexOf(filter.key) >= 0 && filter.n > 0; })[0];
         // With the Recurring switch on, an empty Errors group means no recurring error, not no error at all.
         var errorTitle = ui.recurring ? t("f_no_error_rec") : t("f_no_error");
@@ -1076,7 +1093,9 @@
     // When the group is empty the count says nothing useful; #live then announces this title.
     ui.empty = emptyTitle;
     return filterHtml +
-      '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div style="padding:10px 12px" class="note">' + esc(ui.announce) + "</div>" +
+      '<div class="split"><div class="card" style="padding:0;overflow:hidden"><div class="task-list-tools">' +
+      '<input type="search" data-task-search="1" aria-label="' + esc(t("task_search")) + '" placeholder="' + esc(t("task_search")) + '" value="' + esc(ui.search) + '">' +
+      '<span class="note" title="' + esc(ui.announce) + '">' + visible + ' / ' + activeFilter.n + '</span></div>' +
       '<div class="row hd trow"><div>' + esc(t("col_status")) + "</div><div>" + esc(t("col_task")) + "</div><div>" + esc(t("col_provider")) + "</div><div>" + esc(t("col_channel")) + "</div><div>" + esc(t("col_created")) + '</div><div>' + esc(t("col_requester")) + '<div class="reqh">' +
       t("gap") + "</div></div></div>" + rows.join("") + empty + "</div>" + detail + "</div>" +
       '<div class="card" style="padding:0;overflow:hidden"><button type="button" class="chip" style="margin:10px 12px" data-machine="1" aria-expanded="' +
@@ -1110,7 +1129,7 @@
       esc(task.title || task.id) + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">' + pill(spec.tone, spec.glyph, spec.label) +
       '<span class="tag' + (task.recurring ? "" : " gap-hide") + '">↻ ' + esc(t("recurring")) + "</span></div>" +
       '<div class="kv" style="grid-template-columns:88px minmax(0,1fr)">' +
-      kv("Id", task.id, "mono") + kv(t("col_provider"), task.provider || t("no_provider"), task.provider ? "" : "note") +
+      '<div class="k">Id</div><div class="task-id"><span class="mono">' + esc(task.id) + '</span><button type="button" class="copy-id" data-copy-id="' + esc(task.id) + '" title="Copy" aria-label="Copy"><span aria-hidden="true">⧉</span></button></div>' + kv(t("col_provider"), task.provider || t("no_provider"), task.provider ? "" : "note") +
       kv(t("col_channel"), channelLabel(task.channel), task.channel ? "" : "note") +
       kv(t("parent"), task.parent_id ? String(task.parent_id).slice(0, 8) : t("root"), task.parent_id ? "mono" : "note") +
       '<div class="k">' + esc(t("col_requester")) + '</div><div><span class="gap">' + t("gap") + "</span></div></div>" +
@@ -1740,6 +1759,17 @@
       if (cache.tareas) paint("tareas", cache.tareas);
       return;
     }
+    var copy = event.target.closest("[data-copy-id]");
+    if (copy) {
+      var clipboard = typeof navigator !== "undefined" && navigator.clipboard;
+      if (!clipboard || !clipboard.writeText) { $("live").textContent = t("copy_failed"); return; }
+      clipboard.writeText(copy.getAttribute("data-copy-id")).then(function () {
+        copy.innerHTML = '<span aria-hidden="true">✓</span>';
+        copy.setAttribute("aria-label", t("copied"));
+        $("live").textContent = t("copied");
+      }).catch(function () { $("live").textContent = t("copy_failed"); });
+      return;
+    }
     var task = event.target.closest("[data-task]");
     if (task) {
       ui.task = task.getAttribute("data-task");
@@ -1760,6 +1790,13 @@
       ui.machine = !ui.machine;
       if (cache.tareas) paint("tareas", cache.tareas);
     }
+  });
+
+  document.addEventListener("input", function (event) {
+    var input = event.target;
+    if (!input || !input.getAttribute || input.getAttribute("data-task-search") == null || event.isComposing) return;
+    ui.search = input.value;
+    if (cache.tareas) paint("tareas", cache.tareas);
   });
 
   // Roving tabindex: one tab stop in the toolbar; arrows move between chips, Enter and Space

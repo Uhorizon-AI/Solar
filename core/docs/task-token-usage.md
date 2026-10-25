@@ -113,7 +113,7 @@ assigning a cached version to a replaced binary.
 
 ## Console presentation
 
-Tasks show known input and output subtotals as `input → output` below the creation timestamp in the task list’s Created · Tokens column and immediately
+Tasks show known input and output subtotals as `input → output` below the creation timestamp in the task list’s When · Tokens column and immediately
 in the detail. Coverage, individual attempts, cache, reasoning and original
 evidence remain under Measurement details. Distinct provider/model/CLI groups
 remain separate. Unmeasured list entries are blank; missing metrics within a measured group use a dash, never zero. Task details explain unavailable measurements.

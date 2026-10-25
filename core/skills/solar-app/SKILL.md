@@ -255,6 +255,16 @@ its frontmatter folded until opened.
 Landing these sources does not mean installed acceptance: install and client
 publication are still required before claiming it.
 
+## Task search and ID copy
+
+The task list header contains a client-side name/ID substring search and a compact
+visible/group count. Search is case-insensitive, intersects the selected status
+and Recurring filter, and keeps a parent as context when its child matches. A
+matching historical revision remains searchable by its own name or ID. Search
+focus and selection survive detail loading and repaints. No runtime state changes.
+An icon-only button next to the full detail ID copies that ID to the browser
+clipboard; its tooltip is `Copy`, with a live success/failure announcement.
+
 ## Task token usage
 
 Task detail renders the read-only token usage projection, including unavailable metrics and partial coverage. See [scope and semantics](../../docs/task-token-usage.md).

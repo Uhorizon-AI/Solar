@@ -239,6 +239,8 @@ function boot(routes, hash) {
   const els = {};
   const clicks = [];
   const keys = [];
+  const inputs = [];
+  const copied = [];
   const location = { host: "127.0.0.1:9000", hash: hash || "" };
   const history = { replaceState(state, title, url) { location.hash = url; } };
   const requests = [];
@@ -253,8 +255,10 @@ function boot(routes, hash) {
   // against the chips the current innerHTML holds.
   const chipsFrom = (html) => (html.match(/data-filter="([a-z]+)" data-chip="1"/g) || []).map((m) => m.match(/data-filter="([a-z]+)"/)[1]);
   const fake = (target) => {
-    const attrs = target.kind === "recurring" ? { "data-recurring": "1", "data-chip": null } : { "data-filter": target.key, "data-chip": "1" };
+    const attrs = target.kind === "search" ? { "data-task-search": "1" } : target.kind === "recurring" ? { "data-recurring": "1", "data-chip": null } : { "data-filter": target.key, "data-chip": "1" };
     return {
+      selectionStart: target.start, selectionEnd: target.end,
+      setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; },
       focus() { sandbox.document.activeElement = this; },
       getAttribute(name) { return attrs[name] == null ? null : attrs[name]; },
     };
@@ -267,6 +271,7 @@ function boot(routes, hash) {
       // Replacing the block drops any focused node inside it, as the real DOM does.
       set innerHTML(value) { html = value; if (sandbox.document.activeElement) sandbox.document.activeElement = null; },
       querySelector(sel) {
+        if (/\[data-task-search\]/.test(sel)) return fake({ kind: "search" });
         if (/\[data-recurring\]/.test(sel)) return fake({ kind: "recurring" });
         const m = sel.match(/\[data-filter="([a-z]+)"\]/);
         return m && chipsFrom(html).includes(m[1]) ? fake({ kind: "filter", key: m[1] }) : null;
@@ -280,10 +285,11 @@ function boot(routes, hash) {
     document: {
       activeElement: null,
       getElementById(id) { return els[id] || make(id); },
-      addEventListener(type, fn) { if (type === "click") clicks.push(fn); if (type === "keydown") keys.push(fn); },
+      addEventListener(type, fn) { if (type === "click") clicks.push(fn); if (type === "keydown") keys.push(fn); if (type === "input") inputs.push(fn); },
     },
     location,
     history,
+    navigator: { clipboard: { writeText(text) { copied.push(text); return Promise.resolve(); } } },
     fetch(url) {
       requests.push(url);
       let hit = routes[url];
@@ -304,10 +310,20 @@ function boot(routes, hash) {
     document: sandbox.document,
     els,
     requests,
+    copied,
+    input(value, caret) {
+      const target = fake({ kind: "search", start: caret == null ? value.length : caret, end: caret == null ? value.length : caret });
+      target.value = value;
+      target.focus();
+      inputs.forEach((fn) => fn({ target }));
+    },
+    get focusedSearch() { const a = sandbox.document.activeElement; return a && a.getAttribute("data-task-search") != null; },
+    get searchCaret() { return sandbox.document.activeElement && sandbox.document.activeElement.selectionStart; },
     get focusedFilter() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-filter") : null; },
     get focusedRecurring() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-recurring") != null : false; },
     click(attrs) {
       const target = {
+        setAttribute(name, value) { attrs[name] = value; },
         getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
         closest(sel) {
           const name = (String(sel).match(/\[([^\]=\s]+)/) || [])[1];
@@ -1130,6 +1146,38 @@ async function settled() {
   page = await open(family);
   page.click({ "data-filter": "done" });
   if (!same(rowsOf(page.els.health.innerHTML), ["other", "parent", "child"])) throw new Error("parent stays before child within its date-sorted family");
+
+  // Search intersects status, preserves parent context and input caret during repaint.
+  const searchable = fixture([
+    mk("parent-100", "completed", { title: "Parent work" }),
+    mk("child-abc", "error", { title: "Review Consumer", parent_id: "parent-100" }),
+    mk("other-200", "completed", { title: "Other delivery" })
+  ]);
+  page = await open(searchable);
+  page.click({ "data-filter": "all" });
+  page.input("CONSUM", 3);
+  view = page.els.health.innerHTML;
+  if (!same(rowsOf(view), ["parent-100", "child-abc"])) throw new Error("search must keep the matching child's parent");
+  need(view, '1 / 3', "compact count excludes context parents");
+  if (!page.focusedSearch || page.searchCaret !== 3) throw new Error("search lost focus or caret");
+  need(view, 'title="Copy" aria-label="Copy"', "copy is an accessible icon-only control");
+  page.click({ "data-copy-id": "child-abc" });
+  await settled();
+  if (!same(page.copied, ["child-abc"])) throw new Error("copy must use the complete ID");
+  need(page.els.live.textContent, "Copied", "copy success is announced");
+  page.input("ABC");
+  if (!same(rowsOf(page.els.health.innerHTML), ["parent-100", "child-abc"])) throw new Error("partial case-insensitive ID search");
+  page.click({ "data-filter": "done" });
+  view = page.els.health.innerHTML;
+  if (rowsOf(view).length) throw new Error("search must respect Done");
+  need(view, "No matching tasks.", "query empty-state is not the errors good-news state");
+  page.input("");
+  if (rowsOf(page.els.health.innerHTML).length !== 2) throw new Error("clearing search restores status group");
+  page.click({ "data-filter": "errors" });
+  page.input('<img src=x onerror=alert(1)>');
+  view = page.els.health.innerHTML;
+  lack(view, '<img src=x', "search value is escaped");
+  need(view, "No matching tasks.", "Errors search does not claim no tasks are in error");
 
   // URL hash: the selection survives a reload and nothing else does.
   page = await open(everything);
