@@ -272,7 +272,7 @@ def test_restricted_start_channel_is_the_validated_payload_channel(tmp_path, fak
     assert router.route(json.dumps(payload))['status'] == 'success'
     with solar_state.session() as store:
         assert restricted_start_channels(store) == [expected]
-        assert runtime_views.console_executions(store)['channels'] == [{'channel': expected, 'n': 1}]
+        assert [(r['channel'], r['n']) for r in runtime_views.console_executions(store)['channels']] == [(expected, 1)]
 
 
 @pytest.mark.parametrize('stream', [False, True])
@@ -313,7 +313,7 @@ def test_restricted_router_never_loads_or_writes_interactive_context(tmp_path, m
         assert store.continuity_get()['active_task'] == sentinels[0]
         assert len(store.task_list()) == 4  # <subtasks> in output was inert
         assert restricted_start_channels(store) == ['async-task']  # the payload's channel, not a hardcoded label
-        assert runtime_views.console_executions(store)['channels'] == [{'channel': 'async-task', 'n': 1}]
+        assert [(r['channel'], r['n']) for r in runtime_views.console_executions(store)['channels']] == [('async-task', 1)]
 
 
 @pytest.mark.parametrize('change', ['source', 'missing', 'manifest', 'profile', 'digest', 'token'])

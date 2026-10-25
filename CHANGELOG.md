@@ -7,6 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Fixed
+- Align provider and channel run breakdowns with Runs, percentage and measured average duration columns.
 - Add compact task name/ID search beside the list count and an icon-only Copy action for the full detail ID, preserving status filters and parent context.
 - Record elapsed duration for restricted router executions, including failures; show labelled timestamp-derived durations for historical Runs when both endpoints are recorded.
 - Show input and output token counts directly in Console Tasks and recent Runs; keep measurement coverage and evidence under optional details, and match run counters by router ID.

@@ -66,7 +66,7 @@ def test_queries_cover_every_status_and_keep_reconciled_out_of_averages(ready, m
     assert tasks["by_status"]["planned"]["n"] == 1
     assert any(row["task_id"] == "arch" for row in tasks["history"])
     claude = next(row for row in runs["providers"] if row["provider"] == "claude")
-    assert claude == {"provider": "claude", "n": 2, "avg_duration_ms": 200}
+    assert claude == {"provider": "claude", "n": 3, "avg_duration_ms": 200}
     codex = next(row for row in runs["providers"] if row["provider"] == "codex")
     assert codex["n"] == 1
     assert codex["avg_duration_ms"] == 10
@@ -76,6 +76,9 @@ def test_queries_cover_every_status_and_keep_reconciled_out_of_averages(ready, m
     assert runs["by_status"]["reconciled"] == 1
     assert runs["total"] == 5
     assert sum(row["n"] for row in runs["channels"]) == 5
+    assert sum(row["n"] for row in runs["providers"]) == 5
+    assert runs["providers"][-1] == dict(provider="other", n=1, avg_duration_ms=50)
+    assert runs["channels"][-1]["channel"] == "other"
     assert events["calendar-busy-sync"]["shadow"] == 1
     data = console_data.mandates(workspace)
     assert data["modes"]["calendar-busy-sync"] == "active"
@@ -311,3 +314,26 @@ def test_duration_uses_measured_time_or_labelled_matching_timestamps(ready):
         rows = runtime_views.console_executions(store)['recent']
         assert [(r['duration_ms'], r['duration_source']) for r in rows] == [
             (12000, 'timestamps'), (1234, 'measured'), (0, 'measured'), (None, None), (None, None), (None, None)]
+
+
+def test_channel_average_uses_only_measured_non_reconciled_runs(ready):
+    with st.session(ready, auto_backup=False) as store:
+        samples = [
+            ('one', 'async-task', 'success', 100),
+            ('two', 'async-task', 'failed', 300),
+            ('three', 'async-task', 'success', None),
+            ('four', 'async-task', 'reconciled', 9999),
+            ('five', 'telegram', 'success', None),
+            ('six', 'voice', 'success', 0),
+        ]
+        for rid, channel, status, duration in samples:
+            store.audit_append(dict(event='start', router_id=rid, channel=channel, ts='2026-10-24T10:00:00Z'))
+            end = dict(event='end', router_id=rid, status=status, provider='codex', ts='2026-10-24T10:00:05Z')
+            if duration is not None:
+                end['duration_ms'] = duration
+            store.audit_append(end)
+        runs = runtime_views.console_executions(store)
+        channels = {row['channel']: row for row in runs['channels']}
+        assert channels['async-task'] == dict(channel='async-task', n=4, avg_duration_ms=200)
+        assert channels['telegram'] == dict(channel='telegram', n=1, avg_duration_ms=None)
+        assert channels['voice'] == dict(channel='voice', n=1, avg_duration_ms=0)

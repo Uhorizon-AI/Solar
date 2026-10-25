@@ -127,4 +127,9 @@ routes record monotonic elapsed milliseconds on success and failure. Historical
 rows missing that measurement can display a duration labelled as approximate in its tooltip when one
 matching start and an end have valid timezone-aware timestamps in chronological
 order. This is a read-only derivation; saved audit rows are not rewritten.
-Reconciled rows keep no duration, and provider averages use measured durations only.
+Reconciled rows keep no duration, and provider and channel averages use measured durations only. Both breakdowns display Runs, percentage of all runs, and Average in the same column order.
+
+The provider breakdown assigns missing provider identities to `other`. The channel
+breakdown uses its existing unknown-channel identity `other`. Both place this row
+last and include every end event once in their counts, including reconciled events;
+reconciled durations remain excluded from averages. No missing provider is inferred.

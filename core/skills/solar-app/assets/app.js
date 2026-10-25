@@ -191,7 +191,7 @@
       state_machine: "State machine", no_history: "No history.", detail: "Detail", recurring: "recurring",
       parent: "Parent", root: "root", history: "History", final_state: "final", can_go: "Can move to",
       total: "Total", atypical: "unusual", by_provider: "By provider", runs_short: "Runs", average: "Average",
-      no_provider_note: "No provider · before a provider is chosen", failed_n: "failed", reconciled_n: "reconciled",
+      no_provider_note: "Runs without a provider are excluded from this breakdown.", failed_n: "failed", reconciled_n: "reconciled",
       no_duration: "no run duration", mean: "average ", by_channel: "By channel", weight: "Weight",
       by_day: "By day ", day_note: "· days with activity · square-root scale", recent_runs: "Latest runs",
       when: "When", result: "Result", duration: "Duration",
@@ -398,7 +398,7 @@
       state_machine: "Máquina de estados", no_history: "Sin historia.", detail: "Detalle", recurring: "recurrente",
       parent: "Padre", root: "raíz", history: "Historia", final_state: "final", can_go: "Puede pasar a",
       total: "Total", atypical: "atípico", by_provider: "Por proveedor", runs_short: "Ejec.", average: "Media",
-      no_provider_note: "Sin proveedor · antes de elegir proveedor", failed_n: "fallidas", reconciled_n: "reconciliadas",
+      no_provider_note: "Las ejecuciones sin proveedor se excluyen de este desglose.", failed_n: "fallidas", reconciled_n: "reconciliadas",
       no_duration: "sin duración de ejecución", mean: "media ", by_channel: "Por canal", weight: "Peso",
       by_day: "Por día ", day_note: "· días con actividad · escala raíz", recent_runs: "Últimas ejecuciones",
       when: "Cuándo", result: "Resultado", duration: "Duración",
@@ -1533,7 +1533,6 @@
     var success = byStatus.success || 0;
     var failed = byStatus.failed || 0;
     var reconciled = byStatus.reconciled || 0;
-    var noProv = data.no_provider || {};
     var statusHtml = ["success", "failed", "reconciled"].map(function (key) {
       var spec = execRow(key);
       var n = byStatus[key] || 0;
@@ -1548,11 +1547,10 @@
         '</span><span class="pill sm warn' + (avg > 86400000 ? "" : " gap-hide") + '" title="' + esc(t("unusual_tip")) + '">▲ ' + esc(t("atypical")) + "</span></div></div>";
     }).join("");
     var channels = data.channels || [];
-    var widest = channels.reduce(function (max, row) { return Math.max(max, row.n || 0); }, 0) || 1;
     var channelHtml = channels.map(function (row) {
-      return '<div class="row" style="grid-template-columns:90px 56px minmax(0,1fr)"><div style="font-weight:500">' + esc(channelLabel(row.channel)) +
-        '</div><div class="mono">' + nf(row.n) + '</div><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="flex:1"><div style="background:var(--info);width:' +
-        ((row.n / widest) * 100) + '%"></div></div><span class="note" style="width:44px;text-align:right">' + pc(row.n, total) + "</span></div></div>";
+      return '<div class="row" style="grid-template-columns:100px 64px 56px minmax(0,1fr)"><div style="font-weight:500">' + esc(row.channel === "other" ? "other" : channelLabel(row.channel)) +
+        '</div><div class="mono">' + nf(row.n) + '</div><div class="note">' + pc(row.n, total) +
+        '</div><div class="mono">' + esc(dur(row.avg_duration_ms)) + '</div></div>';
     }).join("");
     var days = data.days || [];
     var peak = days.reduce(function (max, row) { return Math.max(max, row.n || 0); }, 0) || 1;
@@ -1581,13 +1579,9 @@
       '<div class="seg-rec" style="width:' + (total ? reconciled / total * 100 : 0) + '%"></div></div>' +
       '<div class="tiles2"><div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("by_provider")) + "</div>" +
       '<div class="row hd" style="grid-template-columns:100px 64px 56px minmax(0,1fr)"><div>' + esc(t("col_provider")) + "</div><div>" + esc(t("runs_short")) + "</div><div>%</div><div>" + esc(t("average")) + "</div></div>" +
-      providers + '<div style="padding:12px 16px 4px" class="lbl">' + esc(t("no_provider_note")) + "</div>" +
-      '<div class="row" style="grid-template-columns:150px minmax(0,1fr) 90px"><div>' + pill("err", "▲", (noProv.failed || 0) + " " + t("failed_n")) +
-      '</div><div class="note w100">' + esc(t("mean")) + esc(dur(noProv.failed_avg_duration_ms)) + '</div><div class="mono"></div></div>' +
-      '<div class="row" style="grid-template-columns:150px minmax(0,1fr) 90px"><div>' + pill("warn", "⇄", (noProv.reconciled || 0) + " " + t("reconciled_n")) +
-      '</div><div class="note w100">' + esc(t("no_duration")) + '</div><div class="mono muted">—</div></div></div>' +
+      providers + '</div>' +
       '<div class="card" style="padding:0;overflow:hidden"><div style="padding:12px 16px 6px" class="h3">' + esc(t("by_channel")) + "</div>" +
-      '<div class="row hd" style="grid-template-columns:90px 56px minmax(0,1fr)"><div>' + esc(t("channel")) + "</div><div>" + esc(t("runs_short")) + "</div><div>" + esc(t("weight")) + "</div></div>" +
+      '<div class="row hd" style="grid-template-columns:100px 64px 56px minmax(0,1fr)"><div>' + esc(t("channel")) + "</div><div>" + esc(t("runs_short")) + "</div><div>%</div><div>" + esc(t("average")) + "</div></div>" +
       channelHtml + "</div></div>" +
       '<div class="card"><div class="h3" style="margin-bottom:10px">' + esc(t("by_day")) + '<span class="note" style="font-family:\'Inter\',sans-serif;font-weight:400">' + esc(t("day_note")) + "</span></div>" +
       '<div style="display:flex;align-items:flex-end;height:140px;gap:2px;border-bottom:1px solid var(--muted)">' + dayHtml + "</div>" +

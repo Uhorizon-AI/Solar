@@ -641,11 +641,10 @@ def _execution_duration(start, end):
 def console_executions(store):
     """End events, grouped. Reconciled durations stay out of every average.
 
-    A row with no provider is not a provider bucket: failed ones are the
-    failures from before a provider was chosen, and reconciled ones are counted
-    beside them. A failed row that already names a provider stays in that
-    provider's count and average. Channel and user_id are read from the start
-    row with the same router_id.
+    Every end is counted once in both breakdowns. Missing provider identities
+    go to other; other is last in both lists. Reconciled rows count toward the
+    totals but never the measured averages. Channel and user_id are read from
+    the start row with the same router_id.
     """
     starts = {}
     start_counts = {}
@@ -675,6 +674,7 @@ def console_executions(store):
     reconciled_n = 0
     by_status = {}
     channels = {}
+    channel_durations = {}
     days = {}
     user_ids = set()
     for body in ends:
@@ -691,17 +691,18 @@ def console_executions(store):
             user_ids.add(str(user_id))
         duration = (_duration(body.get('duration_ms'))
                     if body.get('duration_source') == 'measured' else None)
+        if duration is not None and status != 'reconciled':
+            channel_time = channel_durations.setdefault(channel, {'total': 0, 'count': 0})
+            channel_time['total'] += duration
+            channel_time['count'] += 1
         if status == 'reconciled':
             reconciled_n += 1
-            continue
-        if not provider:
-            if status == 'failed':
-                no_provider_failed['n'] += 1
-                if duration is not None:
-                    no_provider_failed['duration_ms'] += duration
-                    no_provider_failed['duration_n'] += 1
-            continue
-        bucket = providers.setdefault(provider, {'n': 0, 'duration_ms': 0, 'duration_n': 0})
+        if not provider and status == 'failed':
+            no_provider_failed['n'] += 1
+            if duration is not None:
+                no_provider_failed['duration_ms'] += duration
+                no_provider_failed['duration_n'] += 1
+        bucket = providers.setdefault(provider or 'other', {'n': 0, 'duration_ms': 0, 'duration_n': 0})
         bucket['n'] += 1
         if duration is not None:
             bucket['duration_ms'] += duration
@@ -709,7 +710,7 @@ def console_executions(store):
     provider_rows = [
         {'provider': name, 'n': bucket['n'],
          'avg_duration_ms': _average(bucket['duration_ms'], bucket['duration_n'])}
-        for name, bucket in sorted(providers.items())
+        for name, bucket in sorted(providers.items(), key=lambda item: (item[0] == "other", item[0]))
     ]
     _, token_groups = _console_token_groups(store, {b.get('router_id') for b in ends[-20:] if b.get('router_id')})
     recent = [
@@ -728,7 +729,10 @@ def console_executions(store):
             reconciled=reconciled_n,
         ),
         providers=provider_rows,
-        channels=[{'channel': name, 'n': n} for name, n in sorted(channels.items())],
+        channels=[{'channel': name, 'n': n,
+                   'avg_duration_ms': _average(channel_durations.get(name, {}).get('total', 0),
+                                               channel_durations.get(name, {}).get('count', 0))}
+                  for name, n in sorted(channels.items(), key=lambda item: (item[0] == "other", item[0]))],
         days=[{'day': day, 'n': n} for day, n in sorted(days.items())],
         first=ends[0]['ts'] if ends else None,
         last=ends[-1]['ts'] if ends else None,
