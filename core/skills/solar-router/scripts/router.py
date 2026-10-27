@@ -1341,9 +1341,11 @@ def _restricted_route(payload, *, stream=False):
                   execution_profile=profile, review_input_digest=fields["review_input_digest"], stream=stream)
         review = dict(manifest=manifest, expected=fields["review_input_digest"],
                       profile=profile, before_launch=before_launch)
-        if profile == "ask_readonly_v1":
+        if profile in {"ask_readonly_v1", "ask_lite_v1"}:
             from ask_metering import StateObserver
-            observation_sink = StateObserver(solar_state, task_id, token, router_id, provider, manifest.get("model"))
+            observation_sink = StateObserver(
+                solar_state, task_id, token, router_id, provider, manifest.get("model"),
+                profile=profile)
             review["observation_sink"] = observation_sink
         adapter = PROVIDERS[provider]
         adapter.last_review_preflight = {}

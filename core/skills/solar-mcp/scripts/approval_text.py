@@ -365,7 +365,8 @@ def _ask_rows(spec, copy):
     """A question names the folder the client starts in and the model, plus the one-line limit of the request."""
     if spec is None:
         return []
-    rows = [("profile", "ask_readonly_v1"), ("folder", _line(spec.get("folder") or "workspace", 1000)),
+    profile = "ask_lite_v1" if spec.get("lite") is True else "ask_readonly_v1"
+    rows = [("profile", profile), ("folder", _line(spec.get("folder") or "workspace", 1000)),
             ("model", _line(spec["model"], _VALUE) if spec.get("model") else _NO_MODEL)]
     rows.append(("note", _line(copy["ask_note"], 2 * _VALUE)))
     return rows
@@ -642,9 +643,10 @@ def _context_rows(copy: dict, facts: dict) -> list:
     rows.append((copy["access"], _access_text(copy, values.get("access_policy"))))
     try:
         manifest = json.loads(values.get("review_input_manifest") or "null")
-        if values.get("execution_profile") == "ask_readonly_v1" and isinstance(manifest, dict):
+        if values.get("execution_profile") in {"ask_readonly_v1", "ask_lite_v1"} and isinstance(manifest, dict):
             folder = json.loads(manifest["user_prompt"])["cwd"]
-            rows += _ask_rows(dict(folder=folder, model=manifest.get("model")), copy)
+            rows += _ask_rows(dict(folder=folder, model=manifest.get("model"),
+                                   lite=values.get("execution_profile") == "ask_lite_v1"), copy)
             rows += _stored_zone_rows(copy, values, folder)
         elif values.get("execution_profile") and isinstance(manifest, dict):
             spec = dict(profile=values["execution_profile"], model=manifest.get("model"))

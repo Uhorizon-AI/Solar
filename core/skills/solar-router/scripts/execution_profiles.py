@@ -14,6 +14,9 @@ PROFILE = "text_only_review_v1"
 COMPOSITION = "review_envelope_v1"
 ASK_PROFILE = "ask_readonly_v1"
 ASK_COMPOSITION = "ask_envelope_v1"
+ASK_LITE_PROFILE = "ask_lite_v1"
+ASK_LITE_COMPOSITION = "ask_lite_envelope_v1"
+ASK_PROFILES = frozenset({ASK_PROFILE, ASK_LITE_PROFILE})
 ASK_PROVIDERS = frozenset({"claude", "codex", "agent", "agy"})
 MAX_INPUT_BYTES = 98304  # Keep the user-prompt argv entry within portable OS limits.
 SYSTEM_PROMPT = (
@@ -113,18 +116,20 @@ def build_review_envelope_v1(*, instructions: str, rules: list, evidence: list,
     return dict(manifest=manifest, review_input_digest=digest(manifest))
 
 
-def build_ask_envelope(*, provider: str, prompt: str, cwd: str, model: str | None = None) -> dict:
+def build_ask_envelope(*, provider: str, prompt: str, cwd: str, model: str | None = None,
+                       profile: str = ASK_PROFILE) -> dict:
     """A question for one client: the prompt, the absolute folder it starts in and an optional model.
 
-    Nothing else is decided here. The client keeps its own login and is asked for its own read-only
-    mode at launch; what to read and how to answer belong to the prompt."""
-    if provider not in ASK_PROVIDERS:
+    `ask_readonly_v1` keeps the caller's session. `ask_lite_v1` is the same envelope with a different
+    profile id; launch isolation is decided by the router, not by this composition."""
+    if provider not in ASK_PROVIDERS or profile not in ASK_PROFILES:
         raise ProfileError("execution_profile_unsupported")
     if (not valid_model(model) or not isinstance(prompt, str) or not prompt.strip()
             or not isinstance(cwd, str) or not Path(cwd).is_absolute() or any(ord(c) < 32 for c in cwd)):
         raise ProfileError("review_input_mismatch")
     user = canonical(dict(instructions=prompt, cwd=cwd))
-    manifest = _normalize(dict(composition=ASK_COMPOSITION, execution_profile=ASK_PROFILE,
+    composition = ASK_LITE_COMPOSITION if profile == ASK_LITE_PROFILE else ASK_COMPOSITION
+    manifest = _normalize(dict(composition=composition, execution_profile=profile,
                                provider=provider, model=model, system_prompt="", user_prompt=user,
                                sources=[], context_budget=dict(max_utf8_bytes=MAX_INPUT_BYTES,
                                                                input_utf8_bytes=len(user.encode("utf-8")))))
@@ -143,13 +148,13 @@ def ask_cwd(manifest: dict) -> str:
 
 def verify_envelope(manifest, expected: str, *, provider: str, profile: str) -> dict:
     """Recompose, including fixed prompt and budget, rather than trusting metadata."""
-    if profile == ASK_PROFILE:
+    if profile in ASK_PROFILES:
         try:
             if isinstance(manifest, str):
                 manifest = json.loads(manifest)
             user = json.loads(manifest["user_prompt"])
             rebuilt = build_ask_envelope(provider=provider, prompt=user["instructions"], cwd=user["cwd"],
-                                         model=manifest["model"])
+                                         model=manifest["model"], profile=profile)
             if manifest != rebuilt["manifest"] or expected != rebuilt["review_input_digest"]:
                 raise ProfileError("review_input_mismatch")
             return rebuilt["manifest"]
@@ -174,7 +179,7 @@ def verify_envelope(manifest, expected: str, *, provider: str, profile: str) -> 
 
 def verify_sources(manifest: dict, scopes: list[str]) -> None:
     """Worker-only reads within approved scopes; symlinks cannot widen access."""
-    if manifest.get("execution_profile") == ASK_PROFILE:
+    if manifest.get("execution_profile") in ASK_PROFILES:
         # The folder the client really starts in must be inside a scope the task declares.
         folder = Path(ask_cwd(manifest)).resolve()
         if not folder.is_dir() or not any(folder == Path(s).resolve() or Path(s).resolve() in folder.parents
@@ -319,6 +324,13 @@ def preflight(binary: str, env: dict, cwd: str, metadata: dict | None = None, *,
 def restricted_launch(adapter, manifest, expected: str, *, profile: str, extra_flags=(),
                       before_launch=lambda: None):
     """Used unchanged by run/stream. No shell, ambient project cwd or fallback."""
+    if profile == ASK_LITE_PROFILE:
+        if extra_flags:
+            raise ProfileError("execution_profile_override_rejected")
+        from ask_lite import launch
+        with launch(adapter, manifest, expected, before_launch) as invocation:
+            yield invocation
+        return
     if profile == "repository_readonly_v1":
         if extra_flags:
             raise ProfileError("execution_profile_override_rejected")

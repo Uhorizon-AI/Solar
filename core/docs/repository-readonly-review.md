@@ -363,11 +363,16 @@ with profiles disabled remains the default and the safe operational rollback.
 ## Questions (`ask_readonly_v1`)
 
 A question is not a review: it has no repository, commit or evidence. `task.create`/`task.update` take `ask`
-(`folder`, `model`, both optional) plus the prompt in `instructions` and an explicit `provider`.
+(`folder`, `model`, `lite`, all optional) plus the prompt in `instructions` and an explicit `provider`.
 
-- **Own session.** The client is launched with the caller's environment: no isolated HOME, no copied or linked
+- **Own session (`ask_readonly_v1`, default).** The client is launched with the caller's environment: no isolated HOME, no copied or linked
   credentials, no `--help` preflight. A `SOLAR_ROUTER_<NAME>_CMD` override only supplies the binary; the flags
   are imposed and the prompt always follows a separator (`--`, or `--print` for Antigravity).
+- **Lite session (`ask_lite_v1`, opt-in via `ask.lite: true`).** Same envelope (prompt + folder) and the same
+  workspace-folder risk rule, but launch reuses review-style isolation per client (Claude restricted flags and
+  empty MCP; Codex private `CODEX_HOME` with empty MCP/plugins; Cursor/Agy private HOME with empty MCP). Auth is
+  copied like repository reviews and fails closed when credentials are unavailable. Workspace rules under the
+  start folder may still load. Solar MCP allowlist is not part of this profile yet.
 - **Read-only is a request, not a limit, and it depends on each client.** Solar can only ask for what the client's CLI offers, and the client's own configuration decides the rest. Measured on 23/10/2026 (Codex 0.162.1): a question to Codex was launched with `--sandbox read-only` (its session logs record `sandbox_policy: read-only`) and still created a file, because the user's Codex has `approval_policy = "on-request"` and an automatic approvals reviewer, which can approve leaving the sandbox (in Codex, read-only means «not without approval»). Cursor (Ask mode) and Claude (plan mode) did not write. Solar does not override a client's approval policy. Each client is asked for its native mode (`--sandbox read-only`,
   `--mode ask`, `--mode plan`, `--permission-mode plan`); Solar does not enforce it. The client may read beyond
   its folder and inherits its own configuration, hooks and tools. Use `repository_readonly_v1` when that matters.

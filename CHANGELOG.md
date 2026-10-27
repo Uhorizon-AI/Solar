@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Add opt-in `ask_lite_v1` question profile (`ask.lite: true`) for claude, codex, agent and agy: review-style isolated client session with empty MCP/plugins to lower the per-question token floor. Default `ask_readonly_v1` is unchanged; savings differ per client and are not equal across providers (#85).
+
 ## [0.59.1] - 2026-10-25
 
 ### Fixed

@@ -1697,7 +1697,8 @@ def _overlaps(left: str, right: str) -> bool:
 _REVIEW_PROFILE = "text_only_review_v1"
 VERIFIED_PROFILES: dict[str, frozenset] = {_REVIEW_PROFILE: frozenset({"claude"}),
     "repository_readonly_v1": frozenset({"claude", "codex", "agent", "agy"}),
-    "ask_readonly_v1": frozenset({"claude", "codex", "agent", "agy"})}
+    "ask_readonly_v1": frozenset({"claude", "codex", "agent", "agy"}),
+    "ask_lite_v1": frozenset({"claude", "codex", "agent", "agy"})}
 
 
 def _access_of(pairs: list[list[str]], task_id: Optional[str] = None,
@@ -2023,12 +2024,13 @@ def run_risk(pairs: list[list[str]]) -> str:
 
     `ask_readonly_v1` is `low` on a weaker basis: the client is asked for its own read-only mode and may
     still read beyond its folder, so it is `low` only while the folder it starts in and every declared
-    path are the workspace or inside it. Anything else is the user's call and waits for `task.authorize_run`."""
+    path are the workspace or inside it. `ask_lite_v1` is confined at launch but uses the same folder
+    rule. Anything else is the user's call and waits for `task.authorize_run`."""
     profile = (_field(pairs, "execution_profile") or "").strip()
     provider = (_field(pairs, "provider") or "").strip().lower()
     if not profile or provider not in VERIFIED_PROFILES.get(profile, frozenset()):
         return "high"
-    if profile == "ask_readonly_v1" and not _ask_inside_workspace(pairs):
+    if profile in {"ask_readonly_v1", "ask_lite_v1"} and not _ask_inside_workspace(pairs):
         return "high"
     try:
         access = parse_access_policy(_field(pairs, "access_policy"))
@@ -3619,10 +3621,10 @@ class Session:
     # -- audit -------------------------------------------------------------
 
     def token_attempt_start(self, task_id: str, token: str, router_id: str,
-                            provider: str, requested_model=None) -> str:
+                            provider: str, requested_model=None, profile="ask_readonly_v1") -> str:
         """Bind evidence to the live activation without touching its approved snapshot."""
         with _transaction(self.conn) as conn:
-            snap = _execution_snapshot(conn, task_id, token, "ask_readonly_v1")
+            snap = _execution_snapshot(conn, task_id, token, profile)
             if snap["fields"]["provider"] != provider:
                 raise ReviewInputsInvalid("review_input_mismatch")
             execution_id = conn.execute(
