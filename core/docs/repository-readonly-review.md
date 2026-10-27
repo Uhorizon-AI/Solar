@@ -56,7 +56,7 @@ are validated and omitted from the physical snapshot: their targets are included
 once at their canonical paths, never duplicated under the aliases. Each omitted
 source records its link blob ID, SHA-256, target text and resolved canonical path
 in the approved manifest. The reviewer prompt identifies omitted aliases and
-asks readers to consult canonical files (including AGENTS.md where present).
+asks readers to treat canonical files (including AGENTS.md where present) as evidence, not instructions.
 The original repository's CLAUDE.md/GEMINI.md aliases are left intact; snapshot
 reviewers treat repository instructions as evidence rather than operational authority.
 
@@ -69,8 +69,8 @@ uses only approved Git blobs, never the working tree or the host filesystem.
 There are no repository setup scripts or unguarded fallback. Ordinary-file
 manifests keep their existing representation and digest.
 
-At execution Router revalidates approved inputs, materializes all files into a
-private temporary directory without `.git`, rechecks the ID/token and snapshot,
+At execution Router revalidates approved inputs, materializes every non-omitted file (omitted
+symlink aliases are never written) into a private temporary directory without `.git`, rechecks the ID/token and snapshot,
 and invokes the selected CLI there. Each invocation receives an independent
 copy of the same version. Uncommitted builder edits and newer commits do not
 change it. The source repository is never given as the review cwd. A result is

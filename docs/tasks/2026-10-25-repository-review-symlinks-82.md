@@ -45,9 +45,9 @@ solar client sync
 
 ## Completion evidence
 
-- Focused repository-review and native review-preparation tests: 136 passed.
+- Focused repository-review and native review-preparation tests: 145 passed.
 - Router and MCP skill package validation: passed.
 - `git diff --check`: passed.
 - `solar client sync`: passed against the installed framework; this PR is not installed or deployed.
-- Broad Router/MCP run: interrupted after 1,131 passed and 3 skipped because task-wait transport stalled in `transport_pulse.py`. Its single earlier failure was a diagnostic-path expectation, corrected and verified in the focused 136-test run. Final broad run excluding `test_task_wait.py`: 1,147 passed, 3 skipped, 10 subtests passed. The excluded unchanged transport module remains unvalidated in this run.
+- Broad run (Router, MCP and derived-child state), excluding `test_task_wait.py`: 1,178 passed, 3 skipped, 10 subtests passed. `test_task_wait.py` alone: 21 passed on this branch and 21 passed on base 308bb3a, so the transport stall seen in an earlier run did not reproduce and is not caused by this change.
 - Real website PR #232 preflight reaches the independent existing size limit: 792 tracked blobs, 46,281,724 bytes (44.14 MiB), versus 32 MiB. This PR deliberately does not change that policy or claim to unblock full website review.

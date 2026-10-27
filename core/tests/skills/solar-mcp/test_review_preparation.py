@@ -154,3 +154,23 @@ def test_native_review_preparation_omits_internal_alias_without_touching_builder
     assert alias['omitted_symlink'] and alias['resolved_path'] == 'requirements.md'
     assert (root / 'CLAUDE.md').is_symlink()
     assert 'CLAUDE.md' in manifest['system_prompt'] and 'requirements.md' in manifest['system_prompt']
+
+
+def test_review_batch_with_an_unsafe_alias_creates_no_parent_or_children(solar_env, tmp_path):
+    from pathlib import Path
+    from git_review_fixture import git
+    root, _ = repository(tmp_path)
+    (root / 'CLAUDE.md').symlink_to('/etc/passwd')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'unsafe alias')
+    commit = git(root, 'rev-parse', 'HEAD')
+    children = [dict(key=f'r{i}', title=f'Review {i}', instructions='Check.', provider=p)
+                for i, p in enumerate(['claude', 'codex'])]
+    body, error = execute('task.create', dict(
+        title='Builder', instructions='Declare the approved reviewers, then synthesize.', provider='claude',
+        object=str(root), scope='Review committed files', effect='One synthesis',
+        review_batch=dict(repository=str(root), commit=commit, reviews=children)))
+    assert error and body['code'] == 'review_input_invalid'
+    assert 'repository_review_unsafe_tree' in body['error']
+    assert 'CLAUDE.md' in body['error'] and 'invalid_link_target' in body['error']
+    with solar_state.read_session() as store:
+        assert store.task_list() == []
