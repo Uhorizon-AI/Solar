@@ -218,12 +218,13 @@ def run(provider, cmd, *, cwd, env, timeout, observer):
 
 class StateObserver:
     """Per-invocation receiver; no mutable state on the provider singleton."""
-    def __init__(self, state, task_id, token, router_id, provider, model=None):
+    def __init__(self, state, task_id, token, router_id, provider, model=None, profile="ask_readonly_v1"):
         self.state, self.token = state, token
         self.started = False
         self.problem = None
         with state.session() as store:
-            self.id = store.token_attempt_start(task_id, token, router_id, provider, model)
+            self.id = store.token_attempt_start(
+                task_id, token, router_id, provider, model, profile=profile)
 
     def launched(self, binary, version):
         self.started = True

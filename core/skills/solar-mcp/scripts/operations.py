@@ -150,7 +150,7 @@ def _derive_allowed(arguments: dict) -> bool:
         return True
     with solar_state.read_session() as store:
         profile = solar_state.value_of(dict(_task(store, source_id)["frontmatter"]).get("execution_profile") or "")
-    return profile == "ask_readonly_v1"
+    return profile in {"ask_readonly_v1", "ask_lite_v1"}
 
 
 def _review_fields(arguments: dict, derive: bool = True) -> dict:
@@ -228,9 +228,12 @@ def _queued_next(frontmatter, risk: str) -> str:
     import solar_state
     if risk != "low":
         return "Queued but waiting: it is not confined, so run task.authorize_run to let it run."
-    if solar_state.value_of(dict(frontmatter).get("execution_profile") or "") == "ask_readonly_v1":
+    profile = solar_state.value_of(dict(frontmatter).get("execution_profile") or "")
+    if profile == "ask_readonly_v1":
         return ("Queued. The client is asked for its read-only mode (a request, not a guarantee) "
                 "and it runs when a place is free.")
+    if profile == "ask_lite_v1":
+        return ("Queued. Lite ask: isolated client session, read-only request, runs when a place is free.")
     return "Queued. It is confined to a verified read-only profile and runs when a place is free."
 
 
@@ -240,7 +243,7 @@ def _ask_fields(arguments: dict, derived: bool = False) -> dict:
     if router_scripts not in sys.path:
         sys.path.insert(0, router_scripts)
     from execution_profiles import (build_ask_envelope, verify_sources, canonical, ProfileError,
-                                    ASK_PROFILE)
+                                    ASK_PROFILE, ASK_LITE_PROFILE)
     spec = arguments["ask"]
     try:
         if "review" in arguments or "review_batch" in arguments:
@@ -251,6 +254,8 @@ def _ask_fields(arguments: dict, derived: bool = False) -> dict:
                                  "A question needs " + " and ".join(missing) + " in the same call; "
                                  "send the client and the prompt again with the ask.")
         folder = spec.get("folder") or str(workspace())
+        lite = spec.get("lite") is True
+        profile = ASK_LITE_PROFILE if lite else ASK_PROFILE
         for path in (arguments.get("access_policy") or {}).get("scopes", []):
             if os.path.realpath(path) != os.path.realpath(os.path.normpath(path)):
                 raise OperationError(
@@ -258,7 +263,7 @@ def _ask_fields(arguments: dict, derived: bool = False) -> dict:
                     "A declared path changes meaning when its '..' is collapsed (a link comes before it). "
                     "Declare the real path.")
         envelope = build_ask_envelope(provider=arguments["provider"], prompt=arguments["instructions"],
-                                      cwd=folder, model=spec.get("model"))
+                                      cwd=folder, model=spec.get("model"), profile=profile)
         access = arguments.get("access_policy", dict(mode="read", scopes=[folder], resources=[]))
         if access["mode"] != "read":
             raise OperationError("review_input_invalid", "A question can only read.")
@@ -271,7 +276,7 @@ def _ask_fields(arguments: dict, derived: bool = False) -> dict:
                 "review_input_invalid",
                 "A declared read starts the client in the workspace unless ask.folder says otherwise, and "
                 "that folder must be inside the declared paths. Declare the workspace too or give ask.folder.") from None
-        return dict(execution_profile=json.dumps(ASK_PROFILE),
+        return dict(execution_profile=json.dumps(profile),
                     review_input_manifest=json.dumps(canonical(envelope["manifest"])),
                     review_input_digest=json.dumps(envelope["review_input_digest"]),
                     access_policy=_access_text(access))
@@ -415,9 +420,11 @@ def _requote_question(current_fields: dict, changes: dict) -> dict:
     stored = solar_state.parse_access_policy(solar_state.value_of(current_fields["access_policy"]))
     access = changes.get("access_policy") or dict(mode=stored["mode"], scopes=stored["scopes"],
                                                   resources=stored["resources"])
+    lite = manifest.get("execution_profile") == "ask_lite_v1"
     return _ask_fields(dict(provider=changes.get("provider", manifest["provider"]),
                             instructions=changes.get("instructions", user["instructions"]),
-                            access_policy=access, ask=dict(folder=user["cwd"], model=manifest.get("model"))),
+                            access_policy=access,
+                            ask=dict(folder=user["cwd"], model=manifest.get("model"), lite=lite)),
                        derived=True)
 
 
@@ -435,7 +442,8 @@ def _do_task_update(arguments: dict) -> dict:
     if ((current_fields.get("execution_profile") and "review_batch" in changes)
             or (current_fields.get("subtask_policy") and ("review" in changes or "ask" in changes))):
         raise OperationError("review_input_invalid", "Changing between a review and a parent batch needs a new revision.")
-    is_question = solar_state.value_of(current_fields.get("execution_profile") or "") == "ask_readonly_v1"
+    is_question = solar_state.value_of(current_fields.get("execution_profile") or "") in {
+        "ask_readonly_v1", "ask_lite_v1"}
     requote = (is_question and set(changes) & {"instructions", "provider", "access_policy"}
                and "review" not in changes and "ask" not in changes)
     if (dict(current["frontmatter"]).get("execution_profile")
@@ -820,12 +828,15 @@ _REVIEW = _obj(dict(
 _ASK = {**_obj(dict(
     folder={"type": "string", "pattern": r"/[^\x00-\x1f\x7f]*", "maxLength": 1000,
          "description": "Absolute folder the client starts in; any path, also outside Solar. Omit it for the workspace."},
-    model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."})),
+    model={**LINE(160), "description": "Optional. Omit it to use the model the client CLI has already chosen."},
+    lite={"type": "boolean",
+          "description": "When true, use ask_lite_v1: isolated client session (empty MCP/plugins, review-style "
+                         "config) instead of the default ask_readonly_v1 user session. Opt-in only."})),
     "description": "What makes the task a question: the client is asked for its read-only mode (a request, not a "
                    "guarantee: a client's own settings can still allow writes, e.g. Codex with on-request approvals and an automatic reviewer) and it needs no task.authorize_run only while the folder it starts in and every declared "
                    "path are the workspace or inside it; anything else waits. Pass {} to ask in the "
-                   "workspace. A declared read (access_policy mode read) with a provider and instructions, no schedule and no "
-                   "exclusive resources, is treated as the same question. Any other task without ask is an ordinary task, "
+                   "workspace. ask.lite true selects ask_lite_v1 (isolated). A declared read (access_policy mode read) with a provider and instructions, no schedule and no "
+                   "exclusive resources, is treated as the same question (default profile, not lite). Any other task without ask is an ordinary task, "
                    "not a question and not read-only. "
                    "Use it for own content only: external or untrusted content goes through review with "
                    "profile repository_readonly_v1."}

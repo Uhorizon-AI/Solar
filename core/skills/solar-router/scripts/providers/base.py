@@ -222,10 +222,12 @@ class BaseProvider(ABC):
     def run_review(self, *, manifest, expected, profile, before_launch=lambda: None, observation_sink=None) -> str:
         """Restricted execution has one launch constructor and a fixed JSON output format."""
         import json
-        from execution_profiles import restricted_launch, ASK_PROFILE
+        from execution_profiles import restricted_launch, ASK_PROFILE, ASK_LITE_PROFILE
         self.last_usage = None
         if profile == ASK_PROFILE:
             return self._run_ask_profile(manifest, expected, before_launch, observation_sink)
+        if profile == ASK_LITE_PROFILE:
+            return self._run_ask_lite_profile(manifest, expected, before_launch, observation_sink)
         with restricted_launch(self, manifest, expected, profile=profile,
                                before_launch=before_launch) as (argv, env, cwd):
             # Inherit the router's process group: the worker owns that group and
@@ -290,6 +292,28 @@ class BaseProvider(ABC):
         answer = self.ask(ask_prompt(approved), **kwargs)
         self.last_review_preflight = dict(provider=self.name, read_only_mode=answer.mode)
         return answer.text
+
+    def _run_ask_lite_profile(self, manifest, expected, before_launch, observation_sink=None) -> str:
+        """A cheap question: same envelope as ask, review-style isolation at launch."""
+        from ask_lite import launch
+        from ask_metering import run as meter_run
+
+        class _NullObserver:
+            def launched(self, *_a, **_k):
+                return None
+
+            def __call__(self, *_a, **_k):
+                return None
+
+            def capture_problem(self, *_a, **_k):
+                return None
+
+        observer = observation_sink if observation_sink is not None else _NullObserver()
+        with launch(self, manifest, expected, before_launch) as (argv, env, cwd):
+            return meter_run(
+                self.name, argv, cwd=cwd, env=env,
+                timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300), observer=observer,
+            )
 
     @staticmethod
     def _failure_reason(argv, proc) -> str:
