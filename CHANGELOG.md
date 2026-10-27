@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.59.2] - 2026-10-27
+
 ### Fixed
 - Allow repository reviews with safe internal symbolic links by recording and omitting aliases from the snapshot without duplicating their canonical files. Keep unsafe targets rejected and report the offending path and reason through MCP.
 
