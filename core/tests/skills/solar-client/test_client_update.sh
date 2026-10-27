@@ -649,6 +649,62 @@ fail_ec=$?
 set -e
 assert_ok "a failed migration returns non-zero" test "$fail_ec" -ne 0
 assert_ok "a failed migration does not start the console" bash -c '! grep -q host-start "$1"' _ "$SVC_LOG"
+
+# --- resume: an agent that is already loaded is unloaded first; bootstrap would fail with error 5 ---
+printf '#!/usr/bin/env python3\nraise SystemExit(0)\n' >"$FAKE_CUT"
+AGENT_LOADED="$TMP/agent-loaded"
+STATEFUL_LAUNCH="$TMP/launchctl-stateful.sh"
+cat >"$STATEFUL_LAUNCH" <<EOF
+#!/usr/bin/env bash
+echo "launchctl \$*" >>"$SVC_LOG"
+case "\$1" in
+  print) [[ -f "$AGENT_LOADED" ]]; exit \$? ;;
+  bootout) rm -f "$AGENT_LOADED" ;;
+  bootstrap) if [[ -f "$AGENT_LOADED" ]]; then echo "bootstrap-error-5" >>"$SVC_LOG"; exit 5; fi; : >"$AGENT_LOADED" ;;
+esac
+exit 0
+EOF
+LOADING_HOST_START="$TMP/host-start-loads.sh"
+printf '#!/usr/bin/env bash\necho host-start >>"%s"\n: >"%s"\n' "$SVC_LOG" "$AGENT_LOADED" >"$LOADING_HOST_START"
+chmod +x "$STATEFUL_LAUNCH" "$LOADING_HOST_START"
+rm -rf "$SOLAR_RUNTIME_ROOT" && mkdir -p "$SOLAR_RUNTIME_ROOT"
+: >"$AGENT_LOADED"; : >"$SVC_LOG"
+set +e
+SOLAR_CLIENT_LAUNCHCTL="$STATEFUL_LAUNCH" SOLAR_CLIENT_HOST_START_SCRIPT="$LOADING_HOST_START" \
+  solar_client_state_cutover "$MOCK_INSTALL_ROOT" auto >/dev/null 2>&1
+loaded_ec=$?
+set -e
+assert_ok "an agent loaded in between does not fail the resume" test "$loaded_ec" -eq 0
+assert_ok "no bootstrap hit error 5" bash -c '! grep -q bootstrap-error-5 "$1"' _ "$SVC_LOG"
+assert_ok "the loaded agent is unloaded right before bootstrap" bash -c \
+  'tail -3 "$1" | tr "\n" " " | grep -q "bootout .*bootstrap"' _ "$SVC_LOG"
+# an agent that is not loaded in between is bootstrapped without a second unload
+: >"$SVC_LOG"; : >"$AGENT_LOADED"
+rm -rf "$SOLAR_RUNTIME_ROOT" && mkdir -p "$SOLAR_RUNTIME_ROOT"
+set +e
+SOLAR_CLIENT_LAUNCHCTL="$STATEFUL_LAUNCH" solar_client_state_cutover "$MOCK_INSTALL_ROOT" auto >/dev/null 2>&1
+set -e
+assert_ok "an unloaded agent is unloaded once (the pause) and bootstrapped once" bash -c \
+  '[[ "$(grep -c "launchctl bootout" "$1")" == 1 && "$(grep -c "launchctl bootstrap" "$1")" == 1 ]]' _ "$SVC_LOG"
+
+# --- a drain that ran out of time names what it was waiting for and how to cancel it ---
+DRAIN_STATE_PY="$TMP/drain-state.py"
+printf '#!/usr/bin/env python3\nimport json\nprint(json.dumps({"value": "Review of the nightly report"}))\n' >"$DRAIN_STATE_PY"
+DRAIN_STOP="$TMP/drain-stop.sh"
+printf '#!/usr/bin/env bash\necho %s\nexit 1\n' \
+  "'{\"children\": [{\"task_id\": \"task-abc\", \"since\": \"2000-01-01T00:00:00Z\", \"provider\": \"agent\"}], \"state\": \"draining\"}'" >"$DRAIN_STOP"
+chmod +x "$DRAIN_STATE_PY" "$DRAIN_STOP"
+set +e
+drain_err="$(SOLAR_CLIENT_STATE_PY="$DRAIN_STATE_PY" SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT="$DRAIN_STOP" \
+  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="async-supervisor" \
+  solar_client_drain_async "$MOCK_INSTALL_ROOT" 5 2>&1 >/dev/null)"
+drain_ec=$?
+set -e
+assert_ok "a drain that ran out of time still fails" test "$drain_ec" -ne 0
+assert_ok "the drain error names the task and its title" bash -c 'grep -q "task-abc · Review of the nightly report · agent" <<<"$1"' _ "$drain_err"
+assert_ok "the drain error says how long it has been running" bash -c 'grep -q "running [0-9]* min" <<<"$1"' _ "$drain_err"
+assert_ok "the drain error prints the exact cancel command" bash -c 'grep -q "task_cancel.py - task-abc" <<<"$1"' _ "$drain_err"
+assert_ok "the drain error keeps the resume instruction" bash -c 'grep -q "solar client update --resume" <<<"$1"' _ "$drain_err"
 unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_CUTOVER_ROOT
 unset SOLAR_CLIENT_LAUNCHCTL SOLAR_CLIENT_GATEWAY_STOP_SCRIPT
 unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
