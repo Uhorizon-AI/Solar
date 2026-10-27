@@ -2049,31 +2049,39 @@ solar_client_async_busy() {
 # What a drain that ran out of time was still waiting for: one line per execution (task, title,
 # provider, how long it has been running) and the exact command that cancels it. Reads the JSON
 # stop_supervisor.sh printed; the title comes from solar-state. Says nothing when it cannot tell.
+# At most five executions are listed, each title cleaned and cut to 80 characters.
 # Args: install_root stop_output
 solar_client_describe_running() {
   local install_root="$1" stop_output="$2" state_py cancel_py
   state_py="$(solar_client_state_py "$install_root")"
   cancel_py="${install_root}/core/skills/solar-async-tasks/scripts/task_cancel.py"
   python3 - "$state_py" "$cancel_py" "$stop_output" <<'PY' || true
-import json, subprocess, sys
+import json, shlex, subprocess, sys
 from datetime import datetime, timezone
+
+MAX_SHOWN = 5          # more than this and the message would take longer to build than to read
+TITLE_LIMIT = 80
 
 state_py, cancel_py, output = sys.argv[1:4]
 try:
+    # stop_supervisor.sh puts its JSON object on the last line.
     children = json.loads(output.strip().splitlines()[-1]).get("children") or []
 except (ValueError, IndexError, AttributeError):
     children = []
-for child in children:
-    task_id = child.get("task_id")
-    if not task_id:
-        continue
+children = [c for c in children if isinstance(c, dict) and c.get("task_id")]
+for child in children[:MAX_SHOWN]:
+    task_id = child["task_id"]
     title = ""
     try:
         done = subprocess.run([sys.executable, state_py, "task", "field", task_id, "title"],
-                              capture_output=True, text=True, timeout=20)
-        title = (json.loads(done.stdout.strip().splitlines()[-1]).get("value") or "") if done.returncode == 0 else ""
-    except (ValueError, IndexError, OSError, subprocess.SubprocessError):
+                              capture_output=True, text=True, timeout=5)
+        # solar_state.py prints indented JSON over several lines: read the whole output.
+        title = (json.loads(done.stdout).get("value") or "") if done.returncode == 0 else ""
+    except (ValueError, AttributeError, OSError, subprocess.SubprocessError):
         pass
+    title = "".join(ch if ch.isprintable() else " " for ch in str(title)).strip()
+    if len(title) > TITLE_LIMIT:
+        title = title[:TITLE_LIMIT - 1] + "…"
     age = ""
     try:
         since = datetime.strptime(child["since"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
@@ -2083,7 +2091,10 @@ for child in children:
         pass
     bits = [task_id, title, child.get("provider") or "", age]
     print("  - " + " · ".join(bit for bit in bits if bit))
-    print(f"    cancel it with: python3 {cancel_py} - {task_id}")
+    command = shlex.join(["python3", cancel_py, "-", task_id])
+    print(f"    request cancellation with: {command}   (an active task stops when its worker acknowledges it)")
+if len(children) > MAX_SHOWN:
+    print(f"  ... and {len(children) - MAX_SHOWN} more")
 PY
 }
 
@@ -2108,6 +2119,8 @@ solar_client_drain_async() {
       return 1
     fi
     echo "Drain: asking the async supervisor to finish its executions"
+    # The output is captured (not streamed) so a drain that runs out of time can say what it waited
+    # for; it is printed unchanged once the script ends.
     local stop_code=0 stop_out=""
     stop_out="$(bash "$stop_script" --drain --timeout "$timeout")" || stop_code=$?
     [[ -n "$stop_out" ]] && printf '%s\n' "$stop_out"

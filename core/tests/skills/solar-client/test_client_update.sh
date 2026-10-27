@@ -676,8 +676,8 @@ loaded_ec=$?
 set -e
 assert_ok "an agent loaded in between does not fail the resume" test "$loaded_ec" -eq 0
 assert_ok "no bootstrap hit error 5" bash -c '! grep -q bootstrap-error-5 "$1"' _ "$SVC_LOG"
-assert_ok "the loaded agent is unloaded right before bootstrap" bash -c \
-  'tail -3 "$1" | tr "\n" " " | grep -q "bootout .*bootstrap"' _ "$SVC_LOG"
+assert_ok "the loaded agent is unloaded before bootstrap, after the console start" bash -c \
+  'host="$(grep -n "^host-start" "$1" | tail -1 | cut -d: -f1)"; out="$(grep -n "launchctl bootout" "$1" | tail -1 | cut -d: -f1)"; boot="$(grep -n "launchctl bootstrap" "$1" | tail -1 | cut -d: -f1)"; [[ "$host" -lt "$out" && "$out" -lt "$boot" ]]' _ "$SVC_LOG"
 # an agent that is not loaded in between is bootstrapped without a second unload
 : >"$SVC_LOG"; : >"$AGENT_LOADED"
 rm -rf "$SOLAR_RUNTIME_ROOT" && mkdir -p "$SOLAR_RUNTIME_ROOT"
@@ -688,23 +688,61 @@ assert_ok "an unloaded agent is unloaded once (the pause) and bootstrapped once"
   '[[ "$(grep -c "launchctl bootout" "$1")" == 1 && "$(grep -c "launchctl bootstrap" "$1")" == 1 ]]' _ "$SVC_LOG"
 
 # --- a drain that ran out of time names what it was waiting for and how to cancel it ---
+DRAIN_TITLE="$TMP/drain-title.txt"
 DRAIN_STATE_PY="$TMP/drain-state.py"
-printf '#!/usr/bin/env python3\nimport json\nprint(json.dumps({"value": "Review of the nightly report"}))\n' >"$DRAIN_STATE_PY"
+# solar_state.py prints indented JSON over several lines, so the double does too.
+cat >"$DRAIN_STATE_PY" <<EOF
+#!/usr/bin/env python3
+import json
+print(json.dumps({"id": "x", "key": "title", "value": open("$DRAIN_TITLE").read()}, indent=2))
+EOF
 DRAIN_STOP="$TMP/drain-stop.sh"
-printf '#!/usr/bin/env bash\necho %s\nexit 1\n' \
-  "'{\"children\": [{\"task_id\": \"task-abc\", \"since\": \"2000-01-01T00:00:00Z\", \"provider\": \"agent\"}], \"state\": \"draining\"}'" >"$DRAIN_STOP"
-chmod +x "$DRAIN_STATE_PY" "$DRAIN_STOP"
-set +e
-drain_err="$(SOLAR_CLIENT_STATE_PY="$DRAIN_STATE_PY" SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT="$DRAIN_STOP" \
-  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="async-supervisor" \
-  solar_client_drain_async "$MOCK_INSTALL_ROOT" 5 2>&1 >/dev/null)"
-drain_ec=$?
-set -e
+chmod +x "$DRAIN_STATE_PY"
+# drain_case <install root> <stop output>: the stderr of a drain whose stop script ends with exit 1
+drain_case() {
+  printf '#!/usr/bin/env bash\ncat <<'"'"'J'"'"'\n%s\nJ\nexit 1\n' "$2" >"$DRAIN_STOP"
+  chmod +x "$DRAIN_STOP"
+  set +e
+  drain_err="$(SOLAR_CLIENT_STATE_PY="$DRAIN_STATE_PY" SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT="$DRAIN_STOP" \
+    SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="async-supervisor" \
+    solar_client_drain_async "$1" 5 2>&1 >/dev/null)"
+  drain_ec=$?
+  set -e
+}
+CHILD_ABC='{"task_id": "task-abc", "since": "2000-01-01T00:00:00Z", "provider": "agent"}'
+
+printf 'Review of the nightly report' >"$DRAIN_TITLE"
+drain_case "$MOCK_INSTALL_ROOT" "{\"children\": [$CHILD_ABC], \"state\": \"draining\"}"
 assert_ok "a drain that ran out of time still fails" test "$drain_ec" -ne 0
 assert_ok "the drain error names the task and its title" bash -c 'grep -q "task-abc · Review of the nightly report · agent" <<<"$1"' _ "$drain_err"
 assert_ok "the drain error says how long it has been running" bash -c 'grep -q "running [0-9]* min" <<<"$1"' _ "$drain_err"
-assert_ok "the drain error prints the exact cancel command" bash -c 'grep -q "task_cancel.py - task-abc" <<<"$1"' _ "$drain_err"
+assert_ok "the drain error prints the exact cancel command" bash -c 'grep -q "request cancellation with: python3 .*task_cancel.py - task-abc" <<<"$1"' _ "$drain_err"
 assert_ok "the drain error keeps the resume instruction" bash -c 'grep -q "solar client update --resume" <<<"$1"' _ "$drain_err"
+
+SPACED_ROOT="$TMP/install with space"
+mkdir -p "$SPACED_ROOT"
+drain_case "$SPACED_ROOT" "{\"children\": [$CHILD_ABC], \"state\": \"draining\"}"
+assert_ok "the cancel command quotes an install path with spaces" bash -c "grep -qF \"'$SPACED_ROOT/core/skills/solar-async-tasks/scripts/task_cancel.py'\" <<<\"\$1\"" _ "$drain_err"
+
+printf 'first line\nsecond\tline \033[31mred %s' "$(printf 'x%.0s' $(seq 1 120))" >"$DRAIN_TITLE"
+drain_case "$MOCK_INSTALL_ROOT" "{\"children\": [$CHILD_ABC], \"state\": \"draining\"}"
+assert_ok "a title with control characters stays on one cut line" bash -c \
+  '[[ "$(grep -c "task-abc" <<<"$1")" == 2 ]] && ! grep -q $'"'"'\033'"'"' <<<"$1" && grep -q "first line second line" <<<"$1" && grep -q "…" <<<"$1"' _ "$drain_err"
+
+: >"$DRAIN_TITLE"
+drain_case "$MOCK_INSTALL_ROOT" "{\"children\": [$CHILD_ABC], \"state\": \"draining\"}"
+assert_ok "an empty title leaves no empty field" bash -c 'grep -q "^  - task-abc · agent · running" <<<"$1"' _ "$drain_err"
+
+drain_case "$MOCK_INSTALL_ROOT" '{"children": [{"task_id": "task-abc", "provider": "agent"}], "state": "draining"}'
+assert_ok "a child without a start time is listed without an age" bash -c 'grep -q "task-abc" <<<"$1" && ! grep -q "running [0-9]" <<<"$1"' _ "$drain_err"
+
+drain_case "$MOCK_INSTALL_ROOT" 'no json at all'
+assert_ok "a stop output without JSON still fails with the original message" bash -c 'grep -q "did not drain" <<<"$1" && grep -q "solar client update --resume" <<<"$1" && ! grep -q "task_cancel" <<<"$1"' _ "$drain_err"
+
+many="$(python3 -c 'import json; print(json.dumps({"children": [{"task_id": "t%d" % i, "provider": "agent"} for i in range(7)]}))')"
+drain_case "$MOCK_INSTALL_ROOT" "$many"
+assert_ok "seven running executions list five and count the rest" bash -c \
+  '[[ "$(grep -c "request cancellation with" <<<"$1")" == 5 ]] && grep -q "and 2 more" <<<"$1"' _ "$drain_err"
 unset SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE SOLAR_CLIENT_CUTOVER_SCRIPT SOLAR_CLIENT_CUTOVER_ROOT
 unset SOLAR_CLIENT_LAUNCHCTL SOLAR_CLIENT_GATEWAY_STOP_SCRIPT
 unset SOLAR_CLIENT_HOST_STOP_SCRIPT SOLAR_CLIENT_HOST_START_SCRIPT SOLAR_CLIENT_GATEWAY_SETUP_SCRIPT
