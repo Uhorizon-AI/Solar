@@ -942,3 +942,52 @@ def test_regular_file_manifest_stays_compatible(tmp_path):
     assert e['manifest']['system_prompt'] == repo.SYSTEM_PROMPT
     assert all(set(s) == {'path', 'oid', 'size', 'sha256'} for s in e['manifest']['sources'])
     assert repo.verify(e['manifest'], e['review_input_digest'], 'claude') == e['manifest']
+
+
+@pytest.mark.parametrize('link,target,files,reason,path', [
+    ('nested/x', '../../y', {'nested/file.md': 'n'}, 'link_outside_snapshot', 'nested/x'),
+    ('CLAUDE.md', 'requirements.md/', {}, 'link_target_not_directory', 'CLAUDE.md'),
+    ('CLAUDE.md', 'nested/', {'nested/file.md': 'n'}, 'link_target_not_tracked_file', 'CLAUDE.md'),
+])
+def test_further_unsafe_alias_shapes_report_path_and_reason(tmp_path, link, target, files, reason, path):
+    root, _ = repository(tmp_path)
+    for name, text in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True); (root / name).write_text(text)
+    (root / link).parent.mkdir(parents=True, exist_ok=True)
+    (root / link).symlink_to(target)
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'unsafe alias')
+    with pytest.raises(profiles.ProfileError) as caught:
+        envelope(root, git(root, 'rev-parse', 'HEAD'))
+    assert caught.value.detail == dict(path=path, reason=reason)
+
+
+def test_chain_ending_in_an_excluded_file_is_rejected(tmp_path):
+    root, _ = repository(tmp_path)
+    (root / '.env').write_text('SECRET')
+    (root / 'a').symlink_to('.env'); (root / 'CLAUDE.md').symlink_to('a')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'chain to secret')
+    with pytest.raises(profiles.ProfileError) as caught:
+        envelope(root, git(root, 'rev-parse', 'HEAD'))
+    assert caught.value.detail['reason'] == 'excluded_file'
+
+
+def test_dot_segments_inside_a_link_target_are_normalized(tmp_path):
+    root, _ = repository(tmp_path)
+    (root / 'nested').mkdir(); (root / 'nested' / 'file.md').write_text('n')
+    (root / 'CLAUDE.md').symlink_to('nested/./file.md')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'dot segment')
+    e = envelope(root, git(root, 'rev-parse', 'HEAD'))
+    alias = next(s for s in e['manifest']['sources'] if s['path'] == 'CLAUDE.md')
+    assert alias['resolved_path'] == 'nested/file.md'
+
+
+def test_tampering_with_link_metadata_is_caught_by_rebuilding_the_manifest(tmp_path):
+    root, _ = repository(tmp_path)
+    (root / 'CLAUDE.md').symlink_to('requirements.md')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'alias')
+    e = envelope(root, git(root, 'rev-parse', 'HEAD'))
+    manifest = json.loads(json.dumps(e['manifest']))
+    next(s for s in manifest['sources'] if s['path'] == 'CLAUDE.md')['symlink_target'] = 'operations.md'
+    # Even with a digest recomputed for the forged manifest, verify rebuilds from Git and refuses it.
+    with pytest.raises(profiles.ProfileError):
+        repo.verify(manifest, profiles.digest(manifest), 'claude')
