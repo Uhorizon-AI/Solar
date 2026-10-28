@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.59.3] - 2026-10-28
+### Fixed
+- fix(client): address round 1 review of the drain message
+- fix(client): resume the LaunchAgent idempotently and name what a drain waits for
+
+
 ## [0.59.2] - 2026-10-27
 
 ### Fixed
