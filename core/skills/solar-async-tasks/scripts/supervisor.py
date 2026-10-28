@@ -807,6 +807,25 @@ class Supervisor:
                   f"- error: {why}; whether it had effects is uncertain, so it was not retried\n")
         with self._session() as store:
             store.task_fail(task_id, suffix, token=token)
+        self._notify_failure(task_id)
+
+    def _notify_failure(self, task_id: str) -> None:
+        """A task the supervisor itself failed (lost lease, executor gone) never reaches the worker's own
+        notice. The notifier decides from `notify_when`; it runs off the supervisor's loop and is ended with
+        its process group after NOTIFY_TIMEOUT."""
+        def send() -> None:
+            try:
+                proc = subprocess.Popen(["bash", str(HERE / "notify_if_configured.sh"), task_id],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL, env={**os.environ}, start_new_session=True)
+                try:
+                    proc.wait(timeout=self.NOTIFY_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait()
+            except OSError:
+                pass
+        threading.Thread(target=send, name="failure-notice", daemon=True).start()
 
     def _start_failure(self, task_id: str, token: str, worker: str, why: str) -> None:
         """An execution that never started: nothing ran, so the place is given back unambiguously.

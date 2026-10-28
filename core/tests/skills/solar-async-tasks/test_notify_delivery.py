@@ -120,3 +120,38 @@ def test_notification_points_at_result_path(tmp_path):
     task = task_file(root, extra=f'result_path: "{log}"\n')
     assert notify(task, env).returncode == 0
     assert str(log) in (workspace / 'sent.log').read_text()
+
+
+def test_notify_when_failed_reports_failure_with_its_reason_and_not_completion(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    failed = task_file(root, 'error', '')
+    failed.write_text(failed.read_text().replace('notify_when: completed', 'notify_when: "failed"')
+                      + '\n## Execution Error\n- error_code: provider_quota\n- error: quota exceeded\n')
+    assert notify(failed, env).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Task failed' in sent and 'Reason: quota exceeded' in sent
+    done = task_file(root, 'completed', '')
+    done.write_text(done.read_text().replace('notify_when: completed', 'notify_when: "failed"'))
+    assert notify(done, env).returncode == 0
+    assert 'Task completed' not in (workspace / 'sent.log').read_text()
+
+
+def test_notify_when_completed_alone_still_reports_failure_without_the_reason(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    failed = task_file(root, 'error', '')
+    failed.write_text(failed.read_text() + '\n## Execution Error\n- error: secret path /x\n')
+    assert notify(failed, env).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Task failed' in sent and 'Reason' not in sent
+
+
+def test_a_new_claim_clears_the_notice_record_so_each_run_notifies_once(tmp_path):
+    import solar_state
+    _, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'queued', 'recurring: true\nnotify_delivered: true\nnotify_status: delivered\n')
+    seed(root)
+    with solar_state.session() as store:
+        tid = task_id_of(task)
+        store.task_claim(tid, 'worker')
+        pairs = dict(store.task_get(tid)['frontmatter'])
+    assert 'notify_delivered' not in pairs and 'notify_status' not in pairs
