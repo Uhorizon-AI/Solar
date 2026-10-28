@@ -57,6 +57,8 @@ system_state="INFO"
 system_detail=""
 router_state="INFO"
 router_detail=""
+perms_state="INFO"
+perms_detail=""
 browser_state="INFO"
 client_state="OK"
 client_detail=""
@@ -164,6 +166,17 @@ else
   router_state="INFO"
 fi
 
+# client permissions — static read of each client's own settings plus the last stored
+# probe; never a model call. The live probe is opt-in: solar client doctor --probe-permissions.
+perms_script="$(solar_core_dir)/skills/solar-router/scripts/client_permissions.py"
+if [[ -f "$perms_script" ]]; then
+  if perms_out="$(python3 "$perms_script" summary 2>/dev/null)" && [[ -n "$perms_out" ]]; then
+    IFS=$'\t' read -r perms_state perms_detail <<< "$perms_out"
+  else
+    perms_detail="unknown (could not read client settings)"
+  fi
+fi
+
 # browser (on-demand; INFO by default per plan)
 if [[ -f "$(solar_core_dir)/skills/solar-browser/scripts/check_browser.sh" ]]; then
   if bash "$(solar_core_dir)/skills/solar-browser/scripts/check_browser.sh" 2>/dev/null | grep -qi "running\|ok\|healthy"; then
@@ -241,6 +254,8 @@ if [[ "$JSON" == true ]]; then
   SYSTEM_DETAIL="$system_detail" \
   ROUTER_STATE="$router_state" \
   ROUTER_DETAIL="$router_detail" \
+  PERMS_STATE="$perms_state" \
+  PERMS_DETAIL="$perms_detail" \
   BROWSER_STATE="$browser_state" \
   CLIENT_STATE="$client_state" \
   CLIENT_DETAIL="$client_detail" \
@@ -258,6 +273,8 @@ print(json.dumps({
   "system_detail": os.environ["SYSTEM_DETAIL"],
   "router": os.environ["ROUTER_STATE"],
   "router_detail": os.environ["ROUTER_DETAIL"],
+  "permissions": os.environ["PERMS_STATE"],
+  "permissions_detail": os.environ["PERMS_DETAIL"],
   "browser": os.environ["BROWSER_STATE"],
   "client": os.environ["CLIENT_STATE"],
   "client_detail": os.environ["CLIENT_DETAIL"],
@@ -273,6 +290,7 @@ block_line "client" "$client_state" "$client_detail"
 block_line "workspace" "$workspace_state" "$workspace_detail"
 block_line "system" "$system_state" "$system_detail"
 block_line "router" "$router_state" "$router_detail"
+block_line "clients" "$perms_state" "$perms_detail"
 block_line "browser" "$browser_state"
 
 if [[ "$host_state" == "WARN" ]]; then
@@ -283,6 +301,9 @@ if [[ -n "$router_detail" ]] && echo "$router_detail" | grep -q "historical orph
 fi
 if [[ "$client_state" == "WARN" ]]; then
   echo "hint: solar client doctor"
+fi
+if [[ "$perms_state" == "WARN" ]]; then
+  echo "hint: python3 core/skills/solar-router/scripts/client_permissions.py static   # exact setting and file"
 fi
 if [[ "$workspace_state" == "WARN" ]]; then
   echo "hint: solar workspace doctor"
@@ -316,7 +337,7 @@ for s in "$host_state" "$workspace_state" "$system_state"; do
   [[ "$s" == "FAIL" || "$s" == "DOWN" ]] && fail=1
 done
 if [[ "$STRICT" == true ]]; then
-  for s in "$host_state" "$workspace_state" "$client_state" "$system_state" "$router_state"; do
+  for s in "$host_state" "$workspace_state" "$client_state" "$system_state" "$router_state" "$perms_state"; do
     [[ "$s" == "FAIL" || "$s" == "WARN" || "$s" == "DOWN" ]] && fail=1
   done
 fi

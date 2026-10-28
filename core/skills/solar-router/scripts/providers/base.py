@@ -14,11 +14,14 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1]
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 _PATHS_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-paths" / "scripts"
 if str(_PATHS_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_PATHS_SCRIPTS))
 
 import solar_runtime  # noqa: E402
+from client_permissions import MCP_READ_TOOLS  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
 SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
@@ -135,6 +138,18 @@ class BaseProvider(ABC):
     def read_only_args(self, cwd: pathlib.Path) -> Tuple[List[str], str]:
         """The client's native read-only switches and their label; none by default."""
         return [], "none"
+
+    def static_permission_checks(self, home: pathlib.Path, workspace: pathlib.Path) -> list:
+        """Findings read from the client's own settings, without a model call.
+
+        Checks a client has no readable settings for are left out; the caller reports
+        them as `unknown`. Never writes to the client's configuration.
+        """
+        return []
+
+    def permission_fix_hint(self, check: str) -> str:
+        return {"mcp_read": f"allow the Solar MCP read tools ({', '.join(MCP_READ_TOOLS)}) in the client's own permission settings",
+                "write_guard": "make the client's own settings stop overriding its read-only mode"}[check]
 
     def ask(self, prompt: str, *, cwd=None, model: Optional[str] = None, observer=None) -> AskResult:
         """Put one question to the client with the session the user logged in with.

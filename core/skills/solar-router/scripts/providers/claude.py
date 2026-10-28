@@ -3,6 +3,7 @@ import os
 import shlex
 import subprocess
 
+from client_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, UNKNOWN, mcp_registered, read_json
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
@@ -19,6 +20,39 @@ class ClaudeProvider(BaseProvider):
 
     def ask_separator(self):
         return ["--"]
+
+    def static_permission_checks(self, home, workspace):
+        """Claude decides by `permissions.allow`/`deny` rules across its settings files."""
+        registered = mcp_registered([home / ".claude.json", workspace / ".mcp.json"])
+        if registered is False:
+            return [Finding(self.name, "mcp_read", MISSING, "static",
+                            f"the {MCP_SERVER} MCP server is not registered for Claude",
+                            setting=f"mcpServers.{MCP_SERVER}", file=str(home / ".claude.json"),
+                            fix="run: solar mcp install --clients claude")]
+        files = [home / ".claude" / "settings.json", workspace / ".claude" / "settings.json",
+                 workspace / ".claude" / "settings.local.json"]
+        rules = [d.get("permissions") or {} for d in map(read_json, files) if d]
+        prefix = f"mcp__{MCP_SERVER}"
+        tools = [f"{prefix}__{tool}" for tool in MCP_READ_TOOLS]
+
+        def covers(entries, tool):
+            return any(isinstance(e, str) and e in (prefix, f"{prefix}__*", tool) for e in entries)
+
+        allow = [e for p in rules for e in p.get("allow", [])]
+        deny = [e for p in rules for e in p.get("deny", [])]
+        denied = [t for t in tools if covers(deny, t)]
+        if denied:
+            return [Finding(self.name, "mcp_read", MISSING, "static", f"denied: {', '.join(denied)}",
+                            setting="permissions.deny", file="; ".join(map(str, files[:1])),
+                            fix=f"remove the rule matching {', '.join(denied)} from permissions.deny")]
+        if all(covers(allow, t) for t in tools):
+            return [Finding(self.name, "mcp_read", "ok", "static", "permissions.allow covers the Solar read tools")]
+        # A non-interactive plan-mode launch may refuse an unlisted tool, but the cause is
+        # the client's to confirm: only the probe sees what actually reaches the server.
+        return [Finding(self.name, "mcp_read", UNKNOWN, "static",
+                        f"no permissions.allow rule for {', '.join(tools)}; run the probe to see whether the call is blocked",
+                        setting="permissions.allow", file=str(files[0]),
+                        fix=f"if the probe reports it blocked, add {', '.join(repr(t) for t in tools)} to permissions.allow, then probe again")]
 
     def stream(self, prompt: str, *, review=None):
         if review is not None:

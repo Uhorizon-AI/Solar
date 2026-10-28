@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(status): check that each CLI client's own permissions allow what Solar needs (read through the Solar MCP) and forbid what it forbids (writing in an ask). Static check from the client's settings in `solar status`; opt-in live probe via `solar client doctor --probe-permissions`. Results are `ok | missing | too_permissive | unknown` with the exact setting and file; Solar changes no client configuration.
+
 ## [0.59.3] - 2026-10-28
 ### Fixed
 - fix(client): address round 1 review of the drain message

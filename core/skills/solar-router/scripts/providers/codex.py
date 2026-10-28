@@ -2,8 +2,12 @@ import json
 import os
 import shlex
 import subprocess
+import os
+import pathlib
 import sys
 
+from client_permissions import (Finding, MCP_SERVER, MISSING, OK, TOO_PERMISSIVE,
+                                read_toml, unknown)
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
@@ -27,6 +31,41 @@ class CodexProvider(BaseProvider):
 
     def ask_separator(self):
         return ["--"]
+
+    def static_permission_checks(self, home, workspace):
+        """Codex decides by `approval_policy`, `approvals_reviewer` and `mcp_servers` in config.toml.
+
+        `--sandbox read-only` on the command line overrides `sandbox_mode`, but not the
+        approval path: an automatic reviewer can approve leaving that sandbox.
+        """
+        codex_home = pathlib.Path(os.getenv("CODEX_HOME") or home / ".codex")
+        path = codex_home / "config.toml"
+        config = read_toml(path)
+        if config is None:
+            return [unknown(self.name, c, f"{path} is missing or unreadable") for c in ("mcp_read", "write_guard")]
+        project = (config.get("projects") or {}).get(str(workspace)) or {}
+        policy = project.get("approval_policy", config.get("approval_policy"))
+        reviewer = project.get("approvals_reviewer", config.get("approvals_reviewer"))
+        servers = config.get("mcp_servers") or {}
+        if MCP_SERVER not in servers:
+            read = Finding(self.name, "mcp_read", MISSING, "static", f"the {MCP_SERVER} MCP server is not registered for Codex",
+                           setting=f"mcp_servers.{MCP_SERVER}", file=str(path), fix="run: solar mcp install --clients codex")
+        elif (servers[MCP_SERVER] or {}).get("enabled") is False:
+            read = Finding(self.name, "mcp_read", MISSING, "static", f"mcp_servers.{MCP_SERVER} is disabled",
+                           setting=f"mcp_servers.{MCP_SERVER}.enabled", file=str(path), fix="set enabled = true")
+        else:
+            read = unknown(self.name, "mcp_read", "registered; only the probe shows whether a read call is approved")
+        if policy == "never":
+            write = Finding(self.name, "write_guard", OK, "static", 'approval_policy = "never": no path out of the read-only sandbox')
+        elif reviewer and policy:
+            where = f'projects."{workspace}"' if "approval_policy" in project else "top level"
+            write = Finding(self.name, "write_guard", TOO_PERMISSIVE, "static",
+                            f'approval_policy = "{policy}" with approvals_reviewer = "{reviewer}" ({where}) can approve leaving --sandbox read-only',
+                            setting="approval_policy", file=str(path),
+                            fix='set approval_policy = "never" (or remove approvals_reviewer) for the Solar workspace')
+        else:
+            write = unknown(self.name, "write_guard", f"approval_policy={policy or 'unset'}; only the probe shows whether read-only holds")
+        return [read, write]
 
     def stream(self, prompt: str, *, review=None):
         if review is not None:
