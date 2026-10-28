@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# If the completed task has notify_when: completed, send a Telegram notification
-# to the allowlisted origin chat (or TELEGRAM_CHAT_ID). When the task carries a
+# If the finished task asks for it in notify_when, send a Telegram notification
+# to the allowlisted origin chat (or TELEGRAM_CHAT_ID). notify_when is a comma
+# list of `completed`, `failed`, `blocked`; the bare legacy value `completed`
+# also reports a failure. `blocked` is announced by the supervisor (--waiting). When the task carries a
 # `## Delivery` section, that is the message: the one-screen delivery the
 # executor wrote, ending in its own evidence line. Otherwise a brief line plus
 # the result location. Long text is chunked (~1s apart).
@@ -26,7 +28,13 @@ esac
 
 if [[ -z "$MODE" ]]; then
   NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
-  [[ "$NOTIFY_WHEN" != "completed" ]] && exit 0
+  NOTIFY_WHEN="${NOTIFY_WHEN//[[:space:]]/}"
+  notify_wants() { [[ ",${NOTIFY_WHEN}," == *",$1,"* ]]; }
+  if [[ "$(task_status_of "$TASK_ID")" == "error" ]]; then
+    notify_wants failed || [[ "$NOTIFY_WHEN" == "completed" ]] || exit 0
+  else
+    notify_wants completed || exit 0
+  fi
 
   if [[ "$(task_field "$TASK_ID" "notify_delivered")" == "true" ]]; then
     exit 0
@@ -108,6 +116,17 @@ BRIEF="Task completed: ${TITLE}"
 if [[ "$TASK_STATUS" == "error" ]]; then
   BRIEF="Task failed and needs attention: ${TITLE}"
   LOCATION="" # Keep execution errors and sensitive details in local logs.
+  # A task that asks for `failed` by name also gets the one-line reason (bounded, single line).
+  if [[ ",$(task_field "$TASK_ID" "notify_when" | tr -d '[:space:]')," == *",failed,"* ]]; then
+    REASON="$(task_body "$TASK_ID" | awk '
+      /^## Execution Error[[:space:]]*$/ { found = 1; next }
+      found && /^## / { exit }
+      found && /^- error:/ { sub(/^- error:[[:space:]]*/, ""); print; exit }
+      found && /^- error_code:/ && code == "" { sub(/^- error_code:[[:space:]]*/, ""); code = $0 }
+      END { if (code != "") print code }
+    ' | head -n1 | tr -d '\r' | cut -c1-200)"
+    [[ -n "$REASON" ]] && BRIEF="${BRIEF}"$'\n'"Reason: ${REASON}"
+  fi
 fi
 if [[ -n "$LOCATION" ]]; then
   BRIEF="${BRIEF}"$'\n'"${LOCATION}"
@@ -155,7 +174,7 @@ send_chunks() {
 if [[ -n "$MODE" ]]; then
   case "$MODE" in
     --waiting)
-      MESSAGE="Waiting for your approval to run: ${TITLE}"$'\n'"Ask your assistant to review it and authorize it. If nobody does, the wait ends on its own." ;;
+      MESSAGE="Waiting for your approval to run: ${TITLE}"$'\n'"Reason: it can change things beyond a confined read, so it needs task.authorize_run before it runs."$'\n'"Ask your assistant to review it and authorize it. If nobody does, the wait ends on its own." ;;
     --expired-draft)
       MESSAGE="Approval wait ended: ${TITLE}"$'\n'"The task went back to draft and will not run until it is approved again." ;;
     --expired-skipped)

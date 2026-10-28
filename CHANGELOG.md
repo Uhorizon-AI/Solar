@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(tasks): `task.create` and `task.update` accept `notify_when` (`completed`, `failed`, `blocked`), so a task can notify the configured chat without manual steps. `failed` adds a one-line reason; the approval-wait notice now says why the task waits. Each run notifies once (a claim clears the previous run's notice record), and a task failed by the supervisor itself is also announced. Closes the first piece of #81.
+
 ### Fixed
 - router: a client that exits 0 with empty output now stores a short, secret-scrubbed summary of the captured stderr in the task error (`provider returned empty output (exit 0: ...)`), as #94 does for non-zero exits; with nothing on stderr the message is unchanged. Applies to `ask` and `run` in `providers/base.py` and to the Cursor and Claude streams and Ollama `run`. The streams capture the initial stderr through EOF, a one-second read deadline, or the chunk that reaches the 16 KiB threshold. Closes #142.
 - router: error scrubbing now hides the whole credential of `Authorization` and `Proxy-Authorization` headers (`Basic`, `Bearer`, ...), not only the scheme word, whatever the scheme (Basic, Bearer, DPoP, ApiKey, ...); only a short diagnostic sentence such as `authorization: denied because the sandbox blocked it` keeps its cause. This also covers the non-zero exit case of #94.
