@@ -3,7 +3,7 @@ import os
 import shlex
 import subprocess
 
-from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, mcp_registered, read_json, solar_read_tools_declare_read_only, unknown
+from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, mcp_registered, read_json, rule_list, solar_read_tools_declare_read_only, unknown
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
@@ -39,14 +39,17 @@ class ClaudeProvider(BaseProvider):
             return any(isinstance(e, str) and e in (prefix, f"{prefix}__*", tool) for e in entries)
 
         for source, perms in found:
-            denied = [t for t in tools if covers(perms.get("deny", []), t)]
+            denied = [t for t in tools if covers(rule_list(perms, "deny"), t)]
             if denied:
                 break
         if denied:
             return [Finding(self.name, "mcp_read", MISSING, "static", f"denied: {', '.join(denied)}",
                             setting="permissions.deny", file=str(source),
                             fix=f"remove the rule matching {', '.join(denied)} from permissions.deny")]
-        if not solar_read_tools_declare_read_only():
+        declared = solar_read_tools_declare_read_only()
+        if declared is None:
+            return [unknown(self.name, "mcp_read", "could not read the Solar MCP server's tool table; run the probe")]
+        if not declared:
             return [Finding(self.name, "mcp_read", MISSING, "static",
                             "Claude's plan mode runs only MCP tools that declare readOnlyHint, and this Solar's read tools do not",
                             setting="annotations.readOnlyHint on solar_search and solar_docs",

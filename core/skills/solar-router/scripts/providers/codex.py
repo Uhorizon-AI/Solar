@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import pathlib
@@ -41,7 +42,9 @@ class CodexProvider(BaseProvider):
         path = codex_home / "config.toml"
         config = read_toml(path)
         if config is None:
-            return [unknown(self.name, c, f"{path} is missing or unreadable") for c in ("mcp_read", "write_guard")]
+            why = ("needs Python 3.11+ (tomllib) to read it" if importlib.util.find_spec("tomllib") is None
+                   else "is missing or unreadable")
+            return [unknown(self.name, c, f"{path} {why}") for c in ("mcp_read", "write_guard")]
         project = (config.get("projects") or {}).get(str(workspace)) or {}
         policy = project.get("approval_policy", config.get("approval_policy"))
         reviewer = project.get("approvals_reviewer", config.get("approvals_reviewer"))
@@ -56,7 +59,7 @@ class CodexProvider(BaseProvider):
             read = unknown(self.name, "mcp_read", "registered; only the probe shows whether a read call is approved")
         if policy == "never":
             write = Finding(self.name, "write_guard", OK, "static", 'approval_policy = "never": no path out of the read-only sandbox')
-        elif reviewer and policy:
+        elif reviewer and reviewer != "user" and policy:
             where = f'projects."{workspace}"' if "approval_policy" in project else "top level"
             write = Finding(self.name, "write_guard", TOO_PERMISSIVE, "static",
                             f'approval_policy = "{policy}" with approvals_reviewer = "{reviewer}" ({where}) can approve leaving --sandbox read-only',

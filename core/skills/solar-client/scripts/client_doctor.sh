@@ -35,6 +35,7 @@ done
 solar_resolve_paths --quiet
 
 if [[ "$PROBE_PERMISSIONS" == true ]]; then
+  [[ "$STRICT" != true ]] || { echo "--strict cannot be combined with --probe-permissions" >&2; exit 2; }
   # Only this: the probe replaces the doctor's file checks for this run.
   exec python3 "$(solar_core_dir)/skills/solar-router/scripts/cli_permissions.py" probe ${PROBE_ARGS[@]+"${PROBE_ARGS[@]}"}
 fi

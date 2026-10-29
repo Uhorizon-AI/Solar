@@ -78,6 +78,24 @@ class TestCursorStatic(Env):
                                      deny=["Mcp(solar:*)"]))
         self.assertEqual(self.checks(AgentProvider())["mcp_read"].status, cp.MISSING)
 
+    def test_a_full_allowlist_with_no_readable_registration_is_unknown(self):
+        self.config(permissions=dict(allow=["Mcp(solar:solar_search)", "Mcp(solar:solar_docs)"], deny=[]))
+        (self.home / ".cursor" / "mcp.json").unlink()
+        self.assertEqual(self.checks(AgentProvider())["mcp_read"].status, cp.UNKNOWN)
+
+    def test_a_workspace_wildcard_deny_names_the_wildcard_and_its_own_file(self):
+        self.config(permissions=dict(allow=["Mcp(solar:*)"], deny=[]))
+        _json(self.workspace / ".cursor" / "cli.json", dict(permissions=dict(deny=["Mcp(solar:*)"])))
+        found = self.checks(AgentProvider())["mcp_read"]
+        self.assertEqual(found.status, cp.MISSING)
+        self.assertIn("Mcp(solar:*)", found.fix)
+        self.assertTrue(found.file.endswith(".cursor/cli.json"))
+        self.assertFalse(found.file.startswith(str(self.home)))
+
+    def test_null_rule_lists_are_no_rules(self):
+        self.config(permissions=dict(allow=None, deny=None))
+        self.assertEqual(self.checks(AgentProvider())["mcp_read"].status, cp.MISSING)
+
     def test_an_approval_mode_that_is_not_modelled_is_unknown(self):
         self.config()
         _json(self.home / ".cursor" / "cli-config.json", dict(approvalMode="something-new"))
@@ -113,6 +131,17 @@ class TestClaudeStatic(Env):
             found = self.checks(ClaudeProvider())["mcp_read"]
         self.assertEqual(found.status, cp.UNKNOWN)
         self.assertIn("probe", found.detail)
+
+    def test_a_tool_table_that_cannot_be_read_is_unknown_not_missing(self):
+        with patch("providers.claude.solar_read_tools_declare_read_only", return_value=None):
+            found = self.checks(ClaudeProvider())["mcp_read"]
+        self.assertEqual(found.status, cp.UNKNOWN)
+
+    def test_null_permission_lists_do_not_break_the_check(self):
+        _json(self.home / ".claude" / "settings.json", {"permissions": {"allow": None, "deny": None}})
+        with patch("providers.claude.solar_read_tools_declare_read_only", return_value=True):
+            found = self.checks(ClaudeProvider())["mcp_read"]
+        self.assertEqual(found.status, cp.UNKNOWN)
 
     def test_this_solar_declares_its_read_tools_read_only(self):
         self.assertTrue(cp.solar_read_tools_declare_read_only())
@@ -150,6 +179,11 @@ class TestCodexStatic(Env):
         self.assertEqual(found.setting, "approval_policy")
         self.assertIn('"never"', found.fix)
         self.assertIn('approval_policy = "never"', found.snippet)
+
+    @patch.dict("os.environ", {"CODEX_HOME": ""})
+    def test_a_user_reviewer_is_not_an_automatic_approval_path(self):
+        self.config('approval_policy = "on-request"\napprovals_reviewer = "user"\n')
+        self.assertEqual(self.checks(CodexProvider())["write_guard"].status, cp.UNKNOWN)
 
     @patch.dict("os.environ", {"CODEX_HOME": ""})
     def test_the_workspace_entry_overrides_the_top_level(self):
@@ -201,7 +235,6 @@ class TestContractPerProvider(Env):
         for cls in PROVIDERS:
             cp.static_checks(cls(), self.home, self.workspace)
         self.assertEqual(before, {p: p.read_bytes() for p in self.home.rglob("*") if p.is_file()})
-        self.assertEqual(sorted(before), sorted(p for p in self.home.rglob("*") if p.is_file()))
 
 
 def _answer(text="DONE"):
@@ -315,6 +348,9 @@ class TestProbe(Env):
                 audit.write_text(json.dumps(dict(kind="request", arguments=dict(query="probe-xyz"))) + "\n"
                                  + json.dumps(dict(kind="decision", allowed=True, arguments=dict(query="probe-xyz"))) + "\n")
                 self.assertTrue(cp.audit_has_call("probe-xyz"))  # a later decision row counts
+                audit.write_text("probe-bad {not json\n"
+                                 + json.dumps(dict(kind="decision", allowed=True, arguments=dict(query="probe-bad"))) + "\n")
+                self.assertTrue(cp.audit_has_call("probe-bad"))  # a malformed line is skipped, not fatal
 
 
 class TestStoreAndSummary(Env):

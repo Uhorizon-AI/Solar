@@ -98,8 +98,14 @@ def mcp_registered(candidates, key="mcpServers", server=MCP_SERVER, project=None
     return False if readable else None
 
 
-def solar_read_tools_declare_read_only() -> bool:
-    """Whether the Solar MCP server marks its read tools `readOnlyHint`.
+def rule_list(permissions, key) -> list:
+    """The string entries of `permissions[key]`; a null or non-list value counts as no rules."""
+    entries = permissions.get(key) if isinstance(permissions, dict) else None
+    return [e for e in entries if isinstance(e, str)] if isinstance(entries, list) else []
+
+
+def solar_read_tools_declare_read_only():
+    """Whether the Solar MCP server marks its read tools `readOnlyHint`; `None` when it cannot be read.
 
     Claude Code's plan mode runs only MCP tools that declare it, whatever the user's permission
     rules say (verified with a stub server and with Solar's own). Read from the server's tool table.
@@ -111,8 +117,8 @@ def solar_read_tools_declare_read_only() -> bool:
         import mcp_server
         return all((mcp_server.TOOLS[t].get("annotations") or {}).get("readOnlyHint") is True
                    for t in MCP_READ_TOOLS)
-    except Exception:  # noqa: BLE001 - unreadable server code is "not verified", not "ok"
-        return False
+    except Exception:  # noqa: BLE001 - unreadable server code is "not verified", not a verdict
+        return None
 
 
 # --- static tier ------------------------------------------------------------
@@ -218,15 +224,19 @@ def audit_has_call(marker: str) -> bool:
     mcp_scripts = Path(__file__).resolve().parents[2] / "solar-mcp" / "scripts"
     if str(mcp_scripts) not in sys.path:
         sys.path.insert(0, str(mcp_scripts))
-    import mcp_gate
     try:
+        import mcp_gate
         with (mcp_gate.gate_root() / "audit.jsonl").open(encoding="utf-8") as stream:
             for line in stream:
-                if marker in line:
+                if marker not in line:
+                    continue
+                try:
                     row = json.loads(line)
-                    if row.get("kind") == "decision" and row.get("allowed"):
-                        return True
-    except (OSError, ValueError):
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("kind") == "decision" and row.get("allowed"):
+                    return True
+    except (ImportError, OSError, ValueError):
         pass
     return False
 
