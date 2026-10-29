@@ -6,6 +6,16 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.60.2] - 2026-10-29
+### Fixed
+- fix: sort last runs by parsed time and validate --last
+- fix: keep only the newest router run per task
+- fix: ignore router runs from earlier attempts of a requeued task
+- fix: simplify run_task_id prefix handling
+- fix: match executor request ids and mark interrupted runs
+- fix: router status lists every provider and ignores finished tasks
+
+
 ## [0.60.1] - 2026-10-29
 
 ### Fixed
