@@ -94,7 +94,8 @@ echo "  Providers:"
 bash "$SCRIPT_DIR/diagnose_router.sh" --dry-run 2>/dev/null \
   | grep -E "^  - [a-z0-9_-]+: " \
   | sed 's/^/  /' \
-  || echo "    (diagnose_router.sh not available)"
+  || true
+[[ -f "$SCRIPT_DIR/diagnose_router.sh" ]] || echo "    (diagnose_router.sh not available)"
 
 # ---------------------------------------------------------------------------
 # 2. In-flight processes (start without matching end)
@@ -144,7 +145,9 @@ echo "  Last $LAST_N executions:"
 $PYTHON - "$LAST_N" <<'PYEOF'
 import os, sys
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
+sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
+from router_open_runs import open_runs
 
 last_n = int(sys.argv[1])
 starts = {}
@@ -152,6 +155,7 @@ ends = {}
 try:
     with solar_state.session() as store:
         loaded = store.audit_rows()
+        running = open_runs(loaded, store.task_status)
 except solar_state.StateError:
     print("    (no audit yet)")
     raise SystemExit(0)
@@ -190,7 +194,8 @@ else:
             jit_str = "jit=yes" if jit else "jit=no"
             print(f"    - {time_str}  router={rid[:8]}  req={req_id[:12]}  user={user}  {provider}  {status}  {duration_str}  {jit_str}  agent={agent}  planet={planet}")
         else:
-            print(f"    - {time_str}  router={rid[:8]}  req={req_id[:12]}  user={user}  (in-flight)  agent={agent}  planet={planet}")
+            state = "(in-flight)" if rid in running else "(interrupted)"
+            print(f"    - {time_str}  router={rid[:8]}  req={req_id[:12]}  user={user}  {state}  agent={agent}  planet={planet}")
 PYEOF
 
 echo ""

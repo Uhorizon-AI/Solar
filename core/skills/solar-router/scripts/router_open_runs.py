@@ -7,8 +7,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-# Statuses a task never leaves: a router run for such a task cannot be running.
-TERMINAL_TASK_STATUSES = frozenset({"completed", "archived", "error", "cancelled"})
+from solar_state import TERMINAL_STATUSES  # a task never leaves these: its router run cannot be running
 
 
 def run_task_id(row: dict) -> Optional[str]:
@@ -16,8 +15,9 @@ def run_task_id(row: dict) -> Optional[str]:
     task_id = row.get("task_id")
     if task_id:
         return str(task_id)
+    # The executor sends request_id=f"task_{task_id}" (execute_active.call_router).
     request_id = str(row.get("request_id") or "")
-    return request_id if request_id.startswith("task_") else None
+    return request_id[len("task_"):] or None if request_id.startswith("task_") else None
 
 
 def open_runs(rows: list[dict], task_status: Callable[[str], Optional[str]]) -> dict[str, dict]:
@@ -37,7 +37,7 @@ def open_runs(rows: list[dict], task_status: Callable[[str], Optional[str]]) -> 
         if rid in ends:
             continue
         task_id = run_task_id(row)
-        if task_id and task_status(task_id) in TERMINAL_TASK_STATUSES:
+        if task_id and task_status(task_id) in TERMINAL_STATUSES:
             continue
         result[rid] = row
     return result

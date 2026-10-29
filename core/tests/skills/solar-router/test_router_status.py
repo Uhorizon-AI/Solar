@@ -3,6 +3,7 @@ is over is not reported as in flight."""
 from __future__ import annotations
 
 import os
+import uuid
 import subprocess
 from pathlib import Path
 
@@ -19,11 +20,11 @@ def _start(rid, **extra):
 
 
 def test_open_runs_skips_terminal_tasks_and_closed_runs():
-    statuses = {"task_a": "cancelled", "task_b": "active", "task_c": "completed"}
+    statuses = {"task_a": "cancelled", "task_b": "active", "gen-c": "completed"}
     rows = [
         _start("r-cancelled", task_id="task_a"),
         _start("r-active", task_id="task_b"),
-        _start("r-by-request", request_id="task_c"),
+        _start("r-by-request", request_id="task_gen-c"),
         _start("r-unknown-task", task_id="task_gone"),
         _start("r-no-task", request_id="telegram-1"),
         _start("r-ended", task_id="task_b"),
@@ -39,13 +40,14 @@ def status_env(isolated_runtime, tmp_path, monkeypatch):
     (ws / "AGENTS.md").write_text("# test\n")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name in ("codex", "agent"):
+    for name in ("codex", "claude", "agy", "agent"):
         stub = bin_dir / name
         stub.write_text("#!/bin/sh\nexit 0\n")
         stub.chmod(0o755)
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", SOLAR_WORKSPACE=str(ws))
     for key in ("SOLAR_ROUTER_PROVIDER_PRIORITY", "SOLAR_AI_PROVIDER_PRIORITY"):
         env.pop(key, None)
+    env["_STUB_BIN"] = str(bin_dir)
     return env
 
 
@@ -73,16 +75,50 @@ def test_providers_block_follows_priority_override(status_env):
     assert names == ["agent", "codex"], proc.stdout + proc.stderr
 
 
-def test_cancelled_task_run_is_not_in_flight_and_no_deprecation_warning(status_env, isolated_runtime):
-    with solar_state.session() as store:
-        store.task_create([("title", '"x"')], "body", status="draft", task_id="task_cancelled")
-        store.task_create([("title", '"y"')], "body", status="queued", task_id="task_queued")
-        store.task_cancel("task_queued")
-        store.audit_append(_start("2448d7d9-aaaa", task_id="task_queued"))
-        store.audit_append(_start("19e02d89-bbbb", request_id="telegram-1"))
+def test_failing_provider_is_listed_without_script_missing_note(status_env):
+    os.remove(Path(status_env["_STUB_BIN"]) / "claude")
+    status_env["PATH"] = status_env["_STUB_BIN"] + ":/usr/bin:/bin"
+    status_env["SOLAR_ROUTER_PROVIDER_PRIORITY"] = "codex,claude"
     proc = _run_status(status_env)
-    in_flight = proc.stdout.split("In-flight:")[1].split("Last ")[0]
-    assert "2448d7d9" not in in_flight
-    assert "19e02d89" in in_flight and "started unknown" not in in_flight
-    assert "DeprecationWarning" not in proc.stderr
+    block = _providers_block(proc.stdout)
+    assert "- claude: FAIL" in block and "- codex: OK" in block, proc.stdout
+    assert "not available" not in proc.stdout
+
+
+def _make_task(task_id, final):
+    """A real task in the store, driven to `final` through allowed transitions."""
+    with solar_state.session() as store:
+        store.task_create([("title", f'"{task_id}"')], "body", status="queued", task_id=task_id)
+        if final == "cancelled":
+            store.task_cancel(task_id)
+        else:
+            with solar_state._transaction(store.conn) as conn:
+                conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (final, task_id))
+
+
+@pytest.mark.parametrize("final", sorted(solar_state.TERMINAL_STATUSES))
+@pytest.mark.parametrize("ts", ["2026-10-28T16:55:34Z", "2026-10-28T16:55:34+00:00", "2026-10-28T16:55:34"])
+def test_terminal_task_run_is_not_in_flight(status_env, final, ts):
+    task_id = str(uuid.uuid4())
+    _make_task(task_id, final)
+    with solar_state.session() as store:
+        # The executor's real request id: task_ + the id task_create() generated; no task_id field.
+        store.audit_append(_start("dead0000-aaaa", request_id=f"task_{task_id}", ts=ts, user_id="solar-async-tasks"))
+        store.audit_append(_start("live0000-bbbb", request_id="telegram-1", ts=ts))
+    out = _run_status(status_env).stdout
+    in_flight = out.split("In-flight:")[1].split("Last ")[0]
+    assert "dead0000" not in in_flight
+    assert "live0000" in in_flight and "started unknown" not in in_flight
+    last = out.split("Last ")[1]
+    assert any("dead0000" in l and "(interrupted)" in l for l in last.splitlines()), last
+    assert any("live0000" in l and "(in-flight)" in l for l in last.splitlines()), last
     assert _run_status(status_env, "--stale-count-all").stdout.strip() == "1"
+    assert _run_status(status_env, "--stale-count", "--max-age-hours", "100000").stdout.strip() == "1"
+
+
+def test_no_deprecation_warning_even_when_promoted_to_error(status_env):
+    with solar_state.session() as store:
+        store.audit_append(_start("live0000-bbbb", request_id="telegram-1"))
+    status_env["PYTHONWARNINGS"] = "error::DeprecationWarning"
+    proc = _run_status(status_env)
+    assert proc.returncode == 0 and "Traceback" not in proc.stderr, proc.stderr
