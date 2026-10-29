@@ -100,6 +100,15 @@ class TestCursorStatic(Env):
         self.assertIn(".cursor/cli.json", found.file)
         self.assertRegex(found.fix, r"Mcp\(solar:solar_docs\).*cli-config\.json.*Mcp\(solar:\*\).*cli\.json")
 
+    def test_the_same_deny_rule_in_two_files_names_both(self):
+        self.config(permissions=dict(allow=[], deny=["Mcp(solar:*)"]))
+        _json(self.workspace / ".cursor" / "cli.json", dict(permissions=dict(deny=["Mcp(solar:*)"])))
+        found = self.checks(AgentProvider())["mcp_read"]
+        self.assertIn("cli-config.json", found.file)
+        self.assertIn(".cursor/cli.json", found.file)
+        self.assertIn("cli-config.json", found.fix)
+        self.assertIn(".cursor/cli.json", found.fix)
+
     def test_null_rule_lists_are_no_rules(self):
         self.config(permissions=dict(allow=None, deny=None))
         self.assertEqual(self.checks(AgentProvider())["mcp_read"].status, cp.MISSING)
@@ -392,8 +401,9 @@ class TestDoctorFlags(unittest.TestCase):
         import os
         import subprocess
         script = Path(cp.__file__).resolve().parents[2] / "solar-client" / "scripts" / "client_doctor.sh"
+        env = {k: v for k, v in os.environ.items() if not k.startswith("SOLAR_")}
         done = subprocess.run(["bash", str(script), "--strict", "--probe-permissions"], capture_output=True,
-                              text=True, timeout=60, env=dict(os.environ))
+                              text=True, timeout=60, env=env, cwd="/")
         self.assertEqual(done.returncode, 2, done.stderr)
         self.assertIn("--strict", done.stderr)
 

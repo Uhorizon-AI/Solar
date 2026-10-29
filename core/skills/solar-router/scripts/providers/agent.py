@@ -49,12 +49,12 @@ class AgentProvider(BaseProvider):
             for entry in rule_list(perms, "allow"):
                 allow.setdefault(entry, path)
             for entry in rule_list(perms, "deny"):
-                deny.setdefault(entry, path)
+                deny.setdefault(entry, []).append(path)
         blocked = [e for e in [*needed, wildcard] if e in deny]
         if blocked:
             return [Finding(self.name, "mcp_read", MISSING, "static", f"denied: {', '.join(blocked)}",
-                            setting="permissions.deny", file=", ".join(dict.fromkeys(str(deny[e]) for e in blocked)),
-                            fix="; ".join(f"remove {e} from permissions.deny in {deny[e]}" for e in blocked))]
+                            setting="permissions.deny", file=", ".join(dict.fromkeys(str(f) for e in blocked for f in deny[e])),
+                            fix="; ".join(f"remove {e} from permissions.deny in {', '.join(map(str, deny[e]))}" for e in blocked))]
         if mode != "allowlist":
             return [unknown(self.name, "mcp_read", f"approvalMode={mode or 'unset'} is not modelled; run the probe")]
         absent = [e for e in needed if e not in allow and wildcard not in allow]
