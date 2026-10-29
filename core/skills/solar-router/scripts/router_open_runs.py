@@ -8,8 +8,6 @@ from __future__ import annotations
 import datetime
 from typing import Callable, Optional
 
-from solar_state import TERMINAL_STATUSES  # a task never leaves these: its router run cannot be running
-
 
 def run_task_id(row: dict) -> Optional[str]:
     """The task a run belongs to: the restricted route records task_id, others use request_id."""
@@ -45,9 +43,11 @@ def open_runs(rows: list[dict], task_status: Callable[[str], Optional[str]],
               task_claimed: Callable[[str], Optional[str]] = lambda task_id: None) -> dict[str, dict]:
     """router_id -> start row, for starts with no end that can still be running.
 
-    Not running: the task is terminal, or the task became active again after the run started
-    (a retry or requeue: that attempt is over). A task the store does not know stays open:
-    nothing proves the run is over."""
+    Not running: the task is known and not `active` (finished, or requeued and waiting), the task
+    became active again after the run started (a retry), or a later run of the same task exists
+    (a task has one live run). The audit keeps microseconds and task events only seconds, so the
+    last rule also covers a retry inside the same second. A task the store does not know stays
+    open: nothing proves the run is over."""
     starts: dict[str, dict] = {}
     ends: set[str] = set()
     for row in rows:
@@ -56,13 +56,21 @@ def open_runs(rows: list[dict], task_status: Callable[[str], Optional[str]],
             starts[rid] = row
         elif row.get("event") == "end":
             ends.add(rid)
-    result = {}
+    result: dict[str, dict] = {}
+    latest: dict[str, str] = {}       # task_id -> router_id of its newest start, ended or not
+    for rid, row in starts.items():
+        task_id = run_task_id(row)
+        if task_id:
+            latest[task_id] = rid
     for rid, row in starts.items():
         if rid in ends:
             continue
         task_id = run_task_id(row)
         if task_id:
-            if task_status(task_id) in TERMINAL_STATUSES:
+            status = task_status(task_id)
+            if status is not None and status != "active":
+                continue
+            if latest[task_id] != rid:
                 continue
             started, claimed = _parse(row.get("ts")), _parse(task_claimed(task_id))
             if started and claimed and started < claimed:

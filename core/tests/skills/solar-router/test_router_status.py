@@ -27,7 +27,7 @@ def test_open_runs_skips_terminal_tasks_and_closed_runs():
         _start("r-by-request", request_id="task_gen-c"),
         _start("r-unknown-task", task_id="task_gone"),
         _start("r-no-task", request_id="telegram-1"),
-        _start("r-ended", task_id="task_b"),
+        _start("r-ended", task_id="task_other"),
         {"event": "end", "router_id": "r-ended"},
     ]
     result = open_runs(rows, statuses.get)
@@ -176,3 +176,24 @@ def test_providers_block_explains_when_diagnosis_reports_nothing(status_env):
     os.remove(Path(status_env["SOLAR_WORKSPACE"]) / "AGENTS.md")
     out = _run_status(status_env).stdout
     assert "no provider reported" in _providers_block(out)[0]
+
+
+def test_retry_inside_the_same_second_keeps_only_the_newest_run():
+    # The audit has microseconds, task events whole seconds: the claim reads 10:00:00Z for a
+    # reactivation at 10:00:00.900, so "started < claimed" alone keeps the old run.
+    rows = [_start("old", task_id="t", ts="2026-10-28T10:00:00.100000+00:00"),
+            _start("new", task_id="t", ts="2026-10-28T10:00:00.950000+00:00")]
+    result = open_runs(rows, lambda t: "active", lambda t: "2026-10-28T10:00:00Z")
+    assert set(result) == {"new"}
+
+
+def test_requeued_task_that_is_not_active_has_no_run_in_flight():
+    rows = [_start("r", task_id="t")]
+    for status in ("queued", "draft", "planned", "blocked"):
+        assert open_runs(rows, lambda t, s=status: s) == {}, status
+    assert set(open_runs(rows, lambda t: None)) == {"r"}
+
+
+def test_older_open_run_is_dropped_when_the_newest_run_already_ended():
+    rows = [_start("old", task_id="t"), _start("new", task_id="t"), {"event": "end", "router_id": "new"}]
+    assert open_runs(rows, lambda t: "active") == {}
