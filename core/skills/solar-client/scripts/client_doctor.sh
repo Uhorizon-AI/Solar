@@ -20,8 +20,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -h|--help)
       echo "Usage: solar client doctor [--strict] [--probe-permissions [--client NAME]...]"
-      echo "  --probe-permissions  Opt-in live probe (costs tokens): launches each installed client as the router"
-      echo "                       does for an ask, checks it can read through the Solar MCP and cannot write."
+      echo "  --probe-permissions  Opt-in live probe. Ask checks cost tokens: each installed client is launched"
+      echo "                       as the router does for an ask, to see that it can read through the Solar MCP"
+      echo "                       and cannot write. restricted_reader launches each repository reader with no"
+      echo "                       model call, or records why it cannot start. Neither check edits client config."
       echo "Workspace checks (sun/, planets/): solar workspace doctor [--check-plans] [--check-git]"
       exit 0
       ;;

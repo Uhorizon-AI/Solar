@@ -342,6 +342,107 @@ def codex_preflight(binary, env, cwd, config, metadata=None, *, with_model=True)
             raise unsupported('codex', 'policy', reason)
 
 
+def _projects_base_too_long(parent, prefix):
+    """True when Cursor's project directory would exceed the 83-character base it accepts.
+
+    `mkdtemp` adds eight random characters. Past that limit Cursor ignores
+    `CURSOR_DATA_DIR` and creates `/tmp/.cursor…`, which the write guard denies.
+    """
+    from repository_cli_guards import CURSOR_PROJECT_BASE_LIMIT
+    sample = os.path.join(parent, prefix + 'xxxxxxxx', 'home', 'cursor-data', 'projects')
+    return len(sample) > CURSOR_PROJECT_BASE_LIMIT
+
+
+@contextmanager
+def review_directory():
+    """Private review directory short enough for Cursor's project-state path.
+
+    macOS puts the default temp dir under `/var/folders/…`, and together with a
+    descriptive prefix that path is longer than Cursor CLI 2026.10 accepts
+    (83 characters). Cursor then mkdirs `/tmp/.cursor/<slug>`, and the
+    seatbelt/bubblewrap write guard returns EPERM. A short directory under
+    `/tmp` keeps the project path inside the guard.
+    """
+    import tempfile
+    parent = tempfile.gettempdir()
+    prefix = 'solar-repository-review-'
+    kwargs = {}
+    if _projects_base_too_long(parent, prefix):
+        parent = '/tmp'
+        prefix = 'sr-'
+        kwargs['dir'] = parent
+    with tempfile.TemporaryDirectory(prefix=prefix, **kwargs) as name:
+        yield Path(name)
+
+
+def exercise_restricted_reader(provider):
+    """Launch the restricted reader's preflight. No model call and no write to the client's own config.
+
+    Cursor also creates the project-state directory under the write guard, which
+    is the step that failed with EPERM. A `ProfileError` means the reader cannot
+    start; its `reason` is the cause.
+    """
+    name = provider.name
+    if name == 'claude':
+        return _exercise_claude(provider)
+    if name == 'codex':
+        return _exercise_codex(provider)
+    if name in {'agent', 'agy'}:
+        return _exercise_guarded(provider)
+    from repository_cli_guards import refused
+    raise refused('provider_unsupported', 'profile', name)
+
+
+def _exercise_claude(provider):
+    from execution_profiles import ENV_ALLOWLIST, preflight
+    binary = provider.resolve_binary('claude')
+    env = {k: v for k, v in os.environ.items() if k in ENV_ALLOWLIST}
+    with review_directory() as private:
+        cwd = private / 'repository'
+        cwd.mkdir(mode=0o700)
+        preflight(binary, env, str(cwd), {})
+    return 'claude restricted preflight passed'
+
+
+def _exercise_codex(provider):
+    import shutil
+    from repository_cli_guards import refused
+    binary = provider.resolve_binary('codex')
+    origin = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
+    auth = origin / 'auth.json'
+    if not auth.is_file():
+        raise refused('credentials_unavailable', 'credentials', 'codex')
+    with review_directory() as private:
+        home = private / 'codex-home'
+        home.mkdir(mode=0o700)
+        shutil.copyfile(auth, home / 'auth.json')
+        os.chmod(home / 'auth.json', 0o600)
+        cwd = private / 'repository'
+        cwd.mkdir(mode=0o700)
+        env = {'HOME': str(Path.home()), 'PATH': os.environ.get('PATH', ''), 'CODEX_HOME': str(home)}
+        config = [arg for value in CODEX_CONFIG for arg in ('-c', value)]
+        codex_preflight(binary, env, str(cwd), config, {})
+    return 'codex restricted preflight passed'
+
+
+def _exercise_guarded(provider):
+    from repository_cli_guards import finish_cursor_launch, prepare
+    binary = provider.resolve_binary(provider.name)
+    origin = Path(os.environ.get('HOME') or Path.home())
+    with review_directory() as private:
+        cwd = private / 'repository'
+        cwd.mkdir(mode=0o700)
+        (cwd / 'source.md').write_text('unchanged', encoding='utf-8')
+        incoming = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE') if k in os.environ}
+        incoming['HOME'] = str(origin)
+        argv, env = prepare(provider.name, binary, incoming, private, cwd,
+                            dict(system_prompt='Reply with the single word pong.',
+                                 user_prompt='Synthetic probe.'))
+        if provider.name == 'agent':
+            finish_cursor_launch(argv[:argv.index(binary)], env, private, cwd)
+    return 'restricted reader preflight passed'
+
+
 @contextmanager
 def launch(adapter, manifest, expected, before_launch):
     import shutil
@@ -358,7 +459,8 @@ def launch(adapter, manifest, expected, before_launch):
     manifest = verify(manifest, expected, provider)
     env = {k: v for k, v in os.environ.items() if k in ENV_ALLOWLIST}
     binary = adapter.resolve_binary(provider)
-    with tempfile.TemporaryDirectory(prefix='solar-repository-review-') as temp:
+    with review_directory() as private_path:
+        temp = str(private_path)
         private = Path(temp)
         cwd = private / 'repository'
         cwd.mkdir(mode=0o700)
@@ -373,9 +475,13 @@ def launch(adapter, manifest, expected, before_launch):
                     '--settings', '{"disableAllHooks":true}', '--system-prompt', manifest['system_prompt'],
                     *model_args(manifest), '--output-format', 'json', '--', manifest['user_prompt']]
         elif provider in {'agent', 'agy'}:
-            from repository_cli_guards import prepare
+            from repository_cli_guards import finish_cursor_launch, prepare
             argv, env = prepare(provider, binary, env, private, cwd, manifest,
                                 metadata=adapter.last_review_preflight)
+            if provider == 'agent':
+                # Cursor stores per-workspace state in a path of its own. Create it
+                # under the write guard before the model starts, or refuse by name.
+                finish_cursor_launch(argv[:argv.index(binary)], env, private, cwd)
         else:
             # An empty config home prevents project/user integrations from loading.
             # Copy only the selected CLI auth file, never its configuration, rules,

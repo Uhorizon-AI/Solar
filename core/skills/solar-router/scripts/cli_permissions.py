@@ -7,6 +7,10 @@ settings decide what runs (Solar can also pin a setting on the command line it b
 - `mcp_read`: the client, launched as `ask` launches it, may call the read tools of
   the Solar MCP server.
 - `write_guard`: that same launch cannot write to disk.
+- `restricted_reader`: the repository review reader can be constructed and, for
+  Cursor, can create its project-state directory inside the write guard. The
+  static tier cannot see this; only the probe launches that reader, and it does
+  not call a model or change the client's configuration.
 
 Two tiers share one result shape. The static tier reads the client's settings
 (cheap, no model call, shown by `solar status`). The probe launches the client
@@ -34,7 +38,7 @@ from pathlib import Path
 
 OK, MISSING, TOO_PERMISSIVE, UNKNOWN = "ok", "missing", "too_permissive", "unknown"
 STATUSES = (OK, MISSING, TOO_PERMISSIVE, UNKNOWN)
-CHECKS = ("mcp_read", "write_guard")
+CHECKS = ("mcp_read", "write_guard", "restricted_reader")
 CLIENTS = ("claude", "codex", "agent", "agy")
 MCP_SERVER = "solar"
 MCP_READ_TOOLS = ("solar_search", "solar_docs")
@@ -128,8 +132,15 @@ def static_checks(provider, home: Path, workspace: Path) -> list[Finding]:
     """The provider's own reading of its settings; one finding per check."""
     findings = provider.static_permission_checks(home, workspace)
     seen = {f.check for f in findings}
-    return findings + [unknown(provider.name, c, "no readable settings model for this client")
-                       for c in CHECKS if c not in seen]
+    extra = []
+    for check in CHECKS:
+        if check in seen:
+            continue
+        if check == "restricted_reader":
+            extra.append(unknown(provider.name, check, "only the probe launches the restricted reader"))
+        else:
+            extra.append(unknown(provider.name, check, "no readable settings model for this client"))
+    return findings + extra
 
 
 def installed(provider) -> bool:
@@ -309,6 +320,40 @@ def probe_workspace() -> Path:
     return SOLAR_WORKSPACE
 
 
+def probe_restricted_reader(provider, exercise=None) -> Finding:
+    """Launch the restricted reader (no model) or say why it cannot start.
+
+    `cursor_project_path_outside_write_guard` is a real failure: Cursor would
+    mkdir under `/tmp/.cursor` because its project path is longer than 83
+    characters, and the review write guard denies that. Anything else the
+    constructor refuses is `unknown` — the probe does not guess a fix.
+    """
+    from execution_profiles import ProfileError
+    exercise = exercise or _exercise_restricted_reader
+    try:
+        detail = exercise(provider)
+    except ProfileError as exc:
+        info = exc.detail if isinstance(exc.detail, dict) else {}
+        reason = info.get("reason") or exc.code
+        if reason == "cursor_project_path_outside_write_guard":
+            return Finding(provider.name, "restricted_reader", MISSING, "probe",
+                           "Cursor would create its project state outside the review write guard "
+                           "(a base path longer than 83 characters falls back to /tmp/.cursor, which the guard denies)",
+                           setting="review private directory",
+                           fix="keep the review private directory short enough that Cursor's project path stays inside the write guard; this is not a client setting")
+        return unknown(provider.name, "restricted_reader",
+                       f"cannot launch the restricted reader: {reason}", tier="probe")
+    except (OSError, RuntimeError) as exc:
+        return unknown(provider.name, "restricted_reader",
+                       f"cannot launch the restricted reader: {str(exc)[:200]}", tier="probe")
+    return Finding(provider.name, "restricted_reader", OK, "probe", detail or "restricted reader preflight passed")
+
+
+def _exercise_restricted_reader(provider):
+    from repository_reviews import exercise_restricted_reader
+    return exercise_restricted_reader(provider)
+
+
 def run_probe(only=None, checks=CHECKS, workspace=None) -> list[Finding]:
     workspace = Path(workspace) if workspace else probe_workspace()
     out = []
@@ -317,6 +362,8 @@ def run_probe(only=None, checks=CHECKS, workspace=None) -> list[Finding]:
             out.append(probe_mcp_read(provider, workspace))
         if "write_guard" in checks:
             out.append(probe_write_guard(provider))
+        if "restricted_reader" in checks:
+            out.append(probe_restricted_reader(provider))
     return out
 
 
@@ -361,7 +408,7 @@ def summary(static: list[Finding]):
 def render(findings: list[Finding]) -> str:
     lines = []
     for f in findings:
-        lines.append(f"{f.cli:7} {f.check:12} {f.status:14} [{f.tier}] {f.detail}")
+        lines.append(f"{f.cli:7} {f.check:18} {f.status:14} [{f.tier}] {f.detail}")
         if f.status in (MISSING, TOO_PERMISSIVE) and (f.fix or f.setting):
             where = f" in {f.file}" if f.file else ""
             lines.append(f"        fix: {f.fix or f.setting}{where}")

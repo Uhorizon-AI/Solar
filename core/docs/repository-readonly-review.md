@@ -178,12 +178,25 @@ A refusal carries `error_detail` with `provider`, `stage`, `reason` and, for hel
 checks, `option`. Reasons: `required_option_missing`, `required_value_unadvertised`,
 `help_failed`, `help_timeout`, `help_unavailable`, `help_format_unknown`,
 `managed_policy_present`, `credentials_unavailable`, `boundary_unavailable`,
-`write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`.
+`write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`,
+`cursor_project_path_outside_write_guard`, `cursor_state_mkdir_denied`,
+`cursor_state_mkdir_timeout`.
 A help text proves neither the effective configuration nor that a guard works. These adapters
 do not claim a doctor-style effective/cloud-policy attestation; their stronger
 write boundary is enforced externally. Network access remains available for the
 provider, so this is not an OS network-egress boundary or proof of absent
 provider-side integrations. A real model pilot must also verify tool refusals.
+
+The private directory is kept short enough for Cursor CLI 2026.10. That CLI
+stores per-workspace state under `CURSOR_DATA_DIR/projects` only when the base
+path is at most 83 characters (and the full path at most 91); otherwise it
+mkdirs `/tmp/.cursor/<slug>`. A macOS default temp directory
+(`/var/folders/…`) plus a long prefix crosses that limit, and the write guard
+then returns `EPERM`. The review directory is created under `/tmp` with a short
+prefix in that case, and the project directory is created inside the guard
+before the model starts. If it would still fall outside, launch refuses with
+`cursor_project_path_outside_write_guard` instead of running the model. An
+`EPERM` mkdir that still escapes is reported with that same reason.
 
 Cursor receives `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, a private HOME/XDG tree,
 and `AGENT_CLI_CREDENTIAL_STORE=file`. `--trust` satisfies the CLI headless

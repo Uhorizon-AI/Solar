@@ -111,7 +111,7 @@ else:
     second = json.loads(record.read_text())
     def stable(argv):  # each launch uses its own private directory
         import re
-        return [re.sub(r'solar-repository-review-\w+', 'PRIVATE', a) for a in argv]
+        return [re.sub(r'(?:solar-repository-review-|sr-)\w+', 'PRIVATE', a) for a in argv]
     assert stable(first['argv']) == stable(second['argv'])
     assert first['operations'] == 'The maximum batch is five.\n'
     assert not Path(first['cwd']).exists() and not Path(second['cwd']).exists()

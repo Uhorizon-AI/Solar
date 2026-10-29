@@ -5,9 +5,11 @@ quality or of provider-side context isolation. See repository-readonly-review.md
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -172,6 +174,66 @@ state.write_text('allowed')
             raise refused('write_guard_probe_failed', 'write_guard', provider) from None
         finally:
             state.unlink(missing_ok=True)
+
+
+# Cursor CLI 2026.10 (`paths.kL`) refuses a project base longer than 83 characters
+# and a full project path longer than 91. Past the base limit it falls back to
+# `/tmp/.cursor`, which this write guard does not allow.
+CURSOR_PROJECT_BASE_LIMIT = 83
+CURSOR_PROJECT_PATH_LIMIT = 91
+
+
+def cursor_workspace_slug(path):
+    """Cursor's workspace slug: non-alphanumerics become single dashes."""
+    return re.sub(r'^-+|-+$', '', re.sub(r'-+', '-', re.sub(r'[^a-zA-Z0-9]', '-', str(path))))
+
+
+def cursor_project_path(workspace, *, data_dir, tmpdir):
+    """Directory Cursor creates for `workspace`, matching CLI 2026.10 `paths.kL`."""
+    data_dir = str(data_dir).rstrip('/')
+    tmpdir = str(tmpdir).rstrip('/') or '/tmp'
+    base = data_dir + '/projects'
+    if len(base) > CURSOR_PROJECT_BASE_LIMIT:
+        base = data_dir
+        if len(base) > CURSOR_PROJECT_BASE_LIMIT:
+            candidate = tmpdir + '/.cursor'
+            base = candidate if len(candidate) <= CURSOR_PROJECT_BASE_LIMIT else '/tmp/.cursor'
+    full = base + '/' + cursor_workspace_slug(workspace)
+    if len(full) > CURSOR_PROJECT_PATH_LIMIT:
+        digest = hashlib.sha256(full.encode()).hexdigest()[:7]
+        full = full[:min(CURSOR_PROJECT_BASE_LIMIT, len(full))] + '-' + digest
+    return full
+
+
+def require_cursor_state_inside(env, workspace, private, provider='agent'):
+    """Refuse, by name, when Cursor would mkdir outside the review write guard."""
+    path = cursor_project_path(workspace, data_dir=env['CURSOR_DATA_DIR'], tmpdir=env['TMPDIR'])
+    try:
+        Path(path).resolve().relative_to(Path(private).resolve())
+    except ValueError:
+        raise unsupported(provider, 'state', 'cursor_project_path_outside_write_guard') from None
+    return path
+
+
+def mkdir_under_guard(prefix, env, cwd, path, provider='agent'):
+    """Create Cursor's project directory with the same write guard the reader uses."""
+    code = 'import pathlib,sys; pathlib.Path(sys.argv[1]).mkdir(parents=True, exist_ok=True, mode=0o700)'
+    try:
+        done = subprocess.run([*prefix, sys.executable, '-B', '-c', code, path],
+                              cwd=str(cwd), env=env, capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        raise unsupported(provider, 'state', 'cursor_state_mkdir_timeout') from None
+    except (OSError, subprocess.SubprocessError):
+        raise unsupported(provider, 'state', 'cursor_state_mkdir_denied') from None
+    if done.returncode:
+        raise unsupported(provider, 'state', 'cursor_state_mkdir_denied')
+
+
+def finish_cursor_launch(prefix, env, private, cwd):
+    """Create the project-state directory inside the guard, or refuse before the model starts."""
+    path = require_cursor_state_inside(env, cwd, private)
+    mkdir_under_guard(prefix, env, cwd, path)
+    return path
 
 
 def prepare(provider, binary, original_env, private, cwd, manifest, *, metadata=None):

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 import pytest
 import execution_profiles as profiles
@@ -551,3 +552,45 @@ def test_agy_keeps_a_private_log_for_the_failure_reason(tmp_path, monkeypatch):
     argv, env, _ = _prepare_without_model(tmp_path, monkeypatch, 'agy', HELP)
     log = Path(argv[argv.index('--log-file') + 1])
     assert Path(env['HOME']).parent in log.parents
+
+
+def _long_review_root():
+    return '/var/folders/' + ('y' * 30) + '/T/solar-repository-review-abcdefgh'
+
+
+def test_a_long_macos_temp_makes_cursor_fall_back_outside_the_guard():
+    root = _long_review_root()
+    path = guards.cursor_project_path(root + '/repository',
+                                      data_dir=root + '/home/cursor-data',
+                                      tmpdir=root + '/tmp')
+    assert path.startswith('/tmp/.cursor')
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.require_cursor_state_inside(
+            {'CURSOR_DATA_DIR': root + '/home/cursor-data', 'TMPDIR': root + '/tmp'},
+            root + '/repository', Path('/tmp/sr-short'))
+    assert error.value.detail['reason'] == 'cursor_project_path_outside_write_guard'
+
+
+def test_a_short_review_directory_keeps_cursor_state_inside_the_guard(monkeypatch):
+    monkeypatch.setattr(tempfile, 'gettempdir', lambda: '/var/folders/' + ('y' * 40) + '/T')
+    with repo.review_directory() as private:
+        assert str(private).startswith('/tmp/sr-')
+        data = str(private / 'home' / 'cursor-data')
+        tmp = str(private / 'tmp')
+        workspace = private / 'repository'
+        workspace.mkdir()
+        path = guards.cursor_project_path(str(workspace), data_dir=data, tmpdir=tmp)
+        Path(path).resolve().relative_to(private.resolve())
+        assert not path.startswith('/tmp/.cursor')
+        created = guards.finish_cursor_launch([], {'CURSOR_DATA_DIR': data, 'TMPDIR': tmp, 'PATH': os.environ.get('PATH', '')},
+                                              private, workspace)
+        assert Path(created).is_dir()
+
+
+def test_cursor_eperm_names_the_write_guard_instead_of_a_generic_provider_failure():
+    from providers.base import raise_restricted_failure
+    with pytest.raises(profiles.ProfileError) as error:
+        raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/tmp/.cursor/x'", 1)
+    assert error.value.detail == dict(provider='agent', stage='state', reason='cursor_project_path_outside_write_guard')
+    with pytest.raises(RuntimeError, match='not_logged_in'):
+        raise_restricted_failure('agent', 'exit 1: not_logged_in', 1)

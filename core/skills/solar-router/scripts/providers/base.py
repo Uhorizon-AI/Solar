@@ -68,6 +68,19 @@ class AskResult:
     mode: str  # the client's native read-only switch, or "none" when it has none
 
 
+def raise_restricted_failure(provider_name: str, failure: str | None, returncode: int):
+    """Turn a restricted reader's non-zero exit into the error the router reports.
+
+    Cursor's EPERM mkdir under `/tmp` is the write guard denying the project-state
+    directory, not an anonymous provider failure. The code names that cause.
+    """
+    if provider_name == "agent" and failure and "EPERM" in failure and "mkdir" in failure:
+        from execution_profiles import ProfileError
+        raise ProfileError("execution_profile_unsupported", detail=dict(
+            provider="agent", stage="state", reason="cursor_project_path_outside_write_guard"))
+    raise RuntimeError("restricted provider returned non-zero (" + (failure or f"exit {returncode}") + ")")
+
+
 class BaseProvider(ABC):
     name: str = ""
     default_cmd: str = ""
@@ -263,7 +276,7 @@ class BaseProvider(ABC):
                 except (OSError, ValueError, IndexError):  # ValueError: non-UTF-8 bytes
                     pass
         if proc.returncode:
-            raise RuntimeError("restricted provider returned non-zero (" + (failure or f"exit {proc.returncode}") + ")")
+            raise_restricted_failure(self.name, failure, proc.returncode)
         if self.name == "codex":
             result = self._codex_final_review(proc.stdout, last_message)
         else:

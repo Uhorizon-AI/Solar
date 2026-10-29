@@ -429,7 +429,9 @@ class TestStoreAndSummary(Env):
         self.assertIn("probe never run", detail)
 
     def test_a_stored_probe_is_shown_with_its_age_and_never_runs_a_client(self):
-        cp.save_probe([cp.Finding("agent", "mcp_read", cp.OK, "probe"), cp.Finding("agent", "write_guard", cp.OK, "probe")])
+        cp.save_probe([cp.Finding("agent", "mcp_read", cp.OK, "probe"),
+                       cp.Finding("agent", "write_guard", cp.OK, "probe"),
+                       cp.Finding("agent", "restricted_reader", cp.OK, "probe")])
         static = [cp.unknown("agent", c, "n/a") for c in cp.CHECKS]
         with patch("providers.base.subprocess.run") as run:
             state, detail = cp.summary(static)
@@ -474,6 +476,51 @@ class TestStoreAndSummary(Env):
     def test_finding_rejects_an_invalid_status(self):
         with self.assertRaises(ValueError):
             cp.Finding("agent", "mcp_read", "fine")
+
+
+class TestRestrictedReaderProbe(Env):
+    def test_static_tier_does_not_claim_the_reader_ran(self):
+        found = self.checks(AgentProvider())["restricted_reader"]
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertIn("probe", found.detail)
+
+    def test_a_fake_client_that_starts_is_ok(self):
+        found = cp.probe_restricted_reader(AgentProvider(), exercise=lambda provider: "restricted reader preflight passed")
+        self.assertEqual((found.cli, found.check, found.status, found.tier),
+                         ("agent", "restricted_reader", cp.OK, "probe"))
+        self.assertIn("preflight passed", found.detail)
+
+    def test_a_fake_client_outside_the_guard_names_the_cause_and_is_not_a_client_setting(self):
+        from execution_profiles import ProfileError
+
+        def exercise(provider):
+            raise ProfileError("execution_profile_unsupported", detail=dict(
+                provider="agent", stage="state", reason="cursor_project_path_outside_write_guard"))
+
+        found = cp.probe_restricted_reader(AgentProvider(), exercise=exercise)
+        self.assertEqual(found.status, cp.MISSING)
+        self.assertIn("83", found.detail)
+        self.assertIn("/tmp/.cursor", found.detail)
+        self.assertIn("not a client setting", found.fix)
+        self.assertEqual(found.setting, "review private directory")
+
+    def test_a_fake_client_that_cannot_start_is_unknown(self):
+        from execution_profiles import ProfileError
+
+        def exercise(provider):
+            raise ProfileError("execution_profile_unsupported", detail=dict(
+                provider="codex", stage="credentials", reason="credentials_unavailable"))
+
+        found = cp.probe_restricted_reader(CodexProvider(), exercise=exercise)
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertIn("credentials_unavailable", found.detail)
+
+    def test_the_probe_does_not_write_the_client_configuration(self):
+        config = self.home / ".cursor" / "cli-config.json"
+        _json(config, {"approvalMode": "allowlist", "permissions": {"allow": []}})
+        before = config.read_bytes()
+        cp.probe_restricted_reader(AgentProvider(), exercise=lambda provider: "ok")
+        self.assertEqual(config.read_bytes(), before)
 
 
 if __name__ == "__main__":

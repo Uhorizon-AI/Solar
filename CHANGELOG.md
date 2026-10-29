@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(router): Cursor repository reviews no longer die with `EPERM` creating `/tmp/.cursor…`. The private directory stays within Cursor CLI's 83-character project path, the state directory is created inside the write guard, and a miss is reported as `cursor_project_path_outside_write_guard`. `solar client doctor --probe-permissions` launches that restricted reader (no model call) and stores the result for `solar status`.
+
 ## [0.60.2] - 2026-10-29
 ### Fixed
 - fix: sort last runs by parsed time and validate --last
@@ -14,7 +17,6 @@ The format is based on Keep a Changelog.
 - fix: simplify run_task_id prefix handling
 - fix: match executor request ids and mark interrupted runs
 - fix: router status lists every provider and ignores finished tasks
-
 
 ## [0.60.1] - 2026-10-29
 
