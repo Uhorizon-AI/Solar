@@ -5,11 +5,13 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 import pytest
 import execution_profiles as profiles
 from claude_help import claude_help
 from codex_help import codex_help
+import repository_cli_guards as guards
 import repository_reviews as repo
 from providers import PROVIDERS
 from git_review_fixture import repository, git
@@ -844,6 +846,69 @@ def test_reader_probe_omits_the_model_option_the_real_launch_omits(monkeypatch, 
     repo._exercise_codex(Codex())
     assert seen['claude']['with_model'] is False
     assert seen['codex']['with_model'] is False
+
+
+def test_review_directory_comes_from_tempfile_with_an_unpredictable_name(monkeypatch):
+    monkeypatch.setattr(tempfile, 'gettempdir', lambda: '/var/folders/' + ('y' * 40) + '/T')
+    names, modes = [], []
+    for _ in range(2):
+        with repo.review_directory() as private:
+            names.append(private.name)
+            modes.append(private.stat().st_mode & 0o777)
+            assert private.parent == Path('/tmp')
+            assert private.is_dir()
+    assert names[0].startswith('sr-') and names[1].startswith('sr-')
+    assert names[0] != names[1]
+    assert names[0] != 'sr-'
+    assert modes == [0o700, 0o700]
+
+
+def test_a_command_override_makes_the_reader_probe_match_launch(monkeypatch):
+    monkeypatch.setenv('SOLAR_ROUTER_AGENT_CMD', 'agent')
+
+    class Agent:
+        name = 'agent'
+
+        def resolve_binary(self, name):
+            raise AssertionError('binary resolved')
+
+    with pytest.raises(profiles.ProfileError) as error:
+        repo.exercise_restricted_reader(Agent())
+    assert error.value.code == 'execution_profile_override_rejected'
+    with pytest.raises(profiles.ProfileError) as launched:
+        with repo.launch(Agent(), {}, 'digest', lambda: None):
+            pass
+    assert launched.value.code == 'execution_profile_override_rejected'
+    import cli_permissions as cp
+    found = cp.probe_restricted_reader(Agent(), exercise=repo.exercise_restricted_reader)
+    assert found.status == cp.UNKNOWN
+    assert 'execution_profile_override_rejected' in found.detail
+
+
+def test_agy_probe_does_not_claim_a_cursor_state_directory(monkeypatch):
+    class Agy:
+        name = 'agy'
+
+        def resolve_binary(self, name):
+            return 'agy'
+
+    monkeypatch.setattr(guards, 'prepare', lambda *a, **k: (['agy'], {}))
+    monkeypatch.setattr(guards, 'finish_cursor_launch', lambda *a, **k: (_ for _ in ()).throw(AssertionError('cursor state')))
+    assert repo._exercise_guarded(Agy()) == 'agy restricted reader prepared'
+
+
+def test_agent_probe_names_the_state_directory_it_created(monkeypatch):
+    class Agent:
+        name = 'agent'
+
+        def resolve_binary(self, name):
+            return '/usr/bin/false'
+
+    monkeypatch.setattr(guards, 'prepare', lambda *a, **k: (
+        ['/usr/bin/false'], {'CURSOR_DATA_DIR': '/d', 'TMPDIR': '/t'}))
+    monkeypatch.setattr(guards, 'finish_cursor_launch', lambda *a, **k: '/d/projects/x')
+    monkeypatch.setattr(guards, 'require_cursor_project_path_current', lambda *a, **k: None)
+    assert repo._exercise_guarded(Agent()) == 'agent restricted reader preflight passed'
 
 
 def test_codex_does_not_require_the_model_option_when_none_is_named(monkeypatch):

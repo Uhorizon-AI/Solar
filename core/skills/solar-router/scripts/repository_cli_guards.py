@@ -205,6 +205,81 @@ def cursor_project_path(workspace, *, data_dir, tmpdir):
     return full
 
 
+# Reads the project-path function out of the installed Cursor CLI bundle (no model
+# call). `node -e` puts the following arguments at argv[1..]. A miss means the
+# bundle no longer has the 2026.10 shape, which the probe reports instead of
+# pretending the prediction still matches.
+_CURSOR_PATH_OBSERVER = r"""
+const fs = require("fs");
+const crypto = require("crypto");
+process.env.CURSOR_DATA_DIR = process.argv[2];
+process.env.TMPDIR = process.argv[3];
+const os = require("os");
+const path = require("path");
+const index = fs.readFileSync(process.argv[1], "utf8");
+function extract(marker) {
+  const start = index.indexOf(marker);
+  if (start < 0) process.exit(2);
+  const open = index.indexOf("{", start);
+  let depth = 0;
+  for (let i = open; i < index.length; i++) {
+    const ch = index[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) return index.slice(start, i + 1); }
+  }
+  process.exit(2);
+}
+function adapt(source) {
+  return source.split("(0,a.r_)").join(" slug").split("(0,i.join)").join(" path.join")
+    .split("(0,s.tmpdir)").join(" os.tmpdir").split("(0,s.homedir)").join(" os.homedir")
+    .split("(0,n.createHash)").join(" crypto.createHash");
+}
+const slugSrc = adapt(extract('function s(t){return t.replace(/[^a-zA-Z0-9]/g,"-")')).replace("function s(", "function slug(");
+const dataSrc = adapt(extract("function c(){const t=process.env.CURSOR_DATA_DIR"));
+const projectsSrc = adapt(extract('function u(){return(0,i.join)(c(),"projects")}'));
+const projectSrc = adapt(extract("function d(t){let e=u();"));
+const fn = new Function("crypto", "os", "path", "workspace",
+  slugSrc + "\n" + dataSrc + "\n" + projectsSrc + "\n" + projectSrc + "\nreturn d(workspace);");
+process.stdout.write(String(fn(crypto, os, path, process.argv[4])));
+"""
+
+
+def observe_cursor_project_path(index_js, workspace, *, data_dir, tmpdir, provider='agent'):
+    """Path the installed Cursor CLI would use for `workspace`. No model call."""
+    index_js = Path(index_js)
+    node = index_js.parent / 'node'
+    if not node.is_file():
+        found = shutil.which('node')
+        if not found:
+            raise unsupported(provider, 'state', 'cursor_project_path_unreadable')
+        node = Path(found)
+    try:
+        done = subprocess.run([str(node), '-e', _CURSOR_PATH_OBSERVER, str(index_js),
+                               str(data_dir), str(tmpdir), str(workspace)],
+                              capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        raise unsupported(provider, 'state', 'cursor_project_path_unreadable') from None
+    if done.returncode or not done.stdout.strip():
+        raise unsupported(provider, 'state', 'cursor_project_path_unreadable') from None
+    return done.stdout.strip()
+
+
+def require_cursor_project_path_current(binary, workspace, *, data_dir, tmpdir, provider='agent'):
+    """Refuse when Solar's prediction disagrees with the installed CLI's own function."""
+    index_js = Path(binary).resolve().parent / 'index.js'
+    if not index_js.is_file():
+        raise unsupported(provider, 'state', 'cursor_project_path_unreadable')
+    predicted = cursor_project_path(workspace, data_dir=data_dir, tmpdir=tmpdir)
+    observed = observe_cursor_project_path(index_js, workspace, data_dir=data_dir, tmpdir=tmpdir, provider=provider)
+    try:
+        same = Path(predicted).resolve() == Path(observed).resolve()
+    except OSError:
+        same = predicted == observed
+    if not same:
+        raise unsupported(provider, 'state', 'cursor_project_path_drift')
+    return predicted
+
+
 def require_cursor_state_inside(env, workspace, private, provider='agent'):
     """Refuse, by name, when Cursor would mkdir outside the review write guard."""
     path = cursor_project_path(workspace, data_dir=env['CURSOR_DATA_DIR'], tmpdir=env['TMPDIR'])

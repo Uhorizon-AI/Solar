@@ -572,6 +572,58 @@ def test_a_long_macos_temp_makes_cursor_fall_back_outside_the_guard():
     assert error.value.detail['reason'] == 'cursor_project_path_outside_write_guard'
 
 
+_CURSOR_PATH_FIXTURE = """
+function s(t){return t.replace(/[^a-zA-Z0-9]/g,"-").replace(/-+/g,"-").replace(/^-+|-+$/g,"")}
+function c(){const t=process.env.CURSOR_DATA_DIR;return t?.trim()?t:(0,i.join)((0,s.homedir)(),".cursor")}
+function u(){return(0,i.join)(c(),"projects")}
+function d(t){let e=u();e.length>83&&(e=c(),e.length>83&&(e=function(t){const e=(0,i.join)(t,".cursor");return e.length<=83?e:(0,i.join)("/tmp",".cursor")}((0,s.tmpdir)())));const r=(0,i.join)(e,(0,a.r_)(t));if(r.length>91){const t=(0,n.createHash)("sha256").update(r).digest("hex").substring(0,7);return`${r.substring(0,Math.min(83,r.length))}-${t}`}return r}
+"""
+
+
+def test_cursor_project_path_matches_a_cli_bundle_and_a_changed_limit_does_not(tmp_path):
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not installed')
+    bundle = tmp_path / 'index.js'
+    bundle.write_text(_CURSOR_PATH_FIXTURE)
+    node_bin = tmp_path / 'node'
+    node_bin.symlink_to(node)
+    workspace = '/tmp/sr-abcdefgh/repository'
+    data = '/tmp/sr-abcdefgh/home/cursor-data'
+    tmp = '/tmp/sr-abcdefgh/tmp'
+    observed = guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
+    assert observed == guards.cursor_project_path(workspace, data_dir=data, tmpdir=tmp)
+    long_workspace = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/repository'
+    long_data = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/home/cursor-data'
+    long_tmp = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/tmp'
+    observed = guards.observe_cursor_project_path(bundle, long_workspace, data_dir=long_data, tmpdir=long_tmp)
+    assert Path(observed).resolve() == Path(guards.cursor_project_path(long_workspace, data_dir=long_data, tmpdir=long_tmp)).resolve()
+    bundle.write_text(_CURSOR_PATH_FIXTURE.replace('e.length>83', 'e.length>10'))
+    medium_workspace, medium_data, medium_tmp = '/tmp/ws', '/tmp/' + ('d' * 20), '/tmp'
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.require_cursor_project_path_current(bundle, medium_workspace, data_dir=medium_data, tmpdir=medium_tmp)
+    assert error.value.detail['reason'] == 'cursor_project_path_drift'
+    bundle.write_text('not a cursor bundle')
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
+    assert error.value.detail['reason'] == 'cursor_project_path_unreadable'
+
+
+def test_cursor_project_path_matches_the_installed_cli():
+    agent = shutil.which('agent')
+    index = Path(agent).resolve().parent / 'index.js' if agent else None
+    if index is None or not index.is_file() or not (index.parent / 'node').is_file():
+        pytest.skip('Cursor CLI bundle is not installed')
+    workspace = '/tmp/sr-abcdefgh/repository'
+    data = '/tmp/sr-abcdefgh/home/cursor-data'
+    tmp = '/tmp/sr-abcdefgh/tmp'
+    guards.require_cursor_project_path_current(Path(agent), workspace, data_dir=data, tmpdir=tmp)
+    long_workspace = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/repository'
+    long_data = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/home/cursor-data'
+    long_tmp = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/tmp'
+    guards.require_cursor_project_path_current(Path(agent), long_workspace, data_dir=long_data, tmpdir=long_tmp)
+
+
 def test_a_short_review_directory_keeps_cursor_state_inside_the_guard(monkeypatch):
     monkeypatch.setattr(tempfile, 'gettempdir', lambda: '/var/folders/' + ('y' * 40) + '/T')
     with repo.review_directory() as private:
@@ -651,5 +703,7 @@ def test_cursor_eperm_names_the_write_guard_instead_of_a_generic_provider_failur
     assert error.value.detail == named
     with pytest.raises(RuntimeError, match='cursor-data'):
         raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/x/home/cursor-data/projects/ws'", 1)
+    with pytest.raises(RuntimeError, match='/tmp/other'):
+        raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/tmp/other'", 1)
     with pytest.raises(RuntimeError, match='not_logged_in'):
         raise_restricted_failure('agent', 'exit 1: not_logged_in', 1)

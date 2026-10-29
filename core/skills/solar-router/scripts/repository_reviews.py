@@ -371,8 +371,18 @@ def review_directory():
         parent = '/tmp'
         prefix = 'sr-'
         kwargs['dir'] = parent
+    # Always tempfile.TemporaryDirectory (mkdtemp): mode 0700 and an unpredictable
+    # suffix. `/tmp` is only the fallback parent, never a fixed directory name.
     with tempfile.TemporaryDirectory(prefix=prefix, **kwargs) as name:
         yield Path(name)
+
+
+def reject_profile_override(provider):
+    """The same override refusal `launch` uses, so a probe cannot report ok for a review that will not start."""
+    prefixes = ('SOLAR_ROUTER_' + provider.upper() + '_', 'SOLAR_AI_' + provider.upper() + '_')
+    if any(key.startswith(prefixes) and (key.endswith('_CMD') or any(token in key for token in ('FLAGS', 'ARGS', 'SETTINGS')))
+           for key in os.environ):
+        raise _error('execution_profile_override_rejected')
 
 
 def exercise_restricted_reader(provider):
@@ -380,8 +390,10 @@ def exercise_restricted_reader(provider):
 
     Cursor also creates the project-state directory under the write guard, which
     is the step that failed with EPERM. A `ProfileError` means the reader cannot
-    start; its `reason` is the cause.
+    start; its `reason` is the cause. Command overrides are rejected exactly as
+    in `launch`.
     """
+    reject_profile_override(provider.name)
     name = provider.name
     if name == 'claude':
         return _exercise_claude(provider)
@@ -426,7 +438,7 @@ def _exercise_codex(provider):
 
 
 def _exercise_guarded(provider):
-    from repository_cli_guards import finish_cursor_launch, prepare
+    from repository_cli_guards import finish_cursor_launch, prepare, require_cursor_project_path_current
     binary = provider.resolve_binary(provider.name)
     origin = Path(os.environ.get('HOME') or Path.home())
     with review_directory() as private:
@@ -440,7 +452,9 @@ def _exercise_guarded(provider):
                                  user_prompt='Synthetic probe.'))
         if provider.name == 'agent':
             finish_cursor_launch(argv[:argv.index(binary)], env, private, cwd)
-    return 'restricted reader preflight passed'
+            require_cursor_project_path_current(binary, cwd, data_dir=env['CURSOR_DATA_DIR'], tmpdir=env['TMPDIR'])
+            return 'agent restricted reader preflight passed'
+    return 'agy restricted reader prepared'
 
 
 @contextmanager
@@ -451,10 +465,7 @@ def launch(adapter, manifest, expected, before_launch):
     adapter.last_review_preflight = dict(provider=provider, version=None)
     if provider not in PROVIDERS:
         raise _error('execution_profile_unsupported')
-    prefixes = ('SOLAR_ROUTER_' + provider.upper() + '_', 'SOLAR_AI_' + provider.upper() + '_')
-    if any(key.startswith(prefixes) and (key.endswith('_CMD') or any(s in key for s in ('FLAGS', 'ARGS', 'SETTINGS')))
-           for key in os.environ):
-        raise _error('execution_profile_override_rejected')
+    reject_profile_override(provider)
     manifest = verify(manifest, expected, provider)
     env = {k: v for k, v in os.environ.items() if k in ENV_ALLOWLIST}
     binary = adapter.resolve_binary(provider)

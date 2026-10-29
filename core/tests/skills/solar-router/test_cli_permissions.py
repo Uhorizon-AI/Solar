@@ -462,6 +462,25 @@ class TestStoreAndSummary(Env):
         self.assertEqual(rows[("codex", "write_guard")]["status"], cp.TOO_PERMISSIVE)
         self.assertEqual(rows[("agent", "mcp_read")]["status"], cp.MISSING)
 
+    def test_a_probe_saved_before_restricted_reader_is_not_a_failure_or_incomplete(self):
+        cp.save_probe([cp.Finding("agent", "mcp_read", cp.OK, "probe"),
+                       cp.Finding("agent", "write_guard", cp.OK, "probe")])
+        static = [cp.unknown("agent", c, "n/a") for c in cp.CHECKS]
+        state, detail = cp.summary(static)
+        self.assertEqual(state, "OK")
+        self.assertNotIn("unverified", detail)
+        self.assertNotIn("missing", detail)
+        self.assertNotIn("incomplete", detail)
+        cp.save_probe([cp.Finding("agent", "mcp_read", cp.MISSING, "probe"),
+                       cp.Finding("agent", "write_guard", cp.OK, "probe")])
+        state, detail = cp.summary(static)
+        self.assertEqual(state, "WARN")
+        self.assertIn("agent mcp_read missing", detail)
+        never = [cp.unknown("codex", c, "n/a") for c in cp.CHECKS]
+        state, detail = cp.summary(never)
+        self.assertEqual(state, "INFO")
+        self.assertIn("unverified", detail)
+
     def test_the_summary_shows_the_age_of_the_oldest_stored_result(self):
         cp.save_probe([cp.Finding("agent", "mcp_read", cp.OK, "probe")])
         path = cp.store_path()

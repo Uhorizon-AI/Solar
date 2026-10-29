@@ -38,7 +38,7 @@ uv run --project core/tests pytest core/tests/skills/solar-router/test_repositor
 
 ## Completion evidence (optional)
 
-- Validation: `uv run --project core/tests pytest core/tests/skills/solar-router/test_repository_cli_guards.py core/tests/skills/solar-router/test_cli_permissions.py core/tests/skills/solar-router/test_repository_reviews.py -q` → 259 passed, 1 skipped, 12 subtests.
-- Follow-up on review: `mkdir_under_guard` uses `python -I`; an `EPERM` mkdir is `cursor_project_path_outside_write_guard` only for `/tmp/.cursor` (or `/tmp/.[REDACTED]`); the reader probe passes `with_model=False`. The OS write-guard mkdir is covered when `sandbox-exec` or `bwrap` is installed.
+- Validation: `uv run --project core/tests pytest core/tests/skills/solar-router -q` on macOS → 729 passed, 3 skipped, 22 subtests. The OS write-guard mkdir ran (`sandbox-exec` is installed). Linux was not run here: no container runtime on this machine. `test_finish_cursor_launch_mkdirs_under_the_os_write_guard` skips where `sandbox-exec` and `bwrap` are both absent.
+- Follow-up on review of `d5042e9`: probe compares the installed Cursor path function (`cursor_project_path_drift` / `cursor_project_path_unreadable`); a stored probe without `restricted_reader` is not a failure or an incomplete probe; review directories come from `tempfile`; agy and agent probe details differ; an `EPERM` mkdir of `/tmp/other` stays generic; command overrides are rejected by the probe and by launch.
 - Not run from this tree: `solar client doctor --probe-permissions --client agent` and a live `review_batch` use the installed Solar, which does not yet contain this branch. Issue #99 stays open until that install is exercised.
 - Files changed: see the commit.

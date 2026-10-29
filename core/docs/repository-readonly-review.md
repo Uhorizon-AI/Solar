@@ -180,7 +180,8 @@ checks, `option`. Reasons: `required_option_missing`, `required_value_unadvertis
 `managed_policy_present`, `credentials_unavailable`, `boundary_unavailable`,
 `write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`,
 `cursor_project_path_outside_write_guard`, `cursor_state_mkdir_denied`,
-`cursor_state_mkdir_timeout`.
+`cursor_state_mkdir_timeout`, `cursor_project_path_drift`,
+`cursor_project_path_unreadable`.
 A help text proves neither the effective configuration nor that a guard works. These adapters
 do not claim a doctor-style effective/cloud-policy attestation; their stronger
 write boundary is enforced externally. Network access remains available for the
@@ -201,7 +202,13 @@ computed path would still fall outside the private directory, launch refuses
 with `cursor_project_path_outside_write_guard` and does not start the model.
 Only a later model exit whose stderr is an `EPERM` mkdir of `/tmp/.cursor…`
 (or the redacted form `/tmp/.[REDACTED]`) is reported with that same reason.
-Any other denied mkdir stays a generic provider failure.
+Any other denied mkdir stays a generic provider failure, including an `EPERM`
+mkdir of a different path under `/tmp`. The permission probe compares Solar's
+prediction with the project-path function inside the installed Cursor CLI
+bundle (no model call). A mismatch is `cursor_project_path_drift`; a bundle
+that cannot be read is `cursor_project_path_unreadable`. Neither is reported
+as a passing reader. The review launch itself does not parse the bundle; a
+wrong prediction still fails at the model's `EPERM` with the named reason.
 
 Cursor receives `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, a private HOME/XDG tree,
 and `AGENT_CLI_CREDENTIAL_STORE=file`. `--trust` satisfies the CLI headless

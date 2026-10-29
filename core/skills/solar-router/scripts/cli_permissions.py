@@ -341,6 +341,14 @@ def probe_restricted_reader(provider, exercise=None) -> Finding:
                            "(a base path longer than 83 characters falls back to /tmp/.cursor, which the guard denies)",
                            setting="review private directory",
                            fix="keep the review private directory short enough that Cursor's project path stays inside the write guard; this is not a client setting")
+        if reason == "cursor_project_path_drift":
+            return unknown(provider.name, "restricted_reader",
+                           "installed Cursor CLI project path does not match Solar's prediction; the 83/91 rule is stale",
+                           tier="probe")
+        if reason == "cursor_project_path_unreadable":
+            return unknown(provider.name, "restricted_reader",
+                           "cannot read the installed Cursor CLI project-path function",
+                           tier="probe")
         return unknown(provider.name, "restricted_reader",
                        f"cannot launch the restricted reader: {reason}", tier="probe")
     except (OSError, RuntimeError) as exc:
@@ -379,7 +387,12 @@ def combine(static: Finding, probe) -> str:
 
 
 def summary(static: list[Finding]):
-    """One state and one line for `solar status`: WARN when something is wrong, never a model call."""
+    """One state and one line for `solar status`: WARN when something is wrong, never a model call.
+
+    A probe saved before `restricted_reader` existed has no row for it. That
+    absence is not a failure and not an incomplete probe. A client with no
+    stored probe at all still counts the check as unverified.
+    """
     rows = stored_rows()
     probes = {}
     for key, row in rows.items():
@@ -390,7 +403,11 @@ def summary(static: list[Finding]):
     if not static:
         return "INFO", "no installed client"
     bad, unverified = [], 0
+    probed_clients = {cli for cli, _check in rows}
     for finding in static:
+        if (finding.check == "restricted_reader" and finding.cli in probed_clients
+                and (finding.cli, finding.check) not in rows):
+            continue
         status = combine(finding, probes.get((finding.cli, finding.check)))
         if status in (MISSING, TOO_PERMISSIVE):
             bad.append(f"{finding.cli} {finding.check} {status}")

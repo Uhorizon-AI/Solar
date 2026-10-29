@@ -271,9 +271,15 @@ Capability is not permission: a flag Solar passes is a request, and the client's
   client it is `unknown`. `mcp_read` checks `solar_search`. A client that could not run is `unknown`.
   `restricted_reader` does not call a model. It launches each installed client's repository-review
   preflight (the same constructor a review uses before the prompt) or records why it cannot.
-  For Cursor it also creates the project-state directory inside the write guard; a path that would
-  fall back to `/tmp/.cursor` is `missing`, with the cause (the 83-character project base) and the
-  fix, which is Solar's review directory, not a client setting.
+  For Cursor it also creates the project-state directory inside the write guard and compares that
+  path with the project-path function in the installed CLI bundle (no model call). A path that would
+  fall back to `/tmp/.cursor` is `missing`. A bundle that disagrees with Solar's 83/91 prediction is
+  `unknown` (`cursor_project_path_drift`), as is a bundle that cannot be read. The fix for the fallback
+  is Solar's review directory, not a client setting. The probe rejects `SOLAR_ROUTER_*` / `SOLAR_AI_*`
+  command overrides with the same code a review uses, so an override cannot look like a passing reader.
+  A probe saved before `restricted_reader` existed has no row for it: `solar status` does not treat that
+  absence as a failure or as an incomplete probe. A client that has never been probed still shows the
+  check as unverified.
   A partial probe (`--client`, `--check`) replaces only the checks it ran; `solar status` shows the age of the oldest one.
   The last result is stored in `<runtime>/router/cli-permissions.json` (machine state: it depends on this machine's
   client settings) and `solar status` shows it with its age.
