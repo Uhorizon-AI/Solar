@@ -258,15 +258,19 @@ policy checks, CLI restrictions, limitations and the opt-in inference-free probe
 Capability is not permission: a flag Solar passes is a request, and the client's own settings decide what runs.
 `cli_permissions.py` reports, per installed client (claude, codex, agent, agy: Antigravity, the successor of the Gemini CLI) and check (`mcp_read`, `write_guard`):
 
-- **Static tier** — reads the client's own settings (`~/.cursor/cli-config.json`, `~/.claude/settings.json`,
-  `~/.codex/config.toml`, workspace overrides). No model call; `solar status` shows it on the `clients:` line.
+- **Static tier** — reads the client's own settings (`~/.cursor/cli-config.json` and `<workspace>/.cursor/cli.json`, `~/.claude/settings.json` and `<workspace>/.claude/settings*.json`,
+  `~/.codex/config.toml`). No model call; `solar status` shows it on the `clients:` line.
   A check the settings cannot settle is `unknown` (never `ok`); Antigravity (`agy`, formerly the Gemini CLI) has no documented permission settings: `~/.gemini/settings.json` holds only auth and general options, so both checks are `unknown` until the probe runs.
 - **Probe tier** — opt-in, costs tokens, run by `solar client doctor --probe-permissions`. It launches each client
   through `BaseProvider.ask`, the same construction as a router question (no separate flag set, no `-f`/`--yolo`).
   `mcp_read` is judged by the Solar MCP server's own audit log (`<runtime>/mcp/audit.jsonl`): the probe asks the
   client to call `solar_search` with a unique marker, and `ok` means the server recorded that call. If it did not,
   the result is `missing` with the client's own words as detail; no cause is assumed. `write_guard` asks the client
-  to create a file in a scratch folder and is `too_permissive` if the file exists. A client that could not run is `unknown`.
+  to create a file in a scratch folder (outside the workspace, so folder-keyed overrides such as Codex's
+  `projects."<workspace>"` are covered by the static check instead) and is `too_permissive` if the file exists.
+  A silent exit with no file is `ok` only for Antigravity, which auto-denies what it cannot prompt for; for any other
+  client it is `unknown`. `mcp_read` checks `solar_search`. A client that could not run is `unknown`.
+  A partial probe (`--client`, `--check`) replaces only the checks it ran; `solar status` shows the age of the oldest one.
   The last result is stored in `<runtime>/router/cli-permissions.json` (machine state: it depends on this machine's
   client settings) and `solar status` shows it with its age.
 

@@ -20,6 +20,7 @@ configuration.
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import os
 import shutil
@@ -37,7 +38,6 @@ CLIENTS = ("claude", "codex", "agent", "agy")
 MCP_SERVER = "solar"
 MCP_READ_TOOLS = ("solar_search", "solar_docs")
 STORE_NAME = "cli-permissions.json"
-PROBE_TIMEOUT_SEC = 180
 
 
 @dataclass(frozen=True)
@@ -79,17 +79,22 @@ def read_toml(path: Path):
         return None
 
 
-def mcp_registered(candidates, key="mcpServers", server=MCP_SERVER):
-    """Whether any JSON file registers the Solar server; `None` when none is readable."""
+def mcp_registered(candidates, key="mcpServers", server=MCP_SERVER, project=None):
+    """Whether any JSON file registers the Solar server; `None` when none is readable.
+
+    `project` also looks under `projects.<path>.mcpServers`, where Claude keeps local-scope servers.
+    """
     readable = False
     for path in candidates:
         data = read_json(path)
         if data is None:
             continue
         readable = True
-        servers = data.get(key)
-        if isinstance(servers, dict) and server in servers:
-            return True
+        scopes = [data] + ([(data.get("projects") or {}).get(str(project)) or {}] if project else [])
+        for scope in scopes:
+            servers = scope.get(key) if isinstance(scope, dict) else None
+            if isinstance(servers, dict) and server in servers:
+                return True
     return False if readable else None
 
 
@@ -158,12 +163,32 @@ def load_probe():
     return data
 
 
+def _stamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def stored_rows() -> dict:
+    """Stored probe results keyed by (cli, check); each keeps the time it was probed."""
+    stored = load_probe()
+    rows = {}
+    for row in (stored or {}).get("results", []):
+        if isinstance(row, dict) and "cli" in row and "check" in row:
+            rows[(row["cli"], row["check"])] = dict(row, probed_at=row.get("probed_at") or stored.get("probed_at"))
+    return rows
+
+
 def save_probe(findings: list[Finding]) -> None:
-    """Router machine state: the answer depends on this machine's client settings."""
+    """Router machine state: the answer depends on this machine's client settings.
+
+    A partial probe (`--client`, `--check`) replaces only the checks it ran and keeps the rest.
+    """
     path = store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = dict(probed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                   results=[asdict(f) for f in findings])
+    now = _stamp()
+    rows = stored_rows()
+    for f in findings:
+        rows[(f.cli, f.check)] = dict(asdict(f), probed_at=now)
+    payload = dict(probed_at=now, results=[rows[k] for k in sorted(rows)])
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temp, path)
@@ -171,7 +196,7 @@ def save_probe(findings: list[Finding]) -> None:
 
 def age_label(stamp: str, now=None) -> str:
     try:
-        then = time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+        then = calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
     except (TypeError, ValueError):
         return "unknown age"
     seconds = max(0, int((now or time.time()) - then))
@@ -199,7 +224,8 @@ def audit_has_call(marker: str) -> bool:
             for line in stream:
                 if marker in line:
                     row = json.loads(line)
-                    return row.get("kind") == "decision" and bool(row.get("allowed"))
+                    if row.get("kind") == "decision" and row.get("allowed"):
+                        return True
     except (OSError, ValueError):
         pass
     return False
@@ -215,7 +241,7 @@ def probe_mcp_read(provider, workspace: Path) -> Finding:
     except (RuntimeError, TimeoutError) as exc:
         return unknown(provider.name, "mcp_read", f"the client did not answer: {str(exc)[:200]}", tier="probe")
     if audit_has_call(marker):
-        return Finding(provider.name, "mcp_read", OK, "probe", "the Solar MCP server received the read call")
+        return Finding(provider.name, "mcp_read", OK, "probe", "the Solar MCP server received the solar_search call")
     reply = " ".join(answer.text.split())[:200]
     return Finding(provider.name, "mcp_read", MISSING, "probe",
                    f"the Solar MCP server received no call; the client said: {reply}",
@@ -238,9 +264,9 @@ def probe_write_guard(provider) -> Finding:
             return Finding(provider.name, "write_guard", TOO_PERMISSIVE, "probe",
                            "the client created the file although it was asked for read-only mode",
                            **fix_for(provider, "write_guard"))
-        if failure and "empty output" in failure:
-            # Exit 0 with no output and no file: the client ran and its write was refused
-            # (Antigravity auto-denies a tool it cannot prompt for in headless mode).
+        if failure and "empty output" in failure and provider.name == "agy":
+            # Exit 0 with no output and no file: Antigravity auto-denies a tool it cannot prompt for
+            # in headless mode. For any other client the same silence proves nothing, so it stays unknown.
             return Finding(provider.name, "write_guard", OK, "probe",
                            "the client exited without output and created no canary file")
         if failure:
@@ -287,12 +313,12 @@ def combine(static: Finding, probe) -> str:
 
 def summary(static: list[Finding]):
     """One state and one line for `solar status`: WARN when something is wrong, never a model call."""
-    stored = load_probe()
+    rows = stored_rows()
     probes = {}
-    for row in (stored or {}).get("results", []):
+    for key, row in rows.items():
         try:
-            probes[(row["cli"], row["check"])] = Finding(**row)
-        except (KeyError, TypeError, ValueError):
+            probes[key] = Finding(**{k: v for k, v in row.items() if k != "probed_at"})
+        except (TypeError, ValueError):
             continue
     if not static:
         return "INFO", "no installed client"
@@ -303,7 +329,8 @@ def summary(static: list[Finding]):
             bad.append(f"{finding.cli} {finding.check} {status}")
         elif status == UNKNOWN:
             unverified += 1
-    probed = f"probe {age_label(stored['probed_at'])}" if stored else "probe never run"
+    stamps = [r["probed_at"] for r in rows.values() if r.get("probed_at")]
+    probed = f"oldest probe {age_label(min(stamps))}" if stamps else "probe never run"
     if bad:
         return "WARN", f"{'; '.join(bad)} ({probed})"
     if unverified:

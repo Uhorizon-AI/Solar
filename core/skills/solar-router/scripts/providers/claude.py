@@ -23,7 +23,7 @@ class ClaudeProvider(BaseProvider):
 
     def static_permission_checks(self, home, workspace):
         """Claude decides by `permissions.allow`/`deny` rules across its settings files."""
-        registered = mcp_registered([home / ".claude.json", workspace / ".mcp.json"])
+        registered = mcp_registered([home / ".claude.json", workspace / ".mcp.json"], project=workspace)
         if registered is False:
             return [Finding(self.name, "mcp_read", MISSING, "static",
                             f"the {MCP_SERVER} MCP server is not registered for Claude",
@@ -31,19 +31,20 @@ class ClaudeProvider(BaseProvider):
                             fix="run: solar mcp install --clients claude")]
         files = [home / ".claude" / "settings.json", workspace / ".claude" / "settings.json",
                  workspace / ".claude" / "settings.local.json"]
-        rules = [d.get("permissions") or {} for d in map(read_json, files) if d]
+        found = [(f, (read_json(f) or {}).get("permissions") or {}) for f in files]
         prefix = f"mcp__{MCP_SERVER}"
         tools = [f"{prefix}__{tool}" for tool in MCP_READ_TOOLS]
 
         def covers(entries, tool):
             return any(isinstance(e, str) and e in (prefix, f"{prefix}__*", tool) for e in entries)
 
-        allow = [e for p in rules for e in p.get("allow", [])]
-        deny = [e for p in rules for e in p.get("deny", [])]
-        denied = [t for t in tools if covers(deny, t)]
+        for source, perms in found:
+            denied = [t for t in tools if covers(perms.get("deny", []), t)]
+            if denied:
+                break
         if denied:
             return [Finding(self.name, "mcp_read", MISSING, "static", f"denied: {', '.join(denied)}",
-                            setting="permissions.deny", file="; ".join(map(str, files[:1])),
+                            setting="permissions.deny", file=str(source),
                             fix=f"remove the rule matching {', '.join(denied)} from permissions.deny")]
         if not solar_read_tools_declare_read_only():
             return [Finding(self.name, "mcp_read", MISSING, "static",

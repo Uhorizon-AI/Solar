@@ -73,6 +73,11 @@ class TestCursorStatic(Env):
         self.assertEqual(found.status, cp.MISSING)
         self.assertEqual(found.setting, "permissions.deny")
 
+    def test_a_server_wildcard_in_deny_is_missing(self):
+        self.config(permissions=dict(allow=["Mcp(solar:solar_search)", "Mcp(solar:solar_docs)"],
+                                     deny=["Mcp(solar:*)"]))
+        self.assertEqual(self.checks(AgentProvider())["mcp_read"].status, cp.MISSING)
+
     def test_an_approval_mode_that_is_not_modelled_is_unknown(self):
         self.config()
         _json(self.home / ".cursor" / "cli-config.json", dict(approvalMode="something-new"))
@@ -115,6 +120,18 @@ class TestClaudeStatic(Env):
     def test_a_deny_rule_is_missing(self):
         _json(self.home / ".claude" / "settings.json", {"permissions": {"deny": ["mcp__solar__solar_search"]}})
         self.assertEqual(self.checks(ClaudeProvider())["mcp_read"].status, cp.MISSING)
+
+    def test_the_deny_finding_names_the_file_that_holds_the_rule(self):
+        _json(self.workspace / ".claude" / "settings.local.json", {"permissions": {"deny": ["mcp__solar"]}})
+        found = self.checks(ClaudeProvider())["mcp_read"]
+        self.assertEqual(found.status, cp.MISSING)
+        self.assertTrue(found.file.endswith("workspace/.claude/settings.local.json"))
+
+    def test_a_server_registered_in_the_local_project_scope_is_registered(self):
+        _json(self.home / ".claude.json", {"mcpServers": {}, "projects": {str(self.workspace): {"mcpServers": {"solar": {}}}}})
+        with patch("providers.claude.solar_read_tools_declare_read_only", return_value=True):
+            found = self.checks(ClaudeProvider())["mcp_read"]
+        self.assertNotIn("not registered", found.detail)
 
     def test_write_guard_is_unknown(self):
         self.assertEqual(self.checks(ClaudeProvider())["write_guard"].status, cp.UNKNOWN)
@@ -256,10 +273,15 @@ class TestProbe(Env):
         self.assertEqual(cp.probe_write_guard(self.provider(ask)).status, cp.OK)
         self.assertFalse(folders[0].exists())
 
-    def test_write_is_ok_when_the_client_exits_silently_and_writes_nothing(self):
+    def test_a_silent_exit_without_a_file_is_ok_only_for_antigravity(self):
         def ask(*a, **k):
             raise RuntimeError("provider returned empty output")
-        self.assertEqual(cp.probe_write_guard(self.provider(ask)).status, cp.OK)
+        for cls, expected in ((AgyProvider, cp.OK), (AgentProvider, cp.UNKNOWN),
+                              (CodexProvider, cp.UNKNOWN), (ClaudeProvider, cp.UNKNOWN)):
+            with self.subTest(client=cls.name):
+                provider = cls()
+                provider.ask = ask
+                self.assertEqual(cp.probe_write_guard(provider).status, expected)
 
     def test_write_is_unknown_when_the_client_failed_and_nothing_was_written(self):
         def ask(*a, **k):
@@ -290,6 +312,9 @@ class TestProbe(Env):
             with patch("mcp_gate.gate_root", return_value=Path(root)):
                 self.assertTrue(cp.audit_has_call("probe-abc"))
                 self.assertFalse(cp.audit_has_call("probe-other"))
+                audit.write_text(json.dumps(dict(kind="request", arguments=dict(query="probe-xyz"))) + "\n"
+                                 + json.dumps(dict(kind="decision", allowed=True, arguments=dict(query="probe-xyz"))) + "\n")
+                self.assertTrue(cp.audit_has_call("probe-xyz"))  # a later decision row counts
 
 
 class TestStoreAndSummary(Env):
@@ -324,9 +349,30 @@ class TestStoreAndSummary(Env):
         state, _ = cp.summary([cp.unknown("agy", "mcp_read", "n/a")])
         self.assertEqual(state, "INFO")
 
-    def test_age_label(self):
-        self.assertEqual(cp.age_label("2026-10-26T00:00:00Z", now=cp.time.mktime((2026, 10, 28, 0, 0, 0, 0, 0, 0)) - cp.time.timezone), "2d ago")
+    def test_age_label_is_independent_of_the_local_timezone_and_daylight_saving(self):
+        now = cp.calendar.timegm((2026, 7, 10, 12, 0, 0))
+        self.assertEqual(cp.age_label("2026-07-08T12:00:00Z", now=now), "2d ago")
+        self.assertEqual(cp.age_label("2026-07-10T11:59:30Z", now=now), "just now")  # a summer stamp stays "just now"
         self.assertEqual(cp.age_label("garbage"), "unknown age")
+
+    def test_a_partial_probe_keeps_the_other_stored_results(self):
+        cp.save_probe([cp.Finding("codex", "write_guard", cp.TOO_PERMISSIVE, "probe"),
+                       cp.Finding("agent", "mcp_read", cp.OK, "probe")])
+        cp.save_probe([cp.Finding("agent", "mcp_read", cp.MISSING, "probe")])
+        rows = cp.stored_rows()
+        self.assertEqual(rows[("codex", "write_guard")]["status"], cp.TOO_PERMISSIVE)
+        self.assertEqual(rows[("agent", "mcp_read")]["status"], cp.MISSING)
+
+    def test_the_summary_shows_the_age_of_the_oldest_stored_result(self):
+        cp.save_probe([cp.Finding("agent", "mcp_read", cp.OK, "probe")])
+        path = cp.store_path()
+        data = json.loads(path.read_text())
+        data["results"][0]["probed_at"] = "2020-01-01T00:00:00Z"
+        path.write_text(json.dumps(data))
+        cp.save_probe([cp.Finding("agent", "write_guard", cp.OK, "probe")])
+        _, detail = cp.summary([cp.unknown("agent", c, "n/a") for c in cp.CHECKS])
+        self.assertIn("oldest probe", detail)
+        self.assertNotIn("just now", detail)
 
     def test_finding_rejects_an_invalid_status(self):
         with self.assertRaises(ValueError):

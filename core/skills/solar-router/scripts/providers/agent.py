@@ -3,10 +3,8 @@ import os
 import shlex
 import subprocess
 
-import pathlib
-
-from cli_permissions import (Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, OK, UNKNOWN,
-                                mcp_registered, read_json, unknown)
+from cli_permissions import (Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, OK,
+                             mcp_registered, read_json, unknown)
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
@@ -47,7 +45,7 @@ class AgentProvider(BaseProvider):
         permissions = [d.get("permissions") or {} for _, d in configs]
         allow = {e for p in permissions for e in p.get("allow", []) if isinstance(e, str)}
         deny = {e for p in permissions for e in p.get("deny", []) if isinstance(e, str)}
-        blocked = [e for e in needed if e in deny]
+        blocked = [e for e in needed if e in deny or f"Mcp({MCP_SERVER}:*)" in deny]
         if blocked:
             return [Finding(self.name, "mcp_read", MISSING, "static", f"denied: {', '.join(blocked)}",
                             setting="permissions.deny", file=str(user),

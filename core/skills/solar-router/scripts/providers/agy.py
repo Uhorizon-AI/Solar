@@ -1,6 +1,5 @@
-import re
-
 import json
+import re
 
 from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, UNKNOWN
 from .base import BaseProvider, SOLAR_WORKSPACE

@@ -1,13 +1,12 @@
 import json
 import os
+import pathlib
 import shlex
 import subprocess
-import os
-import pathlib
 import sys
 
 from cli_permissions import (Finding, MCP_SERVER, MISSING, OK, TOO_PERMISSIVE,
-                                read_toml, unknown)
+                             read_toml, unknown)
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 

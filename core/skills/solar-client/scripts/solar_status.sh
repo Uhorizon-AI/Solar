@@ -303,7 +303,8 @@ if [[ "$client_state" == "WARN" ]]; then
   echo "hint: solar client doctor"
 fi
 if [[ "$perms_state" == "WARN" ]]; then
-  echo "hint: python3 core/skills/solar-router/scripts/cli_permissions.py static   # exact setting and file"
+  echo "hint: python3 $(solar_core_dir)/skills/solar-router/scripts/cli_permissions.py static   # exact setting and file"
+  echo "hint: after applying a fix, solar client doctor --probe-permissions refreshes the stored result"
 fi
 if [[ "$workspace_state" == "WARN" ]]; then
   echo "hint: solar workspace doctor"
