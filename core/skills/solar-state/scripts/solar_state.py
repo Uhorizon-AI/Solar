@@ -1237,6 +1237,10 @@ def _blocked(conn: sqlite3.Connection, pairs: list[list[str]]) -> bool:
     return False
 
 
+NOTIFY_RUN_KEYS = ("notify_delivered", "notify_delivered_run", "notify_status", "notify_error",
+                   "notify_attempted_at")
+
+
 def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optional[str],
           *, rewrite_body: Optional[Callable[[str], str]] = None,
           fields: Optional[dict] = None, drop: Iterable[str] = (),
@@ -1256,6 +1260,11 @@ def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optiona
         raise TransitionRefused(f"{current} -> {to_status} is not an allowed transition")
     pairs = json.loads(row["frontmatter"])
     body = rewrite_body(row["body"]) if rewrite_body is not None else row["body"]
+    if to_status == "active" and current != "active":
+        # Each run notifies on its own: what the previous run's notice recorded must not silence this one.
+        for key in NOTIFY_RUN_KEYS:
+            _drop_pair(pairs, key)
+        _set_pair(pairs, "notify_run", f" {uuid.uuid4().hex}")      # the run a notice belongs to
     for key in drop:
         _drop_pair(pairs, key)
     for key, value in (fields or {}).items():

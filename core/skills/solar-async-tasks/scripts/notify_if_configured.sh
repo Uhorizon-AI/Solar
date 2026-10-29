@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# If the completed task has notify_when: completed, send a Telegram notification
-# to the allowlisted origin chat (or TELEGRAM_CHAT_ID). When the task carries a
+# If the finished task asks for it in notify_when, send a Telegram notification
+# to the allowlisted origin chat (or TELEGRAM_CHAT_ID). notify_when is a comma
+# list of `completed`, `failed`, `blocked`; the bare legacy value `completed`
+# also reports a failure. `blocked` is announced by the supervisor (--waiting). When the task carries a
 # `## Delivery` section, that is the message: the one-screen delivery the
 # executor wrote, ending in its own evidence line. Otherwise a brief line plus
 # the result location. Long text is chunked (~1s apart).
@@ -24,13 +26,48 @@ case "$MODE" in
   *) echo "Unknown notification mode: $MODE" >&2; exit 2 ;;
 esac
 
-if [[ -z "$MODE" ]]; then
-  NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
-  [[ "$NOTIFY_WHEN" != "completed" ]] && exit 0
-
-  if [[ "$(task_field "$TASK_ID" "notify_delivered")" == "true" ]]; then
+if [[ -n "$MODE" ]]; then
+  # The wait notice is the `blocked` event. A task that lists other events but not `blocked` does not get it;
+  # a task with no list (or only the legacy bare `completed` a gateway parent carries) keeps the notice.
+  WAIT_WHEN="$(task_field "$TASK_ID" "notify_when" | tr -d '[:space:]')"
+  if [[ -n "$WAIT_WHEN" && "$WAIT_WHEN" != "completed" && ",${WAIT_WHEN}," != *",blocked,"* ]]; then
     exit 0
   fi
+fi
+
+if [[ -z "$MODE" ]]; then
+  NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
+  NOTIFY_WHEN="${NOTIFY_WHEN//[[:space:]]/}"
+  notify_wants() { [[ ",${NOTIFY_WHEN}," == *",$1,"* ]]; }
+  if [[ "$(task_status_of "$TASK_ID")" == "error" ]]; then
+    notify_wants failed || [[ "$NOTIFY_WHEN" == "completed" ]] || exit 0
+  else
+    notify_wants completed || exit 0
+  fi
+
+  # One notice per run. The run is the id stamped at claim; a notice for an earlier run never silences this one.
+  RUN="$(task_field "$TASK_ID" "notify_run")"
+  already_delivered() {
+    [[ "$(task_field "$TASK_ID" "notify_delivered")" == "true" \
+       && "$(task_field "$TASK_ID" "notify_delivered_run")" == "$RUN" ]]
+  }
+  already_delivered && exit 0
+
+  # The worker and the supervisor can both announce the same end: serialise check -> send -> record.
+  LOCK_DIR="${TMPDIR:-/tmp}/solar-notify-${TASK_ID//[^A-Za-z0-9_.-]/_}.lock"
+  for _ in $(seq 1 150); do
+    mkdir "$LOCK_DIR" 2>/dev/null && { HAVE_LOCK=1; break; }
+    [[ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +2 2>/dev/null)" ]] && rmdir "$LOCK_DIR" 2>/dev/null   # a dead holder
+    sleep 1
+  done
+  if [[ -z "${HAVE_LOCK:-}" ]]; then   # the lock outlives a dead holder by 2 minutes; waiting past that never loses the notice
+    state task set "$TASK_ID" notify_status failed >/dev/null
+    state task set "$TASK_ID" notify_error notify_lock_timeout >/dev/null
+    echo "Task notification failed: notify_lock_timeout ($TASK_ID)" >&2
+    exit 1
+  fi
+  trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+  already_delivered && exit 0
 fi
 
 TITLE=$(task_field "$TASK_ID" "title")
@@ -108,6 +145,17 @@ BRIEF="Task completed: ${TITLE}"
 if [[ "$TASK_STATUS" == "error" ]]; then
   BRIEF="Task failed and needs attention: ${TITLE}"
   LOCATION="" # Keep execution errors and sensitive details in local logs.
+  # A task that asks for `failed` by name also gets the one-line reason (bounded, single line).
+  if [[ ",$(task_field "$TASK_ID" "notify_when" | tr -d '[:space:]')," == *",failed,"* ]]; then
+    # Only the machine code, never the provider's free text: it can carry paths, prompts or secrets.
+    REASON="$(task_body "$TASK_ID" | awk '
+      /^## Execution Error[[:space:]]*$/ { found = 1; next }
+      found && /^## / { exit }
+      found && /^- error_code:/ { sub(/^- error_code:[[:space:]]*/, ""); print; exit }
+    ' | head -n1 | tr -d '\r[:space:]')"
+    [[ "$REASON" =~ ^[a-z][a-z0-9_]{0,39}$ ]] || REASON="unknown"
+    BRIEF="${BRIEF}"$'\n'"Reason: ${REASON}"
+  fi
 fi
 if [[ -n "$LOCATION" ]]; then
   BRIEF="${BRIEF}"$'\n'"${LOCATION}"
@@ -155,7 +203,7 @@ send_chunks() {
 if [[ -n "$MODE" ]]; then
   case "$MODE" in
     --waiting)
-      MESSAGE="Waiting for your approval to run: ${TITLE}"$'\n'"Ask your assistant to review it and authorize it. If nobody does, the wait ends on its own." ;;
+      MESSAGE="Waiting for your approval to run: ${TITLE}"$'\n'"Reason: it can change things beyond a confined read, so it needs task.authorize_run before it runs."$'\n'"Ask your assistant to review it and authorize it. If nobody does, the wait ends on its own." ;;
     --expired-draft)
       MESSAGE="Approval wait ended: ${TITLE}"$'\n'"The task went back to draft and will not run until it is approved again." ;;
     --expired-skipped)
@@ -181,6 +229,9 @@ fi
 
 send_chunks "$MESSAGE" || { record_notify_failure "telegram_send_failed"; exit 1; }
 
-state task set "$TASK_ID" notify_status delivered >/dev/null
-state task set "$TASK_ID" notify_error null >/dev/null
-state task set "$TASK_ID" notify_delivered true >/dev/null
+if [[ "$(task_field "$TASK_ID" "notify_run")" == "$RUN" ]]; then   # a new run has not started meanwhile
+  state task set "$TASK_ID" notify_status delivered >/dev/null
+  state task set "$TASK_ID" notify_error null >/dev/null
+  state task set "$TASK_ID" notify_delivered_run "$RUN" >/dev/null
+  state task set "$TASK_ID" notify_delivered true >/dev/null
+fi

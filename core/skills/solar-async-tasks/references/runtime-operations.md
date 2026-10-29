@@ -104,7 +104,7 @@ When a long-running user request should notify on completion:
 1. Offer to create an async task.
 2. Confirm title, objective, and priority.
 3. Create the task with `task.create` and approve it with `task.approve` (both through `solar_execute`).
-4. Set `notify_when: completed` on that task. Origin metadata does this for a gateway parent.
+4. Set `notify_when` on that task: pass it to `task.create`/`task.update` as a list of `completed`, `failed`, `blocked` (stored as a comma list). Origin metadata sets `completed` for a gateway parent.
 
 On completion the runtime notifies when `notify_when: completed` is set and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
 
@@ -114,8 +114,8 @@ retry records `notify_status: delivered` and `notify_delivered: true`, so a late
 invocation skips delivery. A later run of the notifier retries after the failure is resolved. Automatic retry scheduling is not enabled.
 
 The executor also invokes the notifier after execution failure or timeout; cleanup
-failure uses the same path. Only tasks already carrying `notify_when: completed`
-are eligible, and the origin allowlist still applies. Failure messages are brief
+failure uses the same path. Only tasks whose `notify_when` lists `failed` (or is the legacy bare `completed`)
+are eligible, and `failed` adds a one-line reason (the machine `error_code`, never the provider's text); and the origin allowlist still applies. Failure messages are brief
 and omit execution details. The sender is resolved from the installation root;
 task data and environment remain in the workspace.
 
@@ -177,3 +177,8 @@ Logs:
 - Each task has one log, `<runtime root>/task-logs/<task-id>.log`.
 - Logs reflect the last run.
 - Logs older than seven days are cleaned by the worker.
+
+A claim clears `notify_delivered` and the other notice records, so a recurring task notifies once per run
+and a retry of the same run's notice is still deduplicated. `blocked` is announced by the supervisor for
+a task waiting for `task.authorize_run`, with the reason: a task with no `notify_when` still gets it, a task that
+lists other events without `blocked` does not.

@@ -120,3 +120,127 @@ def test_notification_points_at_result_path(tmp_path):
     task = task_file(root, extra=f'result_path: "{log}"\n')
     assert notify(task, env).returncode == 0
     assert str(log) in (workspace / 'sent.log').read_text()
+
+
+def test_notify_when_failed_reports_failure_with_its_reason_and_not_completion(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    failed = task_file(root, 'error', '')
+    failed.write_text(failed.read_text().replace('notify_when: completed', 'notify_when: "failed"')
+                      + '\n## Execution Error\n- error_code: provider_quota\n- error: quota exceeded\n')
+    assert notify(failed, env).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Task failed' in sent and 'Reason: provider_quota' in sent
+    assert 'quota exceeded' not in sent
+    done = task_file(root, 'completed', '')
+    done.write_text(done.read_text().replace('notify_when: completed', 'notify_when: "failed"'))
+    assert notify(done, env).returncode == 0
+    assert 'Task completed' not in (workspace / 'sent.log').read_text()
+
+
+def test_notify_when_completed_alone_still_reports_failure_without_the_reason(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    failed = task_file(root, 'error', '')
+    failed.write_text(failed.read_text() + '\n## Execution Error\n- error: secret path /x\n')
+    assert notify(failed, env).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Task failed' in sent and 'Reason' not in sent
+
+
+def test_a_new_claim_clears_the_notice_record_so_each_run_notifies_once(tmp_path):
+    import solar_state
+    _, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'queued', 'recurring: true\nnotify_delivered: true\nnotify_status: delivered\n')
+    seed(root)
+    with solar_state.session() as store:
+        tid = task_id_of(task)
+        store.task_claim(tid, 'worker')
+        pairs = dict(store.task_get(tid)['frontmatter'])
+    assert 'notify_delivered' not in pairs and 'notify_status' not in pairs
+    assert pairs.get('notify_run', '').strip()
+
+
+def _failed_with(root, env, error_section):
+    failed = task_file(root, 'error', '')
+    failed.write_text(failed.read_text().replace('notify_when: completed', 'notify_when: "failed"')
+                      + '\n## Execution Error\n' + error_section)
+    return failed
+
+
+def test_reason_is_a_machine_code_and_never_the_provider_text(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    failed = _failed_with(root, env, '- error_code: router_crashed\n- error: token sk-123 at /Users/x/secret.md\n')
+    assert notify(failed, env).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Reason: router_crashed' in sent
+    assert 'sk-123' not in sent and '/Users/x' not in sent
+
+
+@pytest.mark.parametrize('section', ['- error: only free text with sk-123\n',
+                                     '- error_code: see https://x.example/?t=sk-123\n',
+                                     '- error_code: ' + 'a' * 80 + '\n'])
+def test_a_missing_or_malformed_code_is_reported_as_unknown(tmp_path, section):
+    workspace, root, env = fixture_env(tmp_path)
+    failed = _failed_with(root, env, section)
+    assert notify(failed, env).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Reason: unknown' in sent and 'sk-123' not in sent and 'x.example' not in sent
+
+
+def test_two_notifiers_for_the_same_run_send_one_notice(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    sender = Path(env['SOLAR_ROOT']) / 'core/skills/solar-telegram/scripts/send_telegram.sh'
+    sender.write_text('#!/bin/bash\nsleep 1\nprintf "%s\\n" "$1" >> "$SOLAR_WORKSPACE/sent.log"\n')
+    task = task_file(root, 'error', '')
+    task.write_text(task.read_text().replace('notify_when: completed', 'notify_when: "failed"')
+                    + '\n## Execution Error\n- error_code: boom\n')
+    seed(root)
+    run_env = env_for(root, {**env, 'TMPDIR': str(tmp_path)})
+    cmd = ['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)]
+    procs = [subprocess.Popen(cmd, env=run_env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(2)]
+    assert [p.wait(timeout=30) for p in procs] == [0, 0]
+    assert (workspace / 'sent.log').read_text().count('Task failed') == 1
+
+
+def test_a_notice_recorded_for_an_earlier_run_does_not_silence_this_run(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'completed', 'notify_run: run-2\nnotify_delivered: true\n'
+                     'notify_delivered_run: run-1\n')
+    assert notify(task, env).returncode == 0
+    assert (workspace / 'sent.log').read_text().count('Task completed') == 1
+    assert 'notify_delivered_run: run-2' in task.read_text()
+
+
+@pytest.mark.parametrize('when,sent', [('completed,failed', False), ('blocked', True), ('', True),
+                                       ('completed', True)])
+def test_the_approval_wait_notice_honours_blocked(tmp_path, when, sent):
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'queued', '')
+    task.write_text(task.read_text().replace('notify_when: completed', f'notify_when: "{when}"'))
+    seed(root)
+    result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task), '--waiting'],
+                            env=env_for(root, env), text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    log = workspace / 'sent.log'
+    assert (log.exists() and 'Waiting for your approval' in log.read_text()) is sent
+
+
+def test_a_lock_that_is_never_released_is_recorded_not_dropped(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'completed', '')
+    (tmp_path / f'solar-notify-{task_id_of(task)}.lock').mkdir()
+    seed(root)
+    # a wait of 150 s is too slow for a test: shorten it through a seq stub
+    stub = tmp_path / 'bin'
+    stub.mkdir()
+    (stub / 'seq').write_text('#!/bin/bash\necho 1\n')
+    (stub / 'seq').chmod(0o755)
+    (stub / 'sleep').write_text('#!/bin/bash\nexit 0\n')
+    (stub / 'sleep').chmod(0o755)
+    run_env = env_for(root, {**env, 'TMPDIR': str(tmp_path), 'PATH': f'{stub}:{os.environ["PATH"]}'})
+    result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
+                            env=run_env, text=True, capture_output=True, timeout=20)
+    mirror(root)
+    assert result.returncode == 1 and 'notify_lock_timeout' in result.stderr
+    assert 'notify_error: notify_lock_timeout' in task.read_text()
+    assert not (workspace / 'sent.log').exists()

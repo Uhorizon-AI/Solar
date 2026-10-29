@@ -89,6 +89,11 @@ _TEXT_FIELDS = ("title", "object", "scope", "effect", "provider", "planet", "age
                 "responsibility")
 
 
+def _notify_text(tokens) -> str:
+    """The stored spelling of notify_when: tokens in a fixed order, comma separated, empty to turn it off."""
+    return ",".join(t for t in ("completed", "failed", "blocked") if t in tokens)
+
+
 def _now_iso() -> str:
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -335,6 +340,8 @@ def _do_task_create(arguments: dict) -> dict:
         explicit = {key: json.dumps(arguments[key], ensure_ascii=False)
                     for key in _TEXT_FIELDS if key in arguments and key != "title"}
         merged = {**copied, **explicit}
+        if "notify_when" in arguments:
+            merged["notify_when"] = _notify_text(arguments["notify_when"])
         merged.setdefault("priority", "normal")
         if "priority" in arguments:
             merged["priority"] = arguments["priority"]
@@ -449,6 +456,8 @@ def _do_task_update(arguments: dict) -> dict:
     fields.update(_requote_question(current_fields, changes) if requote else _review_fields(arguments, derive=False))
     if "priority" in changes:
         fields["priority"] = changes["priority"]
+    if "notify_when" in changes:
+        fields["notify_when"] = _notify_text(changes["notify_when"])
     if "access_policy" in changes:
         fields["access_policy"] = _access_text(changes["access_policy"])
     body = None
@@ -843,6 +852,17 @@ _REVIEW_BATCH = _obj(dict(repository=_REVIEW["properties"]["repository"],
 
 _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 
+_NOTIFY_WHEN = {
+    "type": "array", "uniqueItems": True, "maxItems": 3,
+    "items": {"type": "string", "enum": ["completed", "failed", "blocked"]},
+    "description": "When the configured chat is told, without confirming the text (a system notice, not a message "
+                   "to third parties): completed, failed (adds the one-line reason) and blocked (the wait for "
+                   "task.authorize_run, announced with its reason; a task with no list is still told, a task that lists "
+                   "other events without blocked is not). A recurring task is told once per run. An empty list turns "
+                   "off the completed and failed notices. "
+                   "Editing it follows the usual rules: a queued task returns to draft.",
+}
+
 OPERATIONS: dict[str, Operation] = {op.name: op for op in (
     Operation(
         "task.create", A2, "Create a draft task (or a draft revision), and queue it when queue is true. "
@@ -854,7 +874,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "profile repository_readonly_v1.",
         _obj(dict(title=_TITLE, instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500),
                   effect=LINE(500), priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
-                  responsibility=SLUG, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH, ask=_ASK,
+                  responsibility=SLUG, notify_when=_NOTIFY_WHEN, revises_task_id=TASK_ID, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH, ask=_ASK,
                   queue={"type": "boolean", "description": "Queue it right away, as task.approve would. For work "
                          "that should run now; a risky task still waits for task.authorize_run."}),
              required=("title", "instructions")),
@@ -868,7 +888,8 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION, title=_TITLE,
                   instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500), effect=LINE(500),
                   priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
-                  responsibility=SLUG, access_policy=_ACCESS, review=_REVIEW, review_batch=_REVIEW_BATCH, ask=_ASK),
+                  responsibility=SLUG, notify_when=_NOTIFY_WHEN, access_policy=_ACCESS, review=_REVIEW,
+                  review_batch=_REVIEW_BATCH, ask=_ASK),
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable", "review_input_invalid",
                 "no_changes", "access_policy_invalid"),
