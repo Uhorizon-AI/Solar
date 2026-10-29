@@ -36,9 +36,24 @@ if [[ -z "$MODE" ]]; then
     notify_wants completed || exit 0
   fi
 
-  if [[ "$(task_field "$TASK_ID" "notify_delivered")" == "true" ]]; then
-    exit 0
-  fi
+  # One notice per run. The run is the id stamped at claim; a notice for an earlier run never silences this one.
+  RUN="$(task_field "$TASK_ID" "notify_run")"
+  already_delivered() {
+    [[ "$(task_field "$TASK_ID" "notify_delivered")" == "true" \
+       && "$(task_field "$TASK_ID" "notify_delivered_run")" == "$RUN" ]]
+  }
+  already_delivered && exit 0
+
+  # The worker and the supervisor can both announce the same end: serialise check -> send -> record.
+  LOCK_DIR="${TMPDIR:-/tmp}/solar-notify-${TASK_ID//[^A-Za-z0-9_.-]/_}.lock"
+  for _ in $(seq 1 60); do
+    mkdir "$LOCK_DIR" 2>/dev/null && { HAVE_LOCK=1; break; }
+    [[ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +2 2>/dev/null)" ]] && rmdir "$LOCK_DIR" 2>/dev/null   # a dead holder
+    sleep 1
+  done
+  [[ -z "${HAVE_LOCK:-}" ]] && exit 0
+  trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+  already_delivered && exit 0
 fi
 
 TITLE=$(task_field "$TASK_ID" "title")
@@ -118,14 +133,14 @@ if [[ "$TASK_STATUS" == "error" ]]; then
   LOCATION="" # Keep execution errors and sensitive details in local logs.
   # A task that asks for `failed` by name also gets the one-line reason (bounded, single line).
   if [[ ",$(task_field "$TASK_ID" "notify_when" | tr -d '[:space:]')," == *",failed,"* ]]; then
+    # Only the machine code, never the provider's free text: it can carry paths, prompts or secrets.
     REASON="$(task_body "$TASK_ID" | awk '
       /^## Execution Error[[:space:]]*$/ { found = 1; next }
       found && /^## / { exit }
-      found && /^- error:/ { sub(/^- error:[[:space:]]*/, ""); print; exit }
-      found && /^- error_code:/ && code == "" { sub(/^- error_code:[[:space:]]*/, ""); code = $0 }
-      END { if (code != "") print code }
-    ' | head -n1 | tr -d '\r' | cut -c1-200)"
-    [[ -n "$REASON" ]] && BRIEF="${BRIEF}"$'\n'"Reason: ${REASON}"
+      found && /^- error_code:/ { sub(/^- error_code:[[:space:]]*/, ""); print; exit }
+    ' | head -n1 | tr -d '\r[:space:]')"
+    [[ "$REASON" =~ ^[a-z][a-z0-9_]{0,39}$ ]] || REASON="unknown"
+    BRIEF="${BRIEF}"$'\n'"Reason: ${REASON}"
   fi
 fi
 if [[ -n "$LOCATION" ]]; then
@@ -200,6 +215,9 @@ fi
 
 send_chunks "$MESSAGE" || { record_notify_failure "telegram_send_failed"; exit 1; }
 
-state task set "$TASK_ID" notify_status delivered >/dev/null
-state task set "$TASK_ID" notify_error null >/dev/null
-state task set "$TASK_ID" notify_delivered true >/dev/null
+if [[ "$(task_field "$TASK_ID" "notify_run")" == "$RUN" ]]; then   # a new run has not started meanwhile
+  state task set "$TASK_ID" notify_status delivered >/dev/null
+  state task set "$TASK_ID" notify_error null >/dev/null
+  state task set "$TASK_ID" notify_delivered_run "$RUN" >/dev/null
+  state task set "$TASK_ID" notify_delivered true >/dev/null
+fi

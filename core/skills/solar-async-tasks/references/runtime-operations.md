@@ -115,7 +115,7 @@ invocation skips delivery. A later run of the notifier retries after the failure
 
 The executor also invokes the notifier after execution failure or timeout; cleanup
 failure uses the same path. Only tasks whose `notify_when` lists `failed` (or is the legacy bare `completed`)
-are eligible, and `failed` adds a one-line reason; and the origin allowlist still applies. Failure messages are brief
+are eligible, and `failed` adds a one-line reason (the machine `error_code`, never the provider's text); and the origin allowlist still applies. Failure messages are brief
 and omit execution details. The sender is resolved from the installation root;
 task data and environment remain in the workspace.
 

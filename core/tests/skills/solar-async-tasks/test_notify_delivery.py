@@ -129,7 +129,8 @@ def test_notify_when_failed_reports_failure_with_its_reason_and_not_completion(t
                       + '\n## Execution Error\n- error_code: provider_quota\n- error: quota exceeded\n')
     assert notify(failed, env).returncode == 0
     sent = (workspace / 'sent.log').read_text()
-    assert 'Task failed' in sent and 'Reason: quota exceeded' in sent
+    assert 'Task failed' in sent and 'Reason: provider_quota' in sent
+    assert 'quota exceeded' not in sent
     done = task_file(root, 'completed', '')
     done.write_text(done.read_text().replace('notify_when: completed', 'notify_when: "failed"'))
     assert notify(done, env).returncode == 0
@@ -155,3 +156,55 @@ def test_a_new_claim_clears_the_notice_record_so_each_run_notifies_once(tmp_path
         store.task_claim(tid, 'worker')
         pairs = dict(store.task_get(tid)['frontmatter'])
     assert 'notify_delivered' not in pairs and 'notify_status' not in pairs
+
+
+def _failed_with(root, env, error_section):
+    failed = task_file(root, 'error', '')
+    failed.write_text(failed.read_text().replace('notify_when: completed', 'notify_when: "failed"')
+                      + '\n## Execution Error\n' + error_section)
+    return failed
+
+
+def test_reason_is_a_machine_code_and_never_the_provider_text(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    failed = _failed_with(root, env, '- error_code: router_crashed\n- error: token sk-123 at /Users/x/secret.md\n')
+    assert notify(failed, env).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Reason: router_crashed' in sent
+    assert 'sk-123' not in sent and '/Users/x' not in sent
+
+
+@pytest.mark.parametrize('section', ['- error: only free text with sk-123\n',
+                                     '- error_code: see https://x.example/?t=sk-123\n',
+                                     '- error_code: ' + 'a' * 80 + '\n'])
+def test_a_missing_or_malformed_code_is_reported_as_unknown(tmp_path, section):
+    workspace, root, env = fixture_env(tmp_path)
+    failed = _failed_with(root, env, section)
+    assert notify(failed, env).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Reason: unknown' in sent and 'sk-123' not in sent and 'x.example' not in sent
+
+
+def test_two_notifiers_for_the_same_run_send_one_notice(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    sender = Path(env['SOLAR_ROOT']) / 'core/skills/solar-telegram/scripts/send_telegram.sh'
+    sender.write_text('#!/bin/bash\nsleep 1\nprintf "%s\\n" "$1" >> "$SOLAR_WORKSPACE/sent.log"\n')
+    task = task_file(root, 'error', '')
+    task.write_text(task.read_text().replace('notify_when: completed', 'notify_when: "failed"')
+                    + '\n## Execution Error\n- error_code: boom\n')
+    seed(root)
+    run_env = env_for(root, {**env, 'TMPDIR': str(tmp_path)})
+    cmd = ['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)]
+    procs = [subprocess.Popen(cmd, env=run_env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(2)]
+    assert [p.wait(timeout=30) for p in procs] == [0, 0]
+    assert (workspace / 'sent.log').read_text().count('Task failed') == 1
+
+
+def test_a_notice_recorded_for_an_earlier_run_does_not_silence_this_run(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'completed', 'notify_run: run-2\nnotify_delivered: true\n'
+                     'notify_delivered_run: run-1\n')
+    assert notify(task, env).returncode == 0
+    assert (workspace / 'sent.log').read_text().count('Task completed') == 1
+    assert 'notify_delivered_run: run-2' in task.read_text()
