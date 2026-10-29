@@ -22,6 +22,7 @@ import errno
 import fcntl
 import json
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -152,6 +153,9 @@ class Supervisor:
         self._notice_lock = threading.Lock()       # the approval-notice sender and the supervisor's exit
         self._notice_closing = False
         self._notice_proc: Optional[subprocess.Popen] = None
+        self._failure_queue: "queue.Queue[Optional[str]]" = queue.Queue()   # tasks the supervisor itself failed
+        self._failure_sender: Optional[threading.Thread] = None
+        self._failure_proc: Optional[subprocess.Popen] = None
         self._announcer: Optional[threading.Thread] = None
         self.draining = False
         self.drain_request: Optional[dict] = None
@@ -498,15 +502,16 @@ class Supervisor:
         so a stop never falls between the thread starting a sender and the supervisor seeing it."""
         with self._notice_lock:
             self._notice_closing = True
-            proc = self._notice_proc
-            if proc is not None and proc.poll() is None:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except OSError:
-                    pass
-        thread = self._announcer
-        if thread is not None and thread.is_alive():
-            thread.join(10)
+            for proc in (self._notice_proc, self._failure_proc):
+                if proc is not None and proc.poll() is None:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+            self._failure_queue.put(None)
+        for thread in (self._announcer, self._failure_sender):
+            if thread is not None and thread.is_alive():
+                thread.join(10)
 
     def _send_notices(self) -> None:
         try:
@@ -811,21 +816,44 @@ class Supervisor:
 
     def _notify_failure(self, task_id: str) -> None:
         """A task the supervisor itself failed (lost lease, executor gone) never reaches the worker's own
-        notice. The notifier decides from `notify_when`; it runs off the supervisor's loop and is ended with
-        its process group after NOTIFY_TIMEOUT."""
-        def send() -> None:
+        notice. The notifier decides from `notify_when`. One sender thread sends them one at a time, off the
+        supervisor's loop, and `_stop_announcer` ends it with the supervisor."""
+        with self._notice_lock:
+            if self._notice_closing:
+                return
+            self._failure_queue.put(task_id)
+            if self._failure_sender is None or not self._failure_sender.is_alive():
+                self._failure_sender = threading.Thread(target=self._send_failure_notices,
+                                                        name="failure-notice", daemon=True)
+                self._failure_sender.start()
+
+    def _send_failure_notices(self) -> None:
+        while True:
             try:
-                proc = subprocess.Popen(["bash", str(HERE / "notify_if_configured.sh"), task_id],
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL, env={**os.environ}, start_new_session=True)
+                task_id = self._failure_queue.get(timeout=5)
+            except queue.Empty:
+                return
+            if task_id is None:
+                return
+            try:
+                with self._notice_lock:
+                    if self._notice_closing:
+                        return
+                    proc = subprocess.Popen(["bash", str(HERE / "notify_if_configured.sh"), task_id],
+                                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL, env={**os.environ},
+                                            start_new_session=True)
+                    self._failure_proc = proc
                 try:
                     proc.wait(timeout=self.NOTIFY_TIMEOUT)
                 except subprocess.TimeoutExpired:
-                    os.killpg(proc.pid, signal.SIGKILL)
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
                     proc.wait()
             except OSError:
                 pass
-        threading.Thread(target=send, name="failure-notice", daemon=True).start()
 
     def _start_failure(self, task_id: str, token: str, worker: str, why: str) -> None:
         """An execution that never started: nothing ran, so the place is given back unambiguously.

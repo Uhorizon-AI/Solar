@@ -299,3 +299,26 @@ def test_a_notice_without_a_task_id_is_not_sent_and_says_so(tmp_path):
     waiting_task()
     assert notify("", "--waiting", env).returncode == 3
     assert not (workspace / "sent.log").exists()
+
+
+def test_stopping_the_supervisor_ends_the_failure_notice_it_was_sending(rig, tmp_path, monkeypatch):
+    import supervisor_support
+    mod = supervisor_support.supervisor_mod
+    pidfile = tmp_path / "failure.pid"
+    fake = tmp_path / "scripts"
+    fake.mkdir()
+    (fake / "notify_if_configured.sh").write_text(f'#!/bin/bash\nsleep 300 &\necho $! > "{pidfile}"\nwait\n')
+    monkeypatch.setattr(mod, "HERE", fake)
+    monkeypatch.setattr(mod.Supervisor, "NOTIFY_TIMEOUT", 120.0)
+    sup = rig.build()
+    sup._notify_failure("some-task")
+    supervisor_support.wait_until(pidfile.exists, 30, what="the failure notice to start")
+    child = int(pidfile.read_text())
+    sup._stop_announcer()
+    assert not sup._failure_sender.is_alive()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and supervisor_support.alive(child):
+        time.sleep(0.05)
+    assert not supervisor_support.alive(child), "the failure notice outlived the supervisor"
+    sup._notify_failure("late-task")                          # after the stop nothing starts
+    assert sup._failure_queue.empty()

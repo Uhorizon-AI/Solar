@@ -7,7 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
-- feat(tasks): `task.create` and `task.update` accept `notify_when` (`completed`, `failed`, `blocked`), so a task can notify the configured chat without manual steps. `failed` adds a one-line reason; the approval-wait notice now says why the task waits. Each run notifies once (a claim clears the previous run's notice record), and a task failed by the supervisor itself is also announced. Closes the first piece of #81.
+- feat(tasks): `task.create` and `task.update` accept `notify_when` (`completed`, `failed`, `blocked`), so a task can notify the configured chat without manual steps. `failed` adds a one-line reason (the machine `error_code`, never the provider's text; `unknown` when missing or malformed); a notice is sent once per run even when the worker and the supervisor both announce the end; the approval-wait notice now says why the task waits. Each run notifies once (a claim clears the previous run's notice record), and a task failed by the supervisor itself is also announced. Closes the first piece of #81.
 
 ## [0.60.2] - 2026-10-29
 ### Fixed
