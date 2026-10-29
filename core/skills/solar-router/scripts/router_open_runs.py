@@ -21,7 +21,7 @@ def run_task_id(row: dict) -> Optional[str]:
     return request_id[len("task_"):] or None
 
 
-def _parse(ts: object) -> Optional[datetime.datetime]:
+def parse_ts(ts: object) -> Optional[datetime.datetime]:
     try:
         parsed = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
     except ValueError:
@@ -72,7 +72,7 @@ def open_runs(rows: list[dict], task_status: Callable[[str], Optional[str]],
                 continue
             if latest[task_id] != rid:
                 continue
-            started, claimed = _parse(row.get("ts")), _parse(task_claimed(task_id))
+            started, claimed = parse_ts(row.get("ts")), parse_ts(task_claimed(task_id))
             if started and claimed and started < claimed:
                 continue
         result[rid] = row

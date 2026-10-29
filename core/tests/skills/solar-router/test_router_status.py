@@ -197,3 +197,33 @@ def test_requeued_task_that_is_not_active_has_no_run_in_flight():
 def test_older_open_run_is_dropped_when_the_newest_run_already_ended():
     rows = [_start("old", task_id="t"), _start("new", task_id="t"), {"event": "end", "router_id": "new"}]
     assert open_runs(rows, lambda t: "active") == {}
+
+
+def test_single_old_run_before_the_latest_claim_is_not_open():
+    # Alone, so only the claim comparison can drop it (no newer run supersedes it).
+    rows = [_start("old", task_id="t", ts="2026-10-28T10:00:00.100000+00:00")]
+    assert open_runs(rows, lambda t: "active", lambda t: "2026-10-28T10:00:05Z") == {}
+    assert set(open_runs(rows, lambda t: "active", lambda t: "2026-10-28T09:59:59Z")) == {"old"}
+
+
+def test_last_executions_sort_by_time_across_timestamp_formats(status_env):
+    with solar_state.session() as store:
+        # As strings "…:00Z" > "…:00+00:00", yet the +00:00 one is the later instant.
+        store.audit_append(_start("earlier0-1111", request_id="a", ts="2026-10-28T10:00:00Z"))
+        store.audit_append(_start("later00-2222", request_id="b", ts="2026-10-28T10:00:00.500000+00:00"))
+    last = _run_status(status_env).stdout.split("Last ")[1]
+    assert last.index("later00-") < last.index("earlier0"), last
+
+
+@pytest.mark.parametrize("value", ["abc", "-1", "1.5"])
+def test_last_rejects_a_non_integer(status_env, value):
+    proc = _run_status(status_env, "--last", value)
+    assert proc.returncode == 2 and "--last needs" in proc.stderr and "Traceback" not in proc.stderr
+
+
+def test_last_limits_the_listing(status_env):
+    with solar_state.session() as store:
+        for i in range(3):
+            store.audit_append(_start(f"run{i}0000-x", request_id=f"r{i}", ts=f"2026-10-28T10:00:0{i}+00:00"))
+    last = _run_status(status_env, "--last", "2").stdout.split("Last 2 executions:")[1]
+    assert last.count("router=") == 2 and "run20000" in last and "run00000" not in last

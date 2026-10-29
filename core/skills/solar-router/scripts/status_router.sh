@@ -38,6 +38,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ "$LAST_N" =~ ^[0-9]+$ ]] || { echo "--last needs a non-negative integer" >&2; exit 2; }
+
 if [[ "$STALE_COUNT_ONLY" == true ]]; then
   export STALE_ALL STALE_MAX_AGE_HOURS
   $PYTHON - <<'PYEOF'
@@ -149,11 +151,11 @@ echo ""
 echo "  Last $LAST_N executions:"
 
 $PYTHON - "$LAST_N" <<'PYEOF'
-import os, sys
+import datetime, os, sys
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
 sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
-from router_open_runs import open_runs, last_claim
+from router_open_runs import open_runs, last_claim, parse_ts
 
 last_n = int(sys.argv[1])
 starts = {}
@@ -178,7 +180,9 @@ for rid, start in starts.items():
     end = ends.get(rid)
     merged.append((start.get("ts", ""), rid, start, end))
 
-merged.sort(key=lambda x: x[0], reverse=True)
+# By parsed time: ts strings mix "Z", offsets and microsecond precision. Ties keep audit order.
+_epoch0 = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
+merged.sort(key=lambda x: parse_ts(x[0]) or _epoch0, reverse=True)
 
 if not merged:
     print("    (no executions yet)")
