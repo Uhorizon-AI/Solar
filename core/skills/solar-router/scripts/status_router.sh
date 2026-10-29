@@ -47,14 +47,14 @@ from pathlib import Path
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
 sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
-from router_open_runs import open_runs
+from router_open_runs import open_runs, last_claim
 
 count_all = os.environ.get("STALE_ALL", "false").lower() == "true"
 max_age_h = float(os.environ.get("STALE_MAX_AGE_HOURS", "24"))
 
 try:
     with solar_state.session() as store:
-        starts = open_runs(store.audit_rows(), store.task_status)
+        starts = open_runs(store.audit_rows(), store.task_status, last_claim(store))
 except solar_state.StateError as exc:
     print(exc, file=sys.stderr)
     raise SystemExit(1)
@@ -91,11 +91,17 @@ echo "════════════════════════�
 echo ""
 echo "  Providers:"
 # Every provider in the configured priority (list_providers.sh), not a fixed list.
-bash "$SCRIPT_DIR/diagnose_router.sh" --dry-run 2>/dev/null \
-  | grep -E "^  - [a-z0-9_-]+: " \
-  | sed 's/^/  /' \
-  || true
-[[ -f "$SCRIPT_DIR/diagnose_router.sh" ]] || echo "    (diagnose_router.sh not available)"
+providers_out=""
+if [[ -f "$SCRIPT_DIR/diagnose_router.sh" ]]; then
+  providers_out="$(bash "$SCRIPT_DIR/diagnose_router.sh" --dry-run 2>/dev/null | grep -E "^  - [a-z0-9_-]+: " || true)"
+  if [[ -n "$providers_out" ]]; then
+    echo "$providers_out" | sed 's/^/  /'
+  else
+    echo "    (no provider reported: run diagnose_router.sh --dry-run)"
+  fi
+else
+  echo "    (diagnose_router.sh not available)"
+fi
 
 # ---------------------------------------------------------------------------
 # 2. In-flight processes (start without matching end)
@@ -108,11 +114,11 @@ import os, sys, datetime
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
 sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
-from router_open_runs import open_runs
+from router_open_runs import open_runs, last_claim
 
 try:
     with solar_state.session() as store:
-        in_flight = open_runs(store.audit_rows(), store.task_status)
+        in_flight = open_runs(store.audit_rows(), store.task_status, last_claim(store))
 except solar_state.StateError:
     print("    (no audit yet)")
     raise SystemExit(0)
@@ -147,7 +153,7 @@ import os, sys
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
 sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
-from router_open_runs import open_runs
+from router_open_runs import open_runs, last_claim
 
 last_n = int(sys.argv[1])
 starts = {}
@@ -155,7 +161,7 @@ ends = {}
 try:
     with solar_state.session() as store:
         loaded = store.audit_rows()
-        running = open_runs(loaded, store.task_status)
+        running = open_runs(loaded, store.task_status, last_claim(store))
 except solar_state.StateError:
     print("    (no audit yet)")
     raise SystemExit(0)
