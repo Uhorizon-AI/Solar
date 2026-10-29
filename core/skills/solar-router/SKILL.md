@@ -255,12 +255,12 @@ policy checks, CLI restrictions, limitations and the opt-in inference-free probe
 
 ## CLI permission checks
 
-Capability is not permission: a flag Solar passes is a request, and the client's own settings decide what runs.
+Capability is not permission: a flag Solar passes is a request, and the client's own settings decide what runs, unless Solar pins a setting on the command line it builds (the Codex ask does this for `approval_policy`; the probe confirms it).
 `cli_permissions.py` reports, per installed client (claude, codex, agent, agy: Antigravity, the successor of the Gemini CLI) and check (`mcp_read`, `write_guard`):
 
-- **Static tier** — reads the client's own settings, except Codex `write_guard`, which comes from Solar's own ask command (`-c approval_policy="never"`: requested on the command line, confirmed only by the probe) (`~/.cursor/cli-config.json` and `<workspace>/.cursor/cli.json`, `~/.claude/settings.json` and `<workspace>/.claude/settings*.json`,
+- **Static tier** — reads the client's own settings (`~/.cursor/cli-config.json` and `<workspace>/.cursor/cli.json`, `~/.claude/settings.json` and `<workspace>/.claude/settings*.json`,
   `~/.codex/config.toml`). No model call; `solar status` shows it on the `clients:` line.
-  A check the settings cannot settle is `unknown` (never `ok`); Antigravity (`agy`, formerly the Gemini CLI) has no documented permission settings: `~/.gemini/settings.json` holds only auth and general options, so both checks are `unknown` until the probe runs.
+  A check the settings cannot settle is `unknown` (never `ok`), with one exception: Codex `write_guard` comes from Solar's own ask command (`-c approval_policy="never"`), so it is `ok` as requested on the command line and only the probe confirms it; Antigravity (`agy`, formerly the Gemini CLI) has no documented permission settings: `~/.gemini/settings.json` holds only auth and general options, so both checks are `unknown` until the probe runs.
 - **Probe tier** — opt-in, costs tokens, run by `solar client doctor --probe-permissions`. It launches each client
   through `BaseProvider.ask`, the same construction as a router question (no separate flag set, no `-f`/`--yolo`).
   `mcp_read` is judged by the Solar MCP server's own audit log (`<runtime>/mcp/audit.jsonl`): the probe asks the
