@@ -266,8 +266,7 @@ Capability is not permission: a flag Solar passes is a request, and the client's
   `mcp_read` is judged by the Solar MCP server's own audit log (`<runtime>/mcp/audit.jsonl`): the probe asks the
   client to call `solar_search` with a unique marker, and `ok` means the server recorded that call. If it did not,
   the result is `missing` with the client's own words as detail; no cause is assumed. `write_guard` asks the client
-  to create a file in a scratch folder (outside the workspace, so folder-keyed overrides such as Codex's
-  `projects."<workspace>"` are covered by the static check instead) and is `too_permissive` if the file exists.
+  to create a file in a scratch folder (outside the workspace, so a folder-keyed client setting does not apply to it) and is `too_permissive` if the file exists.
   A silent exit with no file is `ok` only for Antigravity, which auto-denies what it cannot prompt for; for any other
   client it is `unknown`. `mcp_read` checks `solar_search`. A client that could not run is `unknown`.
   A partial probe (`--client`, `--check`) replaces only the checks it ran; `solar status` shows the age of the oldest one.
@@ -282,6 +281,6 @@ Per CLI, what the operator changes:
 | CLI | Settings file | Change |
 |---|---|---|
 | claude | none for MCP in plan mode | Claude's plan mode runs only MCP tools that declare `readOnlyHint`; `permissions.allow` does not lift it. The Solar MCP server declares it on `solar_search` and `solar_docs`: update Solar. |
-| codex | `~/.codex/config.toml` | `approval_policy = "never"` for the workspace (or no `approvals_reviewer`, or `approvals_reviewer = "user"`), so no reviewer can approve leaving `--sandbox read-only`. |
+| codex | none for `write_guard` | Solar's ask passes `-c approval_policy="never"` on the command line, so no `approvals_reviewer` in `config.toml` can approve leaving `--sandbox read-only` (a `[projects."<path>"]` `approval_policy` is not honored by `codex exec`). `mcp_read`: `mcp_servers.solar` registered and enabled in `~/.codex/config.toml`. |
 | agent (Cursor) | `~/.cursor/cli-config.json` | With `approvalMode: allowlist`, `permissions.allow` needs `Mcp(solar:solar_search)` and `Mcp(solar:solar_docs)`. `--approve-mcps` is not enough. |
 | agy (Antigravity) | `~/.gemini/antigravity-cli/settings.json` | Documented rule `mcp(solar/solar_search)`, `mcp(solar/solar_docs)` in `permissions.allow`; unverified in headless mode. |
