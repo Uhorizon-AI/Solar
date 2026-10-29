@@ -5,7 +5,7 @@ import subprocess
 
 import pathlib
 
-from client_permissions import (Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, OK, UNKNOWN,
+from cli_permissions import (Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, OK, UNKNOWN,
                                 mcp_registered, read_json, unknown)
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 

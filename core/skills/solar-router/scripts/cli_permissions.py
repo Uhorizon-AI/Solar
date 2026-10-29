@@ -1,4 +1,4 @@
-"""Does each client's own permission layer allow what Solar needs and forbid what it forbids?
+"""Does each CLI's own permission layer allow what Solar needs and forbid what it forbids?
 
 Capability is not permission: a flag Solar passes is a request, and the client's
 settings decide what runs. Two checks per client:
@@ -36,13 +36,13 @@ CHECKS = ("mcp_read", "write_guard")
 CLIENTS = ("claude", "codex", "agent", "agy")
 MCP_SERVER = "solar"
 MCP_READ_TOOLS = ("solar_search", "solar_docs")
-STORE_NAME = "client-permissions.json"
+STORE_NAME = "cli-permissions.json"
 PROBE_TIMEOUT_SEC = 180
 
 
 @dataclass(frozen=True)
 class Finding:
-    client: str
+    cli: str
     check: str
     status: str
     tier: str = "static"  # static | probe
@@ -56,9 +56,9 @@ class Finding:
             raise ValueError(f"invalid finding {self.check}={self.status}")
 
 
-def unknown(client, check, detail, *, tier="static", fix=""):
+def unknown(cli, check, detail, *, tier="static", fix=""):
     """What is not verified is never `ok`."""
-    return Finding(client, check, UNKNOWN, tier, detail, fix=fix)
+    return Finding(cli, check, UNKNOWN, tier, detail, fix=fix)
 
 
 def read_json(path: Path):
@@ -273,16 +273,16 @@ def summary(static: list[Finding]):
     probes = {}
     for row in (stored or {}).get("results", []):
         try:
-            probes[(row["client"], row["check"])] = Finding(**row)
+            probes[(row["cli"], row["check"])] = Finding(**row)
         except (KeyError, TypeError, ValueError):
             continue
     if not static:
         return "INFO", "no installed client"
     bad, unverified = [], 0
     for finding in static:
-        status = combine(finding, probes.get((finding.client, finding.check)))
+        status = combine(finding, probes.get((finding.cli, finding.check)))
         if status in (MISSING, TOO_PERMISSIVE):
-            bad.append(f"{finding.client} {finding.check} {status}")
+            bad.append(f"{finding.cli} {finding.check} {status}")
         elif status == UNKNOWN:
             unverified += 1
     probed = f"probe {age_label(stored['probed_at'])}" if stored else "probe never run"
@@ -296,7 +296,7 @@ def summary(static: list[Finding]):
 def render(findings: list[Finding]) -> str:
     lines = []
     for f in findings:
-        lines.append(f"{f.client:7} {f.check:12} {f.status:14} [{f.tier}] {f.detail}")
+        lines.append(f"{f.cli:7} {f.check:12} {f.status:14} [{f.tier}] {f.detail}")
         if f.status in (MISSING, TOO_PERMISSIVE) and (f.fix or f.setting):
             where = f" in {f.file}" if f.file else ""
             lines.append(f"        fix: {f.fix or f.setting}{where}")

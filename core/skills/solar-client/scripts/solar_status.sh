@@ -168,7 +168,7 @@ fi
 
 # client permissions — static read of each client's own settings plus the last stored
 # probe; never a model call. The live probe is opt-in: solar client doctor --probe-permissions.
-perms_script="$(solar_core_dir)/skills/solar-router/scripts/client_permissions.py"
+perms_script="$(solar_core_dir)/skills/solar-router/scripts/cli_permissions.py"
 if [[ -f "$perms_script" ]]; then
   if perms_out="$(python3 "$perms_script" summary 2>/dev/null)" && [[ -n "$perms_out" ]]; then
     IFS=$'\t' read -r perms_state perms_detail <<< "$perms_out"
@@ -303,7 +303,7 @@ if [[ "$client_state" == "WARN" ]]; then
   echo "hint: solar client doctor"
 fi
 if [[ "$perms_state" == "WARN" ]]; then
-  echo "hint: python3 core/skills/solar-router/scripts/client_permissions.py static   # exact setting and file"
+  echo "hint: python3 core/skills/solar-router/scripts/cli_permissions.py static   # exact setting and file"
 fi
 if [[ "$workspace_state" == "WARN" ]]; then
   echo "hint: solar workspace doctor"

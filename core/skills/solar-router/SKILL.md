@@ -115,9 +115,9 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 # Full error output when a provider fails (e.g. 401, binary not found)
 bash core/skills/solar-router/scripts/diagnose_router.sh --verbose
 
-# Client permissions: does each client's own permission layer allow what Solar needs (read through
+# CLI permissions: does each CLI client's own permission layer allow what Solar needs (read through
 # the Solar MCP) and forbid what it forbids (writing in an ask)? Results: ok | missing | too_permissive | unknown.
-python3 core/skills/solar-router/scripts/client_permissions.py static   # settings only, no model call; also in `solar status`
+python3 core/skills/solar-router/scripts/cli_permissions.py static   # settings only, no model call; also in `solar status`
 solar client doctor --probe-permissions [--client NAME]                 # opt-in live probe, costs tokens, stored for `solar status`
 
 # Unit tests: router logic + provider adapters (centralized under core/tests; pytest runs unittest-style tests; no real AI calls)
@@ -253,10 +253,10 @@ policy checks, CLI restrictions, limitations and the opt-in inference-free probe
 
 `ask_metering.py` is an internal structured CLI transport and per-invocation observation sink for asynchronous questions; it is not a standalone provider entry point. See [scope and semantics](../../docs/task-token-usage.md).
 
-## Client permission checks
+## CLI permission checks
 
 Capability is not permission: a flag Solar passes is a request, and the client's own settings decide what runs.
-`client_permissions.py` reports, per installed client (claude, codex, agent, agy: Antigravity, the successor of the Gemini CLI) and check (`mcp_read`, `write_guard`):
+`cli_permissions.py` reports, per installed client (claude, codex, agent, agy: Antigravity, the successor of the Gemini CLI) and check (`mcp_read`, `write_guard`):
 
 - **Static tier** — reads the client's own settings (`~/.cursor/cli-config.json`, `~/.claude/settings.json`,
   `~/.codex/config.toml`, workspace overrides). No model call; `solar status` shows it on the `clients:` line.
@@ -267,7 +267,7 @@ Capability is not permission: a flag Solar passes is a request, and the client's
   client to call `solar_search` with a unique marker, and `ok` means the server recorded that call. If it did not,
   the result is `missing` with the client's own words as detail; no cause is assumed. `write_guard` asks the client
   to create a file in a scratch folder and is `too_permissive` if the file exists. A client that could not run is `unknown`.
-  The last result is stored in `<runtime>/router/client-permissions.json` (machine state: it depends on this machine's
+  The last result is stored in `<runtime>/router/cli-permissions.json` (machine state: it depends on this machine's
   client settings) and `solar status` shows it with its age.
 
 Each `missing`/`too_permissive` result names the setting, the file and the change. Solar never writes to a client's configuration.

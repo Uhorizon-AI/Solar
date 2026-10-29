@@ -1,4 +1,4 @@
-"""Client permission checks: static reading of each client's settings and the opt-in probe.
+"""CLI permission checks: static reading of each client's settings and the opt-in probe.
 
 No real client runs: `subprocess.run` is mocked or `ask` is replaced. Settings live in
 temporary directories, never in the real home.
@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
-import client_permissions as cp
+import cli_permissions as cp
 from providers.agent import AgentProvider
 from providers.agy import AgyProvider
 from providers.base import AskResult
@@ -157,7 +157,7 @@ class TestContractPerProvider(Env):
                 self.assertEqual(sorted(f.check for f in found), sorted(cp.CHECKS))
                 for f in found:
                     self.assertIn(f.status, cp.STATUSES)
-                    self.assertEqual(f.client, cls.name)
+                    self.assertEqual(f.cli, cls.name)
 
     def test_antigravity_has_no_settings_model_so_nothing_is_ok(self):
         self.assertEqual({f.status for f in cp.static_checks(AgyProvider(), self.home, self.workspace)}, {cp.UNKNOWN})
@@ -281,7 +281,7 @@ class TestProbe(Env):
 class TestStoreAndSummary(Env):
     def setUp(self):
         super().setUp()
-        patcher = patch.object(cp, "store_path", return_value=Path(self._tmp.name) / "client-permissions.json")
+        patcher = patch.object(cp, "store_path", return_value=Path(self._tmp.name) / "cli-permissions.json")
         patcher.start()
         self.addCleanup(patcher.stop)
 

@@ -3,7 +3,7 @@ import os
 import shlex
 import subprocess
 
-from client_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, UNKNOWN, mcp_registered, read_json
+from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, UNKNOWN, mcp_registered, read_json
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
