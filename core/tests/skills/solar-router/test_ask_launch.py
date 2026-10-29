@@ -34,6 +34,8 @@ class TestNativeReadOnlyMode(unittest.TestCase):
         argv = call.args[0]
         self.assertEqual(argv[argv.index("--sandbox") + 1], "read-only")
         self.assertEqual(result.mode, "--sandbox read-only")
+        self.assertEqual(argv[argv.index("-c") + 1], 'approval_policy="never"')
+        self.assertLess(argv.index("-c"), argv.index("--"))  # before the separator and the prompt
 
     def test_cursor_asks_for_ask_mode(self):
         result, call = _ask(AgentProvider())

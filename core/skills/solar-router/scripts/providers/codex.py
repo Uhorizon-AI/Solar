@@ -6,9 +6,11 @@ import shlex
 import subprocess
 import sys
 
-from cli_permissions import (Finding, MCP_SERVER, MISSING, OK, TOO_PERMISSIVE,
-                             read_toml, unknown)
+from cli_permissions import Finding, MCP_SERVER, MISSING, OK, read_toml, unknown
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
+
+
+WRITE_GUARD_OVERRIDE = 'approval_policy="never"'
 
 
 class CodexProvider(BaseProvider):
@@ -27,29 +29,36 @@ class CodexProvider(BaseProvider):
         return ["exec", "--skip-git-repo-check"]
 
     def read_only_args(self, cwd):
-        return ["--sandbox", "read-only", "-C", str(cwd)], "--sandbox read-only"
+        # `approval_policy="never"` closes the way out of the read-only sandbox: with an automatic
+        # `approvals_reviewer` in the user's config, Codex asks for elevated execution and the
+        # reviewer grants it. A `[projects."<path>"]` override of the policy is not honored by
+        # `codex exec`, so only a command-line `-c` is reliable; it wins over config.toml.
+        return ["--sandbox", "read-only", "-c", WRITE_GUARD_OVERRIDE, "-C", str(cwd)], "--sandbox read-only"
+
+    def permission_fix_hint(self, check: str) -> str:
+        if check == "write_guard":
+            return (f"update Codex and check that it accepts `-c {WRITE_GUARD_OVERRIDE}` on `codex exec`; "
+                    "Solar passes it on every ask, so config.toml settings do not apply")
+        return super().permission_fix_hint(check)
 
     def ask_separator(self):
         return ["--"]
 
     def static_permission_checks(self, home, workspace):
-        """Codex decides by `approval_policy`, `approvals_reviewer` and `mcp_servers` in config.toml.
-
-        `--sandbox read-only` on the command line overrides `sandbox_mode`, but not the
-        approval path: an automatic reviewer can approve leaving that sandbox.
-        """
+        """`write_guard` comes from Solar's own ask command; `mcp_read` from `mcp_servers` in config.toml."""
+        flags, _ = self.read_only_args(workspace)
+        if WRITE_GUARD_OVERRIDE in flags:
+            write = Finding(self.name, "write_guard", OK, "static",
+                            f"the ask command passes -c {WRITE_GUARD_OVERRIDE}, which config.toml cannot override (requested, not verified: the probe confirms)")
+        else:
+            write = unknown(self.name, "write_guard", "the ask command does not pin the approval policy; run the probe")
         codex_home = pathlib.Path(os.getenv("CODEX_HOME") or home / ".codex")
         path = codex_home / "config.toml"
         config = read_toml(path)
         if config is None:
             why = ("needs Python 3.11+ (tomllib) to read it" if importlib.util.find_spec("tomllib") is None
                    else "is missing or unreadable")
-            return [unknown(self.name, c, f"{path} {why}") for c in ("mcp_read", "write_guard")]
-        projects = config.get("projects")
-        project = projects.get(str(workspace)) if isinstance(projects, dict) else None
-        project = project if isinstance(project, dict) else {}
-        policy = project.get("approval_policy", config.get("approval_policy"))
-        reviewer = project.get("approvals_reviewer", config.get("approvals_reviewer"))
+            return [unknown(self.name, "mcp_read", f"{path} {why}"), write]
         servers = config.get("mcp_servers")
         servers = servers if isinstance(servers, dict) else {}
         if MCP_SERVER not in servers:
@@ -60,17 +69,6 @@ class CodexProvider(BaseProvider):
                            setting=f"mcp_servers.{MCP_SERVER}.enabled", file=str(path), fix="set enabled = true")
         else:
             read = unknown(self.name, "mcp_read", "registered; only the probe shows whether a read call is approved")
-        if policy == "never":
-            write = Finding(self.name, "write_guard", OK, "static", 'approval_policy = "never": no path out of the read-only sandbox')
-        elif reviewer and reviewer != "user" and policy:
-            where = f'projects."{workspace}"' if "approval_policy" in project else "top level"
-            write = Finding(self.name, "write_guard", TOO_PERMISSIVE, "static",
-                            f'approval_policy = "{policy}" with approvals_reviewer = "{reviewer}" ({where}) can approve leaving --sandbox read-only',
-                            setting="approval_policy", file=str(path),
-                            fix='set approval_policy = "never" (or remove approvals_reviewer, or set it to "user") for the Solar workspace',
-                            snippet=f'[projects."{workspace}"]\napproval_policy = "never"')
-        else:
-            write = unknown(self.name, "write_guard", f"approval_policy={policy or 'unset'}; only the probe shows whether read-only holds")
         return [read, write]
 
     def stream(self, prompt: str, *, review=None):

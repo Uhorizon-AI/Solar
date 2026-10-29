@@ -1,7 +1,8 @@
 """Does each CLI's own permission layer allow what Solar needs and forbid what it forbids?
 
 Capability is not permission: a flag Solar passes is a request, and the client's
-settings decide what runs. Two checks per client:
+settings decide what runs (Solar can also pin a setting on the command line it builds, as the Codex ask does for
+`approval_policy`; the probe confirms it). Two checks per client:
 
 - `mcp_read`: the client, launched as `ask` launches it, may call the read tools of
   the Solar MCP server.

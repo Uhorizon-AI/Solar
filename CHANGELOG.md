@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(router): Codex asks pass `-c approval_policy="never"`, so an automatic `approvals_reviewer` in `~/.codex/config.toml` can no longer approve leaving `--sandbox read-only` (the live probe wrote a file; a per-project `approval_policy` is not honored by `codex exec`). The static `write_guard` check reads the ask command instead of `config.toml`.
+
 ## [0.60.0] - 2026-10-29
 
 ### Added

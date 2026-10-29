@@ -188,19 +188,30 @@ class TestCodexStatic(Env):
         _write(self.home / ".codex" / "config.toml", text)
 
     @patch.dict("os.environ", {"CODEX_HOME": ""})
-    def test_an_automatic_reviewer_with_on_request_is_too_permissive(self):
+    def test_write_guard_is_ok_because_the_ask_command_pins_the_policy(self):
         self.config('approval_policy = "on-request"\napprovals_reviewer = "guardian_subagent"\n'
                     'sandbox_mode = "workspace-write"\n[mcp_servers.solar]\ncommand = "x"\n')
         found = self.checks(CodexProvider())["write_guard"]
-        self.assertEqual(found.status, cp.TOO_PERMISSIVE)
-        self.assertEqual(found.setting, "approval_policy")
-        self.assertIn('"never"', found.fix)
-        self.assertIn('approval_policy = "never"', found.snippet)
+        self.assertEqual(found.status, cp.OK)
+        self.assertIn('approval_policy="never"', found.detail)
+
+    def test_a_probe_failure_points_at_codex_not_at_config_toml(self):
+        hint = CodexProvider().permission_fix_hint("write_guard")
+        self.assertIn("-c", hint)
+        with patch.object(CodexProvider, "read_only_args", return_value=(["--sandbox", "read-only"], "m")):
+            self.assertEqual(cp.fix_for(CodexProvider(), "write_guard")["fix"], hint)
+
+    def test_the_read_only_ask_carries_the_override_before_the_prompt(self):
+        flags, mode = CodexProvider().read_only_args(self.workspace)
+        self.assertEqual(mode, "--sandbox read-only")
+        self.assertEqual(flags[flags.index("-c") + 1], 'approval_policy="never"')
+        self.assertIn("read-only", flags)
 
     @patch.dict("os.environ", {"CODEX_HOME": ""})
-    def test_a_user_reviewer_is_not_an_automatic_approval_path(self):
-        self.config('approval_policy = "on-request"\napprovals_reviewer = "user"\n')
-        self.assertEqual(self.checks(CodexProvider())["write_guard"].status, cp.UNKNOWN)
+    def test_without_the_override_write_guard_is_not_claimed(self):
+        with patch.object(CodexProvider, "read_only_args", return_value=(["--sandbox", "read-only"], "m")):
+            found = self.checks(CodexProvider())["write_guard"]
+        self.assertEqual(found.status, cp.UNKNOWN)
 
     @patch.dict("os.environ", {"CODEX_HOME": ""})
     def test_odd_toml_shapes_do_not_raise(self):
@@ -216,12 +227,6 @@ class TestCodexStatic(Env):
         self.assertIn("Python 3.11", found.detail)
 
     @patch.dict("os.environ", {"CODEX_HOME": ""})
-    def test_the_workspace_entry_overrides_the_top_level(self):
-        self.config('approval_policy = "on-request"\napprovals_reviewer = "guardian_subagent"\n'
-                    f'[projects."{self.workspace}"]\napproval_policy = "never"\n')
-        self.assertEqual(self.checks(CodexProvider())["write_guard"].status, cp.OK)
-
-    @patch.dict("os.environ", {"CODEX_HOME": ""})
     def test_unregistered_server_is_missing(self):
         self.config('approval_policy = "never"\n')
         self.assertEqual(self.checks(CodexProvider())["mcp_read"].status, cp.MISSING)
@@ -234,7 +239,8 @@ class TestCodexStatic(Env):
     @patch.dict("os.environ", {"CODEX_HOME": ""})
     def test_no_settings_file_is_unknown(self):
         found = self.checks(CodexProvider())
-        self.assertEqual({f.status for f in found.values()}, {cp.UNKNOWN})
+        self.assertEqual(found["mcp_read"].status, cp.UNKNOWN)
+        self.assertEqual(found["write_guard"].status, cp.OK)  # comes from the ask command, not the file
 
 
 class TestContractPerProvider(Env):
