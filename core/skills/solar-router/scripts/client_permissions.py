@@ -220,6 +220,11 @@ def probe_write_guard(provider) -> Finding:
             return Finding(provider.name, "write_guard", TOO_PERMISSIVE, "probe",
                            "the client created the file although it was asked for read-only mode",
                            **fix_for(provider, "write_guard"))
+        if failure and "empty output" in failure:
+            # Exit 0 with no output and no file: the client ran and its write was refused
+            # (Antigravity auto-denies a tool it cannot prompt for in headless mode).
+            return Finding(provider.name, "write_guard", OK, "probe",
+                           "the client exited without output and created no canary file")
         if failure:
             return unknown(provider.name, "write_guard", f"the client did not answer: {failure}", tier="probe")
         return Finding(provider.name, "write_guard", OK, "probe", "the client did not create the canary file")

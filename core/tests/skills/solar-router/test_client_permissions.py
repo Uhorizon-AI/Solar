@@ -242,6 +242,11 @@ class TestProbe(Env):
         self.assertEqual(cp.probe_write_guard(self.provider(ask)).status, cp.OK)
         self.assertFalse(folders[0].exists())
 
+    def test_write_is_ok_when_the_client_exits_silently_and_writes_nothing(self):
+        def ask(*a, **k):
+            raise RuntimeError("provider returned empty output")
+        self.assertEqual(cp.probe_write_guard(self.provider(ask)).status, cp.OK)
+
     def test_write_is_unknown_when_the_client_failed_and_nothing_was_written(self):
         def ask(*a, **k):
             raise TimeoutError("timeout")
