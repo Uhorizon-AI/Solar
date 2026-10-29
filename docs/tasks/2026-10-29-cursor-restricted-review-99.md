@@ -38,5 +38,7 @@ uv run --project core/tests pytest core/tests/skills/solar-router/test_repositor
 
 ## Completion evidence (optional)
 
-- Validation: `uv run --project core/tests pytest core/tests/skills/solar-router/test_repository_cli_guards.py core/tests/skills/solar-router/test_cli_permissions.py core/tests/skills/solar-router/test_repository_reviews.py -q` → 256 passed, 1 skipped.
+- Validation: `uv run --project core/tests pytest core/tests/skills/solar-router/test_repository_cli_guards.py core/tests/skills/solar-router/test_cli_permissions.py core/tests/skills/solar-router/test_repository_reviews.py -q` → 259 passed, 1 skipped, 12 subtests.
+- Follow-up on review: `mkdir_under_guard` uses `python -I`; an `EPERM` mkdir is `cursor_project_path_outside_write_guard` only for `/tmp/.cursor` (or `/tmp/.[REDACTED]`); the reader probe passes `with_model=False`. The OS write-guard mkdir is covered when `sandbox-exec` or `bwrap` is installed.
+- Not run from this tree: `solar client doctor --probe-permissions --client agent` and a live `review_batch` use the installed Solar, which does not yet contain this branch. Issue #99 stays open until that install is exercised.
 - Files changed: see the commit.

@@ -216,10 +216,14 @@ def require_cursor_state_inside(env, workspace, private, provider='agent'):
 
 
 def mkdir_under_guard(prefix, env, cwd, path, provider='agent'):
-    """Create Cursor's project directory with the same write guard the reader uses."""
+    """Create Cursor's project directory with the same write guard the reader uses.
+
+    `-I` keeps the untrusted snapshot off `sys.path`. Without it, a `pathlib.py`
+    in that directory would run with the private HOME while the network stays open.
+    """
     code = 'import pathlib,sys; pathlib.Path(sys.argv[1]).mkdir(parents=True, exist_ok=True, mode=0o700)'
     try:
-        done = subprocess.run([*prefix, sys.executable, '-B', '-c', code, path],
+        done = subprocess.run([*prefix, sys.executable, '-I', '-B', '-c', code, path],
                               cwd=str(cwd), env=env, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
         raise unsupported(provider, 'state', 'cursor_state_mkdir_timeout') from None

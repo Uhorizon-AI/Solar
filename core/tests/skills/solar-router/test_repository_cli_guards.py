@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -587,10 +588,68 @@ def test_a_short_review_directory_keeps_cursor_state_inside_the_guard(monkeypatc
         assert Path(created).is_dir()
 
 
+def test_mkdir_under_guard_does_not_import_the_snapshot(tmp_path):
+    private = tmp_path / 'private'
+    private.mkdir()
+    cwd = private / 'repository'
+    cwd.mkdir()
+    marker = private / 'hostile-imported'
+    (cwd / 'pathlib.py').write_text(
+        'import pathlib, sys\n'
+        f'pathlib.Path({str(marker)!r}).write_text("imported")\n'
+        'raise SystemExit(86)\n')
+    target = private / 'home' / 'cursor-data' / 'projects' / 'ws'
+    guards.mkdir_under_guard([], {'PATH': os.environ.get('PATH', '')}, cwd, str(target))
+    assert target.is_dir()
+    assert not marker.exists()
+
+
+def _write_guard_helper():
+    if sys.platform == 'darwin':
+        return Path('/usr/bin/sandbox-exec').is_file()
+    if sys.platform == 'linux':
+        return shutil.which('bwrap', path='/usr/bin:/bin') is not None
+    return False
+
+
+@pytest.mark.skipif(not _write_guard_helper(), reason='OS write guard helper is not installed')
+def test_finish_cursor_launch_mkdirs_under_the_os_write_guard(monkeypatch):
+    monkeypatch.setattr(tempfile, 'gettempdir', lambda: '/var/folders/' + ('y' * 40) + '/T')
+    with repo.review_directory() as private:
+        workspace = private / 'repository'
+        workspace.mkdir()
+        (workspace / 'source.md').write_text('unchanged')
+        marker = private / 'hostile-imported'
+        (workspace / 'pathlib.py').write_text(
+            'import pathlib\n'
+            f'pathlib.Path({str(marker)!r}).write_text("imported")\n'
+            'raise SystemExit(86)\n')
+        data = private / 'home' / 'cursor-data'
+        tmp = private / 'tmp'
+        data.mkdir(parents=True)
+        tmp.mkdir()
+        prefix = guards.guard_prefix(private, workspace, 'agent')
+        created = guards.finish_cursor_launch(
+            prefix,
+            {'CURSOR_DATA_DIR': str(data), 'TMPDIR': str(tmp), 'PATH': os.environ.get('PATH', '')},
+            private, workspace)
+        assert Path(created).is_dir()
+        Path(created).resolve().relative_to(private.resolve())
+        assert not str(created).startswith('/tmp/.cursor')
+        assert not marker.exists()
+        assert (workspace / 'source.md').read_text() == 'unchanged'
+
+
 def test_cursor_eperm_names_the_write_guard_instead_of_a_generic_provider_failure():
     from providers.base import raise_restricted_failure
+    named = dict(provider='agent', stage='state', reason='cursor_project_path_outside_write_guard')
     with pytest.raises(profiles.ProfileError) as error:
         raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/tmp/.cursor/x'", 1)
-    assert error.value.detail == dict(provider='agent', stage='state', reason='cursor_project_path_outside_write_guard')
+    assert error.value.detail == named
+    with pytest.raises(profiles.ProfileError) as error:
+        raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/tmp/.[REDACTED]'", 1)
+    assert error.value.detail == named
+    with pytest.raises(RuntimeError, match='cursor-data'):
+        raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/x/home/cursor-data/projects/ws'", 1)
     with pytest.raises(RuntimeError, match='not_logged_in'):
         raise_restricted_failure('agent', 'exit 1: not_logged_in', 1)

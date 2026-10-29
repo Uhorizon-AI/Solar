@@ -193,10 +193,15 @@ path is at most 83 characters (and the full path at most 91); otherwise it
 mkdirs `/tmp/.cursor/<slug>`. A macOS default temp directory
 (`/var/folders/…`) plus a long prefix crosses that limit, and the write guard
 then returns `EPERM`. The review directory is created under `/tmp` with a short
-prefix in that case, and the project directory is created inside the guard
-before the model starts. If it would still fall outside, launch refuses with
-`cursor_project_path_outside_write_guard` instead of running the model. An
-`EPERM` mkdir that still escapes is reported with that same reason.
+prefix in that case. Before the model starts, `mkdir_under_guard` creates the
+project directory inside the guard, with `python -I` so a module in the
+untrusted snapshot cannot shadow the standard library. A denied or timed-out
+creation is `cursor_state_mkdir_denied` or `cursor_state_mkdir_timeout`. If the
+computed path would still fall outside the private directory, launch refuses
+with `cursor_project_path_outside_write_guard` and does not start the model.
+Only a later model exit whose stderr is an `EPERM` mkdir of `/tmp/.cursor…`
+(or the redacted form `/tmp/.[REDACTED]`) is reported with that same reason.
+Any other denied mkdir stays a generic provider failure.
 
 Cursor receives `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, a private HOME/XDG tree,
 and `AGENT_CLI_CREDENTIAL_STORE=file`. `--trust` satisfies the CLI headless

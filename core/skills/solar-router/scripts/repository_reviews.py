@@ -400,7 +400,7 @@ def _exercise_claude(provider):
     with review_directory() as private:
         cwd = private / 'repository'
         cwd.mkdir(mode=0o700)
-        preflight(binary, env, str(cwd), {})
+        preflight(binary, env, str(cwd), {}, with_model=False)
     return 'claude restricted preflight passed'
 
 
@@ -421,7 +421,7 @@ def _exercise_codex(provider):
         cwd.mkdir(mode=0o700)
         env = {'HOME': str(Path.home()), 'PATH': os.environ.get('PATH', ''), 'CODEX_HOME': str(home)}
         config = [arg for value in CODEX_CONFIG for arg in ('-c', value)]
-        codex_preflight(binary, env, str(cwd), config, {})
+        codex_preflight(binary, env, str(cwd), config, {}, with_model=False)
     return 'codex restricted preflight passed'
 
 
@@ -446,7 +446,6 @@ def _exercise_guarded(provider):
 @contextmanager
 def launch(adapter, manifest, expected, before_launch):
     import shutil
-    import tempfile
     from execution_profiles import ENV_ALLOWLIST, model_args, preflight
     provider = adapter.name
     adapter.last_review_preflight = dict(provider=provider, version=None)

@@ -819,6 +819,33 @@ def test_a_review_without_a_model_is_a_distinct_approved_input(tmp_path):
             envelope(root, commit, model=bad)
 
 
+def test_reader_probe_omits_the_model_option_the_real_launch_omits(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(profiles, 'preflight', lambda *a, **k: seen.update(claude=k))
+    monkeypatch.setattr(repo, 'codex_preflight', lambda *a, **k: seen.update(codex=k))
+
+    class Claude:
+        name = 'claude'
+
+        def resolve_binary(self, name):
+            return 'claude'
+
+    class Codex:
+        name = 'codex'
+
+        def resolve_binary(self, name):
+            return 'codex'
+
+    repo._exercise_claude(Claude())
+    home = tmp_path / 'codex-origin'
+    home.mkdir()
+    (home / 'auth.json').write_text('{}')
+    monkeypatch.setenv('CODEX_HOME', str(home))
+    repo._exercise_codex(Codex())
+    assert seen['claude']['with_model'] is False
+    assert seen['codex']['with_model'] is False
+
+
 def test_codex_does_not_require_the_model_option_when_none_is_named(monkeypatch):
     seen = []
     monkeypatch.setattr(repo, 'discover', lambda *a, **k: seen.append(k['required']))

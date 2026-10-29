@@ -71,10 +71,15 @@ class AskResult:
 def raise_restricted_failure(provider_name: str, failure: str | None, returncode: int):
     """Turn a restricted reader's non-zero exit into the error the router reports.
 
-    Cursor's EPERM mkdir under `/tmp` is the write guard denying the project-state
-    directory, not an anonymous provider failure. The code names that cause.
+    Cursor's EPERM mkdir of `/tmp/.cursor…` is the write guard denying the
+    project-state directory. Redaction hides the slug as `/tmp/.[REDACTED]`.
+    Any other denied mkdir stays a generic failure so a different cause is
+    not labeled as the project-path fallback. The preflight mkdir reports
+    `cursor_state_mkdir_denied` or `cursor_state_mkdir_timeout` itself.
     """
-    if provider_name == "agent" and failure and "EPERM" in failure and "mkdir" in failure:
+    text = failure or ""
+    cursor_tmp = "/tmp/.cursor" in text or "/tmp/.[REDACTED]" in text
+    if provider_name == "agent" and "EPERM" in text and "mkdir" in text and cursor_tmp:
         from execution_profiles import ProfileError
         raise ProfileError("execution_profile_unsupported", detail=dict(
             provider="agent", stage="state", reason="cursor_project_path_outside_write_guard"))
