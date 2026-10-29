@@ -195,6 +195,12 @@ class TestCodexStatic(Env):
         self.assertEqual(found.status, cp.OK)
         self.assertIn('approval_policy="never"', found.detail)
 
+    def test_a_probe_failure_points_at_codex_not_at_config_toml(self):
+        hint = CodexProvider().permission_fix_hint("write_guard")
+        self.assertIn("-c", hint)
+        with patch.object(CodexProvider, "read_only_args", return_value=(["--sandbox", "read-only"], "m")):
+            self.assertEqual(cp.fix_for(CodexProvider(), "write_guard")["fix"], hint)
+
     def test_the_read_only_ask_carries_the_override_before_the_prompt(self):
         flags, mode = CodexProvider().read_only_args(self.workspace)
         self.assertEqual(mode, "--sandbox read-only")

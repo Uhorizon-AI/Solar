@@ -35,6 +35,12 @@ class CodexProvider(BaseProvider):
         # `codex exec`, so only a command-line `-c` is reliable; it wins over config.toml.
         return ["--sandbox", "read-only", "-c", WRITE_GUARD_OVERRIDE, "-C", str(cwd)], "--sandbox read-only"
 
+    def permission_fix_hint(self, check: str) -> str:
+        if check == "write_guard":
+            return (f"update Codex and check that it accepts `-c {WRITE_GUARD_OVERRIDE}` on `codex exec`; "
+                    "Solar passes it on every ask, so config.toml settings do not apply")
+        return super().permission_fix_hint(check)
+
     def ask_separator(self):
         return ["--"]
 
@@ -43,7 +49,7 @@ class CodexProvider(BaseProvider):
         flags, _ = self.read_only_args(workspace)
         if WRITE_GUARD_OVERRIDE in flags:
             write = Finding(self.name, "write_guard", OK, "static",
-                            f"the ask command passes -c {WRITE_GUARD_OVERRIDE}, which config.toml cannot override")
+                            f"the ask command passes -c {WRITE_GUARD_OVERRIDE}, which config.toml cannot override (requested, not verified: the probe confirms)")
         else:
             write = unknown(self.name, "write_guard", "the ask command does not pin the approval policy; run the probe")
         codex_home = pathlib.Path(os.getenv("CODEX_HOME") or home / ".codex")
