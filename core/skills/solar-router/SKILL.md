@@ -270,4 +270,14 @@ Capability is not permission: a flag Solar passes is a request, and the client's
   The last result is stored in `<runtime>/router/cli-permissions.json` (machine state: it depends on this machine's
   client settings) and `solar status` shows it with its age.
 
-Each `missing`/`too_permissive` result names the setting, the file and the change. Solar never writes to a client's configuration.
+Each `missing`/`too_permissive` result names the setting, the file and the change, with a literal snippet to paste
+when the CLI's syntax is confirmed (Cursor: live; Codex and Antigravity: from their docs, Antigravity unverified). Solar never writes to a client's configuration.
+
+Per CLI, what the operator changes:
+
+| CLI | Settings file | Change |
+|---|---|---|
+| claude | none for MCP in plan mode | Claude's plan mode runs only MCP tools that declare `readOnlyHint`; `permissions.allow` does not lift it. The Solar MCP server declares it on `solar_search` and `solar_docs`: update Solar. |
+| codex | `~/.codex/config.toml` | `approval_policy = "never"` for the workspace (or no `approvals_reviewer`), so no reviewer can approve leaving `--sandbox read-only`. |
+| agent (Cursor) | `~/.cursor/cli-config.json` | With `approvalMode: allowlist`, `permissions.allow` needs `Mcp(solar:solar_search)` and `Mcp(solar:solar_docs)`. `--approve-mcps` is not enough. |
+| agy (Antigravity) | `~/.gemini/antigravity-cli/settings.json` | Documented rule `mcp(solar/solar_search)`, `mcp(solar/solar_docs)` in `permissions.allow`; unverified in headless mode. |

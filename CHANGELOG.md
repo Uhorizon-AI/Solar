@@ -8,6 +8,7 @@ The format is based on Keep a Changelog.
 
 ### Added
 - feat(status): check that each CLI client's own permissions allow what Solar needs (read through the Solar MCP) and forbid what it forbids (writing in an ask). Static check from the client's settings in `solar status`; opt-in live probe via `solar client doctor --probe-permissions`. Results are `ok | missing | too_permissive | unknown` with the exact setting and file; Solar changes no client configuration.
+- fix(mcp): `solar_search` and `solar_docs` declare `readOnlyHint`, so Claude Code's plan mode runs them (it refuses MCP tools without it, whatever `permissions.allow` says).
 
 ## [0.59.3] - 2026-10-28
 ### Fixed

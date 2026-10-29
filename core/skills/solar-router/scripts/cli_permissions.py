@@ -50,6 +50,7 @@ class Finding:
     setting: str = ""  # the exact setting to change, empty when nothing is to change
     file: str = ""
     fix: str = ""
+    snippet: str = ""  # literal text to paste, when the CLI's docs or a live run confirm its syntax
 
     def __post_init__(self):
         if self.status not in STATUSES or self.check not in CHECKS:
@@ -90,6 +91,23 @@ def mcp_registered(candidates, key="mcpServers", server=MCP_SERVER):
         if isinstance(servers, dict) and server in servers:
             return True
     return False if readable else None
+
+
+def solar_read_tools_declare_read_only() -> bool:
+    """Whether the Solar MCP server marks its read tools `readOnlyHint`.
+
+    Claude Code's plan mode runs only MCP tools that declare it, whatever the user's permission
+    rules say (verified with a stub server and with Solar's own). Read from the server's tool table.
+    """
+    scripts = Path(__file__).resolve().parents[2] / "solar-mcp" / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    try:
+        import mcp_server
+        return all((mcp_server.TOOLS[t].get("annotations") or {}).get("readOnlyHint") is True
+                   for t in MCP_READ_TOOLS)
+    except Exception:  # noqa: BLE001 - unreadable server code is "not verified", not "ok"
+        return False
 
 
 # --- static tier ------------------------------------------------------------
@@ -236,7 +254,7 @@ def fix_for(provider, check: str) -> dict:
     """The change that static knowledge of this client would propose, for a probe verdict."""
     for finding in provider.static_permission_checks(Path.home(), probe_workspace()):
         if finding.check == check and finding.fix:
-            return dict(setting=finding.setting, file=finding.file, fix=finding.fix)
+            return dict(setting=finding.setting, file=finding.file, fix=finding.fix, snippet=finding.snippet)
     return dict(fix=provider.permission_fix_hint(check))
 
 
@@ -300,6 +318,7 @@ def render(findings: list[Finding]) -> str:
         if f.status in (MISSING, TOO_PERMISSIVE) and (f.fix or f.setting):
             where = f" in {f.file}" if f.file else ""
             lines.append(f"        fix: {f.fix or f.setting}{where}")
+            lines += ["          " + row for row in f.snippet.splitlines()]
     return "\n".join(lines)
 
 

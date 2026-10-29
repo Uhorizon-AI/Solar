@@ -55,6 +55,8 @@ class TestCursorStatic(Env):
         self.assertIn("Mcp(solar:solar_docs)", found.fix)
         self.assertEqual(found.setting, "permissions.allow")
         self.assertTrue(found.file.endswith(".cursor/cli-config.json"))
+        self.assertEqual(json.loads(found.snippet)["permissions"]["allow"],
+                         ["Mcp(solar:solar_search)", "Mcp(solar:solar_docs)"])
 
     def test_the_same_config_with_the_entries_added_is_ok(self):
         self.config(permissions=dict(allow=["Shell(ls)", "Mcp(solar:solar_search)", "Mcp(solar:solar_docs)"], deny=[]))
@@ -92,19 +94,23 @@ class TestClaudeStatic(Env):
         super().setUp()
         _json(self.home / ".claude.json", {"mcpServers": {"solar": {}}})
 
-    def test_allow_rules_for_both_tools_are_ok(self):
+    def test_a_server_without_read_only_hints_is_missing_whatever_the_allow_rules_say(self):
         _json(self.home / ".claude" / "settings.json",
               {"permissions": {"allow": ["mcp__solar__solar_search", "mcp__solar__solar_docs"]}})
-        self.assertEqual(self.checks(ClaudeProvider())["mcp_read"].status, cp.OK)
+        with patch("providers.claude.solar_read_tools_declare_read_only", return_value=False):
+            found = self.checks(ClaudeProvider())["mcp_read"]
+        self.assertEqual(found.status, cp.MISSING)
+        self.assertIn("readOnlyHint", found.detail)
+        self.assertIn("update Solar", found.fix)
 
-    def test_a_server_rule_in_the_workspace_settings_counts(self):
-        _json(self.workspace / ".claude" / "settings.local.json", {"permissions": {"allow": ["mcp__solar"]}})
-        self.assertEqual(self.checks(ClaudeProvider())["mcp_read"].status, cp.OK)
-
-    def test_no_rule_is_unknown_not_missing_because_the_cause_is_not_assumed(self):
-        found = self.checks(ClaudeProvider())["mcp_read"]
+    def test_a_server_with_read_only_hints_leaves_the_rest_to_the_probe(self):
+        with patch("providers.claude.solar_read_tools_declare_read_only", return_value=True):
+            found = self.checks(ClaudeProvider())["mcp_read"]
         self.assertEqual(found.status, cp.UNKNOWN)
         self.assertIn("probe", found.detail)
+
+    def test_this_solar_declares_its_read_tools_read_only(self):
+        self.assertTrue(cp.solar_read_tools_declare_read_only())
 
     def test_a_deny_rule_is_missing(self):
         _json(self.home / ".claude" / "settings.json", {"permissions": {"deny": ["mcp__solar__solar_search"]}})
@@ -126,6 +132,7 @@ class TestCodexStatic(Env):
         self.assertEqual(found.status, cp.TOO_PERMISSIVE)
         self.assertEqual(found.setting, "approval_policy")
         self.assertIn('"never"', found.fix)
+        self.assertIn('approval_policy = "never"', found.snippet)
 
     @patch.dict("os.environ", {"CODEX_HOME": ""})
     def test_the_workspace_entry_overrides_the_top_level(self):
@@ -208,16 +215,23 @@ class TestProbe(Env):
         self.assertIn("User rejected MCP", found.detail)
         self.assertTrue(found.fix)
 
-    def test_claude_probe_names_the_setting_and_file_without_assuming_the_cause(self):
+    def test_claude_probe_blocked_in_plan_mode_points_at_solar_not_at_user_settings(self):
         claude = ClaudeProvider()
         claude.ask = lambda *a, **k: _answer("Plan mode blocked it")
-        with patch.object(cp, "audit_has_call", return_value=False):
+        with patch.object(cp, "audit_has_call", return_value=False), \
+             patch("providers.claude.solar_read_tools_declare_read_only", return_value=False):
             found = cp.probe_mcp_read(claude, self.workspace)
         self.assertEqual(found.status, cp.MISSING)
-        self.assertEqual(found.setting, "permissions.allow")
-        self.assertTrue(found.file.endswith(".claude/settings.json"))
-        self.assertIn("mcp__solar__solar_search", found.fix)
-        self.assertIn("Plan mode blocked it", found.detail)  # the client's own words, not our guess
+        self.assertIn("readOnlyHint", found.setting)
+        self.assertIn("Plan mode blocked it", found.detail)  # the client's own words
+
+    def test_agy_blocked_probe_carries_the_documented_rule_as_a_snippet(self):
+        agy = AgyProvider()
+        agy.ask = lambda *a, **k: _answer("denied")
+        with patch.object(cp, "audit_has_call", return_value=False):
+            found = cp.probe_mcp_read(agy, self.workspace)
+        self.assertIn("mcp(solar/solar_search)", found.snippet)
+        self.assertTrue(found.file.endswith("antigravity-cli/settings.json"))
 
     def test_read_is_unknown_when_the_client_could_not_run(self):
         def ask(*a, **k):

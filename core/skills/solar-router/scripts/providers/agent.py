@@ -59,7 +59,8 @@ class AgentProvider(BaseProvider):
             return [Finding(self.name, "mcp_read", MISSING, "static",
                             f"approvalMode=allowlist and permissions.allow lacks {', '.join(absent)}",
                             setting="permissions.allow", file=str(user),
-                            fix=f"add {', '.join(absent)} to permissions.allow")]
+                            fix=f"add {', '.join(absent)} to permissions.allow",
+                            snippet=json.dumps({"permissions": {"allow": absent}}, indent=2))]
         return [Finding(self.name, "mcp_read", OK, "static", "permissions.allow lists the Solar read tools")]
 
     def stream(self, prompt: str, *, review=None):

@@ -62,7 +62,8 @@ class CodexProvider(BaseProvider):
             write = Finding(self.name, "write_guard", TOO_PERMISSIVE, "static",
                             f'approval_policy = "{policy}" with approvals_reviewer = "{reviewer}" ({where}) can approve leaving --sandbox read-only',
                             setting="approval_policy", file=str(path),
-                            fix='set approval_policy = "never" (or remove approvals_reviewer) for the Solar workspace')
+                            fix='set approval_policy = "never" (or remove approvals_reviewer) for the Solar workspace',
+                            snippet=f'[projects."{workspace}"]\napproval_policy = "never"')
         else:
             write = unknown(self.name, "write_guard", f"approval_policy={policy or 'unset'}; only the probe shows whether read-only holds")
         return [read, write]

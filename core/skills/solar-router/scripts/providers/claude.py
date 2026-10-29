@@ -3,7 +3,7 @@ import os
 import shlex
 import subprocess
 
-from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, UNKNOWN, mcp_registered, read_json
+from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, mcp_registered, read_json, solar_read_tools_declare_read_only, unknown
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
@@ -45,14 +45,14 @@ class ClaudeProvider(BaseProvider):
             return [Finding(self.name, "mcp_read", MISSING, "static", f"denied: {', '.join(denied)}",
                             setting="permissions.deny", file="; ".join(map(str, files[:1])),
                             fix=f"remove the rule matching {', '.join(denied)} from permissions.deny")]
-        if all(covers(allow, t) for t in tools):
-            return [Finding(self.name, "mcp_read", "ok", "static", "permissions.allow covers the Solar read tools")]
-        # A non-interactive plan-mode launch may refuse an unlisted tool, but the cause is
-        # the client's to confirm: only the probe sees what actually reaches the server.
-        return [Finding(self.name, "mcp_read", UNKNOWN, "static",
-                        f"no permissions.allow rule for {', '.join(tools)}; run the probe to see whether the call is blocked",
-                        setting="permissions.allow", file=str(files[0]),
-                        fix=f"if the probe reports it blocked, add {', '.join(repr(t) for t in tools)} to permissions.allow, then probe again")]
+        if not solar_read_tools_declare_read_only():
+            return [Finding(self.name, "mcp_read", MISSING, "static",
+                            "Claude's plan mode runs only MCP tools that declare readOnlyHint, and this Solar's read tools do not",
+                            setting="annotations.readOnlyHint on solar_search and solar_docs",
+                            file="core/skills/solar-mcp/scripts/mcp_server.py",
+                            fix="update Solar (the server must declare readOnlyHint); permissions.allow rules do not lift plan mode")]
+        return [unknown(self.name, "mcp_read",
+                        "the Solar MCP read tools declare readOnlyHint; run the probe to confirm the call reaches the server")]
 
     def stream(self, prompt: str, *, review=None):
         if review is not None:
