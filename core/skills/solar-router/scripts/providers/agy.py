@@ -1,5 +1,7 @@
+import json
 import re
 
+from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, UNKNOWN
 from .base import BaseProvider, SOLAR_WORKSPACE
 
 
@@ -11,6 +13,8 @@ class AgyProvider(BaseProvider):
     """
 
     name = "agy"
+    # Antigravity is the successor of the Gemini CLI. Its ~/.gemini/settings.json carries no
+    # permission rules, so static_permission_checks stays the base default (unknown).
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
@@ -26,6 +30,19 @@ class AgyProvider(BaseProvider):
 
     def read_only_args(self, cwd):
         return ["--mode", "plan", "--add-dir", str(cwd)], "--mode plan"
+
+    def static_permission_checks(self, home, workspace):
+        """No readable rules to judge, so `unknown`; the fix is what Antigravity's docs give.
+
+        The `mcp(server/tool)` syntax comes from its permissions documentation and is not verified
+        here (a third-party report says headless mode may ignore allow rules): the probe decides.
+        """
+        rules = [f"mcp({MCP_SERVER}/{tool})" for tool in MCP_READ_TOOLS]
+        return [Finding(self.name, "mcp_read", UNKNOWN, "static",
+                        "no readable permission rules; if the probe reports it blocked, the documented rule is below (unverified)",
+                        setting="permissions.allow", file=str(home / ".gemini" / "antigravity-cli" / "settings.json"),
+                        fix=f"add {', '.join(rules)} to permissions.allow",
+                        snippet=json.dumps({"permissions": {"allow": rules}}, indent=2))]
 
     def clean_output(self, output: str) -> str:
         cleaned = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", output)

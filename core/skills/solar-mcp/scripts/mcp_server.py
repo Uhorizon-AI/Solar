@@ -64,8 +64,13 @@ _SCOPES = ["capabilities", "docs", "operations", "resources", "tasks"]
 _VIEWS = list(task_views._VIEWS)
 _ID = {"type": "string", "minLength": 1, "maxLength": 200}
 
+# MCP `readOnlyHint`: a client in a read-only mode (Claude Code's plan mode) runs only the
+# tools that declare it, whatever permission rules the user wrote. Only the two read tools do.
+READ_ONLY = dict(readOnlyHint=True)
+
 TOOLS = {
     "solar_search": dict(
+        annotations=READ_ONLY,
         description=(
             "Find things and read task state. Read-only; grants no authority. "
             "scope=capabilities: instruction skills (query, limit, preferred_namespace). "
@@ -87,6 +92,7 @@ TOOLS = {
             uri=dict(type="string", maxLength=100)),
             required=["scope"], additionalProperties=False)),
     "solar_docs": dict(
+        annotations=READ_ONLY,
         description=(
             "Read documentation, contracts, requirements and references. Read-only; instructions "
             "are not executed. id is a skill ID (optionally with a registered reference), "
@@ -476,7 +482,8 @@ def handle(message: dict, confirm=None) -> dict | None:
                                      text=json.dumps(body, indent=2, sort_keys=True, default=str))])
     elif method == "tools/list":
         result = dict(tools=[dict(name=name, description=spec["description"],
-                                  inputSchema=spec["inputSchema"])
+                                  inputSchema=spec["inputSchema"],
+                                  **({"annotations": spec["annotations"]} if "annotations" in spec else {}))
                              for name, spec in TOOLS.items()])
     elif method == "tools/call":
         name = params.get("name", "")

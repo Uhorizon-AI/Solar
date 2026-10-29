@@ -115,6 +115,11 @@ bash core/skills/solar-router/scripts/diagnose_router.sh
 # Full error output when a provider fails (e.g. 401, binary not found)
 bash core/skills/solar-router/scripts/diagnose_router.sh --verbose
 
+# CLI permissions: does each CLI client's own permission layer allow what Solar needs (read through
+# the Solar MCP) and forbid what it forbids (writing in an ask)? Results: ok | missing | too_permissive | unknown.
+python3 core/skills/solar-router/scripts/cli_permissions.py static   # settings only, no model call; also in `solar status`
+solar client doctor --probe-permissions [--client NAME]                 # opt-in live probe, costs tokens, stored for `solar status`
+
 # Unit tests: router logic + provider adapters (centralized under core/tests; pytest runs unittest-style tests; no real AI calls)
 uv run --project core/tests pytest core/tests/skills/solar-router -q
 # Without uv: PYTHONPATH=core/skills/solar-router/scripts python3 -m unittest discover -s core/tests/skills/solar-router -p "test_*.py" -v
@@ -247,3 +252,36 @@ policy checks, CLI restrictions, limitations and the opt-in inference-free probe
 ## Task token usage
 
 `ask_metering.py` is an internal structured CLI transport and per-invocation observation sink for asynchronous questions; it is not a standalone provider entry point. See [scope and semantics](../../docs/task-token-usage.md).
+
+## CLI permission checks
+
+Capability is not permission: a flag Solar passes is a request, and the client's own settings decide what runs.
+`cli_permissions.py` reports, per installed client (claude, codex, agent, agy: Antigravity, the successor of the Gemini CLI) and check (`mcp_read`, `write_guard`):
+
+- **Static tier** — reads the client's own settings (`~/.cursor/cli-config.json` and `<workspace>/.cursor/cli.json`, `~/.claude/settings.json` and `<workspace>/.claude/settings*.json`,
+  `~/.codex/config.toml`). No model call; `solar status` shows it on the `clients:` line.
+  A check the settings cannot settle is `unknown` (never `ok`); Antigravity (`agy`, formerly the Gemini CLI) has no documented permission settings: `~/.gemini/settings.json` holds only auth and general options, so both checks are `unknown` until the probe runs.
+- **Probe tier** — opt-in, costs tokens, run by `solar client doctor --probe-permissions`. It launches each client
+  through `BaseProvider.ask`, the same construction as a router question (no separate flag set, no `-f`/`--yolo`).
+  `mcp_read` is judged by the Solar MCP server's own audit log (`<runtime>/mcp/audit.jsonl`): the probe asks the
+  client to call `solar_search` with a unique marker, and `ok` means the server recorded that call. If it did not,
+  the result is `missing` with the client's own words as detail; no cause is assumed. `write_guard` asks the client
+  to create a file in a scratch folder (outside the workspace, so folder-keyed overrides such as Codex's
+  `projects."<workspace>"` are covered by the static check instead) and is `too_permissive` if the file exists.
+  A silent exit with no file is `ok` only for Antigravity, which auto-denies what it cannot prompt for; for any other
+  client it is `unknown`. `mcp_read` checks `solar_search`. A client that could not run is `unknown`.
+  A partial probe (`--client`, `--check`) replaces only the checks it ran; `solar status` shows the age of the oldest one.
+  The last result is stored in `<runtime>/router/cli-permissions.json` (machine state: it depends on this machine's
+  client settings) and `solar status` shows it with its age.
+
+Each `missing`/`too_permissive` result names the setting, the file and the change, with a literal snippet to paste
+when the CLI's syntax is confirmed (Cursor: live; Codex and Antigravity: from their docs, Antigravity unverified). Solar never writes to a client's configuration.
+
+Per CLI, what the operator changes:
+
+| CLI | Settings file | Change |
+|---|---|---|
+| claude | none for MCP in plan mode | Claude's plan mode runs only MCP tools that declare `readOnlyHint`; `permissions.allow` does not lift it. The Solar MCP server declares it on `solar_search` and `solar_docs`: update Solar. |
+| codex | `~/.codex/config.toml` | `approval_policy = "never"` for the workspace (or no `approvals_reviewer`, or `approvals_reviewer = "user"`), so no reviewer can approve leaving `--sandbox read-only`. |
+| agent (Cursor) | `~/.cursor/cli-config.json` | With `approvalMode: allowlist`, `permissions.allow` needs `Mcp(solar:solar_search)` and `Mcp(solar:solar_docs)`. `--approve-mcps` is not enough. |
+| agy (Antigravity) | `~/.gemini/antigravity-cli/settings.json` | Documented rule `mcp(solar/solar_search)`, `mcp(solar/solar_docs)` in `permissions.allow`; unverified in headless mode. |

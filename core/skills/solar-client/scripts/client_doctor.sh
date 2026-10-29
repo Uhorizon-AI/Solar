@@ -5,15 +5,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/client_lib.sh"
 
 STRICT=false
+PROBE_PERMISSIONS=false
+PROBE_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --strict) STRICT=true; shift ;;
+    --probe-permissions) PROBE_PERMISSIONS=true; shift ;;
+    --client)
+      [[ $# -ge 2 ]] || { echo "--client needs a name" >&2; exit 2; }
+      PROBE_ARGS+=(--client "$2"); shift 2 ;;
     --check-plans|--check-git)
       echo "Use: solar workspace doctor $1" >&2
       exit 2
       ;;
     -h|--help)
-      echo "Usage: solar client doctor [--strict]"
+      echo "Usage: solar client doctor [--strict] [--probe-permissions [--client NAME]...]"
+      echo "  --probe-permissions  Opt-in live probe (costs tokens): launches each installed client as the router"
+      echo "                       does for an ask, checks it can read through the Solar MCP and cannot write."
       echo "Workspace checks (sun/, planets/): solar workspace doctor [--check-plans] [--check-git]"
       exit 0
       ;;
@@ -24,7 +32,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ "$PROBE_PERMISSIONS" != true || "$STRICT" != true ]] || { echo "--strict cannot be combined with --probe-permissions" >&2; exit 2; }
+[[ "$PROBE_PERMISSIONS" == true || ${#PROBE_ARGS[@]} -eq 0 ]] || { echo "--client needs --probe-permissions" >&2; exit 2; }
+
 solar_resolve_paths --quiet
+
+if [[ "$PROBE_PERMISSIONS" == true ]]; then
+  # Only this: the probe replaces the doctor's file checks for this run.
+  exec python3 "$(solar_core_dir)/skills/solar-router/scripts/cli_permissions.py" probe ${PROBE_ARGS[@]+"${PROBE_ARGS[@]}"}
+fi
 
 warn_count=0
 err_count=0
