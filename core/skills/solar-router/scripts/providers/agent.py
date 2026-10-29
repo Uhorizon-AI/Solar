@@ -53,8 +53,8 @@ class AgentProvider(BaseProvider):
         blocked = [e for e in [*needed, wildcard] if e in deny]
         if blocked:
             return [Finding(self.name, "mcp_read", MISSING, "static", f"denied: {', '.join(blocked)}",
-                            setting="permissions.deny", file=str(deny[blocked[0]]),
-                            fix=f"remove {', '.join(blocked)} from permissions.deny")]
+                            setting="permissions.deny", file=", ".join(dict.fromkeys(str(deny[e]) for e in blocked)),
+                            fix="; ".join(f"remove {e} from permissions.deny in {deny[e]}" for e in blocked))]
         if mode != "allowlist":
             return [unknown(self.name, "mcp_read", f"approvalMode={mode or 'unset'} is not modelled; run the probe")]
         absent = [e for e in needed if e not in allow and wildcard not in allow]

@@ -282,6 +282,6 @@ Per CLI, what the operator changes:
 | CLI | Settings file | Change |
 |---|---|---|
 | claude | none for MCP in plan mode | Claude's plan mode runs only MCP tools that declare `readOnlyHint`; `permissions.allow` does not lift it. The Solar MCP server declares it on `solar_search` and `solar_docs`: update Solar. |
-| codex | `~/.codex/config.toml` | `approval_policy = "never"` for the workspace (or no `approvals_reviewer`), so no reviewer can approve leaving `--sandbox read-only`. |
+| codex | `~/.codex/config.toml` | `approval_policy = "never"` for the workspace (or no `approvals_reviewer`, or `approvals_reviewer = "user"`), so no reviewer can approve leaving `--sandbox read-only`. |
 | agent (Cursor) | `~/.cursor/cli-config.json` | With `approvalMode: allowlist`, `permissions.allow` needs `Mcp(solar:solar_search)` and `Mcp(solar:solar_docs)`. `--approve-mcps` is not enough. |
 | agy (Antigravity) | `~/.gemini/antigravity-cli/settings.json` | Documented rule `mcp(solar/solar_search)`, `mcp(solar/solar_docs)` in `permissions.allow`; unverified in headless mode. |

@@ -45,14 +45,17 @@ class CodexProvider(BaseProvider):
             why = ("needs Python 3.11+ (tomllib) to read it" if importlib.util.find_spec("tomllib") is None
                    else "is missing or unreadable")
             return [unknown(self.name, c, f"{path} {why}") for c in ("mcp_read", "write_guard")]
-        project = (config.get("projects") or {}).get(str(workspace)) or {}
+        projects = config.get("projects")
+        project = projects.get(str(workspace)) if isinstance(projects, dict) else None
+        project = project if isinstance(project, dict) else {}
         policy = project.get("approval_policy", config.get("approval_policy"))
         reviewer = project.get("approvals_reviewer", config.get("approvals_reviewer"))
-        servers = config.get("mcp_servers") or {}
+        servers = config.get("mcp_servers")
+        servers = servers if isinstance(servers, dict) else {}
         if MCP_SERVER not in servers:
             read = Finding(self.name, "mcp_read", MISSING, "static", f"the {MCP_SERVER} MCP server is not registered for Codex",
                            setting=f"mcp_servers.{MCP_SERVER}", file=str(path), fix="run: solar mcp install --clients codex")
-        elif (servers[MCP_SERVER] or {}).get("enabled") is False:
+        elif isinstance(servers[MCP_SERVER], dict) and servers[MCP_SERVER].get("enabled") is False:
             read = Finding(self.name, "mcp_read", MISSING, "static", f"mcp_servers.{MCP_SERVER} is disabled",
                            setting=f"mcp_servers.{MCP_SERVER}.enabled", file=str(path), fix="set enabled = true")
         else:
@@ -64,7 +67,7 @@ class CodexProvider(BaseProvider):
             write = Finding(self.name, "write_guard", TOO_PERMISSIVE, "static",
                             f'approval_policy = "{policy}" with approvals_reviewer = "{reviewer}" ({where}) can approve leaving --sandbox read-only',
                             setting="approval_policy", file=str(path),
-                            fix='set approval_policy = "never" (or remove approvals_reviewer) for the Solar workspace',
+                            fix='set approval_policy = "never" (or remove approvals_reviewer, or set it to "user") for the Solar workspace',
                             snippet=f'[projects."{workspace}"]\napproval_policy = "never"')
         else:
             write = unknown(self.name, "write_guard", f"approval_policy={policy or 'unset'}; only the probe shows whether read-only holds")

@@ -214,7 +214,7 @@ def age_label(stamp: str, now=None) -> str:
 
 # --- live probe -------------------------------------------------------------
 
-def audit_has_call(marker: str) -> bool:
+def audit_has_call(marker: str):
     """Did the Solar MCP server itself receive a call carrying `marker`?
 
     The server writes every decision to its audit log, with the arguments. That
@@ -226,7 +226,11 @@ def audit_has_call(marker: str) -> bool:
         sys.path.insert(0, str(mcp_scripts))
     try:
         import mcp_gate
-        with (mcp_gate.gate_root() / "audit.jsonl").open(encoding="utf-8") as stream:
+        path = mcp_gate.gate_root() / "audit.jsonl"
+    except ImportError:
+        return None  # the log cannot be located: not evidence that the server saw nothing
+    try:
+        with path.open(encoding="utf-8") as stream:
             for line in stream:
                 if marker not in line:
                     continue
@@ -236,8 +240,10 @@ def audit_has_call(marker: str) -> bool:
                     continue
                 if isinstance(row, dict) and row.get("kind") == "decision" and row.get("allowed"):
                     return True
-    except (ImportError, OSError, ValueError):
-        pass
+    except FileNotFoundError:
+        pass  # no log: the server never recorded a call
+    except (OSError, ValueError):
+        return None
     return False
 
 
@@ -250,7 +256,10 @@ def probe_mcp_read(provider, workspace: Path) -> Finding:
         answer = provider.ask(prompt, cwd=workspace)
     except (RuntimeError, TimeoutError) as exc:
         return unknown(provider.name, "mcp_read", f"the client did not answer: {str(exc)[:200]}", tier="probe")
-    if audit_has_call(marker):
+    seen = audit_has_call(marker)
+    if seen is None:
+        return unknown(provider.name, "mcp_read", "the Solar MCP server's audit log could not be read", tier="probe")
+    if seen:
         return Finding(provider.name, "mcp_read", OK, "probe", "the Solar MCP server received the solar_search call")
     reply = " ".join(answer.text.split())[:200]
     return Finding(provider.name, "mcp_read", MISSING, "probe",

@@ -92,6 +92,14 @@ class TestCursorStatic(Env):
         self.assertTrue(found.file.endswith(".cursor/cli.json"))
         self.assertFalse(found.file.startswith(str(self.home)))
 
+    def test_deny_rules_in_two_files_name_each_file(self):
+        self.config(permissions=dict(allow=[], deny=["Mcp(solar:solar_docs)"]))
+        _json(self.workspace / ".cursor" / "cli.json", dict(permissions=dict(deny=["Mcp(solar:*)"])))
+        found = self.checks(AgentProvider())["mcp_read"]
+        self.assertIn("cli-config.json", found.file)
+        self.assertIn(".cursor/cli.json", found.file)
+        self.assertRegex(found.fix, r"Mcp\(solar:solar_docs\).*cli-config\.json.*Mcp\(solar:\*\).*cli\.json")
+
     def test_null_rule_lists_are_no_rules(self):
         self.config(permissions=dict(allow=None, deny=None))
         self.assertEqual(self.checks(AgentProvider())["mcp_read"].status, cp.MISSING)
@@ -184,6 +192,19 @@ class TestCodexStatic(Env):
     def test_a_user_reviewer_is_not_an_automatic_approval_path(self):
         self.config('approval_policy = "on-request"\napprovals_reviewer = "user"\n')
         self.assertEqual(self.checks(CodexProvider())["write_guard"].status, cp.UNKNOWN)
+
+    @patch.dict("os.environ", {"CODEX_HOME": ""})
+    def test_odd_toml_shapes_do_not_raise(self):
+        self.config('mcp_servers.solar = "x"\nprojects = "y"\napproval_policy = "never"\n')
+        found = self.checks(CodexProvider())
+        self.assertEqual(found["write_guard"].status, cp.OK)
+
+    @patch.dict("os.environ", {"CODEX_HOME": ""})
+    def test_a_missing_tomllib_is_named(self):
+        self.config('approval_policy = "never"\n')
+        with patch("importlib.util.find_spec", return_value=None), patch("providers.codex.read_toml", return_value=None):
+            found = self.checks(CodexProvider())["mcp_read"]
+        self.assertIn("Python 3.11", found.detail)
 
     @patch.dict("os.environ", {"CODEX_HOME": ""})
     def test_the_workspace_entry_overrides_the_top_level(self):
@@ -336,6 +357,19 @@ class TestProbe(Env):
             for flag in ("-f", "--force", "--yolo", "--dangerously-skip-permissions", "bypassPermissions"):
                 self.assertNotIn(flag, probe_argv)
 
+    def test_an_unreadable_audit_log_is_unknown_not_missing(self):
+        sys.path.insert(0, str(Path(cp.__file__).resolve().parents[2] / "solar-mcp" / "scripts"))
+        import mcp_gate  # noqa: F401
+        with TemporaryDirectory() as root:
+            with patch("mcp_gate.gate_root", return_value=Path(root)):
+                self.assertFalse(cp.audit_has_call("x"))  # no log: the server saw nothing
+            with patch("mcp_gate.gate_root", return_value=Path(root)), \
+                 patch.object(Path, "open", side_effect=PermissionError("denied")):
+                self.assertIsNone(cp.audit_has_call("x"))
+        provider = self.provider(lambda *a, **k: _answer())
+        with patch("cli_permissions.audit_has_call", return_value=None):
+            self.assertEqual(cp.probe_mcp_read(provider, self.workspace).status, cp.UNKNOWN)
+
     def test_audit_evidence_comes_from_the_server_log(self):
         sys.path.insert(0, str(Path(cp.__file__).resolve().parents[2] / "solar-mcp" / "scripts"))
         import mcp_gate  # noqa: F401
@@ -351,6 +385,17 @@ class TestProbe(Env):
                 audit.write_text("probe-bad {not json\n"
                                  + json.dumps(dict(kind="decision", allowed=True, arguments=dict(query="probe-bad"))) + "\n")
                 self.assertTrue(cp.audit_has_call("probe-bad"))  # a malformed line is skipped, not fatal
+
+
+class TestDoctorFlags(unittest.TestCase):
+    def test_strict_cannot_be_combined_with_the_probe(self):
+        import os
+        import subprocess
+        script = Path(cp.__file__).resolve().parents[2] / "solar-client" / "scripts" / "client_doctor.sh"
+        done = subprocess.run(["bash", str(script), "--strict", "--probe-permissions"], capture_output=True,
+                              text=True, timeout=60, env=dict(os.environ))
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("--strict", done.stderr)
 
 
 class TestStoreAndSummary(Env):
