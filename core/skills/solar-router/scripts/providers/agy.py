@@ -11,6 +11,8 @@ class AgyProvider(BaseProvider):
     """
 
     name = "agy"
+    # Antigravity is the successor of the Gemini CLI. Its ~/.gemini/settings.json carries no
+    # permission rules, so static_permission_checks stays the base default (unknown).
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:

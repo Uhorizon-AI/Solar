@@ -256,11 +256,11 @@ policy checks, CLI restrictions, limitations and the opt-in inference-free probe
 ## Client permission checks
 
 Capability is not permission: a flag Solar passes is a request, and the client's own settings decide what runs.
-`client_permissions.py` reports, per installed client (claude, codex, agent, agy) and check (`mcp_read`, `write_guard`):
+`client_permissions.py` reports, per installed client (claude, codex, agent, agy: Antigravity, the successor of the Gemini CLI) and check (`mcp_read`, `write_guard`):
 
 - **Static tier** — reads the client's own settings (`~/.cursor/cli-config.json`, `~/.claude/settings.json`,
   `~/.codex/config.toml`, workspace overrides). No model call; `solar status` shows it on the `clients:` line.
-  A check the settings cannot settle is `unknown` (never `ok`); Antigravity has no readable settings model, so both are `unknown`.
+  A check the settings cannot settle is `unknown` (never `ok`); Antigravity (`agy`, formerly the Gemini CLI) has no documented permission settings: `~/.gemini/settings.json` holds only auth and general options, so both checks are `unknown` until the probe runs.
 - **Probe tier** — opt-in, costs tokens, run by `solar client doctor --probe-permissions`. It launches each client
   through `BaseProvider.ask`, the same construction as a router question (no separate flag set, no `-f`/`--yolo`).
   `mcp_read` is judged by the Solar MCP server's own audit log (`<runtime>/mcp/audit.jsonl`): the probe asks the
