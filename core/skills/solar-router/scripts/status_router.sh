@@ -15,6 +15,8 @@ SOLAR_WORKSPACE="${SOLAR_WORKSPACE:-$SOLAR_WORKSPACE}"
 source "$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_runtime_paths.sh"
 STATE_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-state/scripts" && pwd)"
 export STATE_SCRIPTS
+ROUTER_SCRIPTS="$SCRIPT_DIR"
+export ROUTER_SCRIPTS
 PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 LAST_N=10
 
@@ -43,31 +45,23 @@ import json, os, sys
 from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
+sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
+from router_open_runs import open_runs
 
 count_all = os.environ.get("STALE_ALL", "false").lower() == "true"
 max_age_h = float(os.environ.get("STALE_MAX_AGE_HOURS", "24"))
 
-starts = {}
-ends = set()
 try:
     with solar_state.session() as store:
-        loaded = store.audit_rows()
+        starts = open_runs(store.audit_rows(), store.task_status)
 except solar_state.StateError as exc:
     print(exc, file=sys.stderr)
     raise SystemExit(1)
-for row in loaded:
-    rid = row.get("router_id", "")
-    if row.get("event") == "start":
-        starts[rid] = row
-    elif row.get("event") == "end":
-        ends.add(rid)
 
 now = datetime.now(timezone.utc)
 stale = 0
 for rid, row in starts.items():
-    if rid in ends:
-        continue
     if count_all:
         stale += 1
         continue
@@ -96,8 +90,9 @@ echo "════════════════════════�
 # ---------------------------------------------------------------------------
 echo ""
 echo "  Providers:"
+# Every provider in the configured priority (list_providers.sh), not a fixed list.
 bash "$SCRIPT_DIR/diagnose_router.sh" --dry-run 2>/dev/null \
-  | grep -E "^\s+- (codex|claude|agy)" \
+  | grep -E "^  - [a-z0-9_-]+: " \
   | sed 's/^/  /' \
   || echo "    (diagnose_router.sh not available)"
 
@@ -110,33 +105,27 @@ echo "  In-flight:"
 $PYTHON - <<'PYEOF'
 import os, sys, datetime
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
+sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
+from router_open_runs import open_runs
 
-starts = {}
-ends = set()
 try:
     with solar_state.session() as store:
-        loaded = store.audit_rows()
+        in_flight = open_runs(store.audit_rows(), store.task_status)
 except solar_state.StateError:
     print("    (no audit yet)")
     raise SystemExit(0)
-for row in loaded:
-    rid = row.get("router_id", "")
-    if row.get("event") == "start":
-        starts[rid] = row
-    elif row.get("event") == "end":
-        ends.add(rid)
-
-in_flight = {rid: row for rid, row in starts.items() if rid not in ends}
 
 if not in_flight:
     print("    (none)")
 else:
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     for rid, row in in_flight.items():
         ts_str = row.get("ts", "")
         try:
-            ts = datetime.datetime.fromisoformat(ts_str.rstrip("Z"))
+            ts = datetime.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
             elapsed = int((now - ts).total_seconds())
             elapsed_str = f"{elapsed}s ago"
         except Exception:
