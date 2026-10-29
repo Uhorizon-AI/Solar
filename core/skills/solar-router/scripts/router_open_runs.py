@@ -17,7 +17,9 @@ def run_task_id(row: dict) -> Optional[str]:
         return str(task_id)
     # The executor sends request_id=f"task_{task_id}" (execute_active.call_router).
     request_id = str(row.get("request_id") or "")
-    return request_id[len("task_"):] or None if request_id.startswith("task_") else None
+    if not request_id.startswith("task_"):
+        return None
+    return request_id[len("task_"):] or None
 
 
 def open_runs(rows: list[dict], task_status: Callable[[str], Optional[str]]) -> dict[str, dict]:
