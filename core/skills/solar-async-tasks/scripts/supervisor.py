@@ -480,6 +480,7 @@ class Supervisor:
 
     NOTIFY_TIMEOUT = 30.0
     NOTICES_PER_PASS = 3
+    FAILURE_IDLE = 5.0               # how long the failure sender waits for more work before it leaves
 
     def _announce_approvals(self) -> None:
         """Tell the configured chat about a task that began waiting for authorization, or whose wait ended.
@@ -830,9 +831,13 @@ class Supervisor:
     def _send_failure_notices(self) -> None:
         while True:
             try:
-                task_id = self._failure_queue.get(timeout=5)
+                task_id = self._failure_queue.get(timeout=self.FAILURE_IDLE)
             except queue.Empty:
-                return
+                with self._notice_lock:                  # leave only if nothing was queued meanwhile
+                    if self._failure_queue.empty():
+                        self._failure_sender = None
+                        return
+                continue
             if task_id is None:
                 return
             try:

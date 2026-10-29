@@ -322,3 +322,22 @@ def test_stopping_the_supervisor_ends_the_failure_notice_it_was_sending(rig, tmp
     assert not supervisor_support.alive(child), "the failure notice outlived the supervisor"
     sup._notify_failure("late-task")                          # after the stop nothing starts
     assert sup._failure_queue.empty()
+
+
+def test_a_failure_notice_queued_as_the_sender_leaves_is_still_sent(rig, tmp_path, monkeypatch):
+    import supervisor_support
+    mod = supervisor_support.supervisor_mod
+    done = tmp_path / "sent.txt"
+    fake = tmp_path / "scripts"
+    fake.mkdir()
+    (fake / "notify_if_configured.sh").write_text(f'#!/bin/bash\necho "$1" >> "{done}"\n')
+    monkeypatch.setattr(mod, "HERE", fake)
+    monkeypatch.setattr(mod.Supervisor, "FAILURE_IDLE", 0.05)
+    sup = rig.build()
+    sup._notify_failure("first")
+    supervisor_support.wait_until(lambda: done.exists(), 30, what="the first notice")
+    supervisor_support.wait_until(lambda: sup._failure_sender is None, 30, what="the sender to leave")
+    sup._notify_failure("second")                           # no sender is alive: a new one must start
+    supervisor_support.wait_until(lambda: done.read_text().split() == ["first", "second"], 30,
+                                  what="the second notice")
+    sup._stop_announcer()

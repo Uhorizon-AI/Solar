@@ -26,6 +26,15 @@ case "$MODE" in
   *) echo "Unknown notification mode: $MODE" >&2; exit 2 ;;
 esac
 
+if [[ -n "$MODE" ]]; then
+  # The wait notice is the `blocked` event. A task that lists other events but not `blocked` does not get it;
+  # a task with no list (or only the legacy bare `completed` a gateway parent carries) keeps the notice.
+  WAIT_WHEN="$(task_field "$TASK_ID" "notify_when" | tr -d '[:space:]')"
+  if [[ -n "$WAIT_WHEN" && "$WAIT_WHEN" != "completed" && ",${WAIT_WHEN}," != *",blocked,"* ]]; then
+    exit 0
+  fi
+fi
+
 if [[ -z "$MODE" ]]; then
   NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
   NOTIFY_WHEN="${NOTIFY_WHEN//[[:space:]]/}"
@@ -46,12 +55,17 @@ if [[ -z "$MODE" ]]; then
 
   # The worker and the supervisor can both announce the same end: serialise check -> send -> record.
   LOCK_DIR="${TMPDIR:-/tmp}/solar-notify-${TASK_ID//[^A-Za-z0-9_.-]/_}.lock"
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 150); do
     mkdir "$LOCK_DIR" 2>/dev/null && { HAVE_LOCK=1; break; }
     [[ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +2 2>/dev/null)" ]] && rmdir "$LOCK_DIR" 2>/dev/null   # a dead holder
     sleep 1
   done
-  [[ -z "${HAVE_LOCK:-}" ]] && exit 0
+  if [[ -z "${HAVE_LOCK:-}" ]]; then   # the lock outlives a dead holder by 2 minutes; waiting past that never loses the notice
+    state task set "$TASK_ID" notify_status failed >/dev/null
+    state task set "$TASK_ID" notify_error notify_lock_timeout >/dev/null
+    echo "Task notification failed: notify_lock_timeout ($TASK_ID)" >&2
+    exit 1
+  fi
   trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
   already_delivered && exit 0
 fi

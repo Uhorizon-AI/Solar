@@ -156,6 +156,7 @@ def test_a_new_claim_clears_the_notice_record_so_each_run_notifies_once(tmp_path
         store.task_claim(tid, 'worker')
         pairs = dict(store.task_get(tid)['frontmatter'])
     assert 'notify_delivered' not in pairs and 'notify_status' not in pairs
+    assert pairs.get('notify_run', '').strip()
 
 
 def _failed_with(root, env, error_section):
@@ -208,3 +209,38 @@ def test_a_notice_recorded_for_an_earlier_run_does_not_silence_this_run(tmp_path
     assert notify(task, env).returncode == 0
     assert (workspace / 'sent.log').read_text().count('Task completed') == 1
     assert 'notify_delivered_run: run-2' in task.read_text()
+
+
+@pytest.mark.parametrize('when,sent', [('completed,failed', False), ('blocked', True), ('', True),
+                                       ('completed', True)])
+def test_the_approval_wait_notice_honours_blocked(tmp_path, when, sent):
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'queued', '')
+    task.write_text(task.read_text().replace('notify_when: completed', f'notify_when: "{when}"'))
+    seed(root)
+    result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task), '--waiting'],
+                            env=env_for(root, env), text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    log = workspace / 'sent.log'
+    assert (log.exists() and 'Waiting for your approval' in log.read_text()) is sent
+
+
+def test_a_lock_that_is_never_released_is_recorded_not_dropped(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'completed', '')
+    (tmp_path / f'solar-notify-{task_id_of(task)}.lock').mkdir()
+    seed(root)
+    # a wait of 150 s is too slow for a test: shorten it through a seq stub
+    stub = tmp_path / 'bin'
+    stub.mkdir()
+    (stub / 'seq').write_text('#!/bin/bash\necho 1\n')
+    (stub / 'seq').chmod(0o755)
+    (stub / 'sleep').write_text('#!/bin/bash\nexit 0\n')
+    (stub / 'sleep').chmod(0o755)
+    run_env = env_for(root, {**env, 'TMPDIR': str(tmp_path), 'PATH': f'{stub}:{os.environ["PATH"]}'})
+    result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
+                            env=run_env, text=True, capture_output=True, timeout=20)
+    mirror(root)
+    assert result.returncode == 1 and 'notify_lock_timeout' in result.stderr
+    assert 'notify_error: notify_lock_timeout' in task.read_text()
+    assert not (workspace / 'sent.log').exists()

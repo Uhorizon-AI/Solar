@@ -180,4 +180,5 @@ Logs:
 
 A claim clears `notify_delivered` and the other notice records, so a recurring task notifies once per run
 and a retry of the same run's notice is still deduplicated. `blocked` is announced by the supervisor for
-every task waiting for `task.authorize_run`, with the reason.
+a task waiting for `task.authorize_run`, with the reason: a task with no `notify_when` still gets it, a task that
+lists other events without `blocked` does not.

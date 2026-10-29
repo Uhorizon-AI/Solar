@@ -857,8 +857,9 @@ _NOTIFY_WHEN = {
     "items": {"type": "string", "enum": ["completed", "failed", "blocked"]},
     "description": "When the configured chat is told, without confirming the text (a system notice, not a message "
                    "to third parties): completed, failed (adds the one-line reason) and blocked (the wait for "
-                   "task.authorize_run, announced with its reason by the supervisor for every task). A recurring "
-                   "task is told once per run. An empty list turns the notice off. "
+                   "task.authorize_run, announced with its reason; a task with no list is still told, a task that lists "
+                   "other events without blocked is not). A recurring task is told once per run. An empty list turns "
+                   "off the completed and failed notices. "
                    "Editing it follows the usual rules: a queued task returns to draft.",
 }
 
