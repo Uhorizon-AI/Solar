@@ -181,7 +181,7 @@ checks, `option`. Reasons: `required_option_missing`, `required_value_unadvertis
 `write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`,
 `cursor_project_path_outside_write_guard`, `cursor_state_mkdir_denied`,
 `cursor_state_mkdir_timeout`, `cursor_project_path_drift`,
-`cursor_project_path_unreadable`.
+`cursor_project_path_shape_unknown`, `cursor_project_path_unreadable`.
 A help text proves neither the effective configuration nor that a guard works. These adapters
 do not claim a doctor-style effective/cloud-policy attestation; their stronger
 write boundary is enforced externally. Network access remains available for the
@@ -203,12 +203,16 @@ with `cursor_project_path_outside_write_guard` and does not start the model.
 Only a later model exit whose stderr is an `EPERM` mkdir of `/tmp/.cursor…`
 (or the redacted form `/tmp/.[REDACTED]`) is reported with that same reason.
 Any other denied mkdir stays a generic provider failure, including an `EPERM`
-mkdir of a different path under `/tmp`. The permission probe compares Solar's
-prediction with the project-path function inside the installed Cursor CLI
-bundle (no model call). A mismatch is `cursor_project_path_drift`; a bundle
-that cannot be read is `cursor_project_path_unreadable`. Neither is reported
-as a passing reader. The review launch itself does not parse the bundle; a
-wrong prediction still fails at the model's `EPERM` with the named reason.
+mkdir of a different path under `/tmp`. The permission probe compares the
+installed CLI's project path with Solar's prediction before it treats that
+prediction as outside the write guard, so a higher Cursor limit is
+`cursor_project_path_drift` and not a false `cursor_project_path_outside_write_guard`.
+The observer only reads the installed bundle. It passes `workspace`, `data_dir`
+and `tmpdir` as argv and does not inherit `NODE_OPTIONS`. Exit 2 (minified
+markers gone) is `cursor_project_path_shape_unknown`: update Solar's observer,
+not the Cursor install. Any other node failure is `cursor_project_path_unreadable`.
+Neither is a passing reader. The review launch itself does not parse the bundle;
+a wrong prediction still fails at the model's `EPERM` with the named reason.
 
 Cursor receives `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, a private HOME/XDG tree,
 and `AGENT_CLI_CREDENTIAL_STORE=file`. `--trust` satisfies the CLI headless

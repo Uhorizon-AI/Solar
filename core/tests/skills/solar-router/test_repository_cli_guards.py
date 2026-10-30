@@ -606,7 +606,33 @@ def test_cursor_project_path_matches_a_cli_bundle_and_a_changed_limit_does_not(t
     bundle.write_text('not a cursor bundle')
     with pytest.raises(profiles.ProfileError) as error:
         guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
+    assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
+    node_bin.unlink()
+    node_bin.write_text('#!/bin/sh\nexit 1\n')
+    node_bin.chmod(0o755)
+    bundle.write_text(_CURSOR_PATH_FIXTURE)
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
     assert error.value.detail['reason'] == 'cursor_project_path_unreadable'
+
+
+def test_cursor_path_observer_does_not_inherit_node_options(tmp_path, monkeypatch):
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not installed')
+    bundle = tmp_path / 'index.js'
+    bundle.write_text(_CURSOR_PATH_FIXTURE)
+    (tmp_path / 'node').symlink_to(node)
+    marker = tmp_path / 'injected'
+    hook = tmp_path / 'hook.js'
+    hook.write_text('require("fs").writeFileSync(' + repr(str(marker)) + ', "x")\n')
+    monkeypatch.setenv('NODE_OPTIONS', '--require ' + str(hook))
+    workspace = '/tmp/sr-abcdefgh/repository'
+    data = '/tmp/sr-abcdefgh/home/cursor-data'
+    tmp = '/tmp/sr-abcdefgh/tmp'
+    observed = guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
+    assert observed == guards.cursor_project_path(workspace, data_dir=data, tmpdir=tmp)
+    assert not marker.exists()
 
 
 def test_cursor_project_path_matches_the_installed_cli():

@@ -523,6 +523,76 @@ class TestRestrictedReaderProbe(Env):
         self.assertIn("not a client setting", found.fix)
         self.assertEqual(found.setting, "review private directory")
 
+    def test_a_stale_path_rule_is_unknown_not_a_guard_miss(self):
+        from execution_profiles import ProfileError
+
+        def exercise(provider):
+            raise ProfileError("execution_profile_unsupported", detail=dict(
+                provider="agent", stage="state", reason="cursor_project_path_drift"))
+
+        found = cp.probe_restricted_reader(AgentProvider(), exercise=exercise)
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertIn("83/91", found.detail)
+        self.assertEqual(found.fix, "")
+        self.assertEqual(found.setting, "")
+
+    def test_an_unknown_bundle_shape_names_the_observer(self):
+        from execution_profiles import ProfileError
+
+        def exercise(provider):
+            raise ProfileError("execution_profile_unsupported", detail=dict(
+                provider="agent", stage="state", reason="cursor_project_path_shape_unknown"))
+
+        found = cp.probe_restricted_reader(AgentProvider(), exercise=exercise)
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertIn("observer", found.detail)
+        self.assertIn("not the Cursor install", found.detail)
+
+    def test_a_node_failure_is_unknown_and_names_node(self):
+        from execution_profiles import ProfileError
+
+        def exercise(provider):
+            raise ProfileError("execution_profile_unsupported", detail=dict(
+                provider="agent", stage="state", reason="cursor_project_path_unreadable"))
+
+        found = cp.probe_restricted_reader(AgentProvider(), exercise=exercise)
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertIn("node", found.detail)
+        self.assertNotIn("observer", found.detail)
+
+    def test_drift_is_named_before_an_outside_guard_refusal(self):
+        from execution_profiles import ProfileError
+        import repository_cli_guards as guards
+        import repository_reviews as repo
+
+        order = []
+
+        def current(*args, **kwargs):
+            order.append("drift")
+            raise ProfileError("execution_profile_unsupported", detail=dict(
+                provider="agent", stage="state", reason="cursor_project_path_drift"))
+
+        def finish(*args, **kwargs):
+            order.append("outside")
+            raise ProfileError("execution_profile_unsupported", detail=dict(
+                provider="agent", stage="state", reason="cursor_project_path_outside_write_guard"))
+
+        class Agent:
+            name = "agent"
+
+            def resolve_binary(self, name):
+                return "/usr/bin/false"
+
+        with patch.object(guards, "prepare", return_value=(
+                ["/usr/bin/false"], {"CURSOR_DATA_DIR": "/d", "TMPDIR": "/t"})), \
+                patch.object(guards, "require_cursor_project_path_current", current), \
+                patch.object(guards, "finish_cursor_launch", finish):
+            found = cp.probe_restricted_reader(Agent(), exercise=repo._exercise_guarded)
+        self.assertEqual(order, ["drift"])
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertIn("83/91", found.detail)
+        self.assertNotEqual(found.status, cp.MISSING)
+
     def test_a_fake_client_that_cannot_start_is_unknown(self):
         from execution_profiles import ProfileError
 

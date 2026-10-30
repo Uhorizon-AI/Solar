@@ -206,9 +206,10 @@ def cursor_project_path(workspace, *, data_dir, tmpdir):
 
 
 # Reads the project-path function out of the installed Cursor CLI bundle (no model
-# call). `node -e` puts the following arguments at argv[1..]. A miss means the
-# bundle no longer has the 2026.10 shape, which the probe reports instead of
-# pretending the prediction still matches.
+# call). `node -e` puts the following arguments at argv[1..]: the bundle, then
+# data_dir, tmpdir and workspace. Those three are argv only and are never
+# interpolated into this script. Exit 2 means the minified markers are gone
+# (unknown bundle shape). Any other non-zero exit is a node failure.
 _CURSOR_PATH_OBSERVER = r"""
 const fs = require("fs");
 const crypto = require("crypto");
@@ -244,8 +245,18 @@ process.stdout.write(String(fn(crypto, os, path, process.argv[4])));
 """
 
 
+def _observer_env():
+    """Env for the path observer. No `NODE_OPTIONS` / `NODE_PATH`, so a `--require` cannot run first."""
+    return {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'SYSTEMROOT') if key in os.environ}
+
+
 def observe_cursor_project_path(index_js, workspace, *, data_dir, tmpdir, provider='agent'):
-    """Path the installed Cursor CLI would use for `workspace`. No model call."""
+    """Path the installed Cursor CLI would use for `workspace`. No model call.
+
+    The bundle is the CLI the user already installed; this only reads it. Unlike
+    `mkdir_under_guard`, the node process is not inside the review write guard.
+    `workspace`, `data_dir` and `tmpdir` are argv, never interpolated into the script.
+    """
     index_js = Path(index_js)
     node = index_js.parent / 'node'
     if not node.is_file():
@@ -256,11 +267,14 @@ def observe_cursor_project_path(index_js, workspace, *, data_dir, tmpdir, provid
     try:
         done = subprocess.run([str(node), '-e', _CURSOR_PATH_OBSERVER, str(index_js),
                                str(data_dir), str(tmpdir), str(workspace)],
+                              cwd=str(node.resolve().parent), env=_observer_env(),
                               capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         raise unsupported(provider, 'state', 'cursor_project_path_unreadable') from None
+    if done.returncode == 2:
+        raise unsupported(provider, 'state', 'cursor_project_path_shape_unknown')
     if done.returncode or not done.stdout.strip():
-        raise unsupported(provider, 'state', 'cursor_project_path_unreadable') from None
+        raise unsupported(provider, 'state', 'cursor_project_path_unreadable')
     return done.stdout.strip()
 
 

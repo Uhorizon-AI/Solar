@@ -904,11 +904,21 @@ def test_agent_probe_names_the_state_directory_it_created(monkeypatch):
         def resolve_binary(self, name):
             return '/usr/bin/false'
 
+    order = []
+
+    def current(*args, **kwargs):
+        order.append('current')
+
+    def finish(*args, **kwargs):
+        order.append('finish')
+        return '/d/projects/x'
+
     monkeypatch.setattr(guards, 'prepare', lambda *a, **k: (
         ['/usr/bin/false'], {'CURSOR_DATA_DIR': '/d', 'TMPDIR': '/t'}))
-    monkeypatch.setattr(guards, 'finish_cursor_launch', lambda *a, **k: '/d/projects/x')
-    monkeypatch.setattr(guards, 'require_cursor_project_path_current', lambda *a, **k: None)
+    monkeypatch.setattr(guards, 'finish_cursor_launch', finish)
+    monkeypatch.setattr(guards, 'require_cursor_project_path_current', current)
     assert repo._exercise_guarded(Agent()) == 'agent restricted reader preflight passed'
+    assert order == ['current', 'finish']
 
 
 def test_codex_does_not_require_the_model_option_when_none_is_named(monkeypatch):

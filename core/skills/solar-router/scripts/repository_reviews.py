@@ -451,8 +451,10 @@ def _exercise_guarded(provider):
                             dict(system_prompt='Reply with the single word pong.',
                                  user_prompt='Synthetic probe.'))
         if provider.name == 'agent':
-            finish_cursor_launch(argv[:argv.index(binary)], env, private, cwd)
+            # Compare the installed CLI before the 83/91 prediction. A higher limit
+            # would otherwise look like cursor_project_path_outside_write_guard.
             require_cursor_project_path_current(binary, cwd, data_dir=env['CURSOR_DATA_DIR'], tmpdir=env['TMPDIR'])
+            finish_cursor_launch(argv[:argv.index(binary)], env, private, cwd)
             return 'agent restricted reader preflight passed'
     return 'agy restricted reader prepared'
 

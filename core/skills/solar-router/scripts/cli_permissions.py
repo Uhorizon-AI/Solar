@@ -345,9 +345,13 @@ def probe_restricted_reader(provider, exercise=None) -> Finding:
             return unknown(provider.name, "restricted_reader",
                            "installed Cursor CLI project path does not match Solar's prediction; the 83/91 rule is stale",
                            tier="probe")
+        if reason == "cursor_project_path_shape_unknown":
+            return unknown(provider.name, "restricted_reader",
+                           "installed Cursor CLI bundle shape is not one this Solar build's path observer knows; update Solar's observer, not the Cursor install",
+                           tier="probe")
         if reason == "cursor_project_path_unreadable":
             return unknown(provider.name, "restricted_reader",
-                           "cannot read the installed Cursor CLI project-path function",
+                           "could not run the installed Cursor CLI's node to read its project path",
                            tier="probe")
         return unknown(provider.name, "restricted_reader",
                        f"cannot launch the restricted reader: {reason}", tier="probe")
