@@ -68,6 +68,24 @@ class AskResult:
     mode: str  # the client's native read-only switch, or "none" when it has none
 
 
+def raise_restricted_failure(provider_name: str, failure: str | None, returncode: int):
+    """Turn a restricted reader's non-zero exit into the error the router reports.
+
+    Cursor's EPERM mkdir of `/tmp/.cursor…` is the write guard denying the
+    project-state directory. Redaction hides the slug as `/tmp/.[REDACTED]`.
+    Any other denied mkdir stays a generic failure so a different cause is
+    not labeled as the project-path fallback. The preflight mkdir reports
+    `cursor_state_mkdir_denied` or `cursor_state_mkdir_timeout` itself.
+    """
+    text = failure or ""
+    cursor_tmp = "/tmp/.cursor" in text or "/tmp/.[REDACTED]" in text
+    if provider_name == "agent" and "EPERM" in text and "mkdir" in text and cursor_tmp:
+        from execution_profiles import ProfileError
+        raise ProfileError("execution_profile_unsupported", detail=dict(
+            provider="agent", stage="state", reason="cursor_project_path_outside_write_guard"))
+    raise RuntimeError("restricted provider returned non-zero (" + (failure or f"exit {returncode}") + ")")
+
+
 class BaseProvider(ABC):
     name: str = ""
     default_cmd: str = ""
@@ -263,7 +281,7 @@ class BaseProvider(ABC):
                 except (OSError, ValueError, IndexError):  # ValueError: non-UTF-8 bytes
                     pass
         if proc.returncode:
-            raise RuntimeError("restricted provider returned non-zero (" + (failure or f"exit {proc.returncode}") + ")")
+            raise_restricted_failure(self.name, failure, proc.returncode)
         if self.name == "codex":
             result = self._codex_final_review(proc.stdout, last_message)
         else:

@@ -5,9 +5,11 @@ quality or of provider-side context isolation. See repository-readonly-review.md
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -172,6 +174,164 @@ state.write_text('allowed')
             raise refused('write_guard_probe_failed', 'write_guard', provider) from None
         finally:
             state.unlink(missing_ok=True)
+
+
+# Cursor CLI 2026.10 (`paths.kL`) refuses a project base longer than 83 characters
+# and a full project path longer than 91. Past the base limit it falls back to
+# `/tmp/.cursor`, which this write guard does not allow.
+CURSOR_PROJECT_BASE_LIMIT = 83
+CURSOR_PROJECT_PATH_LIMIT = 91
+
+
+def cursor_workspace_slug(path):
+    """Cursor's workspace slug: non-alphanumerics become single dashes."""
+    return re.sub(r'^-+|-+$', '', re.sub(r'-+', '-', re.sub(r'[^a-zA-Z0-9]', '-', str(path))))
+
+
+def cursor_project_path(workspace, *, data_dir, tmpdir):
+    """Directory Cursor creates for `workspace`, matching CLI 2026.10 `paths.kL`."""
+    data_dir = str(data_dir).rstrip('/')
+    tmpdir = str(tmpdir).rstrip('/') or '/tmp'
+    base = data_dir + '/projects'
+    if len(base) > CURSOR_PROJECT_BASE_LIMIT:
+        base = data_dir
+        if len(base) > CURSOR_PROJECT_BASE_LIMIT:
+            candidate = tmpdir + '/.cursor'
+            base = candidate if len(candidate) <= CURSOR_PROJECT_BASE_LIMIT else '/tmp/.cursor'
+    full = base + '/' + cursor_workspace_slug(workspace)
+    if len(full) > CURSOR_PROJECT_PATH_LIMIT:
+        digest = hashlib.sha256(full.encode()).hexdigest()[:7]
+        full = full[:min(CURSOR_PROJECT_BASE_LIMIT, len(full))] + '-' + digest
+    return full
+
+
+# Reads the project-path function out of the installed Cursor CLI bundle (no model
+# call). `node -e` puts the following arguments at argv[1..]: the bundle, then
+# data_dir, tmpdir and workspace. Those three are argv only and are never
+# interpolated into this script. Exit 2 is an unknown bundle shape only when
+# stderr also contains the line `shape_unknown`. Node uses exit 2 for other
+# failures, and those stay `cursor_project_path_unreadable`.
+_CURSOR_PATH_OBSERVER = r"""
+const fs = require("fs");
+const crypto = require("crypto");
+process.env.CURSOR_DATA_DIR = process.argv[2];
+process.env.TMPDIR = process.argv[3];
+const os = require("os");
+const path = require("path");
+const index = fs.readFileSync(process.argv[1], "utf8");
+function unknownShape() {
+  process.stderr.write("shape_unknown\n");
+  process.exit(2);
+}
+function extract(marker) {
+  const start = index.indexOf(marker);
+  if (start < 0) unknownShape();
+  const open = index.indexOf("{", start);
+  let depth = 0;
+  for (let i = open; i < index.length; i++) {
+    const ch = index[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) return index.slice(start, i + 1); }
+  }
+  unknownShape();
+}
+function adapt(source) {
+  return source.split("(0,a.r_)").join(" slug").split("(0,i.join)").join(" path.join")
+    .split("(0,s.tmpdir)").join(" os.tmpdir").split("(0,s.homedir)").join(" os.homedir")
+    .split("(0,n.createHash)").join(" crypto.createHash");
+}
+const slugSrc = adapt(extract('function s(t){return t.replace(/[^a-zA-Z0-9]/g,"-")')).replace("function s(", "function slug(");
+const dataSrc = adapt(extract("function c(){const t=process.env.CURSOR_DATA_DIR"));
+const projectsSrc = adapt(extract('function u(){return(0,i.join)(c(),"projects")}'));
+const projectSrc = adapt(extract("function d(t){let e=u();"));
+const fn = new Function("crypto", "os", "path", "workspace",
+  slugSrc + "\n" + dataSrc + "\n" + projectsSrc + "\n" + projectSrc + "\nreturn d(workspace);");
+process.stdout.write(String(fn(crypto, os, path, process.argv[4])));
+"""
+
+
+def _observer_env():
+    """Env for the path observer. No `NODE_OPTIONS` / `NODE_PATH`, so a `--require` cannot run first."""
+    return {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'SYSTEMROOT') if key in os.environ}
+
+
+def observe_cursor_project_path(index_js, workspace, *, data_dir, tmpdir, provider='agent'):
+    """Path the installed Cursor CLI would use for `workspace`. No model call.
+
+    The bundle is the CLI the user already installed; this only reads it. Unlike
+    `mkdir_under_guard`, the node process is not inside the review write guard.
+    `workspace`, `data_dir` and `tmpdir` are argv, never interpolated into the script.
+    """
+    index_js = Path(index_js)
+    node = index_js.parent / 'node'
+    if not node.is_file():
+        found = shutil.which('node')
+        if not found:
+            raise unsupported(provider, 'state', 'cursor_project_path_unreadable')
+        node = Path(found)
+    try:
+        done = subprocess.run([str(node), '-e', _CURSOR_PATH_OBSERVER, str(index_js),
+                               str(data_dir), str(tmpdir), str(workspace)],
+                              cwd=str(node.resolve().parent), env=_observer_env(),
+                              capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        raise unsupported(provider, 'state', 'cursor_project_path_unreadable') from None
+    if done.returncode == 2 and "shape_unknown" in done.stderr.splitlines():
+        raise unsupported(provider, 'state', 'cursor_project_path_shape_unknown')
+    if done.returncode or not done.stdout.strip():
+        raise unsupported(provider, 'state', 'cursor_project_path_unreadable')
+    return done.stdout.strip()
+
+
+def require_cursor_project_path_current(binary, workspace, *, data_dir, tmpdir, provider='agent'):
+    """Refuse when Solar's prediction disagrees with the installed CLI's own function."""
+    index_js = Path(binary).resolve().parent / 'index.js'
+    if not index_js.is_file():
+        raise unsupported(provider, 'state', 'cursor_project_path_unreadable')
+    predicted = cursor_project_path(workspace, data_dir=data_dir, tmpdir=tmpdir)
+    observed = observe_cursor_project_path(index_js, workspace, data_dir=data_dir, tmpdir=tmpdir, provider=provider)
+    try:
+        same = Path(predicted).resolve() == Path(observed).resolve()
+    except OSError:
+        same = predicted == observed
+    if not same:
+        raise unsupported(provider, 'state', 'cursor_project_path_drift')
+    return predicted
+
+
+def require_cursor_state_inside(env, workspace, private, provider='agent'):
+    """Refuse, by name, when Cursor would mkdir outside the review write guard."""
+    path = cursor_project_path(workspace, data_dir=env['CURSOR_DATA_DIR'], tmpdir=env['TMPDIR'])
+    try:
+        Path(path).resolve().relative_to(Path(private).resolve())
+    except ValueError:
+        raise unsupported(provider, 'state', 'cursor_project_path_outside_write_guard') from None
+    return path
+
+
+def mkdir_under_guard(prefix, env, cwd, path, provider='agent'):
+    """Create Cursor's project directory with the same write guard the reader uses.
+
+    `-I` keeps the untrusted snapshot off `sys.path`. Without it, a `pathlib.py`
+    in that directory would run with the private HOME while the network stays open.
+    """
+    code = 'import pathlib,sys; pathlib.Path(sys.argv[1]).mkdir(parents=True, exist_ok=True, mode=0o700)'
+    try:
+        done = subprocess.run([*prefix, sys.executable, '-I', '-B', '-c', code, path],
+                              cwd=str(cwd), env=env, capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        raise unsupported(provider, 'state', 'cursor_state_mkdir_timeout') from None
+    except (OSError, subprocess.SubprocessError):
+        raise unsupported(provider, 'state', 'cursor_state_mkdir_denied') from None
+    if done.returncode:
+        raise unsupported(provider, 'state', 'cursor_state_mkdir_denied')
+
+
+def finish_cursor_launch(prefix, env, private, cwd):
+    """Create the project-state directory inside the guard, or refuse before the model starts."""
+    path = require_cursor_state_inside(env, cwd, private)
+    mkdir_under_guard(prefix, env, cwd, path)
+    return path
 
 
 def prepare(provider, binary, original_env, private, cwd, manifest, *, metadata=None):

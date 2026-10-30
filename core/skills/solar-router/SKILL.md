@@ -256,12 +256,12 @@ policy checks, CLI restrictions, limitations and the opt-in inference-free probe
 ## CLI permission checks
 
 Capability is not permission: a flag Solar passes is a request, and the client's own settings decide what runs, unless Solar pins a setting on the command line it builds (the Codex ask does this for `approval_policy`; the probe confirms it).
-`cli_permissions.py` reports, per installed client (claude, codex, agent, agy: Antigravity, the successor of the Gemini CLI) and check (`mcp_read`, `write_guard`):
+`cli_permissions.py` reports, per installed client (claude, codex, agent, agy: Antigravity, the successor of the Gemini CLI) and check (`mcp_read`, `write_guard`, `restricted_reader`):
 
 - **Static tier** — reads the client's own settings (`~/.cursor/cli-config.json` and `<workspace>/.cursor/cli.json`, `~/.claude/settings.json` and `<workspace>/.claude/settings*.json`,
   `~/.codex/config.toml`). No model call; `solar status` shows it on the `clients:` line.
   A check the settings cannot settle is `unknown` (never `ok`), with one exception: Codex `write_guard` comes from Solar's own ask command (`-c approval_policy="never"`), so it is `ok` as requested on the command line and only the probe confirms it; Antigravity (`agy`, formerly the Gemini CLI) has no documented permission settings: `~/.gemini/settings.json` holds only auth and general options, so both checks are `unknown` until the probe runs.
-- **Probe tier** — opt-in, costs tokens, run by `solar client doctor --probe-permissions`. It launches each client
+- **Probe tier** — opt-in, run by `solar client doctor --probe-permissions`. `mcp_read` and `write_guard` cost tokens: each client is launched
   through `BaseProvider.ask`, the same construction as a router question (no separate flag set, no `-f`/`--yolo`).
   `mcp_read` is judged by the Solar MCP server's own audit log (`<runtime>/mcp/audit.jsonl`): the probe asks the
   client to call `solar_search` with a unique marker, and `ok` means the server recorded that call. If it did not,
@@ -269,6 +269,19 @@ Capability is not permission: a flag Solar passes is a request, and the client's
   to create a file in a scratch folder (outside the workspace, so a folder-keyed client setting does not apply to it) and is `too_permissive` if the file exists.
   A silent exit with no file is `ok` only for Antigravity, which auto-denies what it cannot prompt for; for any other
   client it is `unknown`. `mcp_read` checks `solar_search`. A client that could not run is `unknown`.
+  `restricted_reader` does not call a model. It launches each installed client's repository-review
+  preflight (the same constructor a review uses before the prompt) or records why it cannot.
+  For Cursor it compares the installed CLI's project path with Solar's prediction before creating
+  state inside the write guard (no model call). A higher Cursor limit is `unknown`
+  (`cursor_project_path_drift`), not a false `missing` guard. A path that would still fall back to
+  `/tmp/.cursor` is `missing`. A bundle whose minified shape this build does not know is `unknown`
+  (`cursor_project_path_shape_unknown`: update Solar's observer, not the Cursor install). A node
+  failure is `unknown` (`cursor_project_path_unreadable`). The fix for the fallback is Solar's review
+  directory, not a client setting. The probe rejects `SOLAR_ROUTER_*` / `SOLAR_AI_*`
+  command overrides with the same code a review uses, so an override cannot look like a passing reader.
+  A probe saved before `restricted_reader` existed has no row for it: `solar status` does not treat that
+  absence as a failure or as an incomplete probe. A client that has never been probed still shows the
+  check as unverified.
   A partial probe (`--client`, `--check`) replaces only the checks it ran; `solar status` shows the age of the oldest one.
   The last result is stored in `<runtime>/router/cli-permissions.json` (machine state: it depends on this machine's
   client settings) and `solar status` shows it with its age.

@@ -178,12 +178,43 @@ A refusal carries `error_detail` with `provider`, `stage`, `reason` and, for hel
 checks, `option`. Reasons: `required_option_missing`, `required_value_unadvertised`,
 `help_failed`, `help_timeout`, `help_unavailable`, `help_format_unknown`,
 `managed_policy_present`, `credentials_unavailable`, `boundary_unavailable`,
-`write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`.
+`write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`,
+`cursor_project_path_outside_write_guard`, `cursor_state_mkdir_denied`,
+`cursor_state_mkdir_timeout`, `cursor_project_path_drift`,
+`cursor_project_path_shape_unknown`, `cursor_project_path_unreadable`.
 A help text proves neither the effective configuration nor that a guard works. These adapters
 do not claim a doctor-style effective/cloud-policy attestation; their stronger
 write boundary is enforced externally. Network access remains available for the
 provider, so this is not an OS network-egress boundary or proof of absent
 provider-side integrations. A real model pilot must also verify tool refusals.
+
+The private directory is kept short enough for Cursor CLI 2026.10. That CLI
+stores per-workspace state under `CURSOR_DATA_DIR/projects` only when the base
+path is at most 83 characters (and the full path at most 91); otherwise it
+mkdirs `/tmp/.cursor/<slug>`. A macOS default temp directory
+(`/var/folders/…`) plus a long prefix crosses that limit, and the write guard
+then returns `EPERM`. The review directory is created under `/tmp` with a short
+prefix in that case. Before the model starts, `mkdir_under_guard` creates the
+project directory inside the guard, with `python -I` so a module in the
+untrusted snapshot cannot shadow the standard library. A denied or timed-out
+creation is `cursor_state_mkdir_denied` or `cursor_state_mkdir_timeout`. If the
+computed path would still fall outside the private directory, launch refuses
+with `cursor_project_path_outside_write_guard` and does not start the model.
+Only a later model exit whose stderr is an `EPERM` mkdir of `/tmp/.cursor…`
+(or the redacted form `/tmp/.[REDACTED]`) is reported with that same reason.
+Any other denied mkdir stays a generic provider failure, including an `EPERM`
+mkdir of a different path under `/tmp`. The permission probe compares the
+installed CLI's project path with Solar's prediction before it treats that
+prediction as outside the write guard, so a higher Cursor limit is
+`cursor_project_path_drift` and not a false `cursor_project_path_outside_write_guard`.
+The observer only reads the installed bundle. It passes `workspace`, `data_dir`
+and `tmpdir` as argv and does not inherit `NODE_OPTIONS`. Exit 2 is
+`cursor_project_path_shape_unknown` only when stderr also contains the line
+`shape_unknown` (the minified markers are gone): update Solar's observer, not
+the Cursor install. Any other node failure, including exit 2 without that
+marker, is `cursor_project_path_unreadable`.
+Neither is a passing reader. The review launch itself does not parse the bundle;
+a wrong prediction still fails at the model's `EPERM` with the named reason.
 
 Cursor receives `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, a private HOME/XDG tree,
 and `AGENT_CLI_CREDENTIAL_STORE=file`. `--trust` satisfies the CLI headless
