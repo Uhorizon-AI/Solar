@@ -92,7 +92,7 @@ case "$MODE" in
   pytest) run_pytest || rc=1 ;;
   shell) run_shell || rc=1 ;;
   all) run_pytest || rc=1; run_shell || rc=1 ;;
-  macos) run_pytest macos || rc=1; run_shell || rc=1 ;;
+  macos) export SOLAR_CI_SLOW_HEALTH_PROBE=1; run_pytest macos || rc=1; run_shell || rc=1 ;;
   *) echo "usage: $0 [pytest|shell|all|macos]" >&2; exit 2 ;;
 esac
 exit "$rc"
