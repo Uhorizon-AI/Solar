@@ -38,7 +38,7 @@ uv run --project core/tests pytest core/tests/skills/solar-router/test_repositor
 
 ## Completion evidence (optional)
 
-- Validation: `uv run --project core/tests pytest core/tests/skills/solar-router -q` on macOS → 729 passed, 3 skipped, 22 subtests. The OS write-guard mkdir ran (`sandbox-exec` is installed). Linux was not run here: no container runtime on this machine. `test_finish_cursor_launch_mkdirs_under_the_os_write_guard` skips where `sandbox-exec` and `bwrap` are both absent.
-- Follow-up on review of `cdef14d`: the probe compares the installed CLI path before the outside-guard check, so a higher limit is `cursor_project_path_drift` and not a false `missing`. Exit 2 from the observer is `cursor_project_path_shape_unknown`; any other node failure is `cursor_project_path_unreadable`. The observer does not inherit `NODE_OPTIONS`.
+- Validation: `uv run --project core/tests pytest core/tests/skills/solar-router -q` on macOS → 734 passed, 3 skipped, 22 subtests. The OS write-guard mkdir ran (`sandbox-exec` is installed). Linux was not run here: no container runtime on this machine. `test_finish_cursor_launch_mkdirs_under_the_os_write_guard` skips where `sandbox-exec` and `bwrap` are both absent.
+- Follow-up on review of `78de525`: `cursor_project_path_shape_unknown` requires exit 2 and the stderr line `shape_unknown`. Exit 2 without that line stays `cursor_project_path_unreadable`. The count above is from this pass, after the tests added since `cdef14d`.
 - Not run from this tree: `solar client doctor --probe-permissions --client agent` and a live `review_batch` use the installed Solar, which does not yet contain this branch. Issue #99 stays open until that install is exercised.
 - Files changed: see the commit.

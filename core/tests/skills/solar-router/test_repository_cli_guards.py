@@ -608,7 +608,7 @@ def test_cursor_project_path_matches_a_cli_bundle_and_a_changed_limit_does_not(t
         guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
     assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
     node_bin.unlink()
-    node_bin.write_text('#!/bin/sh\nexit 1\n')
+    node_bin.write_text('#!/bin/sh\necho invalid argument >&2\nexit 2\n')
     node_bin.chmod(0o755)
     bundle.write_text(_CURSOR_PATH_FIXTURE)
     with pytest.raises(profiles.ProfileError) as error:

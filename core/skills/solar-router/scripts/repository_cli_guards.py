@@ -208,8 +208,9 @@ def cursor_project_path(workspace, *, data_dir, tmpdir):
 # Reads the project-path function out of the installed Cursor CLI bundle (no model
 # call). `node -e` puts the following arguments at argv[1..]: the bundle, then
 # data_dir, tmpdir and workspace. Those three are argv only and are never
-# interpolated into this script. Exit 2 means the minified markers are gone
-# (unknown bundle shape). Any other non-zero exit is a node failure.
+# interpolated into this script. Exit 2 is an unknown bundle shape only when
+# stderr also contains the line `shape_unknown`. Node uses exit 2 for other
+# failures, and those stay `cursor_project_path_unreadable`.
 _CURSOR_PATH_OBSERVER = r"""
 const fs = require("fs");
 const crypto = require("crypto");
@@ -218,9 +219,13 @@ process.env.TMPDIR = process.argv[3];
 const os = require("os");
 const path = require("path");
 const index = fs.readFileSync(process.argv[1], "utf8");
+function unknownShape() {
+  process.stderr.write("shape_unknown\n");
+  process.exit(2);
+}
 function extract(marker) {
   const start = index.indexOf(marker);
-  if (start < 0) process.exit(2);
+  if (start < 0) unknownShape();
   const open = index.indexOf("{", start);
   let depth = 0;
   for (let i = open; i < index.length; i++) {
@@ -228,7 +233,7 @@ function extract(marker) {
     if (ch === "{") depth++;
     else if (ch === "}") { depth--; if (depth === 0) return index.slice(start, i + 1); }
   }
-  process.exit(2);
+  unknownShape();
 }
 function adapt(source) {
   return source.split("(0,a.r_)").join(" slug").split("(0,i.join)").join(" path.join")
@@ -271,7 +276,7 @@ def observe_cursor_project_path(index_js, workspace, *, data_dir, tmpdir, provid
                               capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         raise unsupported(provider, 'state', 'cursor_project_path_unreadable') from None
-    if done.returncode == 2:
+    if done.returncode == 2 and "shape_unknown" in done.stderr.splitlines():
         raise unsupported(provider, 'state', 'cursor_project_path_shape_unknown')
     if done.returncode or not done.stdout.strip():
         raise unsupported(provider, 'state', 'cursor_project_path_unreadable')
