@@ -107,6 +107,12 @@ cat >"$TMP/guard-bin/cloudflared" <<'EOF'
 sleep 300
 EOF
 chmod +x "$TMP/guard-bin/launchctl" "$TMP/guard-bin/cloudflared"
+# Preflight only checks that the first provider binary exists. A double keeps the
+# test independent of whether the machine has the real CLI installed.
+for provider_bin in codex claude; do
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/guard-bin/$provider_bin"
+  chmod +x "$TMP/guard-bin/$provider_bin"
+done
 export PATH="$TMP/guard-bin:${PATH}"
 unset SOLAR_APP_DATA
 export SOLAR_RUNTIME_ROOT="$TMP/runtime"

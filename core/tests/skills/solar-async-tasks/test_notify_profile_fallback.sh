@@ -29,6 +29,10 @@ mkdir -p "$SOLAR_WORKSPACE/sun/preferences" \
          "$SOLAR_WORKSPACE/core/skills/solar-telegram/scripts" \
          "$SOLAR_APP_DATA/Solar/runtime/async-tasks/completed"
 
+# The state owner gate reads the workspace id from the workspace settings.
+mkdir -p "$SOLAR_WORKSPACE/.solar"
+printf '{"workspace_id":"test-workspace"}\n' >"$SOLAR_WORKSPACE/.solar/settings.json"
+
 # The queue must resolve to the runtime root, not to the workspace.
 RESOLVED_ROOT="$(bash -c 'source "$0/skills/solar-async-tasks/scripts/task_lib.sh" >/dev/null 2>&1; printf "%s" "$SOLAR_TASK_ROOT"' "$CORE_ROOT")"
 # The resolver canonicalises, so compare against the resolved app-data path.
@@ -78,6 +82,8 @@ python3 - <<PY
 import sys
 sys.path.insert(0, "$CORE_ROOT/skills/solar-state/scripts")
 import solar_state
+import os
+solar_state.claim_owner(os.environ["SOLAR_WORKSPACE"], "test-workspace")
 with solar_state.cutover() as cut:
     cut.upgrade_schema()
     cut.set_format("sqlite")
