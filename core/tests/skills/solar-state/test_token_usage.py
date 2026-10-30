@@ -267,10 +267,9 @@ def test_console_lists_match_each_router_without_repeating_task_totals(ready):
         assert 'observations' not in json.dumps(runs)
 
 
-@pytest.mark.parametrize('profile', sorted(st.VERIFIED_PROFILES))
-def test_every_verified_profile_opens_a_metered_attempt_and_reaches_the_console(ready, profile):
-    """A profile that cannot be metered fails here, so no execution profile silently loses its tokens."""
-    provider = sorted(st.VERIFIED_PROFILES[profile])[0]
+@pytest.mark.parametrize('profile,provider', sorted((p, c) for p, providers in st.VERIFIED_PROFILES.items() for c in providers))
+def test_every_verified_profile_opens_a_metered_attempt_and_reaches_the_console(ready, profile, provider):
+    """A profile/provider pair that cannot be metered fails here, so none silently loses its tokens."""
     with st.session(ready, auto_backup=False) as store:
         task = question(store, 'Meter ' + profile, provider, profile=profile)
         assert store.task_claim_detail(task, 'worker')['claimed']
@@ -281,6 +280,7 @@ def test_every_verified_profile_opens_a_metered_attempt_and_reaches_the_console(
         store.token_attempt_finish(attempt, token, 'success')
         store.audit_append(dict(event='end', router_id='run-' + profile, status='success', provider=provider, ts='t'))
         data = store.task_token_usage(task)
+        assert data['scope'] == 'solar_router_executions'
         assert data['attempts'][0]['coverage'] == 'available'
         row = next(r for r in runtime_views.console_tasks(store)['tasks'] if r['id'] == task)
         assert row['token_groups'][0]['metrics']['input_tokens']['subtotal'] == 9

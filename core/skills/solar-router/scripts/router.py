@@ -1292,6 +1292,7 @@ def _failed_after_audit(
         provider=provider_used,
         duration_ms=int((time.monotonic() - t_start) * 1000),
         prompt_chars=prompt_chars,
+        **UNMETERED_INTERACTIVE,
     )
     return _failed(request_id, error_code, error, provider_used)
 

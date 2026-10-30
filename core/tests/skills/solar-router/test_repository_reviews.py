@@ -119,7 +119,12 @@ else:
     assert measured['usage'] == dict(input_tokens=11, output_tokens=3)
     kept_metadata()
     first = json.loads(record.read_text())
-    assert ''.join(adapter.stream('UNAPPROVED CONTEXT', review=review)) == expected
+    streamed = Sink()
+    assert ''.join(adapter.stream('UNAPPROVED CONTEXT', review=dict(review, observation_sink=streamed))) == expected
+    # Streaming goes through the same launch: one launch and one terminal record, never two.
+    assert streamed.launch == str(binary)
+    [(_, measured)] = streamed.events
+    assert measured['terminal'] and measured['usage'] == dict(input_tokens=11, output_tokens=3)
     kept_metadata()
     second = json.loads(record.read_text())
     def stable(argv):  # each launch uses its own private directory

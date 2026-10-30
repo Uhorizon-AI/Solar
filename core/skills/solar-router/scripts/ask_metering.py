@@ -68,10 +68,12 @@ def selection(provider, event):
     return observation
 
 
-def review_observation(provider, result, usage):
-    """Terminal observation of a restricted execution whose final record was already parsed."""
+def review_observation(provider, result, usage, successful=True):
+    """Terminal observation of a restricted execution whose final record was already parsed.
+
+    `successful=False` keeps the counters of a rejected reply as evidence only."""
     observation = dict(event_type='turn.completed' if provider == 'codex' else 'result',
-                       terminal=True, successful=True, source='review.usage')
+                       terminal=True, successful=successful, source='review.usage')
     if isinstance(usage, dict):
         observation['usage'] = usage
     if isinstance(result.get('modelUsage'), dict):

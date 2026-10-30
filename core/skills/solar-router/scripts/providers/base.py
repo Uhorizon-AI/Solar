@@ -263,14 +263,16 @@ class BaseProvider(ABC):
                                before_launch=before_launch) as (argv, env, cwd):
             # Inherit the router's process group: the worker owns that group and
             # must stop the provider with it on timeout, cancellation or revocation.
-            if observation_sink is not None:
-                observation_sink.launched(argv[0], (getattr(self, "last_review_preflight", None) or {}).get("version"))
             try:
                 proc = subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True,
                                       timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300))
             except subprocess.TimeoutExpired as exc:
+                # The client was running when the deadline hit: it was launched. An exec failure
+                # (missing binary, no permission) raises before this point and stays "not launched".
+                self._confirm_launch(observation_sink, argv)
                 self._capture_evidence(manifest, argv, env, exc.stdout, None, timed_out=True)
                 raise
+            self._confirm_launch(observation_sink, argv)
             # Opt-in diagnostic copy, taken before the launch directory is removed.
             self._capture_evidence(manifest, argv, env, proc.stdout, proc.returncode)
             failure = self._failure_reason(argv, proc) if proc.returncode else None
@@ -282,36 +284,41 @@ class BaseProvider(ABC):
                         last_message = fh.read()
                 except (OSError, ValueError, IndexError):  # ValueError: non-UTF-8 bytes
                     pass
-        if proc.returncode:
-            raise_restricted_failure(self.name, failure, proc.returncode)
-        if self.name == "codex":
-            result = self._codex_final_review(proc.stdout, last_message)
-        else:
-            result = json.loads(proc.stdout)
-        if not isinstance(result, dict):
-            raise RuntimeError("restricted provider returned no result object")
-        # The client's own counters, kept before any normalization: absent stays absent, never zero.
-        native_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
-        if self.name == "agy":
-            if result.get("status") != "SUCCESS" or result.get("error"):
-                raise RuntimeError("restricted provider returned an error")
-            result = dict(result=result.get("response"), usage=result.get("usage"))
-        elif self.name == "agent":
-            if result.get("type") != "result" or result.get("subtype") != "success":
-                raise RuntimeError("restricted provider returned an error")
-            usage = result.get("usage")
-            if isinstance(usage, dict) and "inputTokens" in usage:
-                result["usage"] = dict(input_tokens=usage.get("inputTokens", 0),
-                                       output_tokens=usage.get("outputTokens", 0),
-                                       cached_input_tokens=usage.get("cacheReadTokens", 0))
-        if result.get("is_error") or not isinstance(result.get("result"), str) or not result["result"]:
-            raise RuntimeError("restricted provider returned no review text")
+        try:
+            if proc.returncode:
+                raise_restricted_failure(self.name, failure, proc.returncode)
+            if self.name == "codex":
+                result = self._codex_final_review(proc.stdout, last_message)
+            else:
+                result = json.loads(proc.stdout)
+            if not isinstance(result, dict):
+                raise RuntimeError("restricted provider returned no result object")
+            # The client's own record and counters, kept before any normalization: absent stays absent, never zero.
+            native_result = result
+            native_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
+            if self.name == "agy":
+                if result.get("status") != "SUCCESS" or result.get("error"):
+                    raise RuntimeError("restricted provider returned an error")
+                result = dict(result=result.get("response"), usage=result.get("usage"))
+            elif self.name == "agent":
+                if result.get("type") != "result" or result.get("subtype") != "success":
+                    raise RuntimeError("restricted provider returned an error")
+                usage = result.get("usage")
+                if isinstance(usage, dict) and "inputTokens" in usage:
+                    result["usage"] = dict(input_tokens=usage.get("inputTokens", 0),
+                                           output_tokens=usage.get("outputTokens", 0),
+                                           cached_input_tokens=usage.get("cacheReadTokens", 0))
+            if result.get("is_error") or not isinstance(result.get("result"), str) or not result["result"]:
+                raise RuntimeError("restricted provider returned no review text")
+        except Exception:
+            self._record_rejected_counters(observation_sink, proc.stdout)
+            raise
         self.last_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
         if observation_sink is not None:
             # The restricted launch already returns the client's own final record: record its counters
             # as the terminal observation. A reply without counters still closes as "no counters".
             from ask_metering import review_observation
-            observation_sink(1, review_observation(self.name, result, native_usage))
+            observation_sink(1, review_observation(self.name, native_result, native_usage))
         if profile == "repository_readonly_v1":
             from execution_profiles import verify_envelope
             approved = verify_envelope(manifest, expected, provider=self.name, profile=profile)
@@ -320,6 +327,35 @@ class BaseProvider(ABC):
             return ("Reviewed commit: " + commit + "\n" + freshness_line(approved) + "\n\n"
                     + result["result"])
         return result["result"]
+
+    def _confirm_launch(self, observation_sink, argv) -> None:
+        """Tell the meter the client process really started."""
+        if observation_sink is not None:
+            observation_sink.launched(argv[0], (getattr(self, "last_review_preflight", None) or {}).get("version"))
+
+    def _record_rejected_counters(self, observation_sink, stdout) -> None:
+        """Counters a rejected reply still carried: evidence of a failed attempt, never validated metrics.
+
+        Best effort: whatever the client printed that is not parseable is simply not evidence.
+        """
+        if observation_sink is None:
+            return
+        import json
+        try:
+            if self.name == "codex":
+                events = [json.loads(line) for line in (stdout or "").splitlines() if line.strip()]
+                usage = [e["usage"] for e in events if isinstance(e, dict) and isinstance(e.get("usage"), dict)]
+                record, usage = {}, (usage[-1] if usage else None)
+            else:
+                record = json.loads(stdout)
+                usage = record.get("usage") if isinstance(record, dict) else None
+                record = record if isinstance(record, dict) else {}
+            from ask_metering import review_observation
+            observation = review_observation(self.name, record, usage, successful=False)
+            if "usage" in observation or "model_usage" in observation:
+                observation_sink(1, observation)
+        except Exception:  # noqa: BLE001  # the original failure is what the caller must see
+            pass
 
     def _run_ask_profile(self, manifest, expected, before_launch, observation_sink=None) -> str:
         """A question: verified twice around the launch, answered with the client's own session."""
