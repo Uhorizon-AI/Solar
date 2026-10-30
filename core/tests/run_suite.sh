@@ -2,7 +2,12 @@
 # Run the whole core test suite (pytest + shell tests) in a clean environment.
 #
 # Same entrypoint for CI and for a maintainer who wants the CI result locally:
-#   bash core/tests/run_suite.sh [pytest|shell|all]   (default: all)
+#   bash core/tests/run_suite.sh [pytest|shell|all|macos]   (default: all)
+#
+# `macos` is the macOS runner's job: only the pytest files whose behavior depends on
+# macOS (launchd, LaunchAgents, case-insensitive volume, host lifecycle) plus every
+# shell test. The full pytest suite runs on Ubuntu; running it twice on macOS would
+# not fit the job limit and would repeat the same platform-neutral checks.
 #
 # Clean environment: nothing is inherited from the caller's Solar setup. Python
 # tests run from a throwaway workspace (sun/ + .solar/settings.json) with
@@ -15,6 +20,17 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/../.." && pwd)"
 MODE="${1:-all}"
 SHELL_TIMEOUT="${SOLAR_SHELL_TEST_TIMEOUT:-300}"
+
+# Pytest files that depend on macOS, relative to core/tests.
+MACOS_PYTEST=(
+  skills/solar-system
+  skills/solar-app/test_host_lifecycle.py
+  skills/solar-client/test_service_isolation.py
+  skills/solar-client/test_smoke_isolation.py
+  skills/solar-client/test_update_sequence.py
+  skills/solar-client/test_codex_agents.py
+  skills/solar-router/test_runtime_isolation.py
+)
 
 # "relative/path.sh|reason" — explicit skips for tests that cannot run on a CI runner.
 SKIPS=(
@@ -32,7 +48,11 @@ skip_reason() {
 }
 
 run_pytest() {
-  local ws rc
+  local ws rc targets=("$TESTS_DIR") t
+  if [[ "${1:-}" == macos ]]; then
+    targets=()
+    for t in "${MACOS_PYTEST[@]}"; do targets+=("$TESTS_DIR/$t"); done
+  fi
   ws="$(mktemp -d)"
   mkdir -p "$ws/sun" "$ws/.solar"
   echo '{}' > "$ws/.solar/settings.json"
@@ -40,7 +60,7 @@ run_pytest() {
   (
     cd "$ws" || exit 2
     env -u SOLAR_WORKSPACE SOLAR_ROOT="$REPO_ROOT" \
-      uv run --project "$TESTS_DIR" pytest "$TESTS_DIR" -p no:cacheprovider -q -ra "${PYTEST_EXTRA_ARGS[@]+"${PYTEST_EXTRA_ARGS[@]}"}"
+      uv run --project "$TESTS_DIR" pytest "${targets[@]}" -p no:cacheprovider -q -ra --durations=20 "${PYTEST_EXTRA_ARGS[@]+"${PYTEST_EXTRA_ARGS[@]}"}"
   )
   rc=$?
   rm -rf "$ws"
@@ -72,6 +92,7 @@ case "$MODE" in
   pytest) run_pytest || rc=1 ;;
   shell) run_shell || rc=1 ;;
   all) run_pytest || rc=1; run_shell || rc=1 ;;
-  *) echo "usage: $0 [pytest|shell|all]" >&2; exit 2 ;;
+  macos) run_pytest macos || rc=1; run_shell || rc=1 ;;
+  *) echo "usage: $0 [pytest|shell|all|macos]" >&2; exit 2 ;;
 esac
 exit "$rc"

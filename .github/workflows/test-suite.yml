@@ -12,7 +12,8 @@ permissions:
 
 concurrency:
   group: test-suite-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded PR runs are cancelled; a run on main must finish so its commit keeps a verdict.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   suite:
@@ -22,9 +23,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            mode: all
+          - os: macos-latest
+            mode: macos
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # test_client_update.sh needs release tags
       - uses: astral-sh/setup-uv@v5
       - name: Run core/tests (clean environment)
-        run: bash core/tests/run_suite.sh all
+        run: bash core/tests/run_suite.sh ${{ matrix.mode }}
