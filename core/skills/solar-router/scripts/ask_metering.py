@@ -68,6 +68,25 @@ def selection(provider, event):
     return observation
 
 
+def review_observation(provider, result, usage, successful=True):
+    """Terminal observation of a restricted execution whose final record was already parsed.
+
+    `successful=False` keeps the counters of a rejected reply as evidence only."""
+    event = ('turn.completed' if successful else 'turn.failed') if provider == 'codex' else 'result'
+    observation = dict(event_type=event,
+                       terminal=True, successful=successful, source='review.usage')
+    if isinstance(usage, dict):
+        observation['usage'] = usage
+    if isinstance(result.get('modelUsage'), dict):
+        observation['model_usage'] = result['modelUsage']
+    if 'total_cost_usd' in result:
+        observation['reported_estimate_usd'] = result['total_cost_usd']
+    for key in ('session_id', 'model'):
+        if isinstance(result.get(key), str):
+            observation[key] = result[key]
+    return observation
+
+
 def run(provider, cmd, *, cwd, env, timeout, observer):
     """Read stdout/stderr concurrently under a wall deadline, committing before another event.
 

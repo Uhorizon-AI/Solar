@@ -132,7 +132,7 @@ def project(attempts):
                 if val is not None:
                     g['metrics'][k]['subtotal'] = (g['metrics'][k]['subtotal'] or 0) + val
                     g['metrics'][k]['available'] += 1
-    return {'scope': 'solar_async_ask_only', 'attempts': attempts, 'coverage': coverage,
+    return {'scope': 'solar_router_executions', 'attempts': attempts, 'coverage': coverage,
             'subtotals': list(groups.values()), 'attempt_count': len(attempts),
             'partial_count': sum(a['coverage'] == 'partial' for a in attempts),
             'not_available_count': sum(a['coverage'] == 'not_available' for a in attempts),

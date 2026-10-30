@@ -330,6 +330,10 @@ def append_message(path: pathlib.Path, role: str, text: str) -> None:
         fh.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
+# Interactive replies run with no task identity, so no token attempt can be bound; say so in the audit.
+UNMETERED_INTERACTIVE = dict(token_measurement="not_measurable", token_measurement_reason="interactive_route_no_task")
+
+
 def audit_log(router_id: str, event: str, **kwargs: Any) -> None:
     row = {
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1288,6 +1292,7 @@ def _failed_after_audit(
         provider=provider_used,
         duration_ms=int((time.monotonic() - t_start) * 1000),
         prompt_chars=prompt_chars,
+        **UNMETERED_INTERACTIVE,
     )
     return _failed(request_id, error_code, error, provider_used)
 
@@ -1341,10 +1346,10 @@ def _restricted_route(payload, *, stream=False):
                   execution_profile=profile, review_input_digest=fields["review_input_digest"], stream=stream)
         review = dict(manifest=manifest, expected=fields["review_input_digest"],
                       profile=profile, before_launch=before_launch)
-        if profile == "ask_readonly_v1":
-            from ask_metering import StateObserver
-            observation_sink = StateObserver(solar_state, task_id, token, router_id, provider, manifest.get("model"))
-            review["observation_sink"] = observation_sink
+        # Every restricted execution is metered, whatever its profile.
+        from ask_metering import StateObserver
+        observation_sink = StateObserver(solar_state, task_id, token, router_id, provider, manifest.get("model"))
+        review["observation_sink"] = observation_sink
         adapter = PROVIDERS[provider]
         adapter.last_review_preflight = {}
         if stream:
@@ -1403,7 +1408,7 @@ def _restricted_route(payload, *, stream=False):
                   stream=stream, review_preflight=metadata)
         return dict(_failed(request_id, "state_unavailable", str(exc), provider), review_preflight=metadata)
     except Exception as exc:
-        if observation_sink is not None and isinstance(exc, TimeoutError):
+        if observation_sink is not None and isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
             metering_timed_out = True
             observation_sink.capture_problem("cli_timeout")
         metadata = getattr(adapter, "last_review_preflight", {})
@@ -1507,6 +1512,9 @@ def route_stream(raw: str):
                 full_text_parts.append(chunk)
                 yield json.dumps({"type": "chunk", "text": chunk}, ensure_ascii=False)
     except UnsupportedProviderPriorityError as exc:
+        audit_log(router_id, "end", status="failed", error_code="invalid_provider_priority", error=str(exc),
+                  provider=provider_used, stream=True,
+                  duration_ms=int((time.monotonic() - t_start) * 1000), **UNMETERED_INTERACTIVE)
         yield json.dumps(
             {
                 "type": "done",
@@ -1519,6 +1527,8 @@ def route_stream(raw: str):
         )
         return
     except Exception as exc:
+        audit_log(router_id, "end", status="failed", error=str(exc), provider=provider_used, stream=True,
+                  duration_ms=int((time.monotonic() - t_start) * 1000), **UNMETERED_INTERACTIVE)
         yield json.dumps({"type": "done", "status": "failed", "error": str(exc), "provider": provider_used, "request_id": request_id})
         return
 
@@ -1558,6 +1568,7 @@ def route_stream(raw: str):
         jit_generated=bool(jit_context and jit_context.get("jit_generated")),
         history_turns=len(recent) // 2,
         summary_used=summary is not None,
+        **UNMETERED_INTERACTIVE,
         summary_updated=new_summary is not None,
         **material_audit_fields(
             text=text,
@@ -1723,6 +1734,7 @@ def route(raw: str) -> Dict[str, Any]:
         jit_generated=bool(jit_context and jit_context.get("jit_generated")),
         history_turns=len(recent) // 2,
         summary_used=summary is not None,
+        **UNMETERED_INTERACTIVE,
         summary_updated=new_summary is not None,
         **material_audit_fields(
             text=text,

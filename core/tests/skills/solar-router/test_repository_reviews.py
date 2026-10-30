@@ -105,10 +105,26 @@ else:
         if provider == 'claude':  # the reader's preflight record survives for the audit log and the result
             assert adapter.last_review_preflight['version'] == '9.9.9 (test double)'
             assert adapter.last_review_preflight['capabilities_checked'] == [*profiles.FLAGS, *(['--model'] if named else [])]
-    assert adapter.run('UNAPPROVED CONTEXT', review=review) == expected
+    class Sink:
+        def __init__(self): self.launch, self.events = None, []
+        def launched(self, binary, version): self.launch = binary
+        def __call__(self, position, observation): self.events.append((position, observation))
+        def capture_problem(self, problem): pass
+    sink = Sink()
+    assert adapter.run('UNAPPROVED CONTEXT', review=dict(review, observation_sink=sink)) == expected
+    # A repository review is metered like a question: launch confirmed, one terminal record with the counters.
+    assert sink.launch == str(binary)
+    [(position, measured)] = sink.events
+    assert position == 1 and measured['terminal'] and measured['successful']
+    assert measured['usage'] == dict(input_tokens=11, output_tokens=3)
     kept_metadata()
     first = json.loads(record.read_text())
-    assert ''.join(adapter.stream('UNAPPROVED CONTEXT', review=review)) == expected
+    streamed = Sink()
+    assert ''.join(adapter.stream('UNAPPROVED CONTEXT', review=dict(review, observation_sink=streamed))) == expected
+    # Streaming goes through the same launch: one launch and one terminal record, never two.
+    assert streamed.launch == str(binary)
+    [(_, measured)] = streamed.events
+    assert measured['terminal'] and measured['usage'] == dict(input_tokens=11, output_tokens=3)
     kept_metadata()
     second = json.loads(record.read_text())
     def stable(argv):  # each launch uses its own private directory
