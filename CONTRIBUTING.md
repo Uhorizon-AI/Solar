@@ -60,6 +60,18 @@ Checklist:
 - [ ] Documentation updated when needed.
 - [ ] `CHANGELOG.md` updated when relevant.
 
+## Merge Policy
+
+Short rules so that parallel PRs do not break each other:
+
+1. **CI is the single "nothing is broken" gate.** The `Test suite` workflow runs the full `core/tests` suite on every PR and on `main`. A PR is mergeable only with it green. Reviewers (human or AI) judge design and risk; they do not replace the suite.
+2. **One PR at a time.** After each merge, the next PR is rebased on the new `main` and must pass CI again before review is requested.
+3. **Review only what changed.** After a rebase or a push, reviewers look only at what changed since their last review, not at the whole diff again.
+4. **Merge order follows shared files.** PRs that touch the same hot files (`solar_state.py`, `router.py`, `providers/base.py`, `operations.py`) merge one after another, smallest or most urgent first; unrelated PRs can go in any order.
+5. **Releases are grouped.** Publish one release for several merged PRs, except for an urgent fix.
+
+Making the check required for merging is a repository setting (branch protection) and is done by the maintainer.
+
 ## Creating a Release
 
 **Maintainers only:** Solar uses semantic versioning for framework releases.
