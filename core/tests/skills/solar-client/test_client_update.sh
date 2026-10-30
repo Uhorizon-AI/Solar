@@ -1281,7 +1281,7 @@ chmod +x "$TMP/trapped-launch.sh" "$TMP/trapped-cutover.py"
 trap_head_before="$(git -C "$TRAP_GLOBAL" rev-parse HEAD)"
 set +e
 trap_out="$(
-  unset SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE
+  unset SOLAR_ROOT SOLAR_CLIENT_GLOBAL_INSTALL_OVERRIDE
   SOLAR_RUNTIME_ROOT="$TRAP_RT" \
   SOLAR_CLIENT_STATE_PY="$CORE_ROOT/skills/solar-state/scripts/solar_state.py" \
   SOLAR_CLIENT_LAUNCHCTL="$TMP/trapped-launch.sh" \
