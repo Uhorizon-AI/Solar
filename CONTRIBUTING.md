@@ -76,9 +76,11 @@ Making the check required for merging is a repository setting (branch protection
 
 **Maintainers only:** Solar uses semantic versioning for framework releases.
 
+**Release policy.** Releases are grouped: one release per week (the cadence is the maintainer's call), covering every PR merged since the last one. An urgent fix (it breaks users, or security) may go out of cadence. `--publish` refuses unless the `Test suite` checks `Suite (ubuntu-latest)` and `Suite (macos-latest)` are green on the commit under the release commit, also with `--publish --retry`. The only way around it is `--urgent "reason"`, which prints the reason.
+
 To create a release:
 ```bash
-bash core/scripts/create-release.sh [--push]
+bash core/scripts/create-release.sh [--publish]
 ```
 
 The script will:

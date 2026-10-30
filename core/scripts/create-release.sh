@@ -19,10 +19,16 @@ SOLAR_CLI="$GIT_ROOT/core/skills/solar-client/scripts/solar"
 INSTALL_E2E_TEST="$GIT_ROOT/core/tests/skills/solar-client/test_install_solar_client.sh"
 BOOTSTRAP_REL_PATH="core/skills/solar-client/scripts/bootstrap_solar_client.sh"
 
+RELEASE_REPO="${SOLAR_RELEASE_REPO:-Uhorizon-AI/Solar}"
+# The checks the Test suite workflow reports. Both must be green on the commit
+# that the release commit sits on before anything is published.
+REQUIRED_SUITE_CHECKS=("Suite (ubuntu-latest)" "Suite (macos-latest)")
+
 PUBLISH=false
 RETRY=false
 AUTO_CONFIRM=false
 FORCE_VERSION=""
+URGENT_REASON=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +55,12 @@ while [[ $# -gt 0 ]]; do
       FORCE_VERSION="$1"
       shift
       ;;
+    --urgent)
+      shift
+      [[ $# -gt 0 && -n "$1" ]] || { echo "ERROR: --urgent requires a written reason" >&2; exit 2; }
+      URGENT_REASON="$1"
+      shift
+      ;;
     -h|--help)
       cat <<'EOF'
 Usage:
@@ -65,7 +77,16 @@ Modes:
 Options:
   --yes, -y           Skip confirmation prompt
   --version vX.Y.Z    Force version (must match vMAJOR.MINOR.PATCH)
+  --urgent "reason"   Publish without a green test suite. For an urgent fix only; the
+                      reason is printed and stays in the terminal log.
   --push              Deprecated alias for --publish
+
+Release policy:
+  Releases are grouped: one release per week (cadence proposed by the maintainer),
+  covering every PR merged since the last one. An urgent fix (breaks users, security)
+  may be released outside the cadence. Publishing requires the Test suite checks
+  "Suite (ubuntu-latest)" and "Suite (macos-latest)" to be green on the commit the
+  release commit sits on; --urgent is the only way around it. See CONTRIBUTING.md.
 EOF
       exit 0
       ;;
@@ -565,8 +586,60 @@ function verify_remote_release() {
   success "Release $tag verified via API"
 }
 
+# Refuse to publish unless the Test suite is green on the commit under the release
+# commit (the last commit of main that CI saw). Fails closed: if GitHub cannot be
+# queried, nothing is published.
+function require_green_suite() {
+  local tag="$1"
+  if [[ -n "$URGENT_REASON" ]]; then
+    warn "Publishing WITHOUT the suite gate (--urgent): $URGENT_REASON"
+    return 0
+  fi
+  local sha
+  if ! sha="$(git -C "$GIT_ROOT" rev-parse "${tag}^" 2>/dev/null)"; then
+    error "Cannot resolve the commit under $tag; refusing to publish"
+    exit 1
+  fi
+  info "Checking the Test suite on ${sha:0:12} (the commit under $tag)..."
+  if ! command -v gh >/dev/null 2>&1; then
+    error "gh is required to verify the Test suite; refusing to publish"
+    exit 1
+  fi
+  local json
+  if ! json="$(gh api "repos/${RELEASE_REPO}/commits/${sha}/check-runs?per_page=100" 2>/dev/null)"; then
+    error "Could not read the Test suite checks for ${sha:0:12}; refusing to publish"
+    exit 1
+  fi
+  local problems
+  problems="$(python3 - "$json" "${REQUIRED_SUITE_CHECKS[@]}" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+runs = {}
+for run in data.get("check_runs", []):
+    # A re-run replaces an earlier result; the latest completed one wins.
+    prev = runs.get(run["name"])
+    if prev is None or (run.get("started_at") or "") >= (prev.get("started_at") or ""):
+        runs[run["name"]] = run
+for name in sys.argv[2:]:
+    run = runs.get(name)
+    if run is None:
+        print(f"{name}: no result")
+    elif run.get("conclusion") != "success":
+        print(f"{name}: {run.get('conclusion') or run.get('status')}")
+PY
+)" || { error "Could not read the Test suite result; refusing to publish"; exit 1; }
+  if [[ -n "$problems" ]]; then
+    error "The Test suite is not green on ${sha:0:12}; refusing to publish"
+    echo "$problems" >&2
+    echo "Fix it, or for an urgent fix pass: --urgent \"reason\"" >&2
+    exit 1
+  fi
+  success "Test suite green on ${sha:0:12}"
+}
+
 function publish_release() {
   local tag="$1"
+  require_green_suite "$tag"
   run_local_install_e2e
   info "Pushing main and tags to origin..."
   git -C "$GIT_ROOT" push origin main --tags
@@ -586,6 +659,7 @@ function retry_publish() {
   fi
   NEW_VERSION="$tag"
   info "Retry publish for $tag (no commit/tag rewrite)"
+  require_green_suite "$tag"
   verify_remote_tag "$tag"
   create_github_release "$tag"
   verify_remote_release "$tag"
@@ -649,4 +723,7 @@ function main() {
   fi
 }
 
-main
+# Run only when executed; tests source this file to exercise single functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main
+fi
