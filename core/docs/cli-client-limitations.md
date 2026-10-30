@@ -24,7 +24,10 @@ Solar does **not** strip or replace the user's CLI session for ordinary question
   Historical example: before Solar passed `approval_policy="never"` to Codex
   (see [Questions](repository-readonly-review.md#questions-ask_readonly_v1)), a
   Codex configured with on-request approvals and an automatic reviewer could
-  write; that case is now closed, the general caution is not.
+  write. Since v0.60.1 Solar passes that override on the command line and the
+  permission probe confirms it. "Historical" refers to that Codex case only;
+  the general caution (and the wording of the ask descriptions in Solar MCP)
+  stands.
 - Solar does not remove MCP servers, skills catalogs, or vendor tool schemas from
   the user's default CLI configuration.
 - Sandbox / plan / ask modes are **permission** requests. They are not a promise
@@ -45,7 +48,9 @@ reviews. That isolation is **not** the default ask path.
 **Measured result (#80):** in the runs recorded on that issue, for Cursor, Codex,
 Antigravity and Claude, `ask_readonly_v1` ≈ the same CLI invoked directly in the
 same folder (delta ≈ 0 within noise). This is a measurement, not a guarantee for
-other versions or configurations.
+other versions or configurations. The runs date from 2026-10-25, before v0.60.1
+added `-c approval_policy="never"` to the Codex ask command; that flag is not
+expected to change input size, but it was not re-measured.
 
 ---
 
@@ -64,7 +69,7 @@ They are **not comparable across clients as a single ranking metric**:
 | Claude Code | **Effective** = `input + cache_read + cache_creation` (Claude often reports tiny `input` with large cache fields) |
 
 Do not treat rows as billing quotes. CLI versions observed in that campaign included
-roughly `agent` 2026.10.22, `codex-cli` 0.164.0, `agy` 1.4.7, Claude Code ~2.1.x;
+roughly `agent` 2026.10.22, `codex-cli` 0.164.0, `agy` 1.4.7; the Claude Code version was not recorded precisely (2.1.x family);
 re-measure after harness upgrades (see Governance).
 
 | Client | Empty / isolated floor | Ask or project cwd (default session) | Notes |
@@ -72,7 +77,7 @@ re-measure after harness upgrades (see Governance).
 | Cursor (`agent`) | ~8.4k input | ~12.6k input | **Post-hygiene workspace:** no duplicate `.cursorrules`, reduced synced skills/commands. Another operator without that hygiene will not match ~12.6k. |
 | Codex | ~16.4k input (~13.7k strongly isolated) | ~22–25k input | Workspace `.codex` trim can shave ~2–3k; not the floor. |
 | Antigravity (`agy`) | ~9.3k input | ~17.1k input | Private-HOME lite auth may fail closed. |
-| Claude Code | ~24.8k effective | ~32–35k effective | Default session is the heaviest **effective** floor in this set. |
+| Claude Code | ~24.8k effective | ~32–35k effective | Default session; **effective** metric, not comparable with the **input** rows above. |
 
 **Claude lite-style launch** (restricted flags, empty tools/MCP, empty setting
 sources — same family as review isolation, not default ask): ~**5.7k** effective
