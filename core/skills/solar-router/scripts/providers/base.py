@@ -318,7 +318,7 @@ class BaseProvider(ABC):
             # The restricted launch already returns the client's own final record: record its counters
             # as the terminal observation. A reply without counters still closes as "no counters".
             from ask_metering import review_observation
-            observation_sink(1, review_observation(self.name, native_result, native_usage))
+            self._observe(observation_sink, review_observation(self.name, native_result, native_usage))
         if profile == "repository_readonly_v1":
             from execution_profiles import verify_envelope
             approved = verify_envelope(manifest, expected, provider=self.name, profile=profile)
@@ -342,11 +342,12 @@ class BaseProvider(ABC):
     def _record_rejected_counters(self, observation_sink, stdout) -> None:
         """Counters a rejected reply still carried: evidence of a failed attempt, never validated metrics.
 
-        Best effort: whatever the client printed that is not parseable is simply not evidence.
-        """
+        What the client printed that cannot be parsed is simply not evidence: it flags nothing, because a
+        client failure is not a meter failure. Only a sink that cannot persist is flagged."""
         if observation_sink is None:
             return
         import json
+        from ask_metering import review_observation
         try:
             if self.name == "codex":
                 events = []
@@ -361,11 +362,19 @@ class BaseProvider(ABC):
                 record = json.loads(stdout)
                 usage = record.get("usage") if isinstance(record, dict) else None
                 record = record if isinstance(record, dict) else {}
-            from ask_metering import review_observation
             observation = review_observation(self.name, record, usage, successful=False)
-            if "usage" in observation or "model_usage" in observation:
-                observation_sink(1, observation)
-        except Exception:  # noqa: BLE001  # the original failure is what the caller must see
+        except (ValueError, TypeError):  # includes UnicodeError and JSONDecodeError
+            return
+        if "usage" in observation or "model_usage" in observation:
+            self._observe(observation_sink, observation)
+
+    @staticmethod
+    def _observe(observation_sink, observation) -> None:
+        """Hand the meter its terminal record. A meter that cannot persist it is flagged, but never
+        replaces the outcome of a review that already ran."""
+        try:
+            observation_sink(1, observation)
+        except Exception:  # noqa: BLE001
             observation_sink.capture_problem("persistence_failed")
 
     def _run_ask_profile(self, manifest, expected, before_launch, observation_sink=None) -> str:

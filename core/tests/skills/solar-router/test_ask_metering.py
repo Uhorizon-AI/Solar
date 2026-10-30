@@ -627,3 +627,40 @@ def test_failed_streamed_interactive_replies_close_their_audit_start(isolated_ru
     assert done['status'] == 'failed'
     [end] = _end_rows()
     assert end['status'] == 'failed' and end['stream'] is True and end['token_measurement'] == 'not_measurable'
+
+
+@pytest.mark.parametrize('provider', ['claude', 'codex', 'agent', 'agy'])
+@pytest.mark.parametrize('stdout', ['', 'not json at all', '\ufffd\x00 broken'])
+def test_a_client_failure_without_usable_output_is_not_a_meter_failure(isolated_runtime, tmp_path, monkeypatch, provider, stdout):
+    import solar_state as st
+    task, token, profile = _review_task(tmp_path, provider)
+    _real_adapter(monkeypatch, tmp_path, provider,
+                  lambda *a, **k: type('R', (), {'returncode': 1, 'stdout': stdout, 'stderr': ''})())
+    assert _route(task, token, profile, provider)['status'] == 'failed'
+    with st.read_session() as store:
+        [attempt] = store.task_token_usage(task)['attempts']
+        assert attempt['status'] == 'failed' and attempt['observations'] == []
+        assert attempt['reason'] == 'failed'  # the client failed; nothing says the meter did
+
+
+class _MeterThatCannotObserve(Observer):
+    def __call__(self, position, observation):
+        self.capture_problem('persistence_failed')
+        raise RuntimeError('persist_failed')
+
+
+def test_a_meter_that_cannot_persist_the_counters_never_replaces_a_paid_review(monkeypatch, tmp_path):
+    _real_adapter(monkeypatch, tmp_path, 'claude', _completed(STDOUT['claude']))
+    meter = _MeterThatCannotObserve()
+    assert PROVIDERS['claude'].run_review(manifest={}, expected='', profile='text_only_review_v1',
+                                          observation_sink=meter) == 'Review text'
+    assert meter.problem == 'persistence_failed'
+
+
+def test_a_meter_that_cannot_persist_rejected_counters_keeps_the_client_failure(monkeypatch, tmp_path):
+    stdout = json.dumps({'is_error': True, 'result': 'quota', 'usage': {'input_tokens': 5, 'output_tokens': 1}})
+    _real_adapter(monkeypatch, tmp_path, 'claude', _completed(stdout))
+    meter = _MeterThatCannotObserve()
+    with pytest.raises(RuntimeError, match='no review text'):  # the client's failure, not the meter's
+        PROVIDERS['claude'].run_review(manifest={}, expected='', profile='text_only_review_v1', observation_sink=meter)
+    assert meter.problem == 'persistence_failed'

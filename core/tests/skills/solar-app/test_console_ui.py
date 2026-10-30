@@ -205,7 +205,7 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertRegex(css, r"\.fg\.ok\{color:var\(--ok\)\}")
         self.assertRegex(css, r"\.pill\.run\{color:var\(--info\)")
 
-    def test_token_usage_scope_text_covers_reviews_not_only_questions(self):
+    def test_token_usage_scope_copy_in_both_languages_mentions_reviews(self):
         js = (ASSETS / "app.js").read_text(encoding="utf-8")
         for text in ("task executions (questions and reviews)", "ejecuciones de tareas de Solar (preguntas y revisiones)"):
             self.assertIn(text, js)
