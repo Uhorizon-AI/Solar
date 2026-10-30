@@ -25,7 +25,7 @@ Solar does **not** strip or replace the user's CLI session for ordinary question
   (see [Questions](repository-readonly-review.md#questions-ask_readonly_v1)), a
   Codex configured with on-request approvals and an automatic reviewer could
   write. Since v0.60.1 Solar passes that override on the command line and the
-  permission probe confirms it. "Historical" refers to that Codex case only;
+  permission probe is the check that confirms it. "Historical" refers to that Codex case only;
   the general caution (and the wording of the ask descriptions in Solar MCP)
   stands.
 - Solar does not remove MCP servers, skills catalogs, or vendor tool schemas from
@@ -54,7 +54,7 @@ expected to change input size, but it was not re-measured.
 
 ---
 
-## Measured floors (minimal “PRUEBA TOKENS OK” class prompts)
+## Measured floors (minimal “token test OK” class prompts)
 
 Figures are provider-reported attempt counters from controlled runs on **2026-10-25**
 in an operator workspace, recorded in the measurement comments of
