@@ -143,6 +143,10 @@ class Rig:
             for index in range(tasks):
                 store.task_create([("title", json.dumps(f"T{index}"))], "\n# T\n", status="draft")
         if version < solar_state.SCHEMA_VERSION:
+            # The undo below knows schema v8 and nothing newer: a later migration must be undone
+            # here too, or the base keeps its objects under an older user_version and collides.
+            assert solar_state.SCHEMA_VERSION == 8, "teach runtime_state to undo the newer migrations"
+            assert version in (5, 6), f"runtime_state can rebuild schema v5 or v6, not v{version}"
             conn = sqlite3.connect(solar_state.db_path(self.rt))
             for table in ("token_observations", "token_attempts"):
                 conn.execute(f"DROP TABLE {table}")
