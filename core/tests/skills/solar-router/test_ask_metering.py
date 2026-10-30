@@ -640,6 +640,7 @@ def test_a_client_failure_without_usable_output_is_not_a_meter_failure(isolated_
     with st.read_session() as store:
         [attempt] = store.task_token_usage(task)['attempts']
         assert attempt['status'] == 'failed' and attempt['observations'] == []
+        assert attempt['capture_error'] is None  # said directly, not inferred from `reason`
         assert attempt['reason'] == 'failed'  # the client failed; nothing says the meter did
 
 

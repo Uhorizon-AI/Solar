@@ -207,8 +207,10 @@ class ConsoleUiTests(unittest.TestCase):
 
     def test_token_usage_scope_copy_in_both_languages_mentions_reviews(self):
         js = (ASSETS / "app.js").read_text(encoding="utf-8")
-        for text in ("task executions (questions and reviews)", "ejecuciones de tareas de Solar (preguntas y revisiones)"):
-            self.assertIn(text, js)
+        lines = [line.strip() for line in js.splitlines() if line.strip().startswith("usage_scope:")]
+        self.assertEqual(len(lines), 2)  # one per language; the phrase must sit in the key, not anywhere
+        for line, text in zip(lines, ("task executions (questions and reviews)", "ejecuciones de tareas de Solar (preguntas y revisiones)")):
+            self.assertIn(text, line)
         self.assertNotIn("async questions only", js)
 
     def test_screens_follow_the_routes(self):
