@@ -476,15 +476,16 @@ def test_real_adapter_leaves_one_metered_attempt_per_provider_and_transport(isol
         assert attempt['metrics']['output_tokens'] == 8
 
 
-def test_real_adapter_timeout_is_a_timed_out_attempt_that_was_launched(isolated_runtime, tmp_path, monkeypatch):
+@pytest.mark.parametrize('provider', ['claude', 'codex', 'agent', 'agy'])
+def test_real_adapter_timeout_is_a_timed_out_attempt_that_was_launched(isolated_runtime, tmp_path, monkeypatch, provider):
     import subprocess
     import solar_state as st
-    task, token, profile = _review_task(tmp_path)
+    task, token, profile = _review_task(tmp_path, provider)
 
     def slow(*a, **k):
-        raise subprocess.TimeoutExpired(cmd='claude', timeout=1)
-    _real_adapter(monkeypatch, tmp_path, 'claude', slow)
-    assert _route(task, token, profile, 'claude')['status'] == 'failed'
+        raise subprocess.TimeoutExpired(cmd=provider, timeout=1)
+    _real_adapter(monkeypatch, tmp_path, provider, slow)
+    assert _route(task, token, profile, provider)['status'] == 'failed'
     with st.read_session() as store:
         usage = store.task_token_usage(task)
         [attempt] = usage['attempts']
@@ -492,15 +493,16 @@ def test_real_adapter_timeout_is_a_timed_out_attempt_that_was_launched(isolated_
         assert attempt['coverage'] == 'not_available' and attempt['launch_confirmed'] is True
 
 
+@pytest.mark.parametrize('provider', ['claude', 'codex', 'agent', 'agy'])
 @pytest.mark.parametrize('error', [FileNotFoundError, PermissionError])
-def test_real_adapter_exec_failure_is_not_a_launched_attempt(isolated_runtime, tmp_path, monkeypatch, error):
+def test_real_adapter_exec_failure_is_not_a_launched_attempt(isolated_runtime, tmp_path, monkeypatch, error, provider):
     import solar_state as st
-    task, token, profile = _review_task(tmp_path)
+    task, token, profile = _review_task(tmp_path, provider)
 
     def broken(*a, **k):
         raise error('no client')
-    _real_adapter(monkeypatch, tmp_path, 'claude', broken)
-    assert _route(task, token, profile, 'claude')['status'] == 'failed'
+    _real_adapter(monkeypatch, tmp_path, provider, broken)
+    assert _route(task, token, profile, provider)['status'] == 'failed'
     with st.read_session() as store:
         usage = store.task_token_usage(task)
         [attempt] = usage['attempts']
@@ -514,6 +516,10 @@ def test_real_adapter_exec_failure_is_not_a_launched_attempt(isolated_runtime, t
     ('claude', json.dumps({'result': 'x', 'usage': {'input_tokens': 5, 'output_tokens': 1}}), 1),
     ('agent', json.dumps({'type': 'result', 'subtype': 'error', 'usage': {'inputTokens': 5, 'outputTokens': 1}}), 0),
     ('codex', '\n'.join(json.dumps(e) for e in [{'type': 'turn.failed', 'usage': {'input_tokens': 5, 'output_tokens': 1}}]), 0),
+    ('codex', '\n'.join([json.dumps({'type': 'turn.failed', 'usage': {'input_tokens': 5, 'output_tokens': 1}}), '{"type": "tur']), 0),
+    ('agy', json.dumps({'status': 'ERROR', 'usage': {'input_tokens': 5, 'output_tokens': 1}}), 0),
+    ('agy', json.dumps({'status': 'SUCCESS', 'response': 'x', 'usage': {'input_tokens': 5, 'output_tokens': 1}}), 2),
+    ('agent', json.dumps({'type': 'result', 'subtype': 'success', 'result': 'x', 'usage': {'inputTokens': 5, 'outputTokens': 1}}), 1),
 ])
 def test_rejected_reply_keeps_its_counters_as_partial_evidence_not_metrics(isolated_runtime, tmp_path, monkeypatch, provider, stdout, returncode):
     import solar_state as st
@@ -524,6 +530,8 @@ def test_rejected_reply_keeps_its_counters_as_partial_evidence_not_metrics(isola
     with st.read_session() as store:
         [attempt] = store.task_token_usage(task)['attempts']
         assert attempt['status'] == 'failed' and attempt['coverage'] == 'partial'
+        [observation] = attempt['observations']  # one record, never the success path as well
+        assert observation['original']['successful'] is False and observation['original']['terminal']
         assert all(v is None for v in attempt['metrics'].values())  # evidence, never a validated subtotal
         assert store.task_token_usage(task)['subtotals'] == []
 
@@ -572,3 +580,50 @@ def test_task_bound_executions_do_not_claim_to_be_unmeasurable(isolated_runtime,
     assert _route(task, token, profile, 'claude')['status'] == 'success'
     [end] = _end_rows()
     assert 'token_measurement' not in end
+
+
+def test_a_codex_rejection_is_labelled_as_a_failed_turn(monkeypatch, tmp_path):
+    stdout = json.dumps({'type': 'turn.failed', 'usage': {'input_tokens': 5, 'output_tokens': 1}})
+    _real_adapter(monkeypatch, tmp_path, 'codex', _completed(stdout))
+    receiver = Observer()
+    with pytest.raises(RuntimeError):
+        PROVIDERS['codex'].run_review(manifest={}, expected='', profile='text_only_review_v1', observation_sink=receiver)
+    [(_, observation)] = receiver.events
+    assert observation['event_type'] == 'turn.failed' and observation['successful'] is False
+
+
+class _BrokenMeter(Observer):
+    def launched(self, binary, version):
+        self.capture_problem('persistence_failed')
+        raise RuntimeError('persist_failed')
+
+
+def test_a_meter_that_cannot_persist_the_launch_never_replaces_the_review_outcome(monkeypatch, tmp_path):
+    import subprocess
+    _real_adapter(monkeypatch, tmp_path, 'claude', _completed(STDOUT['claude']))
+    meter = _BrokenMeter()
+    assert PROVIDERS['claude'].run_review(manifest={}, expected='', profile='text_only_review_v1',
+                                          observation_sink=meter) == 'Review text'
+    assert meter.problem == 'persistence_failed'
+
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired(cmd='claude', timeout=1)
+    _real_adapter(monkeypatch, tmp_path, 'claude', slow)
+    with pytest.raises(subprocess.TimeoutExpired):  # the real outcome, not the meter's failure
+        PROVIDERS['claude'].run_review(manifest={}, expected='', profile='text_only_review_v1', observation_sink=_BrokenMeter())
+
+
+@pytest.mark.parametrize('error', [RuntimeError('dead'), None])
+def test_failed_streamed_interactive_replies_close_their_audit_start(isolated_runtime, monkeypatch, error):
+    import router
+    from router import UnsupportedProviderPriorityError
+
+    def broken(prompt, provider_override=None):
+        raise error or UnsupportedProviderPriorityError('bad priority')
+        yield
+    monkeypatch.setattr(router, 'stream_provider', broken)
+    raw = json.dumps(dict(request_id='i', session_id='s', user_id='u', text='hello', channel='other', mode='direct_only'))
+    [done] = [json.loads(line) for line in router.route_stream(raw) if json.loads(line)['type'] == 'done']
+    assert done['status'] == 'failed'
+    [end] = _end_rows()
+    assert end['status'] == 'failed' and end['stream'] is True and end['token_measurement'] == 'not_measurable'

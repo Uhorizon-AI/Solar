@@ -205,6 +205,12 @@ class ConsoleUiTests(unittest.TestCase):
         self.assertRegex(css, r"\.fg\.ok\{color:var\(--ok\)\}")
         self.assertRegex(css, r"\.pill\.run\{color:var\(--info\)")
 
+    def test_token_usage_scope_text_covers_reviews_not_only_questions(self):
+        js = (ASSETS / "app.js").read_text(encoding="utf-8")
+        for text in ("task executions (questions and reviews)", "ejecuciones de tareas de Solar (preguntas y revisiones)"):
+            self.assertIn(text, js)
+        self.assertNotIn("async questions only", js)
+
     def test_screens_follow_the_routes(self):
         result = subprocess.run(
             ["node", "-e", _JS_HARNESS, str(ASSETS / "app.js")],

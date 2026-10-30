@@ -72,7 +72,8 @@ def review_observation(provider, result, usage, successful=True):
     """Terminal observation of a restricted execution whose final record was already parsed.
 
     `successful=False` keeps the counters of a rejected reply as evidence only."""
-    observation = dict(event_type='turn.completed' if provider == 'codex' else 'result',
+    event = ('turn.completed' if successful else 'turn.failed') if provider == 'codex' else 'result'
+    observation = dict(event_type=event,
                        terminal=True, successful=successful, source='review.usage')
     if isinstance(usage, dict):
         observation['usage'] = usage

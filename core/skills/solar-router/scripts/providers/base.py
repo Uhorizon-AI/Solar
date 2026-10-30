@@ -294,7 +294,7 @@ class BaseProvider(ABC):
             if not isinstance(result, dict):
                 raise RuntimeError("restricted provider returned no result object")
             # The client's own record and counters, kept before any normalization: absent stays absent, never zero.
-            native_result = result
+            native_result = dict(result)
             native_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
             if self.name == "agy":
                 if result.get("status") != "SUCCESS" or result.get("error"):
@@ -329,9 +329,15 @@ class BaseProvider(ABC):
         return result["result"]
 
     def _confirm_launch(self, observation_sink, argv) -> None:
-        """Tell the meter the client process really started."""
+        """Tell the meter the client process really started.
+
+        A meter that cannot persist this is flagged (the sink records the problem) but never replaces
+        the outcome of a review that already ran, or that already timed out."""
         if observation_sink is not None:
-            observation_sink.launched(argv[0], (getattr(self, "last_review_preflight", None) or {}).get("version"))
+            try:
+                observation_sink.launched(argv[0], (getattr(self, "last_review_preflight", None) or {}).get("version"))
+            except Exception:  # noqa: BLE001
+                observation_sink.capture_problem("persistence_failed")
 
     def _record_rejected_counters(self, observation_sink, stdout) -> None:
         """Counters a rejected reply still carried: evidence of a failed attempt, never validated metrics.
@@ -343,7 +349,12 @@ class BaseProvider(ABC):
         import json
         try:
             if self.name == "codex":
-                events = [json.loads(line) for line in (stdout or "").splitlines() if line.strip()]
+                events = []
+                for line in (stdout or "").splitlines():
+                    try:  # one truncated line must not discard the counters of the valid ones
+                        events.append(json.loads(line))
+                    except ValueError:
+                        continue
                 usage = [e["usage"] for e in events if isinstance(e, dict) and isinstance(e.get("usage"), dict)]
                 record, usage = {}, (usage[-1] if usage else None)
             else:
@@ -355,7 +366,7 @@ class BaseProvider(ABC):
             if "usage" in observation or "model_usage" in observation:
                 observation_sink(1, observation)
         except Exception:  # noqa: BLE001  # the original failure is what the caller must see
-            pass
+            observation_sink.capture_problem("persistence_failed")
 
     def _run_ask_profile(self, manifest, expected, before_launch, observation_sink=None) -> str:
         """A question: verified twice around the launch, answered with the client's own session."""

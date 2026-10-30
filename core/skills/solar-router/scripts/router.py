@@ -1512,6 +1512,9 @@ def route_stream(raw: str):
                 full_text_parts.append(chunk)
                 yield json.dumps({"type": "chunk", "text": chunk}, ensure_ascii=False)
     except UnsupportedProviderPriorityError as exc:
+        audit_log(router_id, "end", status="failed", error_code="invalid_provider_priority", error=str(exc),
+                  provider=provider_used, stream=True,
+                  duration_ms=int((time.monotonic() - t_start) * 1000), **UNMETERED_INTERACTIVE)
         yield json.dumps(
             {
                 "type": "done",
@@ -1524,6 +1527,8 @@ def route_stream(raw: str):
         )
         return
     except Exception as exc:
+        audit_log(router_id, "end", status="failed", error=str(exc), provider=provider_used, stream=True,
+                  duration_ms=int((time.monotonic() - t_start) * 1000), **UNMETERED_INTERACTIVE)
         yield json.dumps({"type": "done", "status": "failed", "error": str(exc), "provider": provider_used, "request_id": request_id})
         return
 
