@@ -130,7 +130,11 @@ class Rig:
         return [json.loads(line) for line in self.events.read_text().splitlines() if line.strip()]
 
     def runtime_state(self, version: int, tasks: int = 1) -> None:
-        """A runtime already on solar-state at schema `version` (5 or 6), with some history."""
+        """A runtime already on solar-state at schema `version` (5 or 6), with some history.
+
+        The base is built at the current schema and then taken back by undoing what each later
+        migration added, newest first: v8 (token evidence and the execution id), v7 (lifecycle
+        tables), then v6 (reservations) for a v5 base."""
         claim_test_owner(self.rt, self.ws, WS_ID, monkeypatch=self.monkeypatch)
         with solar_state.cutover(self.rt) as cut:
             cut.upgrade_schema()
@@ -140,6 +144,9 @@ class Rig:
                 store.task_create([("title", json.dumps(f"T{index}"))], "\n# T\n", status="draft")
         if version < solar_state.SCHEMA_VERSION:
             conn = sqlite3.connect(solar_state.db_path(self.rt))
+            for table in ("token_observations", "token_attempts"):
+                conn.execute(f"DROP TABLE {table}")
+            conn.execute("ALTER TABLE execution_reservations DROP COLUMN execution_id")
             for table in ("execution_groups", "execution_lifecycle", "execution_cleanup_holds"):
                 conn.execute(f"DROP TABLE {table}")
             if version == 5:
@@ -205,7 +212,7 @@ def test_the_whole_sequence_runs_in_order_with_an_old_supervisor_and_schema(rig)
     assert rig.barrier() is None
     # the code moved only after the drain and the stops, together with the schema
     assert rig.head() != old_head and rig.head() == rig.git("rev-parse", "v0.0.2") and rig.marker() == "NEW"
-    assert rig.schema() == solar_state.SCHEMA_VERSION == 7
+    assert rig.schema() == solar_state.SCHEMA_VERSION
     assert list((rig.rt / "state-backups" / "pre-update").glob("state-v5-pre-update-*.sqlite"))
     assert list((rig.rt / "state-backups" / "pre-migration").glob(f"state-v5-to-v{solar_state.SCHEMA_VERSION}-*.sqlite"))
     with solar_state.session(rig.rt, auto_backup=False) as store:
