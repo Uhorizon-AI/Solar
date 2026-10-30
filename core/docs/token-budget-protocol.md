@@ -46,6 +46,9 @@ Solar builds, not everything the harness injects or subsequently reads. Caching
 can reduce billed input without removing context occupancy. Treat missing
 measurements as unavailable, not zero.
 
+For measured CLI floors on Solar questions (`ask_readonly_v1` ≈ host CLI) and
+operator policy, see [CLI client limitations](cli-client-limitations.md).
+
 ---
 
 ## Three Session Levels

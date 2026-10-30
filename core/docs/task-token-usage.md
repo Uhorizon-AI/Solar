@@ -10,6 +10,9 @@ says `token_measurement=not_measurable`. This does not measure host IDE sessions
 or work performed outside Solar. Unsupported or unreported counters stay
 unavailable, never zero.
 
+For measured CLI floors, metric caveats (input vs Claude effective), and operator
+policy, see [CLI client limitations](cli-client-limitations.md).
+
 ## Capture and storage
 
 The router requests JSON events from Codex and streaming JSON from Claude,
