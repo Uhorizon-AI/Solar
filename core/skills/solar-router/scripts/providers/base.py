@@ -263,6 +263,8 @@ class BaseProvider(ABC):
                                before_launch=before_launch) as (argv, env, cwd):
             # Inherit the router's process group: the worker owns that group and
             # must stop the provider with it on timeout, cancellation or revocation.
+            if observation_sink is not None:
+                observation_sink.launched(argv[0], (getattr(self, "last_review_preflight", None) or {}).get("version"))
             try:
                 proc = subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True,
                                       timeout=env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300))
@@ -288,6 +290,8 @@ class BaseProvider(ABC):
             result = json.loads(proc.stdout)
         if not isinstance(result, dict):
             raise RuntimeError("restricted provider returned no result object")
+        # The client's own counters, kept before any normalization: absent stays absent, never zero.
+        native_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
         if self.name == "agy":
             if result.get("status") != "SUCCESS" or result.get("error"):
                 raise RuntimeError("restricted provider returned an error")
@@ -303,6 +307,11 @@ class BaseProvider(ABC):
         if result.get("is_error") or not isinstance(result.get("result"), str) or not result["result"]:
             raise RuntimeError("restricted provider returned no review text")
         self.last_usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
+        if observation_sink is not None:
+            # The restricted launch already returns the client's own final record: record its counters
+            # as the terminal observation. A reply without counters still closes as "no counters".
+            from ask_metering import review_observation
+            observation_sink(1, review_observation(self.name, result, native_usage))
         if profile == "repository_readonly_v1":
             from execution_profiles import verify_envelope
             approved = verify_envelope(manifest, expected, provider=self.name, profile=profile)

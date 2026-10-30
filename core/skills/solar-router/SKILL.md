@@ -251,7 +251,7 @@ policy checks, CLI restrictions, limitations and the opt-in inference-free probe
 
 ## Task token usage
 
-`ask_metering.py` is an internal structured CLI transport and per-invocation observation sink for asynchronous questions; it is not a standalone provider entry point. See [scope and semantics](../../docs/task-token-usage.md).
+`ask_metering.py` is an internal structured CLI transport and per-invocation observation sink for every restricted router execution (questions and repository reviews alike); it is not a standalone provider entry point. See [scope and semantics](../../docs/task-token-usage.md).
 
 ## CLI permission checks
 

@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(router): token metering now covers every restricted execution, not only `ask_readonly_v1`. Repository reviews (Codex, Claude, Cursor, Antigravity) record a token attempt with the client's own counters, so Solar Console shows Entrada/Salida in Tasks and Runs for them again; `token_attempt_start` accepts every verified profile and refuses unknown ones. Interactive replies, which have no task identity, record `token_measurement=not_measurable` in the audit instead of staying silent. Tests iterate the profile registry, so a new profile that cannot be metered fails. The token-usage `scope` value is now `solar_router_executions` (was `solar_async_ask_only`). Closes #105.
+
 ## [0.60.3] - 2026-10-30
 
 ### Fixed

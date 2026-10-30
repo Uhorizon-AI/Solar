@@ -3622,7 +3622,10 @@ class Session:
                             provider: str, requested_model=None) -> str:
         """Bind evidence to the live activation without touching its approved snapshot."""
         with _transaction(self.conn) as conn:
-            snap = _execution_snapshot(conn, task_id, token, "ask_readonly_v1")
+            snap = _execution_snapshot(conn, task_id, token)
+            # Every verified execution profile is metered; an unknown one never opens an attempt.
+            if snap["fields"]["execution_profile"] not in VERIFIED_PROFILES:
+                raise ReviewInputsInvalid("review_input_mismatch")
             if snap["fields"]["provider"] != provider:
                 raise ReviewInputsInvalid("review_input_mismatch")
             execution_id = conn.execute(

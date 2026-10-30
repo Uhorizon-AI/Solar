@@ -265,3 +265,33 @@ def test_console_lists_match_each_router_without_repeating_task_totals(ready):
         assert runs[-1]['token_groups'] == []
         assert 'observations' not in json.dumps(tasks)
         assert 'observations' not in json.dumps(runs)
+
+
+@pytest.mark.parametrize('profile', sorted(st.VERIFIED_PROFILES))
+def test_every_verified_profile_opens_a_metered_attempt_and_reaches_the_console(ready, profile):
+    """A profile that cannot be metered fails here, so no execution profile silently loses its tokens."""
+    provider = sorted(st.VERIFIED_PROFILES[profile])[0]
+    with st.session(ready, auto_backup=False) as store:
+        task = question(store, 'Meter ' + profile, provider, profile=profile)
+        assert store.task_claim_detail(task, 'worker')['claimed']
+        token = token_of(store, task)
+        attempt = store.token_attempt_start(task, token, 'run-' + profile, provider)
+        store.token_attempt_launch(attempt, token, binary=provider, cli_version=None)
+        store.token_observe(attempt, token, 1, observation(input_tokens=9, output_tokens=4))
+        store.token_attempt_finish(attempt, token, 'success')
+        store.audit_append(dict(event='end', router_id='run-' + profile, status='success', provider=provider, ts='t'))
+        data = store.task_token_usage(task)
+        assert data['attempts'][0]['coverage'] == 'available'
+        row = next(r for r in runtime_views.console_tasks(store)['tasks'] if r['id'] == task)
+        assert row['token_groups'][0]['metrics']['input_tokens']['subtotal'] == 9
+        assert row['token_groups'][0]['metrics']['output_tokens']['subtotal'] == 4
+        run = next(r for r in runtime_views.console_executions(store)['recent'] if r.get('token_groups'))
+        assert run['token_groups'][0]['metrics']['output_tokens']['subtotal'] == 4
+
+
+def test_profile_outside_the_registry_never_opens_an_attempt(ready):
+    with st.session(ready, auto_backup=False) as store:
+        task = question(store, 'Meter unknown', 'codex', profile='unregistered_v1')
+        assert store.task_claim_detail(task, 'worker')['claimed']
+        with pytest.raises(st.ReviewInputsInvalid):
+            store.token_attempt_start(task, token_of(store, task), 'r', 'codex')

@@ -286,3 +286,110 @@ def test_large_final_answer_is_preserved_and_measurement_still_selected(tmp_path
     assert files and all(stream.closed for stream in files)
     assert receiver.problem is None
     assert receiver.events[-1][1]['usage']['input_tokens'] == 2
+
+
+@pytest.mark.parametrize('provider', ['claude', 'codex', 'agent', 'agy'])
+def test_repository_review_route_leaves_a_metered_attempt_in_the_console(isolated_runtime, tmp_path, monkeypatch, provider):
+    """The route meters every profile: a review ends with Entrada/Salida, not with no attempt at all."""
+    import router
+    import solar_state as st
+    import runtime_views
+    import repository_reviews as repo
+    from ask_metering import review_observation
+    from git_review_fixture import repository
+    from reservation_tokens import token_of
+    root, commit = repository(tmp_path)
+    built = repo.build(repository=str(root), commit=commit, provider=provider, model=None,
+                       instructions='Review.', rules=['Cite sources.'])
+    with st.session() as store:
+        fields = [('title', json.dumps('Review meter')), ('provider', json.dumps(provider)),
+                  ('access_policy', json.dumps(dict(version=1, mode='read', scopes=[str(root)], resources=[]))),
+                  ('execution_profile', json.dumps(repo.PROFILE)),
+                  ('review_input_manifest', json.dumps(built['manifest'])),
+                  ('review_input_digest', json.dumps(built['review_input_digest']))]
+        task = store.task_create(fields, '\n# Review meter\n\nReview.\n')
+        store.task_approve(task, expected_row_version=store.task_get(task)['row_version'])
+        assert store.task_claim_detail(task, 'test-worker')['claimed']
+        token = token_of(store, task)
+    adapter = PROVIDERS[provider]
+
+    def fake_review(*, observation_sink=None, **kwargs):
+        assert observation_sink is not None, 'a restricted profile reached the provider unmetered'
+        observation_sink.launched(provider, None)
+        usage = dict(input_tokens=21, output_tokens=8)
+        observation_sink(1, review_observation(provider, {}, usage))
+        return 'Review text'
+    monkeypatch.setattr(adapter, 'run_review', fake_review)
+    result = router.route(json.dumps(dict(request_id='review-meter', text='x', channel='async-task', mode='direct_only',
+                                          provider=provider, execution=dict(task_id=task, token=token, profile=repo.PROFILE))))
+    assert result['status'] == 'success', result
+    with st.read_session() as store:
+        usage = runtime_views.console_task_detail(store, task)['token_usage']
+        attempt = usage['attempts'][0]
+        assert attempt['status'] == 'success' and attempt['coverage'] == 'available'
+        assert attempt['metrics']['input_tokens'] == 21 and attempt['metrics']['output_tokens'] == 8
+        row = next(r for r in runtime_views.console_tasks(store)['tasks'] if r['id'] == task)
+        assert row['token_groups'][0]['metrics']['input_tokens']['subtotal'] == 21
+
+
+def test_provider_failure_in_a_review_is_a_failed_attempt_not_a_missing_one(isolated_runtime, tmp_path, monkeypatch):
+    import router
+    import solar_state as st
+    import repository_reviews as repo
+    from git_review_fixture import repository
+    from reservation_tokens import token_of
+    root, commit = repository(tmp_path)
+    built = repo.build(repository=str(root), commit=commit, provider='claude', model=None,
+                       instructions='Review.', rules=['Cite sources.'])
+    with st.session() as store:
+        fields = [('title', json.dumps('Review failure')), ('provider', json.dumps('claude')),
+                  ('access_policy', json.dumps(dict(version=1, mode='read', scopes=[str(root)], resources=[]))),
+                  ('execution_profile', json.dumps(repo.PROFILE)),
+                  ('review_input_manifest', json.dumps(built['manifest'])),
+                  ('review_input_digest', json.dumps(built['review_input_digest']))]
+        task = store.task_create(fields, '\n# Review failure\n\nReview.\n')
+        store.task_approve(task, expected_row_version=store.task_get(task)['row_version'])
+        assert store.task_claim_detail(task, 'test-worker')['claimed']
+        token = token_of(store, task)
+
+    def broken(*, observation_sink=None, **kwargs):
+        observation_sink.launched('claude', None)
+        raise RuntimeError('provider exploded')
+    monkeypatch.setattr(PROVIDERS['claude'], 'run_review', broken)
+    result = router.route(json.dumps(dict(request_id='review-failure', text='x', channel='async-task', mode='direct_only',
+                                          provider='claude', execution=dict(task_id=task, token=token, profile=repo.PROFILE))))
+    assert result['status'] == 'failed'
+    with st.read_session() as store:
+        [attempt] = store.task_token_usage(task)['attempts']
+        assert attempt['status'] == 'failed' and attempt['reason'] == 'failed'
+        assert attempt['coverage'] == 'not_available'
+
+
+@pytest.mark.parametrize('provider,stdout,expected', [
+    ('agent', {'type': 'result', 'subtype': 'success', 'result': 'ok', 'usage': {'inputTokens': 21}}, {'inputTokens': 21}),
+    ('agent', {'type': 'result', 'subtype': 'success', 'result': 'ok',
+               'usage': {'inputTokens': 21, 'outputTokens': 8, 'cacheWriteTokens': 5, 'future_counter': 7}},
+     {'inputTokens': 21, 'outputTokens': 8, 'cacheWriteTokens': 5, 'future_counter': 7}),
+    ('claude', {'result': 'ok', 'usage': {'input_tokens': 3, 'output_tokens': 0}, 'total_cost_usd': 0.5, 'session_id': 's1'},
+     {'input_tokens': 3, 'output_tokens': 0}),
+    ('agy', {'status': 'SUCCESS', 'response': 'ok', 'usage': {'input_tokens': 1, 'output_tokens': 2}}, {'input_tokens': 1, 'output_tokens': 2}),
+    ('claude', {'result': 'ok'}, None),
+])
+def test_review_records_the_clients_native_counters_without_inventing_zeros(monkeypatch, provider, stdout, expected):
+    import contextlib
+    import subprocess
+
+    @contextlib.contextmanager
+    def launch(*a, **k):
+        yield [provider, '--x'], {}, '.'
+    monkeypatch.setattr(ep, 'restricted_launch', launch)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: type('R', (), {'returncode': 0, 'stdout': json.dumps(stdout), 'stderr': ''})())
+    adapter = PROVIDERS[provider]
+    monkeypatch.setattr(adapter, 'last_review_preflight', {'version': '9.9.9'}, raising=False)
+    receiver = Observer()
+    out = adapter.run_review(manifest={}, expected='', profile='other_profile_v1', observation_sink=receiver)
+    assert out == 'ok'
+    assert receiver.launch == (provider, '9.9.9')
+    [(position, observation)] = receiver.events
+    assert position == 1 and observation['terminal'] and observation['successful']
+    assert observation.get('usage') == expected

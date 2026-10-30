@@ -1,9 +1,14 @@
-# Token usage for asynchronous questions
+# Token usage for router executions
 
-Solar records the token counters reported by each provider CLI for asynchronous
-questions using `ask_readonly_v1`, including equivalent declared reads. This does
-not measure host IDE sessions, ordinary router calls, repository reviews or work
-performed outside Solar. Unsupported or unreported counters stay unavailable.
+Solar records the token counters reported by each provider CLI for every
+task-bound router execution: asynchronous questions (`ask_readonly_v1`) and
+repository or text reviews (`repository_readonly_v1`, `text_only_review_v1`).
+Questions stream the client's events; reviews record the counters of the
+client's final record, which their fixed launch already returns. Interactive
+replies have no task identity, so they are not metered; their audit `end` row
+says `token_measurement=not_measurable`. This does not measure host IDE sessions
+or work performed outside Solar. Unsupported or unreported counters stay
+unavailable, never zero.
 
 ## Capture and storage
 
