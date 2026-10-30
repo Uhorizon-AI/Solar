@@ -6,6 +6,42 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.60.3] - 2026-10-30
+
+### Fixed
+- fix(router): Cursor repository reviews no longer die with `EPERM` creating `/tmp/.cursor…`. The private directory stays within Cursor CLI's 83-character project path, and the state directory is created inside the write guard with `python -I` so the snapshot cannot shadow the standard library. A path that would fall outside is `cursor_project_path_outside_write_guard`. A mkdir denied or timed out before the model starts is `cursor_state_mkdir_denied` or `cursor_state_mkdir_timeout`. A model exit uses the outside-guard reason only when stderr shows an `EPERM` mkdir of `/tmp/.cursor` (or its redacted `/tmp/.[REDACTED]` form). `solar client doctor --probe-permissions` launches that restricted reader (no model call, and no `--model` requirement when the review names none), compares the installed Cursor path before the outside-guard check, rejects the same command overrides a review rejects, and stores the result for `solar status`. A bundle shape this build does not know is `cursor_project_path_shape_unknown` only when the observer prints the stderr line `shape_unknown`; any other node failure, including exit 2 without that line, is `cursor_project_path_unreadable`. A probe saved before `restricted_reader` existed is not reported as a failure or as an incomplete probe.
+
+## [0.60.2] - 2026-10-29
+### Fixed
+- fix: sort last runs by parsed time and validate --last
+- fix: keep only the newest router run per task
+- fix: ignore router runs from earlier attempts of a requeued task
+- fix: simplify run_task_id prefix handling
+- fix: match executor request ids and mark interrupted runs
+- fix: router status lists every provider and ignores finished tasks
+
+## [0.60.1] - 2026-10-29
+
+### Fixed
+- fix(router): Codex asks pass `-c approval_policy="never"`, so an automatic `approvals_reviewer` in `~/.codex/config.toml` can no longer approve leaving `--sandbox read-only` (the live probe wrote a file; a per-project `approval_policy` is not honored by `codex exec`). The static `write_guard` check reads the ask command instead of `config.toml`.
+
+## [0.60.0] - 2026-10-29
+
+### Added
+- feat(status): check that each CLI client's own permissions allow what Solar needs (read through the Solar MCP) and forbid what it forbids (writing in an ask). Static check from the client's settings in `solar status`; opt-in live probe via `solar client doctor --probe-permissions`. Results are `ok | missing | too_permissive | unknown` with the exact setting and file; Solar changes no client configuration.
+- fix(mcp): `solar_search` and `solar_docs` declare `readOnlyHint`, so Claude Code's plan mode runs them (it refuses MCP tools without it, whatever `permissions.allow` says).
+
+## [0.59.3] - 2026-10-28
+### Fixed
+- fix(client): address round 1 review of the drain message
+- fix(client): resume the LaunchAgent idempotently and name what a drain waits for
+
+
+## [0.59.2] - 2026-10-27
+
+### Fixed
+- Allow repository reviews with safe internal symbolic links by recording and omitting aliases from the snapshot without duplicating their canonical files. Keep unsafe targets rejected and report the offending path and reason through MCP.
+
 ## [0.59.1] - 2026-10-25
 
 ### Fixed

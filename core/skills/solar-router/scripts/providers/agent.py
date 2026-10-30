@@ -3,6 +3,8 @@ import os
 import shlex
 import subprocess
 
+from cli_permissions import (Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, OK,
+                             mcp_registered, read_json, rule_list, unknown)
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
@@ -25,6 +27,47 @@ class AgentProvider(BaseProvider):
 
     def read_only_args(self, cwd):
         return ["--mode", "ask", "--workspace", str(cwd)], "--mode ask"
+
+    def static_permission_checks(self, home, workspace):
+        """Cursor decides by `approvalMode` and the `permissions` lists of its CLI config."""
+        user = home / ".cursor" / "cli-config.json"
+        files = [user, workspace / ".cursor" / "cli.json"]
+        configs = [(path, read_json(path)) for path in files]
+        configs = [(path, data) for path, data in configs if data]
+        needed = [f"Mcp({MCP_SERVER}:{tool})" for tool in MCP_READ_TOOLS]
+        registered = mcp_registered([home / ".cursor" / "mcp.json", workspace / ".cursor" / "mcp.json"])
+        if registered is False:
+            return [Finding(self.name, "mcp_read", MISSING, "static",
+                            f"the {MCP_SERVER} MCP server is not registered for Cursor",
+                            setting=f"mcpServers.{MCP_SERVER}", file=str(home / ".cursor" / "mcp.json"),
+                            fix="run: solar mcp install --clients cursor")]
+        mode = next((d.get("approvalMode") for _, d in reversed(configs) if d.get("approvalMode")), None)
+        wildcard = f"Mcp({MCP_SERVER}:*)"
+        allow, deny = {}, {}
+        for path, data in configs:
+            perms = data.get("permissions")
+            for entry in rule_list(perms, "allow"):
+                allow.setdefault(entry, path)
+            for entry in rule_list(perms, "deny"):
+                deny.setdefault(entry, []).append(path)
+        blocked = [e for e in [*needed, wildcard] if e in deny]
+        if blocked:
+            return [Finding(self.name, "mcp_read", MISSING, "static", f"denied: {', '.join(blocked)}",
+                            setting="permissions.deny", file=", ".join(dict.fromkeys(str(f) for e in blocked for f in deny[e])),
+                            fix="; ".join(f"remove {e} from permissions.deny in {', '.join(map(str, deny[e]))}" for e in blocked))]
+        if mode != "allowlist":
+            return [unknown(self.name, "mcp_read", f"approvalMode={mode or 'unset'} is not modelled; run the probe")]
+        absent = [e for e in needed if e not in allow and wildcard not in allow]
+        if absent:
+            return [Finding(self.name, "mcp_read", MISSING, "static",
+                            f"approvalMode=allowlist and permissions.allow lacks {', '.join(absent)}",
+                            setting="permissions.allow", file=str(user),
+                            fix=f"add {', '.join(absent)} to permissions.allow",
+                            snippet=json.dumps({"permissions": {"allow": absent}}, indent=2))]
+        if registered is None:
+            return [unknown(self.name, "mcp_read",
+                            "permissions.allow lists the Solar read tools, but no mcp.json could be read to confirm the server is registered")]
+        return [Finding(self.name, "mcp_read", OK, "static", "permissions.allow lists the Solar read tools")]
 
     def stream(self, prompt: str, *, review=None):
         if review is not None:

@@ -15,6 +15,8 @@ SOLAR_WORKSPACE="${SOLAR_WORKSPACE:-$SOLAR_WORKSPACE}"
 source "$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_runtime_paths.sh"
 STATE_SCRIPTS="$(cd "$SCRIPT_DIR/../../solar-state/scripts" && pwd)"
 export STATE_SCRIPTS
+ROUTER_SCRIPTS="$SCRIPT_DIR"
+export ROUTER_SCRIPTS
 PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 LAST_N=10
 
@@ -36,6 +38,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ "$LAST_N" =~ ^[0-9]+$ ]] || { echo "--last needs a non-negative integer" >&2; exit 2; }
+
 if [[ "$STALE_COUNT_ONLY" == true ]]; then
   export STALE_ALL STALE_MAX_AGE_HOURS
   $PYTHON - <<'PYEOF'
@@ -43,31 +47,23 @@ import json, os, sys
 from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
+sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
+from router_open_runs import open_runs, last_claim
 
 count_all = os.environ.get("STALE_ALL", "false").lower() == "true"
 max_age_h = float(os.environ.get("STALE_MAX_AGE_HOURS", "24"))
 
-starts = {}
-ends = set()
 try:
     with solar_state.session() as store:
-        loaded = store.audit_rows()
+        starts = open_runs(store.audit_rows(), store.task_status, last_claim(store))
 except solar_state.StateError as exc:
     print(exc, file=sys.stderr)
     raise SystemExit(1)
-for row in loaded:
-    rid = row.get("router_id", "")
-    if row.get("event") == "start":
-        starts[rid] = row
-    elif row.get("event") == "end":
-        ends.add(rid)
 
 now = datetime.now(timezone.utc)
 stale = 0
 for rid, row in starts.items():
-    if rid in ends:
-        continue
     if count_all:
         stale += 1
         continue
@@ -96,10 +92,18 @@ echo "════════════════════════�
 # ---------------------------------------------------------------------------
 echo ""
 echo "  Providers:"
-bash "$SCRIPT_DIR/diagnose_router.sh" --dry-run 2>/dev/null \
-  | grep -E "^\s+- (codex|claude|agy)" \
-  | sed 's/^/  /' \
-  || echo "    (diagnose_router.sh not available)"
+# Every provider in the configured priority (list_providers.sh), not a fixed list.
+providers_out=""
+if [[ -f "$SCRIPT_DIR/diagnose_router.sh" ]]; then
+  providers_out="$(bash "$SCRIPT_DIR/diagnose_router.sh" --dry-run 2>/dev/null | grep -E "^  - [a-z0-9_-]+: " || true)"
+  if [[ -n "$providers_out" ]]; then
+    echo "$providers_out" | sed 's/^/  /'
+  else
+    echo "    (no provider reported: run diagnose_router.sh --dry-run)"
+  fi
+else
+  echo "    (diagnose_router.sh not available)"
+fi
 
 # ---------------------------------------------------------------------------
 # 2. In-flight processes (start without matching end)
@@ -110,33 +114,27 @@ echo "  In-flight:"
 $PYTHON - <<'PYEOF'
 import os, sys, datetime
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
+sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
+from router_open_runs import open_runs, last_claim
 
-starts = {}
-ends = set()
 try:
     with solar_state.session() as store:
-        loaded = store.audit_rows()
+        in_flight = open_runs(store.audit_rows(), store.task_status, last_claim(store))
 except solar_state.StateError:
     print("    (no audit yet)")
     raise SystemExit(0)
-for row in loaded:
-    rid = row.get("router_id", "")
-    if row.get("event") == "start":
-        starts[rid] = row
-    elif row.get("event") == "end":
-        ends.add(rid)
-
-in_flight = {rid: row for rid, row in starts.items() if rid not in ends}
 
 if not in_flight:
     print("    (none)")
 else:
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     for rid, row in in_flight.items():
         ts_str = row.get("ts", "")
         try:
-            ts = datetime.datetime.fromisoformat(ts_str.rstrip("Z"))
+            ts = datetime.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
             elapsed = int((now - ts).total_seconds())
             elapsed_str = f"{elapsed}s ago"
         except Exception:
@@ -153,9 +151,11 @@ echo ""
 echo "  Last $LAST_N executions:"
 
 $PYTHON - "$LAST_N" <<'PYEOF'
-import os, sys
+import datetime, os, sys
 sys.path.insert(0, os.environ["STATE_SCRIPTS"])
+sys.path.insert(0, os.environ["ROUTER_SCRIPTS"])
 import solar_state
+from router_open_runs import open_runs, last_claim, parse_ts
 
 last_n = int(sys.argv[1])
 starts = {}
@@ -163,6 +163,7 @@ ends = {}
 try:
     with solar_state.session() as store:
         loaded = store.audit_rows()
+        running = open_runs(loaded, store.task_status, last_claim(store))
 except solar_state.StateError:
     print("    (no audit yet)")
     raise SystemExit(0)
@@ -179,7 +180,9 @@ for rid, start in starts.items():
     end = ends.get(rid)
     merged.append((start.get("ts", ""), rid, start, end))
 
-merged.sort(key=lambda x: x[0], reverse=True)
+# By parsed time: ts strings mix "Z", offsets and microsecond precision. Ties keep audit order.
+_epoch0 = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
+merged.sort(key=lambda x: parse_ts(x[0]) or _epoch0, reverse=True)
 
 if not merged:
     print("    (no executions yet)")
@@ -201,7 +204,8 @@ else:
             jit_str = "jit=yes" if jit else "jit=no"
             print(f"    - {time_str}  router={rid[:8]}  req={req_id[:12]}  user={user}  {provider}  {status}  {duration_str}  {jit_str}  agent={agent}  planet={planet}")
         else:
-            print(f"    - {time_str}  router={rid[:8]}  req={req_id[:12]}  user={user}  (in-flight)  agent={agent}  planet={planet}")
+            state = "(in-flight)" if rid in running else "(interrupted)"
+            print(f"    - {time_str}  router={rid[:8]}  req={req_id[:12]}  user={user}  {state}  agent={agent}  planet={planet}")
 PYEOF
 
 echo ""

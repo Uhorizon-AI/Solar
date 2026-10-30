@@ -14,11 +14,14 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1]
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 _PATHS_SCRIPTS = _SCRIPTS_DIR.parent.parent / "solar-paths" / "scripts"
 if str(_PATHS_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_PATHS_SCRIPTS))
 
 import solar_runtime  # noqa: E402
+from cli_permissions import MCP_READ_TOOLS  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
 SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
@@ -63,6 +66,24 @@ class AskResult:
     provider: str
     text: str
     mode: str  # the client's native read-only switch, or "none" when it has none
+
+
+def raise_restricted_failure(provider_name: str, failure: str | None, returncode: int):
+    """Turn a restricted reader's non-zero exit into the error the router reports.
+
+    Cursor's EPERM mkdir of `/tmp/.cursor…` is the write guard denying the
+    project-state directory. Redaction hides the slug as `/tmp/.[REDACTED]`.
+    Any other denied mkdir stays a generic failure so a different cause is
+    not labeled as the project-path fallback. The preflight mkdir reports
+    `cursor_state_mkdir_denied` or `cursor_state_mkdir_timeout` itself.
+    """
+    text = failure or ""
+    cursor_tmp = "/tmp/.cursor" in text or "/tmp/.[REDACTED]" in text
+    if provider_name == "agent" and "EPERM" in text and "mkdir" in text and cursor_tmp:
+        from execution_profiles import ProfileError
+        raise ProfileError("execution_profile_unsupported", detail=dict(
+            provider="agent", stage="state", reason="cursor_project_path_outside_write_guard"))
+    raise RuntimeError("restricted provider returned non-zero (" + (failure or f"exit {returncode}") + ")")
 
 
 class BaseProvider(ABC):
@@ -135,6 +156,18 @@ class BaseProvider(ABC):
     def read_only_args(self, cwd: pathlib.Path) -> Tuple[List[str], str]:
         """The client's native read-only switches and their label; none by default."""
         return [], "none"
+
+    def static_permission_checks(self, home: pathlib.Path, workspace: pathlib.Path) -> list:
+        """Findings read from the client's own settings, without a model call.
+
+        Checks a client has no readable settings for are left out; the caller reports
+        them as `unknown`. Never writes to the client's configuration.
+        """
+        return []
+
+    def permission_fix_hint(self, check: str) -> str:
+        return {"mcp_read": f"allow the Solar MCP read tools ({', '.join(MCP_READ_TOOLS)}) in the client's own permission settings",
+                "write_guard": "make the client's own settings stop overriding its read-only mode"}[check]
 
     def ask(self, prompt: str, *, cwd=None, model: Optional[str] = None, observer=None) -> AskResult:
         """Put one question to the client with the session the user logged in with.
@@ -248,7 +281,7 @@ class BaseProvider(ABC):
                 except (OSError, ValueError, IndexError):  # ValueError: non-UTF-8 bytes
                     pass
         if proc.returncode:
-            raise RuntimeError("restricted provider returned non-zero (" + (failure or f"exit {proc.returncode}") + ")")
+            raise_restricted_failure(self.name, failure, proc.returncode)
         if self.name == "codex":
             result = self._codex_final_review(proc.stdout, last_message)
         else:

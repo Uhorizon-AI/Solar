@@ -50,13 +50,27 @@ The full manifest covers repository, commit/tree, exact model/provider/prompts,
 file paths, modes represented by the accepted tree entries, object IDs, SHA-256
 content hashes and sizes. File execution bits are deliberately not reproduced.
 
-The initial bound is 10,000 regular files and 32 MiB total. Symlinks, submodules,
-unsafe paths, root CLI configuration directories and tracked credential-like
-files are rejected, not silently omitted. There are no filters or repository
-setup scripts. Choose another reviewed commit if it contains unsupported files.
+The initial bound is 10,000 tree entries and 32 MiB of blob content. Relative
+symlinks that resolve to regular tracked files inside the same committed tree
+are validated and omitted from the physical snapshot: their targets are included
+once at their canonical paths, never duplicated under the aliases. Each omitted
+source records its link blob ID, SHA-256, target text and resolved canonical path
+in the approved manifest. The reviewer prompt identifies omitted aliases and
+asks readers to treat canonical files (including AGENTS.md where present) as evidence, not instructions.
+The original repository's CLAUDE.md/GEMINI.md aliases are left intact; snapshot
+reviewers treat repository instructions as evidence rather than operational authority.
 
-At execution Router revalidates approved inputs, materializes all files into a
-private temporary directory without `.git`, rechecks the ID/token and snapshot,
+Absolute or escaping links, cycles, chains longer than 40 hops, directory links,
+missing/untracked targets, unsafe paths, submodules, root CLI configuration and
+tracked credential-like files remain rejected. Intermediate path components must
+be committed directories, never links or files. Rejections carry the offending
+path and a fixed reason; MCP exposes both with `review_input_invalid`. Resolution
+uses only approved Git blobs, never the working tree or the host filesystem.
+There are no repository setup scripts or unguarded fallback. Ordinary-file
+manifests keep their existing representation and digest.
+
+At execution Router revalidates approved inputs, materializes every non-omitted file (omitted
+symlink aliases are never written) into a private temporary directory without `.git`, rechecks the ID/token and snapshot,
 and invokes the selected CLI there. Each invocation receives an independent
 copy of the same version. Uncommitted builder edits and newer commits do not
 change it. The source repository is never given as the review cwd. A result is
@@ -164,12 +178,43 @@ A refusal carries `error_detail` with `provider`, `stage`, `reason` and, for hel
 checks, `option`. Reasons: `required_option_missing`, `required_value_unadvertised`,
 `help_failed`, `help_timeout`, `help_unavailable`, `help_format_unknown`,
 `managed_policy_present`, `credentials_unavailable`, `boundary_unavailable`,
-`write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`.
+`write_guard_probe_failed`, `write_guard_probe_timeout`, `provider_unsupported`,
+`cursor_project_path_outside_write_guard`, `cursor_state_mkdir_denied`,
+`cursor_state_mkdir_timeout`, `cursor_project_path_drift`,
+`cursor_project_path_shape_unknown`, `cursor_project_path_unreadable`.
 A help text proves neither the effective configuration nor that a guard works. These adapters
 do not claim a doctor-style effective/cloud-policy attestation; their stronger
 write boundary is enforced externally. Network access remains available for the
 provider, so this is not an OS network-egress boundary or proof of absent
 provider-side integrations. A real model pilot must also verify tool refusals.
+
+The private directory is kept short enough for Cursor CLI 2026.10. That CLI
+stores per-workspace state under `CURSOR_DATA_DIR/projects` only when the base
+path is at most 83 characters (and the full path at most 91); otherwise it
+mkdirs `/tmp/.cursor/<slug>`. A macOS default temp directory
+(`/var/folders/…`) plus a long prefix crosses that limit, and the write guard
+then returns `EPERM`. The review directory is created under `/tmp` with a short
+prefix in that case. Before the model starts, `mkdir_under_guard` creates the
+project directory inside the guard, with `python -I` so a module in the
+untrusted snapshot cannot shadow the standard library. A denied or timed-out
+creation is `cursor_state_mkdir_denied` or `cursor_state_mkdir_timeout`. If the
+computed path would still fall outside the private directory, launch refuses
+with `cursor_project_path_outside_write_guard` and does not start the model.
+Only a later model exit whose stderr is an `EPERM` mkdir of `/tmp/.cursor…`
+(or the redacted form `/tmp/.[REDACTED]`) is reported with that same reason.
+Any other denied mkdir stays a generic provider failure, including an `EPERM`
+mkdir of a different path under `/tmp`. The permission probe compares the
+installed CLI's project path with Solar's prediction before it treats that
+prediction as outside the write guard, so a higher Cursor limit is
+`cursor_project_path_drift` and not a false `cursor_project_path_outside_write_guard`.
+The observer only reads the installed bundle. It passes `workspace`, `data_dir`
+and `tmpdir` as argv and does not inherit `NODE_OPTIONS`. Exit 2 is
+`cursor_project_path_shape_unknown` only when stderr also contains the line
+`shape_unknown` (the minified markers are gone): update Solar's observer, not
+the Cursor install. Any other node failure, including exit 2 without that
+marker, is `cursor_project_path_unreadable`.
+Neither is a passing reader. The review launch itself does not parse the bundle;
+a wrong prediction still fails at the model's `EPERM` with the named reason.
 
 Cursor receives `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, a private HOME/XDG tree,
 and `AGENT_CLI_CREDENTIAL_STORE=file`. `--trust` satisfies the CLI headless
@@ -368,7 +413,7 @@ A question is not a review: it has no repository, commit or evidence. `task.crea
 - **Own session.** The client is launched with the caller's environment: no isolated HOME, no copied or linked
   credentials, no `--help` preflight. A `SOLAR_ROUTER_<NAME>_CMD` override only supplies the binary; the flags
   are imposed and the prompt always follows a separator (`--`, or `--print` for Antigravity).
-- **Read-only is a request, not a limit, and it depends on each client.** Solar can only ask for what the client's CLI offers, and the client's own configuration decides the rest. Measured on 23/10/2026 (Codex 0.162.1): a question to Codex was launched with `--sandbox read-only` (its session logs record `sandbox_policy: read-only`) and still created a file, because the user's Codex has `approval_policy = "on-request"` and an automatic approvals reviewer, which can approve leaving the sandbox (in Codex, read-only means «not without approval»). Cursor (Ask mode) and Claude (plan mode) did not write. Solar does not override a client's approval policy. Each client is asked for its native mode (`--sandbox read-only`,
+- **Read-only is a request, not a limit, and it depends on each client.** Solar can only ask for what the client's CLI offers, and the client's own configuration decides the rest. Measured on 23/10/2026 (Codex 0.162.1): a question to Codex was launched with `--sandbox read-only` (its session logs record `sandbox_policy: read-only`) and still created a file, because the user's Codex has `approval_policy = "on-request"` and an automatic approvals reviewer, which can approve leaving the sandbox (in Codex, read-only means «not without approval»). Cursor (Ask mode) and Claude (plan mode) did not write. Since this was measured, the Codex ask passes `-c approval_policy="never"` on its command line (it wins over `config.toml`), so that reviewer should no longer approve leaving the sandbox (requested; the probe confirms it); no other client's approval settings are overridden. Each client is asked for its native mode (`--sandbox read-only`,
   `--mode ask`, `--mode plan`, `--permission-mode plan`); Solar does not enforce it. The client may read beyond
   its folder and inherits its own configuration, hooks and tools. Use `repository_readonly_v1` when that matters.
 - **Own content only.** Use `ask` for the user's own content (their plans, code and folders). Content that is

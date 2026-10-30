@@ -3,6 +3,7 @@ import os
 import shlex
 import subprocess
 
+from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, mcp_registered, read_json, rule_list, solar_read_tools_declare_read_only, unknown
 from .base import BaseProvider, SOLAR_WORKSPACE, env_int
 
 
@@ -19,6 +20,43 @@ class ClaudeProvider(BaseProvider):
 
     def ask_separator(self):
         return ["--"]
+
+    def static_permission_checks(self, home, workspace):
+        """Claude decides by `permissions.allow`/`deny` rules across its settings files."""
+        registered = mcp_registered([home / ".claude.json", workspace / ".mcp.json"], project=workspace)
+        if registered is False:
+            return [Finding(self.name, "mcp_read", MISSING, "static",
+                            f"the {MCP_SERVER} MCP server is not registered for Claude",
+                            setting=f"mcpServers.{MCP_SERVER}", file=str(home / ".claude.json"),
+                            fix="run: solar mcp install --clients claude")]
+        files = [home / ".claude" / "settings.json", workspace / ".claude" / "settings.json",
+                 workspace / ".claude" / "settings.local.json"]
+        found = [(f, (read_json(f) or {}).get("permissions") or {}) for f in files]
+        prefix = f"mcp__{MCP_SERVER}"
+        tools = [f"{prefix}__{tool}" for tool in MCP_READ_TOOLS]
+
+        def covers(entries, tool):
+            return any(isinstance(e, str) and e in (prefix, f"{prefix}__*", tool) for e in entries)
+
+        for source, perms in found:
+            denied = [t for t in tools if covers(rule_list(perms, "deny"), t)]
+            if denied:
+                break
+        if denied:
+            return [Finding(self.name, "mcp_read", MISSING, "static", f"denied: {', '.join(denied)}",
+                            setting="permissions.deny", file=str(source),
+                            fix=f"remove the rule matching {', '.join(denied)} from permissions.deny")]
+        declared = solar_read_tools_declare_read_only()
+        if declared is None:
+            return [unknown(self.name, "mcp_read", "could not read the Solar MCP server's tool table; run the probe")]
+        if not declared:
+            return [Finding(self.name, "mcp_read", MISSING, "static",
+                            "Claude's plan mode runs only MCP tools that declare readOnlyHint, and this Solar's read tools do not",
+                            setting="annotations.readOnlyHint on solar_search and solar_docs",
+                            file="core/skills/solar-mcp/scripts/mcp_server.py",
+                            fix="update Solar (the server must declare readOnlyHint); permissions.allow rules do not lift plan mode")]
+        return [unknown(self.name, "mcp_read",
+                        "the Solar MCP read tools declare readOnlyHint; run the probe to confirm the call reaches the server")]
 
     def stream(self, prompt: str, *, review=None):
         if review is not None:

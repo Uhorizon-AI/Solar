@@ -2,8 +2,10 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
 import execution_profiles as profiles
@@ -551,3 +553,183 @@ def test_agy_keeps_a_private_log_for_the_failure_reason(tmp_path, monkeypatch):
     argv, env, _ = _prepare_without_model(tmp_path, monkeypatch, 'agy', HELP)
     log = Path(argv[argv.index('--log-file') + 1])
     assert Path(env['HOME']).parent in log.parents
+
+
+def _long_review_root():
+    return '/var/folders/' + ('y' * 30) + '/T/solar-repository-review-abcdefgh'
+
+
+def test_a_long_macos_temp_makes_cursor_fall_back_outside_the_guard():
+    root = _long_review_root()
+    path = guards.cursor_project_path(root + '/repository',
+                                      data_dir=root + '/home/cursor-data',
+                                      tmpdir=root + '/tmp')
+    assert path.startswith('/tmp/.cursor')
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.require_cursor_state_inside(
+            {'CURSOR_DATA_DIR': root + '/home/cursor-data', 'TMPDIR': root + '/tmp'},
+            root + '/repository', Path('/tmp/sr-short'))
+    assert error.value.detail['reason'] == 'cursor_project_path_outside_write_guard'
+
+
+_CURSOR_PATH_FIXTURE = """
+function s(t){return t.replace(/[^a-zA-Z0-9]/g,"-").replace(/-+/g,"-").replace(/^-+|-+$/g,"")}
+function c(){const t=process.env.CURSOR_DATA_DIR;return t?.trim()?t:(0,i.join)((0,s.homedir)(),".cursor")}
+function u(){return(0,i.join)(c(),"projects")}
+function d(t){let e=u();e.length>83&&(e=c(),e.length>83&&(e=function(t){const e=(0,i.join)(t,".cursor");return e.length<=83?e:(0,i.join)("/tmp",".cursor")}((0,s.tmpdir)())));const r=(0,i.join)(e,(0,a.r_)(t));if(r.length>91){const t=(0,n.createHash)("sha256").update(r).digest("hex").substring(0,7);return`${r.substring(0,Math.min(83,r.length))}-${t}`}return r}
+"""
+
+
+def test_cursor_project_path_matches_a_cli_bundle_and_a_changed_limit_does_not(tmp_path):
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not installed')
+    bundle = tmp_path / 'index.js'
+    bundle.write_text(_CURSOR_PATH_FIXTURE)
+    node_bin = tmp_path / 'node'
+    node_bin.symlink_to(node)
+    workspace = '/tmp/sr-abcdefgh/repository'
+    data = '/tmp/sr-abcdefgh/home/cursor-data'
+    tmp = '/tmp/sr-abcdefgh/tmp'
+    observed = guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
+    assert observed == guards.cursor_project_path(workspace, data_dir=data, tmpdir=tmp)
+    long_workspace = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/repository'
+    long_data = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/home/cursor-data'
+    long_tmp = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/tmp'
+    observed = guards.observe_cursor_project_path(bundle, long_workspace, data_dir=long_data, tmpdir=long_tmp)
+    assert Path(observed).resolve() == Path(guards.cursor_project_path(long_workspace, data_dir=long_data, tmpdir=long_tmp)).resolve()
+    bundle.write_text(_CURSOR_PATH_FIXTURE.replace('e.length>83', 'e.length>10'))
+    medium_workspace, medium_data, medium_tmp = '/tmp/ws', '/tmp/' + ('d' * 20), '/tmp'
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.require_cursor_project_path_current(bundle, medium_workspace, data_dir=medium_data, tmpdir=medium_tmp)
+    assert error.value.detail['reason'] == 'cursor_project_path_drift'
+    bundle.write_text('not a cursor bundle')
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
+    assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
+    node_bin.unlink()
+    node_bin.write_text('#!/bin/sh\necho invalid argument >&2\nexit 2\n')
+    node_bin.chmod(0o755)
+    bundle.write_text(_CURSOR_PATH_FIXTURE)
+    with pytest.raises(profiles.ProfileError) as error:
+        guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
+    assert error.value.detail['reason'] == 'cursor_project_path_unreadable'
+
+
+def test_cursor_path_observer_does_not_inherit_node_options(tmp_path, monkeypatch):
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not installed')
+    bundle = tmp_path / 'index.js'
+    bundle.write_text(_CURSOR_PATH_FIXTURE)
+    (tmp_path / 'node').symlink_to(node)
+    marker = tmp_path / 'injected'
+    hook = tmp_path / 'hook.js'
+    hook.write_text('require("fs").writeFileSync(' + repr(str(marker)) + ', "x")\n')
+    monkeypatch.setenv('NODE_OPTIONS', '--require ' + str(hook))
+    workspace = '/tmp/sr-abcdefgh/repository'
+    data = '/tmp/sr-abcdefgh/home/cursor-data'
+    tmp = '/tmp/sr-abcdefgh/tmp'
+    observed = guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp)
+    assert observed == guards.cursor_project_path(workspace, data_dir=data, tmpdir=tmp)
+    assert not marker.exists()
+
+
+def test_cursor_project_path_matches_the_installed_cli():
+    agent = shutil.which('agent')
+    index = Path(agent).resolve().parent / 'index.js' if agent else None
+    if index is None or not index.is_file() or not (index.parent / 'node').is_file():
+        pytest.skip('Cursor CLI bundle is not installed')
+    workspace = '/tmp/sr-abcdefgh/repository'
+    data = '/tmp/sr-abcdefgh/home/cursor-data'
+    tmp = '/tmp/sr-abcdefgh/tmp'
+    guards.require_cursor_project_path_current(Path(agent), workspace, data_dir=data, tmpdir=tmp)
+    long_workspace = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/repository'
+    long_data = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/home/cursor-data'
+    long_tmp = '/var/folders/' + ('y' * 40) + '/T/solar-repository-review-abcdefgh/tmp'
+    guards.require_cursor_project_path_current(Path(agent), long_workspace, data_dir=long_data, tmpdir=long_tmp)
+
+
+def test_a_short_review_directory_keeps_cursor_state_inside_the_guard(monkeypatch):
+    monkeypatch.setattr(tempfile, 'gettempdir', lambda: '/var/folders/' + ('y' * 40) + '/T')
+    with repo.review_directory() as private:
+        assert str(private).startswith('/tmp/sr-')
+        data = str(private / 'home' / 'cursor-data')
+        tmp = str(private / 'tmp')
+        workspace = private / 'repository'
+        workspace.mkdir()
+        path = guards.cursor_project_path(str(workspace), data_dir=data, tmpdir=tmp)
+        Path(path).resolve().relative_to(private.resolve())
+        assert not path.startswith('/tmp/.cursor')
+        created = guards.finish_cursor_launch([], {'CURSOR_DATA_DIR': data, 'TMPDIR': tmp, 'PATH': os.environ.get('PATH', '')},
+                                              private, workspace)
+        assert Path(created).is_dir()
+
+
+def test_mkdir_under_guard_does_not_import_the_snapshot(tmp_path):
+    private = tmp_path / 'private'
+    private.mkdir()
+    cwd = private / 'repository'
+    cwd.mkdir()
+    marker = private / 'hostile-imported'
+    (cwd / 'pathlib.py').write_text(
+        'import pathlib, sys\n'
+        f'pathlib.Path({str(marker)!r}).write_text("imported")\n'
+        'raise SystemExit(86)\n')
+    target = private / 'home' / 'cursor-data' / 'projects' / 'ws'
+    guards.mkdir_under_guard([], {'PATH': os.environ.get('PATH', '')}, cwd, str(target))
+    assert target.is_dir()
+    assert not marker.exists()
+
+
+def _write_guard_helper():
+    if sys.platform == 'darwin':
+        return Path('/usr/bin/sandbox-exec').is_file()
+    if sys.platform == 'linux':
+        return shutil.which('bwrap', path='/usr/bin:/bin') is not None
+    return False
+
+
+@pytest.mark.skipif(not _write_guard_helper(), reason='OS write guard helper is not installed')
+def test_finish_cursor_launch_mkdirs_under_the_os_write_guard(monkeypatch):
+    monkeypatch.setattr(tempfile, 'gettempdir', lambda: '/var/folders/' + ('y' * 40) + '/T')
+    with repo.review_directory() as private:
+        workspace = private / 'repository'
+        workspace.mkdir()
+        (workspace / 'source.md').write_text('unchanged')
+        marker = private / 'hostile-imported'
+        (workspace / 'pathlib.py').write_text(
+            'import pathlib\n'
+            f'pathlib.Path({str(marker)!r}).write_text("imported")\n'
+            'raise SystemExit(86)\n')
+        data = private / 'home' / 'cursor-data'
+        tmp = private / 'tmp'
+        data.mkdir(parents=True)
+        tmp.mkdir()
+        prefix = guards.guard_prefix(private, workspace, 'agent')
+        created = guards.finish_cursor_launch(
+            prefix,
+            {'CURSOR_DATA_DIR': str(data), 'TMPDIR': str(tmp), 'PATH': os.environ.get('PATH', '')},
+            private, workspace)
+        assert Path(created).is_dir()
+        Path(created).resolve().relative_to(private.resolve())
+        assert not str(created).startswith('/tmp/.cursor')
+        assert not marker.exists()
+        assert (workspace / 'source.md').read_text() == 'unchanged'
+
+
+def test_cursor_eperm_names_the_write_guard_instead_of_a_generic_provider_failure():
+    from providers.base import raise_restricted_failure
+    named = dict(provider='agent', stage='state', reason='cursor_project_path_outside_write_guard')
+    with pytest.raises(profiles.ProfileError) as error:
+        raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/tmp/.cursor/x'", 1)
+    assert error.value.detail == named
+    with pytest.raises(profiles.ProfileError) as error:
+        raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/tmp/.[REDACTED]'", 1)
+    assert error.value.detail == named
+    with pytest.raises(RuntimeError, match='cursor-data'):
+        raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/x/home/cursor-data/projects/ws'", 1)
+    with pytest.raises(RuntimeError, match='/tmp/other'):
+        raise_restricted_failure('agent', "exit 1: Error: EPERM: operation not permitted, mkdir '/tmp/other'", 1)
+    with pytest.raises(RuntimeError, match='not_logged_in'):
+        raise_restricted_failure('agent', 'exit 1: not_logged_in', 1)

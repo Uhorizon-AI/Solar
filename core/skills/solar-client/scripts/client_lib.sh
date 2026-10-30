@@ -2046,6 +2046,58 @@ solar_client_async_busy() {
   return 0
 }
 
+# What a drain that ran out of time was still waiting for: one line per execution (task, title,
+# provider, how long it has been running) and the exact command that cancels it. Reads the JSON
+# stop_supervisor.sh printed; the title comes from solar-state. Says nothing when it cannot tell.
+# At most five executions are listed, each title cleaned and cut to 80 characters.
+# Args: install_root stop_output
+solar_client_describe_running() {
+  local install_root="$1" stop_output="$2" state_py cancel_py
+  state_py="$(solar_client_state_py "$install_root")"
+  cancel_py="${install_root}/core/skills/solar-async-tasks/scripts/task_cancel.py"
+  python3 - "$state_py" "$cancel_py" "$stop_output" <<'PY' || true
+import json, shlex, subprocess, sys
+from datetime import datetime, timezone
+
+MAX_SHOWN = 5          # more than this and the message would take longer to build than to read
+TITLE_LIMIT = 80
+
+state_py, cancel_py, output = sys.argv[1:4]
+try:
+    # stop_supervisor.sh puts its JSON object on the last line.
+    children = json.loads(output.strip().splitlines()[-1]).get("children") or []
+except (ValueError, IndexError, AttributeError):
+    children = []
+children = [c for c in children if isinstance(c, dict) and c.get("task_id")]
+for child in children[:MAX_SHOWN]:
+    task_id = child["task_id"]
+    title = ""
+    try:
+        done = subprocess.run([sys.executable, state_py, "task", "field", task_id, "title"],
+                              capture_output=True, text=True, timeout=5)
+        # solar_state.py prints indented JSON over several lines: read the whole output.
+        title = (json.loads(done.stdout).get("value") or "") if done.returncode == 0 else ""
+    except (ValueError, AttributeError, OSError, subprocess.SubprocessError):
+        pass
+    title = "".join(ch if ch.isprintable() else " " for ch in str(title)).strip()
+    if len(title) > TITLE_LIMIT:
+        title = title[:TITLE_LIMIT - 1] + "…"
+    age = ""
+    try:
+        since = datetime.strptime(child["since"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        seconds = max(0, int((datetime.now(timezone.utc) - since).total_seconds()))
+        age = f"running {seconds // 60} min {seconds % 60} s"
+    except (KeyError, ValueError):
+        pass
+    bits = [task_id, title, child.get("provider") or "", age]
+    print("  - " + " · ".join(bit for bit in bits if bit))
+    command = shlex.join(["python3", cancel_py, "-", task_id])
+    print(f"    request cancellation with: {command}   (an active task stops when its worker acknowledges it)")
+if len(children) > MAX_SHOWN:
+    print(f"  ... and {len(children) - MAX_SHOWN} more")
+PY
+}
+
 # The adapter that lets the old executors finish. The one-shot worker has no drain request:
 # the ticks are already paused, so it is waited for. The resident supervisor (when one runs)
 # is asked to drain through its own stop script and never killed. No uncertain owner is
@@ -2067,14 +2119,18 @@ solar_client_drain_async() {
       return 1
     fi
     echo "Drain: asking the async supervisor to finish its executions"
-    local stop_code=0
-    bash "$stop_script" --drain --timeout "$timeout" || stop_code=$?
+    # The output is captured (not streamed) so a drain that runs out of time can say what it waited
+    # for; it is printed unchanged once the script ends.
+    local stop_code=0 stop_out=""
+    stop_out="$(bash "$stop_script" --drain --timeout "$timeout")" || stop_code=$?
+    [[ -n "$stop_out" ]] && printf '%s\n' "$stop_out"
     if [[ "$stop_code" -ne 0 ]]; then
       # stop_supervisor.sh: 1 = still draining at the deadline, 2 = its owner cannot be identified,
       # 3 = it left but executions with an uncertain owner or a failed cleanup remain blocked.
       # Each needs something different from the person, and none of them replaced anything.
       case "$stop_code" in
         1) echo "ERROR: the async supervisor did not drain: it was still collecting its executions after ${timeout}s. Nothing was replaced and nothing was killed; the maintenance barrier stays. Let them finish (or cancel them) and run: solar client update --resume" >&2
+           solar_client_describe_running "$install_root" "$stop_out" >&2
            solar_client_update_event drain-timeout "reason=supervisor" "code=$stop_code" ;;
         2) echo "ERROR: the async supervisor's process could not be identified (the process table did not answer), so it was not asked to stop. Nothing was replaced; the maintenance barrier stays. Check the process table (ps) and the supervisor's identity with: bash $(dirname "$stop_script")/check_async_tasks.sh, then run: solar client update --resume" >&2
            solar_client_update_event drain-refused "reason=supervisor_unidentified" "code=$stop_code" ;;
@@ -2457,9 +2513,17 @@ _solar_client_state_cutover_locked() {
   if [[ "$launchagent_was_loaded" == true ]]; then
     plist="${HOME}/Library/LaunchAgents/${launchagent_label}.plist"
     echo "State: resuming LaunchAgent ${launchagent_label}"
+    # The agent was unloaded when the update paused the ticks, so a loaded one now means something
+    # loaded it in between: unload it first, or bootstrap fails (error 5) on a healthy system.
     if [[ -n "${SOLAR_CLIENT_LAUNCHCTL:-}" ]]; then
+      if bash "$SOLAR_CLIENT_LAUNCHCTL" print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1; then
+        bash "$SOLAR_CLIENT_LAUNCHCTL" bootout "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
+      fi
       bash "$SOLAR_CLIENT_LAUNCHCTL" bootstrap "gui/${UID}" "$plist" || failed=1
     elif [[ -f "$plist" ]]; then
+      if launchctl print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1; then
+        launchctl bootout "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
+      fi
       launchctl bootstrap "gui/${UID}" "$plist" || failed=1
       launchctl kickstart -k "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 || true
     fi

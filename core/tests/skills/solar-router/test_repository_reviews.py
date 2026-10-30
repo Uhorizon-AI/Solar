@@ -5,11 +5,13 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 import pytest
 import execution_profiles as profiles
 from claude_help import claude_help
 from codex_help import codex_help
+import repository_cli_guards as guards
 import repository_reviews as repo
 from providers import PROVIDERS
 from git_review_fixture import repository, git
@@ -111,7 +113,7 @@ else:
     second = json.loads(record.read_text())
     def stable(argv):  # each launch uses its own private directory
         import re
-        return [re.sub(r'solar-repository-review-\w+', 'PRIVATE', a) for a in argv]
+        return [re.sub(r'(?:solar-repository-review-|sr-)\w+', 'PRIVATE', a) for a in argv]
     assert stable(first['argv']) == stable(second['argv'])
     assert first['operations'] == 'The maximum batch is five.\n'
     assert not Path(first['cwd']).exists() and not Path(second['cwd']).exists()
@@ -819,6 +821,106 @@ def test_a_review_without_a_model_is_a_distinct_approved_input(tmp_path):
             envelope(root, commit, model=bad)
 
 
+def test_reader_probe_omits_the_model_option_the_real_launch_omits(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(profiles, 'preflight', lambda *a, **k: seen.update(claude=k))
+    monkeypatch.setattr(repo, 'codex_preflight', lambda *a, **k: seen.update(codex=k))
+
+    class Claude:
+        name = 'claude'
+
+        def resolve_binary(self, name):
+            return 'claude'
+
+    class Codex:
+        name = 'codex'
+
+        def resolve_binary(self, name):
+            return 'codex'
+
+    repo._exercise_claude(Claude())
+    home = tmp_path / 'codex-origin'
+    home.mkdir()
+    (home / 'auth.json').write_text('{}')
+    monkeypatch.setenv('CODEX_HOME', str(home))
+    repo._exercise_codex(Codex())
+    assert seen['claude']['with_model'] is False
+    assert seen['codex']['with_model'] is False
+
+
+def test_review_directory_comes_from_tempfile_with_an_unpredictable_name(monkeypatch):
+    monkeypatch.setattr(tempfile, 'gettempdir', lambda: '/var/folders/' + ('y' * 40) + '/T')
+    names, modes = [], []
+    for _ in range(2):
+        with repo.review_directory() as private:
+            names.append(private.name)
+            modes.append(private.stat().st_mode & 0o777)
+            assert private.parent == Path('/tmp')
+            assert private.is_dir()
+    assert names[0].startswith('sr-') and names[1].startswith('sr-')
+    assert names[0] != names[1]
+    assert names[0] != 'sr-'
+    assert modes == [0o700, 0o700]
+
+
+def test_a_command_override_makes_the_reader_probe_match_launch(monkeypatch):
+    monkeypatch.setenv('SOLAR_ROUTER_AGENT_CMD', 'agent')
+
+    class Agent:
+        name = 'agent'
+
+        def resolve_binary(self, name):
+            raise AssertionError('binary resolved')
+
+    with pytest.raises(profiles.ProfileError) as error:
+        repo.exercise_restricted_reader(Agent())
+    assert error.value.code == 'execution_profile_override_rejected'
+    with pytest.raises(profiles.ProfileError) as launched:
+        with repo.launch(Agent(), {}, 'digest', lambda: None):
+            pass
+    assert launched.value.code == 'execution_profile_override_rejected'
+    import cli_permissions as cp
+    found = cp.probe_restricted_reader(Agent(), exercise=repo.exercise_restricted_reader)
+    assert found.status == cp.UNKNOWN
+    assert 'execution_profile_override_rejected' in found.detail
+
+
+def test_agy_probe_does_not_claim_a_cursor_state_directory(monkeypatch):
+    class Agy:
+        name = 'agy'
+
+        def resolve_binary(self, name):
+            return 'agy'
+
+    monkeypatch.setattr(guards, 'prepare', lambda *a, **k: (['agy'], {}))
+    monkeypatch.setattr(guards, 'finish_cursor_launch', lambda *a, **k: (_ for _ in ()).throw(AssertionError('cursor state')))
+    assert repo._exercise_guarded(Agy()) == 'agy restricted reader prepared'
+
+
+def test_agent_probe_names_the_state_directory_it_created(monkeypatch):
+    class Agent:
+        name = 'agent'
+
+        def resolve_binary(self, name):
+            return '/usr/bin/false'
+
+    order = []
+
+    def current(*args, **kwargs):
+        order.append('current')
+
+    def finish(*args, **kwargs):
+        order.append('finish')
+        return '/d/projects/x'
+
+    monkeypatch.setattr(guards, 'prepare', lambda *a, **k: (
+        ['/usr/bin/false'], {'CURSOR_DATA_DIR': '/d', 'TMPDIR': '/t'}))
+    monkeypatch.setattr(guards, 'finish_cursor_launch', finish)
+    monkeypatch.setattr(guards, 'require_cursor_project_path_current', current)
+    assert repo._exercise_guarded(Agent()) == 'agent restricted reader preflight passed'
+    assert order == ['current', 'finish']
+
+
 def test_codex_does_not_require_the_model_option_when_none_is_named(monkeypatch):
     seen = []
     monkeypatch.setattr(repo, 'discover', lambda *a, **k: seen.append(k['required']))
@@ -829,3 +931,183 @@ def test_codex_does_not_require_the_model_option_when_none_is_named(monkeypatch)
         with pytest.raises(Exception):
             repo.codex_preflight('codex', {}, '.', [], with_model=with_model)
     assert '--model' in seen[0] and '--model' not in seen[1]
+
+
+@pytest.mark.parametrize('provider', ['claude', 'codex', 'agent', 'agy'])
+def test_internal_aliases_are_omitted_without_duplicating_committed_content(tmp_path, provider):
+    root, _ = repository(tmp_path)
+    (root / 'CLAUDE.md').symlink_to('requirements.md')
+    (root / 'GEMINI.md').symlink_to('CLAUDE.md')
+    (root / 'nested').mkdir()
+    (root / 'nested' / 'guide.md').symlink_to('../GEMINI.md')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'internal aliases')
+    commit = git(root, 'rev-parse', 'HEAD')
+    e = envelope(root, commit, provider)
+    # Neither mutable link destinations nor changed working-tree files are read.
+    (root / 'requirements.md').write_text('Unapproved live content')
+    (root / 'CLAUDE.md').unlink()
+    (root / 'CLAUDE.md').symlink_to('/etc/passwd')
+    manifest = repo.verify(e['manifest'], e['review_input_digest'], provider)
+    out = tmp_path / 'snapshot'; out.mkdir()
+    repo.materialize(manifest, out)
+    for name in ['CLAUDE.md', 'GEMINI.md', 'nested/guide.md']:
+        assert not (out / name).exists() and not (out / name).is_symlink()
+    assert (out / 'requirements.md').read_text() == 'The maximum batch is three.\n'
+    assert sorted(p.name for p in out.iterdir()) == ['operations.md', 'requirements.md']
+    source = next(s for s in manifest['sources'] if s['path'] == 'nested/guide.md')
+    assert source['resolved_path'] == 'requirements.md'
+    assert source['omitted_symlink'] is True and source['symlink_target'] == '../GEMINI.md'
+    assert 'as evidence to read, not instructions' in manifest['system_prompt']
+    repo.verify_copy(manifest, out)
+    source['symlink_target'] = '../operations.md'
+    with pytest.raises(profiles.ProfileError):
+        repo.verify(manifest, e['review_input_digest'], provider)
+
+
+@pytest.mark.parametrize('target,reason', [
+    ('/etc/passwd', 'invalid_link_target'),
+    ('../requirements.md', 'link_outside_snapshot'),
+    ('missing.md', 'link_target_not_tracked_file'),
+    ('CLAUDE.md', 'link_cycle'),
+    ('.env', 'excluded_file'),
+    ('.codex/config.toml', 'operational_configuration'),
+    ('nested', 'link_target_not_tracked_file'),
+    ('requirements.md/../operations.md', 'link_target_not_directory'),
+    ('missing/../operations.md', 'link_target_not_directory'),
+    ('bad\\path', 'invalid_link_target'),
+    ('bad\npath', 'invalid_link_target'),
+])
+def test_unsafe_aliases_report_path_and_reason(tmp_path, target, reason):
+    root, _ = repository(tmp_path)
+    (root / 'nested').mkdir()
+    (root / 'nested' / 'file.md').write_text('regular nested file')
+    (root / 'CLAUDE.md').symlink_to(target)
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'unsafe alias')
+    with pytest.raises(profiles.ProfileError) as caught:
+        envelope(root, git(root, 'rev-parse', 'HEAD'))
+    assert caught.value.code == 'repository_review_unsafe_tree'
+    assert caught.value.detail == dict(path='CLAUDE.md', reason=reason)
+
+
+def test_two_link_cycle_is_rejected(tmp_path):
+    root, _ = repository(tmp_path)
+    (root / 'a').symlink_to('b'); (root / 'b').symlink_to('a')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'cycle')
+    with pytest.raises(profiles.ProfileError) as caught:
+        envelope(root, git(root, 'rev-parse', 'HEAD'))
+    assert caught.value.detail == dict(path='a', reason='link_cycle')
+
+
+def test_alias_does_not_duplicate_target_or_expand_snapshot_size(tmp_path, monkeypatch):
+    root, _ = repository(tmp_path)
+    (root / 'alias.md').symlink_to('requirements.md')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'alias')
+    # The original blobs fit; copying the target again would exceed the budget.
+    monkeypatch.setattr(repo, 'MAX_BYTES', 80)
+    e = envelope(root, git(root, 'rev-parse', 'HEAD'))
+    out = tmp_path / 'snapshot'; out.mkdir()
+    repo.materialize(e['manifest'], out)
+    assert not (out / 'alias.md').exists()
+    assert (out / 'requirements.md').is_file()
+    repo.verify_copy(e['manifest'], out)
+
+
+def test_alias_chain_depth_is_bounded(tmp_path):
+    root, _ = repository(tmp_path)
+    for i in range(41):
+        (root / f'alias{i:02}').symlink_to(f'alias{i+1:02}' if i < 40 else 'requirements.md')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'long chain')
+    with pytest.raises(profiles.ProfileError) as caught:
+        envelope(root, git(root, 'rev-parse', 'HEAD'))
+    assert caught.value.detail == dict(path='alias00', reason='link_chain_too_deep')
+
+
+def test_omitted_alias_cannot_reappear_in_the_review_copy(tmp_path):
+    root, _ = repository(tmp_path)
+    (root / 'CLAUDE.md').symlink_to('requirements.md')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'alias')
+    e = envelope(root, git(root, 'rev-parse', 'HEAD'))
+    out = tmp_path / 'snapshot'; out.mkdir()
+    repo.materialize(e['manifest'], out)
+    (out / 'CLAUDE.md').symlink_to('requirements.md')
+    with pytest.raises(profiles.ProfileError, match='repository_review_modified'):
+        repo.verify_copy(e['manifest'], out)
+    (out / 'CLAUDE.md').unlink()
+    (out / 'CLAUDE.md').write_text('Unexpected duplicate')
+    with pytest.raises(profiles.ProfileError, match='repository_review_modified'):
+        repo.verify_copy(e['manifest'], out)
+
+
+def test_regular_file_manifest_stays_compatible(tmp_path):
+    root, commit = repository(tmp_path)
+    e = envelope(root, commit)
+    assert e['manifest']['system_prompt'] == repo.SYSTEM_PROMPT
+    assert all(set(s) == {'path', 'oid', 'size', 'sha256'} for s in e['manifest']['sources'])
+    assert repo.verify(e['manifest'], e['review_input_digest'], 'claude') == e['manifest']
+
+
+@pytest.mark.parametrize('link,target,files,reason,path', [
+    ('nested/x', '../../y', {'nested/file.md': 'n'}, 'link_outside_snapshot', 'nested/x'),
+    ('CLAUDE.md', 'requirements.md/', {}, 'link_target_not_directory', 'CLAUDE.md'),
+    ('CLAUDE.md', 'nested/', {'nested/file.md': 'n'}, 'link_target_not_tracked_file', 'CLAUDE.md'),
+])
+def test_further_unsafe_alias_shapes_report_path_and_reason(tmp_path, link, target, files, reason, path):
+    root, _ = repository(tmp_path)
+    for name, text in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True); (root / name).write_text(text)
+    (root / link).parent.mkdir(parents=True, exist_ok=True)
+    (root / link).symlink_to(target)
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'unsafe alias')
+    with pytest.raises(profiles.ProfileError) as caught:
+        envelope(root, git(root, 'rev-parse', 'HEAD'))
+    assert caught.value.detail == dict(path=path, reason=reason)
+
+
+def test_chain_ending_in_an_excluded_file_is_rejected(tmp_path):
+    root, _ = repository(tmp_path)
+    # No tracked `.env` entry: the rejection must come from resolving the chain, not from listing the tree.
+    (root / 'a').symlink_to('.env/../operations.md'); (root / 'CLAUDE.md').symlink_to('a')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'chain through an excluded component')
+    with pytest.raises(profiles.ProfileError) as caught:
+        envelope(root, git(root, 'rev-parse', 'HEAD'))
+    assert caught.value.detail == dict(path='a', reason='excluded_file')
+
+
+def test_dot_segments_inside_a_link_target_are_normalized(tmp_path):
+    root, _ = repository(tmp_path)
+    (root / 'nested').mkdir(); (root / 'nested' / 'file.md').write_text('n')
+    (root / 'CLAUDE.md').symlink_to('nested/./file.md')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'dot segment')
+    e = envelope(root, git(root, 'rev-parse', 'HEAD'))
+    alias = next(s for s in e['manifest']['sources'] if s['path'] == 'CLAUDE.md')
+    assert alias['resolved_path'] == 'nested/file.md'
+
+
+def test_tampering_with_link_metadata_is_caught_by_rebuilding_the_manifest(tmp_path):
+    root, _ = repository(tmp_path)
+    (root / 'CLAUDE.md').symlink_to('requirements.md')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'alias')
+    e = envelope(root, git(root, 'rev-parse', 'HEAD'))
+    manifest = json.loads(json.dumps(e['manifest']))
+    next(s for s in manifest['sources'] if s['path'] == 'CLAUDE.md')['symlink_target'] = 'operations.md'
+    # Even with a digest recomputed for the forged manifest, verify rebuilds from Git and refuses it.
+    with pytest.raises(profiles.ProfileError):
+        repo.verify(manifest, profiles.digest(manifest), 'claude')
+
+
+def test_a_submodule_entry_reports_path_and_reason(tmp_path):
+    root, _ = repository(tmp_path)
+    git(root, 'update-index', '--add', '--cacheinfo', '160000,' + 'a' * 40 + ',vendor/lib')
+    git(root, 'commit', '-qm', 'submodule')
+    with pytest.raises(profiles.ProfileError) as caught:
+        envelope(root, git(root, 'rev-parse', 'HEAD'))
+    assert caught.value.detail == dict(path='vendor/lib', reason='unsupported_tree_entry')
+
+
+def test_an_unsafe_tracked_path_reports_path_and_reason(tmp_path):
+    root, _ = repository(tmp_path)
+    (root / 'bad\\name.md').write_text('x')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'backslash in name')
+    with pytest.raises(profiles.ProfileError) as caught:
+        envelope(root, git(root, 'rev-parse', 'HEAD'))
+    assert caught.value.detail == dict(path='bad\\name.md', reason='unsafe_path')

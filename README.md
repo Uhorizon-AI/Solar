@@ -34,7 +34,7 @@
 **What Solar does not do**
 - It has **no credentials and makes no LLM calls**. It does not store or read your logins: a question runs the client with its own session as it is. Only the restricted review readers copy the minimum login file into a private temporary directory for one run.
 - It has no model of its own. The intelligence is always in a client.
-- **It does not confine a question.** Solar depends on the arguments and the semantics each client offers. «Read-only» is a request made in the client's own terms (Codex `--sandbox read-only`, Cursor `--mode ask`, Claude plan mode, Antigravity `--mode plan`), and what the client really does depends on its own configuration. For example, Codex with `approval_policy = "on-request"` and an automatic approvals reviewer can leave its read-only sandbox and write. Use `ask` for your own content; external or untrusted content goes through `review` with `repository_readonly_v1`, the path that does confine.
+- **It does not confine a question.** Solar depends on the arguments and the semantics each client offers. «Read-only» is a request made in the client's own terms (Codex `--sandbox read-only`, Cursor `--mode ask`, Claude plan mode, Antigravity `--mode plan`), and what the client really does depends on its own configuration. For example, Codex with `approval_policy = "on-request"` and an automatic approvals reviewer could leave its read-only sandbox and write; the Codex question now passes `-c approval_policy="never"` to close that way out, and the other clients rely on their own settings. Use `ask` for your own content; external or untrusted content goes through `review` with `repository_readonly_v1`, the path that does confine.
 
 **How it finds the clients.** During setup you log in to each client once. Your `.env` lists which clients Solar may use, in order (`SOLAR_ROUTER_PROVIDER_PRIORITY`). If you do not name a client, Solar tries them in that order and moves to the next when one fails (for example, no tokens left). If you name a client that is not installed, it fails. The client's own session is the only credential involved.
 
@@ -150,7 +150,7 @@ Requires macOS, Git, Bash, Python 3, and curl. Same shape as Claude Code / Codex
 
 <!-- solar-bootstrap-pin -->
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Uhorizon-AI/Solar/v0.59.1/core/skills/solar-client/scripts/bootstrap_solar_client.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Uhorizon-AI/Solar/v0.60.3/core/skills/solar-client/scripts/bootstrap_solar_client.sh | bash
 ```
 <!-- /solar-bootstrap-pin -->
 

@@ -99,6 +99,14 @@ def test_tools_are_listed(solar_env):
     assert [row["name"] for row in listed] == ["solar_search", "solar_docs", "solar_execute"]
 
 
+def test_only_the_read_tools_declare_read_only(solar_env):
+    with client(solar_env) as probe:
+        listed = {row["name"]: row for row in probe.request("tools/list")["result"]["tools"]}
+    assert listed["solar_search"]["annotations"] == {"readOnlyHint": True}
+    assert listed["solar_docs"]["annotations"] == {"readOnlyHint": True}
+    assert "annotations" not in listed["solar_execute"]
+
+
 def test_the_tool_schemas_are_closed(solar_env):
     with client(solar_env) as probe:
         listed = {row["name"]: row for row in probe.request("tools/list")["result"]["tools"]}
