@@ -9,9 +9,12 @@
 # shell test. The full pytest suite runs on Ubuntu; running it twice on macOS would
 # not fit the job limit and would repeat the same platform-neutral checks.
 #
-# Clean environment: nothing is inherited from the caller's Solar setup. Python
-# tests run from a throwaway workspace (sun/ + .solar/settings.json) with
-# SOLAR_ROOT pointing at this checkout; shell tests run with both variables unset.
+# Clean environment: the caller's SOLAR_WORKSPACE and SOLAR_ROOT are not inherited.
+# Python tests run from a throwaway workspace (sun/ + .solar/settings.json) with
+# SOLAR_ROOT pointing at this checkout; shell tests run with both unset. Other
+# variables (runtime overrides, pytest options) pass through on purpose: CI sets none.
+# The smoke script core/tests/skills/solar-gateway/smoke_priority_ensure.sh is not named
+# test_* and needs a live gateway, so it is not run here.
 # A test that cannot run on a runner goes in SKIPS below with a reason; it is
 # printed on every run, never silently dropped.
 set -uo pipefail
@@ -83,6 +86,8 @@ run_shell() {
       echo "FAIL $rel"; failed+=("$rel")
     fi
   done < <(find "$TESTS_DIR" -type f -name 'test_*.sh' | sort)
+  # Guard against a discovery that silently finds nothing (a moved directory, a wrong glob).
+  (( passed + ${#failed[@]} + ${#skipped[@]} >= 20 )) || { echo "FAIL: found fewer than 20 shell tests"; return 1; }
   echo "shell: passed=$passed failed=${#failed[@]} skipped=${#skipped[@]}"
   ((${#failed[@]} == 0)) || { printf 'FAILED: %s\n' "${failed[@]}"; return 1; }
 }

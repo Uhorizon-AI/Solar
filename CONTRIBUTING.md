@@ -64,7 +64,7 @@ Checklist:
 
 Short rules so that parallel PRs do not break each other:
 
-1. **CI is the single "nothing is broken" gate.** The `Test suite` workflow runs the full `core/tests` suite on every PR and on `main`. A PR is mergeable only with it green. Reviewers (human or AI) judge design and risk; they do not replace the suite.
+1. **CI is the single "nothing is broken" gate.** The `Test suite` workflow runs the `core/tests` suite on every PR and on `main`: everything on Ubuntu, and on macOS the pytest files that depend on macOS plus every shell test (macOS skips the tests that start the real console, with the reason printed). A PR is mergeable only with it green. Reviewers (human or AI) judge design and risk; they do not replace the suite.
 2. **One PR at a time.** After each merge, the next PR is rebased on the new `main` and must pass CI again before review is requested.
 3. **Review only what changed.** After a rebase or a push, reviewers look only at what changed since their last review, not at the whole diff again.
 4. **Merge order follows shared files.** PRs that touch the same hot files (`solar_state.py`, `router.py`, `providers/base.py`, `operations.py`) merge one after another, smallest or most urgent first; unrelated PRs can go in any order.
@@ -88,7 +88,8 @@ The script will:
 2. Propose a version bump (MAJOR/MINOR/PATCH)
 3. Generate CHANGELOG.md entry
 4. Ask for confirmation
-5. Create tag and commit (push with --push flag)
+5. Create tag and commit locally
+6. With `--publish`: check the Test suite is green (or `--urgent "reason"`), run the install E2E, push, create the GitHub Release and verify it
 
 **Commit message format:**
 - `feat(scope): description` → MINOR version bump

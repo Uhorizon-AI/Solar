@@ -57,7 +57,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --urgent)
       shift
-      [[ $# -gt 0 && -n "$1" ]] || { echo "ERROR: --urgent requires a written reason" >&2; exit 2; }
+      [[ $# -gt 0 && -n "${1//[[:space:]]/}" ]] || { echo "ERROR: --urgent requires a written reason" >&2; exit 2; }
       URGENT_REASON="$1"
       shift
       ;;
@@ -70,7 +70,7 @@ Usage:
 
 Modes:
   (default)   Prepare locally: CHANGELOG, SOLAR_VERSION, README Quickstart pin, commit, tag
-  --publish   After prep (if needed): local E2E → git push → gh release create → verify API
+  --publish   After prep (if needed): suite gate → local E2E → git push → gh release create → verify API
   --publish --retry
               Idempotent recovery when the tag is already remote but the GitHub Release is missing
 

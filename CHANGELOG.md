@@ -42,7 +42,7 @@ The format is based on Keep a Changelog.
 
 ## [0.60.0] - 2026-10-29
 
-### Changed
+### Added
 - feat(status): check that each CLI client's own permissions allow what Solar needs (read through the Solar MCP) and forbid what it forbids (writing in an ask). Static check from the client's settings in `solar status`; opt-in live probe via `solar client doctor --probe-permissions`. Results are `ok | missing | too_permissive | unknown` with the exact setting and file; Solar changes no client configuration.
 - fix(mcp): `solar_search` and `solar_docs` declare `readOnlyHint`, so Claude Code's plan mode runs them (it refuses MCP tools without it, whatever `permissions.allow` says).
 
@@ -68,7 +68,7 @@ The format is based on Keep a Changelog.
 
 ## [0.59.0] - 2026-10-25
 
-### Changed
+### Added
 - Capture provider-reported token usage for asynchronous questions through solar-state schema 8, preserving partial measurement evidence and exposing coverage and counters in Console task details and MCP task view `usage`. Missing counters stay distinct from zero; subscription quota and monetary pricing are outside this delivery.
 
 ## [0.58.4] - 2026-10-24
@@ -96,7 +96,7 @@ The format is based on Keep a Changelog.
 
 ## [0.58.0] - 2026-10-23
 
-### Changed
+### Added
 - Path zones (`path_zones.py` in `solar-state`): a declared path is classified as installation, planet, workspace or outside, and a task takes the outermost zone of its paths. Containment is decided by file identity (device and inode), so it is right on any volume: symlinks, `..`, whole directories, targets that do not exist yet, case variants of one folder, an installation nested in a planet. The zone is declared, not verified: it does not confine the client.
 - `task.create` returns `zone` (aggregate plus path to zone list, labelled `declared, not verified`) for a task that declares access or asks a question, and the approval text of `task.create` and `task.authorize_run` shows it. It is informational.
 
@@ -143,7 +143,7 @@ The format is based on Keep a Changelog.
 
 ## [0.55.0] - 2026-10-20
 
-### Changed
+### Added
 - `task.wait` (A0, read-only) in `solar_execute`: one call sleeps in short slices up to `timeout_seconds` (max 90, default 60; `poll_seconds` 1-30, default 1) and answers with the final status plus the task's `result` view; a still-running task returns its status and a `next` hint, never an error. A queued task that still waits for `task.authorize_run` answers at once with `awaiting_approval` instead of burning the timeout. During the wait the stdio server keeps answering the transport: a `ping` gets its reply and cancelling the live request ends the wait (`cancelled_by_client`). It never claims, transitions or writes; the gate records it as `read_allowed`.
 
 ## [0.54.6] - 2026-10-20
@@ -189,12 +189,12 @@ The format is based on Keep a Changelog.
 - Approval friction: every MCP task operation asked a native form (126 confirmations granted in 7 days, 27 attempts left unapproved, no form in Claude Desktop, 8 forms to launch 4 requested reviews). MCP task lifecycle operations (`task.create`, `update`, `schedule`, `approve`, `return_to_draft`, `cancel`, `requeue`, `archive`) no longer ask a native form: the client's own tool permission is the consent. Risk is decided when the task is claimed: a task confined by a verified restricted read-only profile runs; any other task waits as `awaiting_approval` until `task.authorize_run`. External sends and capacity changes keep their form; tasks approved before this change keep running.
 - `task.create` accepts `queue: true` to create and queue in one call (the gate audit keeps the argument). `task.requeue` and a recurring task keep their consent marker and authorization while the approved content is unchanged.
 
-### Changed
+### Added
 - `task.authorize_run` (native confirmation, bound to the approved content), `run_risk` / `needs_run_authorization` in solar-state, and `risk` / `awaiting_approval` in the task detail view.
 
 ## [0.54.0] - 2026-10-18
 
-### Changed
+### Added
 - Repository reviews now record the repository HEAD when the review finished (`Repository HEAD when the review finished: <id>`, same as / differs from the reviewed commit, or `unknown`) right after `Reviewed commit`. It is a record, not a gate: it never rejects or fails a review and stays out of the manifest and digest. Statements by the model about HEAD remain commentary.
 
 ## [0.53.1] - 2026-10-18
@@ -205,7 +205,7 @@ The format is based on Keep a Changelog.
 
 ## [0.53.0] - 2026-10-18
 
-### Changed
+### Added
 - Opt-in local evidence for Codex repository reviews (`SOLAR_ROUTER_REVIEW_EVIDENCE_DIR`, off by default): a redacted copy of the provider JSONL and final-message file in a mode-0700 directory with bounded retention (`SOLAR_ROUTER_REVIEW_EVIDENCE_KEEP`, default 10), kept for completed, failed and timed-out launches. `meta.json` records the model id and reviewed commit (never the prompt) to attribute a folder to its task. A pre-existing evidence directory open to group or others is refused, never chmod-ed (create it with `mkdir -m 700`), and an enabled capture that cannot run warns on stderr. Capture never changes review outcomes and never writes argv, env, stderr or credentials. Redaction is pattern-based, so the directory should still be treated as sensitive.
 
 ## [0.52.4] - 2026-10-18
@@ -230,7 +230,7 @@ The format is based on Keep a Changelog.
 
 ## [0.52.0] - 2026-10-18
 
-### Changed
+### Added
 - Commit-bound repository reviews alongside packet reviews: guarded Claude/Codex/Cursor/Antigravity CLI constructors, isolated snapshots, native review/batch preparation, derived child authorization and version-labelled results. Production capacity and enabled profiles remain unchanged.
 
 ## [0.51.2] - 2026-10-18
@@ -245,7 +245,7 @@ The format is based on Keep a Changelog.
 
 ## [0.51.0] - 2026-10-18
 
-### Changed
+### Added
 - Isolated opt-in macOS launchd evidence harness and integrated simulated concurrency/update regressions; production capacity remains 1 and reader profiles remain disabled.
 - Async 3/5 rollout and safe reversal runbook, plus an offline quality-pilot preparation/report runner, shared rubric and paired results template. Real provider quality validation remains separately authorized and unexecuted.
 
@@ -254,7 +254,7 @@ The format is based on Keep a Changelog.
 
 ## [0.50.0] - 2026-10-17
 
-### Changed
+### Added
 - Guarded Claude `text_only_review_v1` adapter with one restricted launch constructor for run and stream, canonical approved envelopes, input budgets, token-bound router isolation and source revalidation. Unknown effective managed policy rejects real launches; production reader profiles remain disabled and capacity remains 1.
 - Transactional, idempotent derived review children with bounded approved policy, individual approval snapshots, provenance checks and one recorded parent synthesis attempt. Legacy children without provenance remain nonexecutable. The console groups approval/provenance waits as authorization pending.
 
@@ -263,7 +263,7 @@ The format is based on Keep a Changelog.
 
 ## [0.49.0] - 2026-10-17
 
-### Changed
+### Added
 - Resident async-tasks supervisor (`supervisor.py`, one per workspace/runtime): the only holder of the atomic lock `<runtime>/async-tasks/.locks/supervisor.lock` (resolved through solar-paths, bound to the workspace owner), it claims through the same reservations as every other entry point and dispatches each claim by id and token to its own executor in its own process group. Executions are collected with wait/poll, a free place is filled within one second of one ending (or on `SIGUSR1`) without waiting for the 60 s tick, and a place is forgotten only after the executor's process group is proved gone. At start it reconciles processes and leases: live owners from a previous supervisor are adopted, an owner it cannot identify stays blocked, an executor lost without finishing is failed (never run again), and a group it cannot prove is its own is never killed. Cancellation stops only that execution's group; a failed cleanup blocks the affected resource and nothing else; lowering the capacity never stops a running execution. Contract: `core/docs/async-supervisor.md`.
 - `launch_supervisor.sh` (detached `Popen(start_new_session=True)`, stdin null, output to the supervisor's log, no inherited pipes) and `stop_supervisor.sh --drain [--timeout N]` (the contract the update's drain already expected: stop dispatching, collect, exit; never removes the lock, never kills by pid).
 - `/api/console/capacity` and a card on the executions screen: places used and free, tasks running at once, why each queued task waits (dependency, resource, provider, capacity, recovery), the supervisor's published state, and the applied configuration revision with the differences a pending proposal would make. `Session.queue_waits()` (read only) backs it.
@@ -278,7 +278,7 @@ The format is based on Keep a Changelog.
 
 ## [0.48.0] - 2026-10-16
 
-### Changed
+### Added
 - Execution reservations (schema v6, applied only by the cutover, with a backup first): taking a place and becoming `active` are one transaction for `task_claim`, `task_claim_next`, `activate.sh`, the worker and the generic move to `active`. Global capacity (initially `1`), provider limits, declared access (`access_policy`: read/write, canonical scopes with parent/child overlap and symlink aliases, exclusive resources), tasks that declare nothing run alone, and a drain barrier so a stream of readers cannot starve an exclusive task after `exclusive_wait_seconds`. Contract: `core/docs/execution-reservations.md`.
 - Execution token: the claim returns it; completing, releasing, failing, awaiting and recording a pid need it, with a lease and heartbeat; `execute_active.sh --task <id> --token <token>` runs exactly the claimed task and `--once` only takes over an execution nobody runs. `start_next.sh` writes the claim to `$SOLAR_CLAIM_FILE`.
 - Versioned execution configuration: operations `async_execution.propose` and `async_execution.apply` (A2) prepare `<runtime>/async-tasks/config/async-execution.json` and apply a validated revision to the runtime's policy in one transaction; editing the file activates nothing. `solar_state.py async-policy status|apply`.
@@ -298,7 +298,7 @@ The format is based on Keep a Changelog.
 
 ## [0.47.0] - 2026-10-16
 
-### Changed
+### Added
 - `task.return_to_draft` (A2, `task_id` + `expected_row_version`): a queued task goes back to draft keeping its id, body, schedule, run counters and history. `approved_*` are withdrawn (the previous digest stays in `audit` as `task_approval_withdrawn`) and the worker cannot claim it until `task.approve`. Schema v5 adds `queued -> draft` to the `transitions` table of existing bases.
 - `approval_digest_mismatch` (`audit` row once per row version, a log line on every refusal, and the console task list): the reason is `absent`, `legacy` or `mismatch`.
 - The console list shows one row per logical task: finished older versions fold under the newest one linked by `revises_task_id`, which `console_tasks` now projects.
@@ -310,7 +310,7 @@ The format is based on Keep a Changelog.
 
 ## [0.46.0] - 2026-10-15
 
-### Changed
+### Added
 - Console identity: `GET /health` and `/api/runtime/health` now report the physical `workspace` and `runtime` of the console. `core/skills/solar-app/scripts/host_identity.py` is the single decision point (`match`, `mismatch`, `legacy`, `partial`, `unreachable`, `invalid`), compared on physical paths, and it is applied by `check_host.sh` (with and without flag), `ensure_host.sh`, `start_host.sh`, `stop_host.sh` and `solar_host_stop_orphan_listeners`. Contract: `core/docs/console-identity.md`.
 - `solar_test_guard --services` (opt-in) aborts a test whose service detection is real and whose effective install is the real global install; the LaunchAgent still needs a `launchctl` double. Contract: `core/docs/test-isolation.md`.
 - Test-only port override `SOLAR_APP_TEST_MODE=1` + `SOLAR_APP_TEST_PORT` (process environment only; never selects 9000, ignored in a workspace `.env`). A suite-wide guard records the listeners on :9000 before the first test and fails the run if a new one remains.
@@ -331,7 +331,7 @@ The format is based on Keep a Changelog.
 
 ## [0.45.0] - 2026-10-14
 
-### Changed
+### Added
 - Dashboards: a planet declares its surfaces in its own `planets/<planet>/.solar/dashboards.json` (a stable `name` with no dots, title, description, owner, `updated_at`, `mode`, and **exactly one** of loopback `url` or in-planet `file`) and this machine registers the declared ids in the `dashboards` block of `.solar/settings.json` (`enabled`, `registered` with an optional machine-specific `start_command`). A **tool** (`url`) is a loopback HTTP root this machine registers and starts by hand; a **view** (`file`) is a read-only HTML page the planet generates, served by the console itself from `GET /dashboards/<planet>/<name>`. The console joins both in a read-only screen after Tasks (internal id `dashboards`) and in the new `GET /api/console/dashboards` route. The stable `name` is the identity: changing the target keeps `/dashboards/<planet>/<name>`. A view's link is built from the planet and the entry name, never from the declared path: the route re-resolves the file against the declaration, confines it to the planet's `operations/`, requires a lowercase `.html` suffix, refuses a symlink hop and caps it at 4 MiB, then serves it under a restrictive CSP (`default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox`, plus `nosniff` and `no-referrer`). A view reports the file's own **mtime** as freshness, never a date the HTML claims. A single malformed entry is reported with its own id and never hides the valid ones; a registered id with no declaration is surfaced as `registered_dashboard_not_declared`. `solar client sync dashboards status|list|seed|register|unregister|enable|disable`: `register`/`unregister` write settings only and never start, probe or read a planet file; `seed <planet> [--force]` is the only subcommand that writes inside a planet, creating the declaration when absent, validating an existing one without writing, and (with `--force`) writing a new exclusive backup and refusing when the file has uncommitted git changes unless `--allow-dirty`. The declaration gets its own confinement (inside the planet, a regular `.json`, no symlink hop, `.solar` never a symlink) instead of a shared `operations/` confinement, respects Client planet exclusions and is capped at 128 KiB. Starting a registered surface stays an explicit operator action: the console shows the start command as escaped copyable text and never runs it.
 
 ### Changed
@@ -357,7 +357,7 @@ The format is based on Keep a Changelog.
 
 ## [0.43.0] - 2026-10-13
 
-### Changed
+### Added
 - Opt-in native Codex agents: with `solar client sync codex-agents enable`, `solar client sync` also publishes derived roles from top-level `planets/<planet>/agents/*.md` contracts into `.codex/agents/solar__<planet>__<agent>.toml` (only `name`, `description`, `developer_instructions`), tracked by a hash manifest so edited, unmanaged or colliding files are reported and never overwritten, and unchanged generated files are retired when a contract goes away. Adds `codex-agents status [--json]|preview [--contents] [--json]|enable|disable` and Codex-specific exclusions (`exclude --client codex <planet>|<planet>:<agent>`, including the `--client=codex` form) on top of the global ones; an excluded planet is never opened by the publisher. Off by default and silent while disabled; other clients are unchanged.
 - A contract that still exists but no longer validates (broken frontmatter, empty body, serialization failure) keeps its published role (`kept: contract is invalid`): editing a contract never deletes the agent. It is retired only when the `.md` disappears or the agent/planet is excluded.
 - Renaming a contract (letter case, `-` vs `_`, new stem) updates the published role in place, but only after confirming the previous source is gone (the `.md`, its `agents/` dir or its planet no longer exists): the previous identity is adopted by the new source in the same plan, so it is never kept and retired at once (previously the file was deleted and later runs reported a persistent conflict). A previous source that is still present (invalid contract, unreadable, name mismatch, excluded/unobservable planet) keeps its published role and is reported as a conflict. Two sources sharing a public name remain a conflict.
@@ -369,7 +369,7 @@ The format is based on Keep a Changelog.
 
 ## [0.42.0] - 2026-10-12
 
-### Changed
+### Added
 - Read-only operational reports from explicit planet indexes. Paths are confined to each planet's `operations/` directory, refusing both a symlink within it that points elsewhere and an `operations/` that leaves the planet, and are served with a sandboxed CSP that omits top navigation and popups.
 
 ### Changed
@@ -391,7 +391,7 @@ The format is based on Keep a Changelog.
 
 ## [0.40.0] - 2026-10-12
 
-### Changed
+### Added
 - Console task detail: selecting a task reads, on demand and read only, a curated "Context and follow-up" block (recorded checkpoint, owner, next check, wait, decision, stored schedule with IANA timezone and resources). The checkpoint parser is shared with the MCP task views, whose three tools, schemas and `checkpoint_invalid` refusal are unchanged. An invalid checkpoint or unreadable frontmatter is reported for that task only as a stable `context_error` code and does not hide its schedule or history. The complete stored record (every column, every frontmatter entry, instructions rendered as sanitized Markdown with only http, https and mailto links) loads only on an explicit `full=1` request; failures answer with a fixed message, never exception text.
 
 ## [0.39.1] - 2026-10-12
@@ -405,7 +405,7 @@ The format is based on Keep a Changelog.
 - MCP: the public catalog is now exactly three tools. `solar_search` finds capabilities, documents, operations, resources and tasks and reads one task (detail, instructions, config, status, result, error, history). `solar_docs` reads skills, framework documents (`core-doc:`) and operation contracts (`operation:`), whole or by section. `solar_execute` runs one registered operation with a closed per-operation schema, authority and approval. The nine previous tool names answer with a non-executing `tool_renamed` error for two minor releases (recorded in the gate audit), and Client discovery verification accepts either catalog meanwhile. Mapping and policy: `core/docs/mcp-tool-migration.md`. Resources are unchanged.
 - MCP: approvals bind the operation name and exact arguments. `telegram.send` always needs an explicit `chat_id`; `task.create` always stores a draft (`queued` and `description` became `task.approve` and `instructions`); `action.run` takes its mandate from the registration (none registered: refused; a different caller-supplied one: refused). Cancel and requeue require `expected_row_version`. The operator approval CLI grants only registered A2 operations with valid arguments. Every decision gets a `trace_id` and an outcome row in the gate audit.
 
-### Changed
+### Added
 - Task management through MCP: `task.update`, `task.schedule` and `task.archive`, and `task.create` with `revises_task_id` for a draft revision of an approved task. Editing and scheduling never queue; only `task.approve` does, for the exact stored version (`expected_row_version`). Approved, active and finished tasks keep their instructions. Archiving keeps the row, body and events; a queued recurrence is cancelled and archived in one step.
 - solar-state: optimistic `row_version` checks, `task_update`, `task_archive`, an approval digest recorded on approve, and `scheduled_timezone` (IANA) so weekly schedules keep their local hour across daylight-saving changes.
 
@@ -426,18 +426,18 @@ The format is based on Keep a Changelog.
 
 ## [0.37.0] - 2026-10-09
 
-### Changed
+### Added
 - Explicit agent continuity CLI: identity-scoped reads, bounded portable exports and verified restore without carrying permissions or activating tasks.
 - Opt-in planet execution facts: initialization references an existing approval, with evidence references, idempotent event keys and backup/restore, leaving shared machine-state storage unchanged. The workspace AGENTS template now scopes the planet-local `.solar/` fact destination.
 
 ## [0.36.0] - 2026-10-09
 
-### Changed
+### Added
 - `solar-agent` v1: canonical agent contracts across clients, reusable templates and human-approved file-based lessons. Runtime continuity and execution databases remain outside this documentation-only skill.
 
 ## [0.35.0] - 2026-10-09
 
-### Changed
+### Added
 - MCP task status with a task ID reads stored agent/responsibility identity and continuity checkpoint details through solar-state. Queue listings remain summaries; reading recorded evidence does not verify an effect or authorize a retry.
 
 ## [0.34.2] - 2026-10-09
@@ -466,7 +466,7 @@ The format is based on Keep a Changelog.
 
 ## [0.33.0] - 2026-10-07
 
-### Changed
+### Added
 - Shared eligible skill inventory, bounded MCP capability Search/Describe and
   opt-in Client-managed discovery publication for the shared `.agents` surface.
   Native publication stays the default; discovery verifies the registered
@@ -487,7 +487,7 @@ The format is based on Keep a Changelog.
 
 ## [0.32.0] - 2026-09-30
 
-### Changed
+### Added
 - feat(solar-app): `/api/console/health` adds `attention`. Calm lists only non-zero counts. A fault or a missing check names the cause. The page shows that sentence.
 - feat(solar-app): console copy is English unless `.solar/settings.json` sets `"language"` to `es`. Health returns that `language`. The page follows it, including the browser title. A missing key stays English.
 - feat(solar-client): `solar client language set es` writes that key. `solar client update` keeps it. The alias table lives in `solar-client/scripts/console_language.py`. If that file is missing, the error names the path.
@@ -505,12 +505,12 @@ The format is based on Keep a Changelog.
 ### Fixed
 - fix(solar-app): `/api/console/health` states the database, port 9000, system, router, LaunchAgent, and gateway. The console renders those states. A stale pass leaves system unverified unless that stamp recorded a feature failure. Changing the task filter keeps the detail on a visible task. Entrada externa uses the health read from the current visit. An unreadable continuity time stays on the screen as missing data.
 
-### Changed
+### Added
 - feat(solar-app): the console at `/app` is the eight-question view. It is HTML, CSS and JS with no build step. Inter and Montserrat ship under `assets/fonts/` with the SIL Open Font License and are served by `app_http.py`. Each screen reads `/api/console/*`. A 503 with `refused` shows the reason. The verdict comes from `/api/console/health`. The summary reloads every 30 seconds; the other screens reload when opened. Times use Europe/Madrid. The page does not mutate Solar, and it does not call the older `/api/app/*` routes.
 
 ## [0.30.0] - 2026-09-29
 
-### Changed
+### Added
 - feat(solar-state, solar-app, solar-system): the console can read the installation without creating runtime files. `read_session()` takes a shared lock on the existing `state.lock`, refuses when the lock, owner, format or schema is missing, and does not take the daily backup. Queries cover every task status, per-task history, subtasks and execution aggregates. Reconciled durations stay out of every average, and rows with no provider stay out of the provider buckets. Eight read-only routes answer the console questions, including mandate mode from the YAML. A fresh pass stamp is healthy only when local health, the connector, and the ws, http, and tunnel processes are all up; otherwise it is a fault. The host refuses to bind when `SOLAR_APP_HOST` is not loopback. Each LaunchAgent pass writes `runtime/system/pass-stamp.json` with the time, the result of each feature, and local gateway facts.
 
 ## [0.29.2] - 2026-09-28
@@ -525,7 +525,7 @@ The format is based on Keep a Changelog.
 
 ## [0.29.0] - 2026-09-27
 
-### Changed
+### Added
 - feat(solar-client): `sync-clients.sh` publishes skills to Antigravity as copies under `.agents/skills` (`--antigravity-only`, included by default). Commands, workflows and rules are not published. A shared frontmatter `name` across planets is reported and left unchanged. Solar records the names it published in `.agents/skills/.solar-managed` and prunes only those. A folder that already exists and is not in that list is left in place and reported. Codex reads repo skills from `.agents/skills` and reads `$CODEX_HOME/skills` (`~/.codex/skills` when unset), so the workspace `.codex/skills` is a second copy only when `CODEX_HOME` points at that directory. Codex publishing is unchanged.
 
 ## [0.28.3] - 2026-09-27
@@ -566,7 +566,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 ### Fixed
 - fix(solar-state): the published status and its test still described the world from before v0.26.0. `SKILL.md` said the audit, continuity and mandate events were on files and that `migrate` / `rollback` were not called from `solar client update` or `sync`. `test_client_update.sh` asserted the published updater never calls `solar_client_state_cutover`. Both were already false: that updater reloads the new `client_lib.sh` and the cutover runs before anything starts. The status and the test now say so. No runtime is migrated for this correction.
 
-### Changed
+### Added
 - feat(solar-client, solar-state): one install belongs to one workspace. The runtime's identity is a `workspace_id` stored in `workspace-owner.json` and in `.solar/settings.json`; the path is not the identity. `claim_owner` is the only writer of the owner file. `session`, `operate` and `cutover` read the caller's id from `$SOLAR_WORKSPACE/.solar/settings.json` and refuse a missing or different owner; `describe` reports that as not ready. `init`, `update` and `sync` claim before any other write. A claim that refuses leaves the install, settings and services untouched. The updater that is installing this code cannot claim before it writes; the new cutover claims before it stops anything, and a refused claim does not stop services. `solar client claim-runtime --rebind` moves the recorded path when the id matches. `solar client claim-runtime --repair` is the only repair when the two ids differ: without `--keep` it prints both and writes nothing; `--keep owner` or `--keep settings` keeps the named side. `--keep` without a value, or without `--repair`, exits 2.
 - feat(solar-mcp): `workspace()` resolves the workspace with `resolve_solar_paths`. Started outside a workspace, verbs refuse and no runtime is created.
 - feat(solar-client): `state-cutover.json` records the install identity and `sqlite`. The same identity does not stop, migrate or restart. A global install's identity is the commit of `SOLAR_ROOT`; a portable install's is `bundle_checksum`. A missing checksum, or a commit of `unknown`, does not skip the cutover. `rollback` deletes the marker.
@@ -580,7 +580,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.26.0] - 2026-09-26
 
-### Changed
+### Added
 - feat(solar-state): the runtime state gets an owner. Tasks, the router audit, cross-channel continuity and the events of A3 mandates live in one SQLite file, `state.sqlite`, that only this skill opens. `solar-paths` says where; this says what, and nothing else is imported. A shared flock on `state.lock` covers every read and write; a cutover holds it exclusive. `STATE_FORMAT` is read inside that lock and any value other than `sqlite` is refused, so a cutover that dies halfway leaves the runtime on files. Schema v1 is the published foundation and a test pins its SQL; v2 adds what a rollback needs to write the files back (`source_name`, subtask plans, cancellation requests, and mandate streams that exist even when empty); v3 records that an empty `router/audit.jsonl` existed. No component calls the skill yet, and no runtime has been moved onto it.
 - feat(solar-state): the cutover between the file runtime and the base (`migrate`, `rollback`, `rehearse`). `rehearse` imports into a throwaway base and touches nothing. `migrate` and `rollback` refuse unless `SOLAR_STATE_ALLOW_CUTOVER=1`. A resume that already finds `STATE_FORMAT=sqlite` checks the marker, the base and the schema, waits for old writers — including the bare names `create.sh`, `task_cancel.py`, `reconcile_router_audit.sh`, `continuity_cli.py` and `delegation_ctl.py` — and brings in what that old code wrote meanwhile. A task, log, subtask plan, cancellation, the audit, continuity or a mandate stream that is neither still in place nor already under `*.migrated-<stamp>` is refused. Rollback copies `task-logs/` back to `async-tasks/logs/` without moving the source, and an empty audit file comes back empty. `tmp/`, `hooks/` and anything unknown stay where they are.
 - feat(solar-state): every reader and writer of tasks, audit, continuity and mandate events moves onto solar-state. `create.sh`, `approve.sh`, `task_cancel.py`, `requeue_from_error.sh`, `start_next.sh`, `activate.sh`, `complete.sh`, `execute_active.py`, `router.py` and `work_status.sh` no longer touch `async-tasks/` or `router/audit.jsonl` directly; they call the `solar_state` API or its CLI, and refuse when `STATE_FORMAT` is not `sqlite`. The MCP verbs `solar_task_approve`, `solar_task_cancel` and `solar_task_requeue` go the same way, with no file-queue branch — one truth, not two. `sun/delegations/*.yaml` is now opened only by `solar-state` (`mandates.py`); `mcp_gate.check_mandate` calls it in process instead of shelling out to the router. `app_index.py` is replaced by views in `state.sqlite` (`runtime_views.py`): the console and `solar-mcp` read from there, and `solar-mcp` no longer imports `solar-app`. Skills (`solar-async-tasks`, `solar-mcp`, `solar-router`) describe the queue as rows, not files, and stop when there is no MCP verb instead of falling back to the shell.
@@ -631,7 +631,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.25.0] - 2026-09-20
 
-### Changed
+### Added
 - feat(solar-async-tasks): the completion notice is the delivery the executor wrote, not a fixed line plus a path. A gateway parent is asked to close its reply with a `<delivery>` block: one or two short paragraphs in the language of the request, written the way a colleague who did the work would, with the evidence in the closing sentence. No labels and no template. The worker copies that block into the task as `## Delivery` (capped at 1200 characters, keeping the last line; a cut sets `delivery_truncated: true`) and the notification sends that section as the whole message, so it can be read on a phone without opening the Mac. `## Result` is never sent: it is the provider's own account, and transporting it is not compressing it. Every execution rewrites the section and recomputes the flags, so a parent that runs twice or is requeued from error never notifies a previous run's delivery. Tasks created with `delivery_expected: true` that finish without the block are marked `delivery_missing: true` and their notice says so instead of announcing the work as resolved; tasks without the flag keep the previous notice. The `notify_long` path is retired: it read the unbounded `## Result` and no task used it.
 - feat(solar-async-tasks, solar-router): the declared scope of a request reaches the task that carries it out. The router already extracted and validated `object`, `scope` and `effect` before queueing, then recorded them only in the audit: the executor saw the raw user text alone, so a request naming one artifact could be carried out on another. `create.sh --metadata` now accepts those three keys plus `delivery_expected` as a closed allowlist (unknown keys are still dropped), writes them as frontmatter, and the task body restates them in an `## Object` section with the instruction to act on that object and return a question instead of working on a substitute. `delivery_expected` is written by the same call that puts the `<delivery>` instruction in the body, so removing the instruction removes the flag.
 
@@ -655,7 +655,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.24.0] - 2026-09-19
 
-### Changed
+### Added
 - feat(solar-gateway): platform-agnostic message identity. n8n may send `channel` (platform, e.g. `telegram`), `conversation_id` and `message_id`; the gateway composes `session_id = channel:conversation_id` and `request_id = channel:conversation_id:message_id` and never splits a composed id. `channel` is lowercased and must match `^[a-z0-9_-]+$`. `%` and `:` inside `conversation_id` and `message_id` are escaped (`%25`, `%3A`) so different parts never compose the same id; numeric Telegram ids are unchanged. Telegram conversations become the reply chat for origin notify. Partial parts, a malformed `channel` or a conflicting `session_id` are rejected before the replay ledger and never stored. The previous n8n body (`request_id`, `session_id`, optional `chat_id`) is still accepted; without `session_id` it no longer falls back to a shared `n8n:default` session.
 
 ### Changed
@@ -668,7 +668,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.23.2] - 2026-09-15
 
-### Changed
+### Added
 - feat(solar-mcp): user-level Cursor, Claude and Codex registration via `solar mcp print|install|uninstall`, with dry-run, validated workspace, pinned interpreter, atomic/idempotent updates and portable bundle inclusion. Gemini registration is not supported.
 - feat(solar-mcp): native client form confirmation manages approval IDs internally when supported; approvals bind the workspace and are reserved before execution to prevent replay. Clients without form elicitation still need trusted out-of-band approval; original-turn authority binding is not implemented.
 - fix(solar-mcp): preserve TOML comments, quoted tables and unrelated settings, reject unsafe layouts, detect observed concurrent configuration changes and retain one current backup.
@@ -685,7 +685,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.23.0] - 2026-09-12
 
-### Changed
+### Added
 - feat(solar-async-tasks): route stop requests through canonical task cancellation and report `cancelled` only after the managed process acknowledges termination.
 
 ### Changed
@@ -707,7 +707,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.22.0] - 2026-09-06
 
-### Changed
+### Added
 - feat(solar-gateway): persist n8n response snapshots by `request_id`; serialize duplicate requests across threads and processes so concurrent retries execute the router once and replay the same response.
 - feat(solar-async-tasks): accept flat or nested origin metadata through `create.sh --metadata`; notify the allowlisted origin chat with a brief completion message and result location, or optional ordered message batches.
 
@@ -726,7 +726,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.21.0] - 2026-07-26
 
-### Changed
+### Added
 - feat(solar-client): after `solar client update` (and on `--check`), report macOS LaunchAgent `SOLAR_ROOT` binding via solar-system helpers; warn when the plist is stale or incomplete.
 - feat(solar-client): `--reinstall-launchagent` on a real update rewrites the LaunchAgent plist and restarts the transport gateway so bridges inherit the new install root (fail-closed if gateway restart fails).
 
@@ -742,7 +742,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.20.0] - 2026-07-26
 
-### Changed
+### Added
 - feat(solar): Codex-style update banner on `solar` / `-h` (and `solar status`) when a newer GitHub release exists; cached 24h; `solar update` to upgrade; disable with `SOLAR_NO_UPDATE_CHECK=1`.
 - feat(solar-client): `solar client sync exclude list|add|remove` manages `sync_exclude_planets` in workspace settings (skip planet skills/agents/commands on sync; invalid settings fail closed before IDE mutation).
 
@@ -775,7 +775,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.19.0] - 2026-07-26
 
-### Changed
+### Added
 - feat(solar-gateway): `stop_transport_gateway.sh` with `--dry-run` / `--force` / `--tunnel-only`, strict ownership, and stale pid-file unlink.
 - feat(solar-gateway): stable env stamp at `sun/runtime/gateway/env.stamp`, failure backoff via `env.fail`, and portable mkdir-lock (no `flock`) shared by ensure/setup.
 - feat(solar-gateway): non-destructive preflight before stopping a healthy runtime; provider tokens validated via solar-router `list_supported_providers.sh` (canonical `PROVIDERS`).
@@ -811,7 +811,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.18.2] - 2026-06-06
 
-### Changed
+### Added
 - feat(solar-client): canonical `solar` CLI entry — `core/skills/solar-client/scripts/solar` (dispatcher for client, workspace, app, status, paths, chat REPL).
 - feat(solar-app): `solar app voice *` — voice CLI nested under App (doctor, once, paste, ask, etc.).
 
@@ -851,7 +851,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 - **Governance editor:** path tree shipped (`GET /api/governance/tree`); autocomplete / polish still pending (Host-3).
 - **`solar-interface`:** skill and optional `:7741` daemon remain for dev/CLI; full sunset not done. Test dir still named `core/tests/skills/solar-host/`.
 
-### Changed
+### Added
 - feat(solar-app): **Host-3 governance** — `GET /api/governance/tree` (`.md`/`.json` under `sun/`, `planets/`); dashboard select + manual path; chat shows `reply_text`.
 - feat(solar-app): `core/skills/solar-app/SKILL.md` — canonical control plane skill; runtime in `solar-app/scripts/`.
 - feat(solar-client): **Fase 7** — canonical `resolve_solar_paths.sh` and `solar_paths.py`; tests in `core/tests/skills/solar-client/`.
@@ -892,7 +892,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 - Use dashboard chat at `:9000` for agent questions until voice ask is fixed.
 - **Governance editor:** path tree/autocomplete under `sun/` and `planets/` not shipped yet (Host-3 polish).
 
-### Changed
+### Added
 - feat(solar-host): **Host-2** fleet operations on dashboard — `POST /api/actions/client` (`sync`, `client_doctor`, `workspace_doctor`) with allowlist, global lock (`409`), 120s/60s timeouts, 32 KB output cap, loopback-only client.
 - feat(solar-host): **Host-2** request hardening — `Host` and `Origin` must target `127.0.0.1` / `localhost` (and matching port); rejects cross-origin and DNS-rebinding-style `Host` values.
 - feat(solar-host): **Host-2** inbox events — `health.degraded`, `gateway.error`, `client.action.failed`; `emit_deduped()` with 5 min cooldown per `(type, workspace, key)`.
@@ -913,7 +913,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.17.0] - 2026-06-01
 
-### Changed
+### Added
 - feat(solar-host): `voice_core.py` — Host client, intents, SSE `stream_ask`, `session.json` per active workspace.
 - feat(solar-host): voice intents approve/reject/switch/open dashboard; `switch_active_workspace` fix.
 - feat(solar-host): tray Voice menu — toggle PTT copy/paste, Ask Solar (worker threads).
@@ -932,7 +932,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.16.0] - 2026-06-01
 
-### Changed
+### Added
 - feat(solar-host): Host-1 macOS — `host_platform/macos/` (tray, notifications, `SOLAR_HOST_TRAY=1` on start).
 - test(solar-host): `test_host_macos_notifications_unit.sh`.
 - feat(solar-host): enriched inbox — `workspace.activated`, `approval.pending`, payloads with `workspace`/`summary`; `GET /api/events?types=`.
@@ -971,7 +971,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.15.0] - 2026-05-31
 
-### Changed
+### Added
 - feat(solar-client): new skill `solar-client` — workspace lifecycle scripts moved from `solar-interface`.
 - feat(solar-workspace): new skill `solar-workspace` — `solar workspace doctor` for `sun/` and `planets/`.
 - test(solar-workspace): `test_workspace_doctor.sh`.
@@ -998,12 +998,12 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 - fix(solar-workspace): `create-planet.sh` and `planet-git-bootstrap.sh` use `SOLAR_WORKSPACE` + `solar_core_dir` for templates/planets.
 - fix(solar-skill-creator): `check-mcp.sh` and `context-report.sh` resolve workspace via `resolve_solar_paths.sh`.
 
-### Changed
+### Added
 - feat(solar-host): MVP local control plane UI on `SOLAR_HOST_PORT` (default 9000) — status, approvals, workspace overview.
 
 ## [0.12.0] - 2026-05-29
 
-### Changed
+### Added
 - feat(solar-client): Fase 3 dual-mode workspace — `core_source: global | workspace-snapshot` in manifest with `requires_global_client` and `portable_capabilities`.
 - feat(solar-client): `solar client bundle create|verify` — opt-in portable bundle under `.solar/bundle/` with transitive allowlist, `index.json`, and checksums.
 - feat(solar-client): `solar client sync --portable` — sync IDE + bundle create in one step.
@@ -1054,7 +1054,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.11.0] - 2026-05-25
 
-### Changed
+### Added
 - feat(solar-client): `solar client update` — global install update via git (full `SOLAR_ROOT` repo) or `--bundle` (core/ only).
 - feat(solar-client): `client_update.sh` with backup under `$SOLAR_ROOT/backups/`, `--tag`, `--repair` (OneDrive manifest), `--check` report.
 - feat(solar-client): `test_client_update.sh` unit tests for update helpers.
@@ -1072,7 +1072,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.10.1] - 2026-05-25
 
-### Changed
+### Added
 - feat(solar-client): extend `solar client upgrade` with install-root report, prune of IDE/agent artifacts under `SOLAR_ROOT`, and optional `--restructure` for legacy monorepo layouts.
 - feat(solar-client): `test_client_upgrade.sh` unit tests for install prune helpers.
 
@@ -1086,7 +1086,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.10.0] - 2026-05-25
 
-### Changed
+### Added
 - feat(solar-client): Fase 1.1 — `solar client upgrade` (workspace layout, removes obsolete `.solar/core/`, writes `solar-client-v1.1` manifest).
 - feat(solar-client): `client_lib.sh` shared manifest/version helpers; `solar client update --check` compares global vs workspace manifest.
 - feat(solar-client): `smoke-solar-client.sh` go/no-go for manifest-only workspaces.
@@ -1116,7 +1116,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 > **Release note:** Solar Client Fase 1 lives here until go/no-go closes the phase; then promote this section to `[0.8.2]` (or `[0.9.0]`). Tag `v0.8.1` covers release-script fixes only, not Fase 1.
 
-### Changed
+### Added
 - feat(solar-client): add `core/scripts/smoke-solar-client-fase1.sh` go/no-go smoke (#11–#17, inline #13, stderr on failure).
 - feat(solar-client): add `resolve_solar_home.sh` with `.solar/core` + legacy `core/` discovery, export conflict detection, and `--home` override.
 - feat(solar-client): add `solar client init|sync|doctor`, `solar status` (5 blocks), and `solar paths` via the `solar` CLI.
@@ -1150,7 +1150,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.8.0] - 2026-05-24
 
-### Changed
+### Added
 - feat(context): add `core/scripts/context-report.sh` to report lines, characters, directional token estimates, and large active-context files across governance, memory, skills, agents, and commands.
 - feat(solar-async-tasks, solar-router): add async-task execution consent contract so queued tasks can write declared artifacts without re-approval while preserving gates for external, destructive, credential, irreversible, or out-of-scope actions; link the contract from JIT delegation and router policy docs.
 - feat(sun-workspace-doctor): add optional `--check-plans` validation for `sun/plans/YYYY/MM/YYYY-MM-DD_*` layout, month-folder alignment, and future-date timeline markers.
@@ -1196,7 +1196,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.7.0] - 2026-04-09
 
-### Changed
+### Added
 - feat(sync-clients): include `python.terminal.activateEnvironment: false` in `.vscode/settings.json` synchronization to ensure consistent terminal behavior.
 - feat(solar-async-tasks): implement subtask handling with re-queueing and dependency management — `await_subtasks.sh`, parent re-queue logic, and `subtasks:` frontmatter field. Includes 119-line test suite in `core/tests/skills/solar-async-tasks/`.
 - feat(solar-async-tasks): allow immediate task execution by setting scheduled time to `"now"` — `task_lib.sh` treats `"now"` as always-eligible; test coverage added.
@@ -1220,7 +1220,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.6.0] - 2026-03-29
 
-### Changed
+### Added
 - feat(core/tests): centralized skill unit tests under `core/tests/skills/<skill-name>/` with `core/tests/pyproject.toml` + `uv.lock` (pytest via `uv run --project core/tests …`); `core/AGENTS.md` documents the policy.
 - feat(solar-skill-creator): exclude `tests/` directories from `.skill` zip packaging so skill archives stay minimal.
 - feat(solar-interface): add thread deletion with stale-run cleanup and router conversation cleanup so interface and router state stay aligned.
@@ -1238,7 +1238,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.5.0] - 2026-03-27
 
-### Changed
+### Added
 - feat(sync-clients): add `sync_vscode` function to automatically discover and register all planet repositories in `.vscode/settings.json` (`git.scanRepositories`).
 - feat(sync-clients): add `--vscode-only` flag to allow targeted workspace configuration updates.
 - feat(sync-clients): implement a modern, minimalist tree-view output (`↳`) that summarizes resource counts instead of listing every file.
@@ -1280,7 +1280,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.4.0] - 2026-03-01
 
-### Changed
+### Added
 - feat(solar-router): implement Solar-JIT (Just-In-Time) agent orchestration architecture. Includes automated agent selection, context injection, UUID-based `router_id`, and structured audit logging in `sun/runtime/router/audit.jsonl`.
 - feat(solar-router): add `status_router.sh` to monitor real-time router health, in-flight processes, and execution history.
 - feat(config): implement `.geminiignore` with negation patterns to whitelist `sun/` and `planets/` workspace directories while maintaining `.gitignore` compatibility.
@@ -1295,7 +1295,7 @@ A workspace already on `core_source: workspace-snapshot`, whose global install i
 
 ## [0.3.0] - 2026-02-21
 
-### Changed
+### Added
 - feat(solar-system, solar-transport-gateway): enhance orchestrator health checks and script organization.
 - feat(solar-async-tasks, solar-router): introduce async task execution with structured logging and enhanced routing.
 - feat(solar-transport-gateway): improve tunnel recovery and environment variable handling.

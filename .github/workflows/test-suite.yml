@@ -11,7 +11,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: test-suite-${{ github.ref }}
+  # A group per commit on main, so two quick merges never cancel each other's run.
+  group: test-suite-${{ github.event_name == 'push' && github.sha || github.ref }}
   # Only superseded PR runs are cancelled; a run on main must finish so its commit keeps a verdict.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 

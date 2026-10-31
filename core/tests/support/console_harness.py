@@ -146,13 +146,22 @@ class Harness:
 
     # -- running scripts ---------------------------------------------------
     def script(self, name: str, *args: str, timeout: int = 90, **env) -> subprocess.CompletedProcess:
-        if os.environ.get("SOLAR_CI_SLOW_HEALTH_PROBE") and name in ("start_host.sh", "ensure_host.sh"):
-            # Measured on the GitHub macOS runner (issue 108): after the first start, every
-            # check_host.sh --liveness takes 3.5 s, so start_host.sh's 2 s readiness window
-            # (10 x 0.2 s plus the probes) fails or takes 35 s. Real hardware is not affected.
-            pytest.skip("GitHub macOS runner: the health probe takes 3.5 s, past start_host.sh's readiness window")
-        return subprocess.run(["bash", str(APP_SCRIPTS / name), *args], cwd=self.ws, env=self.env(**env),
-                              capture_output=True, text=True, timeout=timeout)
+        slow = bool(os.environ.get("SOLAR_CI_SLOW_HEALTH_PROBE")) and name in ("start_host.sh", "ensure_host.sh")
+        reason = ("GitHub macOS runner: the health probe takes 3.5 s, past start_host.sh's readiness window")
+        try:
+            # Measured on the GitHub macOS runner (issue 108): after the first start every
+            # check_host.sh --liveness takes 3.5 s, so a start that reaches the readiness loop
+            # takes ~35 s and fails. Only that outcome is skipped: a script that answers
+            # quickly (for example a refusal to touch a foreign console) is still asserted.
+            result = subprocess.run(["bash", str(APP_SCRIPTS / name), *args], cwd=self.ws, env=self.env(**env),
+                                    capture_output=True, text=True, timeout=min(timeout, 10) if slow else timeout)
+        except subprocess.TimeoutExpired:
+            if slow:
+                pytest.skip(reason)
+            raise
+        if slow and result.returncode != 0 and "failed to start" in (result.stdout + result.stderr):
+            pytest.skip(reason)
+        return result
 
     def lib(self, snippet: str, timeout: int = 90, **env) -> subprocess.CompletedProcess:
         code = f'source "{APP_SCRIPTS}/host_lib.sh"; solar_host_load_env; {snippet}'
