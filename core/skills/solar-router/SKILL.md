@@ -287,7 +287,10 @@ Capability is not permission: a flag Solar passes is a request, and the client's
   check as unverified.
   A partial probe (`--client`, `--check`) replaces only the checks it ran; `solar status` shows the age of the oldest one.
   The last result is stored in `<runtime>/router/cli-permissions.json` (machine state: it depends on this machine's
-  client settings) and `solar status` shows it with its age.
+  client settings) and `solar status` shows it with its age. Each row stores a fingerprint of the files the
+  static tier reads for that client plus the Solar version; when it no longer matches, `solar status` treats the
+  row as `unknown` ("settings changed since the probe") instead of reusing its verdict. A row saved before
+  fingerprints existed is trusted until the next probe. No model call.
 
 Each `missing`/`too_permissive` result names the setting, the file and the change, with a literal snippet to paste
 when the CLI's syntax is confirmed (Cursor: live; Codex and Antigravity: from their docs, Antigravity unverified). Solar never writes to a client's configuration.
