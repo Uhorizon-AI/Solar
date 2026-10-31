@@ -86,8 +86,30 @@ rebind() {
   transport_gateway_bind_workspace
 }
 
+# Gateway bridges started by the setup/ensure scenarios below. The wrapper script
+# (run_http_webhook_bridge.sh) runs `uv run ...` as a child, so stopping the pid in the
+# pid file can leave the `uv run --with websockets==12.0 ...` process alive (seen on the
+# macOS runner). It keeps the uv cache lock, and the post-job cache prune then waits
+# 5 min on it (#112). Only bridges that were not alive when this test began are killed,
+# so a real gateway on a developer machine is never touched.
+bridge_pids() {
+  ps -axo pid,command | grep -E 'websockets==12|run_(http_webhook|websocket)_bridge' \
+    | grep -v grep | awk '{print $1}' | sort -n
+}
+BRIDGES_BEFORE="$(bridge_pids)"
+kill_leftover_bridges() {
+  local pid leftover=""
+  for pid in $(bridge_pids); do
+    printf '%s\n' "$BRIDGES_BEFORE" | grep -qx "$pid" || leftover+="$pid "
+  done
+  [[ -n "$leftover" ]] || return 0
+  kill $leftover 2>/dev/null || true
+  sleep 1
+  kill -9 $leftover 2>/dev/null || true
+}
+
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"; kill $(jobs -p) 2>/dev/null || true' EXIT
+trap 'rm -rf "$TMP"; kill $(jobs -p) 2>/dev/null || true; kill_leftover_bridges' EXIT
 
 WS="$TMP/ws"
 mkdir -p "$WS/sun" "$WS/.solar"
