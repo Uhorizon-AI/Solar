@@ -90,22 +90,65 @@ rebind() {
 # (run_http_webhook_bridge.sh) runs `uv run ...` as a child, so stopping the pid in the
 # pid file can leave the `uv run --with websockets==12.0 ...` process alive (seen on the
 # macOS runner). It keeps the uv cache lock, and the post-job cache prune then waits
-# 5 min on it (#112). Only bridges that were not alive when this test began are killed,
-# so a real gateway on a developer machine is never touched.
+# 5 min on it (#112).
+# Only a process whose ownership is shown is ever signalled. Owned means all of:
+#   - it was not alive when this test began;
+#   - its command line is a gateway bridge (uv wrapper, bridge script);
+#   - it listens on one of this test's own ports (18765/18787/28765/28787), or is a parent or
+#     child of such a listener, or is the pid in one of this test's own pid files.
+# A gateway started by someone else while the test runs listens on other ports and is
+# therefore never touched. Identity (start time + command) is re-read right before TERM and
+# again before KILL, so a pid that died and was reused is skipped.
+BRIDGE_RE='websockets==12|run_(http_webhook|websocket)_bridge'
 bridge_pids() {
-  ps -axo pid,command | grep -E 'websockets==12|run_(http_webhook|websocket)_bridge' \
-    | grep -v grep | awk '{print $1}' | sort -n || true
+  ps -axww -o pid=,command= | awk -v re="$BRIDGE_RE" '$0 ~ re && !/awk/ {print $1}' | sort -n || true
 }
+bridge_ident() { ps -ww -p "$1" -o lstart= -o command= 2>/dev/null | sed 's/  */ /g' || true; }
 BRIDGES_BEFORE="$(bridge_pids)"
-kill_leftover_bridges() {
-  local pid leftover=""
-  for pid in $(bridge_pids); do
-    printf '%s\n' "$BRIDGES_BEFORE" | grep -qx "$pid" || leftover+="$pid "
+# Lines "pid<TAB>identity" of the bridge processes this test provably started.
+owned_bridges() {
+  local port pid seen=" " queue p parent kids k all
+  all="$(bridge_pids)"
+  is_bridge() { printf '%s\n' "$all" | grep -qx "$1"; }
+  queue=""
+  for port in 18765 18787 28765 28787; do
+    for pid in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true); do
+      is_bridge "$pid" && queue+="$pid "
+    done
   done
-  [[ -n "$leftover" ]] || return 0
-  kill $leftover 2>/dev/null || true
-  sleep 1
-  kill -9 $leftover 2>/dev/null || true
+  for pf in "$TMP"/run*/ws.pid "$TMP"/run*/http.pid; do
+    [[ -f "$pf" ]] || continue
+    pid="$(tr -d '[:space:]' <"$pf" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] && is_bridge "$pid" && queue+="$pid "
+  done
+  # Parents and children (bridge command lines only) of what is already owned.
+  for p in $queue; do
+    seen+="$p "
+    parent="$(ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ' || true)"
+    while [[ "$parent" =~ ^[0-9]+$ && "$parent" -gt 1 ]] && is_bridge "$parent" && [[ "$seen" != *" $parent "* ]]; do
+      seen+="$parent "; parent="$(ps -p "$parent" -o ppid= 2>/dev/null | tr -d ' ' || true)"
+    done
+    kids="$(ps -axww -o pid=,ppid= | awk -v p="$p" '$2 == p {print $1}')"
+    for k in $kids; do is_bridge "$k" && [[ "$seen" != *" $k "* ]] && seen+="$k "; done
+  done
+  for p in $seen; do
+    printf '%s\n' "$BRIDGES_BEFORE" | grep -qx "$p" && continue
+    printf '%s\t%s\n' "$p" "$(bridge_ident "$p")"
+  done
+}
+kill_leftover_bridges() {
+  local owned line pid ident sig
+  owned="$(owned_bridges)"
+  [[ -n "$owned" ]] || return 0
+  for sig in TERM KILL; do
+    while IFS=$'\t' read -r pid ident; do
+      [[ -n "$pid" && -n "$ident" ]] || continue
+      [[ "$(bridge_ident "$pid")" == "$ident" ]] || continue   # gone, or the pid was reused
+      kill -"$sig" "$pid" 2>/dev/null || true
+    done <<<"$owned"
+    if [[ "$sig" == TERM ]]; then sleep 1; fi
+  done
+  return 0
 }
 
 TMP="$(mktemp -d)"
@@ -315,15 +358,19 @@ else
 fi
 
 # --- env.fail backoff ---
-# A 1 s delay (the suite default above) lapses whenever the check below lands in the next
-# wall-clock second, which a busy runner does now and then. "Active immediately" is checked
-# against a 30 s delay; the base goes back to 1 s right after.
+# The suite sets a 1 s backoff base and a 4 s cap above, so the delay written by the next call
+# is 1 s: it lapses whenever the check lands in the next wall-clock second, which a busy runner
+# does now and then. For this one check the base is 30 s and the cap 60 s, so the delay really is
+# 30 s; both values are put back right after.
 _backoff_base_saved="$GATEWAY_BACKOFF_BASE_SEC"
+_backoff_cap_saved="$GATEWAY_BACKOFF_CAP_SEC"
 GATEWAY_BACKOFF_BASE_SEC=30
+GATEWAY_BACKOFF_CAP_SEC=60
 gateway_write_env_fail "test_fail"
 if [[ -f "$(gateway_fail_path)" ]]; then pass "env.fail exists"; else fail "env.fail exists"; fi
 if gateway_backoff_active; then pass "backoff active immediately"; else fail "backoff active immediately"; fi
 GATEWAY_BACKOFF_BASE_SEC="$_backoff_base_saved"
+GATEWAY_BACKOFF_CAP_SEC="$_backoff_cap_saved"
 write_env "claude"
 rebind
 if gateway_backoff_active; then fail "backoff resets on fingerprint change"; else pass "backoff resets on fingerprint change"; fi

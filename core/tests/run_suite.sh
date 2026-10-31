@@ -17,6 +17,10 @@
 # The per-test limit of shell tests needs `timeout` (Ubuntu) or `gtimeout` (macOS with
 # coreutils; the workflow installs it). Without either there is no per-test limit and
 # only the job limit applies; the run says so.
+# After every shell test and after the pytest pass the runner looks for gateway bridge
+# processes (uv run --with websockets==12.0 ... run_*_bridge) that were not alive before it.
+# In CI (GITHUB_ACTIONS or CI set) a new one fails the run; on a developer machine it only
+# prints LEAK, so a real gateway started meanwhile never gives a false failure.
 # pytest runs in parallel (SOLAR_TEST_WORKERS, default 4; 1 = serial); see the serial mark.
 # The smoke script core/tests/skills/solar-gateway/smoke_priority_ensure.sh is not named
 # test_* and needs a live gateway, so it is not run here.
@@ -84,6 +88,9 @@ run_pytest() {
       # reason; those run alone in the second pass (exit 5 = none collected, fine).
       # Both passes always run, so one failing pass never hides the other's result.
       pt -n "$WORKERS" --dist loadfile -m "not serial"; r1=$?
+      # The second pass collects the whole suite again and keeps only `serial`. That is deliberate:
+      # it is simpler than listing files, and a serial mark on a single parameter or test (not
+      # a whole file) can never be missed.
       pt -m serial; r2=$?
       [[ "$r2" -eq 5 ]] && r2=0
       (( r1 != 0 )) && exit "$r1"
@@ -96,22 +103,34 @@ run_pytest() {
   return "$rc"
 }
 
-# Gateway bridges (and the uv wrappers that start them) still alive: pid, parent, command.
+# Gateway bridges (and the uv wrappers that start them) alive now: "pid ppid command" lines,
+# sorted by pid. `ps -axww` so a long command line is never cut (same as port_watch.py).
 bridge_procs() {
-  ps -axo pid,ppid,command | grep -E 'websockets==12|run_(http_webhook|websocket)_bridge' | grep -v grep || true
+  ps -axww -o pid=,ppid=,command= \
+    | awk '/websockets==12|run_(http_webhook|websocket)_bridge/ && !/awk/' | sort -n || true
 }
 
-# Print any bridge process that was not alive in the snapshot $2 (taken before $1 ran).
+# The pids of a bridge_procs snapshot, one per line.
+snapshot_pids() { printf '%s\n' "$1" | awk 'NF {print $1}' | sort; }
+
+# A bridge process that was not alive in snapshot $2 (taken before $1 ran) is a leak. Only a NEW
+# pid counts: a process that went away, or whose parent or position in the list changed, does
+# not. A leak is printed as LEAK; in CI (GITHUB_ACTIONS or CI set) it also fails the run,
+# because a runner has no real gateway of its own. On a developer machine it only warns: a
+# real gateway started meanwhile must not turn a local run red. Returns 1 for a failing leak.
 report_leak() {
-  local what="$1" before="$2" now
+  local what="$1" before="$2" now new pid
   now="$(bridge_procs)"
-  [[ "$now" == "$before" ]] && return 0
+  new="$(comm -13 <(snapshot_pids "$before") <(snapshot_pids "$now"))"
+  [[ -n "$new" ]] || return 0
   echo "LEAK after $what: gateway bridge processes left alive:"
-  diff <(printf '%s\n' "$before") <(printf '%s\n' "$now") | sed -n 's/^> /  /p'
+  for pid in $new; do printf '%s\n' "$now" | awk -v p="$pid" '$1 == p {print "  " $0}'; done
+  [[ -n "${GITHUB_ACTIONS:-}${CI:-}" ]] || return 0
+  return 1
 }
 
 run_shell() {
-  local failed=() skipped=() passed=0 f rel reason
+  local failed=() skipped=() passed=0 f rel reason _before leaked=0
   echo "== shell tests"
   [[ -n "$TIMEOUT_BIN" ]] || echo "note: no timeout or gtimeout found; shell tests have no per-test limit"
   cd "$REPO_ROOT" || return 2
@@ -127,19 +146,20 @@ run_shell() {
     else
       echo "FAIL $rel"; failed+=("$rel")
     fi
-    report_leak "$rel" "$_before"
+    report_leak "$rel" "$_before" || { leaked=1; echo "FAIL $rel: left gateway processes alive"; }
   done < <(find "$TESTS_DIR" -type f -name 'test_*.sh' | sort)
   # Guard against a discovery that silently finds nothing (a moved directory, a wrong glob).
   (( passed + ${#failed[@]} + ${#skipped[@]} >= 20 )) || { echo "FAIL: found fewer than 20 shell tests"; return 1; }
   echo "shell: passed=$passed failed=${#failed[@]} skipped=${#skipped[@]}"
   ((${#failed[@]} == 0)) || { printf 'FAILED: %s\n' "${failed[@]}"; return 1; }
+  (( leaked == 0 )) || return 1
 }
 
 # pytest, with the same leftover-process check the shell tests get.
 pytest_pass() {
   local before; before="$(bridge_procs)"
   run_pytest "$@"; local r=$?
-  report_leak "the pytest pass" "$before"
+  report_leak "the pytest pass" "$before" || r=1
   return "$r"
 }
 
