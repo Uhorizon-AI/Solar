@@ -12,6 +12,11 @@ fail=0
 pass() { echo "PASS: $1"; pass=$((pass + 1)); }
 fail() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
+# Python is already required by the migrator; avoid incompatible BSD/GNU stat flags.
+file_mode() {
+  python3 -c 'import os, stat, sys; print(format(stat.S_IMODE(os.stat(sys.argv[1]).st_mode), "o"))' "$1"
+}
+
 ENV_FILE="$TMP/.env"
 chmod_mode=0640
 
@@ -25,7 +30,7 @@ SOLAR_ROUTER_GEMINI_CMD=gemini -y -m gemini-3-flash -p
 # trailing comment
 EOF
 chmod "$chmod_mode" "$ENV_FILE"
-before_mode="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE")"
+before_mode="$(file_mode "$ENV_FILE")"
 
 out="$(python3 "$MIGRATE" "$ENV_FILE" 2>&1)" || { fail "migrator exit non-zero: $out"; echo "=== abort ==="; exit 1; }
 
@@ -61,8 +66,8 @@ else
   fail "GEMINI_CMD was modified unexpectedly"
 fi
 
-after_mode="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE")"
-if [[ "$before_mode" == "$after_mode" ]]; then
+after_mode="$(file_mode "$ENV_FILE")"
+if [[ "$before_mode" == "640" && "$after_mode" == "$before_mode" ]]; then
   pass "file mode preserved ($after_mode)"
 else
   fail "mode changed $before_mode → $after_mode"
