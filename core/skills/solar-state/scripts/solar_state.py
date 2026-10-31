@@ -3601,7 +3601,8 @@ class Session:
     def legacy_children(self) -> list[dict]:
         """Subtasks created before derived authorizations existed: every task that names a
         parent (the frontmatter or a link) and has no authorization record. Read-only: nothing
-        is backfilled from `parent_task_id`. `executable` is always false without derived provenance; a parent link is never backfilled into authority."""
+        is backfilled from `parent_task_id`. `executable` is always false without derived provenance; a parent link is never backfilled into authority.
+        `pending` marks the ones that are queued work blocked by that gap; the rest is history."""
         recorded = {r[0] for r in self.conn.execute("SELECT task_id FROM task_authorizations")}
         linked = {r[0]: r[1] for r in self.conn.execute("SELECT child_id, parent_id FROM task_links")}
         found = []
@@ -3613,6 +3614,9 @@ class Session:
             approval = approval_state(pairs, task["body"]) or "valid"
             found.append(dict(id=task["id"], parent_id=parent, status=task["status"],
                               approval=approval,
+                              # Work waiting for approval: only a queued task can be blocked by the
+                              # missing authorization. Closed, failed, draft or planned history is not.
+                              pending=task["status"] == "queued",
                               executable=False))
         return found
 
