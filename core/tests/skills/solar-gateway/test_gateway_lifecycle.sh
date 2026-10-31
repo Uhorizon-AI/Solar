@@ -117,7 +117,7 @@ owned_bridges() {
       is_bridge "$pid" && queue+="$pid "
     done
   done
-  local tmp_real; tmp_real="$(cd "$TMP" 2>/dev/null && pwd -P || echo "$TMP")"
+  local tmp_real="$TMP_REAL"
   for pid in $all; do
     printf '%s\n' "$BRIDGES_BEFORE" | grep -qx "$pid" && continue
     if lsof -nP -p "$pid" -Fn 2>/dev/null | grep -qE "^n($TMP|$tmp_real)/"; then queue+="$pid "; fi
@@ -171,7 +171,9 @@ kill_leftover_bridges() {
 }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"; kill $(jobs -p) 2>/dev/null || true; kill_leftover_bridges' EXIT
+TMP_REAL="$(cd "$TMP" && pwd -P)"
+# Bridges are looked up while $TMP still exists (their open files and pid files are the proof).
+trap 'kill $(jobs -p) 2>/dev/null || true; kill_leftover_bridges; rm -rf "$TMP"' EXIT
 
 WS="$TMP/ws"
 mkdir -p "$WS/sun" "$WS/.solar"
