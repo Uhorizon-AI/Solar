@@ -18,6 +18,56 @@ import host_identity  # noqa: E402
 LEGACY_MODES = ["legacy", "workspace_only", "runtime_only"]
 
 
+def test_worker_port_ranges_do_not_wrap_at_ten(monkeypatch):
+    bound = []
+
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def bind(self, address):
+            bound.append(address[1])
+
+    monkeypatch.setattr(ch.socket, "socket", Socket)
+    monkeypatch.setattr(ch.random, "randrange", lambda size: 0)
+    for worker in ("gw0", "gw10", "gw44"):
+        monkeypatch.setenv("PYTEST_XDIST_WORKER", worker)
+        ch.free_port()
+    assert bound == [20000, 30000, 64000]
+
+
+@pytest.mark.parametrize("worker", ["gw45", "gw100"])
+def test_an_out_of_range_worker_fails_before_opening_a_socket(monkeypatch, worker):
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", worker)
+    monkeypatch.setattr(ch.socket, "socket", lambda: pytest.fail("unexpected socket fallback"))
+    with pytest.raises(ValueError, match="at most 45 workers"):
+        ch.free_port()
+
+
+def test_an_exhausted_worker_slice_never_falls_back_to_os_ports(monkeypatch):
+    bound = []
+
+    class BusySocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def bind(self, address):
+            bound.append(address[1])
+            raise OSError("port busy")
+
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw10")
+    monkeypatch.setattr(ch.socket, "socket", BusySocket)
+    with pytest.raises(RuntimeError, match="after 200 attempts"):
+        ch.free_port()
+    assert len(bound) == 200 and all(30000 <= port < 31000 for port in bound)
+
+
 def serves_this_runtime(h) -> bool:
     return h.script("check_host.sh", "--liveness").returncode == 0
 

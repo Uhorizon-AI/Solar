@@ -21,6 +21,8 @@
 # processes (uv run --with websockets==12.0 ... run_*_bridge) that were not alive before it.
 # In CI (GITHUB_ACTIONS or CI set) a new one fails the run; on a developer machine it only
 # prints LEAK, so a real gateway started meanwhile never gives a false failure.
+# CI also stops new leaked bridges, rechecking start time and command before each signal.
+# This releases uv cache locks even when the individual test lost track of its wrapper.
 # pytest runs in parallel (SOLAR_TEST_WORKERS, default 4; 1 = serial); see the serial mark.
 # The smoke script core/tests/skills/solar-gateway/smoke_priority_ensure.sh is not named
 # test_* and needs a live gateway, so it is not run here.
@@ -113,6 +115,33 @@ bridge_procs() {
 # The pids of a bridge_procs snapshot, one per line.
 snapshot_pids() { printf '%s\n' "$1" | awk 'NF {print $1}' | sort; }
 
+# A nonempty identity is returned only while this PID is still a gateway bridge.
+bridge_identity() {
+  ps -ww -p "$1" -o lstart= -o command= 2>/dev/null \
+    | awk '/websockets==12|run_(http_webhook|websocket)_bridge/ && !/awk/' \
+    | sed 's/  */ /g' || true
+}
+
+# Only used on dedicated CI runners. Capture identities before sending any signal,
+# then check them again before TERM and KILL to avoid signalling reused PIDs.
+cleanup_ci_bridges() {
+  local pids="$1" owned="" pid ident sig
+  for pid in $pids; do
+    ident="$(bridge_identity "$pid")"
+    [[ -n "$ident" ]] && owned+="$pid"$'\t'"$ident"$'\n'
+  done
+  [[ -n "$owned" ]] || return 0
+  for sig in TERM KILL; do
+    while IFS=$'\t' read -r pid ident; do
+      [[ -n "$pid" && -n "$ident" ]] || continue
+      [[ "$(bridge_identity "$pid")" == "$ident" ]] || continue
+      kill -"$sig" "$pid" 2>/dev/null || true
+    done <<<"$owned"
+    if [[ "$sig" == TERM ]]; then sleep 1; fi
+  done
+  return 0
+}
+
 # A bridge process that was not alive in snapshot $2 (taken before $1 ran) is a leak. Only a NEW
 # pid counts: a process that went away, or whose parent or position in the list changed, does
 # not. A leak is printed as LEAK; in CI (GITHUB_ACTIONS or CI set) it also fails the run,
@@ -126,11 +155,12 @@ report_leak() {
   echo "LEAK after $what: gateway bridge processes left alive:"
   for pid in $new; do printf '%s\n' "$now" | awk -v p="$pid" '$1 == p {print "  " $0}'; done
   [[ -n "${GITHUB_ACTIONS:-}${CI:-}" ]] || return 0
+  cleanup_ci_bridges "$new"
   return 1
 }
 
 run_shell() {
-  local failed=() skipped=() passed=0 f rel reason _before leaked=0
+  local failed=() skipped=() passed=0 f rel reason _before test_rc
   echo "== shell tests"
   [[ -n "$TIMEOUT_BIN" ]] || echo "note: no timeout or gtimeout found; shell tests have no per-test limit"
   cd "$REPO_ROOT" || return 2
@@ -141,18 +171,19 @@ run_shell() {
     fi
     echo "-- $rel"
     _before="$(bridge_procs)"
-    if env ${SCRUB[@]+"${SCRUB[@]}"} ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$SHELL_TIMEOUT"} bash "$f"; then
+    test_rc=0
+    env ${SCRUB[@]+"${SCRUB[@]}"} ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$SHELL_TIMEOUT"} bash "$f" || test_rc=$?
+    report_leak "$rel" "$_before" || { test_rc=1; echo "FAIL $rel: left gateway processes alive"; }
+    if (( test_rc == 0 )); then
       passed=$((passed + 1))
     else
       echo "FAIL $rel"; failed+=("$rel")
     fi
-    report_leak "$rel" "$_before" || { leaked=1; echo "FAIL $rel: left gateway processes alive"; }
   done < <(find "$TESTS_DIR" -type f -name 'test_*.sh' | sort)
   # Guard against a discovery that silently finds nothing (a moved directory, a wrong glob).
   (( passed + ${#failed[@]} + ${#skipped[@]} >= 20 )) || { echo "FAIL: found fewer than 20 shell tests"; return 1; }
   echo "shell: passed=$passed failed=${#failed[@]} skipped=${#skipped[@]}"
   ((${#failed[@]} == 0)) || { printf 'FAILED: %s\n' "${failed[@]}"; return 1; }
-  (( leaked == 0 )) || return 1
 }
 
 # pytest, with the same leftover-process check the shell tests get.

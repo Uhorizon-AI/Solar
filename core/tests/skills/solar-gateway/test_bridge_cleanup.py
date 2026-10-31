@@ -89,7 +89,75 @@ def test_leak_check_only_reports_new_pids_and_fails_ci(now, expected):
     output = shell(code + f'''
 CI=true
 bridge_procs() {{ printf '%s\\n' '{now}'; }}
+cleanup_ci_bridges() {{ :; }}
 if report_leak example '100 1 bridge'; then echo clean; else echo failed; fi
 ''')
     assert ("LEAK after" in output) is expected
     assert output.rstrip().endswith("failed" if expected else "clean")
+
+
+@pytest.mark.parametrize("ci,actions,replaced,signals", [
+    ("", "", "no", []),
+    ("true", "", "no", ["signal -TERM 200", "signal -KILL 200"]),
+    ("", "true", "no", ["signal -TERM 200", "signal -KILL 200"]),
+    ("true", "", "yes", ["signal -TERM 200"]),
+])
+def test_ci_cleans_only_new_bridges_with_matching_identity(ci, actions, replaced, signals):
+    suite = TESTS / "run_suite.sh"
+    code = "snapshot_pids()" + helpers(suite, "snapshot_pids()", "\nrun_shell()")
+    output = shell(code + f'''
+CI='{ci}'
+GITHUB_ACTIONS='{actions}'
+bridge_procs() {{ printf '100 9 existing\\n200 1 orphaned-uv-bridge\\n'; }}
+bridge_identity() {{
+  [[ "$1" == 200 ]] || {{ echo 'unexpected identity lookup' >&2; return 1; }}
+  if [[ "$reused" == yes ]]; then echo replacement; else echo 'start-time uv-command'; fi
+}}
+kill() {{ echo "signal $*"; }}
+sleep() {{ reused='{replaced}'; }}
+reused=no
+if report_leak example '100 1 existing'; then echo clean; else echo failed; fi
+''')
+    assert [line for line in output.splitlines() if line.startswith("signal")] == signals
+    assert output.rstrip().endswith("failed" if ci or actions else "clean")
+
+
+@pytest.mark.parametrize("identities", ["original\nreplacement\nreplacement\n", "\n"])
+def test_ci_cleanup_leaves_a_changed_or_missing_identity_alone(identities):
+    suite = TESTS / "run_suite.sh"
+    code = "snapshot_pids()" + helpers(suite, "snapshot_pids()", "\nrun_shell()")
+    output = shell(code + f'''
+# The pipe is shared across command substitutions, just like successive ps reads.
+exec 3< <(printf '%s' '{identities}')
+bridge_identity() {{ local ident=""; read -r ident <&3 || true; printf '%s' "$ident"; }}
+kill() {{ echo unexpected-signal; }}
+sleep() {{ :; }}
+cleanup_ci_bridges 200
+''')
+    assert output == ""
+
+
+@pytest.mark.parametrize("exit_code,leaks", [(0, False), (0, True), (1, False), (1, True)])
+def test_shell_summary_counts_a_failed_or_leaking_test_once(exit_code, leaks):
+    suite = TESTS / "run_suite.sh"
+    code = "run_shell()" + helpers(suite, "run_shell()", "\n# pytest, with")
+    output = shell(code + f'''
+REPO_ROOT=/tmp
+TESTS_DIR=/fixture
+TIMEOUT_BIN=""
+SHELL_TIMEOUT=300
+SCRUB=()
+find() {{ for i in {{0..19}}; do echo "/fixture/test$i.sh"; done; }}
+skip_reason() {{ return 1; }}
+bridge_procs() {{ :; }}
+env() {{
+  if [[ "${{@: -1}}" == /fixture/test0.sh ]]; then return {exit_code}; fi
+}}
+report_leak() {{
+  if [[ "$1" == /fixture/test0.sh ]]; then return {int(leaks)}; fi
+}}
+if run_shell; then echo clean; else echo failed; fi
+''')
+    failed = bool(exit_code or leaks)
+    assert f"shell: passed={19 if failed else 20} failed={int(failed)} skipped=0" in output
+    assert output.rstrip().endswith("failed" if failed else "clean")
