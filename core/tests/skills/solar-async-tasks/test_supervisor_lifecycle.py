@@ -611,6 +611,8 @@ def test_a_lease_that_ran_out_ends_the_command_the_executor_started_before_the_t
                 pass
 
 
+@pytest.mark.serial  # asks for a cancellation while a real supervisor writes the same state database.
+#   On a busy CI runner the request hit "database is locked" once, so it runs alone.
 def test_a_forced_cancellation_ends_the_command_too_before_the_place_is_freed(rig):
     task, pidfile = _running_command(rig, "Cancel")
     proc = _start_supervisor_process(rig, sweep=0.5, cancel_grace=1.0, term_grace=1.0, kill_wait=2.0)
