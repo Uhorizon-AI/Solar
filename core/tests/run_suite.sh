@@ -94,6 +94,20 @@ run_pytest() {
   return "$rc"
 }
 
+# Gateway bridges (and the uv wrappers that start them) still alive: pid, parent, command.
+bridge_procs() {
+  ps -axo pid,ppid,command | grep -E 'websockets==12|run_(http_webhook|websocket)_bridge' | grep -v grep || true
+}
+
+# Print any bridge process that was not alive in the snapshot $2 (taken before $1 ran).
+report_leak() {
+  local what="$1" before="$2" now
+  now="$(bridge_procs)"
+  [[ "$now" == "$before" ]] && return 0
+  echo "LEAK after $what: gateway bridge processes left alive:"
+  diff <(printf '%s\n' "$before") <(printf '%s\n' "$now") | sed -n 's/^> /  /p'
+}
+
 run_shell() {
   local failed=() skipped=() passed=0 f rel reason
   echo "== shell tests"
@@ -105,11 +119,13 @@ run_shell() {
       echo "SKIP $rel: $reason"; skipped+=("$rel"); continue
     fi
     echo "-- $rel"
+    _before="$(bridge_procs)"
     if env ${SCRUB[@]+"${SCRUB[@]}"} ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$SHELL_TIMEOUT"} bash "$f"; then
       passed=$((passed + 1))
     else
       echo "FAIL $rel"; failed+=("$rel")
     fi
+    report_leak "$rel" "$_before"
   done < <(find "$TESTS_DIR" -type f -name 'test_*.sh' | sort)
   # Guard against a discovery that silently finds nothing (a moved directory, a wrong glob).
   (( passed + ${#failed[@]} + ${#skipped[@]} >= 20 )) || { echo "FAIL: found fewer than 20 shell tests"; return 1; }
@@ -117,12 +133,20 @@ run_shell() {
   ((${#failed[@]} == 0)) || { printf 'FAILED: %s\n' "${failed[@]}"; return 1; }
 }
 
+# pytest, with the same leftover-process check the shell tests get.
+pytest_pass() {
+  local before; before="$(bridge_procs)"
+  run_pytest "$@"; local r=$?
+  report_leak "the pytest pass" "$before"
+  return "$r"
+}
+
 rc=0
 case "$MODE" in
-  pytest) run_pytest || rc=1 ;;
+  pytest) pytest_pass || rc=1 ;;
   shell) run_shell || rc=1 ;;
-  all) run_pytest || rc=1; run_shell || rc=1 ;;
-  macos) export SOLAR_CI_SLOW_HEALTH_PROBE=1; run_pytest macos || rc=1; run_shell || rc=1 ;;
+  all) pytest_pass || rc=1; run_shell || rc=1 ;;
+  macos) export SOLAR_CI_SLOW_HEALTH_PROBE=1; pytest_pass macos || rc=1; run_shell || rc=1 ;;
   *) echo "usage: $0 [pytest|shell|all|macos]" >&2; exit 2 ;;
 esac
 exit "$rc"
