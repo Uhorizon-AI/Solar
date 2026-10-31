@@ -70,7 +70,7 @@ Short rules so that parallel PRs do not break each other:
 4. **Merge order follows shared files.** PRs that touch the same hot files (`solar_state.py`, `router.py`, `providers/base.py`, `operations.py`) merge one after another, smallest or most urgent first; unrelated PRs can go in any order.
 5. **Releases are grouped.** Publish one release for several merged PRs, except for an urgent fix.
 
-Making the check required for merging is a repository setting (branch protection) and is done by the maintainer.
+Making the check required for merging is a repository setting (branch protection) and is done by the maintainer: Settings > Branches, mark `Suite (ubuntu-latest)` and `Suite (macos-latest)` as required checks. Follow-up: PR #109 and issue #108.
 
 ## Creating a Release
 

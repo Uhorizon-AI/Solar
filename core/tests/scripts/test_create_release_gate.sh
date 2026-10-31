@@ -93,6 +93,7 @@ cli() { bash "$RELEASE_SH" "$@" >"$TMP/cli.txt" 2>&1; echo $?; }
 [[ "$(cli --urgent "hotfix")" == 2 ]] && grep -q "requires --publish" "$TMP/cli.txt" && pass "--urgent without --publish is refused" || fail "--urgent without --publish is refused"
 [[ "$(cli --publish --urgent --yes)" == 2 ]] && grep -q "written reason" "$TMP/cli.txt" && pass "--urgent does not take another option as its reason" || fail "--urgent does not take another option as its reason"
 [[ "$(cli --publish --urgent "   ")" == 2 ]] && pass "--urgent refuses a blank reason" || fail "--urgent refuses a blank reason"
+[[ "$(cli --help)" == 0 ]] && grep -q -- '--publish --urgent "reason"' "$TMP/cli.txt" && pass "-h documents --publish --urgent \"reason\"" || fail "-h documents --publish --urgent \"reason\""
 
 # Both publish paths, including --publish --retry, must call the gate.
 for fn in publish_release retry_publish; do

@@ -81,8 +81,9 @@ Modes:
 Options:
   --yes, -y           Skip confirmation prompt
   --version vX.Y.Z    Force version (must match vMAJOR.MINOR.PATCH)
-  --urgent "reason"   Publish without a green test suite. For an urgent fix only; the
-                      reason is printed and stays in the terminal log.
+  --urgent "reason"   Only together with --publish: `--publish --urgent "reason"` publishes
+                      without a green test suite. For an urgent fix only; the reason is
+                      printed and stays in the terminal log. Without --publish it exits 2.
   --push              Deprecated alias for --publish
 
 Release policy:
@@ -90,7 +91,7 @@ Release policy:
   covering every PR merged since the last one. An urgent fix (breaks users, security)
   may be released outside the cadence. Publishing requires the Test suite checks
   "Suite (ubuntu-latest)" and "Suite (macos-latest)" to be green on the commit the
-  release commit sits on; --urgent is the only way around it. See CONTRIBUTING.md.
+  release commit sits on; --publish --urgent "reason" is the only way around it. See CONTRIBUTING.md.
 EOF
       exit 0
       ;;
