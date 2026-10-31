@@ -611,8 +611,6 @@ def test_a_lease_that_ran_out_ends_the_command_the_executor_started_before_the_t
                 pass
 
 
-@pytest.mark.serial  # asks for a cancellation while a real supervisor writes the same state database.
-#   On a busy CI runner the request hit "database is locked" once, so it runs alone.
 def test_a_forced_cancellation_ends_the_command_too_before_the_place_is_freed(rig):
     task, pidfile = _running_command(rig, "Cancel")
     proc = _start_supervisor_process(rig, sweep=0.5, cancel_grace=1.0, term_grace=1.0, kill_wait=2.0)
@@ -621,8 +619,15 @@ def test_a_forced_cancellation_ends_the_command_too_before_the_place_is_freed(ri
         wait_until(lambda: pidfile.exists() and pidfile.read_text().strip(), 40, what="the command to start")
         sleeper = int(pidfile.read_text())
         executor = wait_until(lambda: (rig.reservations_of(task) or {}).get("owner_pid"), 20)
-        os.kill(executor, signal.SIGSTOP)                  # an executor that cannot react to the cancellation
         with solar_state.session() as store:
+            # Pause only while we own the SQLite writer slot. Otherwise SIGSTOP
+            # can freeze the executor inside a transaction and cancellation will
+            # wait forever for the very process this test deliberately stopped.
+            store.conn.execute("BEGIN IMMEDIATE")
+            try:
+                os.kill(executor, signal.SIGSTOP)
+            finally:
+                store.conn.execute("ROLLBACK")
             store.cancellation_request(task)
         wait_until(lambda: rig.status(task) == "cancelled", 40, interval=0.005, what="the forced cancellation")
         assert not alive(sleeper), "the place was freed while the command was still running"
