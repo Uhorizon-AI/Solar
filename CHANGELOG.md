@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.60.7] - 2026-10-31
+
 ### Changed
 - ci: a `Test suite` workflow runs `core/tests` (pytest and shell tests) on every pull request and on `main`, with no path filter: Ubuntu runs everything; macOS runs the pytest subset that depends on macOS (`MACOS_PYTEST` in `run_suite.sh`) and every `test_*.sh`. `core/tests/run_suite.sh` is the same entrypoint for local runs. `create-release.sh --publish` (and `--retry`) refuses unless both suite checks are green on the commit under the release commit; `--publish --urgent "reason"` is the written exception. Merge and release policy in `CONTRIBUTING.md`; the PR template carries a fixed checklist.
 
