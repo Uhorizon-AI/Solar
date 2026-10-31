@@ -12,6 +12,12 @@ sys.path.insert(0, str(CORE / "skills/solar-client/scripts"))
 import client_profile as cp
 from skill_inventory import inventory
 
+# Serial: every test here runs the whole client sync (dozens of bash and python subprocesses)
+# under fixed 15-25 s subprocess limits. Next to busy workers four different tests of this file
+# hit those limits (TimeoutExpired), so the file runs alone in the second pass of
+# core/tests/run_suite.sh. The assertions and limits are unchanged.
+pytestmark = pytest.mark.serial
+
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
@@ -62,8 +68,6 @@ def configure(ws, mode, dry=False):
     return subprocess.run(args, cwd=ws, capture_output=True, text=True, timeout=15)
 
 
-@pytest.mark.serial  # runs the real client sync and a native rollback under fixed subprocess limits.
-#   Next to busy workers it hit that limit (timeout), so it runs alone.
 def test_real_probe_reduced_publication_and_native_rollback(workspace):
     ws = workspace
     first = publish(ws)
@@ -92,8 +96,6 @@ def test_real_probe_reduced_publication_and_native_rollback(workspace):
     assert (surface / "demo:analysis/SKILL.md").exists(), first.stdout + first.stderr
 
 
-@pytest.mark.serial  # runs the whole client sync under a fixed subprocess limit.
-#   Same kind of test as the ones that timed out next to busy workers, so it runs alone.
 def test_missing_mcp_refuses_before_settings_or_surface_change(workspace, monkeypatch):
     ws = workspace
     assert publish(ws).returncode == 0
@@ -163,8 +165,6 @@ def test_writer_failure_is_atomic_and_keeps_legacy(workspace, monkeypatch):
     assert legacy.exists()
 
 
-@pytest.mark.serial  # runs the whole client sync under a fixed 25 s subprocess limit.
-#   Next to busy workers it hit that limit once, so it runs alone.
 def test_discovery_refuses_antigravity_before_pruning(workspace):
     assert publish(workspace).returncode == 0
     command = ["bash", str(CORE / "skills/solar-client/scripts/client_sync.sh"), "profile", "set", "discovery"]
