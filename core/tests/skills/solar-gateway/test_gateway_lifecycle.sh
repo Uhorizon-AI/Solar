@@ -315,9 +315,15 @@ else
 fi
 
 # --- env.fail backoff ---
+# A 1 s delay (the suite default above) lapses whenever the check below lands in the next
+# wall-clock second, which a busy runner does now and then. "Active immediately" is checked
+# against a 30 s delay; the base goes back to 1 s right after.
+_backoff_base_saved="$GATEWAY_BACKOFF_BASE_SEC"
+GATEWAY_BACKOFF_BASE_SEC=30
 gateway_write_env_fail "test_fail"
 if [[ -f "$(gateway_fail_path)" ]]; then pass "env.fail exists"; else fail "env.fail exists"; fi
 if gateway_backoff_active; then pass "backoff active immediately"; else fail "backoff active immediately"; fi
+GATEWAY_BACKOFF_BASE_SEC="$_backoff_base_saved"
 write_env "claude"
 rebind
 if gateway_backoff_active; then fail "backoff resets on fingerprint change"; else pass "backoff resets on fingerprint change"; fi
