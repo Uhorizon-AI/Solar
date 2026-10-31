@@ -142,9 +142,22 @@ owned_bridges() {
     printf '%s\t%s\n' "$p" "$(bridge_ident "$p")"
   done
 }
+# Say, on stderr, which new bridge processes were NOT signalled and what they hold open, so a
+# leftover the ownership rules could not prove is explained in the CI log (run_suite.sh then
+# reports it as a leak).
+explain_unowned_bridges() {
+  local owned="$1" pid
+  for pid in $(bridge_pids); do
+    printf '%s\n' "$BRIDGES_BEFORE" | grep -qx "$pid" && continue
+    printf '%s\n' "$owned" | cut -f1 | grep -qx "$pid" && continue
+    echo "note: bridge $pid is not provably this test's, left alone: $(bridge_ident "$pid" | cut -c1-160)" >&2
+    lsof -nP -p "$pid" -Fn 2>/dev/null | grep '^n' | grep -v '^n/\(dev\|usr\|System\|opt\|Library\|private/var/db\)' | head -8 | sed 's/^/    open: /' >&2 || true
+  done
+}
 kill_leftover_bridges() {
   local owned line pid ident sig
   owned="$(owned_bridges)"
+  explain_unowned_bridges "$owned"
   [[ -n "$owned" ]] || return 0
   for sig in TERM KILL; do
     while IFS=$'\t' read -r pid ident; do
