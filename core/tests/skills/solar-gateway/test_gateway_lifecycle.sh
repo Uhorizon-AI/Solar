@@ -94,8 +94,9 @@ rebind() {
 # Only a process whose ownership is shown is ever signalled. Owned means all of:
 #   - it was not alive when this test began;
 #   - its command line is a gateway bridge (uv wrapper, bridge script);
-#   - it listens on one of this test's own ports (18765/18787/28765/28787), or is a parent or
-#     child of such a listener, or is the pid in one of this test's own pid files.
+#   - it listens on one of this test's own ports (18765/18787/28765/28787), or holds a file open
+#     under this test's own temporary directory (the bridges write their logs to $TMP/run*),
+#     or is the pid in one of this test's own pid files; or it is a parent or child of one of those.
 # A gateway started by someone else while the test runs listens on other ports and is
 # therefore never touched. Identity (start time + command) is re-read right before TERM and
 # again before KILL, so a pid that died and was reused is skipped.
@@ -115,6 +116,11 @@ owned_bridges() {
     for pid in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true); do
       is_bridge "$pid" && queue+="$pid "
     done
+  done
+  local tmp_real; tmp_real="$(cd "$TMP" 2>/dev/null && pwd -P || echo "$TMP")"
+  for pid in $all; do
+    printf '%s\n' "$BRIDGES_BEFORE" | grep -qx "$pid" && continue
+    if lsof -nP -p "$pid" -Fn 2>/dev/null | grep -qE "^n($TMP|$tmp_real)/"; then queue+="$pid "; fi
   done
   for pf in "$TMP"/run*/ws.pid "$TMP"/run*/http.pid; do
     [[ -f "$pf" ]] || continue
