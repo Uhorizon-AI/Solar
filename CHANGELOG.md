@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.60.8] - 2026-10-31
+
 ## [0.60.7] - 2026-10-31
 
 ### Changed
