@@ -94,11 +94,11 @@ rebind() {
 # Only a process whose ownership is shown is ever signalled. Owned means all of:
 #   - it was not alive when this test began;
 #   - its command line is a gateway bridge (uv wrapper, bridge script);
-#   - it listens on one of this test's own ports (18765/18787/28765/28787), or holds a file open
-#     under this test's own temporary directory (the bridges write their logs to $TMP/run*),
+#   - it holds a file open under this test's own temporary directory (the bridges write
+#     their logs to $TMP/run*),
 #     or is the pid in one of this test's own pid files; or it is a parent or child of one of those.
-# A gateway started by someone else while the test runs listens on other ports and is
-# therefore never touched. Identity (start time + command) is re-read right before TERM and
+# A listening port alone is never ownership proof: a foreign gateway can claim a fixed
+# test port while this test runs. Identity (start time + command) is re-read right before TERM and
 # again before KILL, so a pid that died and was reused is skipped.
 BRIDGE_RE='websockets==12|run_(http_webhook|websocket)_bridge'
 bridge_pids() {
@@ -108,19 +108,16 @@ bridge_ident() { ps -ww -p "$1" -o lstart= -o command= 2>/dev/null | sed 's/  */
 BRIDGES_BEFORE="$(bridge_pids)"
 # Lines "pid<TAB>identity" of the bridge processes this test provably started.
 owned_bridges() {
-  local port pid seen=" " queue p parent kids k all
+  local pid seen=" " queue p parent kids k all pf
   all="$(bridge_pids)"
   is_bridge() { printf '%s\n' "$all" | grep -qx "$1"; }
   queue=""
-  for port in 18765 18787 28765 28787; do
-    for pid in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true); do
-      is_bridge "$pid" && queue+="$pid "
-    done
-  done
   local tmp_real="$TMP_REAL"
   for pid in $all; do
     printf '%s\n' "$BRIDGES_BEFORE" | grep -qx "$pid" && continue
-    if lsof -nP -p "$pid" -Fn 2>/dev/null | grep -qE "^n($TMP|$tmp_real)/"; then queue+="$pid "; fi
+    if lsof -nP -p "$pid" -Fn 2>/dev/null | awk -v tmp="$TMP/" -v real="$tmp_real/" '
+      index($0, "n" tmp) == 1 || index($0, "n" real) == 1 { found=1 }
+      END { exit !found }'; then queue+="$pid "; fi
   done
   for pf in "$TMP"/run*/ws.pid "$TMP"/run*/http.pid; do
     [[ -f "$pf" ]] || continue
