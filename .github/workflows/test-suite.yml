@@ -30,10 +30,10 @@ jobs:
           - os: macos-latest
             mode: macos
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0   # test_client_update.sh needs release tags
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           # On a cache miss (always the first run on main for a new Python version) the
           # action runs `uv cache prune --ci` before saving. On macOS a gateway test leaves
