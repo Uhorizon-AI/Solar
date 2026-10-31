@@ -24,12 +24,6 @@ import solar_state
 import supervisor_lib as lib
 from runtime_owner import claim_test_owner
 
-# Serial: these tests kill real processes and process groups and wait on sub-second sweeps and
-# leases. Next to three other busy workers on a CI runner they failed intermittently
-# (a lost execution reported as an uncertain group; a stuck start still "active" after its lease),
-# so they run alone in the second pass of core/tests/run_suite.sh. Their assertions are unchanged.
-pytestmark = pytest.mark.serial
-
 FAST = {"SOLAR_SUPERVISOR_HANDSHAKE_SECONDS": "1.0"}
 
 
@@ -337,6 +331,8 @@ def test_a_supervisor_that_dies_is_replaced_by_the_next_tick_and_nothing_runs_tw
     assert _lines(marker) == ["start Task one", "end Task one", "start Task two", "end Task two"]
 
 
+@pytest.mark.serial  # kills a supervisor and its process group, then expects recovery to prove the group gone.
+#   On a busy CI runner it once reported the group as uncertain (code 20), so it runs alone.
 def test_an_execution_lost_with_its_supervisor_is_failed_not_run_again(rig):
     marker = rig.tmp / "lost.log"
     rel = _mark(rig, "sleep 30", marker)
