@@ -35,11 +35,7 @@ jobs:
           fetch-depth: 0   # test_client_update.sh needs release tags
       - uses: astral-sh/setup-uv@v7
         with:
-          # On a cache miss (always the first run on main for a new Python version) the
-          # action runs `uv cache prune --ci` before saving. On macOS a gateway test leaves
-          # its webhook server (`uv run ...`) alive, it holds the uv cache lock, and the
-          # prune waits 5 min for it and fails the job after green tests. The macOS cache is
-          # a few KB, so pruning buys nothing there.
+          # The macOS cache is a few KB, so pruning it before saving buys nothing there.
           prune-cache: ${{ runner.os != 'macOS' }}
       - name: Install coreutils (per-test timeout for shell tests on macOS)
         if: runner.os == 'macOS'
