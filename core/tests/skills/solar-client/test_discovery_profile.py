@@ -12,11 +12,6 @@ sys.path.insert(0, str(CORE / "skills/solar-client/scripts"))
 import client_profile as cp
 from skill_inventory import inventory
 
-# Serial: each test runs the whole client sync (many bash and python subprocesses) under fixed
-# 15-25 s subprocess limits. Next to three other busy workers one of them hit its 25 s limit, so
-# the file runs alone in the second pass of core/tests/run_suite.sh. Assertions unchanged.
-pytestmark = pytest.mark.serial
-
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
@@ -164,6 +159,8 @@ def test_writer_failure_is_atomic_and_keeps_legacy(workspace, monkeypatch):
     assert legacy.exists()
 
 
+@pytest.mark.serial  # runs the whole client sync under a fixed 25 s subprocess limit.
+#   Next to busy workers it hit that limit once, so it runs alone.
 def test_discovery_refuses_antigravity_before_pruning(workspace):
     assert publish(workspace).returncode == 0
     command = ["bash", str(CORE / "skills/solar-client/scripts/client_sync.sh"), "profile", "set", "discovery"]
