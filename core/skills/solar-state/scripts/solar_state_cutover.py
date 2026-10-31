@@ -1217,11 +1217,13 @@ def _hook_runner(path: str) -> Callable[[], None]:
 
 def _legacy_note(result: dict) -> Optional[str]:
     """Stderr, not stdout: the first stdout line and the JSON after it are a published shape."""
-    legacy = result.get("legacy_children") or []
-    if not legacy:
+    # Only queued children are work blocked by the missing authorization; completed, cancelled,
+    # archived, failed or draft history stays in `legacy_children` for inspection without a warning.
+    pending = [child for child in result.get("legacy_children") or [] if child.get("pending")]
+    if not pending:
         return None
-    blocked = sum(1 for child in legacy if not child["executable"])
-    return (f"Legacy subtasks without a derived authorization: {len(legacy)} "
+    blocked = sum(1 for child in pending if not child["executable"])
+    return (f"Legacy subtasks without a derived authorization: {len(pending)} "
             f"({blocked} not executable until approved again). Nothing was backfilled.")
 
 
