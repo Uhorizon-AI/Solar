@@ -160,7 +160,9 @@ def test_applied_capacity_five_preserves_exclusive_admission(rig, enabled, undec
     assert all(len(rig.events("start", task)) == 1 for task in tasks)
 
 
-@pytest.mark.parametrize('capacity', [3, 5])
+# capacity 5 starts five real executions at once and asserts they all start within 5 s of each
+# other; on a runner busy with other workers that took 5.7 s once, so it runs alone (serial).
+@pytest.mark.parametrize('capacity', [3, pytest.param(5, marks=pytest.mark.serial)])
 @pytest.mark.parametrize('reader_provider', ['claude', 'codex', 'agent', 'agy'])
 def test_repository_review_batch_overlaps_on_one_commit_and_synthesizes_once(rig, monkeypatch, capacity, reader_provider):
     """Real supervisor/worker/MCP gates; deterministic provider barrier, no real CLI."""

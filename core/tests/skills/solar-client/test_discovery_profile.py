@@ -62,6 +62,8 @@ def configure(ws, mode, dry=False):
     return subprocess.run(args, cwd=ws, capture_output=True, text=True, timeout=15)
 
 
+@pytest.mark.serial  # runs the real client sync and a native rollback under fixed subprocess limits.
+#   Next to busy workers it hit that limit (timeout), so it runs alone.
 def test_real_probe_reduced_publication_and_native_rollback(workspace):
     ws = workspace
     first = publish(ws)
@@ -90,6 +92,8 @@ def test_real_probe_reduced_publication_and_native_rollback(workspace):
     assert (surface / "demo:analysis/SKILL.md").exists(), first.stdout + first.stderr
 
 
+@pytest.mark.serial  # runs the whole client sync under a fixed subprocess limit.
+#   Same kind of test as the ones that timed out next to busy workers, so it runs alone.
 def test_missing_mcp_refuses_before_settings_or_surface_change(workspace, monkeypatch):
     ws = workspace
     assert publish(ws).returncode == 0
