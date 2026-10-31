@@ -57,7 +57,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --urgent)
       shift
-      [[ $# -gt 0 && -n "${1//[[:space:]]/}" ]] || { echo "ERROR: --urgent requires a written reason" >&2; exit 2; }
+      # The reason is a sentence, never another option: "--urgent --yes" must not skip the gate.
+      if [[ $# -eq 0 || -z "${1//[[:space:]]/}" || "$1" == -* ]]; then
+        echo "ERROR: --urgent requires a written reason (not empty, not starting with -)" >&2
+        exit 2
+      fi
       URGENT_REASON="$1"
       shift
       ;;
@@ -97,6 +101,11 @@ EOF
       ;;
   esac
 done
+
+if [[ -n "$URGENT_REASON" && "$PUBLISH" != true ]]; then
+  echo "ERROR: --urgent requires --publish" >&2
+  exit 2
+fi
 
 if [[ "$RETRY" == true && "$PUBLISH" != true ]]; then
   echo "ERROR: --retry requires --publish" >&2
@@ -631,7 +640,8 @@ PY
   if [[ -n "$problems" ]]; then
     error "The Test suite is not green on ${sha:0:12}; refusing to publish"
     echo "$problems" >&2
-    echo "Fix it, or for an urgent fix pass: --urgent \"reason\"" >&2
+    echo "The gate reads the checks of the commit under the release commit: that commit must be on origin/main and its Test suite run must have finished." >&2
+    echo "Wait for it, or for an urgent fix pass: --publish --urgent \"reason\"" >&2
     exit 1
   fi
   success "Test suite green on ${sha:0:12}"

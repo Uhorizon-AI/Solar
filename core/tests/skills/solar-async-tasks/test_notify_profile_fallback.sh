@@ -24,7 +24,8 @@ trap 'rm -rf "$TMP"' EXIT
 export SOLAR_APP_DATA="$TMP/AppData"
 export SOLAR_WORKSPACE="$TMP/ws"
 export SOLAR_ROOT="$SOLAR_WORKSPACE"
-unset SOLAR_TASK_ROOT
+unset SOLAR_TASK_ROOT SOLAR_RUNTIME_ROOT SOLAR_RUNTIME_DIR   # a maintainer's runtime must never be reached
+TEST_RUNTIME="$SOLAR_APP_DATA/Solar/runtime"
 mkdir -p "$SOLAR_WORKSPACE/sun/preferences" \
          "$SOLAR_WORKSPACE/core/skills/solar-telegram/scripts" \
          "$SOLAR_APP_DATA/Solar/runtime/async-tasks/completed"
@@ -41,6 +42,9 @@ if [[ "$RESOLVED_ROOT" == "$EXPECTED_ROOT" ]]; then
   pass "task root resolves to the runtime root, not to sun/"
 else
   fail "task root resolves to the runtime root, not to sun/ (got: $RESOLVED_ROOT)"
+  # Past this point state would be written to whatever root resolved: stop.
+  echo "Results: PASS=$PASS FAIL=$FAIL" >&2
+  exit 1
 fi
 
 cat >"$SOLAR_WORKSPACE/sun/preferences/profile.md" <<'PROFILE'
@@ -83,13 +87,14 @@ import sys
 sys.path.insert(0, "$CORE_ROOT/skills/solar-state/scripts")
 import solar_state
 import os
-solar_state.claim_owner(os.environ["SOLAR_WORKSPACE"], "test-workspace")
-with solar_state.cutover() as cut:
+root = "$TEST_RUNTIME"
+solar_state.claim_owner(os.environ["SOLAR_WORKSPACE"], "test-workspace", root=root)
+with solar_state.cutover(root=root) as cut:
     cut.upgrade_schema()
     cut.set_format("sqlite")
 with open("$TASK_FILE", encoding="utf-8") as handle:
     text = handle.read()
-with solar_state.session() as store:
+with solar_state.session(root=root) as store:
     store.task_import(text, status="completed", source_name="profile-fallback")
 PY
 

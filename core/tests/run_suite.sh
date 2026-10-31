@@ -9,10 +9,14 @@
 # shell test. The full pytest suite runs on Ubuntu; running it twice on macOS would
 # not fit the job limit and would repeat the same platform-neutral checks.
 #
-# Clean environment: the caller's SOLAR_WORKSPACE and SOLAR_ROOT are not inherited.
-# Python tests run from a throwaway workspace (sun/ + .solar/settings.json) with
-# SOLAR_ROOT pointing at this checkout; shell tests run with both unset. Other
-# variables (runtime overrides, pytest options) pass through on purpose: CI sets none.
+# Clean environment: every SOLAR_* variable of the caller is removed before a test runs
+# (SOLAR_RUNTIME_ROOT, SOLAR_APP_DATA, SOLAR_TASK_ROOT... would point tests at a real
+# runtime). Python tests run from a throwaway workspace (sun/ + .solar/settings.json)
+# with SOLAR_ROOT pointing at this checkout; shell tests run with no SOLAR_* at all.
+# The only one kept is the runner's own SOLAR_CI_SLOW_HEALTH_PROBE.
+# The per-test limit of shell tests needs `timeout` (Ubuntu) or `gtimeout` (macOS with
+# coreutils; the workflow installs it). Without either there is no per-test limit and
+# only the job limit applies; the run says so.
 # The smoke script core/tests/skills/solar-gateway/smoke_priority_ensure.sh is not named
 # test_* and needs a live gateway, so it is not run here.
 # A test that cannot run on a runner goes in SKIPS below with a reason; it is
@@ -23,6 +27,12 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/../.." && pwd)"
 MODE="${1:-all}"
 SHELL_TIMEOUT="${SOLAR_SHELL_TEST_TIMEOUT:-300}"
+
+# `-u NAME` for every inherited SOLAR_* variable except the runner's own marker.
+SCRUB=()
+while IFS= read -r _name; do
+  [[ "$_name" == SOLAR_CI_SLOW_HEALTH_PROBE ]] || SCRUB+=(-u "$_name")
+done < <(env | sed -n 's/^\(SOLAR_[A-Za-z0-9_]*\)=.*/\1/p')
 
 # Pytest files that depend on macOS, relative to core/tests.
 MACOS_PYTEST=(
@@ -62,7 +72,7 @@ run_pytest() {
   echo "== pytest (workspace fixture: $ws)"
   (
     cd "$ws" || exit 2
-    env -u SOLAR_WORKSPACE SOLAR_ROOT="$REPO_ROOT" \
+    env ${SCRUB[@]+"${SCRUB[@]}"} SOLAR_ROOT="$REPO_ROOT" \
       uv run --project "$TESTS_DIR" pytest "${targets[@]}" -p no:cacheprovider -q -ra --durations=20 "${PYTEST_EXTRA_ARGS[@]+"${PYTEST_EXTRA_ARGS[@]}"}"
   )
   rc=$?
@@ -73,6 +83,7 @@ run_pytest() {
 run_shell() {
   local failed=() skipped=() passed=0 f rel reason
   echo "== shell tests"
+  [[ -n "$TIMEOUT_BIN" ]] || echo "note: no timeout or gtimeout found; shell tests have no per-test limit"
   cd "$REPO_ROOT" || return 2
   while IFS= read -r f; do
     rel="${f#"$REPO_ROOT"/}"
@@ -80,7 +91,7 @@ run_shell() {
       echo "SKIP $rel: $reason"; skipped+=("$rel"); continue
     fi
     echo "-- $rel"
-    if env -u SOLAR_WORKSPACE -u SOLAR_ROOT ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$SHELL_TIMEOUT"} bash "$f"; then
+    if env ${SCRUB[@]+"${SCRUB[@]}"} ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$SHELL_TIMEOUT"} bash "$f"; then
       passed=$((passed + 1))
     else
       echo "FAIL $rel"; failed+=("$rel")

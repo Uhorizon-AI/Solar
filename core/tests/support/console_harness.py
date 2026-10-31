@@ -146,22 +146,19 @@ class Harness:
 
     # -- running scripts ---------------------------------------------------
     def script(self, name: str, *args: str, timeout: int = 90, **env) -> subprocess.CompletedProcess:
+        # Measured on the GitHub macOS runner (issue 108): after the first start every
+        # check_host.sh --liveness takes 3.5 s, so a start that reaches the readiness loop
+        # takes ~35 s. Only that outcome is skipped, through the 10 s cap and only when the
+        # macOS job set the marker. A quick non-zero exit is a real failure even if its text
+        # says "failed to start": start_host.sh prints that for a crash too.
         slow = bool(os.environ.get("SOLAR_CI_SLOW_HEALTH_PROBE")) and name in ("start_host.sh", "ensure_host.sh")
-        reason = ("GitHub macOS runner: the health probe takes 3.5 s, past start_host.sh's readiness window")
         try:
-            # Measured on the GitHub macOS runner (issue 108): after the first start every
-            # check_host.sh --liveness takes 3.5 s, so a start that reaches the readiness loop
-            # takes ~35 s and fails. Only that outcome is skipped: a script that answers
-            # quickly (for example a refusal to touch a foreign console) is still asserted.
-            result = subprocess.run(["bash", str(APP_SCRIPTS / name), *args], cwd=self.ws, env=self.env(**env),
-                                    capture_output=True, text=True, timeout=min(timeout, 10) if slow else timeout)
+            return subprocess.run(["bash", str(APP_SCRIPTS / name), *args], cwd=self.ws, env=self.env(**env),
+                                  capture_output=True, text=True, timeout=min(timeout, 10) if slow else timeout)
         except subprocess.TimeoutExpired:
             if slow:
-                pytest.skip(reason)
+                pytest.skip("GitHub macOS runner: a start takes ~35 s (each health probe 3.5 s), past the 10 s cap")
             raise
-        if slow and result.returncode != 0 and "failed to start" in (result.stdout + result.stderr):
-            pytest.skip(reason)
-        return result
 
     def lib(self, snippet: str, timeout: int = 90, **env) -> subprocess.CompletedProcess:
         code = f'source "{APP_SCRIPTS}/host_lib.sh"; solar_host_load_env; {snippet}'

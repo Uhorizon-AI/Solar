@@ -70,6 +70,30 @@ fixture failure failure
 gate "hotfix for a broken update" && pass "--urgent publishes with a red suite" || fail "--urgent publishes with a red suite"
 grep -q "hotfix for a broken update" "$TMP/out.txt" && pass "--urgent prints its reason" || fail "--urgent prints its reason"
 
+fixture failure failure
+# --publish --retry with a red suite must stop before anything is created on GitHub.
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$REPO"
+  FORCE_VERSION=v9.9.9
+  CALLS="$TMP/calls.txt"; : >"$CALLS"
+  verify_remote_tag() { echo verify_remote_tag >>"$CALLS"; }
+  create_github_release() { echo create_github_release >>"$CALLS"; }
+  verify_remote_release() { echo verify_remote_release >>"$CALLS"; }
+  retry_publish
+) >"$TMP/retry.txt" 2>&1
+RETRY_RC=$?
+[[ "$RETRY_RC" -ne 0 ]] && pass "retry_publish with a red suite exits with an error" || fail "retry_publish with a red suite exits with an error"
+[[ ! -s "$TMP/calls.txt" ]] && pass "retry_publish creates nothing on GitHub when the gate refuses" || fail "retry_publish creates nothing on GitHub when the gate refuses"
+grep -q "must be on origin/main" "$TMP/retry.txt" && pass "the refusal explains the commit must be on origin/main with a finished run" || fail "the refusal explains the commit must be on origin/main with a finished run"
+
+# CLI parsing of --urgent.
+cli() { bash "$RELEASE_SH" "$@" >"$TMP/cli.txt" 2>&1; echo $?; }
+[[ "$(cli --urgent "hotfix")" == 2 ]] && grep -q "requires --publish" "$TMP/cli.txt" && pass "--urgent without --publish is refused" || fail "--urgent without --publish is refused"
+[[ "$(cli --publish --urgent --yes)" == 2 ]] && grep -q "written reason" "$TMP/cli.txt" && pass "--urgent does not take another option as its reason" || fail "--urgent does not take another option as its reason"
+[[ "$(cli --publish --urgent "   ")" == 2 ]] && pass "--urgent refuses a blank reason" || fail "--urgent refuses a blank reason"
+
 # Both publish paths, including --publish --retry, must call the gate.
 for fn in publish_release retry_publish; do
   if awk "/^function $fn\\(\\)/,/^}/" "$RELEASE_SH" | grep -q 'require_green_suite'; then
