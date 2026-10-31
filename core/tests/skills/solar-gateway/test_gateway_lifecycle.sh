@@ -293,12 +293,30 @@ else
 fi
 
 # --- env.fail backoff ---
+# Freeze epoch seconds so crossing a wall-clock second cannot expire the 1s backoff.
+# Keep other date formats real, and remove the override before the process tests.
+_BACKOFF_TEST_NOW=1700000000
+date() {
+  if [[ "$#" -eq 1 && "$1" == '+%s' ]]; then
+    printf '%s\n' "$_BACKOFF_TEST_NOW"
+  else
+    command date "$@"
+  fi
+}
 gateway_write_env_fail "test_fail"
 if [[ -f "$(gateway_fail_path)" ]]; then pass "env.fail exists"; else fail "env.fail exists"; fi
 if gateway_backoff_active; then pass "backoff active immediately"; else fail "backoff active immediately"; fi
+_BACKOFF_TEST_NOW=$((_BACKOFF_TEST_NOW + GATEWAY_BACKOFF_BASE_SEC))
+assert_fail "backoff expires at next_retry_at" gateway_backoff_active
+_BACKOFF_TEST_NOW=$((_BACKOFF_TEST_NOW + 1))
+assert_fail "backoff remains expired after next_retry_at" gateway_backoff_active
+# Check fingerprint invalidation while the recorded backoff would still be active.
+_BACKOFF_TEST_NOW=1700000000
 write_env "claude"
 rebind
 if gateway_backoff_active; then fail "backoff resets on fingerprint change"; else pass "backoff resets on fingerprint change"; fi
+unset -f date
+unset _BACKOFF_TEST_NOW
 write_env "codex,claude"
 rebind
 gateway_write_stamp
