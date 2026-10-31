@@ -50,7 +50,8 @@ def option_blocks(help_text):
             if not (header and len(header[1]) <= skip_indent and not _SKIPPED.match(line)):
                 continue
             skip_indent = None
-        if _SKIPPED.match(line):
+        # `Example:` indented deeper than the option it follows is part of that option's description.
+        if _SKIPPED.match(line) and not (current and len(line) - len(line.lstrip()) > indent):
             skip_indent = len(line) - len(line.lstrip())
             current = None
             continue

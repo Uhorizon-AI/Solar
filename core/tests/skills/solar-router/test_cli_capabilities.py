@@ -1,6 +1,7 @@
 """Help discovery must bind capabilities to declarations, never incidental text."""
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 from cli_capabilities import advertised_values, discover, option_blocks
@@ -198,3 +199,16 @@ def test_chained_groups_and_later_sentences_are_read_whole(text, expected):
 def test_a_closing_note_is_ignored_when_a_list_exists_a_documented_trade_off():
     assert advertised_values(' <m>  Modes: read. Defaults (read, write)') == {'read'}
     assert advertised_values(' <m>  Set (accept-edits, plan)') == {'accept-edits', 'plan'}
+
+
+def test_an_example_line_inside_an_option_description_does_not_drop_later_options():
+    """Claude CLI 2.1.314 puts `Example:` on its own line inside the description of
+    `--json-schema`. The fixture is the 2.1.303 help with that layout (derived: the
+    real 2.1.314 help was not at hand); #104."""
+    text = (Path(__file__).parent / 'fixtures' / 'claude_2.1.314_help_derived.txt').read_text()
+    blocks = option_blocks(text)
+    for option in ('--json-schema', '--max-budget-usd', '--mcp-config', '--model',
+                   '--no-session-persistence', '--output-format'):
+        assert option in blocks, option
+    assert '"type":"object"' in blocks['--json-schema']
+    assert len(blocks) >= 60
