@@ -13,6 +13,7 @@ pytest owns tmp_path.
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import signal
 import socket
@@ -75,6 +76,26 @@ FAKE_CONSOLE = textwrap.dedent('''\
 
 
 def free_port() -> int:
+    """A loopback port nobody is listening on.
+
+    Under pytest-xdist each worker draws from its own slice of 1000 ports (20000 + 1000 * N), so
+    two workers can never be handed the same port between "free" and "bound" (two consoles on one
+    port made unrelated tests fail). Invalid or exhausted worker slices fail instead
+    of falling back to a shared OS port pool. Outside xdist the OS picks one, as before."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    if worker.startswith("gw") and worker[2:].isdigit():
+        low = 20000 + 1000 * int(worker[2:])
+        if low + 999 > 65535:
+            raise ValueError(f"No isolated console port range for {worker}; use at most 45 workers")
+        for _ in range(200):
+            candidate = low + random.randrange(1000)
+            with socket.socket() as sock:
+                try:
+                    sock.bind(("127.0.0.1", candidate))
+                except OSError:
+                    continue
+                return candidate
+        raise RuntimeError(f"No free console port in {worker}'s range {low}-{low + 999} after 200 attempts")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]

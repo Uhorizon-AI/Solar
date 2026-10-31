@@ -1294,6 +1294,7 @@ trap_ec=$?
 set -e
 assert_ok "old portable updater exits non-zero" test "$trap_ec" -ne 0
 assert_ok "old portable updater treats the bundle as the install" grep -q 'mode=bundle-core' <<<"$trap_out"
+if ! grep -q 'mode=bundle-core' <<<"$trap_out"; then printf '%s\n' "$trap_out" >&2; fi
 trap_bundle_abs="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$TRAP_WS/.solar/bundle")"
 assert_ok "old portable updater names the bundle" grep -q "SOLAR_ROOT=$trap_bundle_abs" <<<"$trap_out"
 assert_ok "old portable updater does not move the global install" \

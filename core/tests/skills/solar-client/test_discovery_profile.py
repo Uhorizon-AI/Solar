@@ -12,6 +12,12 @@ sys.path.insert(0, str(CORE / "skills/solar-client/scripts"))
 import client_profile as cp
 from skill_inventory import inventory
 
+# Serial: every test here runs the whole client sync (dozens of bash and python subprocesses)
+# under fixed 15-25 s subprocess limits. Next to busy workers three different tests of this file
+# hit those limits (TimeoutExpired), so the file runs alone in the second pass of
+# core/tests/run_suite.sh. The assertions and limits are unchanged.
+pytestmark = pytest.mark.serial
+
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):

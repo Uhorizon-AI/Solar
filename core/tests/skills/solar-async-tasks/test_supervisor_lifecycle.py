@@ -331,6 +331,8 @@ def test_a_supervisor_that_dies_is_replaced_by_the_next_tick_and_nothing_runs_tw
     assert _lines(marker) == ["start Task one", "end Task one", "start Task two", "end Task two"]
 
 
+@pytest.mark.serial  # kills a supervisor and its process group, then expects recovery to prove the group gone.
+#   On a busy CI runner it once reported the group as uncertain (code 20), so it runs alone.
 def test_an_execution_lost_with_its_supervisor_is_failed_not_run_again(rig):
     marker = rig.tmp / "lost.log"
     rel = _mark(rig, "sleep 30", marker)
@@ -617,8 +619,15 @@ def test_a_forced_cancellation_ends_the_command_too_before_the_place_is_freed(ri
         wait_until(lambda: pidfile.exists() and pidfile.read_text().strip(), 40, what="the command to start")
         sleeper = int(pidfile.read_text())
         executor = wait_until(lambda: (rig.reservations_of(task) or {}).get("owner_pid"), 20)
-        os.kill(executor, signal.SIGSTOP)                  # an executor that cannot react to the cancellation
         with solar_state.session() as store:
+            # Pause only while we own the SQLite writer slot. Otherwise SIGSTOP
+            # can freeze the executor inside a transaction and cancellation will
+            # wait forever for the very process this test deliberately stopped.
+            store.conn.execute("BEGIN IMMEDIATE")
+            try:
+                os.kill(executor, signal.SIGSTOP)
+            finally:
+                store.conn.execute("ROLLBACK")
             store.cancellation_request(task)
         wait_until(lambda: rig.status(task) == "cancelled", 40, interval=0.005, what="the forced cancellation")
         assert not alive(sleeper), "the place was freed while the command was still running"
