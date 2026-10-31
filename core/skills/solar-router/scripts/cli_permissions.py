@@ -35,38 +35,14 @@ import sys
 import tempfile
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 
-OK, MISSING, TOO_PERMISSIVE, UNKNOWN = "ok", "missing", "too_permissive", "unknown"
-STATUSES = (OK, MISSING, TOO_PERMISSIVE, UNKNOWN)
-CHECKS = ("mcp_read", "write_guard", "restricted_reader")
-CLIENTS = ("claude", "codex", "agent", "agy")
-MCP_SERVER = "solar"
-MCP_READ_TOOLS = ("solar_search", "solar_docs")
+# Re-exported: providers and tests import these names from here.
+from permission_model import (CHECKS, CLIENTS, MCP_READ_TOOLS, MCP_SERVER, MISSING, OK, STATUSES,  # noqa: E402,F401
+                              TOO_PERMISSIVE, UNKNOWN, Finding, unknown)
+
 STORE_NAME = "cli-permissions.json"
-
-
-@dataclass(frozen=True)
-class Finding:
-    cli: str
-    check: str
-    status: str
-    tier: str = "static"  # static | probe
-    detail: str = ""
-    setting: str = ""  # the exact setting to change, empty when nothing is to change
-    file: str = ""
-    fix: str = ""
-    snippet: str = ""  # literal text to paste, when the CLI's docs or a live run confirm its syntax
-
-    def __post_init__(self):
-        if self.status not in STATUSES or self.check not in CHECKS:
-            raise ValueError(f"invalid finding {self.check}={self.status}")
-
-
-def unknown(cli, check, detail, *, tier="static", fix=""):
-    """What is not verified is never `ok`."""
-    return Finding(cli, check, UNKNOWN, tier, detail, fix=fix)
 
 
 def read_json(path: Path):
