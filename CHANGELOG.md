@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- test(client): read migration fixture permissions with Python instead of incompatible BSD/GNU `stat` flags, avoiding false permission-preservation failures on Ubuntu while checking that mode `640` is preserved. PR #116.
+
 ## [0.60.10] - 2026-10-31
 
 ## [0.60.9] - 2026-10-31
