@@ -94,7 +94,7 @@ rebind() {
 # so a real gateway on a developer machine is never touched.
 bridge_pids() {
   ps -axo pid,command | grep -E 'websockets==12|run_(http_webhook|websocket)_bridge' \
-    | grep -v grep | awk '{print $1}' | sort -n
+    | grep -v grep | awk '{print $1}' | sort -n || true
 }
 BRIDGES_BEFORE="$(bridge_pids)"
 kill_leftover_bridges() {
