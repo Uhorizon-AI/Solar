@@ -7,6 +7,12 @@ import subprocess
 
 import pytest
 
+# Serial: these tests copy core and run the real smoke CLI, with the client sync inside. Next to
+# busy workers the same kind of work got several times slower and a sibling test hit its fixed
+# 60 s subprocess limit (TimeoutExpired),
+# so the file runs alone in the second pass of core/tests/run_suite.sh. Limits and assertions unchanged.
+pytestmark = pytest.mark.serial
+
 CORE = Path(__file__).resolve().parents[3]
 
 
