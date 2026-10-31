@@ -82,10 +82,12 @@ run_pytest() {
       # Whole files go to one worker (--dist loadfile), so tests of a file never overlap.
       # A test that is not safe next to other files carries @pytest.mark.serial and its
       # reason; those run alone in the second pass (exit 5 = none collected, fine).
-      pt -n "$WORKERS" --dist loadfile -m "not serial" || exit $?
-      pt -m serial; r=$?
-      [[ "$r" -eq 5 ]] && r=0
-      exit "$r"
+      # Both passes always run, so one failing pass never hides the other's result.
+      pt -n "$WORKERS" --dist loadfile -m "not serial"; r1=$?
+      pt -m serial; r2=$?
+      [[ "$r2" -eq 5 ]] && r2=0
+      (( r1 != 0 )) && exit "$r1"
+      exit "$r2"
     fi
     pt
   )
