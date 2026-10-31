@@ -23,6 +23,12 @@ import supervisor as supervisor_mod
 import supervisor_lib as lib
 from dead_process import dead_pid
 
+# Serial: these tests kill real processes and process groups and wait on sub-second sweeps and
+# leases. Next to three other busy workers on a CI runner they failed intermittently
+# (a lost execution reported as an uncertain group; a stuck start still "active" after its lease),
+# so they run alone in the second pass of core/tests/run_suite.sh. Their assertions are unchanged.
+pytestmark = pytest.mark.serial
+
 
 def _body(rig, task_id):
     with solar_state.session() as store:
