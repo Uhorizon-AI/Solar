@@ -16,6 +16,12 @@ import pytest
 from supervisor_support import wait_until  # first: it puts the skills on sys.path
 import solar_state
 
+# Serial: these tests kill real processes and process groups and wait on sub-second sweeps and
+# leases. Next to three other busy workers on a CI runner they failed intermittently
+# (a lost execution reported as an uncertain group; a stuck start still "active" after its lease),
+# so they run alone in the second pass of core/tests/run_suite.sh. Their assertions are unchanged.
+pytestmark = pytest.mark.serial
+
 
 def _all_started_before_any_ended(rig, tasks):
     starts = [rig.first("start", t) for t in tasks]
