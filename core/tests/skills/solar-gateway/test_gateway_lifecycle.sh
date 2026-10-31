@@ -107,6 +107,12 @@ cat >"$TMP/guard-bin/cloudflared" <<'EOF'
 sleep 300
 EOF
 chmod +x "$TMP/guard-bin/launchctl" "$TMP/guard-bin/cloudflared"
+# Preflight only checks that the first provider binary exists. A double keeps the
+# test independent of whether the machine has the real CLI installed.
+for provider_bin in codex claude; do
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/guard-bin/$provider_bin"
+  chmod +x "$TMP/guard-bin/$provider_bin"
+done
 export PATH="$TMP/guard-bin:${PATH}"
 unset SOLAR_APP_DATA
 export SOLAR_RUNTIME_ROOT="$TMP/runtime"
@@ -740,6 +746,14 @@ CONN_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0
 python3 - "$CONN_PORT" <<'PY' &
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import socketserver
+
+
+class QuickHTTPServer(HTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind resolves the host name, which can take seconds on a CI runner.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 port = int(sys.argv[1])
 
@@ -759,7 +773,7 @@ class Ready(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         return
 
-HTTPServer(("127.0.0.1", port), Ready).serve_forever()
+QuickHTTPServer(("127.0.0.1", port), Ready).serve_forever()
 PY
 CONN_PID=$!
 printf 'INF Starting metrics server on 127.0.0.1:%s/metrics\n' "$CONN_PORT" >"$CONN_LOG"
@@ -830,6 +844,14 @@ cat >"$TMP/guard-bin/run_http_webhook_bridge" <<'PY'
 #!/usr/bin/env python3
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import socketserver
+
+
+class QuickHTTPServer(HTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind resolves the host name, which can take seconds on a CI runner.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 port = int(sys.argv[1])
 
@@ -845,7 +867,7 @@ class Health(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         return
 
-HTTPServer(("127.0.0.1", port), Health).serve_forever()
+QuickHTTPServer(("127.0.0.1", port), Health).serve_forever()
 PY
 cat >"$TMP/guard-bin/run_websocket_bridge" <<'EOF'
 #!/usr/bin/env bash
@@ -939,6 +961,14 @@ if [[ "$CHECK_CODE" -eq 2 ]] && kill -0 "$PARTIAL_CF_PID" 2>/dev/null; then
   python3 - "$READY_PORT" <<'PY' >/dev/null 2>&1 &
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import socketserver
+
+
+class QuickHTTPServer(HTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind resolves the host name, which can take seconds on a CI runner.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 port = int(sys.argv[1])
 
@@ -958,7 +988,7 @@ class Ready(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         return
 
-HTTPServer(("127.0.0.1", port), Ready).serve_forever()
+QuickHTTPServer(("127.0.0.1", port), Ready).serve_forever()
 PY
   READY_PID=$!
   printf 'INF Starting metrics server on 127.0.0.1:%s/metrics\n' "$READY_PORT" >"$TMP/run/cloudflared.log"

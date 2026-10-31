@@ -1,0 +1,41 @@
+name: Test suite
+
+# Full core/tests suite (pytest + shell tests) on every pull request and on main.
+# No path filter: a change anywhere can break any skill.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A group per commit on main, so two quick merges never cancel each other's run.
+  group: test-suite-${{ github.event_name == 'push' && github.sha || github.ref }}
+  # Only superseded PR runs are cancelled; a run on main must finish so its commit keeps a verdict.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  suite:
+    name: Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            mode: all
+          - os: macos-latest
+            mode: macos
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # test_client_update.sh needs release tags
+      - uses: astral-sh/setup-uv@v5
+      - name: Install coreutils (per-test timeout for shell tests on macOS)
+        if: runner.os == 'macOS'
+        run: brew install coreutils
+      - name: Run core/tests (clean environment)
+        run: bash core/tests/run_suite.sh ${{ matrix.mode }}

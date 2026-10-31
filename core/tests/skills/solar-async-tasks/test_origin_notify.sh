@@ -22,10 +22,15 @@ export SOLAR_RUNTIME_ROOT="$SOLAR_WORKSPACE/sun/runtime"
 export SOLAR_TASK_ROOT="$SOLAR_RUNTIME_ROOT/async-tasks"
 export SOLAR_ROOT="$SOLAR_WORKSPACE"
 mkdir -p "$SOLAR_TASK_ROOT" "$SOLAR_WORKSPACE/core/skills/solar-telegram/scripts"
+# The state owner gate reads the workspace id from the workspace settings.
+mkdir -p "$SOLAR_WORKSPACE/.solar"
+printf '{"workspace_id":"test-workspace"}\n' >"$SOLAR_WORKSPACE/.solar/settings.json"
 python3 - <<PY
 import sys
 sys.path.insert(0, "$CORE_ROOT/skills/solar-state/scripts")
 import solar_state
+import os
+solar_state.claim_owner(os.environ["SOLAR_WORKSPACE"], "test-workspace")
 with solar_state.cutover() as cut:
     cut.upgrade_schema()
     cut.set_format("sqlite")

@@ -5,10 +5,13 @@ description = "Centralized automated tests for core/skills (not published to PyP
 requires-python = ">=3.10,<4.0"
 dependencies = [
     "pytest>=8",
+    "pytest-timeout>=2.3",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pytest-timeout>=2.3"]
 
 [tool.pytest.ini_options]
 testpaths = ["skills"]
+# A hung test must fail by itself, not hold a CI job until its limit.
+timeout = 300
