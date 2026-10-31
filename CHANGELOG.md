@@ -6,6 +6,15 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- router: `option_blocks()` no longer drops the options that follow an `Example:` line inside an option's description, which made `restricted_reader` come out `unknown` with Claude CLI 2.1.314 (#104).
+- router: the `mcp_read` probe reports `missing` (and the permission fix) only when the client's own wording shows a denial; a plain miss is retried once and otherwise stays `unknown` (#103).
+- router: stored permission-probe rows carry a fingerprint of the client settings files and the Solar version; `solar status` treats a row as `unknown` ("settings changed since the probe") once it no longer matches (#95).
+- state: the update note counts only queued legacy subtasks; completed, cancelled, archived, failed or draft history no longer asks for approval again (#79).
+
+### Changed
+- router: `providers/base.py` takes the permission vocabulary from the new `permission_model.py` instead of `cli_permissions`, so the two no longer import each other (#96, partial).
+
 ## [0.60.7] - 2026-10-31
 
 ### Changed

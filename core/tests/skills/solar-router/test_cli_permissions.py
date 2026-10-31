@@ -712,3 +712,42 @@ class TestRestrictedReaderProbe(Env):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestImportOrder(unittest.TestCase):
+    """#96: the shared vocabulary must not make providers.base and cli_permissions depend on each other."""
+
+    def run_fresh(self, code):
+        import os
+        import subprocess
+        scripts = str(Path(cp.__file__).resolve().parent)
+        env = {**os.environ, "PYTHONPATH": scripts + os.pathsep + os.environ.get("PYTHONPATH", "")}
+        return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, env=env)
+
+    def test_each_module_imports_first_in_a_fresh_interpreter(self):
+        for code in ("import cli_permissions; import providers.base",
+                     "import providers.base; import cli_permissions",
+                     "import providers; import cli_permissions"):
+            done = self.run_fresh(code)
+            self.assertEqual(done.returncode, 0, f"{code}: {done.stderr}")
+
+    def test_cli_permissions_loads_no_provider_at_import_time(self):
+        done = self.run_fresh("import sys, cli_permissions; print([m for m in sys.modules if m.startswith('providers')])")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "[]"), done.stderr)
+
+    def test_providers_base_does_not_import_cli_permissions(self):
+        """The two-way edge: base.py takes the shared vocabulary from permission_model instead.
+        (The provider subclasses may still import cli_permissions: that edge is one-way.)"""
+        import ast
+        source = (Path(cp.__file__).resolve().parent / "providers" / "base.py").read_text(encoding="utf-8")
+        imported = {node.module for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ImportFrom)}
+        imported |= {alias.name for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Import)
+                     for alias in node.names}
+        self.assertNotIn("cli_permissions", imported)
+        self.assertIn("permission_model", imported)
+
+    def test_the_names_providers_and_tests_import_are_still_exported(self):
+        import permission_model as pm
+        for name in ("Finding", "MCP_READ_TOOLS", "MCP_SERVER", "OK", "MISSING", "TOO_PERMISSIVE", "UNKNOWN",
+                     "STATUSES", "CHECKS", "CLIENTS", "unknown"):
+            self.assertIs(getattr(cp, name), getattr(pm, name), name)

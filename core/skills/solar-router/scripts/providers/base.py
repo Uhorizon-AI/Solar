@@ -21,7 +21,7 @@ if str(_PATHS_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_PATHS_SCRIPTS))
 
 import solar_runtime  # noqa: E402
-from cli_permissions import MCP_READ_TOOLS  # noqa: E402
+from permission_model import MCP_READ_TOOLS  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
 
 SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
