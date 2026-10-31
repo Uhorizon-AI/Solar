@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import hashlib
 import json
 import os
 import re
@@ -196,7 +197,54 @@ def stored_rows() -> dict:
     return rows
 
 
-def save_probe(findings: list[Finding]) -> None:
+def solar_version() -> str:
+    """The version `solar --version` prints; empty when the launcher cannot be read."""
+    launcher = Path(__file__).resolve().parents[2] / "solar-client" / "scripts" / "solar"
+    try:
+        match = re.search(r'^SOLAR_VERSION="([^"]*)"', launcher.read_text(encoding="utf-8"), re.M)
+    except OSError:
+        return ""
+    return match[1] if match else ""
+
+
+def settings_files(cli: str, home: Path, workspace: Path) -> list[Path]:
+    """The files the static tier reads for `cli` (see each provider's static_permission_checks)."""
+    codex_home = Path(os.getenv("CODEX_HOME") or home / ".codex")
+    return {
+        "claude": [home / ".claude.json", workspace / ".mcp.json", home / ".claude" / "settings.json",
+                   workspace / ".claude" / "settings.json", workspace / ".claude" / "settings.local.json"],
+        "codex": [codex_home / "config.toml"],
+        "agent": [home / ".cursor" / "cli-config.json", workspace / ".cursor" / "cli.json",
+                  home / ".cursor" / "mcp.json", workspace / ".cursor" / "mcp.json"],
+        "agy": [home / ".gemini" / "antigravity-cli" / "settings.json", home / ".gemini" / "settings.json"],
+    }.get(cli, [])
+
+
+def _digest(path: Path, workspace: Path) -> str:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return "absent"
+    if path.name == ".claude.json":
+        # Claude rewrites this file constantly (usage counters); only the MCP registrations matter here.
+        data = read_json(path) or {}
+        project = (data.get("projects") or {}).get(str(workspace)) or {}
+        raw = json.dumps([data.get("mcpServers"), project.get("mcpServers") if isinstance(project, dict) else None],
+                         sort_keys=True).encode()
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def fingerprint(cli: str, home=None, workspace=None) -> str:
+    """Hash of what the static tier reads for `cli` plus the Solar version: a stored result is
+    only as current as this value. No model call."""
+    if workspace is None:
+        from providers.base import SOLAR_WORKSPACE as workspace
+    home, workspace = Path(home or Path.home()), Path(workspace)
+    parts = [f"solar={solar_version()}"] + [f"{p}={_digest(p, workspace)}" for p in settings_files(cli, home, workspace)]
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+
+
+def save_probe(findings: list[Finding], home=None, workspace=None) -> None:
     """Router machine state: the answer depends on this machine's client settings.
 
     A partial probe (`--client`, `--check`) replaces only the checks it ran and keeps the rest.
@@ -206,7 +254,7 @@ def save_probe(findings: list[Finding]) -> None:
     now = _stamp()
     rows = stored_rows()
     for f in findings:
-        rows[(f.cli, f.check)] = dict(asdict(f), probed_at=now)
+        rows[(f.cli, f.check)] = dict(asdict(f), probed_at=now, fingerprint=fingerprint(f.cli, home, workspace))
     payload = dict(probed_at=now, results=[rows[k] for k in sorted(rows)])
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -410,7 +458,7 @@ def combine(static: Finding, probe) -> str:
     return OK if OK in statuses else UNKNOWN
 
 
-def summary(static: list[Finding]):
+def summary(static: list[Finding], home=None, workspace=None):
     """One state and one line for `solar status`: WARN when something is wrong, never a model call.
 
     A probe saved before `restricted_reader` existed has no row for it. That
@@ -418,12 +466,16 @@ def summary(static: list[Finding]):
     stored probe at all still counts the check as unverified.
     """
     rows = stored_rows()
-    probes = {}
+    probes, current, stale = {}, {}, 0
     for key, row in rows.items():
         try:
-            probes[key] = Finding(**{k: v for k, v in row.items() if k != "probed_at"})
+            probes[key] = Finding(**{k: v for k, v in row.items() if k not in ("probed_at", "fingerprint")})
         except (TypeError, ValueError):
             continue
+        # A row saved before fingerprints existed cannot be compared, so it is trusted as before.
+        if row.get("fingerprint") and row["fingerprint"] != current.setdefault(key[0], fingerprint(key[0], home, workspace)):
+            probes[key] = unknown(key[0], key[1], "settings changed since the probe", tier="probe")
+            stale += 1
     if not static:
         return "INFO", "no installed client"
     bad, unverified = [], 0
@@ -441,9 +493,10 @@ def summary(static: list[Finding]):
     probed = f"oldest probe {age_label(min(stamps))}" if stamps else "probe never run"
     if bad:
         return "WARN", f"{'; '.join(bad)} ({probed})"
+    note = f"; {stale} probe result(s) stale: settings changed since the probe" if stale else ""
     if unverified:
-        return "INFO", f"{unverified} check(s) unverified ({probed})"
-    return "OK", f"all checks ok ({probed})"
+        return "INFO", f"{unverified} check(s) unverified ({probed}{note})"
+    return "OK", f"all checks ok ({probed}{note})"
 
 
 def render(findings: list[Finding]) -> str:

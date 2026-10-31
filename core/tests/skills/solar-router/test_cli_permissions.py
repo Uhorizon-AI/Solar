@@ -495,6 +495,57 @@ class TestStoreAndSummary(Env):
         state, _ = cp.summary([cp.unknown("agy", "mcp_read", "n/a")])
         self.assertEqual(state, "INFO")
 
+    def _cursor_config(self, **extra):
+        _json(self.home / ".cursor" / "cli-config.json", dict(approvalMode="allowlist", **extra))
+
+    def test_a_probe_saved_before_a_settings_change_is_stale_not_trusted(self):
+        """#95: the stored MISSING came from settings that no longer exist."""
+        self._cursor_config(permissions=dict(allow=["Shell(ls)"], deny=[]))
+        cp.save_probe([cp.Finding("agent", "mcp_read", cp.MISSING, "probe")], self.home, self.workspace)
+        static = [cp.Finding("agent", "mcp_read", cp.OK, "static")]
+        self.assertEqual(cp.summary(static, self.home, self.workspace)[0], "WARN")  # unchanged: the verdict stands
+        self._cursor_config(permissions=dict(allow=["Mcp(solar:solar_search)"], deny=[]))
+        state, detail = cp.summary(static, self.home, self.workspace)
+        self.assertEqual(state, "OK")
+        self.assertIn("settings changed since the probe", detail)
+
+    def test_a_stale_ok_no_longer_vouches_for_a_check_the_settings_cannot_settle(self):
+        self._cursor_config(permissions=dict(allow=[], deny=[]))
+        cp.save_probe([cp.Finding("agent", "write_guard", cp.OK, "probe")], self.home, self.workspace)
+        static = [cp.unknown("agent", "write_guard", "n/a")]
+        self.assertEqual(cp.summary(static, self.home, self.workspace)[0], "OK")
+        self._cursor_config(permissions=dict(allow=["Write(*)"], deny=[]))
+        state, detail = cp.summary(static, self.home, self.workspace)
+        self.assertEqual(state, "INFO")
+        self.assertIn("stale", detail)
+
+    def test_a_new_solar_version_makes_the_stored_result_stale(self):
+        self._cursor_config()
+        with patch.object(cp, "solar_version", return_value="0.1.0"):
+            cp.save_probe([cp.Finding("agent", "write_guard", cp.OK, "probe")], self.home, self.workspace)
+        static = [cp.unknown("agent", "write_guard", "n/a")]
+        with patch.object(cp, "solar_version", return_value="0.2.0"):
+            self.assertEqual(cp.summary(static, self.home, self.workspace)[0], "INFO")
+
+    def test_the_fingerprint_ignores_other_clients_and_claude_json_noise(self):
+        _json(self.home / ".claude.json", {"mcpServers": {"solar": {}}, "numStartups": 1})
+        before = cp.fingerprint("claude", self.home, self.workspace)
+        _json(self.home / ".claude.json", {"mcpServers": {"solar": {}}, "numStartups": 2})
+        self.assertEqual(cp.fingerprint("claude", self.home, self.workspace), before)
+        _json(self.home / ".claude.json", {"mcpServers": {}, "numStartups": 2})
+        self.assertNotEqual(cp.fingerprint("claude", self.home, self.workspace), before)
+        agent_before = cp.fingerprint("agent", self.home, self.workspace)
+        self._cursor_config()
+        self.assertNotEqual(cp.fingerprint("agent", self.home, self.workspace), agent_before)
+        self.assertEqual(cp.fingerprint("claude", self.home, self.workspace),
+                         cp.fingerprint("claude", self.home, self.workspace))
+
+    def test_a_row_stored_before_fingerprints_existed_is_trusted_as_before(self):
+        path = cp.store_path()
+        _json(path, dict(probed_at="2026-10-01T00:00:00Z",
+                         results=[dict(cli="agent", check="mcp_read", status=cp.MISSING, tier="probe")]))
+        self.assertEqual(cp.summary([cp.Finding("agent", "mcp_read", cp.OK)], self.home, self.workspace)[0], "WARN")
+
     def test_age_label_is_independent_of_the_local_timezone_and_daylight_saving(self):
         now = cp.calendar.timegm((2026, 7, 10, 12, 0, 0))
         self.assertEqual(cp.age_label("2026-07-08T12:00:00Z", now=now), "2d ago")
