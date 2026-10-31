@@ -35,7 +35,8 @@ jobs:
           fetch-depth: 0   # test_client_update.sh needs release tags
       - uses: astral-sh/setup-uv@v7
         with:
-          # The macOS cache is a few KB, so pruning it before saving buys nothing there.
+          # macOS: a gateway test leaves a `uv run` alive (it blocked the prune before
+          # setup-uv v7); the cache is a few KB, so pruning buys nothing there.
           prune-cache: ${{ runner.os != 'macOS' }}
       - name: Install coreutils (per-test timeout for shell tests on macOS)
         if: runner.os == 'macOS'
