@@ -28,6 +28,7 @@ import argparse
 import calendar
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -259,24 +260,43 @@ def audit_has_call(marker: str):
     return False
 
 
+# What a client says when its own permission layer stops a tool call ("User rejected MCP: ...",
+# "denied", "blocked in plan mode", "not allowed"). A model that merely chose not to call
+# the tool says none of this, and that is not a permission problem.
+_DENIAL = re.compile(r"\b(?:reject(?:ed|s)?|den(?:y|ied|ies)|block(?:ed|s)?|refus(?:ed|es)|"
+                     r"not\s+(?:allowed|permitted|authori[sz]ed)|forbidden|disallowed|"
+                     r"permission(?:s)?\s+(?:denied|required|needed))\b", re.I)
+
+
+def denial_evidence(answer_text: str) -> bool:
+    return bool(_DENIAL.search(answer_text or ""))
+
+
 def probe_mcp_read(provider, workspace: Path) -> Finding:
-    marker = f"solar-permission-probe-{uuid.uuid4().hex[:12]}"
-    prompt = (f"Call the tool solar_search exactly once with arguments "
-              f'{{"scope":"operations","query":"{marker}"}}. Call no other tool. '
-              "Then reply with the single word DONE, or say in one sentence what stopped you.")
-    try:
-        answer = provider.ask(prompt, cwd=workspace)
-    except (RuntimeError, TimeoutError) as exc:
-        return unknown(provider.name, "mcp_read", f"the client did not answer: {str(exc)[:200]}", tier="probe")
-    seen = audit_has_call(marker)
-    if seen is None:
-        return unknown(provider.name, "mcp_read", "the Solar MCP server's audit log could not be read", tier="probe")
-    if seen:
-        return Finding(provider.name, "mcp_read", OK, "probe", "the Solar MCP server received the solar_search call")
-    reply = " ".join(answer.text.split())[:200]
-    return Finding(provider.name, "mcp_read", MISSING, "probe",
-                   f"the Solar MCP server received no call; the client said: {reply}",
-                   **fix_for(provider, "mcp_read"))
+    """`missing` only with the client's own denial wording; a plain miss is retried once, then `unknown`."""
+    reply = ""
+    for _attempt in range(2):
+        marker = f"solar-permission-probe-{uuid.uuid4().hex[:12]}"
+        prompt = (f"Call the tool solar_search exactly once with arguments "
+                  f'{{"scope":"operations","query":"{marker}"}}. Call no other tool. '
+                  "Then reply with the single word DONE, or say in one sentence what stopped you.")
+        try:
+            answer = provider.ask(prompt, cwd=workspace)
+        except (RuntimeError, TimeoutError) as exc:
+            return unknown(provider.name, "mcp_read", f"the client did not answer: {str(exc)[:200]}", tier="probe")
+        seen = audit_has_call(marker)
+        if seen is None:
+            return unknown(provider.name, "mcp_read", "the Solar MCP server's audit log could not be read", tier="probe")
+        if seen:
+            return Finding(provider.name, "mcp_read", OK, "probe", "the Solar MCP server received the solar_search call")
+        reply = " ".join(answer.text.split())[:200]
+        if denial_evidence(answer.text):
+            return Finding(provider.name, "mcp_read", MISSING, "probe",
+                           f"the Solar MCP server received no call; the client said: {reply}",
+                           **fix_for(provider, "mcp_read"))
+    return unknown(provider.name, "mcp_read",
+                   f"the Solar MCP server received no call in two tries and the client gave no permission "
+                   f"reason (the model may have declined); the client said: {reply}", tier="probe")
 
 
 def probe_write_guard(provider) -> Finding:

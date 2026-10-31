@@ -301,6 +301,53 @@ class TestProbe(Env):
         self.assertIn("User rejected MCP", found.detail)
         self.assertTrue(found.fix)
 
+    def test_read_is_unknown_without_a_fix_when_the_model_declined_for_a_non_permission_reason(self):
+        calls = []
+
+        def ask(prompt, **_):
+            calls.append(prompt)
+            return _answer("I need to discover the MCP schema with another tool before I can call solar_search.")
+        with patch.object(cp, "audit_has_call", return_value=False):
+            found = cp.probe_mcp_read(self.provider(ask), self.workspace)
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertIn("discover the MCP schema", found.detail)  # the model's own sentence
+        self.assertFalse(found.fix or found.setting or found.snippet)
+        self.assertEqual(len(calls), 2)  # retried once before the verdict
+        self.assertNotIn("Mcp(", cp.render([found]))
+
+    def test_read_is_ok_when_a_declined_run_is_followed_by_a_successful_retry(self):
+        answers = iter(["I cannot call it before reading its schema.", "DONE"])
+        markers = []
+
+        def ask(prompt, **_):
+            markers.append(prompt)
+            return _answer(next(answers))
+        # The server sees the call only on the second attempt: the marker of the first one was never sent.
+        with patch.object(cp, "audit_has_call", side_effect=lambda marker: marker in markers[-1] and len(markers) == 2):
+            found = cp.probe_mcp_read(self.provider(ask), self.workspace)
+        self.assertEqual((found.status, found.tier), (cp.OK, "probe"))
+        self.assertEqual(len(markers), 2)
+
+    def test_a_denial_is_not_retried(self):
+        calls = []
+
+        def ask(prompt, **_):
+            calls.append(prompt)
+            return _answer("User rejected MCP: solar-solar_search")
+        with patch.object(cp, "audit_has_call", return_value=False):
+            found = cp.probe_mcp_read(self.provider(ask), self.workspace)
+        self.assertEqual((found.status, len(calls)), (cp.MISSING, 1))
+
+    def test_status_does_not_warn_for_a_read_left_unknown_by_a_model_decline(self):
+        with TemporaryDirectory() as runtime, patch.object(cp, "store_path", return_value=Path(runtime) / "cp.json"), \
+             patch.object(cp, "audit_has_call", return_value=False):
+            found = cp.probe_mcp_read(self.provider(lambda *a, **k: _answer("I chose not to call it")), self.workspace)
+            cp.save_probe([found])
+            static = [cp.Finding("agent", "mcp_read", cp.OK, "static", "allowed")]
+            state, _ = cp.summary(static)
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertNotEqual(state, "WARN")
+
     def test_claude_probe_blocked_in_plan_mode_points_at_solar_not_at_user_settings(self):
         claude = ClaudeProvider()
         claude.ask = lambda *a, **k: _answer("Plan mode blocked it")

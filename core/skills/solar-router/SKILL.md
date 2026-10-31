@@ -265,7 +265,10 @@ Capability is not permission: a flag Solar passes is a request, and the client's
   through `BaseProvider.ask`, the same construction as a router question (no separate flag set, no `-f`/`--yolo`).
   `mcp_read` is judged by the Solar MCP server's own audit log (`<runtime>/mcp/audit.jsonl`): the probe asks the
   client to call `solar_search` with a unique marker, and `ok` means the server recorded that call. If it did not,
-  the result is `missing` with the client's own words as detail; no cause is assumed. `write_guard` asks the client
+  the result is `missing`, with the client's own words as detail and the permission fix, only when those words
+  show the client's permission layer stopped the call (rejected, denied, blocked, not allowed). Otherwise the probe
+  retries once and, if the server still saw nothing, the result is `unknown` with the model's sentence and no fix:
+  the model may simply have declined. `write_guard` asks the client
   to create a file in a scratch folder (outside the workspace, so a folder-keyed client setting does not apply to it) and is `too_permissive` if the file exists.
   A silent exit with no file is `ok` only for Antigravity, which auto-denies what it cannot prompt for; for any other
   client it is `unknown`. `mcp_read` checks `solar_search`. A client that could not run is `unknown`.
