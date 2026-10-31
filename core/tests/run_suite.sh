@@ -17,6 +17,7 @@
 # The per-test limit of shell tests needs `timeout` (Ubuntu) or `gtimeout` (macOS with
 # coreutils; the workflow installs it). Without either there is no per-test limit and
 # only the job limit applies; the run says so.
+# pytest runs in parallel (SOLAR_TEST_WORKERS, default 4; 1 = serial); see the serial mark.
 # The smoke script core/tests/skills/solar-gateway/smoke_priority_ensure.sh is not named
 # test_* and needs a live gateway, so it is not run here.
 # A test that cannot run on a runner goes in SKIPS below with a reason; it is
@@ -60,6 +61,9 @@ skip_reason() {
   return 1
 }
 
+# Workers for pytest (xdist). SOLAR_TEST_WORKERS=1 runs everything serially.
+WORKERS="${SOLAR_TEST_WORKERS:-4}"
+
 run_pytest() {
   local ws rc targets=("$TESTS_DIR") t
   if [[ "${1:-}" == macos ]]; then
@@ -72,8 +76,18 @@ run_pytest() {
   echo "== pytest (workspace fixture: $ws)"
   (
     cd "$ws" || exit 2
-    env ${SCRUB[@]+"${SCRUB[@]}"} SOLAR_ROOT="$REPO_ROOT" \
-      uv run --project "$TESTS_DIR" pytest "${targets[@]}" -p no:cacheprovider -q -ra --durations=20 "${PYTEST_EXTRA_ARGS[@]+"${PYTEST_EXTRA_ARGS[@]}"}"
+    pt() { env ${SCRUB[@]+"${SCRUB[@]}"} SOLAR_ROOT="$REPO_ROOT" \
+      uv run --project "$TESTS_DIR" pytest "${targets[@]}" -p no:cacheprovider -q -ra --durations=20 "${PYTEST_EXTRA_ARGS[@]+"${PYTEST_EXTRA_ARGS[@]}"}" "$@"; }
+    if [[ "$WORKERS" -gt 1 ]]; then
+      # Whole files go to one worker (--dist loadfile), so tests of a file never overlap.
+      # A test that is not safe next to other files carries @pytest.mark.serial and its
+      # reason; those run alone in the second pass (exit 5 = none collected, fine).
+      pt -n "$WORKERS" --dist loadfile -m "not serial" || exit $?
+      pt -m serial; r=$?
+      [[ "$r" -eq 5 ]] && r=0
+      exit "$r"
+    fi
+    pt
   )
   rc=$?
   rm -rf "$ws"
