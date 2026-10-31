@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pytest
 
+# Serial: these tests run the whole client sync script. Next to busy workers it got several
+# times slower, and one test of this family hit its fixed 60 s subprocess limit (TimeoutExpired),
+# so the file runs alone in the second pass of core/tests/run_suite.sh. Limits and assertions unchanged.
+pytestmark = pytest.mark.serial
+
 CORE = Path(__file__).resolve().parents[3]
 GUARD = CORE / "tests/support/shell_runtime_guard.sh"
 SYNC = CORE / "skills/solar-client/scripts/client_sync.sh"

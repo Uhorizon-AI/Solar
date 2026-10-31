@@ -6,12 +6,16 @@ requires-python = ">=3.10,<4.0"
 dependencies = [
     "pytest>=8",
     "pytest-timeout>=2.3",
+    "pytest-xdist>=3.5",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-timeout>=2.3"]
+dev = ["pytest>=8", "pytest-timeout>=2.3", "pytest-xdist>=3.5"]
 
 [tool.pytest.ini_options]
 testpaths = ["skills"]
 # A hung test must fail by itself, not hold a CI job until its limit.
 timeout = 300
+markers = [
+    "serial: not safe next to other test files; runs alone in the serial pass of run_suite.sh (say why next to the mark)",
+]

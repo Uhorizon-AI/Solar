@@ -331,6 +331,8 @@ def test_a_supervisor_that_dies_is_replaced_by_the_next_tick_and_nothing_runs_tw
     assert _lines(marker) == ["start Task one", "end Task one", "start Task two", "end Task two"]
 
 
+@pytest.mark.serial  # kills a supervisor and its process group, then expects recovery to prove the group gone.
+#   On a busy CI runner it once reported the group as uncertain (code 20), so it runs alone.
 def test_an_execution_lost_with_its_supervisor_is_failed_not_run_again(rig):
     marker = rig.tmp / "lost.log"
     rel = _mark(rig, "sleep 30", marker)
@@ -609,6 +611,8 @@ def test_a_lease_that_ran_out_ends_the_command_the_executor_started_before_the_t
                 pass
 
 
+@pytest.mark.serial  # asks for a cancellation while a real supervisor writes the same state database.
+#   On a busy CI runner the request hit "database is locked" once, so it runs alone.
 def test_a_forced_cancellation_ends_the_command_too_before_the_place_is_freed(rig):
     task, pidfile = _running_command(rig, "Cancel")
     proc = _start_supervisor_process(rig, sweep=0.5, cancel_grace=1.0, term_grace=1.0, kill_wait=2.0)

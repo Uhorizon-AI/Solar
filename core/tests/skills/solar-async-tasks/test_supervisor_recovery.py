@@ -363,6 +363,8 @@ def test_what_is_still_being_collected_is_not_claimed_again(rig):
     assert "recurring" in sup._exclude()
 
 
+@pytest.mark.serial  # waits on a 0.3 s sweep and a lease of a stuck start.
+#   On a busy CI runner the claim was still active when checked, so it runs alone.
 def test_an_executor_that_hangs_before_taking_its_execution_is_stopped_when_its_lease_runs_out(rig):
     task = rig.legacy("Stuck at the door", spec=dict(outcome="hang_before_attach"))
     with rig.running(sweep=0.3, cooldown=30) as sup:

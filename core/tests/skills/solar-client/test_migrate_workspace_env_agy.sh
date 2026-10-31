@@ -25,7 +25,7 @@ SOLAR_ROUTER_GEMINI_CMD=gemini -y -m gemini-3-flash -p
 # trailing comment
 EOF
 chmod "$chmod_mode" "$ENV_FILE"
-before_mode="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE")"
+before_mode="$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE")"
 
 out="$(python3 "$MIGRATE" "$ENV_FILE" 2>&1)" || { fail "migrator exit non-zero: $out"; echo "=== abort ==="; exit 1; }
 
@@ -61,7 +61,7 @@ else
   fail "GEMINI_CMD was modified unexpectedly"
 fi
 
-after_mode="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE")"
+after_mode="$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE")"
 if [[ "$before_mode" == "$after_mode" ]]; then
   pass "file mode preserved ($after_mode)"
 else

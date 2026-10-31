@@ -216,10 +216,20 @@ def test_wait_rejects_an_out_of_range_timeout_or_poll(solar_env):
                       dict(task_id=made["id"], poll_seconds=31)):
         body, error = execute("task.wait", arguments)
         assert error and body["code"] == "invalid_arguments", arguments
+    # Both caps are inclusive. A task that is already finished answers at once, so the
+    # boundary values are accepted without really waiting 90 s + 60 s on one that never ends.
+    # A real wait on a task that never finishes is still covered, at 1 s and 3 s, by
+    # test_wait_on_a_running_task_returns_status_and_next_without_error and
+    # test_wait_counts_the_time_it_actually_spent. No test waits the full 90 s: the cap value only
+    # goes through the same argument check and the same wait loop.
+    _activate(made["id"])
+    with solar_state.session() as store:
+        _finish(store, made["id"], status="completed")
     for arguments in (dict(task_id=made["id"], timeout_seconds=90),
                       dict(task_id=made["id"], poll_seconds=30)):
         body, error = execute("task.wait", arguments)
-        assert not error, (arguments, body)   # both caps are inclusive
+        assert not error, (arguments, body)
+        assert body["result"]["waited"] is True, (arguments, body)
 
 
 # --------------------------------------------------------------------------
