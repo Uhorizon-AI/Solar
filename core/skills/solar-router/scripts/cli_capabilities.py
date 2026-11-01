@@ -9,6 +9,7 @@ from execution_profiles import ProfileError
 _ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 _HEADER = re.compile(r'^(\s*)\S[^\n]*:\s*$')
 _SKIPPED = re.compile(r'^\s*(?:examples?|usage)\s*:\s*$', re.I)
+_EXAMPLE = re.compile(r'^\s*example\s*:\s*$', re.I)
 _OPTION = re.compile(r'^(\s*)(?:-[A-Za-z?],?\s+)?(--[A-Za-z][\w-]*)(?=[\s=,\[]|$)(.*)$')
 # A label counts only where a description or sentence begins, or inside brackets.
 _START = r'(?:^|(?<=[.;(\[)\]>])\s*|(?<=\s\s))'
@@ -34,7 +35,8 @@ def option_blocks(help_text):
 
     Colour codes are removed. Lines under an `Examples:`/`Usage:` header (any
     indentation) are never declarations until the next header at the same or a
-    shallower indent; a title such as `Usage of agy:` is not such a header, and an option-looking line indented to the description column of
+    shallower indent, except a singular `Example:` at the description column of
+    the current option, which is part of that option's description; a title such as `Usage of agy:` is not such a header, and an option-looking line indented to the description column of
     another option is part of that option's description. The first declaration wins. Only the first option
     of a line is indexed, so aliases or `--x[=V]` layouts are rejected rather than
     guessed. Unknown layouts fail closed.
@@ -50,8 +52,10 @@ def option_blocks(help_text):
             if not (header and len(header[1]) <= skip_indent and not _SKIPPED.match(line)):
                 continue
             skip_indent = None
-        # `Example:` indented deeper than the option it follows is part of that option's description.
-        if _SKIPPED.match(line) and not (current and len(line) - len(line.lstrip()) > indent):
+        # A singular `Example:` at the description column of the option it follows is part of that
+        # option's description; any other Example(s)/Usage header starts a skipped section.
+        if _SKIPPED.match(line) and not (current and column and _EXAMPLE.match(line)
+                                         and len(line) - len(line.lstrip()) >= column):
             skip_indent = len(line) - len(line.lstrip())
             current = None
             continue

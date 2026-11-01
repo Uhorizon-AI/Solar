@@ -184,7 +184,8 @@ def solar_version() -> str:
 
 
 def settings_files(cli: str, home: Path, workspace: Path) -> list[Path]:
-    """The files the static tier reads for `cli` (see each provider's static_permission_checks)."""
+    """The files that decide a probe result for `cli`: what its static_permission_checks reads, plus
+    where the operator writes the rule the fix suggests (a stored `missing` must go stale once it is applied)."""
     codex_home = Path(os.getenv("CODEX_HOME") or home / ".codex")
     return {
         "claude": [home / ".claude.json", workspace / ".mcp.json", home / ".claude" / "settings.json",
@@ -287,13 +288,27 @@ def audit_has_call(marker: str):
 # What a client says when its own permission layer stops a tool call ("User rejected MCP: ...",
 # "denied", "blocked in plan mode", "not allowed"). A model that merely chose not to call
 # the tool says none of this, and that is not a permission problem.
-_DENIAL = re.compile(r"\b(?:reject(?:ed|s)?|den(?:y|ied|ies)|block(?:ed|s)?|refus(?:ed|es)|"
-                     r"not\s+(?:allowed|permitted|authori[sz]ed)|forbidden|disallowed|"
-                     r"permission(?:s)?\s+(?:denied|required|needed))\b", re.I)
+_DENIAL = re.compile(
+    r"\b(?:reject(?:ed|s)?|den(?:y|ied|ies)|forbidden|disallowed|"
+    r"permission(?:s)?\s+(?:denied|required|needed)|"
+    r"(?:block(?:ed|s)?|refus(?:ed|es))\s+by\s+(?:the\s+)?(?:client|permissions?|policy|sandbox|settings?|plan\s+mode)|"
+    r"(?:plan\s+mode|sandbox|policy|permissions?|settings?|client)\s+(?:\w+\s+){0,2}(?:block(?:ed|s)?|refus(?:ed|es)))\b", re.I)
+_NOT_ALLOWED = re.compile(r"\bnot\s+(?:allowed|permitted|authori[sz]ed)\b", re.I)
+_NEGATION = re.compile(r"\b(?:no|not|never|nothing|without)\b|n't", re.I)
 
 
 def denial_evidence(answer_text: str) -> bool:
-    return bool(_DENIAL.search(answer_text or ""))
+    """True only for the client's own denial wording. A bare `blocked`/`refused` (the model
+    explaining itself) does not count, and a denial word after a negation in the same clause
+    (`no permission was denied`, `I was not denied`) does not either."""
+    text = answer_text or ""
+    if _NOT_ALLOWED.search(text):
+        return True
+    for match in _DENIAL.finditer(text):
+        clause = re.split(r"[.;:!?,\n]", text[:match.start()])[-1][-30:]
+        if not _NEGATION.search(clause):
+            return True
+    return False
 
 
 def probe_mcp_read(provider, workspace: Path) -> Finding:
@@ -449,7 +464,9 @@ def summary(static: list[Finding], home=None, workspace=None):
         except (TypeError, ValueError):
             continue
         # A row saved before fingerprints existed cannot be compared, so it is trusted as before.
-        if row.get("fingerprint") and row["fingerprint"] != current.setdefault(key[0], fingerprint(key[0], home, workspace)):
+        if key[0] not in current:
+            current[key[0]] = fingerprint(key[0], home, workspace)
+        if row.get("fingerprint") and row["fingerprint"] != current[key[0]]:
             probes[key] = unknown(key[0], key[1], "settings changed since the probe", tier="probe")
             stale += 1
     if not static:
@@ -467,9 +484,9 @@ def summary(static: list[Finding], home=None, workspace=None):
             unverified += 1
     stamps = [r["probed_at"] for r in rows.values() if r.get("probed_at")]
     probed = f"oldest probe {age_label(min(stamps))}" if stamps else "probe never run"
-    if bad:
-        return "WARN", f"{'; '.join(bad)} ({probed})"
     note = f"; {stale} probe result(s) stale: settings changed since the probe" if stale else ""
+    if bad:
+        return "WARN", f"{'; '.join(bad)} ({probed}{note})"
     if unverified:
         return "INFO", f"{unverified} check(s) unverified ({probed}{note})"
     return "OK", f"all checks ok ({probed}{note})"

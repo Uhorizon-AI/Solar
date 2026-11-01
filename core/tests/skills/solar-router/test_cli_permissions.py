@@ -294,7 +294,7 @@ class TestProbe(Env):
         self.assertEqual((found.status, found.tier), (cp.OK, "probe"))
         self.assertIn(audit.call_args.args[0], seen[0])  # the marker the server is asked about is in the prompt
 
-    def test_read_is_missing_when_the_server_saw_nothing_whatever_the_client_said(self):
+    def test_read_is_missing_when_the_server_saw_nothing_and_the_client_reports_a_denial(self):
         with patch.object(cp, "audit_has_call", return_value=False):
             found = cp.probe_mcp_read(self.provider(lambda *a, **k: _answer("User rejected MCP: solar-solar_search")), self.workspace)
         self.assertEqual(found.status, cp.MISSING)
@@ -338,13 +338,38 @@ class TestProbe(Env):
             found = cp.probe_mcp_read(self.provider(ask), self.workspace)
         self.assertEqual((found.status, len(calls)), (cp.MISSING, 1))
 
+    def test_a_model_explaining_itself_is_not_denial_evidence(self):
+        """Review of #103: a bare `blocked`/`refused`, or a denial word after a negation, is the model talking."""
+        for sentence in ("I am blocked because I need to discover the MCP schema first",
+                         "No permission was denied; the tool schema is unavailable",
+                         "nothing blocked me",
+                         "I was not denied",
+                         "I refused to guess the arguments"):
+            calls = []
+
+            def ask(prompt, _calls=calls, _sentence=sentence, **_):
+                _calls.append(prompt)
+                return _answer(_sentence)
+            with self.subTest(sentence), patch.object(cp, "audit_has_call", return_value=False):
+                found = cp.probe_mcp_read(self.provider(ask), self.workspace)
+            self.assertEqual(found.status, cp.UNKNOWN, sentence)
+            self.assertEqual(len(calls), 2, sentence)  # retried: it was not a denial
+            self.assertFalse(found.fix or found.setting or found.snippet, sentence)
+
+    def test_the_clients_own_denial_wording_is_evidence(self):
+        for sentence in ("User rejected MCP: solar-solar_search", "Plan mode blocked it", "denied",
+                         "The call was blocked by the permission settings", "This tool is not allowed in this mode",
+                         "It was refused by the sandbox"):
+            with self.subTest(sentence):
+                self.assertTrue(cp.denial_evidence(sentence), sentence)
+
     def test_status_does_not_warn_for_a_read_left_unknown_by_a_model_decline(self):
         with TemporaryDirectory() as runtime, patch.object(cp, "store_path", return_value=Path(runtime) / "cp.json"), \
              patch.object(cp, "audit_has_call", return_value=False):
             found = cp.probe_mcp_read(self.provider(lambda *a, **k: _answer("I chose not to call it")), self.workspace)
-            cp.save_probe([found])
+            cp.save_probe([found], self.home, self.workspace)
             static = [cp.Finding("agent", "mcp_read", cp.OK, "static", "allowed")]
-            state, _ = cp.summary(static)
+            state, _ = cp.summary(static, self.home, self.workspace)
         self.assertEqual(found.status, cp.UNKNOWN)
         self.assertNotEqual(state, "WARN")
 
@@ -508,6 +533,46 @@ class TestStoreAndSummary(Env):
         state, detail = cp.summary(static, self.home, self.workspace)
         self.assertEqual(state, "OK")
         self.assertIn("settings changed since the probe", detail)
+
+    def test_a_stale_row_is_still_named_when_another_row_warns(self):
+        self._cursor_config(permissions=dict(allow=[], deny=[]))
+        cp.save_probe([cp.Finding("agent", "write_guard", cp.OK, "probe"),
+                       cp.Finding("codex", "mcp_read", cp.MISSING, "probe")], self.home, self.workspace)
+        self._cursor_config(permissions=dict(allow=["Write(*)"], deny=[]))
+        static = [cp.unknown("agent", "write_guard", "n/a"), cp.Finding("codex", "mcp_read", cp.OK, "static")]
+        state, detail = cp.summary(static, self.home, self.workspace)
+        self.assertEqual(state, "WARN")
+        self.assertIn("codex mcp_read missing", detail)
+        self.assertIn("settings changed since the probe", detail)
+
+    def test_the_fingerprint_is_computed_once_per_client(self):
+        self._cursor_config()
+        cp.save_probe([cp.Finding("agent", "mcp_read", cp.OK, "probe"),
+                       cp.Finding("agent", "write_guard", cp.OK, "probe")], self.home, self.workspace)
+        static = [cp.Finding("agent", "mcp_read", cp.OK, "static")]
+        with patch.object(cp, "fingerprint", wraps=cp.fingerprint) as spy:
+            cp.summary(static, self.home, self.workspace)
+        self.assertEqual(spy.call_count, 1)
+
+    def test_every_file_a_static_check_reads_is_covered_by_the_fingerprint(self):
+        """The list in settings_files is kept by hand: it must not fall behind a provider's static checks."""
+        seen = set()
+
+        def spy(original):
+            def wrapper(path, *args, **kwargs):
+                seen.add(Path(path))
+                return original(path, *args, **kwargs)
+            return wrapper
+        _json(self.home / ".claude.json", {"mcpServers": {}})
+        for provider in (ClaudeProvider(), CodexProvider(), AgentProvider(), AgyProvider()):
+            seen.clear()
+            with patch.object(Path, "open", spy(Path.open)), patch.object(Path, "read_text", spy(Path.read_text)), \
+                 patch.object(Path, "read_bytes", spy(Path.read_bytes)):
+                provider.static_permission_checks(self.home, self.workspace)
+            roots = (str(self.home), str(self.workspace))
+            under = {p for p in seen if str(p).startswith(roots)}
+            covered = set(cp.settings_files(provider.name, self.home, self.workspace))
+            self.assertLessEqual(under, covered, provider.name)
 
     def test_a_stale_ok_no_longer_vouches_for_a_check_the_settings_cannot_settle(self):
         self._cursor_config(permissions=dict(allow=[], deny=[]))
@@ -710,10 +775,6 @@ class TestRestrictedReaderProbe(Env):
         self.assertEqual(config.read_bytes(), before)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestImportOrder(unittest.TestCase):
     """#96: the shared vocabulary must not make providers.base and cli_permissions depend on each other."""
 
@@ -751,3 +812,7 @@ class TestImportOrder(unittest.TestCase):
         for name in ("Finding", "MCP_READ_TOOLS", "MCP_SERVER", "OK", "MISSING", "TOO_PERMISSIVE", "UNKNOWN",
                      "STATUSES", "CHECKS", "CLIENTS", "unknown"):
             self.assertIs(getattr(cp, name), getattr(pm, name), name)
+
+
+if __name__ == "__main__":
+    unittest.main()

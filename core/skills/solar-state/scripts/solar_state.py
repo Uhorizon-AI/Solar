@@ -3616,6 +3616,8 @@ class Session:
                               approval=approval,
                               # Work waiting for approval: only a queued task can be blocked by the
                               # missing authorization. Closed, failed, draft or planned history is not.
+                              # An `active` child already passed its claim, where the authorization is
+                              # checked (_provenance_problem); if it is requeued it counts again.
                               pending=task["status"] == "queued",
                               executable=False))
         return found

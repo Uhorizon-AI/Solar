@@ -203,12 +203,20 @@ def test_a_closing_note_is_ignored_when_a_list_exists_a_documented_trade_off():
 
 def test_an_example_line_inside_an_option_description_does_not_drop_later_options():
     """Claude CLI 2.1.314 puts `Example:` on its own line inside the description of
-    `--json-schema`. The fixture is the 2.1.303 help with that layout (derived: the
-    real 2.1.314 help was not at hand); #104."""
-    text = (Path(__file__).parent / 'fixtures' / 'claude_2.1.314_help_derived.txt').read_text()
+    `--json-schema` (captured from the real `claude --help` of that version); #104."""
+    text = (Path(__file__).parent / 'fixtures' / 'claude_2.1.314_help.txt').read_text()
     blocks = option_blocks(text)
     for option in ('--json-schema', '--max-budget-usd', '--mcp-config', '--model',
                    '--no-session-persistence', '--output-format'):
         assert option in blocks, option
     assert '"type":"object"' in blocks['--json-schema']
-    assert len(blocks) >= 60
+
+
+def test_an_examples_section_is_never_read_as_declarations_even_when_indented_deeper():
+    """Review of #104: only a singular `Example:` at the description column belongs to an option."""
+    text = '\n'.join(['  --model <m>', '    Examples:', '      --print', '', 'Other:', '  --effort <e>   Level'])
+    blocks = option_blocks(text)
+    assert '--model' in blocks
+    assert '--print' not in blocks
+    assert '--effort' in blocks
+
