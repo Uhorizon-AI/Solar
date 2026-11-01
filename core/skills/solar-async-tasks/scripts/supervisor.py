@@ -21,6 +21,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import json
+import math
 import os
 import signal
 import subprocess
@@ -98,7 +99,7 @@ class Execution:
         self.pgid = pid
         self.provider_pid: Optional[int] = None    # leader of the command's own group, once the executor recorded it
         self.access = access or {}
-        self.dispatched_epoch = time.time()
+        self.dispatched_epoch: Optional[float] = time.time()
         self.cancel_seen: Optional[float] = None
         self.reason: Optional[str] = None          # why the supervisor itself stopped it
         self.forced = False
@@ -115,7 +116,8 @@ class Execution:
 
     def view(self) -> dict:
         return {"task_id": self.task_id, "pid": self.pid, "pgid": self.pgid, "adopted": self.adopted,
-                "since": lib.iso(self.dispatched_epoch), "provider": self.access.get("provider")}
+                "since": lib.iso(self.dispatched_epoch) if self.dispatched_epoch is not None else None,
+                "provider": self.access.get("provider")}
 
 
 def default_executor(task_id: str, token: str) -> list[str]:
@@ -728,7 +730,8 @@ class Supervisor:
         ex.provider_pid = pid                      # remembered: it is one of the groups that must be proved gone
         if kind == "unknown" or members is None:
             return "uncertain", pid
-        if kind == "alive" and pid in members and (info.get("epoch") or 0) >= ex.dispatched_epoch - 2:
+        if (kind == "alive" and pid in members and ex.dispatched_epoch is not None
+                and (info.get("epoch") or 0) >= ex.dispatched_epoch - 2):
             return "alive", pid
         if not members:
             return "none", None
@@ -827,6 +830,7 @@ class Supervisor:
         self.blocked[ex.task_id] = {
             "task_id": ex.task_id, "reason": reason, "detail": detail, "since": lib.iso(time.time()),
             "pid": ex.pid, "pgid": ex.pgid, "pgids": ex.groups(), "started": ex.started,
+            "provider_pid": ex.provider_pid, "dispatched_epoch": ex.dispatched_epoch,
             "token": ex.token, "worker": ex.worker,
             "access": ex.access, "released": released, "ours": not ex.foreign}
         log(f"BLOCKED {ex.task_id}: {reason}: {detail}")
@@ -957,6 +961,14 @@ class Supervisor:
                                "provider": row.get("provider"), "access_class": row.get("access_class"),
                                "resources": row.get("resources") or [], "scopes": row.get("scopes") or []})
         pseudo.foreign = not ours
+        # Recovery must not make an old command look older than its dispatch.
+        # Missing/invalid evidence stays unknown, never replaced with "now".
+        stamp = (rec or {}).get("dispatched_epoch")
+        try:
+            stamp = float(stamp) if type(stamp) in (int, float) else 0.0
+        except OverflowError:
+            stamp = 0.0
+        pseudo.dispatched_epoch = stamp if math.isfinite(stamp) and 0 < stamp <= time.time() else None
         if rec and rec.get("pgid"):
             pseudo.pgid = rec["pgid"]
         if rec and rec.get("provider_pid"):

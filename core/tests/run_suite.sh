@@ -5,8 +5,9 @@
 #   bash core/tests/run_suite.sh [pytest|shell|all|macos]   (default: all)
 #
 # `macos` is the macOS runner's job: only the pytest files whose behavior depends on
-# macOS (launchd, LaunchAgents, case-insensitive volume, host lifecycle) plus every
-# shell test. The full pytest suite runs on Ubuntu; running it twice on macOS would
+# macOS (launchd, LaunchAgents, case-insensitive volume, host lifecycle), focused
+# supervisor recovery regressions, and every shell test. The full pytest suite runs on Ubuntu;
+# running it twice on macOS would
 # not fit the job limit and would repeat the same platform-neutral checks.
 #
 # Clean environment: every SOLAR_* variable of the caller is removed before a test runs
@@ -41,8 +42,10 @@ while IFS= read -r _name; do
   [[ "$_name" == SOLAR_CI_SLOW_HEALTH_PROBE ]] || SCRUB+=(-u "$_name")
 done < <(env | sed -n 's/^\(SOLAR_[A-Za-z0-9_]*\)=.*/\1/p')
 
-# Pytest files that depend on macOS, relative to core/tests.
+# macOS targets plus recovery regressions checked on both OSes, relative to core/tests.
 MACOS_PYTEST=(
+  skills/solar-async-tasks/test_supervisor_recovery_identity.py
+  skills/solar-async-tasks/test_supervisor_lifecycle.py::test_an_execution_lost_with_its_supervisor_is_failed_not_run_again
   skills/solar-system
   skills/solar-app/test_host_lifecycle.py
   skills/solar-client/test_service_isolation.py
