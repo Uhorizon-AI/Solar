@@ -735,7 +735,10 @@ class Supervisor:
             return "alive", pid
         if not members:
             return "none", None
-        return ("alive", pid) if immediate else ("uncertain", pid)
+        # The immediate-collection exception covers a vanished group leader,
+        # never missing dispatch evidence or a live leader that failed proof.
+        return (("alive", pid) if immediate and kind == "gone" and ex.dispatched_epoch is not None
+                else ("uncertain", pid))
 
     def _settle_provider_group(self, ex: Execution, immediate: bool = True) -> bool:
         """End the provider group of this execution and prove it gone. False when that cannot be

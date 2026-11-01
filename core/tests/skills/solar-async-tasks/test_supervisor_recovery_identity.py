@@ -97,7 +97,8 @@ def test_invalid_dispatch_evidence_never_authorizes_a_signal(recovery, evidence)
     assert sup.blocked["lost"]["dispatched_epoch"] is None
 
 
-def test_adoption_without_dispatch_evidence_reports_unknown_time(recovery, monkeypatch):
+@pytest.mark.parametrize("immediate", [False, True])
+def test_adoption_without_dispatch_evidence_reports_unknown_time(recovery, monkeypatch, immediate):
     r = recovery
     del r.record["dispatched_epoch"]
     monkeypatch.setattr(mod.lib, "matches", lambda *args: ("alive", {}))
@@ -105,7 +106,19 @@ def test_adoption_without_dispatch_evidence_reports_unknown_time(recovery, monke
     sup._examine(r.row, r.record, startup=True)
     adopted = sup.children["lost"]
     assert adopted.view()["since"] is None
-    assert sup._provider_group(adopted, immediate=False) == ("uncertain", 300)
+    assert sup._provider_group(adopted, immediate=immediate) == ("uncertain", 300)
+    assert r.stopped == []
+
+
+@pytest.mark.parametrize("immediate", [False, True])
+def test_a_live_leader_older_than_dispatch_is_never_proven_owned(recovery, immediate):
+    r = recovery
+    r.process["epoch"] = 900.0
+    sup = r.build()
+    execution = mod.Execution("lost", "fixture", "worker")
+    execution.dispatched_epoch = 1000.0
+    assert sup._provider_group(execution, immediate=immediate) == ("uncertain", 300)
+    assert not sup._settle_provider_group(execution, immediate=immediate)
     assert r.stopped == []
 
 
