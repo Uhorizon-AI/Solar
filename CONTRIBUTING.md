@@ -76,20 +76,23 @@ Making the check required for merging is a repository setting (branch protection
 
 **Maintainers only:** Solar uses semantic versioning for framework releases.
 
-**Release policy.** Releases are grouped: one release per week (the cadence is the maintainer's call), covering every PR merged since the last one. An urgent fix (it breaks users, or security) may go out of cadence. `--publish` refuses unless the `Test suite` checks `Suite (ubuntu-latest)` and `Suite (macos-latest)` are green on the commit under the release commit, also with `--publish --retry`. The only way around it is `--publish --urgent "reason"`, which prints the reason.
+**Release policy.** Releases are grouped: one release per week (the cadence is the maintainer's call), covering merged PRs; urgent fixes may go out of cadence. Prepare metadata on a release branch, merge its PR, then publish the integrated commit. Both `Suite (ubuntu-latest)` and `Suite (macos-latest)` must be green on the **exact release commit**, not its parent. `--publish --urgent "reason"` bypasses only the suite gate, never integration or tag identity.
 
-To create a release:
 ```bash
-bash core/scripts/create-release.sh [--publish]
+# From clean main: create a local release branch and metadata commit, no tag
+bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]
+
+# Push release/vX.Y.Z and open a PR when authorized. After merge, update main
+# and wait for the suite checks on that integrated commit, then:
+bash core/scripts/create-release.sh --publish --version vX.Y.Z
 ```
 
-The script will:
-1. Analyze commits since last release (using Conventional Commits)
-2. Propose a version bump (MAJOR/MINOR/PATCH)
-3. Generate CHANGELOG.md entry
-4. Ask for confirmation
-5. Create tag and commit locally
-6. With `--publish`: check the Test suite is green (or `--urgent "reason"`), run the install E2E, push, create the GitHub Release and verify it
+Publishing fetches `origin/main`, refuses an unmerged target or conflicting tag,
+runs the local installer E2E, creates/pushes only the requested tag and creates/verifies
+the GitHub Release. It never pushes main or unrelated tags. Publication does not
+prepare another commit. `--publish --retry --version vX.Y.Z` completes an existing
+remote tag's Release only after the same integration, exact-commit suite and tag
+identity checks. See the command reference for legacy partial-publication recovery.
 
 **Commit message format:**
 - `feat(scope): description` → MINOR version bump

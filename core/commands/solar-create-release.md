@@ -1,108 +1,98 @@
 ---
 name: solar-create-release
-description: Create a new Solar framework release with semantic versioning
+description: Prepare a release PR, then publish its integrated and checked commit
 ---
 
 # Solar Release Creation
 
-Interactive command to create framework releases with automatic version calculation and changelog generation.
+Release preparation and publication are separate steps. Required checks on protected
+`main` apply to the exact commit being released, including release metadata changes.
 
 ## Usage
 
 ```bash
-# Prepare locally (no remote side effects)
+# From clean main: prepare metadata on a new local release/vX.Y.Z branch, no tag
 bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]
 
-# Publish (A2 formal — push + GitHub Release)
-bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z] --publish
+# Push that branch and open a PR into main (requires explicit authority).
+# After merge: switch to main, fast-forward to origin/main, wait for its checks.
+# Publish the checked HEAD; this never prepares another commit or pushes main.
+bash core/scripts/create-release.sh --publish --version vX.Y.Z
 
-# Idempotent recovery if tag is remote but GitHub Release is missing
-bash core/scripts/create-release.sh --publish --retry [--version vX.Y.Z]
-```
-
-**Options:**
-- `--yes`: Skip confirmation prompt (required in non-interactive shells)
-- `--version vX.Y.Z`: Force version instead of auto bump
-- `--publish`: Local E2E → `git push origin main --tags` → verify remote tag → `gh release create` → API/raw verify
-- `--publish --retry`: Do **not** recreate commit/tag; only complete/verify the GitHub Release
-- `--push`: Deprecated alias for `--publish` (push without Release is not allowed)
-
-**When to use:**
-- After completing 2-3 significant framework features
-- Before starting new major development (to establish baseline)
-- When framework changes are ready for distribution
-
-Publishing (`--publish`) requires formal A2 approval (external push + GitHub Release).
-
----
-
-## Modes
-
-| Mode | Effect | Remoto |
-|---|---|---|
-| Prepare (default) | CHANGELOG + `SOLAR_VERSION` + README Quickstart pin + commit + local tag | no |
-| `--publish` | Prep if needed → **E2E local** → push → `gh release create` → verify | yes |
-| `--publish --retry` | Confirm remote tag; create Release if missing | yes |
-
-### Prepare order (before commit/tag)
-
-1. Calculate `NEW_VERSION`
-2. Update `CHANGELOG.md` and `SOLAR_VERSION` in `scripts/solar`
-3. Rewrite README block between `<!-- solar-bootstrap-pin -->` markers to
-   `https://raw.githubusercontent.com/Uhorizon-AI/Solar/vX.Y.Z/core/skills/solar-client/scripts/bootstrap_solar_client.sh`
-4. Show preview (changelog + pin URL) and confirm
-5. Commit `chore(release): vX.Y.Z` and create local tag
-
-### Publish order
-
-1. Complete prepare if HEAD is not already the release tag
-2. Run `core/tests/skills/solar-client/test_install_solar_client.sh` — abort on failure (**no push**)
-3. `git push origin main --tags`
-4. Verify tag on remote (`git ls-remote`)
-5. `gh release create` (only after remote tag exists)
-6. Verify Release via API + bootstrap raw URL HTTP 200
-
-If `gh release create` fails after a successful push, re-run:
-
-```bash
+# Recovery when the matching tag is already remote but its Release is missing
 bash core/scripts/create-release.sh --publish --retry --version vX.Y.Z
 ```
 
----
+## Options and authority
 
-## Pre-flight Checks
+- `--yes`, `-y`: skip the preparation confirmation prompt.
+- `--version vX.Y.Z`: select the exact version; never silently replaced by a tag on HEAD.
+- `--publish`: publish current HEAD after integration, version and suite checks.
+  If `--version` is omitted, HEAD must already have an exact release tag.
+- `--publish --retry`: use an existing local tag, verify its remote identity and
+  complete the GitHub Release without pushing, rewriting tags or making commits.
+- `--publish --urgent "reason"`: bypass only the suite gate for an urgent fix.
+  The reason is printed. Integration and tag identity checks still apply.
+- `--push`: deprecated alias for `--publish`.
 
-- Working tree clean
-- On `main`
-- At least one commit since last release (or curated `[Unreleased]`)
-- `--publish` also requires `gh` authenticated
+Preparation makes a local branch and commit. Branch pushes, PR creation and
+publication require explicit authority under the workspace policy. `--yes` is
+not authority for external effects.
 
----
+## Prepare
 
-## What Gets Modified (prepare)
+1. Require clean `main`; analyze commits since the last release or curated Unreleased notes.
+2. Calculate and preview the version, changelog and README bootstrap URL; confirm.
+3. Create local branch `release/vX.Y.Z` (fail if it already exists).
+4. Update `CHANGELOG.md`, `SOLAR_VERSION` in the CLI and the README bootstrap pin.
+5. Commit `chore(release): vX.Y.Z`, without creating a tag or sending anything.
+6. Push the branch and open a PR when authorized. Merge only after its checks pass.
 
-- `CHANGELOG.md`
-- `core/skills/solar-client/scripts/solar` (`SOLAR_VERSION`)
-- `README.md` (bootstrap pin only)
-- Git tag `vX.Y.Z`
+## Publish
 
-**NOT modified:** `sun/`, `planets/` (workspace), no VERSION file
+1. Require a clean checkout and the selected version to match `SOLAR_VERSION` at HEAD.
+2. Refuse an existing local tag pointing to a different commit.
+3. Fetch `origin/main` without fetching tags. Require HEAD to be an ancestor of it.
+4. Require `Suite (ubuntu-latest)` and `Suite (macos-latest)` green on **HEAD**, not its parent.
+5. Refuse a remote tag pointing to a different commit; never rewrite it.
+6. Run the local installer E2E; abort before tag creation/push if it fails.
+7. Create the local tag if absent, and push **only that tag**, never `main` or unrelated tags.
+8. Verify the remote tag commit, create the GitHub Release with `--verify-tag` if missing,
+   then verify the Release API and bootstrap URL.
 
----
+Squash/rebase merges can change the release commit SHA. Publish the integrated
+commit after updating main, not the pre-merge release branch. Tags are created
+only after integration, so there is no pre-merge tag to retarget.
+
+## Retry and legacy partial publications
+
+Retry resolves the existing local tag, validates its version, fetches main and
+requires that exact tag commit to be integrated with passing suite checks. It then
+checks the remote tag points to the same commit before creating a missing Release.
+An unavailable remote/API fails closed.
+
+A legacy release may have pushed a tag while main was rejected (GH006). Neither
+`--retry` nor `--urgent` bypasses integration, and no existing tag is moved
+automatically. Inspect local/remote history and integrate the release commit
+through a PR while preserving its identity, or obtain a separate recovery decision
+if a squash/rebase would change the published tag's identity. Never force-push
+main or silently replace a published tag to repair this condition.
 
 ## Identity contract
 
-| Artefact | Value |
+| Artifact | Value |
 |---|---|
 | Tag / GitHub Release | `vMAJOR.MINOR.PATCH` |
 | `SOLAR_VERSION` | `MAJOR.MINOR.PATCH` |
-| README pin | same `vMAJOR.MINOR.PATCH` (written by this script) |
-| Install/update runtime | `releases/latest` via API + curl (no hard-coded default tag) |
+| README bootstrap pin | same `vMAJOR.MINOR.PATCH` |
+| Install/update default | latest stable GitHub Release via API |
 
----
+Preparation changes only release metadata, its branch and commit. It never modifies
+runtime `sun/` or `planets/`, or creates a VERSION file. Releases remain grouped
+unless an urgent fix justifies going outside the maintainer's cadence.
 
-## Exit Codes
+## Exit codes
 
-- `0`: Success
-- `1`: User rejected or publish/E2E failure
-- `2`: Pre-flight / usage error
+- `0`: success.
+- `1`: confirmation rejected or publication/check failure.
+- `2`: usage or pre-flight failure.
