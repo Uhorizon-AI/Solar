@@ -56,7 +56,7 @@ Independent local Codex review found two blockers (first-parent retry selection 
 - 82 shell/publisher tests pass, including fixed preview/command behavior, no local writer, stable Release identity and public bootstrap verification.
 - Controlled lifecycle test executes the real shell/controller using bare Git and fake GitHub services: installer failure before writes, retry to success and idempotent repeat. Its installer is a stub; this is not a live GitHub permissions/branch-protection test.
 - Shell/Python syntax, workflow YAML parsing and whitespace checks pass.
-- Installer E2E is repeated on the committed implementation before push; it runs isolated client sync for the changed release command.
+- 28 installer E2E checks pass on the committed implementation, including isolated client sync for the changed release command.
 - No repository settings, live merge/release/client update or legacy-tag recovery was performed. Native auto-merge remains a prerequisite to enable deliberately after review. Full GitHub CI on the new PR SHA and controlled real-environment activation remain separate evidence.
 
 ## Review feedback on 674d5d8
@@ -65,4 +65,4 @@ Independent local Codex review found two blockers (first-parent retry selection 
 - Enforce strict/up-to-date protection before submission, without accepting merge queue implicitly or changing settings.
 - Separate failed request identity/provenance from publish eligibility, allowing reconciled omission of an already-integrated drifted request while publication remains blocked. Regression covers drift -> pause/omit/unpause -> old retry rejection -> higher corrected request.
 - Bounded bootstrap propagation retries; preserve command stderr; confirm/pin resumed effects; deleted-fork guard; remove unused diff_base; document incompatible CLI changes.
-- 69 controller and 82 shell checks pass locally. Installer E2E is repeated on the follow-up commit before push. Independent Codex review found a confirmed-SHA push race and incomplete successor coverage; both were corrected, with a second static delta review returning Aprobado. Submission now pushes the captured SHA even if HEAD moves, and the corrected successor passes event validation and the publisher guard. Full GitHub CI remains pending at this checkpoint. All evidence here is pre-merge; no setting or live release was changed.
+- 69 controller and 82 shell checks pass locally. 28 installer E2E checks pass on the follow-up implementation commit. Independent Codex review found a confirmed-SHA push race and incomplete successor coverage; both were corrected, with a second static delta review returning Aprobado. Submission now pushes the captured SHA even if HEAD moves, and the corrected successor passes event validation and the publisher guard. Full GitHub CI remains pending at this checkpoint. All evidence here is pre-merge; no setting or live release was changed.
