@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Usage (from framework repo or Solar workspace):
 #   bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]           # prepare (local)
-#   bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z] --publish # publish (A2 formal)
+#   bash core/scripts/create-release.sh --publish [--version vX.Y.Z] # publish (A2 formal)
 #   bash core/scripts/create-release.sh --publish --retry [--version vX.Y.Z]
 #
 # Git root is always resolved from this script's location (…/solar/), not from cwd.
@@ -21,7 +21,7 @@ BOOTSTRAP_REL_PATH="core/skills/solar-client/scripts/bootstrap_solar_client.sh"
 
 RELEASE_REPO="${SOLAR_RELEASE_REPO:-Uhorizon-AI/Solar}"
 # The checks the Test suite workflow reports. Both must be green on the commit
-# that the release commit sits on before anything is published.
+# being released before anything is published.
 REQUIRED_SUITE_CHECKS=("Suite (ubuntu-latest)" "Suite (macos-latest)")
 
 PUBLISH=false
@@ -69,17 +69,18 @@ while [[ $# -gt 0 ]]; do
       cat <<'EOF'
 Usage:
   bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]
-  bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z] --publish
+  bash core/scripts/create-release.sh --publish [--version vX.Y.Z]
   bash core/scripts/create-release.sh --publish --retry [--version vX.Y.Z]
 
 Modes:
-  (default)   Prepare locally: CHANGELOG, SOLAR_VERSION, README Quickstart pin, commit, tag
-  --publish   After prep (if needed): suite gate → local E2E → git push → gh release create → verify API
+  (default)   Prepare locally: release branch, CHANGELOG, SOLAR_VERSION, README pin, commit (no tag)
+  --publish   After PR merge: integration + exact-commit suite gate → local E2E → push one tag → Release
   --publish --retry
               Idempotent recovery when the tag is already remote but the GitHub Release is missing
+              If the local tag is absent, first: git fetch origin tag vX.Y.Z
 
 Options:
-  --yes, -y           Skip confirmation prompt
+  --yes, -y           Skip the preparation confirmation prompt
   --version vX.Y.Z    Force version (must match vMAJOR.MINOR.PATCH)
   --urgent "reason"   Only together with --publish: `--publish --urgent "reason"` publishes
                       without a green test suite. For an urgent fix only; the reason is
@@ -90,8 +91,9 @@ Release policy:
   Releases are grouped: one release per week (cadence proposed by the maintainer),
   covering every PR merged since the last one. An urgent fix (breaks users, security)
   may be released outside the cadence. Publishing requires the Test suite checks
-  "Suite (ubuntu-latest)" and "Suite (macos-latest)" to be green on the commit the
-  release commit sits on; --publish --urgent "reason" is the only way around it. See CONTRIBUTING.md.
+  "Suite (ubuntu-latest)" and "Suite (macos-latest)" to be green on the exact
+  release commit, already integrated into origin/main. --urgent skips only the suite
+  gate, never integration or tag identity. See CONTRIBUTING.md.
 EOF
       exit 0
       ;;
@@ -140,7 +142,7 @@ TOTAL_BREAKING=0
 
 bootstrap_pin_url() {
   local tag="$1"
-  printf 'https://raw.githubusercontent.com/Uhorizon-AI/Solar/%s/%s\n' "$tag" "$BOOTSTRAP_REL_PATH"
+  printf 'https://raw.githubusercontent.com/%s/%s/%s\n' "$RELEASE_REPO" "$tag" "$BOOTSTRAP_REL_PATH"
 }
 
 function update_readme_bootstrap_pin() {
@@ -496,20 +498,16 @@ function update_changelog() {
   success "CHANGELOG.md updated"
 }
 
-function create_tag_and_commit() {
-  info "Creating git tag $NEW_VERSION..."
+function create_release_commit() {
+  info "Creating release commit $NEW_VERSION (no tag until publication)..."
 
   git -C "$GIT_ROOT" add "$CHANGELOG_FILE" "$README_FILE"
   if [[ -f "$SOLAR_CLI" ]]; then
     git -C "$GIT_ROOT" add "$SOLAR_CLI"
-    # Ensure the CLI stays executable in the index (100755), even after version bumps.
-    git -C "$GIT_ROOT" update-index --chmod=+x -- "core/skills/solar-client/scripts/solar" 2>/dev/null \
-      || git -C "$GIT_ROOT" update-index --chmod=+x "$SOLAR_CLI"
+    git -C "$GIT_ROOT" update-index --chmod=+x -- "core/skills/solar-client/scripts/solar"
   fi
   git -C "$GIT_ROOT" commit -m "chore(release): $NEW_VERSION"
-  git -C "$GIT_ROOT" tag "$NEW_VERSION"
-
-  success "Tag $NEW_VERSION created"
+  success "Release commit prepared on release/$NEW_VERSION; open a PR into main"
 }
 
 function run_local_install_e2e() {
@@ -526,17 +524,56 @@ function run_local_install_e2e() {
   success "Local install E2E passed"
 }
 
+# Empty result means the tag is absent. Annotated tags resolve to their commit.
+function remote_tag_commit() {
+  local tag="$1" refs
+  refs="$(git -C "$GIT_ROOT" ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")" || return 1
+  printf '%s\n' "$refs" | awk '
+    $2 ~ /\^\{\}$/ { peeled=$1 }
+    $2 !~ /\^\{\}$/ { direct=$1 }
+    END { print (peeled != "" ? peeled : direct) }
+  '
+}
+
 function verify_remote_tag() {
-  local tag="$1"
-  if ! git -C "$GIT_ROOT" ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
-    error "Tag $tag not found on origin after push"
+  local tag="$1" expected="$2" remote
+  remote="$(remote_tag_commit "$tag")" || { error "Cannot read remote tag $tag"; exit 1; }
+  if [[ "$remote" != "$expected" ]]; then
+    error "Remote tag $tag is missing or points to a different commit; refusing to publish"
     exit 1
   fi
-  success "Remote tag $tag present"
+  success "Remote tag $tag matches $expected"
+}
+
+function require_integrated_commit() {
+  local sha="$1"
+  # Fetch only main; never move local branches or rewrite an existing release tag.
+  git -C "$GIT_ROOT" fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main' || {
+    error "Cannot refresh origin/main; refusing to publish"; exit 1;
+  }
+  if ! git -C "$GIT_ROOT" merge-base --is-ancestor "$sha" refs/remotes/origin/main; then
+    error "Release commit $sha must be on origin/main before publication"
+    echo "Push the release branch, open a PR into main, merge it, then publish the integrated commit." >&2
+    echo "Existing tags are never moved automatically; inspect any partially published release first." >&2
+    exit 1
+  fi
+}
+
+function validate_release_version() {
+  local tag="$1" sha="$2" version
+  if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    error "Invalid --version (expected vMAJOR.MINOR.PATCH): $tag"; exit 2
+  fi
+  version="$(git -C "$GIT_ROOT" show "$sha:core/skills/solar-client/scripts/solar" |
+    sed -n 's/^SOLAR_VERSION="\([^"]*\)"/\1/p')"
+  if [[ "$version" != "${tag#v}" ]]; then
+    error "$tag does not match SOLAR_VERSION at $sha ($version); prepare release metadata through a PR first"
+    exit 1
+  fi
 }
 
 function create_github_release() {
-  local tag="$1"
+  local tag="$1" sha="$2"
   if ! command -v gh >/dev/null 2>&1; then
     error "gh is required for --publish"
     echo "Retry after installing/auth: bash core/scripts/create-release.sh --publish --retry --version $tag" >&2
@@ -548,24 +585,32 @@ function create_github_release() {
     exit 1
   fi
 
-  if gh release view "$tag" --repo Uhorizon-AI/Solar >/dev/null 2>&1; then
+  if gh release view "$tag" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
     info "GitHub Release $tag already exists — skipping create"
     return 0
   fi
 
   local notes_file
   notes_file="$(mktemp)"
-  python3 - <<'PY' "$CHANGELOG_FILE" "$tag" "$notes_file"
-import pathlib, re, sys
-changelog, tag, out = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3])
+  if ! python3 - "$GIT_ROOT" "$sha" "$tag" "$notes_file" <<'PYNOTES'
+import pathlib, re, subprocess, sys
+repo, sha, tag, out = sys.argv[1:]
+text = subprocess.run(
+    ["git", "-C", repo, "show", f"{sha}:CHANGELOG.md"],
+    check=True, capture_output=True, text=True, encoding="utf-8",
+).stdout
 ver = tag.lstrip("v")
-text = changelog.read_text(encoding="utf-8")
 m = re.search(rf"^## \[{re.escape(ver)}\].*?(?=^## |\Z)", text, re.M | re.S)
 body = m.group(0).strip() if m else f"Solar {tag}"
-out.write_text(body + "\n", encoding="utf-8")
-PY
+pathlib.Path(out).write_text(body + "\n", encoding="utf-8")
+PYNOTES
+  then
+    rm -f "$notes_file"
+    error "Cannot read release notes from commit $sha; refusing to create the Release"
+    exit 1
+  fi
 
-  if ! gh release create "$tag" --repo Uhorizon-AI/Solar --title "$tag" --notes-file "$notes_file"; then
+  if ! gh release create "$tag" --verify-tag --repo "$RELEASE_REPO" --title "$tag" --notes-file "$notes_file"; then
     rm -f "$notes_file"
     error "gh release create failed for $tag"
     echo "Retry (does not recreate commit/tag): bash core/scripts/create-release.sh --publish --retry --version $tag" >&2
@@ -577,7 +622,7 @@ PY
 
 function verify_remote_release() {
   local tag="$1"
-  local api="https://api.github.com/repos/Uhorizon-AI/Solar/releases/tags/${tag}"
+  local api="https://api.github.com/repos/${RELEASE_REPO}/releases/tags/${tag}"
   local body
   if ! body="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$api")"; then
     error "Release $tag not visible via API"
@@ -596,21 +641,15 @@ function verify_remote_release() {
   success "Release $tag verified via API"
 }
 
-# Refuse to publish unless the Test suite is green on the commit under the release
-# commit (the last commit of main that CI saw). Fails closed: if GitHub cannot be
-# queried, nothing is published.
+# Both required checks must belong to the exact commit being released.
+# The urgent exception skips only this gate, never integration or tag identity.
 function require_green_suite() {
-  local tag="$1"
+  local sha="$1"
   if [[ -n "$URGENT_REASON" ]]; then
     warn "Publishing WITHOUT the suite gate (--urgent): $URGENT_REASON"
     return 0
   fi
-  local sha
-  if ! sha="$(git -C "$GIT_ROOT" rev-parse "${tag}^" 2>/dev/null)"; then
-    error "Cannot resolve the commit under $tag; refusing to publish"
-    exit 1
-  fi
-  info "Checking the Test suite on ${sha:0:12} (the commit under $tag)..."
+  info "Checking the Test suite on ${sha:0:12} (the exact release commit)..."
   if ! command -v gh >/dev/null 2>&1; then
     error "gh is required to verify the Test suite; refusing to publish"
     exit 1
@@ -641,7 +680,7 @@ PY
   if [[ -n "$problems" ]]; then
     error "The Test suite is not green on ${sha:0:12}; refusing to publish"
     echo "$problems" >&2
-    echo "The gate reads the checks of the commit under the release commit: that commit must be on origin/main and its Test suite run must have finished." >&2
+    echo "The exact release commit must be on origin/main and its Test suite run must have finished." >&2
     echo "Wait for it, or for an urgent fix pass: --publish --urgent \"reason\"" >&2
     exit 1
   fi
@@ -649,32 +688,57 @@ PY
 }
 
 function publish_release() {
-  local tag="$1"
-  require_green_suite "$tag"
+  local tag="$1" sha remote
+  if [[ -n $(git -C "$GIT_ROOT" status --porcelain) ]]; then
+    error "Working tree is not clean; refusing to publish"; exit 2
+  fi
+  sha="$(git -C "$GIT_ROOT" rev-parse HEAD)"
+  validate_release_version "$tag" "$sha"
+  if git -C "$GIT_ROOT" show-ref --verify --quiet "refs/tags/$tag"; then
+    if [[ "$(git -C "$GIT_ROOT" rev-parse "refs/tags/$tag^{commit}")" != "$sha" ]]; then
+      error "Local tag $tag points to a different commit; refusing to move it"; exit 1
+    fi
+  fi
+  require_integrated_commit "$sha"
+  require_green_suite "$sha"
+  remote="$(remote_tag_commit "$tag")" || { error "Cannot read remote tag $tag"; exit 1; }
+  if [[ -n "$remote" && "$remote" != "$sha" ]]; then
+    error "Remote tag $tag points to a different commit; refusing to move it"; exit 1
+  fi
   run_local_install_e2e
-  info "Pushing main and tags to origin..."
-  git -C "$GIT_ROOT" push origin main --tags
-  verify_remote_tag "$tag"
-  create_github_release "$tag"
+  if ! git -C "$GIT_ROOT" show-ref --verify --quiet "refs/tags/$tag"; then
+    git -C "$GIT_ROOT" tag "$tag" "$sha"
+  fi
+  if [[ -z "$remote" ]]; then
+    info "Pushing only $tag to origin (main is never pushed)..."
+    git -C "$GIT_ROOT" push --no-follow-tags origin "refs/tags/$tag:refs/tags/$tag"
+  else
+    info "Remote tag $tag already matches the release commit; skipping push"
+  fi
+  verify_remote_tag "$tag" "$sha"
+  create_github_release "$tag" "$sha"
   verify_remote_release "$tag"
 }
 
 function retry_publish() {
-  local tag="${FORCE_VERSION:-}"
+  local tag="${FORCE_VERSION:-}" sha
   if [[ -z "$tag" ]]; then
     tag="$(git -C "$GIT_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
   fi
   if [[ -z "$tag" ]]; then
-    error "Cannot determine tag for --retry; pass --version vX.Y.Z"
-    exit 2
+    error "Cannot determine tag for --retry; pass --version vX.Y.Z"; exit 2
   fi
   NEW_VERSION="$tag"
+  if ! sha="$(git -C "$GIT_ROOT" rev-parse --verify "refs/tags/$tag^{commit}" 2>/dev/null)"; then
+    error "Local tag $tag is missing; first run: git fetch origin tag $tag"; exit 1
+  fi
+  validate_release_version "$tag" "$sha"
   info "Retry publish for $tag (no commit/tag rewrite)"
-  require_green_suite "$tag"
-  verify_remote_tag "$tag"
-  create_github_release "$tag"
+  require_integrated_commit "$sha"
+  require_green_suite "$sha"
+  verify_remote_tag "$tag" "$sha"
+  create_github_release "$tag" "$sha"
   verify_remote_release "$tag"
-  success "Publish retry complete for $tag"
 }
 
 function prepare_release() {
@@ -689,10 +753,13 @@ function prepare_release() {
   echo -e "${GREEN}✅ Preparing release $NEW_VERSION...${NC}"
   echo ""
 
+  git -C "$GIT_ROOT" switch -c "release/$NEW_VERSION" || {
+    error "Cannot create release/$NEW_VERSION; release files were not modified"; exit 1;
+  }
   update_changelog
   bump_solar_cli_version
   update_readme_bootstrap_pin "$NEW_VERSION"
-  create_tag_and_commit
+  create_release_commit
 }
 
 function main() {
@@ -707,10 +774,15 @@ function main() {
     return 0
   fi
 
-  # If tag already exists at HEAD and --publish only, skip prep.
-  if [[ "$PUBLISH" == true ]] && git -C "$GIT_ROOT" describe --tags --exact-match HEAD >/dev/null 2>&1; then
-    NEW_VERSION="$(git -C "$GIT_ROOT" describe --tags --exact-match HEAD)"
-    info "HEAD already tagged $NEW_VERSION — skipping preparation"
+  if [[ "$PUBLISH" == true ]]; then
+    NEW_VERSION="$FORCE_VERSION"
+    if [[ -z "$NEW_VERSION" ]]; then
+      NEW_VERSION="$(git -C "$GIT_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+    fi
+    if [[ -z "$NEW_VERSION" ]]; then
+      error "Publication requires --version vX.Y.Z after the release PR is merged; it never prepares a new commit"
+      exit 2
+    fi
   else
     prepare_release
   fi
@@ -728,8 +800,9 @@ function main() {
     echo -e "${GREEN}║  🎉 Release $NEW_VERSION prepared locally          ${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "Next (requires A2 formal approval):"
-    echo "  bash core/scripts/create-release.sh --publish --yes --version $NEW_VERSION"
+    echo "Next: push release/$NEW_VERSION and open a PR into main (requires A2 formal approval)."
+    echo "After merge, update main and wait for its exact-commit suite checks, then publish:"
+    echo "  bash core/scripts/create-release.sh --publish --version $NEW_VERSION"
     echo ""
   fi
 }
