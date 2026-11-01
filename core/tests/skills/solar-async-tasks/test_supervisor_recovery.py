@@ -363,8 +363,6 @@ def test_what_is_still_being_collected_is_not_claimed_again(rig):
     assert "recurring" in sup._exclude()
 
 
-@pytest.mark.serial  # waits on a 0.3 s sweep and a lease of a stuck start.
-#   On a busy CI runner the claim was still active when checked, so it runs alone.
 def test_an_executor_that_hangs_before_taking_its_execution_is_stopped_when_its_lease_runs_out(rig):
     task = rig.legacy("Stuck at the door", spec=dict(outcome="hang_before_attach"))
     with rig.running(sweep=0.3, cooldown=30) as sup:
@@ -373,7 +371,10 @@ def test_an_executor_that_hangs_before_taking_its_execution_is_stopped_when_its_
         with solar_state.session() as store:
             store.conn.execute("UPDATE execution_reservations SET lease_expires_at = '2000-01-01T00:00:00Z' "
                                "WHERE task_id = ?", (task,))
-        wait_until(lambda: sup.start_failures.get(task) == 1, 30, what="the stuck start to be given up")
+        # The counter increments before _give_back commits the queue transition.
+        # Observe both results instead of treating an in-memory counter as a commit.
+        wait_until(lambda: sup.start_failures.get(task) == 1 and rig.status(task) == "queued",
+                   30, what="the stuck start to be given back to the queue")
         assert not alive(pid)
         assert rig.status(task) == "queued", "nothing ran, so the claim goes back to the queue"
 

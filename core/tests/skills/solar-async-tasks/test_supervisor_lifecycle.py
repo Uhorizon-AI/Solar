@@ -331,20 +331,33 @@ def test_a_supervisor_that_dies_is_replaced_by_the_next_tick_and_nothing_runs_tw
     assert _lines(marker) == ["start Task one", "end Task one", "start Task two", "end Task two"]
 
 
-@pytest.mark.serial  # kills a supervisor and its process group, then expects recovery to prove the group gone.
-#   On a busy CI runner it once reported the group as uncertain (code 20), so it runs alone.
 def test_an_execution_lost_with_its_supervisor_is_failed_not_run_again(rig):
     marker = rig.tmp / "lost.log"
-    rel = _mark(rig, "sleep 30", marker)
+    rel = _mark(rig, 'if [[ "$*" == "Lost one" ]]; then sleep 30; fi', marker)
     lost = rig.local("Lost one", rel, timeout=60)
     after = rig.local("Zz after", rel, timeout=60)
     first = _ready(rig)["identity"]["pid"]
     wait_until(lambda: "start Lost one" in _lines(marker), 30)
-    children = lib.read_json(rig.ctx.children_file)["executions"]
-    group = children[0]["pgid"]
+    def recorded_command():
+        # run_managed starts the child before its on_start callback records the
+        # PID, so the child's marker alone does not prove that identity is saved.
+        with solar_state.session() as store:
+            return (store.task_get(lost) or {}).get("pid")
+
+    command = wait_until(recorded_command, 30, what="the command identity to be recorded")
+    # The command has its own group and survives the executor. Make it older
+    # than recovery's two-second identity allowance, independent of runner load.
+    time.sleep(3)
+    def recorded_executor():
+        children = (lib.read_json(rig.ctx.children_file) or {}).get("executions", [])
+        return next((child.get("pgid") for child in children if child.get("task_id") == lost), None)
+
+    group = wait_until(recorded_executor, 30, what="the lost task's executor group to be recorded")
+    assert command != group and alive(command)
     os.kill(first, signal.SIGKILL)
-    os.killpg(group, signal.SIGKILL)                      # the whole execution goes with it
+    os.killpg(group, signal.SIGKILL)                      # only the executor's group
     wait_until(lambda: not alive(first) and not alive(group), 10)
+    assert alive(command), "the separate command must be recovered by the new supervisor"
     out = rig.script("ensure_async_tasks.sh")
     assert out.returncode in (0, 10), out.stdout
     wait_until(lambda: rig.status(lost) == "error", 40, what="the lost execution to be reported")

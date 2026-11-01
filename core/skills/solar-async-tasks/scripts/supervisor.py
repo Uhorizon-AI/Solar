@@ -21,6 +21,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import json
+import math
 import os
 import signal
 import subprocess
@@ -98,7 +99,7 @@ class Execution:
         self.pgid = pid
         self.provider_pid: Optional[int] = None    # leader of the command's own group, once the executor recorded it
         self.access = access or {}
-        self.dispatched_epoch = time.time()
+        self.dispatched_epoch: Optional[float] = time.time()
         self.cancel_seen: Optional[float] = None
         self.reason: Optional[str] = None          # why the supervisor itself stopped it
         self.forced = False
@@ -114,8 +115,13 @@ class Execution:
         return [g for g in (self.pgid, self.provider_pid) if g]
 
     def view(self) -> dict:
+        try:
+            since = lib.iso(self.dispatched_epoch) if self.dispatched_epoch is not None else None
+        except (OverflowError, ValueError, OSError):
+            since = None  # retain numeric evidence even when datetime cannot display it
         return {"task_id": self.task_id, "pid": self.pid, "pgid": self.pgid, "adopted": self.adopted,
-                "since": lib.iso(self.dispatched_epoch), "provider": self.access.get("provider")}
+                "since": since,
+                "provider": self.access.get("provider")}
 
 
 def default_executor(task_id: str, token: str) -> list[str]:
@@ -709,9 +715,11 @@ class Supervisor:
         in a group of its own, apart from the executor's): ('none'|'alive'|'uncertain', pid).
 
         The pid is the one the executor recorded for this task after it was dispatched. `alive`
-        means that process still leads its own group and started after the dispatch (so it is
-        this execution's). A group whose leader is gone but still has members is this execution's
-        too when we look right after its executor ended (`immediate`: a group id cannot be reused
+        requires a known dispatch time not later than the current clock, and a process that
+        still leads its own group and started after that dispatch. A live leader without this
+        ownership proof is always `uncertain`. With known, non-future dispatch evidence, a group
+        whose leader is gone (`kind == "gone"`) but still has members is this execution's too
+        when we look right after its executor ended (`immediate`: a group id cannot be reused
         while it has members, and the window for it to have emptied and been reused is the
         milliseconds since); otherwise, and when the process table would not answer, it is
         `uncertain`."""
@@ -728,11 +736,16 @@ class Supervisor:
         ex.provider_pid = pid                      # remembered: it is one of the groups that must be proved gone
         if kind == "unknown" or members is None:
             return "uncertain", pid
-        if kind == "alive" and pid in members and (info.get("epoch") or 0) >= ex.dispatched_epoch - 2:
+        dispatch_ready = ex.dispatched_epoch is not None and ex.dispatched_epoch <= time.time()
+        if (kind == "alive" and pid in members and dispatch_ready
+                and (info.get("epoch") or 0) >= ex.dispatched_epoch - 2):
             return "alive", pid
         if not members:
             return "none", None
-        return ("alive", pid) if immediate else ("uncertain", pid)
+        # The immediate-collection exception covers a vanished group leader,
+        # never unavailable/future dispatch evidence or a live leader that failed proof.
+        return (("alive", pid) if immediate and kind == "gone" and dispatch_ready
+                else ("uncertain", pid))
 
     def _settle_provider_group(self, ex: Execution, immediate: bool = True) -> bool:
         """End the provider group of this execution and prove it gone. False when that cannot be
@@ -827,6 +840,7 @@ class Supervisor:
         self.blocked[ex.task_id] = {
             "task_id": ex.task_id, "reason": reason, "detail": detail, "since": lib.iso(time.time()),
             "pid": ex.pid, "pgid": ex.pgid, "pgids": ex.groups(), "started": ex.started,
+            "provider_pid": ex.provider_pid, "dispatched_epoch": ex.dispatched_epoch,
             "token": ex.token, "worker": ex.worker,
             "access": ex.access, "released": released, "ours": not ex.foreign}
         log(f"BLOCKED {ex.task_id}: {reason}: {detail}")
@@ -957,6 +971,16 @@ class Supervisor:
                                "provider": row.get("provider"), "access_class": row.get("access_class"),
                                "resources": row.get("resources") or [], "scopes": row.get("scopes") or []})
         pseudo.foreign = not ours
+        # Recovery must not make an old command look older than its dispatch.
+        # Missing/invalid evidence stays unknown, never replaced with "now".
+        # Preserve a valid future stamp across clock rollback; ownership checks
+        # wait until the clock catches up without destroying the evidence.
+        stamp = (rec or {}).get("dispatched_epoch")
+        try:
+            stamp = float(stamp) if type(stamp) in (int, float) else 0.0
+        except OverflowError:
+            stamp = 0.0
+        pseudo.dispatched_epoch = stamp if math.isfinite(stamp) and stamp > 0 else None
         if rec and rec.get("pgid"):
             pseudo.pgid = rec["pgid"]
         if rec and rec.get("provider_pid"):
