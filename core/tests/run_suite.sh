@@ -46,6 +46,7 @@ done < <(env | sed -n 's/^\(SOLAR_[A-Za-z0-9_]*\)=.*/\1/p')
 MACOS_PYTEST=(
   skills/solar-async-tasks/test_supervisor_recovery_identity.py
   skills/solar-async-tasks/test_supervisor_lifecycle.py::test_an_execution_lost_with_its_supervisor_is_failed_not_run_again
+  skills/solar-async-tasks/test_supervisor_recovery.py::test_an_executor_that_hangs_before_taking_its_execution_is_stopped_when_its_lease_runs_out
   skills/solar-system
   skills/solar-app/test_host_lifecycle.py
   skills/solar-client/test_service_isolation.py
