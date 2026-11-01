@@ -67,10 +67,30 @@ STUB
 cat > "$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CURL_CALLS"
-for arg in "$@"; do [[ "$arg" == '%{http_code}' ]] && { printf '%s' "${CURL_STATUS:-200}"; exit 0; }; done
+for arg in "$@"; do
+  if [[ "$arg" == '%{http_code}' ]]; then
+    attempt=0
+    if [[ -n "${CURL_ATTEMPT_FILE:-}" ]]; then
+      [[ ! -f "$CURL_ATTEMPT_FILE" ]] || attempt="$(cat "$CURL_ATTEMPT_FILE")"
+      attempt=$((attempt + 1))
+      printf '%s' "$attempt" > "$CURL_ATTEMPT_FILE"
+    fi
+    if [[ -n "${CURL_RECOVER_AFTER:-}" && "$attempt" -ge "$CURL_RECOVER_AFTER" ]]; then
+      printf 200
+    else
+      printf '%s' "${CURL_STATUS:-200}"
+    fi
+    exit 0
+  fi
+done
 if [[ -n "${CURL_BODY:-}" ]]; then printf '%s\n' "$CURL_BODY"; else printf '%s\n' '{"tag_name":"v9.9.9","draft":false,"prerelease":false}'; fi
 STUB
-chmod +x "$TMP/bin/git" "$TMP/bin/curl"
+cat > "$TMP/bin/sleep" <<'STUB'
+#!/usr/bin/env bash
+[[ -z "${SLEEP_CALLS:-}" ]] || printf '%s\n' "$*" >> "$SLEEP_CALLS"
+exit 0
+STUB
+chmod +x "$TMP/bin/git" "$TMP/bin/curl" "$TMP/bin/sleep"
 export PATH="$TMP/bin:$PATH"
 export GH_CALLS="$TMP/gh-calls"
 fixture() {
@@ -279,6 +299,24 @@ grep -q 'git fetch origin tag v9.9.9' "$TMP/out" && pass 'missing local tag give
   main
 ) > "$TMP/out" 2>&1 && [[ "$(cat "$TMP/local-flow")" == prepare ]] && pass 'local mode prepares without submission' || fail 'local mode prepares without submission'
 
+# Resume previews and requires explicit confirmation before any external submit.
+git -C "$PREP" switch -q release/v9.9.10
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP" RESUME=true
+  python3() { echo "$2" >> "$TMP/resume-no-consent"; }
+  main < /dev/null
+) > "$TMP/out" 2>&1 && fail 'noninteractive resume requires confirmation' || pass 'noninteractive resume requires confirmation'
+[[ "$(cat "$TMP/resume-no-consent")" == preview-resume ]] && pass 'unconfirmed resume never submits' || fail 'unconfirmed resume never submits'
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP" RESUME=true AUTO_CONFIRM=true
+  python3() { echo "$*" >> "$TMP/resume-confirmed"; }
+  main < /dev/null
+) > "$TMP/out" 2>&1 && grep -q 'preview-resume --version v9.9.10 --sha' "$TMP/resume-confirmed" && grep -q 'submit --version v9.9.10 --sha' "$TMP/resume-confirmed" && pass 'confirmed resume pins preview and submit SHA' || fail 'confirmed resume pins preview and submit SHA'
+
 cli() { bash "$RELEASE_SH" "$@" > "$TMP/cli" 2>&1; echo $?; }
 [[ "$(cli --urgent hotfix)" == 2 ]] && pass 'urgent requires publish' || fail 'urgent requires publish'
 [[ "$(cli --publish --urgent --yes)" == 2 ]] && pass 'urgent requires written reason' || fail 'urgent requires written reason'
@@ -304,5 +342,9 @@ verify_api '{"tag_name":"v9.9.9","draft":true,"prerelease":false}' && fail 'draf
 verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":true}' && fail 'prerelease is not stable publication success' || pass 'prerelease is not stable publication success'
 verify_api '{"tag_name":"v1.0.0","draft":false,"prerelease":false}' && fail 'wrong Release identity fails verification' || pass 'wrong Release identity fails verification'
 CURL_STATUS=404 verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":false}' && fail 'missing public bootstrap fails verification' || pass 'missing public bootstrap fails verification'
+CURL_STATUS=404 CURL_RECOVER_AFTER=2 CURL_ATTEMPT_FILE="$TMP/propagation-attempts" SLEEP_CALLS="$TMP/propagation-sleeps" verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":false}' && pass 'bootstrap propagation succeeds on second attempt' || fail 'bootstrap propagation succeeds on second attempt'
+[[ "$(cat "$TMP/propagation-attempts")" == 2 && "$(wc -l < "$TMP/propagation-sleeps" | tr -d ' ')" == 1 ]] && pass 'bootstrap retry waits once using test sleep double' || fail 'bootstrap retry waits once using test sleep double'
+CURL_STATUS=404 CURL_ATTEMPT_FILE="$TMP/exhausted-attempts" verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":false}' && fail 'bootstrap retry exhaustion fails' || pass 'bootstrap retry exhaustion fails'
+[[ "$(cat "$TMP/exhausted-attempts")" == 5 ]] && pass 'bootstrap retry is bounded to five attempts' || fail 'bootstrap retry is bounded to five attempts'
 echo "Results: PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

@@ -92,19 +92,28 @@ acceptance gate the exact integrated SHA. Final code must match the frozen base
 plus validated metadata transformations; drift stops instead of silently including
 more code. Ordinary PRs do not publish versions.
 
-Native auto-merge/merge commits and both required Suite checks must be explicitly
-configured; reviews/protections are never bypassed or changed by the script. No
+Native auto-merge/merge commits, both required Suite checks and **Require branches
+to be up to date before merging** (`strict: true`, Settings > Branches > main >
+Required status checks) must be explicitly configured. Merge queue is not supported
+by this workflow; reviews/protections are never bypassed or changed by the script. No
 second command after green CI is needed. `--local` is preparation-only; `--resume`
-reuses a prepared request. `--publish`/`--retry` request remote CI recovery, not a
+previews and confirms a prepared request (`--yes` is required non-interactively). `--publish`/`--retry` request remote CI recovery, not a
 second local tag/Release writer. Remote recovery never skips required checks.
 
 A failed integrated release need not be published to unblock a correction. Explicit
 exception recovery first freezes admissions, stops/reconciles old writers and all
 partial outcomes, appends an omission through a protected PR, then separately
 unfreezes. Tags remain immutable; a corrected higher version can skip a verified
-omission. Unknown in-flight outcomes keep recovery blocked. See the command reference
+omission. Unknown in-flight outcomes keep recovery blocked. Strict protection prevents a
+stale release PR from merging normally. An older/bypassed merge that already contains
+code drift cannot be repaired by retry; omit that identified failed request through
+the same controlled procedure before requesting a higher corrected version. See the command reference
 for the strict registry schema, operator evidence and limits: cancellation and a
 marker do not prove atomic revocation of an accepted API request.
+
+CLI compatibility: `--publish` and `--publish --retry` now request remote CI reruns
+rather than local publication, and `--urgent` suite bypass is rejected. Existing
+local-publication automation must migrate to this remote recovery contract.
 
 No candidate/promotion interface, client auto-update or deployment is part of release
 creation. Merging this implementation does not enable settings or request a release.

@@ -49,8 +49,12 @@ maintainer computer can close. Required reviews/checks remain authoritative.
 After integration, both suite jobs test the exact main-push SHA. The dependent
 publisher verifies merged-PR provenance and allowed transformations against the
 frozen base, runs installer acceptance, then publishes/verifies that SHA's tag and
-stable GitHub Release. Main advancing does not authorize extra code: drift stops
-publication and requires a fresh explicit request. Ordinary PRs do not request or
+stable GitHub Release. Main advancing does not authorize extra code. Required
+up-to-date protection keeps a stale release PR unmerged: close the stale request
+and prepare a fresh explicitly authorized base rather than silently rebasing it.
+If an older loose-protection/bypass merge already integrated a drifted request,
+publication/retry stays blocked; use the freeze/reconcile/omit/unfreeze procedure
+below before a higher corrected request. A retry cannot repair code drift. Ordinary PRs do not request or
 republish versions. Merge, passing checks and verified publication are separate
 outcomes; follow the PR and its post-merge Test suite run/job summary.
 
@@ -65,7 +69,11 @@ tag is checked textually before publication; the public URL is verified afterwar
   open PRs, request auto-merge and request remote re-runs. No new secret is installed.
 - Origin matches `SOLAR_RELEASE_REPO` (default `Uhorizon-AI/Solar`).
 - Repository Settings explicitly enables native **Allow auto-merge** and merge
-  commits. Main requires both `Suite (ubuntu-latest)` and `Suite (macos-latest)`.
+  commits. Main requires both `Suite (ubuntu-latest)` and `Suite (macos-latest)`
+  and **Require branches to be up to date before merging** (`strict: true`, Settings
+  > Branches > main > Required status checks). Missing strict protection refuses
+  submission before remote writes. Merge queue is not supported by this workflow;
+  accepting it would require explicit `merge_group` handling and validation.
   Required human reviews may pause a request. The script never changes settings,
   approves reviews or uses an administrator bypass.
 - No publication-recovery freeze, other open release PR or unresolved predecessor.
@@ -83,6 +91,11 @@ bash core/scripts/create-release.sh --local --version vX.Y.Z
 # From its release branch: reuse/submit the exact prepared request
 bash core/scripts/create-release.sh --resume
 ```
+
+`--resume` first displays version, authorized base, prepared HEAD, repository and
+push/PR/auto-merge/publication effects. It asks for confirmation; non-interactive
+execution requires `--resume --yes`. The submitted HEAD must still match the
+preview, so changes during the confirmation cannot silently alter the request.
 
 An uncertain GitHub response is resolved by inspecting/reusing the existing PR;
 do not prepare another commit/version by assumption. A changed existing PR head
@@ -111,7 +124,9 @@ with `queue: max`; no long-lived publisher token or token-event workflow chain i
 introduced. Concurrency serializes; it does not cancel writes or guarantee merge
 order. A matching tag/Release is reused, conflicting identities stop, and tags
 are never moved/deleted/reused. A draft, prerelease, wrong tag or missing public
-bootstrap URL is not reported as verified stable publication.
+bootstrap URL is not reported as verified stable publication. The raw bootstrap
+URL is retried up to five times with two-second waits to allow CDN propagation;
+only exhaustion marks verification incomplete.
 
 ## Exceptional recovery: freeze, reconcile, omit, unfreeze
 
@@ -139,6 +154,9 @@ cancel/rollback command. Follow these steps in order:
    attestation; CI validates identity, prior freeze, all observed run IDs/attempt
    statuses, partial tag identity and absence of an already-published Release.
    CI cannot independently prove that an already-accepted API write has resolved.
+   Omission validates the request identity and merged PR's original metadata,
+   without requiring the defective integrated tree to be publishable. This also
+   allows omission of an old drifted merge while publication remains prohibited.
 5. After that omission is integrated, explicitly unfreeze through another protected
    PR preserving every entry. Old supported attempts/retries permanently reject the
    omitted version/SHA; a new higher version may skip that defective predecessor.

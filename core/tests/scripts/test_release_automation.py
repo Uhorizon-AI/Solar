@@ -587,3 +587,138 @@ def test_resuming_omitted_request_never_pushes_or_opens_pr(history, monkeypatch)
     with pytest.raises(ValueError, match='cannot be resubmitted'):
         a.submit(REPO, VERSION)
     a.pages.assert_not_called()
+
+
+@pytest.mark.parametrize('strict', [False, None])
+def test_loose_or_missing_up_to_date_protection_refuses_submission(history, monkeypatch, strict):
+    monkeypatch.setattr(a, 'api', Mock(side_effect=[
+        {'allow_auto_merge': True, 'allow_merge_commit': True},
+        {'contexts': list(a.CHECKS), 'strict': strict}]))
+    with pytest.raises(ValueError, match='Require branches to be up to date'):
+        a.repository_ready(REPO)
+
+
+def test_strict_protection_with_both_suites_is_supported(history, monkeypatch):
+    monkeypatch.setattr(a, 'api', Mock(side_effect=[
+        {'allow_auto_merge': True, 'allow_merge_commit': True},
+        {'contexts': list(a.CHECKS), 'strict': True}]))
+    a.repository_ready(REPO)
+
+
+def test_deleted_fork_cannot_crash_matching_release_submission(history, monkeypatch):
+    a.git('checkout', f'release/{VERSION}')
+    monkeypatch.setattr(a, 'repository_ready', lambda repo: None)
+    dead = {**history['pr'], 'head': {**history['pr']['head'], 'repo': None}}
+    monkeypatch.setattr(a, 'pages', lambda path: [dead])
+    original = a.run
+    writes = []
+    def run(*args):
+        if args[0] == 'gh' or (args[0] == 'git' and args[1] == 'push'):
+            writes.append(args)
+            return 'fixture-pr'
+        return original(*args)
+    monkeypatch.setattr(a, 'run', run)
+    a.submit(REPO, VERSION)
+    assert any(cmd[:3] == ('gh', 'pr', 'create') for cmd in writes)
+
+
+def test_resume_preview_binds_identity_and_changed_head_refuses(history, capsys, monkeypatch):
+    a.git('checkout', f'release/{VERSION}')
+    a.preview_resume(REPO, VERSION, history['head'])
+    text = capsys.readouterr().out
+    for expected in [VERSION, history['base'], history['head'], REPO, 'Effects:']:
+        assert expected in text
+    monkeypatch.setattr(a, 'repository_ready', lambda repo: None)
+    a.git('commit', '--allow-empty', '-qm', 'concurrent change after preview')
+    with pytest.raises(ValueError, match='changed after confirmation'):
+        a.submit(REPO, VERSION, history['head'])
+
+
+def test_integrated_drift_can_be_omitted_then_corrected_without_publishing(history, monkeypatch):
+    # Simulate an old loose-protection merge, before strict readiness was enforced.
+    a.git('reset', '--hard', history['base'])
+    Path('parallel-fix.py').write_text('parallel_change = True\n')
+    a.git('add', 'parallel-fix.py')
+    a.git('commit', '-qm', 'another PR advances main while release CI runs')
+    a.git('merge', '--no-ff', '-qm', 'old loose merge with drift', f'release/{VERSION}')
+    drifted = a.git('rev-parse', 'HEAD')
+    history['pr']['merge_commit_sha'] = drifted
+    history['sha'] = drifted
+    event = {**history['event'], 'after': drifted}
+    with pytest.raises(ValueError, match='only release metadata'):
+        a.validate_event(REPO, event, publish=True)
+    with pytest.raises(ValueError, match='only release metadata'):
+        a.guard_publication(REPO, VERSION, drifted)
+
+    frozen = {'schema': 1, 'paused': True, 'entries': []}
+    Path(a.OMISSIONS).write_text(json.dumps(frozen))
+    a.git('add', a.OMISSIONS)
+    a.git('commit', '-qm', 'protected recovery: freeze')
+    freeze_sha = a.git('rev-parse', 'HEAD')
+    data = {**frozen, 'entries': [omission_entry(history)]}
+    Path(a.OMISSIONS).write_text(json.dumps(data))
+    a.git('add', a.OMISSIONS)
+    a.git('commit', '-qm', 'protected recovery: reconciled omission')
+    monkeypatch.setattr(a, 'request_runs', Mock(return_value=[{'id': 55, 'status': 'completed'}]))
+    monkeypatch.setattr(a, 'object_pages', Mock(return_value=[{'status': 'completed'}]))
+    monkeypatch.setattr(a, 'api', Mock(return_value=None))
+    a.validate_registry_change(REPO, freeze_sha, 'HEAD')
+
+    data['paused'] = False
+    Path(a.OMISSIONS).write_text(json.dumps(data))
+    a.git('add', a.OMISSIONS)
+    a.git('commit', '-qm', 'protected recovery: unfreeze after omission')
+    monkeypatch.setattr(a, 'live_registry', Mock(return_value=data))
+    a.require_published(REPO, history['intent'])
+    with pytest.raises(ValueError, match='permanently omitted'):
+        a.guard_publication(REPO, VERSION, drifted)
+
+    # A new explicit request captures the corrected current main, not the old base.
+    fresh_base = a.git('rev-parse', 'HEAD')
+    new_intent = {'schema': 1, 'version': 'v1.2.0', 'base_sha': fresh_base}
+    Path(a.INTENT).write_text(json.dumps(new_intent))
+    Path(a.CLI).write_text('SOLAR_VERSION="1.2.0"\n')
+    Path('CHANGELOG.md').write_text('## [1.2.0]\n- Corrected release\n')
+    Path('README.md').write_text(f'<!-- solar-bootstrap-pin -->\nhttps://raw.githubusercontent.com/{REPO}/v1.2.0/core/skills/solar-client/scripts/bootstrap_solar_client.sh\n<!-- /solar-bootstrap-pin -->')
+    a.git('add', '.')
+    a.git('commit', '-qm', 'request higher corrected version after recovery')
+    assert a.check_metadata('HEAD', new_intent) == 'v1.2.0'
+    successor = a.git('rev-parse', 'HEAD')
+    new_pr = {**history['pr'], 'merge_commit_sha': successor,
+              'base': {'ref': 'main', 'sha': fresh_base},
+              'head': {'ref': 'release/v1.2.0', 'sha': successor, 'repo': {'full_name': REPO}}}
+    monkeypatch.setattr(a, 'pages', lambda path: [{'filename': name} for name in a.ALLOWED] if path.endswith('/files') else [new_pr])
+    new_event = {**event, 'after': successor}
+    assert a.validate_event(REPO, new_event, publish=True) == 'v1.2.0'
+    a.git('update-ref', 'refs/remotes/origin/main', successor)
+    a.guard_publication(REPO, 'v1.2.0', successor)
+    assert not a.git('tag', '--list')  # Neither the defective version nor a replacement was published by recovery.
+
+
+def test_command_failure_preserves_git_or_github_stderr(capsys):
+    failure = subprocess.CalledProcessError(1, ['git', 'push'], stderr='remote: permission denied by repository policy')
+    a.report_failure(failure)
+    assert 'permission denied by repository policy' in capsys.readouterr().err
+
+
+def test_submission_pushes_confirmed_sha_even_if_head_moves_during_queries(history, monkeypatch):
+    a.git('checkout', f'release/{VERSION}')
+    monkeypatch.setattr(a, 'repository_ready', lambda repo: None)
+    def advance_head(repo):
+        a.git('commit', '--allow-empty', '-qm', 'another process changes HEAD after validation')
+        return {'schema': 1, 'paused': False, 'entries': []}
+    monkeypatch.setattr(a, 'live_registry', advance_head)
+    monkeypatch.setattr(a, 'pages', lambda path: [history['pr']])
+    original = a.run
+    writes = []
+    def run(*args):
+        if args[0] == 'gh' or (args[0] == 'git' and args[1] == 'push'):
+            writes.append(args)
+            return ''
+        return original(*args)
+    monkeypatch.setattr(a, 'run', run)
+    a.submit(REPO, VERSION, history['head'])
+    assert a.git('rev-parse', 'HEAD') != history['head']
+    push = next(cmd for cmd in writes if cmd[:2] == ('git', 'push'))
+    assert push[-1] == f'{history["head"]}:refs/heads/release/{VERSION}'
+    assert not any('HEAD:' in arg for arg in push)

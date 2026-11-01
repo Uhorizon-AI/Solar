@@ -58,8 +58,8 @@ def version_tuple(version):
     return tuple(map(int, version[1:].split('.')))
 
 
-def check_metadata(sha, intent, diff_base=None):
-    if not isinstance(intent, dict) or set(intent) != {'schema', 'version', 'base_sha'} or intent['schema'] != 1:
+def check_request_identity(sha, intent):
+    if not isinstance(intent, dict) or set(intent) != {'schema', 'version', 'base_sha'} or type(intent['schema']) is not int or intent['schema'] != 1:
         raise ValueError('Invalid release intent schema')
     version = intent['version']
     version_tuple(version)
@@ -67,10 +67,15 @@ def check_metadata(sha, intent, diff_base=None):
     if not isinstance(base, str) or not re.fullmatch(r'[0-9a-f]{40}', base):
         raise ValueError('Invalid release base SHA')
     git('merge-base', '--is-ancestor', base, sha)
-    changed = set(git('diff', '--name-only', diff_base or base, sha).splitlines())
+    return version, base
+
+
+def check_metadata(sha, intent):
+    version, base = check_request_identity(sha, intent)
+    changed = set(git('diff', '--name-only', base, sha).splitlines())
     if not changed <= ALLOWED or INTENT not in changed:
         raise ValueError('Release request must change only release metadata')
-    before_cli = text_at(diff_base or base, CLI)
+    before_cli = text_at(base, CLI)
     after_cli = text_at(sha, CLI)
     previous_version = re.search(r'^SOLAR_VERSION="([^"]+)"$', before_cli, re.M)
     cli_version = re.search(r'^SOLAR_VERSION="([^"]+)"$', after_cli, re.M)
@@ -90,7 +95,7 @@ def check_metadata(sha, intent, diff_base=None):
     if not block or pin not in block[1]:
         raise ValueError('README bootstrap pin and release intent differ')
     normalize_readme = lambda text: re.sub(r'<!-- solar-bootstrap-pin -->.*?<!-- /solar-bootstrap-pin -->', 'BOOTSTRAP', text, flags=re.S)
-    if normalize_readme(text_at(diff_base or base, 'README.md')) != normalize_readme(readme):
+    if normalize_readme(text_at(base, 'README.md')) != normalize_readme(readme):
         raise ValueError('Release PR may change only the README bootstrap block')
     return version
 
@@ -135,6 +140,8 @@ def repository_ready(repo):
     contexts = set(protection.get('contexts', [])) | {r['context'] for r in protection.get('checks', [])}
     if not CHECKS <= contexts:
         raise ValueError('Both Test suite checks must be required on main')
+    if protection.get('strict') is not True:
+        raise ValueError('Enable Require branches to be up to date before merging in Settings > Branches > main > Required status checks. No settings were changed; merge queues are not supported by this workflow.')
 
 
 def check_prepare(repo):
@@ -151,12 +158,27 @@ def check_prepare(repo):
     require_published(repo, intent_at('origin/main'))
 
 
-def submit(repo, version):
-    repository_ready(repo)
+def prepared_request(version, expected_sha=None):
     sha = git('rev-parse', 'HEAD')
     intent = intent_at(sha)
-    if not intent or check_metadata(sha, intent) != version or git('branch', '--show-current') != f'release/{version}':
-        raise ValueError('Release branch does not match its committed intent')
+    if expected_sha and sha != expected_sha:
+        raise ValueError('Prepared request changed after confirmation; review it again')
+    if (not intent or check_metadata(sha, intent) != version
+            or git('branch', '--show-current') != f'release/{version}' or git('status', '--porcelain')):
+        raise ValueError('Release branch must be clean and match its committed intent')
+    return sha, intent
+
+
+def preview_resume(repo, version, expected_sha=None):
+    require_remote(repo)
+    sha, intent = prepared_request(version, expected_sha)
+    print(f'Version: {version}\nAuthorized base: {intent["base_sha"]}\nPrepared head: {sha}\nDestination: {repo}\n'
+          'Effects: push this prepared branch, open/reuse its PR, request protected auto-merge and CI publication. No new version is prepared.')
+
+
+def submit(repo, version, expected_sha=None):
+    repository_ready(repo)
+    sha, intent = prepared_request(version, expected_sha)
     registry = live_registry(repo)
     if registry['paused']:
         raise ValueError('Release admission is frozen for recovery')
@@ -168,10 +190,10 @@ def submit(repo, version):
     others = [p for p in existing if p['head']['ref'].startswith('release/') and p['head']['ref'] != branch]
     if others:
         raise ValueError('Another release request is already open')
-    matches = [p for p in existing if p['head']['ref'] == branch and p['head']['repo']['full_name'] == repo]
+    matches = [p for p in existing if p['head']['ref'] == branch and p['head']['repo'] and p['head']['repo']['full_name'] == repo]
     if matches and matches[0]['head']['sha'] != sha:
         raise ValueError('Existing release PR has another head; inspect it before resuming')
-    run('git', 'push', '--no-follow-tags', '-u', 'origin', f'HEAD:refs/heads/{branch}')
+    run('git', 'push', '--no-follow-tags', '-u', 'origin', f'{sha}:refs/heads/{branch}')
     if matches:
         pr = matches[0]
         url = pr['html_url']
@@ -320,7 +342,9 @@ def validate_registry_change(repo, parent, sha):
     # operator must reconcile that uncertainty, or must not submit this recovery PR.
     for entry in added:
         intent = intent_at(entry['request_sha'])
-        if not intent or check_metadata(entry['request_sha'], intent) != entry['version']:
+        # Omission establishes identity/provenance, not eligibility to publish.
+        # A drifted integrated tree is precisely one state recovery must handle.
+        if not intent or check_request_identity(entry['request_sha'], intent)[0] != entry['version']:
             raise ValueError('Omission does not identify a valid integrated release request')
         git('merge-base', '--is-ancestor', entry['request_sha'], parent)
         require_release_pr(repo, entry['request_sha'], intent)
@@ -389,7 +413,7 @@ def retry_remote(repo, version=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['check', 'check-version', 'write-intent', 'submit', 'guard', 'retry', 'validate', 'publish'])
+    parser.add_argument('mode', choices=['check', 'check-version', 'write-intent', 'submit', 'preview-resume', 'guard', 'retry', 'validate', 'publish'])
     parser.add_argument('--version')
     parser.add_argument('--sha')
     args = parser.parse_args()
@@ -421,8 +445,10 @@ def main():
         guard_publication(repo, args.version, args.sha)
     elif args.mode == 'retry':
         retry_remote(repo, args.version)
+    elif args.mode == 'preview-resume':
+        preview_resume(repo, args.version, args.sha)
     elif args.mode == 'submit':
-        submit(repo, args.version)
+        submit(repo, args.version, args.sha)
     else:
         event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
         version = validate_event(repo, event, publish=args.mode == 'publish')
@@ -438,11 +464,18 @@ def main():
                 out.write(f'### Release\n\n{version + ": publication verified" if version and args.mode == "publish" else "No release published by this step."}\n')
 
 
+def report_failure(exc):
+    detail = str(exc)
+    if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+        detail += '\n' + exc.stderr.strip()
+    print(f'ERROR: {detail}\nNo release success is implied. Inspect the PR/Actions run. '
+          'Resume submission with --resume; rerun failed jobs after correcting prerequisites. '
+          'Do not move existing tags.', file=sys.stderr)
+
+
 if __name__ == '__main__':
     try:
         main()
     except (ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
-        print(f'ERROR: {exc}\nNo release success is implied. Inspect the PR/Actions run. '
-              'Resume submission with --resume; rerun failed jobs after correcting prerequisites. '
-              'Do not move existing tags.', file=sys.stderr)
+        report_failure(exc)
         sys.exit(1)

@@ -679,14 +679,21 @@ PYVERIFY
   fi
   local url
   url="$(bootstrap_pin_url "$tag")"
-  local code
-  code="$(curl -fsSL -o /dev/null -w '%{http_code}' "$url" || true)"
-  if [[ "$code" != "200" ]]; then
-    error "Bootstrap raw URL returned HTTP $code; publication verification incomplete: $url"
-    exit 1
-  else
-    success "Bootstrap raw URL OK ($url)"
-  fi
+  local code attempt
+  for attempt in 1 2 3 4 5; do
+    code="$(curl --connect-timeout 5 --max-time 10 -fsSL -o /dev/null -w '%{http_code}' "$url" || true)"
+    if [[ "$code" == "200" ]]; then
+      success "Bootstrap raw URL OK ($url)"
+      break
+    fi
+    if [[ "$attempt" -lt 5 ]]; then
+      info "Bootstrap HTTP $code after tag creation; retrying ($attempt/5)..."
+      sleep 2
+    else
+      error "Bootstrap raw URL returned HTTP $code after 5 attempts; publication verification incomplete: $url"
+      exit 1
+    fi
+  done
   success "Release $tag verified via API"
 }
 
@@ -848,7 +855,20 @@ function main() {
     if [[ -n "$FORCE_VERSION" && "$FORCE_VERSION" != "$NEW_VERSION" ]]; then
       error "--resume version does not match the current release branch"; exit 2
     fi
-    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" submit --version "$NEW_VERSION")
+    local resume_sha
+    resume_sha="$(git -C "$GIT_ROOT" rev-parse HEAD)"
+    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" preview-resume --version "$NEW_VERSION" --sha "$resume_sha")
+    if [[ "$AUTO_CONFIRM" != true ]]; then
+      if [[ ! -t 0 ]]; then
+        error "Non-interactive resume requires --yes to confirm the displayed external effects"; exit 2
+      fi
+      read -r -p "Confirm these resume effects? [y/N]: " -n 1 REPLY
+      echo ""
+      if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+        warn "Resume cancelled"; exit 1
+      fi
+    fi
+    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" submit --version "$NEW_VERSION" --sha "$resume_sha")
     return 0
   fi
 

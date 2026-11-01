@@ -2,7 +2,8 @@
 
 **Triage level:** standard
 **Date:** 2026-11-01
-**Status:** completed
+**Status:** in_progress
+**Delivery stage:** PR in review; integration and live activation pending.
 
 ## Objective
 
@@ -49,11 +50,19 @@ The existing updater already reports nominal version and installed commit in its
 
 Independent local Codex review found two blockers (first-parent retry selection and missing check/PR read permissions) and a minor omitted-resubmission admission issue. They are corrected with focused assertions. Second static Codex delta review returned Aprobado, confirming the corrections and explicit operational limits; it did not execute tests or authorize merge/publication.
 
-## Completion evidence
+## Pre-merge validation evidence
 
-- 61 controller tests pass, including strict append-only registry, unresolved writer/outcome rejection, partial/published/conflicting states, omission-aware predecessor acceptance and exact first-parent remote retry.
-- 75 shell/publisher tests pass, including fixed preview/command behavior, no local writer, stable Release identity and public bootstrap verification.
+- 69 controller tests pass, including strict append-only registry, unresolved writer/outcome rejection, partial/published/conflicting states, omission-aware predecessor acceptance and exact first-parent remote retry.
+- 82 shell/publisher tests pass, including fixed preview/command behavior, no local writer, stable Release identity and public bootstrap verification.
 - Controlled lifecycle test executes the real shell/controller using bare Git and fake GitHub services: installer failure before writes, retry to success and idempotent repeat. Its installer is a stub; this is not a live GitHub permissions/branch-protection test.
 - Shell/Python syntax, workflow YAML parsing and whitespace checks pass.
 - Installer E2E is repeated on the committed implementation before push; it runs isolated client sync for the changed release command.
 - No repository settings, live merge/release/client update or legacy-tag recovery was performed. Native auto-merge remains a prerequisite to enable deliberately after review. Full GitHub CI on the new PR SHA and controlled real-environment activation remain separate evidence.
+
+## Review feedback on 674d5d8
+
+- User supplied Claude Requires changes and Antigravity/Codex approvals on the prior SHA; those verdicts do not apply automatically to this follow-up.
+- Enforce strict/up-to-date protection before submission, without accepting merge queue implicitly or changing settings.
+- Separate failed request identity/provenance from publish eligibility, allowing reconciled omission of an already-integrated drifted request while publication remains blocked. Regression covers drift -> pause/omit/unpause -> old retry rejection -> higher corrected request.
+- Bounded bootstrap propagation retries; preserve command stderr; confirm/pin resumed effects; deleted-fork guard; remove unused diff_base; document incompatible CLI changes.
+- 69 controller and 82 shell checks pass locally. Installer E2E is repeated on the follow-up commit before push. Independent Codex review found a confirmed-SHA push race and incomplete successor coverage; both were corrected, with a second static delta review returning Aprobado. Submission now pushes the captured SHA even if HEAD moves, and the corrected successor passes event validation and the publisher guard. Full GitHub CI remains pending at this checkpoint. All evidence here is pre-merge; no setting or live release was changed.

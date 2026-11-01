@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- Breaking CLI change: `create-release.sh --publish` and `--publish --retry` now request the exact remote CI run instead of publishing locally; `--urgent` suite bypass is rejected. `--resume` displays and confirms external effects and requires `--yes` non-interactively. Release submission also requires main up-to-date protection (`strict: true`); repository settings are never changed automatically.
+
 ### Added
 - One-command release requests freeze the authorized main base, prepare/push a metadata PR and request protected native auto-merge; GitHub checks and publishes the integrated SHA. SHA testing stays independent via `solar client update --ref`, without candidate/promotion states. A single remote publisher and exact-run recovery consult a live pause/append-only omission registry; explicit freeze/reconciliation/omission allows corrected higher releases without publishing defective predecessors or moving tags. Issue #122.
 
