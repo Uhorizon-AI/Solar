@@ -57,9 +57,26 @@ def version_tuple(version):
     return tuple(map(int, version[1:].split('.')))
 
 
-def check_metadata(sha, intent, diff_base=None):
-    if not isinstance(intent, dict) or set(intent) != {'schema', 'version', 'base_sha'} or intent['schema'] != 1:
+def check_metadata(sha, intent, diff_base=None, allow_candidate=False):
+    common = {'schema', 'version', 'base_sha'}
+    if not isinstance(intent, dict):
         raise ValueError('Invalid release intent schema')
+    if intent.get('schema') == 1:
+        valid = set(intent) == common
+    else:
+        valid = (intent.get('schema') == 2 and intent.get('stage') in {'candidate', 'release'}
+                 and (set(intent) == common | {'stage'} or (intent.get('stage') == 'release' and set(intent) == common | {'stage', 'tested_sha'})))
+    if not valid:
+        raise ValueError('Invalid release intent schema')
+    if intent.get('stage') == 'candidate' and not allow_candidate:
+        raise ValueError('Candidate is not authorized for publication; explicitly promote its tested SHA')
+    tested = intent.get('tested_sha')
+    if 'tested_sha' in intent:
+        if not isinstance(tested, str) or not re.fullmatch(r'[0-9a-f]{40}', tested):
+            raise ValueError('Invalid tested candidate SHA')
+        git('merge-base', '--is-ancestor', tested, sha)
+        if set(git('diff', '--name-only', tested, sha).splitlines()) - {INTENT}:
+            raise ValueError('Code differs from the locally tested candidate; prepare and test a fresh candidate')
     version = intent['version']
     version_tuple(version)
     base = intent['base_sha']
@@ -117,11 +134,13 @@ def require_remote(repo):
         raise ValueError(f'origin must point to {repo}')
 
 
-def repository_ready(repo):
+def repository_ready(repo, automatic=True):
     if os.environ.get('GITHUB_ACTIONS') == 'true':
         raise ValueError('Submit from the maintainer CLI, not an Actions token/event chain')
     require_remote(repo)
     info = api(f'repos/{repo}')
+    if not automatic:
+        return
     if not info.get('allow_auto_merge') or not info.get('allow_merge_commit'):
         raise ValueError('Enable Allow auto-merge and merge commits in repository Settings before starting. No settings were changed.')
     protection = api(f'repos/{repo}/branches/main/protection/required_status_checks')
@@ -130,13 +149,18 @@ def repository_ready(repo):
         raise ValueError('Both Test suite checks must be required on main')
 
 
-def check_prepare(repo):
-    repository_ready(repo)
+def check_prepare(repo, candidate=False):
+    if candidate:
+        repository_ready(repo, automatic=False)
+    else:
+        repository_ready(repo)
     git('fetch', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main')
     if git('rev-parse', 'HEAD') != git('rev-parse', 'origin/main'):
         raise ValueError('Start from main synchronized with origin/main')
     if git('status', '--porcelain'):
         raise ValueError('Working tree must be clean')
+    if candidate:
+        return  # An experiment does not authorize or serialize stable publication.
     if any(p['head']['ref'].startswith('release/') for p in pages(f'repos/{repo}/pulls?state=open&base=main')):
         raise ValueError('A release PR is already open; resume it rather than creating another')
     require_published(repo, intent_at('origin/main'))
@@ -177,6 +201,48 @@ def submit(repo, version):
     run('gh', 'pr', 'merge', url, '--repo', repo, '--auto', '--merge', '--match-head-commit', sha)
     print(f'Release request submitted: {url}\nGitHub will integrate and publish after its gates pass. '
           'Follow the PR and the Test suite run; the terminal can be closed.')
+
+
+def upload_candidate(repo, version):
+    repository_ready(repo, automatic=False)
+    sha = git('rev-parse', 'HEAD')
+    intent = intent_at(sha)
+    if not intent or intent.get('stage') != 'candidate' or check_metadata(sha, intent, allow_candidate=True) != version:
+        raise ValueError('Not a prepared candidate')
+    branch = git('branch', '--show-current')
+    if branch != f'candidate/{version}/{intent["base_sha"][:12]}' or git('status', '--porcelain'):
+        raise ValueError('Upload requires the clean prepared candidate branch')
+    run('git', 'push', '--no-follow-tags', '-u', 'origin', f'HEAD:refs/heads/{branch}')
+    print(f'Candidate uploaded: {sha}\nTest locally: solar client update --ref {sha}\n'
+          f'No PR, auto-merge, tag or stable Release requested.\n'
+          f'After validation: bash core/scripts/create-release.sh --promote --tested-sha {sha}')
+
+
+def promote(repo, tested, version=None):
+    repository_ready(repo)
+    sha = git('rev-parse', 'HEAD')
+    intent = intent_at(sha)
+    if not tested or tested != sha:
+        raise ValueError('Check out the exact locally tested candidate and pass its full SHA with --tested-sha')
+    if not intent or intent.get('stage') != 'candidate':
+        raise ValueError('Promotion requires a candidate, not an existing release request')
+    requested = check_metadata(sha, intent, allow_candidate=True)
+    if version and version != requested:
+        raise ValueError('Requested version differs from the tested candidate')
+    if git('status', '--porcelain'):
+        raise ValueError('Candidate working tree must be clean')
+    git('fetch', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main')
+    if git('rev-parse', 'origin/main') != intent['base_sha']:
+        raise ValueError('Main advanced since this candidate; prepare and test a fresh candidate from current main')
+    if any(p['head']['ref'].startswith('release/') for p in pages(f'repos/{repo}/pulls?state=open&base=main')):
+        raise ValueError('A release request is already open; stop or finish it before promotion')
+    require_published(repo, intent_at('origin/main'))
+    git('switch', '-c', f'release/{requested}')
+    intent.update(stage='release', tested_sha=tested)
+    Path(INTENT).write_text(json.dumps(intent, indent=2) + '\n')
+    git('add', INTENT)
+    git('commit', '-m', f'chore(release): promote tested {requested}')
+    submit(repo, requested)
 
 
 def validate_event(repo, event, publish=False):
@@ -228,12 +294,16 @@ def validate_event(repo, event, publish=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['check', 'check-version', 'write-intent', 'submit', 'validate', 'publish'])
+    parser.add_argument('mode', choices=['check', 'check-candidate', 'check-version', 'write-intent', 'candidate', 'promote', 'resume', 'submit', 'validate', 'publish'])
     parser.add_argument('--version')
+    parser.add_argument('--stage', choices=['candidate', 'release'], default='release')
+    parser.add_argument('--tested-sha')
     args = parser.parse_args()
     repo = os.environ.get('SOLAR_RELEASE_REPO', 'Uhorizon-AI/Solar')
     if args.mode == 'check':
         check_prepare(repo)
+    elif args.mode == 'check-candidate':
+        check_prepare(repo, candidate=True)
     elif args.mode == 'check-version':
         version_tuple(args.version)
         if api(f'repos/{repo}/git/ref/tags/{args.version}', missing=True):
@@ -246,7 +316,19 @@ def main():
         base = git('rev-parse', 'HEAD')
         path = Path(INTENT)
         path.parent.mkdir(exist_ok=True)
-        path.write_text(json.dumps({'schema': 1, 'version': args.version, 'base_sha': base}, indent=2) + '\n')
+        path.write_text(json.dumps({'schema': 2, 'version': args.version, 'base_sha': base, 'stage': args.stage}, indent=2) + '\n')
+    elif args.mode == 'candidate':
+        upload_candidate(repo, args.version)
+    elif args.mode == 'promote':
+        promote(repo, args.tested_sha, args.version)
+    elif args.mode == 'resume':
+        intent = intent_at('HEAD')
+        if not intent or (args.version and args.version != intent['version']):
+            raise ValueError('Resume requires the matching committed request')
+        if intent.get('stage') == 'candidate':
+            upload_candidate(repo, intent['version'])
+        else:
+            submit(repo, intent['version'])
     elif args.mode == 'submit':
         submit(repo, args.version)
     else:

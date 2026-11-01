@@ -95,6 +95,16 @@ settings, skips reviews or uses an administrator bypass. Installing this feature
 or merging its implementation PR does not request a release. Confirmation (or
 `--yes`) authorizes the displayed prepare/push/PR/auto-merge/publication scope.
 
+For local acceptance before publishing, use `--candidate --version vX.Y.Z` to
+upload a branch without a PR, auto-merge or Release. Test the printed full SHA with
+`solar client update --ref <SHA>`, then explicitly authorize its final release PR
+with `--promote --tested-sha <SHA>`. Promotion requires the exact clean tested HEAD
+and unchanged preparation base; the publisher rejects later code changes. Fix PRs
+can proceed independently; prepare a new candidate from updated main after a failure.
+No version PR is required for each local testing attempt. Candidate upload does not
+require auto-merge to be enabled. Already-integrated failed publication requests
+still need controlled recovery, not an assumed cancel/rollback.
+
 `--local` retains local-only preparation. `--resume` submits/resumes a prepared
 branch; `--publish` and `--publish --retry` remain controlled manual recovery paths.
 A missing retry tag must first be fetched with `git fetch origin tag vX.Y.Z`.

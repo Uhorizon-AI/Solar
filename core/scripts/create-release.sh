@@ -28,6 +28,9 @@ REQUIRED_SUITE_CHECKS=("Suite (ubuntu-latest)" "Suite (macos-latest)")
 
 PUBLISH=false
 LOCAL_ONLY=false
+CANDIDATE=false
+PROMOTE=false
+TESTED_SHA=""
 RESUME=false
 RETRY=false
 AUTO_CONFIRM=false
@@ -36,6 +39,20 @@ URGENT_REASON=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --candidate)
+      CANDIDATE=true
+      shift
+      ;;
+    --promote)
+      PROMOTE=true
+      shift
+      ;;
+    --tested-sha)
+      shift
+      [[ $# -gt 0 ]] || { echo "ERROR: --tested-sha requires the full tested commit SHA" >&2; exit 2; }
+      TESTED_SHA="$1"
+      shift
+      ;;
     --local)
       LOCAL_ONLY=true
       shift
@@ -87,6 +104,10 @@ Usage:
 Modes:
   (default)   Prepare, push release branch, open PR and request protected native auto-merge.
               GitHub tests the integrated commit and publishes it; no second command.
+  --candidate Prepare and push a candidate branch for solar client update --ref SHA.
+              No PR, auto-merge, tag or stable Release. Main can receive fixes normally.
+  --promote --tested-sha SHA
+              Authorize publication of the exact validated candidate; then GitHub continues.
   --local     Prepare only, with no remote writes (no tag).
   --resume    Re-submit the current prepared release branch after an interrupted request.
   --publish   After PR merge: integration + exact-commit suite gate → local E2E → push one tag → Release
@@ -120,8 +141,16 @@ EOF
   esac
 done
 
-if [[ "$LOCAL_ONLY" == true && ( "$PUBLISH" == true || "$RESUME" == true ) ]] || [[ "$RESUME" == true && "$PUBLISH" == true ]]; then
-  echo "ERROR: --local, --resume and --publish are separate modes" >&2
+mode_count=0
+for enabled in "$LOCAL_ONLY" "$CANDIDATE" "$PROMOTE" "$PUBLISH" "$RESUME"; do
+  [[ "$enabled" != true ]] || mode_count=$((mode_count + 1))
+done
+if [[ "$mode_count" -gt 1 ]]; then
+  echo "ERROR: --local, --candidate, --promote, --resume and --publish are separate modes" >&2
+  exit 2
+fi
+if [[ "$PROMOTE" == true && ! "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ "$PROMOTE" != true && -n "$TESTED_SHA" ]]; then
+  echo "ERROR: --promote requires --tested-sha with the full tested SHA; other modes do not accept it" >&2
   exit 2
 fi
 
@@ -435,7 +464,9 @@ function show_preview_and_confirm() {
   echo "CHANGELOG preview:"
   echo "$CHANGELOG_ENTRY"
   echo ""
-  if [[ "$LOCAL_ONLY" != true ]]; then
+  if [[ "$CANDIDATE" == true ]]; then
+    echo "This prepares and uploads a candidate for local testing. No PR, auto-merge or publication."
+  elif [[ "$LOCAL_ONLY" != true ]]; then
     echo "This requests preparation, branch push, a release PR, protected auto-merge and CI publication of $NEW_VERSION."
     echo "Required checks/reviews must pass. GitHub continues after this command exits."
   fi
@@ -531,7 +562,7 @@ function create_release_commit() {
     git -C "$GIT_ROOT" update-index --chmod=+x -- "core/skills/solar-client/scripts/solar"
   fi
   git -C "$GIT_ROOT" commit -m "chore(release): $NEW_VERSION"
-  success "Release commit prepared on release/$NEW_VERSION"
+  success "Metadata commit prepared on $(git -C "$GIT_ROOT" branch --show-current)"
 }
 
 function run_local_install_e2e() {
@@ -780,13 +811,18 @@ function prepare_release() {
   echo -e "${GREEN}✅ Preparing release $NEW_VERSION...${NC}"
   echo ""
 
-  git -C "$GIT_ROOT" switch -c "release/$NEW_VERSION" || {
-    error "Cannot create release/$NEW_VERSION; release files were not modified"; exit 1;
+  local branch="release/$NEW_VERSION" stage=release
+  if [[ "$CANDIDATE" == true ]]; then
+    branch="candidate/$NEW_VERSION/$(git -C "$GIT_ROOT" rev-parse --short=12 HEAD)"
+    stage=candidate
+  fi
+  git -C "$GIT_ROOT" switch -c "$branch" || {
+    error "Cannot create $branch; release files were not modified"; exit 1;
   }
   update_changelog
   bump_solar_cli_version
   update_readme_bootstrap_pin "$NEW_VERSION"
-  (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" write-intent --version "$NEW_VERSION")
+  (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" write-intent --version "$NEW_VERSION" --stage "$stage")
   create_release_commit
 }
 
@@ -797,13 +833,17 @@ function main() {
   echo -e "${BLUE}╚════════════════════════════════════════════════════╝${NC}"
   echo ""
 
+  if [[ "$PROMOTE" == true ]]; then
+    local promote_args=(promote --tested-sha "$TESTED_SHA")
+    [[ -z "$FORCE_VERSION" ]] || promote_args+=(--version "$FORCE_VERSION")
+    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" "${promote_args[@]}")
+    return 0
+  fi
+
   if [[ "$RESUME" == true ]]; then
-    NEW_VERSION="$(git -C "$GIT_ROOT" branch --show-current)"
-    NEW_VERSION="${NEW_VERSION#release/}"
-    if [[ -n "$FORCE_VERSION" && "$FORCE_VERSION" != "$NEW_VERSION" ]]; then
-      error "--resume version does not match the current release branch"; exit 2
-    fi
-    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" submit --version "$NEW_VERSION")
+    local resume_args=(resume)
+    [[ -z "$FORCE_VERSION" ]] || resume_args+=(--version "$FORCE_VERSION")
+    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" "${resume_args[@]}")
     return 0
   fi
 
@@ -823,11 +863,15 @@ function main() {
     fi
   else
     if [[ "$LOCAL_ONLY" != true ]]; then
-      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" check)
+      local check_mode=check
+      [[ "$CANDIDATE" != true ]] || check_mode=check-candidate
+      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" "$check_mode")
     fi
     prepare_release
     if [[ "$LOCAL_ONLY" != true ]]; then
-      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" submit --version "$NEW_VERSION")
+      local submit_mode=submit
+      [[ "$CANDIDATE" != true ]] || submit_mode=candidate
+      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" "$submit_mode" --version "$NEW_VERSION")
       return 0
     fi
   fi

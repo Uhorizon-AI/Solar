@@ -5,7 +5,7 @@ description: Request a release once; GitHub integrates, tests and publishes it
 
 # Solar Release Creation
 
-## Normal operation: one command
+## Direct publication request: one command
 
 From clean main synchronized with origin/main:
 
@@ -35,6 +35,66 @@ Follow the PR and its post-merge Test suite Actions run. Merge, tests and
 publication are separate outcomes. A green PR or a merged request does not mean
 publication succeeded; the publisher's verified result and job summary do.
 Notifications follow the user's GitHub notification settings.
+
+## Optional local validation: candidate first
+
+Use this path when you want to exercise `solar client update` yourself before
+requesting stable publication:
+
+```bash
+# Clean, synchronized main: prepare and upload a testable candidate only
+bash core/scripts/create-release.sh --candidate --version vX.Y.Z
+
+# Use the full immutable SHA printed by the command, available on origin
+solar client update --ref <candidate-SHA>
+
+# After local validation, from that exact clean candidate checkout:
+bash core/scripts/create-release.sh --promote --tested-sha <candidate-SHA>
+```
+
+Candidate mode creates `candidate/vX.Y.Z/<base-SHA-prefix>`, a metadata commit and
+remote branch. It creates **no PR, tag, GitHub Release or auto-merge request**. It
+works even when repository auto-merge is disabled. Confirmation authorizes only
+preparation and candidate upload. The explicit `--ref` updates the selected local
+Solar installation to the candidate; it does not change the stable release channel.
+Use a dedicated test installation/workspace when you want to keep your usual
+installation on stable. The script prints the command; it never updates a client
+itself. Do not use the future stable bootstrap URL to test an unpublished candidate.
+
+Candidates do not occupy the stable-publication slot. Feature/fix PRs can proceed
+normally. If a test fails, abandon that candidate, integrate the fix, synchronize
+main and run `--candidate` again. A new base produces another candidate branch,
+allowing the same intended version to be retested without moving tags or rewriting
+old candidate history. An unchanged base reuses an existing prepared candidate via
+`--resume`; it does not silently overwrite the branch. No version PR is needed for
+these testing iterations.
+
+Promotion is the explicit external-effect authorization after local validation:
+`--tested-sha` must match the current clean candidate HEAD, and main must still
+match its preparation base. The tool records that SHA and changes only intent
+metadata on a new release branch, then opens the **single final release PR** and
+requests native protected auto-merge. Publishing rejects any subsequent code
+change relative to the tested candidate, even if main advanced before integration.
+Prepare and test a fresh candidate instead of publishing untested code.
+
+`--resume` retries an interrupted candidate upload without promoting it; for a
+release-stage request it resumes PR/auto-merge submission. Mode is read from the
+committed intent, not inferred from a command name or branch label alone.
+
+## Stopping a request and recovery limits
+
+An unpromoted candidate has no publication process to cancel: leave its branch
+unused and prepare a fresh candidate after fixes. Candidate mode is the way to
+reserve a local acceptance step before authorizing automatic publication.
+
+For an already-submitted automatic release PR, disable native auto-merge and close
+the PR in GitHub before it merges, then verify its state. If it has already merged,
+closing it cannot revoke an active publisher: inspect/cancel its Actions run as a
+separate recovery operation and verify whether a tag/Release was already created.
+Cancellation is not an atomic rollback, and tags must never be moved. The tool does
+not claim a general cancel/supersede protocol for already-integrated requests.
+A failed integrated predecessor still blocks the next stable request until it is
+recovered; candidate testing and corrective PRs remain possible in parallel.
 
 ## One-time repository prerequisites
 
@@ -92,13 +152,17 @@ publication never uses it. Integration, version and tag identity remain mandator
 
 ## Request integrity and release order
 
-The committed intent records schema, requested version and preparation base SHA.
+The committed intent records schema, requested version, preparation base SHA and
+candidate/release stage. Promoted requests also record the explicitly tested SHA.
+A candidate-stage intent is rejected by the release pipeline. Older schema-1
+release intents remain supported for compatibility.
 Validation checks the CLI version, changelog, README bootstrap pin, metadata-only
 changes and the matching same-repository merged release PR. The publisher checks
 out the immutable event SHA, including after squash/rebase, not a later main tip.
 Deleted request branches are inspected through their persistent GitHub PR refs.
 
-One release request may be open/unpublished at a time. A new request must wait
+Candidates may be prepared/tested in parallel. One stable release request may be
+open/unpublished at a time. A new request must wait
 for its predecessor's non-draft stable Release and matching tag. Race conditions
 are also checked after merge: a stale or unpublished predecessor fails visibly.
 Publishers use a non-cancelling concurrency group with `queue: max`; ordering
@@ -121,7 +185,9 @@ version. Existing v0.60.14 is not repaired automatically.
 
 - `--version vX.Y.Z`: exact requested version; otherwise propose a semantic bump.
 - `--yes`, `-y`: confirm the displayed mode and its effects without a prompt.
-- `--local`, `--resume`, `--publish`: separate modes.
+- `--candidate`: upload for local validation without a PR or publication.
+- `--promote --tested-sha <full-SHA>`: authorize the final version PR for a validated candidate.
+- `--local`, `--candidate`, `--promote`, `--resume`, `--publish`: separate modes.
 - `--retry`: only with `--publish`; complete an existing tag's Release.
 - `--push`: deprecated alias for manual `--publish`.
 - `SOLAR_RELEASE_REPO`: selects checks, Release operations and bootstrap URLs;

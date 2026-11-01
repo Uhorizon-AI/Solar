@@ -7,7 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
-- One-command release requests: prepare metadata, push a release PR and request native auto-merge; GitHub tests the integrated SHA and publishes its release. Committed intent, predecessor/version checks and a queued publisher prevent ordinary changes or racing requests from publishing the wrong commit. Local preparation and manual recovery remain available; auto-merge prerequisites are checked without changing repository settings. Issue #122.
+- One-command release requests: prepare metadata, push a release PR and request native auto-merge; GitHub tests the integrated SHA and publishes its release. Committed intent, predecessor/version checks and a queued publisher prevent ordinary changes or racing requests from publishing the wrong commit. Optional candidate mode uploads a testable SHA without a PR or publication; explicit promotion binds publication to locally validated code. Local preparation and manual recovery remain available; auto-merge prerequisites are checked without changing repository settings. Issue #122.
 
 ### Fixed
 - Release publication works with protected main: prepare metadata on a release branch without a tag, then publish only the requested tag after its exact commit is integrated and checked. Retry and urgent mode retain integration and tag identity checks; existing tags are never moved automatically. Issue #120.

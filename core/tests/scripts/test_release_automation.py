@@ -314,3 +314,120 @@ def test_submission_from_actions_token_chain_is_refused(history, monkeypatch):
     monkeypatch.setenv('GITHUB_ACTIONS', 'true')
     with pytest.raises(ValueError, match='maintainer CLI'):
         a.repository_ready(REPO)
+
+
+@pytest.fixture
+def candidate(history, monkeypatch):
+    a.git('checkout', '-b', f'candidate/{VERSION}/{history["base"][:12]}', history['head'])
+    a.git('branch', '-f', 'main', history['base'])
+    a.git('branch', '-D', f'release/{VERSION}')
+    intent = {**history['intent'], 'schema': 2, 'stage': 'candidate'}
+    Path(a.INTENT).write_text(json.dumps(intent))
+    a.git('add', a.INTENT)
+    a.git('commit', '-qm', 'candidate metadata')
+    history['candidate'] = a.git('rev-parse', 'HEAD')
+    history['intent'] = intent
+    a.git('update-ref', 'refs/remotes/origin/main', history['base'])
+    monkeypatch.setattr(a, 'repository_ready', Mock())
+    monkeypatch.setattr(a, 'pages', Mock(return_value=[]))
+    calls = []
+    real_run = a.run
+    def run(*args):
+        if args[0] == 'gh' or (args[0] == 'git' and args[1] in {'push', 'fetch'}):
+            calls.append(args)
+            return ''
+        return real_run(*args)
+    monkeypatch.setattr(a, 'run', run)
+    history['calls'] = calls
+    return history
+
+
+def test_candidate_never_authorizes_publication(candidate):
+    with pytest.raises(ValueError, match='not authorized'):
+        a.check_metadata('HEAD', candidate['intent'])
+    assert a.check_metadata('HEAD', candidate['intent'], allow_candidate=True) == VERSION
+
+
+def test_upload_candidate_creates_no_pr_or_tag(candidate, capsys):
+    a.upload_candidate(REPO, VERSION)
+    a.repository_ready.assert_called_once_with(REPO, automatic=False)
+    assert len(candidate['calls']) == 1
+    assert candidate['calls'][0][:3] == ('git', 'push', '--no-follow-tags')
+    assert not a.git('tag', '--list')
+    output = capsys.readouterr().out
+    assert f'solar client update --ref {candidate["candidate"]}' in output
+    assert '--promote --tested-sha' in output
+
+
+def test_promote_records_tested_sha_and_changes_only_intent(candidate, monkeypatch):
+    submit = Mock()
+    monkeypatch.setattr(a, 'submit', submit)
+    a.promote(REPO, candidate['candidate'])
+    intent = a.intent_at('HEAD')
+    assert intent['stage'] == 'release' and intent['tested_sha'] == candidate['candidate']
+    assert a.git('branch', '--show-current') == f'release/{VERSION}'
+    assert a.git('diff', '--name-only', candidate['candidate'], 'HEAD') == a.INTENT
+    assert a.check_metadata('HEAD', intent) == VERSION
+    submit.assert_called_once_with(REPO, VERSION)
+
+
+def test_promote_wrong_sha_does_not_modify_candidate(candidate):
+    with pytest.raises(ValueError, match='exact locally tested'):
+        a.promote(REPO, '0' * 40)
+    assert a.git('rev-parse', 'HEAD') == candidate['candidate']
+    assert a.intent_at('HEAD')['stage'] == 'candidate'
+
+
+def test_promote_advanced_main_requires_retest(candidate):
+    a.git('update-ref', 'refs/remotes/origin/main', candidate['sha'])
+    with pytest.raises(ValueError, match='Main advanced'):
+        a.promote(REPO, candidate['candidate'])
+    assert a.git('rev-parse', 'HEAD') == candidate['candidate']
+
+
+def test_promote_does_not_mix_another_version(candidate):
+    with pytest.raises(ValueError, match='differs from the tested'):
+        a.promote(REPO, candidate['candidate'], 'v9.9.9')
+
+
+def test_promote_dirty_candidate_refused(candidate):
+    Path('local-change').write_text('must be tested first')
+    with pytest.raises(ValueError, match='must be clean'):
+        a.promote(REPO, candidate['candidate'])
+
+
+def test_post_test_changes_cannot_publish(candidate, monkeypatch):
+    monkeypatch.setattr(a, 'submit', Mock())
+    a.promote(REPO, candidate['candidate'])
+    Path('another-fix.py').write_text('changed = True')
+    a.git('add', 'another-fix.py')
+    a.git('commit', '-qm', 'untested change')
+    with pytest.raises(ValueError, match='differs from the locally tested'):
+        a.check_metadata('HEAD', a.intent_at('HEAD'))
+
+
+def test_candidate_pr_cannot_enter_release_pipeline(candidate):
+    event = {'pull_request': {**candidate['pr'], 'head': {
+        'ref': a.git('branch', '--show-current'), 'sha': candidate['candidate'], 'repo': {'full_name': REPO}}}}
+    with pytest.raises(ValueError, match='not authorized'):
+        a.validate_event(REPO, event)
+
+
+def test_candidate_upload_does_not_need_automerge(history, monkeypatch):
+    monkeypatch.setattr(a, 'api', Mock(return_value={'allow_auto_merge': False, 'allow_merge_commit': False}))
+    a.repository_ready(REPO, automatic=False)
+    assert a.api.call_count == 1
+
+
+def test_candidate_preflight_allows_parallel_release(history, monkeypatch):
+    a.git('checkout', 'main')
+    a.git('reset', '--hard', history['base'])
+    a.git('update-ref', 'refs/remotes/origin/main', history['base'])
+    ready = Mock()
+    monkeypatch.setattr(a, 'repository_ready', ready)
+    real_git = a.git
+    monkeypatch.setattr(a, 'git', lambda *args: '' if args[0] == 'fetch' else real_git(*args))
+    a.check_prepare(REPO, candidate=True)
+    ready.assert_called_once_with(REPO, automatic=False)
+    a.pages.assert_not_called()
+    a.api.assert_not_called()

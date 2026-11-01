@@ -274,11 +274,31 @@ grep -q 'git fetch origin tag v9.9.9' "$TMP/out" && pass 'missing local tag give
   main
 ) > "$TMP/out" 2>&1 && [[ "$(cat "$TMP/local-flow")" == prepare ]] && pass 'local mode prepares without submission' || fail 'local mode prepares without submission'
 
+# Candidate mode uploads only; promotion is a separate explicit operation.
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP" CANDIDATE=true
+  python3() { echo "$2" >> "$TMP/candidate-flow"; }
+  prepare_release() { echo prepare >> "$TMP/candidate-flow"; NEW_VERSION=v9.9.10; }
+  main
+) > "$TMP/out" 2>&1 && [[ "$(cat "$TMP/candidate-flow")" == "$(printf 'check-candidate\nprepare\ncandidate')" ]] && pass 'candidate command never submits a publication PR' || fail 'candidate command never submits a publication PR'
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP" PROMOTE=true TESTED_SHA="$SHA"
+  python3() { printf '%s\n' "$*" > "$TMP/promote-flow"; }
+  prepare_release() { exit 99; }
+  main
+) > "$TMP/out" 2>&1 && grep -q "promote --tested-sha $SHA" "$TMP/promote-flow" && pass 'promotion carries exact tested SHA without preparing another candidate' || fail 'promotion carries exact tested SHA without preparing another candidate'
+
 cli() { bash "$RELEASE_SH" "$@" > "$TMP/cli" 2>&1; echo $?; }
 [[ "$(cli --urgent hotfix)" == 2 ]] && pass 'urgent requires publish' || fail 'urgent requires publish'
 [[ "$(cli --publish --urgent --yes)" == 2 ]] && pass 'urgent requires written reason' || fail 'urgent requires written reason'
 [[ "$(cli --publish --urgent '   ')" == 2 ]] && pass 'urgent refuses blank reason' || fail 'urgent refuses blank reason'
 [[ "$(cli --help)" == 0 ]] && grep -q 'never integration' "$TMP/cli" && pass 'help documents integration gate' || fail 'help documents integration gate'
 [[ "$(cli --help)" == 0 ]] && grep -q 'git fetch origin tag vX.Y.Z' "$TMP/cli" && pass 'help documents tag fetch for retry' || fail 'help documents tag fetch for retry'
+[[ "$(cli --promote)" == 2 ]] && pass 'promotion requires explicit tested SHA' || fail 'promotion requires explicit tested SHA'
+[[ "$(cli --candidate --publish)" == 2 ]] && pass 'candidate cannot also publish' || fail 'candidate cannot also publish'
 echo "Results: PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]
