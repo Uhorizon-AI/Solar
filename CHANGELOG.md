@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.60.13] - 2026-11-01
+
 ### Fixed
 - fix(async-tasks): preserve the original dispatch time and command PID through supervisor recovery and persisted blocks, preventing delayed restarts from treating a live command as foreign. Missing or invalid identity evidence remains blocked; regression tests cover delayed recovery, repeated blocks, adoption and a real executor/command restart on both CI platforms.
 
