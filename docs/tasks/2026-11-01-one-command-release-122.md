@@ -13,6 +13,7 @@ Keep local SHA testing independent of versioning, and publish a deliberately aut
 
 - Release script/controller, Test suite workflow, offline tests, release/installation/contribution docs and changelog.
 - Remove candidate/promote/tested_sha interfaces and states; preserve ordinary updater-by-SHA without new client mutations.
+- Incidental CI repair: deterministic approval-wait timestamp regression in `core/tests/skills/solar-state/test_approval_wait.py`, needed to unblock validation of this PR; no production or release-flow changes.
 - Excluded: repository configuration, merging this PR, real releases/client updates, old partial-tag recovery and release/v0.60.15.
 
 ## Acceptance criteria
@@ -66,3 +67,11 @@ Independent local Codex review found two blockers (first-parent retry selection 
 - Separate failed request identity/provenance from publish eligibility, allowing reconciled omission of an already-integrated drifted request while publication remains blocked. Regression covers drift -> pause/omit/unpause -> old retry rejection -> higher corrected request.
 - Bounded bootstrap propagation retries; preserve command stderr; confirm/pin resumed effects; deleted-fork guard; remove unused diff_base; document incompatible CLI changes.
 - 69 controller and 82 shell checks pass locally. 28 installer E2E checks pass on the follow-up implementation commit. Independent Codex review found a confirmed-SHA push race and incomplete successor coverage; both were corrected, with a second static delta review returning Aprobado. Submission now pushes the captured SHA even if HEAD moves, and the corrected successor passes event validation and the publisher guard. Full GitHub CI remains pending at this checkpoint. All evidence here is pre-merge; no setting or live release was changed.
+
+## Incidental CI repair and review on 41b2dd4
+
+- Ubuntu run 41318019128 failed because the approval-wait test equated the wait start with the later audit recording timestamp. Crossing a second boundary exposed the incorrect assertion.
+- Commit `41b2dd42766e4b691d8677d86a41699d6838a088` uses the existing controlled clock, advances it one second between approval and claim, checks `since` against `approved_at` and the event's `since`, and retains the 72-hour expiration assertion. Only test code changed.
+- All 45 tests in `core/tests/skills/solar-state/test_approval_wait.py` passed locally. This is separate from the previously recorded release-controller, shell and installer evidence.
+- User supplied Claude approval (97%), Codex Perfecto (100%) and Antigravity Perfecto (100%) for `41b2dd4`. Claude requested this scope/evidence note; those verdicts apply to that SHA. This follow-up changes documentation only.
+- Full pipeline validation remains a pre-merge gate on the latest PR head; no merge or live activation is authorized by this checkpoint.
