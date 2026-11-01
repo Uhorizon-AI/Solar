@@ -198,7 +198,7 @@ git -C "$PREP" config user.email t@example.com
 (
   set --
   source "$RELEASE_SH"
-  GIT_ROOT="$PREP" NEW_VERSION=v9.9.10
+  GIT_ROOT="$PREP" NEW_VERSION=v9.9.10 LOCAL_ONLY=true
   preflight_checks() { :; }; get_last_tag() { :; }; analyze_commits() { :; }
   calculate_version() { :; }; generate_changelog() { :; }; show_preview_and_confirm() { :; }
   update_changelog() { :; }; update_readme_bootstrap_pin() { :; }
@@ -215,7 +215,7 @@ BEFORE="$(git -C "$PREP" rev-parse HEAD)"
 (
   set --
   source "$RELEASE_SH"
-  GIT_ROOT="$PREP" NEW_VERSION=v9.9.10
+  GIT_ROOT="$PREP" NEW_VERSION=v9.9.10 LOCAL_ONLY=true
   preflight_checks() { :; }; get_last_tag() { :; }; analyze_commits() { :; }
   calculate_version() { :; }; generate_changelog() { :; }; show_preview_and_confirm() { :; }
   update_changelog() { echo mutated >> "$TMP/prep-effects"; }
@@ -253,6 +253,26 @@ grep -q 'https://raw.githubusercontent.com/Example/ReleaseFixture/v9.9.9/' "$CUR
 git -C "$REPO" tag -d v9.9.9 > /dev/null
 flow retry && fail 'retry refuses absent local tag' || pass 'retry refuses absent local tag'
 grep -q 'git fetch origin tag v9.9.9' "$TMP/out" && pass 'missing local tag gives explicit fetch command' || fail 'missing local tag gives explicit fetch command'
+
+# Default submission delegates to GitHub and returns without local publication.
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP"
+  python3() { echo "$2" >> "$TMP/request-flow"; }
+  prepare_release() { echo prepare >> "$TMP/request-flow"; NEW_VERSION=v9.9.10; }
+  publish_release() { echo unexpected-publish >> "$TMP/request-flow"; exit 99; }
+  main
+) > "$TMP/out" 2>&1 && pass 'default command submits without manual publication' || fail 'default command submits without manual publication'
+[[ "$(cat "$TMP/request-flow")" == "$(printf 'check\nprepare\nsubmit')" ]] && pass 'default command checks prepares and submits in order' || fail 'default command checks prepares and submits in order'
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP" LOCAL_ONLY=true
+  python3() { echo unexpected-network >> "$TMP/local-flow"; exit 99; }
+  prepare_release() { echo prepare >> "$TMP/local-flow"; NEW_VERSION=v9.9.10; }
+  main
+) > "$TMP/out" 2>&1 && [[ "$(cat "$TMP/local-flow")" == prepare ]] && pass 'local mode prepares without submission' || fail 'local mode prepares without submission'
 
 cli() { bash "$RELEASE_SH" "$@" > "$TMP/cli" 2>&1; echo $?; }
 [[ "$(cli --urgent hotfix)" == 2 ]] && pass 'urgent requires publish' || fail 'urgent requires publish'

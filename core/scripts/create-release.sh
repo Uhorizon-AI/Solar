@@ -5,7 +5,9 @@ set -euo pipefail
 # Creates framework releases with semantic versioning and changelog generation
 #
 # Usage (from framework repo or Solar workspace):
-#   bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]           # prepare (local)
+#   bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]  # submit release request
+#   bash core/scripts/create-release.sh --local [--version vX.Y.Z]   # local preparation only
+#   bash core/scripts/create-release.sh --resume                    # resume submission
 #   bash core/scripts/create-release.sh --publish [--version vX.Y.Z] # publish (A2 formal)
 #   bash core/scripts/create-release.sh --publish --retry [--version vX.Y.Z]
 #
@@ -25,6 +27,8 @@ RELEASE_REPO="${SOLAR_RELEASE_REPO:-Uhorizon-AI/Solar}"
 REQUIRED_SUITE_CHECKS=("Suite (ubuntu-latest)" "Suite (macos-latest)")
 
 PUBLISH=false
+LOCAL_ONLY=false
+RESUME=false
 RETRY=false
 AUTO_CONFIRM=false
 FORCE_VERSION=""
@@ -32,6 +36,14 @@ URGENT_REASON=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --local)
+      LOCAL_ONLY=true
+      shift
+      ;;
+    --resume)
+      RESUME=true
+      shift
+      ;;
     --publish)
       PUBLISH=true
       shift
@@ -73,14 +85,17 @@ Usage:
   bash core/scripts/create-release.sh --publish --retry [--version vX.Y.Z]
 
 Modes:
-  (default)   Prepare locally: release branch, CHANGELOG, SOLAR_VERSION, README pin, commit (no tag)
+  (default)   Prepare, push release branch, open PR and request protected native auto-merge.
+              GitHub tests the integrated commit and publishes it; no second command.
+  --local     Prepare only, with no remote writes (no tag).
+  --resume    Re-submit the current prepared release branch after an interrupted request.
   --publish   After PR merge: integration + exact-commit suite gate → local E2E → push one tag → Release
   --publish --retry
               Idempotent recovery when the tag is already remote but the GitHub Release is missing
               If the local tag is absent, first: git fetch origin tag vX.Y.Z
 
 Options:
-  --yes, -y           Skip the preparation confirmation prompt
+  --yes, -y           Confirm the displayed preparation/request effects without prompting
   --version vX.Y.Z    Force version (must match vMAJOR.MINOR.PATCH)
   --urgent "reason"   Only together with --publish: `--publish --urgent "reason"` publishes
                       without a green test suite. For an urgent fix only; the reason is
@@ -104,6 +119,11 @@ EOF
       ;;
   esac
 done
+
+if [[ "$LOCAL_ONLY" == true && ( "$PUBLISH" == true || "$RESUME" == true ) ]] || [[ "$RESUME" == true && "$PUBLISH" == true ]]; then
+  echo "ERROR: --local, --resume and --publish are separate modes" >&2
+  exit 2
+fi
 
 if [[ -n "$URGENT_REASON" && "$PUBLISH" != true ]]; then
   echo "ERROR: --urgent requires --publish" >&2
@@ -415,6 +435,10 @@ function show_preview_and_confirm() {
   echo "CHANGELOG preview:"
   echo "$CHANGELOG_ENTRY"
   echo ""
+  if [[ "$LOCAL_ONLY" != true ]]; then
+    echo "This requests preparation, branch push, a release PR, protected auto-merge and CI publication of $NEW_VERSION."
+    echo "Required checks/reviews must pass. GitHub continues after this command exits."
+  fi
   echo "Quickstart bootstrap pin:"
   echo "  $(bootstrap_pin_url "$NEW_VERSION")"
   echo ""
@@ -422,7 +446,7 @@ function show_preview_and_confirm() {
   echo ""
 
   if [[ "$AUTO_CONFIRM" == true ]]; then
-    info "Auto-confirmed (--yes)"
+    info "Release request/preparation effects confirmed (--yes)"
     return 0
   fi
 
@@ -431,7 +455,7 @@ function show_preview_and_confirm() {
     exit 2
   fi
 
-  read -r -p "Do you want to create this release? [y/N]: " -n 1 REPLY
+  read -r -p "Confirm the displayed release effects? [y/N]: " -n 1 REPLY
   echo ""
 
   if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
@@ -501,13 +525,13 @@ function update_changelog() {
 function create_release_commit() {
   info "Creating release commit $NEW_VERSION (no tag until publication)..."
 
-  git -C "$GIT_ROOT" add "$CHANGELOG_FILE" "$README_FILE"
+  git -C "$GIT_ROOT" add "$CHANGELOG_FILE" "$README_FILE" "$GIT_ROOT/.github/solar-release.json"
   if [[ -f "$SOLAR_CLI" ]]; then
     git -C "$GIT_ROOT" add "$SOLAR_CLI"
     git -C "$GIT_ROOT" update-index --chmod=+x -- "core/skills/solar-client/scripts/solar"
   fi
   git -C "$GIT_ROOT" commit -m "chore(release): $NEW_VERSION"
-  success "Release commit prepared on release/$NEW_VERSION; open a PR into main"
+  success "Release commit prepared on release/$NEW_VERSION"
 }
 
 function run_local_install_e2e() {
@@ -746,6 +770,9 @@ function prepare_release() {
   get_last_tag
   analyze_commits
   calculate_version
+  if [[ "$LOCAL_ONLY" != true ]]; then
+    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" check-version --version "$NEW_VERSION")
+  fi
   generate_changelog
   show_preview_and_confirm
 
@@ -759,6 +786,7 @@ function prepare_release() {
   update_changelog
   bump_solar_cli_version
   update_readme_bootstrap_pin "$NEW_VERSION"
+  (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" write-intent --version "$NEW_VERSION")
   create_release_commit
 }
 
@@ -768,6 +796,16 @@ function main() {
   echo -e "${BLUE}║         Solar Release Creation                    ║${NC}"
   echo -e "${BLUE}╚════════════════════════════════════════════════════╝${NC}"
   echo ""
+
+  if [[ "$RESUME" == true ]]; then
+    NEW_VERSION="$(git -C "$GIT_ROOT" branch --show-current)"
+    NEW_VERSION="${NEW_VERSION#release/}"
+    if [[ -n "$FORCE_VERSION" && "$FORCE_VERSION" != "$NEW_VERSION" ]]; then
+      error "--resume version does not match the current release branch"; exit 2
+    fi
+    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" submit --version "$NEW_VERSION")
+    return 0
+  fi
 
   if [[ "$RETRY" == true ]]; then
     retry_publish
@@ -784,7 +822,14 @@ function main() {
       exit 2
     fi
   else
+    if [[ "$LOCAL_ONLY" != true ]]; then
+      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" check)
+    fi
     prepare_release
+    if [[ "$LOCAL_ONLY" != true ]]; then
+      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" submit --version "$NEW_VERSION")
+      return 0
+    fi
   fi
 
   if [[ "$PUBLISH" == true ]]; then
@@ -800,9 +845,9 @@ function main() {
     echo -e "${GREEN}║  🎉 Release $NEW_VERSION prepared locally          ${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "Next: push release/$NEW_VERSION and open a PR into main (requires A2 formal approval)."
-    echo "After merge, update main and wait for its exact-commit suite checks, then publish:"
-    echo "  bash core/scripts/create-release.sh --publish --version $NEW_VERSION"
+    echo "To request protected auto-merge and CI publication (requires explicit authority):"
+    echo "  bash core/scripts/create-release.sh --resume"
+    echo "Manual --publish remains available only for deliberate recovery after integration."
     echo ""
   fi
 }

@@ -57,10 +57,12 @@ solar uninstall             # remove wrapper; optional --remove-install
 
 See `core/commands/solar-create-release.md`:
 
-- prepare (local): release branch, CHANGELOG, `SOLAR_VERSION`, README pin and commit; no tag
-- push the release branch and merge its PR when authorized; update main and wait for checks
-- `--publish --version vX.Y.Z` (A2 formal): exact-commit integration and suite gates → local E2E → push only the release tag → GitHub Release → API verify
-- `--publish --retry`: complete a missing GitHub Release only for a matching remote tag whose exact commit is integrated and checked; no tag rewrite
+- default `create-release.sh --version vX.Y.Z`: confirm preparation, branch push, release PR and protected native auto-merge; GitHub tests and publishes the integrated SHA
+- GitHub auto-merge and both required suites must be configured; the script never changes settings or bypasses reviews
+- no second command is needed for normal publication; follow the PR and post-merge Test suite run
+- `--local` prepares without remote writes; `--resume` submits/resumes the prepared request
+- `--publish` / `--publish --retry` remain explicit manual recovery, with integration, exact-commit checks and immutable tag identity
+- publication never updates installed clients automatically
 
 ## Telemetry
 

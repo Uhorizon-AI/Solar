@@ -76,26 +76,33 @@ Making the check required for merging is a repository setting (branch protection
 
 **Maintainers only:** Solar uses semantic versioning for framework releases.
 
-**Release policy.** Releases are grouped: one release per week (the cadence is the maintainer's call), covering merged PRs; urgent fixes may go out of cadence. Prepare metadata on a release branch, merge its PR, then publish the integrated commit. Both `Suite (ubuntu-latest)` and `Suite (macos-latest)` must be green on the **exact release commit**, not its parent. `--publish --urgent "reason"` bypasses only the suite gate, never integration or tag identity.
+**Release policy.** Releases group merged PRs, normally at the maintainer's weekly cadence; urgent fixes may go out of cadence. A deliberate release request initiates the complete protected pipeline:
 
 ```bash
-# From clean main: create a local release branch and metadata commit, no tag
-bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]
-
-# Push release/vX.Y.Z and open a PR when authorized. After merge, update main
-# and wait for the suite checks on that integrated commit, then:
-bash core/scripts/create-release.sh --publish --version vX.Y.Z
+# Clean main synchronized with origin/main; review the full-effect preview
+bash core/scripts/create-release.sh --version vX.Y.Z
 ```
 
-Publishing fetches `origin/main`, refuses an unmerged target or conflicting tag,
-runs the local installer E2E, creates/pushes only the requested tag and creates/verifies
-the GitHub Release. It never pushes main or unrelated tags. Publication does not
-prepare another commit. `--publish --retry --version vX.Y.Z` completes an existing
-remote tag's Release only after the same integration, exact-commit suite and tag
-identity checks. If the local tag is missing, first run `git fetch origin tag vX.Y.Z`.
-The publish target is the checked-out HEAD integrated into `origin/main`; checking
-out local main is recommended, not required. See the command reference for legacy
-partial-publication recovery.
+Confirmation prepares metadata, pushes a release branch, opens the version PR and
+requests GitHub native auto-merge. Required checks and reviews still apply. After
+merge, both suites must pass on the exact integrated commit before the dependent
+publisher runs installer acceptance and creates/verifies its tag and Release. No
+second publish command or running Mac is needed. Ordinary PRs do not publish.
+
+Repository Settings must allow native auto-merge and merge commits, and main must
+require both Suite checks. The script verifies prerequisites; it never changes
+settings, skips reviews or uses an administrator bypass. Installing this feature
+or merging its implementation PR does not request a release. Confirmation (or
+`--yes`) authorizes the displayed prepare/push/PR/auto-merge/publication scope.
+
+`--local` retains local-only preparation. `--resume` submits/resumes a prepared
+branch; `--publish` and `--publish --retry` remain controlled manual recovery paths.
+A missing retry tag must first be fetched with `git fetch origin tag vX.Y.Z`.
+`--urgent "reason"` is manual-only and skips just suite checks, never integration or
+tag identity. Tags remain immutable. Only one release may be pending publication;
+failures remain visible in the PR and Actions and require correction/retry.
+See the command reference for prerequisites, authority, exact-SHA validation and
+legacy partial-publication recovery. No automatic client update/deployment occurs.
 
 **Commit message format:**
 - `feat(scope): description` → MINOR version bump

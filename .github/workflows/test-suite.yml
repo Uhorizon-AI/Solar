@@ -41,5 +41,37 @@ jobs:
       - name: Install coreutils (per-test timeout for shell tests on macOS)
         if: runner.os == 'macOS'
         run: brew install coreutils
+      - name: Validate release intent (ordinary changes do not request publication)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOLAR_RELEASE_REPO: ${{ github.repository }}
+        run: python3 core/scripts/release_automation.py validate
       - name: Run core/tests (clean environment)
         run: bash core/tests/run_suite.sh ${{ matrix.mode }}
+
+  publish:
+    name: Publish requested release
+    needs: suite
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: read
+    concurrency:
+      group: solar-release-publication
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          prune-cache: false
+      - name: Publish only the validated release intent at this exact SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOLAR_RELEASE_REPO: ${{ github.repository }}
+        run: python3 core/scripts/release_automation.py publish
