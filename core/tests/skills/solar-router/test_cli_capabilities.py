@@ -223,8 +223,9 @@ def test_an_examples_section_is_never_read_as_declarations_even_when_indented_de
 
 def test_an_example_inside_an_option_whose_description_starts_on_the_next_line_keeps_the_following_options():
     """Review of #104: no two-space gap on the option line leaves no description column."""
-    text = '\n'.join(['  --allowedTools, --allowed-tools <tools...>', '      Tools to allow.', '      Example: Bash(git:*)',
+    text = '\n'.join(['  --allowedTools, --allowed-tools <tools...>', '      Tools to allow.', '      Example:', '      --print',
                       '  --effort <e>   Level'])
     blocks = option_blocks(text)
     assert '--allowedTools' in blocks
+    assert '--print' not in blocks
     assert '--effort' in blocks

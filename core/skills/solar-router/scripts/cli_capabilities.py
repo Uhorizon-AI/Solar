@@ -45,6 +45,7 @@ def option_blocks(help_text):
     current = None
     indent = 0
     column = None
+    description = None
     skip_indent = None
     for line in _ANSI.sub('', help_text).splitlines():
         header = None if _OPTION.match(line) else _HEADER.match(line)
@@ -64,7 +65,7 @@ def option_blocks(help_text):
             current = None
             continue
         match = _OPTION.match(line)
-        nested = bool(match and current and column and len(match[1]) >= column)
+        nested = bool(match and current and len(match[1]) >= (column or description or len(line) + 1))
         if match and not nested:
             if match[2] in blocks:
                 current = None
@@ -74,7 +75,9 @@ def option_blocks(help_text):
                 blocks[current] = match[3]
                 gap = re.search(r'\S\s{2,}(?=\S)', line[len(match[1]):])
                 column = len(match[1]) + gap.end() if gap else None
+                description = None
         elif current and line.strip() and len(line) - len(line.lstrip()) > indent:
+            description = description or len(line) - len(line.lstrip())
             blocks[current] += '\n' + line.strip()
         elif line.strip():
             current = None
