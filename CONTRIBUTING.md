@@ -76,43 +76,38 @@ Making the check required for merging is a repository setting (branch protection
 
 **Maintainers only:** Solar uses semantic versioning for framework releases.
 
-**Release policy.** Releases group merged PRs, normally at the maintainer's weekly cadence; urgent fixes may go out of cadence. A deliberate release request initiates the complete protected pipeline:
+**Release policy.** Releases group merged PRs at the maintainer's chosen cadence. Testing is independent: use ordinary branches/PRs and optional `solar client update --ref <full-remote-SHA>` without assigning a version or creating release candidates. The updater changes the selected installation/runtime, reports its commit, and does not promise data rollback.
+
+Once code is reviewed/integrated, request publication from clean synchronized main:
 
 ```bash
-# Clean main synchronized with origin/main; review the full-effect preview
 bash core/scripts/create-release.sh --version vX.Y.Z
 ```
 
-Confirmation prepares metadata, pushes a release branch, opens the version PR and
-requests GitHub native auto-merge. Required checks and reviews still apply. After
-merge, both suites must pass on the exact integrated commit before the dependent
-publisher runs installer acceptance and creates/verifies its tag and Release. No
-second publish command or running Mac is needed. Ordinary PRs do not publish.
+The preview fixes the full authorized base SHA, version, destination and metadata.
+Confirmation/intentional `--yes` authorizes branch push, metadata PR, native protected
+auto-merge and CI publication of that scope. The command handles preparation and
+submission; GitHub continues after the terminal closes. Both suites and installer
+acceptance gate the exact integrated SHA. Final code must match the frozen base
+plus validated metadata transformations; drift stops instead of silently including
+more code. Ordinary PRs do not publish versions.
 
-Repository Settings must allow native auto-merge and merge commits, and main must
-require both Suite checks. The script verifies prerequisites; it never changes
-settings, skips reviews or uses an administrator bypass. Installing this feature
-or merging its implementation PR does not request a release. Confirmation (or
-`--yes`) authorizes the displayed prepare/push/PR/auto-merge/publication scope.
+Native auto-merge/merge commits and both required Suite checks must be explicitly
+configured; reviews/protections are never bypassed or changed by the script. No
+second command after green CI is needed. `--local` is preparation-only; `--resume`
+reuses a prepared request. `--publish`/`--retry` request remote CI recovery, not a
+second local tag/Release writer. Remote recovery never skips required checks.
 
-For local acceptance before publishing, use `--candidate --version vX.Y.Z` to
-upload a branch without a PR, auto-merge or Release. Test the printed full SHA with
-`solar client update --ref <SHA>`, then explicitly authorize its final release PR
-with `--promote --tested-sha <SHA>`. Promotion requires the exact clean tested HEAD
-and unchanged preparation base; the publisher rejects later code changes. Fix PRs
-can proceed independently; prepare a new candidate from updated main after a failure.
-No version PR is required for each local testing attempt. Candidate upload does not
-require auto-merge to be enabled. Already-integrated failed publication requests
-still need controlled recovery, not an assumed cancel/rollback.
+A failed integrated release need not be published to unblock a correction. Explicit
+exception recovery first freezes admissions, stops/reconciles old writers and all
+partial outcomes, appends an omission through a protected PR, then separately
+unfreezes. Tags remain immutable; a corrected higher version can skip a verified
+omission. Unknown in-flight outcomes keep recovery blocked. See the command reference
+for the strict registry schema, operator evidence and limits: cancellation and a
+marker do not prove atomic revocation of an accepted API request.
 
-`--local` retains local-only preparation. `--resume` submits/resumes a prepared
-branch; `--publish` and `--publish --retry` remain controlled manual recovery paths.
-A missing retry tag must first be fetched with `git fetch origin tag vX.Y.Z`.
-`--urgent "reason"` is manual-only and skips just suite checks, never integration or
-tag identity. Tags remain immutable. Only one release may be pending publication;
-failures remain visible in the PR and Actions and require correction/retry.
-See the command reference for prerequisites, authority, exact-SHA validation and
-legacy partial-publication recovery. No automatic client update/deployment occurs.
+No candidate/promotion interface, client auto-update or deployment is part of release
+creation. Merging this implementation does not enable settings or request a release.
 
 **Commit message format:**
 - `feat(scope): description` → MINOR version bump

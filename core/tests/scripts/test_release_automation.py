@@ -45,6 +45,8 @@ def history(tmp_path, monkeypatch):
     a.git('switch', '-q', 'main')
     a.git('merge', '--no-ff', '-qm', 'Merge release PR', f'release/{VERSION}')
     sha = a.git('rev-parse', 'HEAD')
+    a.git('update-ref', 'refs/remotes/origin/main', sha)
+    monkeypatch.setattr(a, 'live_registry', Mock(return_value={'schema': 1, 'paused': False, 'entries': []}))
     pr = {'number': 1, 'html_url': 'fixture-pr', 'merged_at': 'now', 'merge_commit_sha': sha,
           'base': {'ref': 'main', 'sha': base},
           'head': {'ref': f'release/{VERSION}', 'sha': head, 'repo': {'full_name': REPO}}}
@@ -255,7 +257,9 @@ def test_publish_delegates_only_verified_sha_version(history, monkeypatch, tmp_p
         return real_run(args, *pos, **kwargs)
     monkeypatch.setattr(a.subprocess, 'run', dispatch)
     a.main()
-    publish.assert_called_once_with(['bash', 'core/scripts/create-release.sh', '--publish', '--version', VERSION], check=True)
+    assert publish.call_count == 1
+    assert publish.call_args.args[0] == ['bash', 'core/scripts/create-release.sh', '--publish', '--version', VERSION]
+    assert publish.call_args.kwargs['env']['SOLAR_RELEASE_INTERNAL_PUBLISH'] == history['sha']
 
 
 def test_pr_rebase_keeps_publisher_on_new_integrated_sha(history):
@@ -269,7 +273,7 @@ def test_pr_rebase_keeps_publisher_on_new_integrated_sha(history):
     assert a.validate_event(REPO, {**history['event'], 'after': sha}, publish=True) == VERSION
 
 
-def test_main_code_advance_before_merge_does_not_change_request(history):
+def test_main_code_advance_cannot_expand_authorized_request(history):
     a.git('reset', '--hard', history['base'])
     Path('ordinary.py').write_text('unrelated = True\n')
     a.git('add', 'ordinary.py')
@@ -277,7 +281,8 @@ def test_main_code_advance_before_merge_does_not_change_request(history):
     a.git('merge', '--no-ff', '-qm', 'merge release', f'release/{VERSION}')
     sha = a.git('rev-parse', 'HEAD')
     history['pr']['merge_commit_sha'] = sha
-    assert a.validate_event(REPO, {**history['event'], 'after': sha}, publish=True) == VERSION
+    with pytest.raises(ValueError, match='only release metadata'):
+        a.validate_event(REPO, {**history['event'], 'after': sha}, publish=True)
 
 
 def test_workflow_gates_and_permissions():
@@ -285,6 +290,8 @@ def test_workflow_gates_and_permissions():
     text = workflow.read_text()
     suites, publisher = text.split('\n  publish:', 1)
     assert 'contents: write' not in suites
+    assert 'pull-requests: read' in suites
+    assert 'checks: read' in publisher
     assert 'needs: suite' in publisher
     assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in publisher
     assert 'ref: ${{ github.sha }}' in publisher
@@ -316,118 +323,267 @@ def test_submission_from_actions_token_chain_is_refused(history, monkeypatch):
         a.repository_ready(REPO)
 
 
+def omission_entry(history):
+    return {'version': VERSION, 'request_sha': history['sha'], 'reason': 'Known defect; skip this allocated version',
+            'runs': [55], 'evidence': {'writers_stopped': True, 'outcomes_reconciled': True,
+                                    'notes': 'Operator reconciled all write outcomes and completed attempts.'}}
+
+
 @pytest.fixture
-def candidate(history, monkeypatch):
-    a.git('checkout', '-b', f'candidate/{VERSION}/{history["base"][:12]}', history['head'])
-    a.git('branch', '-f', 'main', history['base'])
-    a.git('branch', '-D', f'release/{VERSION}')
-    intent = {**history['intent'], 'schema': 2, 'stage': 'candidate'}
-    Path(a.INTENT).write_text(json.dumps(intent))
-    a.git('add', a.INTENT)
-    a.git('commit', '-qm', 'candidate metadata')
-    history['candidate'] = a.git('rev-parse', 'HEAD')
-    history['intent'] = intent
-    a.git('update-ref', 'refs/remotes/origin/main', history['base'])
-    monkeypatch.setattr(a, 'repository_ready', Mock())
-    monkeypatch.setattr(a, 'pages', Mock(return_value=[]))
+def omission(history, monkeypatch):
+    frozen = {'schema': 1, 'paused': True, 'entries': []}
+    Path(a.OMISSIONS).write_text(json.dumps(frozen))
+    a.git('add', a.OMISSIONS)
+    a.git('commit', '-qm', 'freeze publication in protected recovery PR')
+    parent = a.git('rev-parse', 'HEAD')
+    after = {**frozen, 'entries': [omission_entry(history)]}
+    Path(a.OMISSIONS).write_text(json.dumps(after))
+    a.git('add', a.OMISSIONS)
+    a.git('commit', '-qm', 'record reconciled omission')
+    sha = a.git('rev-parse', 'HEAD')
+    runs = [{'id': 55, 'head_sha': history['sha'], 'head_branch': 'main', 'event': 'push', 'status': 'completed'}]
+    jobs = [{'id': 8, 'status': 'completed'}]
+    monkeypatch.setattr(a, 'request_runs', Mock(return_value=runs))
+    monkeypatch.setattr(a, 'object_pages', Mock(return_value=jobs))
+    monkeypatch.setattr(a, 'api', Mock(return_value=None))
+    return {'history': history, 'parent': parent, 'sha': sha, 'registry': after, 'runs': runs, 'jobs': jobs}
+
+
+def test_reconciled_omission_accepts_failed_request_without_publication(omission):
+    a.validate_registry_change(REPO, omission['parent'], omission['sha'])
+    assert omission['registry']['entries'][0]['request_sha'] == omission['history']['sha']
+
+
+@pytest.mark.parametrize('flag', ['writers_stopped', 'outcomes_reconciled'])
+def test_uncertain_operator_evidence_blocks_omission(history, flag):
+    entry = omission_entry(history)
+    entry['evidence'][flag] = False
+    with pytest.raises(ValueError, match='Unresolved writers'):
+        a.check_registry({'schema': 1, 'paused': True, 'entries': [entry]})
+
+
+def test_active_writer_run_blocks_omission(omission):
+    omission['runs'][0]['status'] = 'in_progress'
+    with pytest.raises(ValueError, match='still active'):
+        a.validate_registry_change(REPO, omission['parent'], omission['sha'])
+
+
+def test_unresolved_job_attempt_blocks_omission(omission):
+    omission['jobs'][0]['status'] = 'queued'
+    with pytest.raises(ValueError, match='job/attempt is unresolved'):
+        a.validate_registry_change(REPO, omission['parent'], omission['sha'])
+
+
+def test_all_request_runs_must_be_accounted_for(omission):
+    omission['runs'].append({**omission['runs'][0], 'id': 56})
+    with pytest.raises(ValueError, match='enumerate every'):
+        a.validate_registry_change(REPO, omission['parent'], omission['sha'])
+
+
+def test_published_release_cannot_be_classified_omitted(omission, monkeypatch):
+    monkeypatch.setattr(a, 'api', Mock(return_value={'draft': False, 'tag_name': VERSION}))
+    with pytest.raises(ValueError, match='was published'):
+        a.validate_registry_change(REPO, omission['parent'], omission['sha'])
+
+
+def test_correct_partial_tag_is_retained_during_omission(omission, monkeypatch):
+    responses = [None, {'object': {'type': 'commit', 'sha': omission['history']['sha']}}]
+    monkeypatch.setattr(a, 'api', Mock(side_effect=responses))
+    a.validate_registry_change(REPO, omission['parent'], omission['sha'])
+
+
+def test_conflicting_partial_tag_blocks_omission(omission, monkeypatch):
+    responses = [None, {'object': {'type': 'commit', 'sha': omission['history']['base']}}]
+    monkeypatch.setattr(a, 'api', Mock(side_effect=responses))
+    with pytest.raises(ValueError, match='Partial tag identity conflicts'):
+        a.validate_registry_change(REPO, omission['parent'], omission['sha'])
+
+
+def test_omission_requires_separate_prior_freeze(history):
+    Path(a.OMISSIONS).write_text(json.dumps({'schema': 1, 'paused': True, 'entries': [omission_entry(history)]}))
+    a.git('add', a.OMISSIONS)
+    a.git('commit', '-qm', 'invalid combined freeze/omit')
+    with pytest.raises(ValueError, match='prior merged PR'):
+        a.validate_registry_change(REPO, history['sha'], 'HEAD')
+
+
+def test_omission_cannot_unfreeze_in_same_change(omission):
+    data = {**omission['registry'], 'paused': False}
+    Path(a.OMISSIONS).write_text(json.dumps(data))
+    a.git('add', a.OMISSIONS)
+    a.git('commit', '-qm', 'invalid combined omit/unfreeze')
+    with pytest.raises(ValueError, match='do not unfreeze'):
+        a.validate_registry_change(REPO, omission['parent'], 'HEAD')
+
+
+def test_old_omissions_are_append_only(omission):
+    changed = json.loads(json.dumps(omission['registry']))
+    changed['entries'][0]['reason'] = 'silently rewritten'
+    Path(a.OMISSIONS).write_text(json.dumps(changed))
+    a.git('add', a.OMISSIONS)
+    a.git('commit', '-qm', 'attempt rewrite')
+    with pytest.raises(ValueError, match='append-only'):
+        a.validate_registry_change(REPO, omission['sha'], 'HEAD')
+
+
+@pytest.mark.parametrize('change', ['bad_sha', 'duplicate', 'bool_run', 'extra_field'])
+def test_registry_schema_rejects_invalid_identity(history, change):
+    entry = omission_entry(history)
+    data = {'schema': 1, 'paused': True, 'entries': [entry]}
+    if change == 'bad_sha':
+        entry['request_sha'] = 'short'
+    elif change == 'duplicate':
+        data['entries'].append(dict(entry))
+    elif change == 'bool_run':
+        entry['runs'] = [True]
+    else:
+        entry['surprise'] = 'unknown field'
+    with pytest.raises(ValueError):
+        a.check_registry(data)
+
+
+def test_live_omission_rejects_old_workflow_after_unfreeze(history, monkeypatch):
+    data = {'schema': 1, 'paused': False, 'entries': [omission_entry(history)]}
+    monkeypatch.setattr(a, 'live_registry', Mock(return_value=data))
+    with pytest.raises(ValueError, match='permanently omitted'):
+        a.guard_publication(REPO, VERSION, history['sha'])
+
+
+def test_recovery_pause_blocks_unstarted_and_retry_writers(history, monkeypatch):
+    monkeypatch.setattr(a, 'live_registry', Mock(return_value={'schema': 1, 'paused': True, 'entries': []}))
+    with pytest.raises(ValueError, match='paused for recovery'):
+        a.guard_publication(REPO, VERSION, history['sha'])
+    with pytest.raises(ValueError, match='freeze blocks retries'):
+        a.retry_remote(REPO, VERSION)
+
+
+def test_verified_omission_allows_successor_without_publishing_defect(history, monkeypatch):
+    data = {'schema': 1, 'paused': False, 'entries': [omission_entry(history)]}
+    monkeypatch.setattr(a, 'live_registry', Mock(return_value=data))
+    a.require_published(REPO, history['intent'])
+    a.api.assert_not_called()
+
+
+def test_omitted_predecessor_identity_must_match(history, monkeypatch):
+    data = {'schema': 1, 'paused': False, 'entries': [{**omission_entry(history), 'request_sha': history['base']}]}
+    monkeypatch.setattr(a, 'live_registry', Mock(return_value=data))
+    with pytest.raises(ValueError, match='identity conflicts'):
+        a.require_published(REPO, history['intent'])
+
+
+def test_remote_retry_uses_exact_authorized_run_not_local_writer(history, monkeypatch):
+    runs = [{'id': 55, 'head_sha': history['sha'], 'head_branch': 'main', 'event': 'push', 'status': 'completed', 'conclusion': 'failure'}]
+    monkeypatch.setattr(a, 'request_runs', Mock(return_value=runs))
     calls = []
-    real_run = a.run
+    original = a.run
     def run(*args):
-        if args[0] == 'gh' or (args[0] == 'git' and args[1] in {'push', 'fetch'}):
+        if args[0] == 'gh':
             calls.append(args)
             return ''
-        return real_run(*args)
+        return original(*args)
     monkeypatch.setattr(a, 'run', run)
-    history['calls'] = calls
-    return history
+    a.retry_remote(REPO, VERSION)
+    assert calls == [('gh', 'run', 'rerun', '55', '--repo', REPO, '--failed')]
+    a.request_runs.assert_called_once_with(REPO, history['sha'])
 
 
-def test_candidate_never_authorizes_publication(candidate):
-    with pytest.raises(ValueError, match='not authorized'):
-        a.check_metadata('HEAD', candidate['intent'])
-    assert a.check_metadata('HEAD', candidate['intent'], allow_candidate=True) == VERSION
+def test_remote_retry_refuses_active_run(history, monkeypatch):
+    monkeypatch.setattr(a, 'request_runs', Mock(return_value=[{'id': 55, 'status': 'in_progress'}]))
+    with pytest.raises(ValueError, match='active run'):
+        a.retry_remote(REPO, VERSION)
 
 
-def test_upload_candidate_creates_no_pr_or_tag(candidate, capsys):
-    a.upload_candidate(REPO, VERSION)
-    a.repository_ready.assert_called_once_with(REPO, automatic=False)
-    assert len(candidate['calls']) == 1
-    assert candidate['calls'][0][:3] == ('git', 'push', '--no-follow-tags')
-    assert not a.git('tag', '--list')
-    output = capsys.readouterr().out
-    assert f'solar client update --ref {candidate["candidate"]}' in output
-    assert '--promote --tested-sha' in output
+def test_controlled_release_lifecycle_and_retry_use_real_writer_with_fake_services(history, monkeypatch, tmp_path):
+    """Run the real CLI/controller against a bare Git remote and fake GitHub APIs."""
+    import os
+    import shutil
+
+    state = tmp_path / '.fixture'
+    state.mkdir()
+    scripts = tmp_path / 'core' / 'scripts'
+    scripts.mkdir()
+    shutil.copy(MODULE, scripts / 'release_automation.py')
+    shutil.copy(MODULE.with_name('create-release.sh'), scripts / 'create-release.sh')
+    installer = tmp_path / 'core/tests/skills/solar-client/test_install_solar_client.sh'
+    installer.parent.mkdir(parents=True)
+    installer.write_text('#!/usr/bin/env bash\n[[ "${FIXTURE_INSTALL_FAIL:-0}" != 1 ]]\n')
+    with open('.git/info/exclude', 'a') as out:
+        out.write('\n/.fixture/\n/core/scripts/\n/core/tests/\n')
+    remote = state / 'origin.git'
+    a.git('init', '--bare', '-q', str(remote))
+    a.git('remote', 'set-url', 'origin', str(remote))
+    a.git('push', '-q', 'origin', 'main')
+    bins = state / 'bin'
+    bins.mkdir()
+    real_git = shutil.which('git')
+    (bins / 'git').write_text('''#!/usr/bin/env python3
+import os, sys
+args = sys.argv[1:]
+if args[-3:] == ['remote', 'get-url', 'origin']:
+    print('https://github.com/Example/Solar.git')
+else:
+    os.execv(os.environ['FIXTURE_REAL_GIT'], ['git', *args])
+''')
+    (bins / 'gh').write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+state = pathlib.Path(os.environ['FIXTURE_STATE'])
+if args[:2] == ['auth', 'status']:
+    sys.exit(0)
+if args and args[0] == 'api' and '/check-runs' in args[1]:
+    print(json.dumps({'check_runs': [{'name': f'Suite ({platform}-latest)', 'conclusion': 'success', 'status': 'completed'} for platform in ['ubuntu', 'macos']]}))
+    sys.exit(0)
+if args[:2] == ['release', 'view']:
+    if not (state / 'release.json').exists():
+        sys.exit(1)
+    value = json.loads((state / 'release.json').read_text())
+    print(json.dumps({'tagName': value['tag_name'], 'isDraft': False, 'isPrerelease': False}))
+    sys.exit(0)
+if args[:2] == ['release', 'create']:
+    if (state / 'release.json').exists():
+        sys.exit(2)
+    notes = pathlib.Path(args[args.index('--notes-file') + 1]).read_text()
+    (state / 'release.json').write_text(json.dumps({'tag_name': args[2], 'draft': False, 'prerelease': False, 'notes': notes}))
+    sys.exit(0)
+sys.exit(3)
+''')
+    (bins / 'curl').write_text('''#!/usr/bin/env python3
+import os, pathlib, sys
+if '%{http_code}' in sys.argv:
+    print('200', end='')
+else:
+    print((pathlib.Path(os.environ['FIXTURE_STATE']) / 'release.json').read_text())
+''')
+    for executable in bins.iterdir():
+        executable.chmod(0o755)
+    event = state / 'event.json'
+    event.write_text(json.dumps(history['event']))
+    monkeypatch.setenv('PATH', str(bins) + os.pathsep + os.environ['PATH'])
+    monkeypatch.setenv('FIXTURE_REAL_GIT', real_git)
+    monkeypatch.setenv('FIXTURE_STATE', str(state))
+    monkeypatch.setenv('GITHUB_ACTIONS', 'true')
+    monkeypatch.setenv('GITHUB_REF', 'refs/heads/main')
+    monkeypatch.setenv('GITHUB_SHA', history['sha'])
+    monkeypatch.setenv('GITHUB_EVENT_PATH', str(event))
+    monkeypatch.setattr(a.sys, 'argv', ['release_automation.py', 'publish'])
+    monkeypatch.setenv('FIXTURE_INSTALL_FAIL', '1')
+    with pytest.raises(subprocess.CalledProcessError):
+        a.main()
+    assert not a.git('--git-dir', str(remote), 'tag', '--list')
+    assert not (state / 'release.json').exists()
+    monkeypatch.setenv('FIXTURE_INSTALL_FAIL', '0')
+    a.main()
+    assert a.git('--git-dir', str(remote), 'rev-parse', f'refs/tags/{VERSION}') == history['sha']
+    assert json.loads((state / 'release.json').read_text())['tag_name'] == VERSION
+    a.main()  # Same tag and Release: idempotent, no duplicate create.
 
 
-def test_promote_records_tested_sha_and_changes_only_intent(candidate, monkeypatch):
-    submit = Mock()
-    monkeypatch.setattr(a, 'submit', submit)
-    a.promote(REPO, candidate['candidate'])
-    intent = a.intent_at('HEAD')
-    assert intent['stage'] == 'release' and intent['tested_sha'] == candidate['candidate']
-    assert a.git('branch', '--show-current') == f'release/{VERSION}'
-    assert a.git('diff', '--name-only', candidate['candidate'], 'HEAD') == a.INTENT
-    assert a.check_metadata('HEAD', intent) == VERSION
-    submit.assert_called_once_with(REPO, VERSION)
-
-
-def test_promote_wrong_sha_does_not_modify_candidate(candidate):
-    with pytest.raises(ValueError, match='exact locally tested'):
-        a.promote(REPO, '0' * 40)
-    assert a.git('rev-parse', 'HEAD') == candidate['candidate']
-    assert a.intent_at('HEAD')['stage'] == 'candidate'
-
-
-def test_promote_advanced_main_requires_retest(candidate):
-    a.git('update-ref', 'refs/remotes/origin/main', candidate['sha'])
-    with pytest.raises(ValueError, match='Main advanced'):
-        a.promote(REPO, candidate['candidate'])
-    assert a.git('rev-parse', 'HEAD') == candidate['candidate']
-
-
-def test_promote_does_not_mix_another_version(candidate):
-    with pytest.raises(ValueError, match='differs from the tested'):
-        a.promote(REPO, candidate['candidate'], 'v9.9.9')
-
-
-def test_promote_dirty_candidate_refused(candidate):
-    Path('local-change').write_text('must be tested first')
-    with pytest.raises(ValueError, match='must be clean'):
-        a.promote(REPO, candidate['candidate'])
-
-
-def test_post_test_changes_cannot_publish(candidate, monkeypatch):
-    monkeypatch.setattr(a, 'submit', Mock())
-    a.promote(REPO, candidate['candidate'])
-    Path('another-fix.py').write_text('changed = True')
-    a.git('add', 'another-fix.py')
-    a.git('commit', '-qm', 'untested change')
-    with pytest.raises(ValueError, match='differs from the locally tested'):
-        a.check_metadata('HEAD', a.intent_at('HEAD'))
-
-
-def test_candidate_pr_cannot_enter_release_pipeline(candidate):
-    event = {'pull_request': {**candidate['pr'], 'head': {
-        'ref': a.git('branch', '--show-current'), 'sha': candidate['candidate'], 'repo': {'full_name': REPO}}}}
-    with pytest.raises(ValueError, match='not authorized'):
-        a.validate_event(REPO, event)
-
-
-def test_candidate_upload_does_not_need_automerge(history, monkeypatch):
-    monkeypatch.setattr(a, 'api', Mock(return_value={'allow_auto_merge': False, 'allow_merge_commit': False}))
-    a.repository_ready(REPO, automatic=False)
-    assert a.api.call_count == 1
-
-
-def test_candidate_preflight_allows_parallel_release(history, monkeypatch):
-    a.git('checkout', 'main')
-    a.git('reset', '--hard', history['base'])
-    a.git('update-ref', 'refs/remotes/origin/main', history['base'])
-    ready = Mock()
-    monkeypatch.setattr(a, 'repository_ready', ready)
-    real_git = a.git
-    monkeypatch.setattr(a, 'git', lambda *args: '' if args[0] == 'fetch' else real_git(*args))
-    a.check_prepare(REPO, candidate=True)
-    ready.assert_called_once_with(REPO, automatic=False)
+def test_resuming_omitted_request_never_pushes_or_opens_pr(history, monkeypatch):
+    a.git('checkout', f'release/{VERSION}')
+    monkeypatch.setattr(a, 'repository_ready', lambda repo: None)
+    monkeypatch.setattr(a, 'live_registry', Mock(return_value={
+        'schema': 1, 'paused': False, 'entries': [omission_entry(history)]}))
+    a.pages.reset_mock()
+    with pytest.raises(ValueError, match='cannot be resubmitted'):
+        a.submit(REPO, VERSION)
     a.pages.assert_not_called()
-    a.api.assert_not_called()

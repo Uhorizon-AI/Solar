@@ -57,14 +57,14 @@ solar uninstall             # remove wrapper; optional --remove-install
 
 See `core/commands/solar-create-release.md`:
 
-- default `create-release.sh --version vX.Y.Z`: confirm preparation, branch push, release PR and protected native auto-merge; GitHub tests and publishes the integrated SHA
-- GitHub auto-merge and both required suites must be configured; the script never changes settings or bypasses reviews
-- no second command is needed for normal publication; follow the PR and post-merge Test suite run
-- optional local acceptance: `--candidate --version vX.Y.Z` uploads without a PR/publication; test using `solar client update --ref <full-candidate-SHA>`
-- `--promote --tested-sha <SHA>` authorizes the final PR only after local validation, preserving the tested code
-- `--local` prepares without remote writes; `--resume` retries candidate upload or release submission according to committed stage
-- `--publish` / `--publish --retry` remain explicit manual recovery, with integration, exact-commit checks and immutable tag identity
-- publication never updates installed clients automatically
+- test ordinary code independently with `solar client update --ref <full-remote-SHA>`; no new version or release request is needed, and the selected installation/runtime really changes
+- installed commit and nominal version are reported separately; local SHA acceptance does not replace CI of the final release tree
+- default `create-release.sh --version vX.Y.Z`: freeze the authorized main base, prepare/push metadata PR and request protected native auto-merge; GitHub tests and publishes the exact integrated SHA
+- no second post-green command or running Mac is required; auto-merge configuration and mandatory reviews/checks remain explicit prerequisites
+- `--local` prepares without remote effects; `--resume` submits/reuses the prepared request
+- `--publish` / `--retry` request the exact remote CI run; only the dependent GitHub job writes tags/Releases
+- exceptional recovery freezes admission and reconciles old writers/outcomes before an append-only omission can permit a higher corrected version; ambiguous outcomes remain blocked
+- no automatic installed-client update/deployment occurs during publication
 
 ## Telemetry
 

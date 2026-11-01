@@ -18,6 +18,10 @@ concurrency:
 
 jobs:
   suite:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     name: Suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -57,7 +61,9 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      checks: read
       pull-requests: read
+      actions: read
     concurrency:
       group: solar-release-publication
       cancel-in-progress: false

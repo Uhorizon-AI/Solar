@@ -28,9 +28,6 @@ REQUIRED_SUITE_CHECKS=("Suite (ubuntu-latest)" "Suite (macos-latest)")
 
 PUBLISH=false
 LOCAL_ONLY=false
-CANDIDATE=false
-PROMOTE=false
-TESTED_SHA=""
 RESUME=false
 RETRY=false
 AUTO_CONFIRM=false
@@ -39,20 +36,6 @@ URGENT_REASON=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --candidate)
-      CANDIDATE=true
-      shift
-      ;;
-    --promote)
-      PROMOTE=true
-      shift
-      ;;
-    --tested-sha)
-      shift
-      [[ $# -gt 0 ]] || { echo "ERROR: --tested-sha requires the full tested commit SHA" >&2; exit 2; }
-      TESTED_SHA="$1"
-      shift
-      ;;
     --local)
       LOCAL_ONLY=true
       shift
@@ -104,23 +87,16 @@ Usage:
 Modes:
   (default)   Prepare, push release branch, open PR and request protected native auto-merge.
               GitHub tests the integrated commit and publishes it; no second command.
-  --candidate Prepare and push a candidate branch for solar client update --ref SHA.
-              No PR, auto-merge, tag or stable Release. Main can receive fixes normally.
-  --promote --tested-sha SHA
-              Authorize publication of the exact validated candidate; then GitHub continues.
   --local     Prepare only, with no remote writes (no tag).
   --resume    Re-submit the current prepared release branch after an interrupted request.
-  --publish   After PR merge: integration + exact-commit suite gate → local E2E → push one tag → Release
+  --publish   Remote recovery: re-run the exact authorized main CI request; no local writer
   --publish --retry
-              Idempotent recovery when the tag is already remote but the GitHub Release is missing
-              If the local tag is absent, first: git fetch origin tag vX.Y.Z
+              Alias for remote recovery; local tags are not required
 
 Options:
   --yes, -y           Confirm the displayed preparation/request effects without prompting
   --version vX.Y.Z    Force version (must match vMAJOR.MINOR.PATCH)
-  --urgent "reason"   Only together with --publish: `--publish --urgent "reason"` publishes
-                      without a green test suite. For an urgent fix only; the reason is
-                      printed and stays in the terminal log. Without --publish it exits 2.
+  --urgent "reason"   Deprecated; remote recovery refuses suite bypasses
   --push              Deprecated alias for --publish
 
 Release policy:
@@ -128,8 +104,8 @@ Release policy:
   covering every PR merged since the last one. An urgent fix (breaks users, security)
   may be released outside the cadence. Publishing requires the Test suite checks
   "Suite (ubuntu-latest)" and "Suite (macos-latest)" to be green on the exact
-  release commit, already integrated into origin/main. --urgent skips only the suite
-  gate, never integration or tag identity. See CONTRIBUTING.md.
+  release commit, already integrated into origin/main. Recovery never skips
+  integration or tag identity. See CONTRIBUTING.md.
 EOF
       exit 0
       ;;
@@ -141,16 +117,8 @@ EOF
   esac
 done
 
-mode_count=0
-for enabled in "$LOCAL_ONLY" "$CANDIDATE" "$PROMOTE" "$PUBLISH" "$RESUME"; do
-  [[ "$enabled" != true ]] || mode_count=$((mode_count + 1))
-done
-if [[ "$mode_count" -gt 1 ]]; then
-  echo "ERROR: --local, --candidate, --promote, --resume and --publish are separate modes" >&2
-  exit 2
-fi
-if [[ "$PROMOTE" == true && ! "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ "$PROMOTE" != true && -n "$TESTED_SHA" ]]; then
-  echo "ERROR: --promote requires --tested-sha with the full tested SHA; other modes do not accept it" >&2
+if [[ "$LOCAL_ONLY" == true && ( "$PUBLISH" == true || "$RESUME" == true ) ]] || [[ "$RESUME" == true && "$PUBLISH" == true ]]; then
+  echo "ERROR: --local, --resume and --publish are separate modes" >&2
   exit 2
 fi
 
@@ -182,6 +150,7 @@ BUMP_TYPE=""
 CHANGELOG_SOURCE="commits"
 CHANGELOG_ENTRY=""
 NEW_VERSION=""
+PREPARE_BASE=""
 MAJOR=0
 MINOR=0
 PATCH=0
@@ -461,12 +430,12 @@ function show_preview_and_confirm() {
   echo -e "${BLUE}📌 Proposed version: $NEW_VERSION${NC} ($BUMP_TYPE)"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
+  echo "Authorized code base: ${PREPARE_BASE:-$(git -C "$GIT_ROOT" rev-parse HEAD)}"
+  echo "Destination: $RELEASE_REPO"
   echo "CHANGELOG preview:"
   echo "$CHANGELOG_ENTRY"
   echo ""
-  if [[ "$CANDIDATE" == true ]]; then
-    echo "This prepares and uploads a candidate for local testing. No PR, auto-merge or publication."
-  elif [[ "$LOCAL_ONLY" != true ]]; then
+  if [[ "$LOCAL_ONLY" != true ]]; then
     echo "This requests preparation, branch push, a release PR, protected auto-merge and CI publication of $NEW_VERSION."
     echo "Required checks/reviews must pass. GitHub continues after this command exits."
   fi
@@ -554,6 +523,9 @@ function update_changelog() {
 }
 
 function create_release_commit() {
+  if [[ -n "$PREPARE_BASE" && "$(git -C "$GIT_ROOT" rev-parse HEAD)" != "$PREPARE_BASE" ]]; then
+    error "Release base changed while preparing metadata; inspect local changes before retry"; exit 1
+  fi
   info "Creating release commit $NEW_VERSION (no tag until publication)..."
 
   git -C "$GIT_ROOT" add "$CHANGELOG_FILE" "$README_FILE" "$GIT_ROOT/.github/solar-release.json"
@@ -562,7 +534,7 @@ function create_release_commit() {
     git -C "$GIT_ROOT" update-index --chmod=+x -- "core/skills/solar-client/scripts/solar"
   fi
   git -C "$GIT_ROOT" commit -m "chore(release): $NEW_VERSION"
-  success "Metadata commit prepared on $(git -C "$GIT_ROOT" branch --show-current)"
+  success "Release commit prepared on release/$NEW_VERSION"
 }
 
 function run_local_install_e2e() {
@@ -629,6 +601,7 @@ function validate_release_version() {
 
 function create_github_release() {
   local tag="$1" sha="$2"
+  require_publisher_authority "$tag" "$sha"
   if ! command -v gh >/dev/null 2>&1; then
     error "gh is required for --publish"
     echo "Retry after installing/auth: bash core/scripts/create-release.sh --publish --retry --version $tag" >&2
@@ -640,8 +613,18 @@ function create_github_release() {
     exit 1
   fi
 
-  if gh release view "$tag" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
-    info "GitHub Release $tag already exists — skipping create"
+  local existing
+  if existing="$(gh release view "$tag" --repo "$RELEASE_REPO" --json tagName,isDraft,isPrerelease 2>/dev/null)"; then
+    if ! python3 - "$existing" "$tag" <<'PYRELEASE'
+import json, sys
+value = json.loads(sys.argv[1])
+if not (value['tagName'] == sys.argv[2] and value['isDraft'] is False and value['isPrerelease'] is False):
+    raise SystemExit(1)
+PYRELEASE
+    then
+      error "Existing Release is not the expected published stable version; inspect it before recovery"; exit 1
+    fi
+    info "Published GitHub Release $tag already exists; skipping create"
     return 0
   fi
 
@@ -665,6 +648,7 @@ PYNOTES
     exit 1
   fi
 
+  require_publisher_authority "$tag" "$sha"
   if ! gh release create "$tag" --verify-tag --repo "$RELEASE_REPO" --title "$tag" --notes-file "$notes_file"; then
     rm -f "$notes_file"
     error "gh release create failed for $tag"
@@ -684,12 +668,22 @@ function verify_remote_release() {
     echo "Retry: bash core/scripts/create-release.sh --publish --retry --version $tag" >&2
     exit 1
   fi
+  if ! python3 - "$body" "$tag" <<'PYVERIFY'
+import json, sys
+value = json.loads(sys.argv[1])
+if not (value['tag_name'] == sys.argv[2] and value['draft'] is False and value['prerelease'] is False):
+    raise SystemExit(1)
+PYVERIFY
+  then
+    error "Release API does not confirm the expected published stable version"; exit 1
+  fi
   local url
   url="$(bootstrap_pin_url "$tag")"
   local code
   code="$(curl -fsSL -o /dev/null -w '%{http_code}' "$url" || true)"
   if [[ "$code" != "200" ]]; then
-    warn "Bootstrap raw URL returned HTTP $code (tag may not be fetched yet): $url"
+    error "Bootstrap raw URL returned HTTP $code; publication verification incomplete: $url"
+    exit 1
   else
     success "Bootstrap raw URL OK ($url)"
   fi
@@ -742,6 +736,16 @@ PY
   success "Test suite green on ${sha:0:12}"
 }
 
+function require_publisher_authority() {
+  local tag="$1" sha="$2"
+  if [[ "${GITHUB_ACTIONS:-}" != true || "${GITHUB_REF:-}" != refs/heads/main ||
+        "${GITHUB_SHA:-}" != "$sha" || "${SOLAR_RELEASE_INTERNAL_PUBLISH:-}" != "$sha" ]]; then
+    error "Only the verified main CI publisher may write tags/Releases; use remote retry from the CLI"
+    exit 1
+  fi
+  (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" guard --version "$tag" --sha "$sha")
+}
+
 function publish_release() {
   local tag="$1" sha remote
   if [[ -n $(git -C "$GIT_ROOT" status --porcelain) ]]; then
@@ -749,6 +753,7 @@ function publish_release() {
   fi
   sha="$(git -C "$GIT_ROOT" rev-parse HEAD)"
   validate_release_version "$tag" "$sha"
+  require_publisher_authority "$tag" "$sha"
   if git -C "$GIT_ROOT" show-ref --verify --quiet "refs/tags/$tag"; then
     if [[ "$(git -C "$GIT_ROOT" rev-parse "refs/tags/$tag^{commit}")" != "$sha" ]]; then
       error "Local tag $tag points to a different commit; refusing to move it"; exit 1
@@ -761,11 +766,13 @@ function publish_release() {
     error "Remote tag $tag points to a different commit; refusing to move it"; exit 1
   fi
   run_local_install_e2e
+  require_publisher_authority "$tag" "$sha"
   if ! git -C "$GIT_ROOT" show-ref --verify --quiet "refs/tags/$tag"; then
     git -C "$GIT_ROOT" tag "$tag" "$sha"
   fi
   if [[ -z "$remote" ]]; then
     info "Pushing only $tag to origin (main is never pushed)..."
+    require_publisher_authority "$tag" "$sha"
     git -C "$GIT_ROOT" push --no-follow-tags origin "refs/tags/$tag:refs/tags/$tag"
   else
     info "Remote tag $tag already matches the release commit; skipping push"
@@ -788,6 +795,7 @@ function retry_publish() {
     error "Local tag $tag is missing; first run: git fetch origin tag $tag"; exit 1
   fi
   validate_release_version "$tag" "$sha"
+  require_publisher_authority "$tag" "$sha"
   info "Retry publish for $tag (no commit/tag rewrite)"
   require_integrated_commit "$sha"
   require_green_suite "$sha"
@@ -798,6 +806,7 @@ function retry_publish() {
 
 function prepare_release() {
   preflight_checks
+  PREPARE_BASE="$(git -C "$GIT_ROOT" rev-parse HEAD)"
   get_last_tag
   analyze_commits
   calculate_version
@@ -811,18 +820,18 @@ function prepare_release() {
   echo -e "${GREEN}✅ Preparing release $NEW_VERSION...${NC}"
   echo ""
 
-  local branch="release/$NEW_VERSION" stage=release
-  if [[ "$CANDIDATE" == true ]]; then
-    branch="candidate/$NEW_VERSION/$(git -C "$GIT_ROOT" rev-parse --short=12 HEAD)"
-    stage=candidate
+  if [[ "$(git -C "$GIT_ROOT" rev-parse HEAD)" != "$PREPARE_BASE" ||
+        "$(git -C "$GIT_ROOT" branch --show-current)" != main ||
+        -n "$(git -C "$GIT_ROOT" status --porcelain)" ]]; then
+    error "Checkout changed since preview; review a fresh release request"; exit 1
   fi
-  git -C "$GIT_ROOT" switch -c "$branch" || {
-    error "Cannot create $branch; release files were not modified"; exit 1;
+  git -C "$GIT_ROOT" switch -c "release/$NEW_VERSION" || {
+    error "Cannot create release/$NEW_VERSION; release files were not modified"; exit 1;
   }
   update_changelog
   bump_solar_cli_version
   update_readme_bootstrap_pin "$NEW_VERSION"
-  (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" write-intent --version "$NEW_VERSION" --stage "$stage")
+  (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" write-intent --version "$NEW_VERSION" --sha "$PREPARE_BASE")
   create_release_commit
 }
 
@@ -833,17 +842,23 @@ function main() {
   echo -e "${BLUE}╚════════════════════════════════════════════════════╝${NC}"
   echo ""
 
-  if [[ "$PROMOTE" == true ]]; then
-    local promote_args=(promote --tested-sha "$TESTED_SHA")
-    [[ -z "$FORCE_VERSION" ]] || promote_args+=(--version "$FORCE_VERSION")
-    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" "${promote_args[@]}")
+  if [[ "$RESUME" == true ]]; then
+    NEW_VERSION="$(git -C "$GIT_ROOT" branch --show-current)"
+    NEW_VERSION="${NEW_VERSION#release/}"
+    if [[ -n "$FORCE_VERSION" && "$FORCE_VERSION" != "$NEW_VERSION" ]]; then
+      error "--resume version does not match the current release branch"; exit 2
+    fi
+    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" submit --version "$NEW_VERSION")
     return 0
   fi
 
-  if [[ "$RESUME" == true ]]; then
-    local resume_args=(resume)
-    [[ -z "$FORCE_VERSION" ]] || resume_args+=(--version "$FORCE_VERSION")
-    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" "${resume_args[@]}")
+  if [[ "$PUBLISH" == true && -z "${SOLAR_RELEASE_INTERNAL_PUBLISH:-}" ]]; then
+    if [[ -n "$URGENT_REASON" ]]; then
+      error "Remote recovery never skips required checks; --urgent is not supported"; exit 2
+    fi
+    local retry_args=(retry)
+    [[ -z "$FORCE_VERSION" ]] || retry_args+=(--version "$FORCE_VERSION")
+    (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" "${retry_args[@]}")
     return 0
   fi
 
@@ -863,15 +878,11 @@ function main() {
     fi
   else
     if [[ "$LOCAL_ONLY" != true ]]; then
-      local check_mode=check
-      [[ "$CANDIDATE" != true ]] || check_mode=check-candidate
-      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" "$check_mode")
+      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" check)
     fi
     prepare_release
     if [[ "$LOCAL_ONLY" != true ]]; then
-      local submit_mode=submit
-      [[ "$CANDIDATE" != true ]] || submit_mode=candidate
-      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" "$submit_mode" --version "$NEW_VERSION")
+      (cd "$GIT_ROOT" && python3 "$SCRIPT_DIR/release_automation.py" submit --version "$NEW_VERSION")
       return 0
     fi
   fi
@@ -891,7 +902,7 @@ function main() {
     echo ""
     echo "To request protected auto-merge and CI publication (requires explicit authority):"
     echo "  bash core/scripts/create-release.sh --resume"
-    echo "Manual --publish remains available only for deliberate recovery after integration."
+    echo "--publish / --retry request remote recovery after integration; no local publisher is run."
     echo ""
   fi
 }
