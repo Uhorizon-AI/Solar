@@ -338,13 +338,21 @@ def test_an_execution_lost_with_its_supervisor_is_failed_not_run_again(rig):
     after = rig.local("Zz after", rel, timeout=60)
     first = _ready(rig)["identity"]["pid"]
     wait_until(lambda: "start Lost one" in _lines(marker), 30)
-    with solar_state.session() as store:
-        command = store.task_get(lost)["pid"]
+    def recorded_command():
+        # run_managed starts the child before its on_start callback records the
+        # PID, so the child's marker alone does not prove that identity is saved.
+        with solar_state.session() as store:
+            return store.task_get(lost)["pid"]
+
+    command = wait_until(recorded_command, 30, what="the command identity to be recorded")
     # The command has its own group and survives the executor. Make it older
     # than recovery's two-second identity allowance, independent of runner load.
     time.sleep(3)
-    children = lib.read_json(rig.ctx.children_file)["executions"]
-    group = children[0]["pgid"]
+    def recorded_executor():
+        children = (lib.read_json(rig.ctx.children_file) or {}).get("executions", [])
+        return next((child.get("pgid") for child in children if child.get("task_id") == lost), None)
+
+    group = wait_until(recorded_executor, 30, what="the lost task's executor group to be recorded")
     assert command != group and alive(command)
     os.kill(first, signal.SIGKILL)
     os.killpg(group, signal.SIGKILL)                      # only the executor's group
