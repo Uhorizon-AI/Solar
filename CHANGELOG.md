@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.61.1] - 2026-11-02
+
 ### Fixed
 - router: `option_blocks()` no longer drops the options that follow an `Example:` line inside an option's description, which made `restricted_reader` come out `unknown` with Claude CLI 2.1.314 (#104).
 - router: the `mcp_read` probe reports `missing` (and the permission fix) only when the client's own wording shows a denial; a plain miss is retried once and otherwise stays `unknown` (#103).
