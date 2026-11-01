@@ -193,7 +193,7 @@ def submit(repo, version, expected_sha=None):
     matches = [p for p in existing if p['head']['ref'] == branch and p['head']['repo'] and p['head']['repo']['full_name'] == repo]
     if matches and matches[0]['head']['sha'] != sha:
         raise ValueError('Existing release PR has another head; inspect it before resuming')
-    run('git', 'push', '--no-follow-tags', '-u', 'origin', f'{sha}:refs/heads/{branch}')
+    run('git', 'push', '--no-follow-tags', 'origin', f'{sha}:refs/heads/{branch}')
     if matches:
         pr = matches[0]
         url = pr['html_url']
