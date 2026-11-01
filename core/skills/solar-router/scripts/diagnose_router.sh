@@ -203,7 +203,7 @@ defaults = {
     "agent": f"agent -p -f --approve-mcps --trust --workspace {repo_root}",
     "codex": codex_default,
     "claude": "claude -p --permission-mode bypassPermissions",
-    "agy": "agy -p --dangerously-skip-permissions",
+    "agy": "agy --dangerously-skip-permissions",
     "ollama": "ollama run solar --hidethinking --nowordwrap",
 }
 if provider not in defaults:

@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- fix(router): Antigravity (`agy`) headless runs bind the prompt to `--print` and strip a misplaced bare `-p`/`--print` from `SOLAR_ROUTER_AGY_CMD`, so `--dangerously-skip-permissions` is no longer eaten as the prompt value (`-p took "--dangerously-skip-permissions" as its prompt`).
+
 ## [0.60.13] - 2026-11-01
 
 ### Fixed

@@ -734,7 +734,7 @@ solar_client_print_upgrade_report() {
   fi
   if [[ -f "$ws/.env" ]]; then
     if grep -Eq '^[[:space:]]*(SOLAR_ROUTER_GEMINI_CMD|SOLAR_AI_GEMINI_CMD)=' "$ws/.env"; then
-      echo "  WARN: remove SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD. Do not rename the value in place (e.g. gemini -y is invalid under AGY). Optional: SOLAR_ROUTER_AGY_CMD=agy -p --dangerously-skip-permissions"
+      echo "  WARN: remove SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD. Do not rename the value in place (e.g. gemini -y is invalid under AGY). Optional: SOLAR_ROUTER_AGY_CMD=agy --dangerously-skip-permissions"
     fi
     if grep -Eiq '^[[:space:]]*(SOLAR_ROUTER_PROVIDER_PRIORITY|SOLAR_AI_PROVIDER_PRIORITY)=.*gemini' "$ws/.env"; then
       echo "  WARN: provider priority lists unsupported gemini — use agy (run solar client update)"

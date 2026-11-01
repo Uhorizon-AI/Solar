@@ -95,7 +95,7 @@ def migrate_workspace_env(env_path: Path) -> int:
         print(
             f"WARN: remove {key}. "
             "Do not rename the value in place (e.g. gemini -y is invalid under AGY). "
-            "Optional: SOLAR_ROUTER_AGY_CMD=agy -p --dangerously-skip-permissions",
+            "Optional: SOLAR_ROUTER_AGY_CMD=agy --dangerously-skip-permissions",
             file=sys.stderr,
         )
 
