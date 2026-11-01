@@ -16,6 +16,8 @@ git -C "$REPO" config user.name t
 git -C "$REPO" config user.email t@example.com
 mkdir -p "$REPO/core/skills/solar-client/scripts"
 printf 'SOLAR_VERSION="9.9.9"\n' > "$REPO/core/skills/solar-client/scripts/solar"
+chmod +x "$REPO/core/skills/solar-client/scripts/solar"
+printf '## [9.9.9] - 2026-11-01\n\n### Fixed\n- Notes from the tagged commit.\n' > "$REPO/CHANGELOG.md"
 git -C "$REPO" add .
 git -C "$REPO" commit -qm 'feat: work'
 PARENT="$(git -C "$REPO" rev-parse HEAD)"
@@ -30,6 +32,17 @@ cat > "$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_CALLS"
 [[ "${GH_FAIL:-0}" == 1 ]] && exit 1
+if [[ "${GH_RELEASE_TEST:-0}" == 1 ]]; then
+  [[ "$1" == auth && "$2" == status ]] && exit 0
+  [[ "$1" == release && "$2" == view ]] && exit 1
+  if [[ "$1" == release && "$2" == create ]]; then
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == --notes-file ]]; then cp "$2" "$GH_NOTES"; break; fi
+      shift
+    done
+    exit 0
+  fi
+fi
 if [[ "$1" == api ]]; then
   if [[ -n "${GH_ONLY_SHA:-}" && "$2" != *"/commits/$GH_ONLY_SHA/"* ]]; then
     printf '{"check_runs":[]}\n'
@@ -41,6 +54,22 @@ fi
 exit 1
 STUB
 chmod +x "$TMP/bin/gh"
+REAL_GIT="$(command -v git)"
+export REAL_GIT
+cat > "$TMP/bin/git" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${GIT_FAIL_LS_REMOTE:-0}" == 1 ]]; then
+  for arg in "$@"; do [[ "$arg" == ls-remote ]] && exit 1; done
+fi
+exec "$REAL_GIT" "$@"
+STUB
+cat > "$TMP/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CURL_CALLS"
+for arg in "$@"; do [[ "$arg" == '%{http_code}' ]] && { printf 200; exit 0; }; done
+printf '{}\n'
+STUB
+chmod +x "$TMP/bin/git" "$TMP/bin/curl"
 export PATH="$TMP/bin:$PATH"
 export GH_CALLS="$TMP/gh-calls"
 fixture() {
@@ -106,6 +135,12 @@ for mode in publish retry; do
   [[ ! -s "$TMP/effects" ]] && pass "$mode red gate has no effects" || fail "$mode red gate has no effects"
 done
 fixture success success
+# Fail ls-remote only: fetching main and reading exact-commit checks still succeed.
+for mode in publish retry; do
+  GIT_FAIL_LS_REMOTE=1 flow "$mode" && fail "$mode refuses unavailable remote tag query" || pass "$mode refuses unavailable remote tag query"
+  [[ ! -s "$TMP/effects" ]] && pass "$mode remote query failure has no effects" || fail "$mode remote query failure has no effects"
+  grep -q 'Cannot read remote tag' "$TMP/out" && pass "$mode reached the tag query failure" || fail "$mode reached the tag query failure"
+done
 # A green but dirty checkout must not be used to test or publish a tag.
 printf dirty > "$REPO/dirty"
 flow publish && fail 'dirty checkout refuses' || pass 'dirty checkout refuses'
@@ -175,10 +210,55 @@ git -C "$PREP" config user.email t@example.com
 [[ "$(git -C "$PREP" branch --show-current)" == release/v9.9.10 ]] && pass 'preparation creates release branch' || fail 'preparation creates release branch'
 git -C "$PREP" rev-parse --verify refs/tags/v9.9.10 > /dev/null 2>&1 && fail 'preparation creates no tag' || pass 'preparation creates no tag'
 [[ "$(git -C "$PREP" log -1 --format=%s)" == 'chore(release): v9.9.10' ]] && pass 'preparation commits metadata' || fail 'preparation commits metadata'
+# An existing release branch must stop preparation before any metadata mutation.
+BEFORE="$(git -C "$PREP" rev-parse HEAD)"
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP" NEW_VERSION=v9.9.10
+  preflight_checks() { :; }; get_last_tag() { :; }; analyze_commits() { :; }
+  calculate_version() { :; }; generate_changelog() { :; }; show_preview_and_confirm() { :; }
+  update_changelog() { echo mutated >> "$TMP/prep-effects"; }
+  bump_solar_cli_version() { echo mutated >> "$TMP/prep-effects"; }
+  update_readme_bootstrap_pin() { echo mutated >> "$TMP/prep-effects"; }
+  create_release_commit() { echo mutated >> "$TMP/prep-effects"; }
+  prepare_release
+) > "$TMP/out" 2>&1 && fail 'existing release branch refuses preparation' || pass 'existing release branch refuses preparation'
+[[ ! -e "$TMP/prep-effects" && "$(git -C "$PREP" rev-parse HEAD)" == "$BEFORE" && -z "$(git -C "$PREP" status --porcelain)" ]] && pass 'branch collision preserves metadata and commit' || fail 'branch collision preserves metadata and commit'
+
+# Retry from a different branch with dirty notes must publish the tagged notes.
+git -C "$REPO" push -q --force origin refs/tags/v9.9.9
+git -C "$REPO" switch -qc future-notes
+printf 'Notes from a later branch.\n' > "$REPO/CHANGELOG.md"
+git -C "$REPO" add CHANGELOG.md
+git -C "$REPO" commit -qm 'docs: later notes'
+printf 'Uncommitted notes must not be published.\n' > "$REPO/CHANGELOG.md"
+: > "$GH_CALLS"
+export GH_NOTES="$TMP/published-notes" CURL_CALLS="$TMP/curl-calls"
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$REPO" FORCE_VERSION=v9.9.9 RELEASE_REPO=Example/ReleaseFixture
+  export GH_RELEASE_TEST=1
+  retry_publish
+) > "$TMP/out" 2>&1 && pass 'retry accepts another branch with dirty changelog' || fail 'retry accepts another branch with dirty changelog'
+grep -q 'Notes from the tagged commit.' "$GH_NOTES" && ! grep -Eq 'later branch|Uncommitted' "$GH_NOTES" && pass 'release notes match tagged commit only' || fail 'release notes match tagged commit only'
+for operation in view create; do
+  grep -q "release $operation v9.9.9 .*--repo Example/ReleaseFixture" "$GH_CALLS" && pass "release $operation uses configured repository" || fail "release $operation uses configured repository"
+done
+grep -q "repos/Example/ReleaseFixture/commits/$SHA/check-runs" "$GH_CALLS" && pass 'suite uses configured repository' || fail 'suite uses configured repository'
+grep -q 'https://api.github.com/repos/Example/ReleaseFixture/releases/tags/v9.9.9' "$CURL_CALLS" && pass 'Release API uses configured repository' || fail 'Release API uses configured repository'
+grep -q 'https://raw.githubusercontent.com/Example/ReleaseFixture/v9.9.9/' "$CURL_CALLS" && pass 'bootstrap URL uses configured repository' || fail 'bootstrap URL uses configured repository'
+# No local tag: explain the exact non-destructive fetch needed before retry.
+git -C "$REPO" tag -d v9.9.9 > /dev/null
+flow retry && fail 'retry refuses absent local tag' || pass 'retry refuses absent local tag'
+grep -q 'git fetch origin tag v9.9.9' "$TMP/out" && pass 'missing local tag gives explicit fetch command' || fail 'missing local tag gives explicit fetch command'
+
 cli() { bash "$RELEASE_SH" "$@" > "$TMP/cli" 2>&1; echo $?; }
 [[ "$(cli --urgent hotfix)" == 2 ]] && pass 'urgent requires publish' || fail 'urgent requires publish'
 [[ "$(cli --publish --urgent --yes)" == 2 ]] && pass 'urgent requires written reason' || fail 'urgent requires written reason'
 [[ "$(cli --publish --urgent '   ')" == 2 ]] && pass 'urgent refuses blank reason' || fail 'urgent refuses blank reason'
 [[ "$(cli --help)" == 0 ]] && grep -q 'never integration' "$TMP/cli" && pass 'help documents integration gate' || fail 'help documents integration gate'
+[[ "$(cli --help)" == 0 ]] && grep -q 'git fetch origin tag vX.Y.Z' "$TMP/cli" && pass 'help documents tag fetch for retry' || fail 'help documents tag fetch for retry'
 echo "Results: PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

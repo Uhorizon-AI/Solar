@@ -92,7 +92,10 @@ runs the local installer E2E, creates/pushes only the requested tag and creates/
 the GitHub Release. It never pushes main or unrelated tags. Publication does not
 prepare another commit. `--publish --retry --version vX.Y.Z` completes an existing
 remote tag's Release only after the same integration, exact-commit suite and tag
-identity checks. See the command reference for legacy partial-publication recovery.
+identity checks. If the local tag is missing, first run `git fetch origin tag vX.Y.Z`.
+The publish target is the checked-out HEAD integrated into `origin/main`; checking
+out local main is recommended, not required. See the command reference for legacy
+partial-publication recovery.
 
 **Commit message format:**
 - `feat(scope): description` → MINOR version bump

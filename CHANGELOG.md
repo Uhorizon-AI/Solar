@@ -8,8 +8,6 @@ The format is based on Keep a Changelog.
 
 ### Fixed
 - Release publication works with protected main: prepare metadata on a release branch without a tag, then publish only the requested tag after its exact commit is integrated and checked. Retry and urgent mode retain integration and tag identity checks; existing tags are never moved automatically. Issue #120.
-
-### Fixed
 - fix(router): Antigravity (`agy`) headless runs bind the prompt to `--print` and strip a misplaced bare `-p`/`--print` from `SOLAR_ROUTER_AGY_CMD`, so `--dangerously-skip-permissions` is no longer eaten as the prompt value (`-p took "--dangerously-skip-permissions" as its prompt`).
 
 ## [0.60.13] - 2026-11-01

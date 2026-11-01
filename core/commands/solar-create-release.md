@@ -15,11 +15,14 @@ Release preparation and publication are separate steps. Required checks on prote
 bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]
 
 # Push that branch and open a PR into main (requires explicit authority).
-# After merge: switch to main, fast-forward to origin/main, wait for its checks.
+# After merge: check out the integrated commit and wait for its checks.
+# Updating local main is recommended, but any clean checkout of that SHA works.
 # Publish the checked HEAD; this never prepares another commit or pushes main.
 bash core/scripts/create-release.sh --publish --version vX.Y.Z
 
 # Recovery when the matching tag is already remote but its Release is missing
+# If the tag is not available locally, first:
+git fetch origin tag vX.Y.Z
 bash core/scripts/create-release.sh --publish --retry --version vX.Y.Z
 ```
 
@@ -51,6 +54,7 @@ not authority for external effects.
 ## Publish
 
 1. Require a clean checkout and the selected version to match `SOLAR_VERSION` at HEAD.
+   HEAD must be integrated into `origin/main`; the local branch name is immaterial.
 2. Refuse an existing local tag pointing to a different commit.
 3. Fetch `origin/main` without fetching tags. Require HEAD to be an ancestor of it.
 4. Require `Suite (ubuntu-latest)` and `Suite (macos-latest)` green on **HEAD**, not its parent.
@@ -58,7 +62,8 @@ not authority for external effects.
 6. Run the local installer E2E; abort before tag creation/push if it fails.
 7. Create the local tag if absent, and push **only that tag**, never `main` or unrelated tags.
 8. Verify the remote tag commit, create the GitHub Release with `--verify-tag` if missing,
-   then verify the Release API and bootstrap URL.
+   then verify the Release API and bootstrap URL. Release notes come from the
+   target commit's changelog, not the current working-tree file.
 
 Squash/rebase merges can change the release commit SHA. Publish the integrated
 commit after updating main, not the pre-merge release branch. Tags are created
@@ -66,6 +71,7 @@ only after integration, so there is no pre-merge tag to retarget.
 
 ## Retry and legacy partial publications
 
+If the local tag is absent, run `git fetch origin tag vX.Y.Z` first.
 Retry resolves the existing local tag, validates its version, fetches main and
 requires that exact tag commit to be integrated with passing suite checks. It then
 checks the remote tag points to the same commit before creating a missing Release.
@@ -77,6 +83,10 @@ automatically. Inspect local/remote history and integrate the release commit
 through a PR while preserving its identity, or obtain a separate recovery decision
 if a squash/rebase would change the published tag's identity. Never force-push
 main or silently replace a published tag to repair this condition.
+
+`SOLAR_RELEASE_REPO` selects the repository for suite checks, Release creation, API
+verification and bootstrap URLs (default `Uhorizon-AI/Solar`). The `origin` remote
+must refer to that repository; this setting does not change the Git remote.
 
 ## Identity contract
 

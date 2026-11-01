@@ -36,12 +36,22 @@ Publish releases without pushing unchecked metadata commits to protected main or
 
 ## Implementation notes
 
-Preparation and publication are separate. Existing v0.60.14 and local main remain untouched. No additional AI reviewers were requested.
+Preparation and publication are separate. Existing v0.60.14 and local main remain untouched. Review feedback from Codex, Claude Sonnet 5.5 and Antigravity was supplied by Louis for commit `07a87725b23f35b5269e192bd462d10d76839468`; all approved with minor observations.
 
 ## Completion evidence
 
 - Shell syntax and `git diff --check`: passed.
-- Release regression suite: 49 passed, 0 failed, using disposable Git repositories and a GitHub API double; covers exact SHA, unmerged targets, both publish paths, urgent mode, conflicting/annotated tags and `push.followTags`.
+- Release regression suite: 67 passed, 0 failed, using disposable Git repositories and a GitHub API double; covers exact SHA, unmerged targets, both publish paths, urgent mode, conflicting/annotated tags and `push.followTags`, unavailable remote tag queries, existing release branches, configured repository consistency, missing local tags and retry notes from the tagged commit despite a divergent/dirty working tree.
 - Installer E2E: 28 passed, 0 failed. The restricted first run could not use `ps`; rerun with process inspection allowed passed. A post-commit rerun validates the committed version and performs client sync inside its isolated fixture.
-- Diff reviewed locally. No additional AI reviewer was requested; GitHub CI remains a separate required gate.
+- Diff and review feedback checked locally. Reviewer approvals apply to the original SHA above, not automatically to this follow-up commit. GitHub CI remains a separate required gate.
 - Existing local main and v0.60.14 were not rewritten. The PR does not perform legacy release recovery, merge or publish a release.
+
+## Review follow-up
+
+- Consolidated Unreleased Fixed entries and clarified retry tag fetching and integrated-HEAD requirements.
+- Removed redundant publish `--yes` examples; preparation still supports it.
+- Used the configured repository consistently for Release operations and bootstrap URLs.
+- Release notes are extracted from the explicitly validated release commit; read failures stop before Release creation.
+- Branch creation failure explicitly stops before metadata changes.
+- Local release regression suite: 67 passed, 0 failed; syntax and whitespace checks passed. Installer E2E is repeated on the follow-up commit before push.
+- Release automation remains separate under issue #122.

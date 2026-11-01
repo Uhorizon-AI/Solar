@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Usage (from framework repo or Solar workspace):
 #   bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]           # prepare (local)
-#   bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z] --publish # publish (A2 formal)
+#   bash core/scripts/create-release.sh --publish [--version vX.Y.Z] # publish (A2 formal)
 #   bash core/scripts/create-release.sh --publish --retry [--version vX.Y.Z]
 #
 # Git root is always resolved from this script's location (…/solar/), not from cwd.
@@ -69,7 +69,7 @@ while [[ $# -gt 0 ]]; do
       cat <<'EOF'
 Usage:
   bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]
-  bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z] --publish
+  bash core/scripts/create-release.sh --publish [--version vX.Y.Z]
   bash core/scripts/create-release.sh --publish --retry [--version vX.Y.Z]
 
 Modes:
@@ -77,9 +77,10 @@ Modes:
   --publish   After PR merge: integration + exact-commit suite gate → local E2E → push one tag → Release
   --publish --retry
               Idempotent recovery when the tag is already remote but the GitHub Release is missing
+              If the local tag is absent, first: git fetch origin tag vX.Y.Z
 
 Options:
-  --yes, -y           Skip confirmation prompt
+  --yes, -y           Skip the preparation confirmation prompt
   --version vX.Y.Z    Force version (must match vMAJOR.MINOR.PATCH)
   --urgent "reason"   Only together with --publish: `--publish --urgent "reason"` publishes
                       without a green test suite. For an urgent fix only; the reason is
@@ -141,7 +142,7 @@ TOTAL_BREAKING=0
 
 bootstrap_pin_url() {
   local tag="$1"
-  printf 'https://raw.githubusercontent.com/Uhorizon-AI/Solar/%s/%s\n' "$tag" "$BOOTSTRAP_REL_PATH"
+  printf 'https://raw.githubusercontent.com/%s/%s/%s\n' "$RELEASE_REPO" "$tag" "$BOOTSTRAP_REL_PATH"
 }
 
 function update_readme_bootstrap_pin() {
@@ -572,7 +573,7 @@ function validate_release_version() {
 }
 
 function create_github_release() {
-  local tag="$1"
+  local tag="$1" sha="$2"
   if ! command -v gh >/dev/null 2>&1; then
     error "gh is required for --publish"
     echo "Retry after installing/auth: bash core/scripts/create-release.sh --publish --retry --version $tag" >&2
@@ -584,24 +585,32 @@ function create_github_release() {
     exit 1
   fi
 
-  if gh release view "$tag" --repo Uhorizon-AI/Solar >/dev/null 2>&1; then
+  if gh release view "$tag" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
     info "GitHub Release $tag already exists — skipping create"
     return 0
   fi
 
   local notes_file
   notes_file="$(mktemp)"
-  python3 - <<'PY' "$CHANGELOG_FILE" "$tag" "$notes_file"
-import pathlib, re, sys
-changelog, tag, out = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3])
+  if ! python3 - "$GIT_ROOT" "$sha" "$tag" "$notes_file" <<'PYNOTES'
+import pathlib, re, subprocess, sys
+repo, sha, tag, out = sys.argv[1:]
+text = subprocess.run(
+    ["git", "-C", repo, "show", f"{sha}:CHANGELOG.md"],
+    check=True, capture_output=True, text=True, encoding="utf-8",
+).stdout
 ver = tag.lstrip("v")
-text = changelog.read_text(encoding="utf-8")
 m = re.search(rf"^## \[{re.escape(ver)}\].*?(?=^## |\Z)", text, re.M | re.S)
 body = m.group(0).strip() if m else f"Solar {tag}"
-out.write_text(body + "\n", encoding="utf-8")
-PY
+pathlib.Path(out).write_text(body + "\n", encoding="utf-8")
+PYNOTES
+  then
+    rm -f "$notes_file"
+    error "Cannot read release notes from commit $sha; refusing to create the Release"
+    exit 1
+  fi
 
-  if ! gh release create "$tag" --verify-tag --repo Uhorizon-AI/Solar --title "$tag" --notes-file "$notes_file"; then
+  if ! gh release create "$tag" --verify-tag --repo "$RELEASE_REPO" --title "$tag" --notes-file "$notes_file"; then
     rm -f "$notes_file"
     error "gh release create failed for $tag"
     echo "Retry (does not recreate commit/tag): bash core/scripts/create-release.sh --publish --retry --version $tag" >&2
@@ -613,7 +622,7 @@ PY
 
 function verify_remote_release() {
   local tag="$1"
-  local api="https://api.github.com/repos/Uhorizon-AI/Solar/releases/tags/${tag}"
+  local api="https://api.github.com/repos/${RELEASE_REPO}/releases/tags/${tag}"
   local body
   if ! body="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$api")"; then
     error "Release $tag not visible via API"
@@ -707,7 +716,7 @@ function publish_release() {
     info "Remote tag $tag already matches the release commit; skipping push"
   fi
   verify_remote_tag "$tag" "$sha"
-  create_github_release "$tag"
+  create_github_release "$tag" "$sha"
   verify_remote_release "$tag"
 }
 
@@ -721,14 +730,14 @@ function retry_publish() {
   fi
   NEW_VERSION="$tag"
   if ! sha="$(git -C "$GIT_ROOT" rev-parse --verify "refs/tags/$tag^{commit}" 2>/dev/null)"; then
-    error "Local tag $tag is missing; fetch the release tag before retrying"; exit 1
+    error "Local tag $tag is missing; first run: git fetch origin tag $tag"; exit 1
   fi
   validate_release_version "$tag" "$sha"
   info "Retry publish for $tag (no commit/tag rewrite)"
   require_integrated_commit "$sha"
   require_green_suite "$sha"
   verify_remote_tag "$tag" "$sha"
-  create_github_release "$tag"
+  create_github_release "$tag" "$sha"
   verify_remote_release "$tag"
 }
 
@@ -744,7 +753,9 @@ function prepare_release() {
   echo -e "${GREEN}✅ Preparing release $NEW_VERSION...${NC}"
   echo ""
 
-  git -C "$GIT_ROOT" switch -c "release/$NEW_VERSION"
+  git -C "$GIT_ROOT" switch -c "release/$NEW_VERSION" || {
+    error "Cannot create release/$NEW_VERSION; release files were not modified"; exit 1;
+  }
   update_changelog
   bump_solar_cli_version
   update_readme_bootstrap_pin "$NEW_VERSION"
@@ -791,7 +802,7 @@ function main() {
     echo ""
     echo "Next: push release/$NEW_VERSION and open a PR into main (requires A2 formal approval)."
     echo "After merge, update main and wait for its exact-commit suite checks, then publish:"
-    echo "  bash core/scripts/create-release.sh --publish --yes --version $NEW_VERSION"
+    echo "  bash core/scripts/create-release.sh --publish --version $NEW_VERSION"
     echo ""
   fi
 }
