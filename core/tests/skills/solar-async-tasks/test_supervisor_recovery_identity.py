@@ -85,7 +85,7 @@ def test_adopted_execution_keeps_original_dispatch_time(recovery, monkeypatch):
     assert adopted.record()["dispatched_epoch"] == 1000.0
 
 
-@pytest.mark.parametrize("evidence", [None, "1000", True, 0, -1, 1002.0, float("nan"), float("inf"), 10**400])
+@pytest.mark.parametrize("evidence", [None, "1000", True, 0, -1, float("nan"), float("inf"), 10**400])
 def test_invalid_dispatch_evidence_never_authorizes_a_signal(recovery, evidence):
     r = recovery
     r.clock["now"] = 1001.5
@@ -95,6 +95,56 @@ def test_invalid_dispatch_evidence_never_authorizes_a_signal(recovery, evidence)
     assert r.stopped == [] and r.failed == []
     assert sup.blocked["lost"]["reason"] == "group_uncertain"
     assert sup.blocked["lost"]["dispatched_epoch"] is None
+
+
+def test_clock_rollback_preserves_evidence_until_recovery_can_prove_ownership(recovery):
+    r = recovery
+    r.clock["now"] = 999.0
+    sup = r.build()
+    sup._examine(r.row, r.record, startup=True)
+    assert sup.blocked["lost"]["dispatched_epoch"] == 1000.0
+    assert r.stopped == [] and r.failed == []
+    sup._save_records()  # startup rewrites children_file, so blocked must retain the evidence
+    again = r.build()
+    assert again._load_records() == {}
+    again._load_blocked()
+    record = dict(again.blocked["lost"])
+    r.clock["now"] = 998.0
+    again._examine(r.row, record, startup=True)
+    assert again.blocked["lost"]["dispatched_epoch"] == 1000.0
+    assert r.stopped == [] and r.failed == []
+    r.clock["now"] = 1005.0
+    again._examine(r.row, dict(again.blocked["lost"]), startup=False)
+    assert r.stopped == [300] and r.failed == ["executor_lost"]
+
+
+def test_finite_future_evidence_survives_even_when_it_cannot_be_displayed(recovery, monkeypatch):
+    r = recovery
+    r.record["dispatched_epoch"] = 1e308
+    monkeypatch.setattr(mod.lib, "matches", lambda *args: ("alive", {}))
+    sup = r.build()
+    sup._examine(r.row, r.record, startup=True)
+    adopted = sup.children["lost"]
+    assert adopted.record()["dispatched_epoch"] == 1e308
+    assert adopted.view()["since"] is None
+    assert sup._provider_group(adopted) == ("uncertain", 300)
+
+
+@pytest.mark.parametrize("kind", ["alive", "gone"])
+@pytest.mark.parametrize("immediate", [False, True])
+def test_future_dispatch_blocks_both_ownership_paths_until_clock_catches_up(recovery, kind, immediate):
+    r = recovery
+    r.process["kind"] = kind
+    r.clock["now"] = 999.0
+    sup = r.build()
+    execution = mod.Execution("lost", "fixture", "worker")
+    execution.dispatched_epoch = 1000.0
+    assert sup._provider_group(execution, immediate=immediate) == ("uncertain", 300)
+    assert not sup._settle_provider_group(execution, immediate=immediate)
+    assert r.stopped == []
+    r.clock["now"] = 1005.0
+    expected = "alive" if kind == "alive" or immediate else "uncertain"
+    assert sup._provider_group(execution, immediate=immediate) == (expected, 300)
 
 
 @pytest.mark.parametrize("immediate", [False, True])

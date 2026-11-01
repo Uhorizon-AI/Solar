@@ -342,7 +342,7 @@ def test_an_execution_lost_with_its_supervisor_is_failed_not_run_again(rig):
         # run_managed starts the child before its on_start callback records the
         # PID, so the child's marker alone does not prove that identity is saved.
         with solar_state.session() as store:
-            return store.task_get(lost)["pid"]
+            return (store.task_get(lost) or {}).get("pid")
 
     command = wait_until(recorded_command, 30, what="the command identity to be recorded")
     # The command has its own group and survives the executor. Make it older
