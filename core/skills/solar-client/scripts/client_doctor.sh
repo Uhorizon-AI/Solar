@@ -79,7 +79,7 @@ fi
 # Deprecated Gemini CLI env keys → Antigravity (`agy`)
 if [[ -f "$SOLAR_WORKSPACE/.env" ]]; then
   if grep -Eq '^[[:space:]]*(SOLAR_ROUTER_GEMINI_CMD|SOLAR_AI_GEMINI_CMD)=' "$SOLAR_WORKSPACE/.env"; then
-    warn "remove SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD. Do not rename the value in place (e.g. gemini -y is invalid under AGY). Optional: SOLAR_ROUTER_AGY_CMD=agy -p --dangerously-skip-permissions"
+    warn "remove SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD. Do not rename the value in place (e.g. gemini -y is invalid under AGY). Optional: SOLAR_ROUTER_AGY_CMD=agy --dangerously-skip-permissions"
     [[ "$STRICT" == true ]] && err "strict: remove SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD"
   fi
 fi

@@ -3,6 +3,7 @@ Unit tests for providers/*.py — subprocess.run is mocked throughout.
 No real AI binaries are called.
 """
 import io
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -114,9 +115,36 @@ class TestAgyProvider(unittest.TestCase):
 
     def test_default_cmd_uses_agy(self):
         cmd = self.provider.build_default_cmd()
-        self.assertTrue(cmd.startswith("agy -p "))
+        self.assertTrue(cmd.startswith("agy "))
+        self.assertNotIn(" -p ", f" {cmd} ")
+        self.assertNotIn("--print", cmd)
         self.assertIn("--dangerously-skip-permissions", cmd)
         self.assertIn(f"--add-dir {SOLAR_WORKSPACE}", cmd)
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/agy")
+    def test_get_cmd_binds_prompt_to_print(self, _which):
+        cmd = self.provider.get_cmd("review this")
+        self.assertEqual(cmd[0], "/usr/bin/agy")
+        self.assertEqual(cmd[-2:], ["--print", "review this"])
+        self.assertNotIn("-p", cmd)
+        # Flags must never sit where -p would eat them as the prompt value.
+        skip_idx = cmd.index("--dangerously-skip-permissions")
+        self.assertLess(skip_idx, cmd.index("--print"))
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/agy")
+    def test_get_cmd_rewrites_legacy_p_before_flags(self, _which):
+        with patch.dict(os.environ, {
+            "SOLAR_ROUTER_AGY_CMD": "agy -p --dangerously-skip-permissions --add-dir /tmp/ws",
+        }, clear=False):
+            cmd = self.provider.get_cmd("hello")
+        self.assertEqual(cmd, [
+            "/usr/bin/agy",
+            "--dangerously-skip-permissions",
+            "--add-dir",
+            "/tmp/ws",
+            "--print",
+            "hello",
+        ])
 
     def test_name_is_agy(self):
         self.assertEqual(self.provider.name, "agy")

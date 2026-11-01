@@ -58,7 +58,7 @@ SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 
 Default Agent command: `agent -p -f --approve-mcps --trust --workspace <repo-root>`
 Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --full-auto -C <repo-root> --add-dir ~/.codex --`
-Default Agy (Antigravity) command: `agy -p --dangerously-skip-permissions --add-dir <repo-root>`
+Default Agy (Antigravity) command: `agy --dangerously-skip-permissions --add-dir <repo-root>` (the adapter appends `--print <prompt>`; do not put bare `-p` before other flags — Antigravity treats `-p`/`--print` as taking the prompt value)
 Default Ollama command targets the local `solar` model: `ollama run solar --hidethinking --nowordwrap`
 
 Deprecated: `SOLAR_ROUTER_GEMINI_CMD` / `SOLAR_AI_GEMINI_CMD` are **not** read. Rename to `SOLAR_ROUTER_AGY_CMD`. `solar client doctor` and `solar client upgrade` warn if the old keys remain.

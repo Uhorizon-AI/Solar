@@ -107,7 +107,7 @@ elif existing="$(read_key "SOLAR_ROUTER_GEMINI_CMD")" || existing="$(read_key "S
   # Do NOT copy the value: legacy cmds like `gemini -y` would keep calling the
   # retired binary under SOLAR_ROUTER_AGY_CMD. Require a manual agy override.
   echo "WARN: SOLAR_ROUTER_GEMINI_CMD / SOLAR_AI_GEMINI_CMD is deprecated and was NOT copied."
-  echo "      Remove the old key. Optional override: SOLAR_ROUTER_AGY_CMD=agy -p --dangerously-skip-permissions"
+  echo "      Remove the old key. Optional override: SOLAR_ROUTER_AGY_CMD=agy --dangerously-skip-permissions"
   echo "      (default agy command is used when SOLAR_ROUTER_AGY_CMD is unset)"
 fi
 

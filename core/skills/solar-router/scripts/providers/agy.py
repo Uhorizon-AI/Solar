@@ -1,8 +1,14 @@
 import json
+import os
 import re
+import shlex
 
 from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, UNKNOWN
 from .base import BaseProvider, SOLAR_WORKSPACE
+
+# Antigravity treats -p/--print/--prompt as options that take the prompt as their
+# value (unlike Claude/Cursor, where -p is a bare non-interactive switch).
+_PRINT_FLAGS = frozenset({"-p", "--print", "--prompt"})
 
 
 class AgyProvider(BaseProvider):
@@ -18,11 +24,41 @@ class AgyProvider(BaseProvider):
     last_usage: dict | None = None
 
     def build_default_cmd(self) -> str:
-        # agy --help: -p/--print = non-interactive; --dangerously-skip-permissions
-        # auto-approves tools; --add-dir anchors workspace.
-        return (
-            f"agy -p --dangerously-skip-permissions --add-dir {SOLAR_WORKSPACE}"
-        )
+        # agy --help: --print takes the prompt as its value. Keep -p/--print out of
+        # this template; get_cmd always appends --print <prompt> last so other flags
+        # are never eaten as the prompt (see issue from measure-110: `-p took
+        # "--dangerously-skip-permissions" as its prompt`).
+        return f"agy --dangerously-skip-permissions --add-dir {SOLAR_WORKSPACE}"
+
+    def get_cmd(self, prompt: str) -> list:
+        """Build argv with the prompt bound to --print, never as a bare trailing arg.
+
+        Strips any bare or ``=``-form -p/--print/--prompt from the env/default
+        template (including a misplaced ``agy -p --dangerously-skip-permissions…``)
+        and reattaches ``--print`` immediately before the real prompt.
+        """
+        new_key = f"SOLAR_ROUTER_{self.name.upper()}_CMD"
+        old_key = f"SOLAR_AI_{self.name.upper()}_CMD"
+        raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
+        parts = shlex.split(raw)
+        if not parts:
+            raise RuntimeError(f"{new_key} is empty")
+        out = [self.resolve_binary(parts[0])]
+        i = 1
+        while i < len(parts):
+            tok = parts[i]
+            if tok in _PRINT_FLAGS:
+                i += 1
+                if i < len(parts) and not parts[i].startswith("-"):
+                    i += 1
+                continue
+            if tok.startswith(("-p=", "--print=", "--prompt=")):
+                i += 1
+                continue
+            out.append(tok)
+            i += 1
+        out.extend(["--print", prompt])
+        return out
 
     def ask_separator(self):
         # The prompt is the value of --print, so it can never be read as an option.
