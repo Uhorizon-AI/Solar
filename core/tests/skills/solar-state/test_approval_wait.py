@@ -98,13 +98,18 @@ def test_a_task_the_executor_confines_never_waits(ready, monkeypatch):
         assert events(store, "awaiting_approval") == []
 
 
-def test_the_wait_reports_since_and_when_it_ends(ready):
+def test_the_wait_reports_since_and_when_it_ends(ready, clock):
     with solar_state.session() as store:
         task_id = waiting(store)
-        claim(store)
+        approved_at = fm(store, task_id)["approved_at"]
+        clock.at += timedelta(seconds=1)
+        claim(store, clock)
         item = next(w for w in store.queue_waits() if w["id"] == task_id)
+        event = events(store, "awaiting_approval")[0]
         assert item["reason"] == "awaiting_approval"
-        assert item["since"] == events(store, "awaiting_approval")[0]["ts"]
+        assert item["since"] == event["since"] == approved_at
+        assert datetime.fromisoformat(event["ts"].replace("Z", "+00:00")) - \
+            datetime.fromisoformat(approved_at.replace("Z", "+00:00")) == timedelta(seconds=1)
         assert datetime.fromisoformat(item["expires_at"].replace("Z", "+00:00")) - \
             datetime.fromisoformat(item["since"].replace("Z", "+00:00")) == 72 * HOUR
         assert store.approval_wait(task_id)["since"] == item["since"]

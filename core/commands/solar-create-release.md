@@ -1,108 +1,212 @@
 ---
 name: solar-create-release
-description: Prepare a release PR, then publish its integrated and checked commit
+description: Request a version once; protected GitHub CI integrates and publishes it
 ---
 
 # Solar Release Creation
 
-Release preparation and publication are separate steps. Required checks on protected
-`main` apply to the exact commit being released, including release metadata changes.
+## Test code independently
 
-## Usage
+Use ordinary branches/PRs and, when local acceptance is useful:
 
 ```bash
-# From clean main: prepare metadata on a new local release/vX.Y.Z branch, no tag
-bash core/scripts/create-release.sh [--yes] [--version vX.Y.Z]
+solar client update --ref <full-remote-SHA>
+```
 
-# Push that branch and open a PR into main (requires explicit authority).
-# After merge: check out the integrated commit and wait for its checks.
-# Updating local main is recommended, but any clean checkout of that SHA works.
-# Publish the checked HEAD; this never prepares another commit or pushes main.
+No new version, release branch or release intent is required to test a commit.
+The updater changes the selected installation/runtime; it is not a sandbox and
+cannot promise rollback of migrations. Use an appropriate test installation and
+workspace. Its current/complete messages report the installed commit separately
+from the nominal version. A retained old version number does not mean old code
+is installed. Local acceptance covers only the SHA and environment actually tested.
+Normal updates still resolve the latest stable GitHub Release.
+
+Correct and review code in ordinary PRs, then integrate into main. If squash,
+rebase or base changes alter the content tested, test the integrated SHA when
+that local acceptance is needed. CI always validates the integrated result.
+
+## Request publication: one command
+
+From clean main synchronized with origin/main:
+
+```bash
+bash core/scripts/create-release.sh --version vX.Y.Z
+# Omit --version to review a Conventional Commits version proposal.
+```
+
+The preview fixes the full authorized base SHA, version, repository, changelog and
+bootstrap pin. Confirmation/intentional `--yes` authorizes preparation, branch push,
+version PR, native protected auto-merge and CI publication of that displayed scope.
+The command refuses if the checkout changes after preview. Agents need authority
+for the complete external effect before executing default mode.
+
+Preparation changes only release metadata: CLI version line, changelog, README
+bootstrap block and `.github/solar-release.json` (schema, version, full base SHA).
+It commits on `release/vX.Y.Z`, pushes only that branch, opens/reuses its PR and
+requests native auto-merge pinned to its head SHA. Once submission succeeds, the
+maintainer computer can close. Required reviews/checks remain authoritative.
+
+After integration, both suite jobs test the exact main-push SHA. The dependent
+publisher verifies merged-PR provenance and allowed transformations against the
+frozen base, runs installer acceptance, then publishes/verifies that SHA's tag and
+stable GitHub Release. Main advancing does not authorize extra code. Required
+up-to-date protection keeps a stale release PR unmerged: close the stale request
+and prepare a fresh explicitly authorized base rather than silently rebasing it.
+If an older loose-protection/bypass merge already integrated a drifted request,
+publication/retry stays blocked; use the freeze/reconcile/omit/unfreeze procedure
+below before a higher corrected request. A retry cannot repair code drift. Ordinary PRs do not request or
+republish versions. Merge, passing checks and verified publication are separate
+outcomes; follow the PR and its post-merge Test suite run/job summary.
+
+No release-specific candidate/promotion interface is needed. The request does not
+assert that every maintainer locally tested its base, or treat an earlier local
+SHA as acceptance of the transformed final release. A bootstrap pin to a future
+tag is checked textually before publication; the public URL is verified afterward.
+
+## Prerequisites
+
+- Maintainer GitHub CLI/git authentication with repository permissions to push,
+  open PRs, request auto-merge and request remote re-runs. No new secret is installed.
+- Origin matches `SOLAR_RELEASE_REPO` (default `Uhorizon-AI/Solar`).
+- Repository Settings explicitly enables native **Allow auto-merge** and merge
+  commits. Main requires both `Suite (ubuntu-latest)` and `Suite (macos-latest)`
+  and **Require branches to be up to date before merging** (`strict: true`, Settings
+  > Branches > main > Required status checks). Missing strict protection refuses
+  submission before remote writes. Merge queue is not supported by this workflow;
+  accepting it would require explicit `merge_group` handling and validation.
+  Required human reviews may pause a request. The script never changes settings,
+  approves reviews or uses an administrator bypass.
+- No publication-recovery freeze, other open release PR or unresolved predecessor.
+  A predecessor can be verified published or explicitly omitted as described below.
+
+Merging this implementation PR does not enable settings or request a real release.
+Legacy branches lacking committed intent do not automatically publish.
+
+## Local preparation and submission recovery
+
+```bash
+# Prepare branch/metadata/commit only; no remote writes or tag
+bash core/scripts/create-release.sh --local --version vX.Y.Z
+
+# From its release branch: reuse/submit the exact prepared request
+bash core/scripts/create-release.sh --resume
+```
+
+`--resume` first displays version, authorized base, prepared HEAD, repository and
+push/PR/auto-merge/publication effects. It asks for confirmation; non-interactive
+execution requires `--resume --yes`. The submitted HEAD must still match the
+preview, so changes during the confirmation cannot silently alter the request.
+
+An uncertain GitHub response is resolved by inspecting/reusing the existing PR;
+do not prepare another commit/version by assumption. A changed existing PR head
+or omitted version is refused before submission. PR/Actions preserve prepared,
+integrated and published identities and outcomes; no separate task database is used.
+
+## One remote publisher and retries
+
+```bash
+# Ask GitHub to retry the exact integrated request's main CI run
 bash core/scripts/create-release.sh --publish --version vX.Y.Z
-
-# Recovery when the matching tag is already remote but its Release is missing
-# If the tag is not available locally, first:
-git fetch origin tag vX.Y.Z
+# Compatibility spelling for the same remote recovery
 bash core/scripts/create-release.sh --publish --retry --version vX.Y.Z
 ```
 
-## Options and authority
+These commands do not create tags/Releases on the Mac or require local tags.
+They resolve the integrated request on main's first-parent history and re-run its
+exact CI run. Active runs, recovery freezes and omitted requests are refused.
+An unknown legacy request needs a separate recovery decision. `--urgent` cannot
+skip checks in this remote recovery path.
 
-- `--yes`, `-y`: skip the preparation confirmation prompt.
-- `--version vX.Y.Z`: select the exact version; never silently replaced by a tag on HEAD.
-- `--publish`: publish current HEAD after integration, version and suite checks.
-  If `--version` is omitted, HEAD must already have an exact release tag.
-- `--publish --retry`: use an existing local tag, verify its remote identity and
-  complete the GitHub Release without pushing, rewriting tags or making commits.
-- `--publish --urgent "reason"`: bypass only the suite gate for an urgent fix.
-  The reason is printed. Integration and tag identity checks still apply.
-- `--push`: deprecated alias for `--publish`.
+The internal writer runs only under the verified main publisher context. Its
+live omission/freeze guards run before tag and Release writes. The normal pipeline
+uses only job-scoped GITHUB_TOKEN and a single non-cancelling concurrency group
+with `queue: max`; no long-lived publisher token or token-event workflow chain is
+introduced. Concurrency serializes; it does not cancel writes or guarantee merge
+order. A matching tag/Release is reused, conflicting identities stop, and tags
+are never moved/deleted/reused. A draft, prerelease, wrong tag or missing public
+bootstrap URL is not reported as verified stable publication. The raw bootstrap
+URL is retried up to five times with two-second waits to allow CDN propagation;
+only exhaustion marks verification incomplete.
 
-Preparation makes a local branch and commit. Branch pushes, PR creation and
-publication require explicit authority under the workspace policy. `--yes` is
-not authority for external effects.
+## Exceptional recovery: freeze, reconcile, omit, unfreeze
 
-## Prepare
+A temporary CI/network failure may be retried on the same SHA. A code defect uses
+an ordinary corrective PR and a higher release version, after the failed request
+is safely omitted. A matching tag without a Release can be completed only while
+the request remains authorized. A published Release is recognized as published;
+corrections use a higher version. Partial tags are retained as allocated versions.
 
-1. Require clean `main`; analyze commits since the last release or curated Unreleased notes.
-2. Calculate and preview the version, changelog and README bootstrap URL; confirm.
-3. Create local branch `release/vX.Y.Z` (fail if it already exists).
-4. Update `CHANGELOG.md`, `SOLAR_VERSION` in the CLI and the README bootstrap pin.
-5. Commit `chore(release): vX.Y.Z`, without creating a tag or sending anything.
-6. Push the branch and open a PR when authorized. Merge only after its checks pass.
+Omission is an explicitly approved exceptional maintainer decision, not an instant
+cancel/rollback command. Follow these steps in order:
 
-## Publish
+1. Freeze admission in a normal protected PR by setting `paused: true` in
+   `.github/solar-release-omissions.json`, preserving all old entries. Disable
+   auto-merge on an affected open release PR and inspect whether it already merged.
+2. Once that pause is integrated, inspect/cancel every run/attempt for the request
+   and wait for all publisher jobs to finish. The normal job token expires at job
+   completion; that does not undo an API request already accepted.
+3. Reconcile remote tag/Release identity and all known write outcomes. If a process,
+   credential, in-flight request or remote outcome remains uncertain, **stop**:
+   omission and the next supported publication remain blocked. Do not infer safety
+   just from cancel status, concurrency, a marker, a timeout or repeated API reads.
+4. After operator reconciliation, submit a separate normal protected PR appending
+   an omission entry while `paused` remains true. It is an explicit operator
+   attestation; CI validates identity, prior freeze, all observed run IDs/attempt
+   statuses, partial tag identity and absence of an already-published Release.
+   CI cannot independently prove that an already-accepted API write has resolved.
+   Omission validates the request identity and merged PR's original metadata,
+   without requiring the defective integrated tree to be publishable. This also
+   allows omission of an old drifted merge while publication remains prohibited.
+5. After that omission is integrated, explicitly unfreeze through another protected
+   PR preserving every entry. Old supported attempts/retries permanently reject the
+   omitted version/SHA; a new higher version may skip that defective predecessor.
 
-1. Require a clean checkout and the selected version to match `SOLAR_VERSION` at HEAD.
-   HEAD must be integrated into `origin/main`; the local branch name is immaterial.
-2. Refuse an existing local tag pointing to a different commit.
-3. Fetch `origin/main` without fetching tags. Require HEAD to be an ancestor of it.
-4. Require `Suite (ubuntu-latest)` and `Suite (macos-latest)` green on **HEAD**, not its parent.
-5. Refuse a remote tag pointing to a different commit; never rewrite it.
-6. Run the local installer E2E; abort before tag creation/push if it fails.
-7. Create the local tag if absent, and push **only that tag**, never `main` or unrelated tags.
-8. Verify the remote tag commit, create the GitHub Release with `--verify-tag` if missing,
-   then verify the Release API and bootstrap URL. Release notes come from the
-   target commit's changelog, not the current working-tree file.
+If no publisher job ever started, evidence can establish that no supported writer
+received its job credential. If a writer did start, terminal status plus token
+expiry is not alone proof of resolved write outcomes: the operator reconciliation
+remains mandatory. If exclusion cannot be established, keep the pause. This protocol
+does not control arbitrary old tools, human/admin writes outside the supported
+mechanism, or revoke an API operation already accepted. No cross-service atomicity
+is claimed. Do not activate this feature until the runbook is reviewed and its
+limits accepted; never auto-merge an omission as a normal release side effect.
 
-Squash/rebase merges can change the release commit SHA. Publish the integrated
-commit after updating main, not the pre-merge release branch. Tags are created
-only after integration, so there is no pre-merge tag to retarget.
+### Registry format
 
-## Retry and legacy partial publications
+Missing registry means unpaused with no omissions. On first freeze create:
 
-If the local tag is absent, run `git fetch origin tag vX.Y.Z` first.
-Retry resolves the existing local tag, validates its version, fetches main and
-requires that exact tag commit to be integrated with passing suite checks. It then
-checks the remote tag points to the same commit before creating a missing Release.
-An unavailable remote/API fails closed.
+```json
+{"schema": 1, "paused": true, "entries": []}
+```
 
-A legacy release may have pushed a tag while main was rejected (GH006). Neither
-`--retry` nor `--urgent` bypasses integration, and no existing tag is moved
-automatically. Inspect local/remote history and integrate the release commit
-through a PR while preserving its identity, or obtain a separate recovery decision
-if a squash/rebase would change the published tag's identity. Never force-push
-main or silently replace a published tag to repair this condition.
+An appended entry has exactly these fields (replace placeholders with evidence):
 
-`SOLAR_RELEASE_REPO` selects the repository for suite checks, Release creation, API
-verification and bootstrap URLs (default `Uhorizon-AI/Solar`). The `origin` remote
-must refer to that repository; this setting does not change the Git remote.
+```json
+{
+  "version": "vX.Y.Z",
+  "request_sha": "<full integrated request SHA>",
+  "reason": "Known defect; do not distribute this allocated version",
+  "runs": [123456],
+  "evidence": {
+    "writers_stopped": true,
+    "outcomes_reconciled": true,
+    "notes": "Run/attempt evidence and reconciled remote outcomes; no credentials"
+  }
+}
+```
 
-## Identity contract
+Old entries are immutable and append-only. Run IDs must enumerate every observed
+push/main Test suite run for that exact SHA. Each job/attempt must be completed.
+False/unknown reconciliation evidence, mismatched partial tags, omitted identity
+conflicts and an already-published Release block the decision. New omissions require
+`paused` to have been true in a prior merged commit and remain true in the omission
+commit; pausing/omitting/unpausing cannot be collapsed into one implicit action.
+An omission PR does not trigger release publication.
 
-| Artifact | Value |
-|---|---|
-| Tag / GitHub Release | `vMAJOR.MINOR.PATCH` |
-| `SOLAR_VERSION` | `MAJOR.MINOR.PATCH` |
-| README bootstrap pin | same `vMAJOR.MINOR.PATCH` |
-| Install/update default | latest stable GitHub Release via API |
+## Legacy and scope
 
-Preparation changes only release metadata, its branch and commit. It never modifies
-runtime `sun/` or `planets/`, or creates a VERSION file. Releases remain grouped
-unless an urgent fix justifies going outside the maintainer's cadence.
-
-## Exit codes
-
-- `0`: success.
-- `1`: confirmation rejected or publication/check failure.
-- `2`: usage or pre-flight failure.
+Existing v0.60.14 partial publication and release/v0.60.15 are not repaired or changed
+by this feature. No installed-client update, deployment or repository configuration
+change occurs when preparing this implementation. `SOLAR_RELEASE_REPO` selects
+checks, Release API and bootstrap URLs; it never changes origin. The release tag
+uses `vMAJOR.MINOR.PATCH`, CLI uses `MAJOR.MINOR.PATCH`; version is allocated when
+publication is requested, not to test code.

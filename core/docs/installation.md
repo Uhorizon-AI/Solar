@@ -57,10 +57,16 @@ solar uninstall             # remove wrapper; optional --remove-install
 
 See `core/commands/solar-create-release.md`:
 
-- prepare (local): release branch, CHANGELOG, `SOLAR_VERSION`, README pin and commit; no tag
-- push the release branch and merge its PR when authorized; update main and wait for checks
-- `--publish --version vX.Y.Z` (A2 formal): exact-commit integration and suite gates → local E2E → push only the release tag → GitHub Release → API verify
-- `--publish --retry`: complete a missing GitHub Release only for a matching remote tag whose exact commit is integrated and checked; no tag rewrite
+- test ordinary code independently with `solar client update --ref <full-remote-SHA>`; no new version or release request is needed, and the selected installation/runtime really changes
+- installed commit and nominal version are reported separately; local SHA acceptance does not replace CI of the final release tree
+- default `create-release.sh --version vX.Y.Z`: freeze the authorized main base, prepare/push metadata PR and request protected native auto-merge; GitHub tests and publishes the exact integrated SHA
+- no second post-green command or running Mac is required; auto-merge, mandatory reviews/checks and main up-to-date protection (`strict: true`) are explicit prerequisites; merge queue is not supported
+- `--local` prepares without remote effects; `--resume` previews/confirms the prepared request (non-interactive: `--resume --yes`)
+- `--publish` / `--retry` request the exact remote CI run; only the dependent GitHub job writes tags/Releases
+- exceptional recovery freezes admission and reconciles old writers/outcomes before an append-only omission can permit a higher corrected version; ambiguous outcomes remain blocked
+- stale requests are blocked before normal merge by strict protection; already-integrated drift requires controlled omission and a higher corrected request, not a blind rerun
+- bootstrap raw URL verification retries five times with short waits before reporting propagation failure
+- no automatic installed-client update/deployment occurs during publication
 
 ## Telemetry
 

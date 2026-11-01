@@ -18,6 +18,7 @@ mkdir -p "$REPO/core/skills/solar-client/scripts"
 printf 'SOLAR_VERSION="9.9.9"\n' > "$REPO/core/skills/solar-client/scripts/solar"
 chmod +x "$REPO/core/skills/solar-client/scripts/solar"
 printf '## [9.9.9] - 2026-11-01\n\n### Fixed\n- Notes from the tagged commit.\n' > "$REPO/CHANGELOG.md"
+printf 'fixture readme\n' > "$REPO/README.md"
 git -C "$REPO" add .
 git -C "$REPO" commit -qm 'feat: work'
 PARENT="$(git -C "$REPO" rev-parse HEAD)"
@@ -66,10 +67,30 @@ STUB
 cat > "$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CURL_CALLS"
-for arg in "$@"; do [[ "$arg" == '%{http_code}' ]] && { printf 200; exit 0; }; done
-printf '{}\n'
+for arg in "$@"; do
+  if [[ "$arg" == '%{http_code}' ]]; then
+    attempt=0
+    if [[ -n "${CURL_ATTEMPT_FILE:-}" ]]; then
+      [[ ! -f "$CURL_ATTEMPT_FILE" ]] || attempt="$(cat "$CURL_ATTEMPT_FILE")"
+      attempt=$((attempt + 1))
+      printf '%s' "$attempt" > "$CURL_ATTEMPT_FILE"
+    fi
+    if [[ -n "${CURL_RECOVER_AFTER:-}" && "$attempt" -ge "$CURL_RECOVER_AFTER" ]]; then
+      printf 200
+    else
+      printf '%s' "${CURL_STATUS:-200}"
+    fi
+    exit 0
+  fi
+done
+if [[ -n "${CURL_BODY:-}" ]]; then printf '%s\n' "$CURL_BODY"; else printf '%s\n' '{"tag_name":"v9.9.9","draft":false,"prerelease":false}'; fi
 STUB
-chmod +x "$TMP/bin/git" "$TMP/bin/curl"
+cat > "$TMP/bin/sleep" <<'STUB'
+#!/usr/bin/env bash
+[[ -z "${SLEEP_CALLS:-}" ]] || printf '%s\n' "$*" >> "$SLEEP_CALLS"
+exit 0
+STUB
+chmod +x "$TMP/bin/git" "$TMP/bin/curl" "$TMP/bin/sleep"
 export PATH="$TMP/bin:$PATH"
 export GH_CALLS="$TMP/gh-calls"
 fixture() {
@@ -113,6 +134,7 @@ flow() {
     set --
     source "$RELEASE_SH"
     GIT_ROOT="$REPO" FORCE_VERSION=v9.9.9 URGENT_REASON="$reason"
+    require_publisher_authority() { :; }
     run_local_install_e2e() { echo e2e >> "$TMP/effects"; [[ "${E2E_FAIL:-0}" != 1 ]] || exit 1; }
     create_github_release() { echo release >> "$TMP/effects"; }
     verify_remote_release() { echo verified >> "$TMP/effects"; }
@@ -174,15 +196,16 @@ done
 git -C "$REPO" tag -f v9.9.9 "$PARENT" > /dev/null
 flow publish && fail 'publish refuses differing local tag' || pass 'publish refuses differing local tag'
 git -C "$REPO" tag -f v9.9.9 "$SHA" > /dev/null
-# Explicit version must win over any tag on HEAD, even in CLI dispatch.
+# Public CLI recovery forwards the selected version and never runs a local writer.
 (
   set --
   source "$RELEASE_SH"
   GIT_ROOT="$REPO" PUBLISH=true FORCE_VERSION=v1.2.3
-  publish_release() { [[ "$1" == v1.2.3 ]]; }
-  prepare_release() { exit 99; }
+  python3() { printf '%s\n' "$*" > "$TMP/retry-forward"; }
+  publish_release() { exit 99; }
   main
-) > "$TMP/out" 2>&1 && pass 'explicit version honored without preparation' || fail 'explicit version honored without preparation'
+) > "$TMP/out" 2>&1 && grep -q 'retry --version v1.2.3' "$TMP/retry-forward" && pass 'explicit version is forwarded to remote recovery' || fail 'explicit version is forwarded to remote recovery'
+
 (
   set --
   source "$RELEASE_SH"
@@ -198,7 +221,7 @@ git -C "$PREP" config user.email t@example.com
 (
   set --
   source "$RELEASE_SH"
-  GIT_ROOT="$PREP" NEW_VERSION=v9.9.10
+  GIT_ROOT="$PREP" NEW_VERSION=v9.9.10 LOCAL_ONLY=true
   preflight_checks() { :; }; get_last_tag() { :; }; analyze_commits() { :; }
   calculate_version() { :; }; generate_changelog() { :; }; show_preview_and_confirm() { :; }
   update_changelog() { :; }; update_readme_bootstrap_pin() { :; }
@@ -211,11 +234,12 @@ git -C "$PREP" config user.email t@example.com
 git -C "$PREP" rev-parse --verify refs/tags/v9.9.10 > /dev/null 2>&1 && fail 'preparation creates no tag' || pass 'preparation creates no tag'
 [[ "$(git -C "$PREP" log -1 --format=%s)" == 'chore(release): v9.9.10' ]] && pass 'preparation commits metadata' || fail 'preparation commits metadata'
 # An existing release branch must stop preparation before any metadata mutation.
+git -C "$PREP" switch -q main
 BEFORE="$(git -C "$PREP" rev-parse HEAD)"
 (
   set --
   source "$RELEASE_SH"
-  GIT_ROOT="$PREP" NEW_VERSION=v9.9.10
+  GIT_ROOT="$PREP" NEW_VERSION=v9.9.10 LOCAL_ONLY=true
   preflight_checks() { :; }; get_last_tag() { :; }; analyze_commits() { :; }
   calculate_version() { :; }; generate_changelog() { :; }; show_preview_and_confirm() { :; }
   update_changelog() { echo mutated >> "$TMP/prep-effects"; }
@@ -240,6 +264,7 @@ export GH_NOTES="$TMP/published-notes" CURL_CALLS="$TMP/curl-calls"
   source "$RELEASE_SH"
   GIT_ROOT="$REPO" FORCE_VERSION=v9.9.9 RELEASE_REPO=Example/ReleaseFixture
   export GH_RELEASE_TEST=1
+  require_publisher_authority() { :; }
   retry_publish
 ) > "$TMP/out" 2>&1 && pass 'retry accepts another branch with dirty changelog' || fail 'retry accepts another branch with dirty changelog'
 grep -q 'Notes from the tagged commit.' "$GH_NOTES" && ! grep -Eq 'later branch|Uncommitted' "$GH_NOTES" && pass 'release notes match tagged commit only' || fail 'release notes match tagged commit only'
@@ -254,11 +279,72 @@ git -C "$REPO" tag -d v9.9.9 > /dev/null
 flow retry && fail 'retry refuses absent local tag' || pass 'retry refuses absent local tag'
 grep -q 'git fetch origin tag v9.9.9' "$TMP/out" && pass 'missing local tag gives explicit fetch command' || fail 'missing local tag gives explicit fetch command'
 
+# Default submission delegates to GitHub and returns without local publication.
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP"
+  python3() { echo "$2" >> "$TMP/request-flow"; }
+  prepare_release() { echo prepare >> "$TMP/request-flow"; NEW_VERSION=v9.9.10; }
+  publish_release() { echo unexpected-publish >> "$TMP/request-flow"; exit 99; }
+  main
+) > "$TMP/out" 2>&1 && pass 'default command submits without manual publication' || fail 'default command submits without manual publication'
+[[ "$(cat "$TMP/request-flow")" == "$(printf 'check\nprepare\nsubmit')" ]] && pass 'default command checks prepares and submits in order' || fail 'default command checks prepares and submits in order'
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP" LOCAL_ONLY=true
+  python3() { echo unexpected-network >> "$TMP/local-flow"; exit 99; }
+  prepare_release() { echo prepare >> "$TMP/local-flow"; NEW_VERSION=v9.9.10; }
+  main
+) > "$TMP/out" 2>&1 && [[ "$(cat "$TMP/local-flow")" == prepare ]] && pass 'local mode prepares without submission' || fail 'local mode prepares without submission'
+
+# Resume previews and requires explicit confirmation before any external submit.
+git -C "$PREP" switch -q release/v9.9.10
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP" RESUME=true
+  python3() { echo "$2" >> "$TMP/resume-no-consent"; }
+  main < /dev/null
+) > "$TMP/out" 2>&1 && fail 'noninteractive resume requires confirmation' || pass 'noninteractive resume requires confirmation'
+[[ "$(cat "$TMP/resume-no-consent")" == preview-resume ]] && pass 'unconfirmed resume never submits' || fail 'unconfirmed resume never submits'
+(
+  set --
+  source "$RELEASE_SH"
+  GIT_ROOT="$PREP" RESUME=true AUTO_CONFIRM=true
+  python3() { echo "$*" >> "$TMP/resume-confirmed"; }
+  main < /dev/null
+) > "$TMP/out" 2>&1 && grep -q 'preview-resume --version v9.9.10 --sha' "$TMP/resume-confirmed" && grep -q 'submit --version v9.9.10 --sha' "$TMP/resume-confirmed" && pass 'confirmed resume pins preview and submit SHA' || fail 'confirmed resume pins preview and submit SHA'
+
 cli() { bash "$RELEASE_SH" "$@" > "$TMP/cli" 2>&1; echo $?; }
 [[ "$(cli --urgent hotfix)" == 2 ]] && pass 'urgent requires publish' || fail 'urgent requires publish'
 [[ "$(cli --publish --urgent --yes)" == 2 ]] && pass 'urgent requires written reason' || fail 'urgent requires written reason'
 [[ "$(cli --publish --urgent '   ')" == 2 ]] && pass 'urgent refuses blank reason' || fail 'urgent refuses blank reason'
-[[ "$(cli --help)" == 0 ]] && grep -q 'never integration' "$TMP/cli" && pass 'help documents integration gate' || fail 'help documents integration gate'
-[[ "$(cli --help)" == 0 ]] && grep -q 'git fetch origin tag vX.Y.Z' "$TMP/cli" && pass 'help documents tag fetch for retry' || fail 'help documents tag fetch for retry'
+[[ "$(cli --help)" == 0 ]] && grep -q 'integration or tag identity' "$TMP/cli" && pass 'help documents integration gate' || fail 'help documents integration gate'
+[[ "$(cli --help)" == 0 ]] && grep -q 'local tags are not required' "$TMP/cli" && pass 'help documents remote recovery' || fail 'help documents remote recovery'
+(
+  set --
+  source "$RELEASE_SH"
+  unset SOLAR_RELEASE_INTERNAL_PUBLISH GITHUB_ACTIONS
+  require_publisher_authority v9.9.9 "$SHA"
+) > "$TMP/out" 2>&1 && fail 'local helper cannot write release artifacts' || pass 'local helper cannot write release artifacts'
+verify_api() {
+  local payload="$1"
+  (
+    set --
+    source "$RELEASE_SH"
+    export CURL_BODY="$payload"
+    verify_remote_release v9.9.9
+  ) > "$TMP/out" 2>&1
+}
+verify_api '{"tag_name":"v9.9.9","draft":true,"prerelease":false}' && fail 'draft Release is not publication success' || pass 'draft Release is not publication success'
+verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":true}' && fail 'prerelease is not stable publication success' || pass 'prerelease is not stable publication success'
+verify_api '{"tag_name":"v1.0.0","draft":false,"prerelease":false}' && fail 'wrong Release identity fails verification' || pass 'wrong Release identity fails verification'
+CURL_STATUS=404 verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":false}' && fail 'missing public bootstrap fails verification' || pass 'missing public bootstrap fails verification'
+CURL_STATUS=404 CURL_RECOVER_AFTER=2 CURL_ATTEMPT_FILE="$TMP/propagation-attempts" SLEEP_CALLS="$TMP/propagation-sleeps" verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":false}' && pass 'bootstrap propagation succeeds on second attempt' || fail 'bootstrap propagation succeeds on second attempt'
+[[ "$(cat "$TMP/propagation-attempts")" == 2 && "$(wc -l < "$TMP/propagation-sleeps" | tr -d ' ')" == 1 ]] && pass 'bootstrap retry waits once using test sleep double' || fail 'bootstrap retry waits once using test sleep double'
+CURL_STATUS=404 CURL_ATTEMPT_FILE="$TMP/exhausted-attempts" verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":false}' && fail 'bootstrap retry exhaustion fails' || pass 'bootstrap retry exhaustion fails'
+[[ "$(cat "$TMP/exhausted-attempts")" == 5 ]] && pass 'bootstrap retry is bounded to five attempts' || fail 'bootstrap retry is bounded to five attempts'
 echo "Results: PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]
