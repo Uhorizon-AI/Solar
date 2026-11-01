@@ -359,7 +359,7 @@ class TestProbe(Env):
     def test_the_clients_own_denial_wording_is_evidence(self):
         for sentence in ("User rejected MCP: solar-solar_search", "Plan mode blocked it", "denied",
                          "The call was blocked by the permission settings", "This tool is not allowed in this mode",
-                         "It was refused by the sandbox"):
+                         "It was refused by the sandbox", "The tool call was blocked in plan mode"):
             with self.subTest(sentence):
                 self.assertTrue(cp.denial_evidence(sentence), sentence)
 
@@ -573,6 +573,23 @@ class TestStoreAndSummary(Env):
             under = {p for p in seen if str(p).startswith(roots)}
             covered = set(cp.settings_files(provider.name, self.home, self.workspace))
             self.assertLessEqual(under, covered, provider.name)
+
+    def test_every_file_a_fix_names_is_covered_by_the_fingerprint(self):
+        """A stored `missing` must go stale once the operator applies the fix, so the file it names is fingerprinted."""
+        roots = (str(self.home), str(self.workspace))
+        for provider in (ClaudeProvider(), CodexProvider(), AgentProvider(), AgyProvider()):
+            named = {Path(f.strip()) for finding in provider.static_permission_checks(self.home, self.workspace)
+                     if finding.fix and finding.file for f in finding.file.split(",")}
+            named = {p for p in named if str(p).startswith(roots)}
+            covered = set(cp.settings_files(provider.name, self.home, self.workspace))
+            self.assertLessEqual(named, covered, provider.name)
+        agy_fix = self.home / ".gemini" / "antigravity-cli" / "settings.json"
+        self.assertIn(agy_fix, cp.settings_files("agy", self.home, self.workspace))
+        self.assertNotIn(self.home / ".gemini" / "settings.json", cp.settings_files("agy", self.home, self.workspace))
+
+    def test_a_curly_apostrophe_negates_a_denial_word(self):
+        self.assertFalse(cp.denial_evidence("It wasn\u2019t denied"))
+        self.assertFalse(cp.denial_evidence("It wasn't denied"))
 
     def test_a_stale_ok_no_longer_vouches_for_a_check_the_settings_cannot_settle(self):
         self._cursor_config(permissions=dict(allow=[], deny=[]))

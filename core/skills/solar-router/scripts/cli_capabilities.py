@@ -53,9 +53,10 @@ def option_blocks(help_text):
                 continue
             skip_indent = None
         # A singular `Example:` at the description column of the option it follows is part of that
-        # option's description; any other Example(s)/Usage header starts a skipped section.
-        if _SKIPPED.match(line) and not (current and column and _EXAMPLE.match(line)
-                                         and len(line) - len(line.lstrip()) >= column):
+        # option's description (deeper than the option itself when its description starts on the next
+        # line); any other Example(s)/Usage header starts a skipped section.
+        if _SKIPPED.match(line) and not (current and _EXAMPLE.match(line)
+                                         and len(line) - len(line.lstrip()) >= (column or indent + 1)):
             skip_indent = len(line) - len(line.lstrip())
             current = None
             continue

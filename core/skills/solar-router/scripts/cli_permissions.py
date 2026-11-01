@@ -193,7 +193,7 @@ def settings_files(cli: str, home: Path, workspace: Path) -> list[Path]:
         "codex": [codex_home / "config.toml"],
         "agent": [home / ".cursor" / "cli-config.json", workspace / ".cursor" / "cli.json",
                   home / ".cursor" / "mcp.json", workspace / ".cursor" / "mcp.json"],
-        "agy": [home / ".gemini" / "antigravity-cli" / "settings.json", home / ".gemini" / "settings.json"],
+        "agy": [home / ".gemini" / "antigravity-cli" / "settings.json"],
     }.get(cli, [])
 
 
@@ -292,9 +292,10 @@ _DENIAL = re.compile(
     r"\b(?:reject(?:ed|s)?|den(?:y|ied|ies)|forbidden|disallowed|"
     r"permission(?:s)?\s+(?:denied|required|needed)|"
     r"(?:block(?:ed|s)?|refus(?:ed|es))\s+by\s+(?:the\s+)?(?:client|permissions?|policy|sandbox|settings?|plan\s+mode)|"
+    r"(?:block(?:ed|s)?|refus(?:ed|es))\s+in\s+(?:the\s+)?plan\s+mode|"
     r"(?:plan\s+mode|sandbox|policy|permissions?|settings?|client)\s+(?:\w+\s+){0,2}(?:block(?:ed|s)?|refus(?:ed|es)))\b", re.I)
 _NOT_ALLOWED = re.compile(r"\bnot\s+(?:allowed|permitted|authori[sz]ed)\b", re.I)
-_NEGATION = re.compile(r"\b(?:no|not|never|nothing|without)\b|n't", re.I)
+_NEGATION = re.compile(r"\b(?:no|not|never|nothing|without)\b|n['’]t", re.I)
 
 
 def denial_evidence(answer_text: str) -> bool:
