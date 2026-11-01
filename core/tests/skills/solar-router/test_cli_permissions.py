@@ -294,12 +294,84 @@ class TestProbe(Env):
         self.assertEqual((found.status, found.tier), (cp.OK, "probe"))
         self.assertIn(audit.call_args.args[0], seen[0])  # the marker the server is asked about is in the prompt
 
-    def test_read_is_missing_when_the_server_saw_nothing_whatever_the_client_said(self):
+    def test_read_is_missing_when_the_server_saw_nothing_and_the_client_reports_a_denial(self):
         with patch.object(cp, "audit_has_call", return_value=False):
             found = cp.probe_mcp_read(self.provider(lambda *a, **k: _answer("User rejected MCP: solar-solar_search")), self.workspace)
         self.assertEqual(found.status, cp.MISSING)
         self.assertIn("User rejected MCP", found.detail)
         self.assertTrue(found.fix)
+
+    def test_read_is_unknown_without_a_fix_when_the_model_declined_for_a_non_permission_reason(self):
+        calls = []
+
+        def ask(prompt, **_):
+            calls.append(prompt)
+            return _answer("I need to discover the MCP schema with another tool before I can call solar_search.")
+        with patch.object(cp, "audit_has_call", return_value=False):
+            found = cp.probe_mcp_read(self.provider(ask), self.workspace)
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertIn("discover the MCP schema", found.detail)  # the model's own sentence
+        self.assertFalse(found.fix or found.setting or found.snippet)
+        self.assertEqual(len(calls), 2)  # retried once before the verdict
+        self.assertNotIn("Mcp(", cp.render([found]))
+
+    def test_read_is_ok_when_a_declined_run_is_followed_by_a_successful_retry(self):
+        answers = iter(["I cannot call it before reading its schema.", "DONE"])
+        markers = []
+
+        def ask(prompt, **_):
+            markers.append(prompt)
+            return _answer(next(answers))
+        # The server sees the call only on the second attempt: the marker of the first one was never sent.
+        with patch.object(cp, "audit_has_call", side_effect=lambda marker: marker in markers[-1] and len(markers) == 2):
+            found = cp.probe_mcp_read(self.provider(ask), self.workspace)
+        self.assertEqual((found.status, found.tier), (cp.OK, "probe"))
+        self.assertEqual(len(markers), 2)
+
+    def test_a_denial_is_not_retried(self):
+        calls = []
+
+        def ask(prompt, **_):
+            calls.append(prompt)
+            return _answer("User rejected MCP: solar-solar_search")
+        with patch.object(cp, "audit_has_call", return_value=False):
+            found = cp.probe_mcp_read(self.provider(ask), self.workspace)
+        self.assertEqual((found.status, len(calls)), (cp.MISSING, 1))
+
+    def test_a_model_explaining_itself_is_not_denial_evidence(self):
+        """Review of #103: a bare `blocked`/`refused`, or a denial word after a negation, is the model talking."""
+        for sentence in ("I am blocked because I need to discover the MCP schema first",
+                         "No permission was denied; the tool schema is unavailable",
+                         "nothing blocked me",
+                         "I was not denied",
+                         "I refused to guess the arguments"):
+            calls = []
+
+            def ask(prompt, _calls=calls, _sentence=sentence, **_):
+                _calls.append(prompt)
+                return _answer(_sentence)
+            with self.subTest(sentence), patch.object(cp, "audit_has_call", return_value=False):
+                found = cp.probe_mcp_read(self.provider(ask), self.workspace)
+            self.assertEqual(found.status, cp.UNKNOWN, sentence)
+            self.assertEqual(len(calls), 2, sentence)  # retried: it was not a denial
+            self.assertFalse(found.fix or found.setting or found.snippet, sentence)
+
+    def test_the_clients_own_denial_wording_is_evidence(self):
+        for sentence in ("User rejected MCP: solar-solar_search", "Plan mode blocked it", "denied",
+                         "The call was blocked by the permission settings", "This tool is not allowed in this mode",
+                         "It was refused by the sandbox", "The tool call was blocked in plan mode"):
+            with self.subTest(sentence):
+                self.assertTrue(cp.denial_evidence(sentence), sentence)
+
+    def test_status_does_not_warn_for_a_read_left_unknown_by_a_model_decline(self):
+        with TemporaryDirectory() as runtime, patch.object(cp, "store_path", return_value=Path(runtime) / "cp.json"), \
+             patch.object(cp, "audit_has_call", return_value=False):
+            found = cp.probe_mcp_read(self.provider(lambda *a, **k: _answer("I chose not to call it")), self.workspace)
+            cp.save_probe([found], self.home, self.workspace)
+            static = [cp.Finding("agent", "mcp_read", cp.OK, "static", "allowed")]
+            state, _ = cp.summary(static, self.home, self.workspace)
+        self.assertEqual(found.status, cp.UNKNOWN)
+        self.assertNotEqual(state, "WARN")
 
     def test_claude_probe_blocked_in_plan_mode_points_at_solar_not_at_user_settings(self):
         claude = ClaudeProvider()
@@ -447,6 +519,114 @@ class TestStoreAndSummary(Env):
     def test_unverified_checks_are_info_not_ok(self):
         state, _ = cp.summary([cp.unknown("agy", "mcp_read", "n/a")])
         self.assertEqual(state, "INFO")
+
+    def _cursor_config(self, **extra):
+        _json(self.home / ".cursor" / "cli-config.json", dict(approvalMode="allowlist", **extra))
+
+    def test_a_probe_saved_before_a_settings_change_is_stale_not_trusted(self):
+        """#95: the stored MISSING came from settings that no longer exist."""
+        self._cursor_config(permissions=dict(allow=["Shell(ls)"], deny=[]))
+        cp.save_probe([cp.Finding("agent", "mcp_read", cp.MISSING, "probe")], self.home, self.workspace)
+        static = [cp.Finding("agent", "mcp_read", cp.OK, "static")]
+        self.assertEqual(cp.summary(static, self.home, self.workspace)[0], "WARN")  # unchanged: the verdict stands
+        self._cursor_config(permissions=dict(allow=["Mcp(solar:solar_search)"], deny=[]))
+        state, detail = cp.summary(static, self.home, self.workspace)
+        self.assertEqual(state, "OK")
+        self.assertIn("settings changed since the probe", detail)
+
+    def test_a_stale_row_is_still_named_when_another_row_warns(self):
+        self._cursor_config(permissions=dict(allow=[], deny=[]))
+        cp.save_probe([cp.Finding("agent", "write_guard", cp.OK, "probe"),
+                       cp.Finding("codex", "mcp_read", cp.MISSING, "probe")], self.home, self.workspace)
+        self._cursor_config(permissions=dict(allow=["Write(*)"], deny=[]))
+        static = [cp.unknown("agent", "write_guard", "n/a"), cp.Finding("codex", "mcp_read", cp.OK, "static")]
+        state, detail = cp.summary(static, self.home, self.workspace)
+        self.assertEqual(state, "WARN")
+        self.assertIn("codex mcp_read missing", detail)
+        self.assertIn("settings changed since the probe", detail)
+
+    def test_the_fingerprint_is_computed_once_per_client(self):
+        self._cursor_config()
+        cp.save_probe([cp.Finding("agent", "mcp_read", cp.OK, "probe"),
+                       cp.Finding("agent", "write_guard", cp.OK, "probe")], self.home, self.workspace)
+        static = [cp.Finding("agent", "mcp_read", cp.OK, "static")]
+        with patch.object(cp, "fingerprint", wraps=cp.fingerprint) as spy:
+            cp.summary(static, self.home, self.workspace)
+        self.assertEqual(spy.call_count, 1)
+
+    def test_every_file_a_static_check_reads_is_covered_by_the_fingerprint(self):
+        """The list in settings_files is kept by hand: it must not fall behind a provider's static checks."""
+        seen = set()
+
+        def spy(original):
+            def wrapper(path, *args, **kwargs):
+                seen.add(Path(path))
+                return original(path, *args, **kwargs)
+            return wrapper
+        _json(self.home / ".claude.json", {"mcpServers": {}})
+        for provider in (ClaudeProvider(), CodexProvider(), AgentProvider(), AgyProvider()):
+            seen.clear()
+            with patch.object(Path, "open", spy(Path.open)), patch.object(Path, "read_text", spy(Path.read_text)), \
+                 patch.object(Path, "read_bytes", spy(Path.read_bytes)):
+                provider.static_permission_checks(self.home, self.workspace)
+            roots = (str(self.home), str(self.workspace))
+            under = {p for p in seen if str(p).startswith(roots)}
+            covered = set(cp.settings_files(provider.name, self.home, self.workspace))
+            self.assertLessEqual(under, covered, provider.name)
+
+    def test_every_file_a_fix_names_is_covered_by_the_fingerprint(self):
+        """A stored `missing` must go stale once the operator applies the fix, so the file it names is fingerprinted."""
+        roots = (str(self.home), str(self.workspace))
+        for provider in (ClaudeProvider(), CodexProvider(), AgentProvider(), AgyProvider()):
+            named = {Path(f.strip()) for finding in provider.static_permission_checks(self.home, self.workspace)
+                     if finding.fix and finding.file for f in finding.file.split(",")}
+            named = {p for p in named if str(p).startswith(roots)}
+            covered = set(cp.settings_files(provider.name, self.home, self.workspace))
+            self.assertLessEqual(named, covered, provider.name)
+        agy_fix = self.home / ".gemini" / "antigravity-cli" / "settings.json"
+        self.assertIn(agy_fix, cp.settings_files("agy", self.home, self.workspace))
+        self.assertNotIn(self.home / ".gemini" / "settings.json", cp.settings_files("agy", self.home, self.workspace))
+
+    def test_a_curly_apostrophe_negates_a_denial_word(self):
+        self.assertFalse(cp.denial_evidence("It wasn\u2019t denied"))
+        self.assertFalse(cp.denial_evidence("It wasn't denied"))
+
+    def test_a_stale_ok_no_longer_vouches_for_a_check_the_settings_cannot_settle(self):
+        self._cursor_config(permissions=dict(allow=[], deny=[]))
+        cp.save_probe([cp.Finding("agent", "write_guard", cp.OK, "probe")], self.home, self.workspace)
+        static = [cp.unknown("agent", "write_guard", "n/a")]
+        self.assertEqual(cp.summary(static, self.home, self.workspace)[0], "OK")
+        self._cursor_config(permissions=dict(allow=["Write(*)"], deny=[]))
+        state, detail = cp.summary(static, self.home, self.workspace)
+        self.assertEqual(state, "INFO")
+        self.assertIn("stale", detail)
+
+    def test_a_new_solar_version_makes_the_stored_result_stale(self):
+        self._cursor_config()
+        with patch.object(cp, "solar_version", return_value="0.1.0"):
+            cp.save_probe([cp.Finding("agent", "write_guard", cp.OK, "probe")], self.home, self.workspace)
+        static = [cp.unknown("agent", "write_guard", "n/a")]
+        with patch.object(cp, "solar_version", return_value="0.2.0"):
+            self.assertEqual(cp.summary(static, self.home, self.workspace)[0], "INFO")
+
+    def test_the_fingerprint_ignores_other_clients_and_claude_json_noise(self):
+        _json(self.home / ".claude.json", {"mcpServers": {"solar": {}}, "numStartups": 1})
+        before = cp.fingerprint("claude", self.home, self.workspace)
+        _json(self.home / ".claude.json", {"mcpServers": {"solar": {}}, "numStartups": 2})
+        self.assertEqual(cp.fingerprint("claude", self.home, self.workspace), before)
+        _json(self.home / ".claude.json", {"mcpServers": {}, "numStartups": 2})
+        self.assertNotEqual(cp.fingerprint("claude", self.home, self.workspace), before)
+        agent_before = cp.fingerprint("agent", self.home, self.workspace)
+        self._cursor_config()
+        self.assertNotEqual(cp.fingerprint("agent", self.home, self.workspace), agent_before)
+        self.assertEqual(cp.fingerprint("claude", self.home, self.workspace),
+                         cp.fingerprint("claude", self.home, self.workspace))
+
+    def test_a_row_stored_before_fingerprints_existed_is_trusted_as_before(self):
+        path = cp.store_path()
+        _json(path, dict(probed_at="2026-10-01T00:00:00Z",
+                         results=[dict(cli="agent", check="mcp_read", status=cp.MISSING, tier="probe")]))
+        self.assertEqual(cp.summary([cp.Finding("agent", "mcp_read", cp.OK)], self.home, self.workspace)[0], "WARN")
 
     def test_age_label_is_independent_of_the_local_timezone_and_daylight_saving(self):
         now = cp.calendar.timegm((2026, 7, 10, 12, 0, 0))
@@ -610,6 +790,45 @@ class TestRestrictedReaderProbe(Env):
         before = config.read_bytes()
         cp.probe_restricted_reader(AgentProvider(), exercise=lambda provider: "ok")
         self.assertEqual(config.read_bytes(), before)
+
+
+class TestImportOrder(unittest.TestCase):
+    """#96: the shared vocabulary must not make providers.base and cli_permissions depend on each other."""
+
+    def run_fresh(self, code):
+        import os
+        import subprocess
+        scripts = str(Path(cp.__file__).resolve().parent)
+        env = {**os.environ, "PYTHONPATH": scripts + os.pathsep + os.environ.get("PYTHONPATH", "")}
+        return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, env=env)
+
+    def test_each_module_imports_first_in_a_fresh_interpreter(self):
+        for code in ("import cli_permissions; import providers.base",
+                     "import providers.base; import cli_permissions",
+                     "import providers; import cli_permissions"):
+            done = self.run_fresh(code)
+            self.assertEqual(done.returncode, 0, f"{code}: {done.stderr}")
+
+    def test_cli_permissions_loads_no_provider_at_import_time(self):
+        done = self.run_fresh("import sys, cli_permissions; print([m for m in sys.modules if m.startswith('providers')])")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "[]"), done.stderr)
+
+    def test_providers_base_does_not_import_cli_permissions(self):
+        """The two-way edge: base.py takes the shared vocabulary from permission_model instead.
+        (The provider subclasses may still import cli_permissions: that edge is one-way.)"""
+        import ast
+        source = (Path(cp.__file__).resolve().parent / "providers" / "base.py").read_text(encoding="utf-8")
+        imported = {node.module for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ImportFrom)}
+        imported |= {alias.name for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Import)
+                     for alias in node.names}
+        self.assertNotIn("cli_permissions", imported)
+        self.assertIn("permission_model", imported)
+
+    def test_the_names_providers_and_tests_import_are_still_exported(self):
+        import permission_model as pm
+        for name in ("Finding", "MCP_READ_TOOLS", "MCP_SERVER", "OK", "MISSING", "TOO_PERMISSIVE", "UNKNOWN",
+                     "STATUSES", "CHECKS", "CLIENTS", "unknown"):
+            self.assertIs(getattr(cp, name), getattr(pm, name), name)
 
 
 if __name__ == "__main__":

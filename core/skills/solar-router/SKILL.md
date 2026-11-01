@@ -265,7 +265,10 @@ Capability is not permission: a flag Solar passes is a request, and the client's
   through `BaseProvider.ask`, the same construction as a router question (no separate flag set, no `-f`/`--yolo`).
   `mcp_read` is judged by the Solar MCP server's own audit log (`<runtime>/mcp/audit.jsonl`): the probe asks the
   client to call `solar_search` with a unique marker, and `ok` means the server recorded that call. If it did not,
-  the result is `missing` with the client's own words as detail; no cause is assumed. `write_guard` asks the client
+  the result is `missing`, with the client's own words as detail and the permission fix, only when those words
+  show the client's permission layer stopped the call (rejected, denied, blocked, not allowed). Otherwise the probe
+  retries once and, if the server still saw nothing, the result is `unknown` with the model's sentence and no fix:
+  the model may simply have declined. `write_guard` asks the client
   to create a file in a scratch folder (outside the workspace, so a folder-keyed client setting does not apply to it) and is `too_permissive` if the file exists.
   A silent exit with no file is `ok` only for Antigravity, which auto-denies what it cannot prompt for; for any other
   client it is `unknown`. `mcp_read` checks `solar_search`. A client that could not run is `unknown`.
@@ -284,7 +287,10 @@ Capability is not permission: a flag Solar passes is a request, and the client's
   check as unverified.
   A partial probe (`--client`, `--check`) replaces only the checks it ran; `solar status` shows the age of the oldest one.
   The last result is stored in `<runtime>/router/cli-permissions.json` (machine state: it depends on this machine's
-  client settings) and `solar status` shows it with its age.
+  client settings) and `solar status` shows it with its age. Each row stores a fingerprint of the files the
+  static tier reads for that client plus the Solar version; when it no longer matches, `solar status` treats the
+  row as `unknown` ("settings changed since the probe") instead of reusing its verdict. A row saved before
+  fingerprints existed is trusted until the next probe. No model call.
 
 Each `missing`/`too_permissive` result names the setting, the file and the change, with a literal snippet to paste
 when the CLI's syntax is confirmed (Cursor: live; Codex and Antigravity: from their docs, Antigravity unverified). Solar never writes to a client's configuration.

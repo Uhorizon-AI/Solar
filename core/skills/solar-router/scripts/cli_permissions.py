@@ -26,45 +26,23 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 
-OK, MISSING, TOO_PERMISSIVE, UNKNOWN = "ok", "missing", "too_permissive", "unknown"
-STATUSES = (OK, MISSING, TOO_PERMISSIVE, UNKNOWN)
-CHECKS = ("mcp_read", "write_guard", "restricted_reader")
-CLIENTS = ("claude", "codex", "agent", "agy")
-MCP_SERVER = "solar"
-MCP_READ_TOOLS = ("solar_search", "solar_docs")
+# Re-exported: providers and tests import these names from here.
+from permission_model import (CHECKS, CLIENTS, MCP_READ_TOOLS, MCP_SERVER, MISSING, OK, STATUSES,  # noqa: E402,F401
+                              TOO_PERMISSIVE, UNKNOWN, Finding, unknown)
+
 STORE_NAME = "cli-permissions.json"
-
-
-@dataclass(frozen=True)
-class Finding:
-    cli: str
-    check: str
-    status: str
-    tier: str = "static"  # static | probe
-    detail: str = ""
-    setting: str = ""  # the exact setting to change, empty when nothing is to change
-    file: str = ""
-    fix: str = ""
-    snippet: str = ""  # literal text to paste, when the CLI's docs or a live run confirm its syntax
-
-    def __post_init__(self):
-        if self.status not in STATUSES or self.check not in CHECKS:
-            raise ValueError(f"invalid finding {self.check}={self.status}")
-
-
-def unknown(cli, check, detail, *, tier="static", fix=""):
-    """What is not verified is never `ok`."""
-    return Finding(cli, check, UNKNOWN, tier, detail, fix=fix)
 
 
 def read_json(path: Path):
@@ -195,7 +173,55 @@ def stored_rows() -> dict:
     return rows
 
 
-def save_probe(findings: list[Finding]) -> None:
+def solar_version() -> str:
+    """The version `solar --version` prints; empty when the launcher cannot be read."""
+    launcher = Path(__file__).resolve().parents[2] / "solar-client" / "scripts" / "solar"
+    try:
+        match = re.search(r'^SOLAR_VERSION="([^"]*)"', launcher.read_text(encoding="utf-8"), re.M)
+    except OSError:
+        return ""
+    return match[1] if match else ""
+
+
+def settings_files(cli: str, home: Path, workspace: Path) -> list[Path]:
+    """The files that decide a probe result for `cli`: what its static_permission_checks reads, plus
+    where the operator writes the rule the fix suggests (a stored `missing` must go stale once it is applied)."""
+    codex_home = Path(os.getenv("CODEX_HOME") or home / ".codex")
+    return {
+        "claude": [home / ".claude.json", workspace / ".mcp.json", home / ".claude" / "settings.json",
+                   workspace / ".claude" / "settings.json", workspace / ".claude" / "settings.local.json"],
+        "codex": [codex_home / "config.toml"],
+        "agent": [home / ".cursor" / "cli-config.json", workspace / ".cursor" / "cli.json",
+                  home / ".cursor" / "mcp.json", workspace / ".cursor" / "mcp.json"],
+        "agy": [home / ".gemini" / "antigravity-cli" / "settings.json"],
+    }.get(cli, [])
+
+
+def _digest(path: Path, workspace: Path) -> str:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return "absent"
+    if path.name == ".claude.json":
+        # Claude rewrites this file constantly (usage counters); only the MCP registrations matter here.
+        data = read_json(path) or {}
+        project = (data.get("projects") or {}).get(str(workspace)) or {}
+        raw = json.dumps([data.get("mcpServers"), project.get("mcpServers") if isinstance(project, dict) else None],
+                         sort_keys=True).encode()
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def fingerprint(cli: str, home=None, workspace=None) -> str:
+    """Hash of what the static tier reads for `cli` plus the Solar version: a stored result is
+    only as current as this value. No model call."""
+    if workspace is None:
+        from providers.base import SOLAR_WORKSPACE as workspace
+    home, workspace = Path(home or Path.home()), Path(workspace)
+    parts = [f"solar={solar_version()}"] + [f"{p}={_digest(p, workspace)}" for p in settings_files(cli, home, workspace)]
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+
+
+def save_probe(findings: list[Finding], home=None, workspace=None) -> None:
     """Router machine state: the answer depends on this machine's client settings.
 
     A partial probe (`--client`, `--check`) replaces only the checks it ran and keeps the rest.
@@ -205,7 +231,7 @@ def save_probe(findings: list[Finding]) -> None:
     now = _stamp()
     rows = stored_rows()
     for f in findings:
-        rows[(f.cli, f.check)] = dict(asdict(f), probed_at=now)
+        rows[(f.cli, f.check)] = dict(asdict(f), probed_at=now, fingerprint=fingerprint(f.cli, home, workspace))
     payload = dict(probed_at=now, results=[rows[k] for k in sorted(rows)])
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -259,24 +285,58 @@ def audit_has_call(marker: str):
     return False
 
 
+# What a client says when its own permission layer stops a tool call ("User rejected MCP: ...",
+# "denied", "blocked in plan mode", "not allowed"). A model that merely chose not to call
+# the tool says none of this, and that is not a permission problem.
+_DENIAL = re.compile(
+    r"\b(?:reject(?:ed|s)?|den(?:y|ied|ies)|forbidden|disallowed|"
+    r"permission(?:s)?\s+(?:denied|required|needed)|"
+    r"(?:block(?:ed|s)?|refus(?:ed|es))\s+by\s+(?:the\s+)?(?:client|permissions?|policy|sandbox|settings?|plan\s+mode)|"
+    r"(?:block(?:ed|s)?|refus(?:ed|es))\s+in\s+(?:the\s+)?plan\s+mode|"
+    r"(?:plan\s+mode|sandbox|policy|permissions?|settings?|client)\s+(?:\w+\s+){0,2}(?:block(?:ed|s)?|refus(?:ed|es)))\b", re.I)
+_NOT_ALLOWED = re.compile(r"\bnot\s+(?:allowed|permitted|authori[sz]ed)\b", re.I)
+_NEGATION = re.compile(r"\b(?:no|not|never|nothing|without)\b|n['’]t", re.I)
+
+
+def denial_evidence(answer_text: str) -> bool:
+    """True only for the client's own denial wording. A bare `blocked`/`refused` (the model
+    explaining itself) does not count, and a denial word after a negation in the same clause
+    (`no permission was denied`, `I was not denied`) does not either."""
+    text = answer_text or ""
+    if _NOT_ALLOWED.search(text):
+        return True
+    for match in _DENIAL.finditer(text):
+        clause = re.split(r"[.;:!?,\n]", text[:match.start()])[-1][-30:]
+        if not _NEGATION.search(clause):
+            return True
+    return False
+
+
 def probe_mcp_read(provider, workspace: Path) -> Finding:
-    marker = f"solar-permission-probe-{uuid.uuid4().hex[:12]}"
-    prompt = (f"Call the tool solar_search exactly once with arguments "
-              f'{{"scope":"operations","query":"{marker}"}}. Call no other tool. '
-              "Then reply with the single word DONE, or say in one sentence what stopped you.")
-    try:
-        answer = provider.ask(prompt, cwd=workspace)
-    except (RuntimeError, TimeoutError) as exc:
-        return unknown(provider.name, "mcp_read", f"the client did not answer: {str(exc)[:200]}", tier="probe")
-    seen = audit_has_call(marker)
-    if seen is None:
-        return unknown(provider.name, "mcp_read", "the Solar MCP server's audit log could not be read", tier="probe")
-    if seen:
-        return Finding(provider.name, "mcp_read", OK, "probe", "the Solar MCP server received the solar_search call")
-    reply = " ".join(answer.text.split())[:200]
-    return Finding(provider.name, "mcp_read", MISSING, "probe",
-                   f"the Solar MCP server received no call; the client said: {reply}",
-                   **fix_for(provider, "mcp_read"))
+    """`missing` only with the client's own denial wording; a plain miss is retried once, then `unknown`."""
+    reply = ""
+    for _attempt in range(2):
+        marker = f"solar-permission-probe-{uuid.uuid4().hex[:12]}"
+        prompt = (f"Call the tool solar_search exactly once with arguments "
+                  f'{{"scope":"operations","query":"{marker}"}}. Call no other tool. '
+                  "Then reply with the single word DONE, or say in one sentence what stopped you.")
+        try:
+            answer = provider.ask(prompt, cwd=workspace)
+        except (RuntimeError, TimeoutError) as exc:
+            return unknown(provider.name, "mcp_read", f"the client did not answer: {str(exc)[:200]}", tier="probe")
+        seen = audit_has_call(marker)
+        if seen is None:
+            return unknown(provider.name, "mcp_read", "the Solar MCP server's audit log could not be read", tier="probe")
+        if seen:
+            return Finding(provider.name, "mcp_read", OK, "probe", "the Solar MCP server received the solar_search call")
+        reply = " ".join(answer.text.split())[:200]
+        if denial_evidence(answer.text):
+            return Finding(provider.name, "mcp_read", MISSING, "probe",
+                           f"the Solar MCP server received no call; the client said: {reply}",
+                           **fix_for(provider, "mcp_read"))
+    return unknown(provider.name, "mcp_read",
+                   f"the Solar MCP server received no call in two tries and the client gave no permission "
+                   f"reason (the model may have declined); the client said: {reply}", tier="probe")
 
 
 def probe_write_guard(provider) -> Finding:
@@ -390,7 +450,7 @@ def combine(static: Finding, probe) -> str:
     return OK if OK in statuses else UNKNOWN
 
 
-def summary(static: list[Finding]):
+def summary(static: list[Finding], home=None, workspace=None):
     """One state and one line for `solar status`: WARN when something is wrong, never a model call.
 
     A probe saved before `restricted_reader` existed has no row for it. That
@@ -398,12 +458,18 @@ def summary(static: list[Finding]):
     stored probe at all still counts the check as unverified.
     """
     rows = stored_rows()
-    probes = {}
+    probes, current, stale = {}, {}, 0
     for key, row in rows.items():
         try:
-            probes[key] = Finding(**{k: v for k, v in row.items() if k != "probed_at"})
+            probes[key] = Finding(**{k: v for k, v in row.items() if k not in ("probed_at", "fingerprint")})
         except (TypeError, ValueError):
             continue
+        # A row saved before fingerprints existed cannot be compared, so it is trusted as before.
+        if key[0] not in current:
+            current[key[0]] = fingerprint(key[0], home, workspace)
+        if row.get("fingerprint") and row["fingerprint"] != current[key[0]]:
+            probes[key] = unknown(key[0], key[1], "settings changed since the probe", tier="probe")
+            stale += 1
     if not static:
         return "INFO", "no installed client"
     bad, unverified = [], 0
@@ -419,11 +485,12 @@ def summary(static: list[Finding]):
             unverified += 1
     stamps = [r["probed_at"] for r in rows.values() if r.get("probed_at")]
     probed = f"oldest probe {age_label(min(stamps))}" if stamps else "probe never run"
+    note = f"; {stale} probe result(s) stale: settings changed since the probe" if stale else ""
     if bad:
-        return "WARN", f"{'; '.join(bad)} ({probed})"
+        return "WARN", f"{'; '.join(bad)} ({probed}{note})"
     if unverified:
-        return "INFO", f"{unverified} check(s) unverified ({probed})"
-    return "OK", f"all checks ok ({probed})"
+        return "INFO", f"{unverified} check(s) unverified ({probed}{note})"
+    return "OK", f"all checks ok ({probed}{note})"
 
 
 def render(findings: list[Finding]) -> str:

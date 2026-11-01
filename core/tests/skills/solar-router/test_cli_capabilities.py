@@ -1,6 +1,7 @@
 """Help discovery must bind capabilities to declarations, never incidental text."""
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 from cli_capabilities import advertised_values, discover, option_blocks
@@ -198,3 +199,33 @@ def test_chained_groups_and_later_sentences_are_read_whole(text, expected):
 def test_a_closing_note_is_ignored_when_a_list_exists_a_documented_trade_off():
     assert advertised_values(' <m>  Modes: read. Defaults (read, write)') == {'read'}
     assert advertised_values(' <m>  Set (accept-edits, plan)') == {'accept-edits', 'plan'}
+
+
+def test_an_example_line_inside_an_option_description_does_not_drop_later_options():
+    """Claude CLI 2.1.314 puts `Example:` on its own line inside the description of
+    `--json-schema` (captured from the real `claude --help` of that version); #104."""
+    text = (Path(__file__).parent / 'fixtures' / 'claude_2.1.314_help.txt').read_text()
+    blocks = option_blocks(text)
+    for option in ('--json-schema', '--max-budget-usd', '--mcp-config', '--model',
+                   '--no-session-persistence', '--output-format'):
+        assert option in blocks, option
+    assert '"type":"object"' in blocks['--json-schema']
+
+
+def test_an_examples_section_is_never_read_as_declarations_even_when_indented_deeper():
+    """Review of #104: only a singular `Example:` at the description column belongs to an option."""
+    text = '\n'.join(['  --model <m>', '    Examples:', '      --print', '', 'Other:', '  --effort <e>   Level'])
+    blocks = option_blocks(text)
+    assert '--model' in blocks
+    assert '--print' not in blocks
+    assert '--effort' in blocks
+
+
+def test_an_example_inside_an_option_whose_description_starts_on_the_next_line_keeps_the_following_options():
+    """Review of #104: no two-space gap on the option line leaves no description column."""
+    text = '\n'.join(['  --allowedTools, --allowed-tools <tools...>', '      Tools to allow.', '      Example:', '      --print',
+                      '  --effort <e>   Level'])
+    blocks = option_blocks(text)
+    assert '--allowedTools' in blocks
+    assert '--print' not in blocks
+    assert '--effort' in blocks

@@ -1445,3 +1445,22 @@ def test_rollback_refuses_unreleased_cleanup_even_when_no_task_is_active(runtime
         cut.rollback(runtime, lister=quiet)
     assert st.read_format(runtime) == st.FORMAT_SQLITE
     assert _snapshot(runtime) == before
+
+
+def _legacy(status, pending, executable=False):
+    return dict(id=f"c-{status}", parent_id="p", status=status, approval="valid", executable=executable, pending=pending)
+
+
+def test_the_update_note_ignores_historical_legacy_children():
+    """#79: 15 completed children without provenance are history, not a request to approve again."""
+    history = [dict(_legacy("completed", False), id=f"c{i}") for i in range(15)]
+    assert cut._legacy_note({"legacy_children": history}) is None
+    assert cut._legacy_note({"legacy_children": [_legacy("cancelled", False), _legacy("error", False),
+                                                 _legacy("archived", False), _legacy("draft", False)]}) is None
+
+
+def test_the_update_note_counts_only_pending_children_when_history_is_mixed():
+    mixed = [_legacy("completed", False), _legacy("completed", False), _legacy("queued", True)]
+    note = cut._legacy_note({"legacy_children": mixed})
+    assert note.startswith("Legacy subtasks without a derived authorization: 1 (1 not executable")
+    assert "Nothing was backfilled" in note

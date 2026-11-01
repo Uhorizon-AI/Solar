@@ -149,6 +149,21 @@ class TestResultAndFailure(unittest.TestCase):
         self.assertIn("not_logged_in", str(ctx.exception))
         self.assertIn("agent", str(ctx.exception))
 
+    def test_failure_keeps_the_last_stderr_lines_when_the_cause_is_not_on_the_first(self):
+        """#94 characterization: this already holds on main (the ask path keeps the redacted tail)."""
+        stderr = ("Starting agent\nloading config\nsandbox init\n"
+                  "Error: EPERM: operation not permitted, mkdir '/tmp/.cursor'\nat Object.mkdirSync\n"
+                  "token=abc123 fatal: stacked sandbox")
+        with patch("providers.base.shutil.which", return_value="/bin/agent"), \
+             patch("providers.base.subprocess.run", return_value=_proc(returncode=1, stdout="", stderr=stderr)):
+            with self.assertRaises(RuntimeError) as ctx:
+                AgentProvider().ask("q")
+        message = str(ctx.exception)
+        self.assertIn("EPERM", message)
+        self.assertIn("stacked sandbox", message)
+        self.assertNotIn("Starting agent", message)  # bounded: first lines are not the summary
+        self.assertNotIn("abc123", message)  # the existing secret scrubbing still applies
+
     def test_missing_binary_fails_with_a_clear_reason(self):
         with patch("providers.base.shutil.which", return_value=None):
             with self.assertRaises(RuntimeError) as ctx:

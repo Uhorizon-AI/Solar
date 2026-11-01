@@ -752,6 +752,19 @@ def test_legacy_children_are_listed_and_never_backfilled(store):
     assert claim(store, stale)["claimed"] is False
 
 
+def test_only_queued_legacy_children_are_pending_work(store):
+    """#79: history without provenance is listed but is not work waiting for approval."""
+    parent = make(store, "Parent", policy=access())
+    queued = make(store, "Queued child", policy=access(), parent_task_id=json.dumps(parent))
+    closed = make(store, "Closed child", policy=access(), parent_task_id=json.dumps(parent))
+    store.task_cancel(closed)
+    draft = make(store, "Draft child", policy=access(), status="draft", parent_task_id=json.dumps(parent))
+    found = {c["id"]: c for c in store.legacy_children()}
+    assert set(found) == {queued, closed, draft}                   # the historical listing is unchanged
+    assert {i: c["pending"] for i, c in found.items()} == {queued: True, closed: False, draft: False}
+    assert all(c["executable"] is False for c in found.values())   # provenance is never backfilled
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
