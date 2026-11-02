@@ -1176,7 +1176,7 @@ def test_every_supported_source_version_reaches_the_reservations_schema(runtime,
     expected = _base_at(runtime, source)
     result = cut.migrate(runtime, lister=quiet)
     assert result["already"] is True
-    assert _schema(runtime)[0] == st.SCHEMA_VERSION == 8
+    assert _schema(runtime)[0] == st.SCHEMA_VERSION == 9
     assert _counts(runtime) == expected                              # tasks, links, audit, events kept
     assert _policy(runtime) == INITIAL_POLICY                        # capacity 1, nothing reserved
     conn = sqlite3.connect(st.db_path(runtime))

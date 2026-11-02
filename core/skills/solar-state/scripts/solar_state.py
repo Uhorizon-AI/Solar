@@ -84,7 +84,7 @@ TRANSITIONS = (
     ("active", "queued"),        # a parent goes back to wait for its subtasks
     ("completed", "queued"),     # recurring task, next run
     ("completed", "archived"),   # recurring task, max runs reached
-    ("error", "queued"), ("error", "archived"), ("error", "cancelled"),
+    ("error", "queued"), ("error", "draft"), ("error", "archived"), ("error", "cancelled"),
     ("cancelled", "archived"),
 )
 CREATE_STATUSES = ("draft", "planned", "queued")
@@ -324,6 +324,12 @@ MIGRATIONS += ("""
     )
 """,)
 
+# v9: recover a failed task for editing without exposing it to the queue first.
+# No task or standing approval is changed by this migration.
+MIGRATIONS += ("""
+    INSERT OR IGNORE INTO transitions (from_status, to_status) VALUES ('error', 'draft')
+""",)
+
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -345,6 +351,15 @@ class TransitionRefused(StateError):
 
 class TaskChanged(StateError):
     """The task changed after the caller read it (optimistic lock on `row_version`)."""
+
+
+class TaskAuthorizationRefused(TransitionRefused):
+    """An authorization prerequisite failed, with read-only recovery evidence."""
+
+    def __init__(self, readiness: dict):
+        self.readiness = readiness
+        self.code = readiness["code"]
+        super().__init__(readiness["message"])
 
 
 class FormatError(StateError):
@@ -1126,6 +1141,71 @@ def approval_state(pairs: list[list[str]], body: str) -> Optional[str]:
     if not stored.startswith(DIGEST_PREFIX):
         return "legacy"
     return None if stored == current_digest(pairs, body) else "mismatch"
+
+
+def authorization_readiness(task_id: str, task: Optional[dict],
+                            expected_row_version: Optional[int] = None) -> dict:
+    """Read-only facts shared by discovery, pre-confirmation and the final transaction."""
+    result = dict(task_id=task_id, status=None, row_version=None, content_approval="absent",
+                  execution_authorization="not_available", next_operation=None,
+                  ready=False, code="task_not_found", message=f"no task {task_id}")
+    if task is None:
+        return result
+    pairs = task["frontmatter"]
+    if isinstance(pairs, str):
+        pairs = json.loads(pairs)
+    status, version = task["status"], task["row_version"]
+    approval = approval_state(pairs, task["body"]) or "valid"
+    required = needs_run_authorization(pairs)
+    execution = ("required" if required else "satisfied") if status == "queued" and approval == "valid" else "not_available"
+    result.update(status=status, row_version=version, content_approval=approval,
+                  execution_authorization=execution, risk=run_risk(pairs))
+    operation = None
+    if status in ("draft", "planned"):
+        operation = "task.approve"
+    elif status == "error" and approval == "valid":
+        operation = "task.requeue"
+    elif status == "error" or (status == "queued" and approval != "valid"):
+        operation = "task.return_to_draft"
+    elif status == "queued" and required:
+        operation = "task.authorize_run"
+    if operation:
+        result["next_operation"] = dict(tool="solar_execute", arguments=dict(
+            operation=operation, arguments=dict(task_id=task_id, expected_row_version=version)))
+    if expected_row_version is not None and version != expected_row_version:
+        result.update(code="task_changed", message=f"{task_id} changed; read its current version",
+                      next_operation=dict(tool="solar_search", arguments=dict(
+                          scope="tasks", task_id=task_id, view="detail")))
+    elif status != "queued":
+        result.update(code="task_state_refused", message=f"{task_id} is {status}: only a queued task is authorized to run")
+    elif approval != "valid":
+        result.update(code="task_state_refused", message=f"{task_id}: content approval is {approval}; return to draft and approve it again")
+    else:
+        message = "The stored task can be authorized." if required else "Execution consent is already satisfied; nothing to authorize."
+        result.update(ready=True, code="ready", message=message)
+    return result
+
+
+def task_context(task: dict, *, fresh_definition: bool = False) -> dict:
+    """Canonical instructions and conservative generated context, never new authority.
+
+    A known snapshot gives an exact boundary. An imported/changed boundary is not
+    guessed away: retain the whole body as context and flag that uncertainty.
+    """
+    pairs, body = task["frontmatter"], task["body"] or ""
+    title = _field(pairs, "title")
+    snapshot = _boundary(pairs)
+    text = definition_text(body, title)
+    known = _after_snapshot(text, snapshot) is not None
+    if fresh_definition and task["status"] in ("draft", "planned") and snapshot is None:
+        return dict(instructions=text, context="", boundary="definition")
+    if task["status"] in ("draft", "planned") and snapshot is None:
+        # A new definition may legitimately contain examples named ## Result.
+        definition = text
+    else:
+        definition = current_definition(body, title, snapshot)
+    return dict(instructions=definition, context=(runtime_tail(body, title, snapshot) if known else text),
+                boundary="snapshot" if known else "ambiguous")
 
 
 def _definition_head(body: str, title: Optional[str] = None) -> str:
@@ -2299,6 +2379,27 @@ class Session:
         row = self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return _task_dict(row) if row else None
 
+    def task_authorization_readiness(self, task_id: str, *, expected_row_version: Optional[int] = None) -> dict:
+        return authorization_readiness(task_id, self.task_get(task_id), expected_row_version)
+
+    def task_definition_context(self, task_id: str) -> dict:
+        """Resolve definition provenance through state, not a guess from task status."""
+        task = self.task_get(task_id)
+        if task is None:
+            raise TransitionRefused(f"no task {task_id}")
+        fresh = (task["status"] in ("draft", "planned") and not _has_run(self.conn, task_id)
+                 and not _was_imported(self.conn, task_id))
+        return task_context(task, fresh_definition=fresh)
+
+    def task_prompt_context(self, task_id: str, *, token: str) -> dict:
+        """Read the prompt after subtask preparation under the current claim."""
+        with _transaction(self.conn) as conn:
+            _check_token(conn, task_id, token)
+            task = self.task_get(task_id)
+            if task is None or task["status"] != "active":
+                raise StaleToken(f"{task_id} is not active")
+            return self.task_definition_context(task_id)
+
     def task_list(self, status: Optional[str] = None) -> list[dict]:
         sql = "SELECT * FROM tasks"
         args: tuple = ()
@@ -2427,14 +2528,10 @@ class Session:
         with _transaction(self.conn) as conn:
             row = conn.execute("SELECT status, frontmatter, body, row_version FROM tasks WHERE id = ?",
                                (task_id,)).fetchone()
-            if row is None:
-                raise TransitionRefused(f"no task {task_id}")
-            if row["status"] != "queued":
-                raise TransitionRefused(f"{task_id} is {row['status']}: only a queued task is authorized to run")
-            _check_version(task_id, row["row_version"], expected_row_version)
+            readiness = authorization_readiness(task_id, row, expected_row_version)
+            if not readiness["ready"]:
+                raise TaskAuthorizationRefused(readiness)
             pairs = json.loads(row["frontmatter"])
-            if approval_state(pairs, row["body"]):
-                raise TransitionRefused(f"{task_id}: its approval does not cover what is stored; queue it again")
             digest = _field(pairs, "approved_digest")
             _set_pair(pairs, "run_authorized_digest", " " + json.dumps(digest))
             _write_task(conn, task_id, "queued", pairs, row["body"], insert=False)
@@ -2446,7 +2543,7 @@ class Session:
     def task_return_to_draft(self, task_id: str, *, expected_row_version: int,
                              actor: Optional[str] = None,
                              reason: str = "return_to_draft") -> dict:
-        """queued -> draft, withdrawing the approval, in one transaction.
+        """queued/error -> draft, withdrawing the approval, in one transaction.
 
         The id, the body, the schedule and the run counters stay. Only the
         `approved_*` fields go; their values are kept in `audit`
@@ -2458,8 +2555,8 @@ class Session:
                                (task_id,)).fetchone()
             if row is None:
                 raise TransitionRefused(f"no task {task_id}")
-            if row["status"] != "queued":
-                raise TransitionRefused(f"{task_id} is {row['status']}, not queued")
+            if row["status"] not in ("queued", "error"):
+                raise TransitionRefused(f"{task_id} is {row['status']}, not queued/error")
             _check_version(task_id, row["row_version"], expected_row_version)
             pairs = json.loads(row["frontmatter"])
             withdrawn = self._withdraw_approval(conn, task_id, pairs, reason, actor)
@@ -2468,7 +2565,7 @@ class Session:
                   fields={BOUNDARY_KEY: boundary} if boundary else None)
             version = conn.execute("SELECT row_version FROM tasks WHERE id = ?",
                                    (task_id,)).fetchone()[0]
-        return dict(task_id=task_id, from_status="queued", status="draft",
+        return dict(task_id=task_id, from_status=row["status"], status="draft",
                     row_version=version, withdrawn=withdrawn)
 
     _has_run = staticmethod(_has_run)

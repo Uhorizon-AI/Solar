@@ -94,14 +94,16 @@ def test_two_workers_cannot_reuse_approval(solar_env, monkeypatch):
     assert seen == [True]
 
 
-@pytest.mark.parametrize('reply,expected', [
-    ({'action': 'accept', 'content': {'approve': True}}, True),
-    ({'action': 'accept', 'content': {'approve': 'true'}}, False),
-    ({'action': 'accept', 'content': {}}, False),
-    ({'action': 'decline'}, False),
-    ({'action': 'cancel'}, False),
+@pytest.mark.parametrize('reply,outcome', [
+    ({'action': 'accept', 'content': {'approve': True}}, 'accepted'),
+    ({'action': 'accept', 'content': {'approve': 'true'}}, 'invalid_response'),
+    ({'action': 'accept', 'content': {}}, 'invalid_response'),
+    ({'action': 'accept', 'content': {'approve': False}}, 'declined'),
+    ({'action': 'decline'}, 'declined'),
+    ({'action': 'cancel'}, 'cancelled'),
 ])
-def test_transport_confirmation_matches_server_request(solar_env, monkeypatch, reply, expected):
+def test_transport_confirmation_matches_server_request(solar_env, monkeypatch, reply, outcome):
+    expected = outcome == 'accepted'
     """A fake client responds to the generated ID as a real harness would."""
     import queue
     lines = queue.Queue()
@@ -131,7 +133,7 @@ def test_transport_confirmation_matches_server_request(solar_env, monkeypatch, r
     assert messages[-1]['result']['isError'] is not expected
     diagnostic = json.loads(messages[-1]['result']['content'][0]['text'])['confirmation']
     assert diagnostic == dict(client_form_advertised=True, transport='mcp-form', attempted=True,
-                              outcome='accepted' if expected else 'not_accepted')
+                              outcome=outcome)
     assert bool(mcp_approve.listing()) is expected
 
 

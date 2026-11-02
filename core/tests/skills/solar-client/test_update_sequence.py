@@ -133,7 +133,7 @@ class Rig:
         """A runtime already on solar-state at schema `version` (5 or 6), with some history.
 
         The base is built at the current schema and then taken back by undoing what each later
-        migration added, newest first: v8 (token evidence and the execution id), v7 (lifecycle
+        migration added, newest first: v9 (error-to-draft), v8 (token evidence and the execution id), v7 (lifecycle
         tables), then v6 (reservations) for a v5 base."""
         claim_test_owner(self.rt, self.ws, WS_ID, monkeypatch=self.monkeypatch)
         with solar_state.cutover(self.rt) as cut:
@@ -143,11 +143,12 @@ class Rig:
             for index in range(tasks):
                 store.task_create([("title", json.dumps(f"T{index}"))], "\n# T\n", status="draft")
         if version < solar_state.SCHEMA_VERSION:
-            # The undo below knows schema v8 and nothing newer: a later migration must be undone
+            # The undo below knows schema v9 and nothing newer: a later migration must be undone
             # here too, or the base keeps its objects under an older user_version and collides.
-            assert solar_state.SCHEMA_VERSION == 8, "teach runtime_state to undo the newer migrations"
+            assert solar_state.SCHEMA_VERSION == 9, "teach runtime_state to undo the newer migrations"
             assert version in (5, 6), f"runtime_state can rebuild schema v5 or v6, not v{version}"
             conn = sqlite3.connect(solar_state.db_path(self.rt))
+            conn.execute("DELETE FROM transitions WHERE from_status='error' AND to_status='draft'")
             for table in ("token_observations", "token_attempts"):
                 conn.execute(f"DROP TABLE {table}")
             conn.execute("ALTER TABLE execution_reservations DROP COLUMN execution_id")

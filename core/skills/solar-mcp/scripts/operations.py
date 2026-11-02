@@ -565,13 +565,31 @@ def _do_async_apply(arguments: dict) -> dict:
                 enabled_reader_profiles=applied["enabled_reader_profiles"])
 
 
+def _pre_authorize_run(arguments: dict) -> None:
+    import solar_state
+
+    try:
+        with solar_state.read_session() as store:
+            readiness = store.task_authorization_readiness(
+                arguments["task_id"], expected_row_version=arguments["expected_row_version"])
+    except solar_state.StateError as exc:
+        raise OperationError(error_code(exc), str(exc), details=dict(readiness=None)) from None
+    if not readiness["ready"]:
+        raise OperationError(readiness["code"], readiness["message"], details=dict(readiness=readiness))
+    if readiness["execution_authorization"] == "satisfied":
+        raise OperationError("task_authorization_not_required", readiness["message"], details=dict(readiness=readiness))
+
+
 def _do_task_authorize_run(arguments: dict) -> dict:
     import solar_state
 
-    with solar_state.session() as store:
-        return store.task_authorize_run(arguments["task_id"],
-                                        expected_row_version=arguments["expected_row_version"],
-                                        actor=_actor("task.authorize_run"))
+    try:
+        with solar_state.session() as store:
+            return store.task_authorize_run(arguments["task_id"],
+                                            expected_row_version=arguments["expected_row_version"],
+                                            actor=_actor("task.authorize_run"))
+    except solar_state.TaskAuthorizationRefused as exc:
+        raise OperationError(exc.code, str(exc), details=dict(readiness=exc.readiness)) from None
 
 
 def _do_task_return_to_draft(arguments: dict) -> dict:
@@ -907,18 +925,19 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "task.authorize_run", A2, "Authorize a queued high-risk task to run, as stored now.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION),
              required=("task_id", "expected_row_version")),
-        errors=("task_not_found", "task_changed", "task_state_refused"),
+        errors=("task_not_found", "task_changed", "task_state_refused", "task_authorization_not_required"),
         refuses_mandate=True,
+        pre_confirm=_pre_authorize_run,
         effects="A task queued without a form whose execution is not confined by a verified restricted "
                 "profile waits (awaiting_approval) until this runs. Bound to the approved content: an edit "
                 "withdraws it. Read-only reviews with a verified profile never need it."),
     Operation(
-        "task.return_to_draft", A2, "Withdraw a queued task back to draft, keeping its id and history.",
+        "task.return_to_draft", A2, "Return a queued or failed task to draft, keeping its id and history.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION),
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_state_refused"),
         client_consent=True,
-        effects="Only a queued task. Its approval is withdrawn (the previous digest stays in the "
+        effects="Only a queued or failed task, without queueing failed work first. Its approval is withdrawn (the previous digest stays in the "
                 "audit), the worker can no longer claim it and it needs task.approve to be queued "
                 "again. Body, schedule, run counters and history are kept. " + _APPROVED_ONLY),
     Operation(
