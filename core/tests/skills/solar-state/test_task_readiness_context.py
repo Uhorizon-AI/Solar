@@ -44,6 +44,55 @@ def test_post_confirmation_edit_has_structured_refusal(ready):
         assert not store.audit_rows("task_run_authorized")
 
 
+def test_error_readiness_retries_valid_content_without_withdrawing_consent(ready):
+    with solar_state.session() as store:
+        task = queued(store)
+        store.task_set(task, "approved_consent", '"client"')
+        store.task_authorize_run(task, expected_row_version=store.task_get(task)["row_version"])
+        consent = fm(store, task)["run_authorized_digest"]
+        token = store.task_claim_detail(task, "test")["token"]
+        store.task_fail(task, "\n## Execution Error\nRetry.\n", token=token)
+        info = store.task_authorization_readiness(task)
+        assert not info["ready"] and info["code"] == "task_state_refused"
+        assert info["execution_authorization"] == "not_available"
+        operation = info["next_operation"]["arguments"]
+        assert operation["operation"] == "task.requeue"
+        store.task_requeue(**operation["arguments"])
+        assert fm(store, task)["run_authorized_digest"] == consent
+        assert store.task_authorization_readiness(task)["execution_authorization"] == "satisfied"
+
+
+@pytest.mark.parametrize("broken", ["absent", "legacy", "mismatch"])
+def test_error_with_invalid_content_advertises_draft_recovery(ready, broken):
+    with solar_state.session() as store:
+        task = queued(store)
+        token = store.task_claim_detail(task, "test")["token"]
+        store.task_fail(task, "\n## Execution Error\nRetry.\n", token=token)
+        value = {"absent": "", "legacy": "old", "mismatch": "v2:wrong"}[broken]
+        store.task_set(task, "approved_digest", json.dumps(value))
+        info = store.task_authorization_readiness(task)
+        assert info["next_operation"]["arguments"]["operation"] == "task.return_to_draft"
+        assert not info["ready"] and info["execution_authorization"] == "not_available"
+
+
+@pytest.mark.parametrize("status", ["draft", "planned"])
+def test_new_definition_has_no_historical_context_or_ambiguity(ready, status):
+    instructions = "Instruction.\n```md\n## Result\nAuthor example.\n```"
+    with solar_state.session() as store:
+        task = store.task_create([("title", '"T"')], "\n# T\n\n" + instructions, status=status)
+        context = store.task_definition_context(task)
+        assert context == dict(instructions=instructions, context="", boundary="definition")
+        assert store.task_authorization_readiness(task)["execution_authorization"] == "not_available"
+
+
+@pytest.mark.parametrize("status", ["draft", "planned", "queued"])
+def test_import_without_snapshot_does_not_masquerade_as_new_definition(ready, status):
+    with solar_state.session() as store:
+        task = store.task_import(f'---\nid: "import-{status}"\nstatus: {status}\ntitle: "T"\n---\n\nInstruction.\n## Result\nPossibly authored.\n')
+        context = store.task_definition_context(task)
+        assert context["boundary"] == "ambiguous" and "Possibly authored." in context["context"]
+
+
 def test_error_to_draft_never_enters_queue_and_removes_all_authority(ready):
     with solar_state.session() as store:
         task = queued(store, recurring="true", recurring_run_count="3")

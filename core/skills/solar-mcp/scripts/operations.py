@@ -576,6 +576,8 @@ def _pre_authorize_run(arguments: dict) -> None:
         raise OperationError(error_code(exc), str(exc), details=dict(readiness=None)) from None
     if not readiness["ready"]:
         raise OperationError(readiness["code"], readiness["message"], details=dict(readiness=readiness))
+    if readiness["execution_authorization"] == "satisfied":
+        raise OperationError("task_authorization_not_required", readiness["message"], details=dict(readiness=readiness))
 
 
 def _do_task_authorize_run(arguments: dict) -> dict:
@@ -923,7 +925,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "task.authorize_run", A2, "Authorize a queued high-risk task to run, as stored now.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION),
              required=("task_id", "expected_row_version")),
-        errors=("task_not_found", "task_changed", "task_state_refused"),
+        errors=("task_not_found", "task_changed", "task_state_refused", "task_authorization_not_required"),
         refuses_mandate=True,
         pre_confirm=_pre_authorize_run,
         effects="A task queued without a form whose execution is not confined by a verified restricted "

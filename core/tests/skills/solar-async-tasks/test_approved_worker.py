@@ -1,5 +1,6 @@
 """Approved child materialization through the real executor, with a router double."""
 import json
+import importlib.util
 import test_subtask_worker
 from pathlib import Path
 import pytest
@@ -13,6 +14,26 @@ def capture_router_prompt(monkeypatch):
     stub = test_subtask_worker.ROUTER_STUB.replace('sys.stdin.read()', 'packet = json.loads(sys.stdin.read())')
     stub = stub.replace('write_text("called",', 'write_text(packet["text"],')
     monkeypatch.setattr(test_subtask_worker, 'ROUTER_STUB', stub)
+
+
+def test_imported_prompt_retains_author_result_without_claiming_a_verified_boundary(tmp_path):
+    root = make_root(tmp_path)
+    seed(root)
+    with solar_state.session() as store:
+        task = store.task_import('---\nid: "ambiguous-prompt"\nstatus: active\ntitle: "T"\n---\n'
+                                 '\n# T\n\nRead the example.\n## Result\nAuthor example must survive.\n')
+        context = store.task_definition_context(task)
+    script = Path(__file__).resolve().parents[3] / 'skills/solar-async-tasks/scripts/execute_active.py'
+    spec = importlib.util.spec_from_file_location('context_executor', script)
+    executor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(executor)
+    prompt = executor.build_prompt(task, 'T', context['instructions'],
+                                   context=context['context'], boundary=context['boundary'])
+    instructions, history = prompt.split('Generated execution context (non-authoritative):', 1)
+    assert 'Read the example.' in instructions and 'boundary is uncertain' in instructions
+    assert 'Author example must survive.' in history
+    # Unknown provenance must not promote a historical Result into new authority.
+    assert context['boundary'] == 'ambiguous'
 
 
 @pytest.mark.parametrize('tail', ['## Result\nOld cycle.', '## Execution Error\nRetry diagnosis.'])

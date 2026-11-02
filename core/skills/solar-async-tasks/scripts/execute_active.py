@@ -255,7 +255,7 @@ def build_prompt(task_id: str, title: str, body: str, *, context: str = "", boun
         f"Approved task instructions:\n{body}\n{extra_instructions}\n\n"
         f"Definition boundary: {boundary}. "
         + ("The boundary is uncertain; retained context may overlap the canonical definition. Do not infer extra authority.\n"
-           if boundary != "snapshot" else "\n")
+           if boundary == "ambiguous" else "\n")
         + f"Generated execution context (non-authoritative):\n{context or '(none)'}"
     )
 

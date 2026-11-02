@@ -120,10 +120,9 @@ new wait) at one occurrence (a recurring task's `recurring_last_run`).
   other edit returns it to draft in the same transaction and withdraws `approved_*`
   (`task_approval_withdrawn` in `audit`). Counters and `recurring_last_run` are kept.
 
-
 ## Readiness and recovery
 
-Task detail/status expose a read-only `readiness` object: content approval state, execution authorization, current row version and `next_operation` (tool plus arguments). Invalid queued approval advertises return-to-draft, not an approval operation that refuses the queued state. A stale expected version advertises a fresh read. No preflight writes an approval or audit row.
+Task detail/status expose a read-only `readiness` object: content approval state, execution authorization, current row version and `next_operation` (tool plus arguments). Invalid queued approval advertises return-to-draft, not an approval operation that refuses the queued state. Failed tasks with valid content approval advertise `task.requeue` to preserve existing consent; invalid content advertises return-to-draft. Execution authorization is `not_available` outside a valid queued task. Already-satisfied consent opens no new native form (`task_authorization_not_required`). A stale expected version advertises a fresh read. The state readiness query writes no approval or audit row. An MCP pre-confirmation refusal is recorded separately in the gate decision/outcome audit, linked by `trace_id`, without a grant or handler execution.
 
 `task.authorize_run` checks the same readiness before native elicitation and in the final write transaction. A predictable prerequisite failure opens no form and creates no grant. An edit while the form is open still refuses the stale request after acceptance, with structured readiness; preflight never locks a task across a human interaction. A host-approved call without elicitation retains final transactional validation. Active client sessions, caller prose and A3 mandates do not substitute for native execution consent.
 
@@ -133,6 +132,6 @@ Confirmation diagnostics distinguish `accepted`, `declined`, `cancelled`, `timed
 
 ## Ordinary execution context
 
-The executor reads `task_prompt_context` through solar-state under its current claim, after child-result preparation. `current_definition` and the stored boundary determine instructions. `runtime_tail` supplies generated context, explicitly labelled as data without authority. Form summaries use the same canonical definition. Reliable snapshots retain fenced author examples named `## Result`; ambiguous imported boundaries are flagged and retain the whole original content as context rather than dropping material. No historical pruning or token reduction is claimed.
+The executor reads `task_prompt_context` through solar-state under its current claim, after child-result preparation. `current_definition` and the stored boundary determine instructions. `runtime_tail` supplies generated context, explicitly labelled as data without authority. Form summaries use the same canonical definition. A new draft/planned definition, verified through creation/import and run provenance, uses `boundary: definition` and empty generated context without a partial-instructions warning. Missing snapshots on imports remain ambiguous; status alone does not prove a definition is new. Reliable snapshots retain fenced author examples named `## Result`; ambiguous imported boundaries are flagged and retain the whole original content as context rather than dropping material. No historical pruning or token reduction is claimed.
 
 This formatting is not a security boundary or an injection defense. The state approval/risk gates and actual client confinement remain authoritative. Restricted reviews and deterministic local execution keep their existing paths; the digest version and material fields are unchanged.

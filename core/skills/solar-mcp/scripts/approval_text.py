@@ -225,11 +225,11 @@ def _facts(task_id: str) -> dict | None:
     try:
         with solar_state.read_session() as store:
             task = store.task_get(task_id)
+            context = store.task_definition_context(task_id) if task is not None else None
         if task is None:
             return dict(missing=True)
         values = task_views._values(task)
         title = task["title"] or ""
-        context = solar_state.task_context(task)
         instructions = context["instructions"]
         return dict(title=title, status=task["status"], row_version=task["row_version"],
                     values=values, priority=task["priority"],

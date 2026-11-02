@@ -2,6 +2,7 @@
 import json
 import queue
 import threading
+from dataclasses import replace
 from io import StringIO
 
 import pytest
@@ -10,7 +11,10 @@ import approval_text
 import mcp_approve
 import mcp_server
 import solar_state
+import operations
+from mcp_context import OperationError
 from mcp_helpers import execute, run, search, stored
+from test_client_consent import confine
 
 CLIENT_CONSENT = True
 
@@ -48,6 +52,10 @@ def test_invalid_prerequisite_never_opens_form_or_grants(solar_env, problem):
     result = payload(out)
     assert out["result"]["isError"] and not forms
     assert not result["readiness"]["ready"] and mcp_approve.listing() == before
+    rows = [json.loads(line) for line in solar_env.gate_audit.read_text().splitlines()]
+    linked = [row for row in rows if row.get("trace_id") == result["trace_id"]]
+    assert len(linked) == 2 and {row["kind"] for row in linked} == {"decision", "outcome"}
+    assert linked[0]["allowed"] is False and linked[1]["ok"] is False
     assert not stored(task).get("run_authorized_digest")
 
 
@@ -82,6 +90,29 @@ def test_changed_task_after_acceptance_returns_recovery_not_transport_failure(so
         assert not store.audit_rows("task_run_authorized")
 
 
+@pytest.mark.parametrize("confined", [False, True])
+def test_covered_consent_never_opens_another_form(solar_env, confined):
+    if confined:
+        made = run("task.create", dict(title="Review", instructions="Read.", provider="codex"))
+        task = made["id"]
+        confine(task)
+        run("task.approve", dict(task_id=task, expected_row_version=stored(task)["row_version"]))
+    else:
+        made = work(); task = made["id"]
+        out = mcp_server.handle(request(task, stored(task)["row_version"]), confirm=lambda *args: True)
+        assert not out["result"]["isError"]
+    before = stored(task)
+    grants = mcp_approve.listing()
+    forms = []
+    out = mcp_server.handle(request(task, before["row_version"]),
+                            confirm=lambda *args: forms.append(args) or True)
+    info = payload(out)
+    assert info["code"] == "task_authorization_not_required" and not forms
+    assert info["readiness"]["execution_authorization"] == "satisfied"
+    assert info["readiness"]["next_operation"] is None
+    assert stored(task) == before and mcp_approve.listing() == grants
+
+
 def test_host_approved_path_without_elicitation_still_validates(solar_env):
     made = work(); task = made["id"]
     with solar_state.session() as store:
@@ -102,6 +133,19 @@ def test_unavailable_preflight_has_stable_diagnostic_and_no_form(solar_env, monk
     assert payload(out)["code"] == "state_unavailable" and not forms
 
 
+def test_domain_preflight_without_details_has_same_error_envelope(solar_env, monkeypatch):
+    made = work()
+    def refuse(*args):
+        raise OperationError("test_refusal", "No prerequisites.")
+    op = operations.OPERATIONS["task.authorize_run"]
+    monkeypatch.setitem(operations.OPERATIONS, op.name, replace(op, pre_confirm=refuse))
+    forms = []
+    out = mcp_server.handle(request(made["id"], made["row_version"]),
+                            confirm=lambda *args: forms.append(args) or True)
+    assert "error" not in out and out["result"]["isError"]
+    assert payload(out)["code"] == "test_refusal" and payload(out)["trace_id"] and not forms
+
+
 def test_form_shows_approved_definition_not_previous_results(solar_env):
     made = work(); task = made["id"]
     with solar_state.session() as store:
@@ -110,10 +154,19 @@ def test_form_shows_approved_definition_not_previous_results(solar_env):
     assert "Approved instructions." in text and "Do something else from history." not in text
 
 
+def test_new_definition_form_has_no_partial_instructions_warning(solar_env):
+    made = run("task.create", dict(title="New", instructions="Author example.\n## Result\nKeep this."))
+    text, _ = approval_text.render("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]), seconds=120)
+    assert "Keep this." in text and "may be partial" not in text and "pueden ser parciales" not in text
+
+
 @pytest.mark.parametrize("reply,outcome", [
     (dict(result=dict(action="accept", content=dict(approve=True))), "accepted"),
     (dict(result=dict(action="decline")), "declined"),
     (dict(result=dict(action="cancel")), "cancelled"),
+    (dict(result=dict(action="decline", content=None)), "declined"),
+    (dict(result=dict(action="cancel", content=None)), "cancelled"),
+    (dict(result=dict(action="accept", content=None)), "invalid_response"),
     (dict(result=[]), "invalid_response"),
     (dict(error=dict(code=-1, message="client failed")), "client_error"),
     (None, "disconnected"),

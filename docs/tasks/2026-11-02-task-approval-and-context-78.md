@@ -7,7 +7,7 @@ last_review: 2026-11-02 Cursor Aprobado (ejecutabilidad)
 # Task spec: approval recovery and execution context
 
 **Date:** 2026-11-02
-**Status:** implemented locally and independently reviewed; ready for maintainer review and a new PR; not installed
+**Status:** implementation ready for PR #127 review, including external feedback corrections; not installed
 **Base:** `7732a11` (v0.61.1)
 **Issues:** #78; diagnosis of #101. The 26 October async-context plan supplies the prompt boundary requirements.
 
@@ -104,3 +104,12 @@ This is the first delivery of the approval, iterative review and proactive-agent
 - Three skill packages validate; `git diff --check` passes. Client sync completed through the existing global installation at the existing `SOLAR_ROOT`, which excludes this checkout from planet resource discovery. This branch was not installed and production state was not upgraded to schema v9.
 - The delayed-form transport test passes; real-client #101 reproduction remains pending. Valid `task.requeue` retains its existing error-body trimming behavior; direct error-to-draft recovery preserves diagnostic context.
 - Independent code review by Claude: initial feedback corrected; final delta review accepted with no remaining findings. Required remote CI and maintainer merge review remain future PR checks.
+
+
+## External review follow-up
+
+- Valid failed work advertises requeue and retains consent; invalid approval advertises draft recovery. Covered consent produces no second native form, and non-queued states do not claim executable authorization.
+- New definition provenance is checked through state; fresh drafts/plans have empty generated context, while imports without snapshots remain explicitly ambiguous. Executor coverage preserves authored content without silently promoting history to authority.
+- Decline/cancel replies may omit content. All domain pre-confirmation errors use an audited tool-error envelope with linked decision/outcome traces, without granting consent or executing the handler.
+- Focused feedback regressions: **128 passed**. Complete state, MCP, async and entire client suites: **1,762 passed, 3 skipped** in 709.25 s. Modified skill packages validate and whitespace checks pass.
+- This follow-up does not install the branch, migrate production, merge or publish a release; real-client reproduction of #101 remains pending.

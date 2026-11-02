@@ -7,6 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Fixed
+- tasks: recovery hints retry valid failed work without withdrawing consent; already-covered execution authorization opens no redundant form. Fresh definitions avoid historical-context warnings while imports retain ambiguity. Pre-confirmation refusals use a consistent audited tool-error envelope, and decline/cancel replies may omit content.
 - tasks: validate authorization prerequisites before native confirmation and return structured recovery instructions; revalidate after acceptance to reject concurrent edits (#78). Failed tasks can return directly to draft without entering the queue, preserving history and withdrawing prior consent (schema v9).
 - tasks: ordinary execution and approval summaries separate the canonical definition from generated history, retaining child results and diagnostics without changing the approval digest.
 

@@ -268,7 +268,7 @@ def record(verdict: Verdict, arguments: dict, trace_id: str = "", via: str = "")
 
 
 def record_outcome(tool: str, trace_id: str, ok: bool, code: str, detail: str = "") -> None:
-    """What happened after an allowed decision. An uncertain failure is visible here."""
+    """Record an outcome, including a pre-confirmation refusal; this does not imply a handler ran."""
     _append(dict(ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), kind="outcome",
                  tool=tool, trace_id=trace_id, ok=ok, code=code, detail=detail[:300],
                  pid=os.getpid()))

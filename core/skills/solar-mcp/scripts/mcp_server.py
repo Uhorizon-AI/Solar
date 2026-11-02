@@ -500,12 +500,15 @@ def handle(message: dict, confirm=None) -> dict | None:
                     try:
                         op.pre_confirm(inner)
                     except OperationError as exc:
-                        if exc.details:
-                            payload = dict(error=str(exc)[:500], code=exc.code, operation=op.name,
-                                           **exc.details)
-                            return dict(jsonrpc="2.0", id=request_id,
-                                        result=dict(content=_text(payload), isError=True))
-                        return _error(request_id, -32602, str(exc))
+                        trace = uuid.uuid4().hex[:12]
+                        verdict = mcp_gate.Verdict(False, exc.code, str(exc), op.authority, op.name,
+                                                   [dict(check="pre_confirmation", value=False)])
+                        mcp_gate.record(verdict, inner, trace, via=name)
+                        mcp_gate.record_outcome(op.name, trace, False, exc.code, "pre-confirmation: " + str(exc))
+                        payload = dict(error=str(exc)[:500], code=exc.code, operation=op.name,
+                                       trace_id=trace, verdict=verdict.as_dict(), **exc.details)
+                        return dict(jsonrpc="2.0", id=request_id,
+                                    result=dict(content=_text(payload), isError=True))
                 if confirm(op.name, inner, request_id):
                     import mcp_approve
                     granted = mcp_approve.grant(op.name, inner, CONFIRMATION_TIMEOUT, "client elicitation: explicit confirmation")
@@ -613,11 +616,13 @@ def serve(stdin=None, stdout=None) -> int:
                 if response.get('error'):
                     return refused('client_error')
                 result = response.get('result') or {}
-                if not isinstance(result, dict) or not isinstance(result.get('content', {}), dict):
+                if not isinstance(result, dict):
                     return refused('invalid_response')
                 action = result.get('action')
                 if action in ('decline', 'cancel'):
                     return refused('declined' if action == 'decline' else 'cancelled')
+                if not isinstance(result.get('content', {}), dict):
+                    return refused('invalid_response')
                 value = (result.get('content') or {}).get('approve')
                 if action != 'accept' or type(value) is not bool:
                     return refused('invalid_response')
