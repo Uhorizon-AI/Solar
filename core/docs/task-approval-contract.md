@@ -37,7 +37,7 @@ claim transaction, after block, schedule and recurrence, before `queued -> activ
 - No digest (`absent`), a digest without the `v2:` prefix (`legacy`) or a different one
   (`mismatch`): the task stays `queued`, the next candidate is tried and
   `approval_digest_mismatch` is written to `audit` (once per task, reason and row version), to the
-  log and to the console. Nothing is converted: approve it again with `task.approve`.
+  log and to the console. Nothing is converted: return it to draft with `task.return_to_draft`, then approve the stored definition with `task.approve`.
   `python3 core/skills/solar-state/scripts/solar_state.py task list-unapproved` lists them.
 
 After the digest gate, the claim applies the risk gate (`needs_run_authorization`): a task with
@@ -119,3 +119,20 @@ new wait) at one occurrence (a recurring task's `recurring_last_run`).
 - **Edits.** A queued task keeps its approval only when the digest is unchanged (a rename) and the approval is valid; a queued task whose approval is absent, legacy or mismatching goes to draft on any edit. Any
   other edit returns it to draft in the same transaction and withdraws `approved_*`
   (`task_approval_withdrawn` in `audit`). Counters and `recurring_last_run` are kept.
+
+
+## Readiness and recovery
+
+Task detail/status expose a read-only `readiness` object: content approval state, execution authorization, current row version and `next_operation` (tool plus arguments). Invalid queued approval advertises return-to-draft, not an approval operation that refuses the queued state. A stale expected version advertises a fresh read. No preflight writes an approval or audit row.
+
+`task.authorize_run` checks the same readiness before native elicitation and in the final write transaction. A predictable prerequisite failure opens no form and creates no grant. An edit while the form is open still refuses the stale request after acceptance, with structured readiness; preflight never locks a task across a human interaction. A host-approved call without elicitation retains final transactional validation. Active client sessions, caller prose and A3 mandates do not substitute for native execution consent.
+
+`task.return_to_draft` accepts queued or failed tasks. Schema v9 registers `error -> draft` without changing existing task rows or approvals. Recovery preserves body, results/errors, definition boundary, schedule and counters, removes every `APPROVAL_KEYS` field (including `run_authorized_digest`) and records the withdrawal. A failed task never passes through the queue merely to become editable. Approving and authorizing the recovered definition remain separate existing operations; only high-risk work requires the final execution-consent form. Unchanged authorized recurrence/requeue retains existing consent.
+
+Confirmation diagnostics distinguish `accepted`, `declined`, `cancelled`, `timed_out`, `disconnected`, `client_error` and `invalid_response`; `not_accepted` remains a fallback for an unclassified negative callback. Only a correlated accept with a boolean checked approval grants authority. The delayed-response wire test diagnoses protocol behavior, not a fix proven in every client (#101 remains unverified in the real client).
+
+## Ordinary execution context
+
+The executor reads `task_prompt_context` through solar-state under its current claim, after child-result preparation. `current_definition` and the stored boundary determine instructions. `runtime_tail` supplies generated context, explicitly labelled as data without authority. Form summaries use the same canonical definition. Reliable snapshots retain fenced author examples named `## Result`; ambiguous imported boundaries are flagged and retain the whole original content as context rather than dropping material. No historical pruning or token reduction is claimed.
+
+This formatting is not a security boundary or an injection defense. The state approval/risk gates and actual client confinement remain authoritative. Restricted reviews and deterministic local execution keep their existing paths; the digest version and material fields are unchanged.

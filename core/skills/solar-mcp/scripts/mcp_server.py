@@ -404,7 +404,8 @@ def call_tool(name: str, arguments: dict) -> tuple[dict, bool]:
         code = operations.error_code(exc)
         mcp_gate.record_outcome(gate_name, trace, False, code, str(exc))
         return dict(error=str(exc)[:500], code=code, operation=gate_name, trace_id=trace,
-                    verdict=verdict.as_dict()), True
+                    verdict=verdict.as_dict(),
+                    **(exc.details if isinstance(exc, OperationError) else {})), True
     mcp_gate.record_outcome(gate_name, trace, True, "ok")
     payload = dict(result=result, verdict=verdict.as_dict(), trace_id=trace)
     if op:
@@ -499,6 +500,11 @@ def handle(message: dict, confirm=None) -> dict | None:
                     try:
                         op.pre_confirm(inner)
                     except OperationError as exc:
+                        if exc.details:
+                            payload = dict(error=str(exc)[:500], code=exc.code, operation=op.name,
+                                           **exc.details)
+                            return dict(jsonrpc="2.0", id=request_id,
+                                        result=dict(content=_text(payload), isError=True))
                         return _error(request_id, -32602, str(exc))
                 if confirm(op.name, inner, request_id):
                     import mcp_approve
@@ -585,15 +591,18 @@ def serve(stdin=None, stdout=None) -> int:
             emit(dict(jsonrpc="2.0", method="notifications/cancelled",
                       params=dict(requestId=elicitation_id, reason="Origin cancelled or confirmation expired")))
         deadline = time.monotonic() + CONFIRMATION_TIMEOUT
+        def refused(reason):
+            confirmation['outcome'] = reason
+            return False
         while time.monotonic() < deadline:
             try:
                 raw = incoming.get(timeout=max(0.01, deadline - time.monotonic()))
             except queue.Empty:
                 close_form()
-                return False
+                return refused('timed_out')
             if raw is None:
                 incoming.put(None)
-                return False
+                return refused('disconnected')
             try:
                 response = json.loads(raw)
             except ValueError:
@@ -601,11 +610,18 @@ def serve(stdin=None, stdout=None) -> int:
             if not isinstance(response, dict):
                 continue
             if response.get('id') == elicitation_id and 'method' not in response:
+                if response.get('error'):
+                    return refused('client_error')
                 result = response.get('result') or {}
                 if not isinstance(result, dict) or not isinstance(result.get('content', {}), dict):
-                    return False
-                return (not response.get('error') and result.get('action') == 'accept'
-                        and (result.get('content') or {}).get('approve') is True)
+                    return refused('invalid_response')
+                action = result.get('action')
+                if action in ('decline', 'cancel'):
+                    return refused('declined' if action == 'decline' else 'cancelled')
+                value = (result.get('content') or {}).get('approve')
+                if action != 'accept' or type(value) is not bool:
+                    return refused('invalid_response')
+                return True if value else refused('declined')
             if remember_cancel(response):
                 target = (response.get('params') or {}).get('requestId')
                 if request_key(target) == request_key(request_id):
@@ -613,7 +629,7 @@ def serve(stdin=None, stdout=None) -> int:
                     raise ConfirmationCancelled()
                 if target == elicitation_id:
                     cancelled.discard(request_key(target))
-                    return False
+                    return refused('cancelled')
                 continue
             if response.get('method') == 'ping':
                 if 'id' in response:
@@ -621,7 +637,7 @@ def serve(stdin=None, stdout=None) -> int:
             elif 'method' in response:
                 deferred.append(raw)
         close_form()
-        return False
+        return refused('timed_out')
 
     def confirm_and_record(name, arguments, request_id, *, request_meta=None):
         confirmation.update(attempted=True, outcome='pending')
@@ -630,7 +646,10 @@ def serve(stdin=None, stdout=None) -> int:
         except ConfirmationCancelled:
             confirmation['outcome'] = 'cancelled'
             raise
-        confirmation['outcome'] = 'accepted' if accepted else 'not_accepted'
+        if accepted:
+            confirmation['outcome'] = 'accepted'
+        elif confirmation['outcome'] == 'pending':
+            confirmation['outcome'] = 'not_accepted'
         return accepted
 
     while True:

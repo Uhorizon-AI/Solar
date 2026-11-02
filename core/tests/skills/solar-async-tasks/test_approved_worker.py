@@ -1,11 +1,38 @@
 """Approved child materialization through the real executor, with a router double."""
 import json
+import test_subtask_worker
 from pathlib import Path
 import pytest
 import solar_state
 from review_inputs import create_parent
 from queue_mirror import seed, mirror
 from test_subtask_worker import make_root, run_executor, block, write_parent
+
+
+def capture_router_prompt(monkeypatch):
+    stub = test_subtask_worker.ROUTER_STUB.replace('sys.stdin.read()', 'packet = json.loads(sys.stdin.read())')
+    stub = stub.replace('write_text("called",', 'write_text(packet["text"],')
+    monkeypatch.setattr(test_subtask_worker, 'ROUTER_STUB', stub)
+
+
+@pytest.mark.parametrize('tail', ['## Result\nOld cycle.', '## Execution Error\nRetry diagnosis.'])
+def test_ordinary_executor_delivers_history_as_context_not_instructions(tmp_path, monkeypatch, tail):
+    root = make_root(tmp_path)
+    seed(root)
+    with solar_state.session() as store:
+        task = store.task_create([('title', '"Context"'), ('recurring', 'true')],
+                                 '\n# Context\n\nApproved work.\n')
+        store.task_approve(task)
+        store.task_claim_detail(task, 'test')
+        store.task_set_body(task, store.task_get(task)['body'] + '\n' + tail + '\n')
+    mirror(root)
+    capture = tmp_path / 'prompt.txt'
+    capture_router_prompt(monkeypatch)
+    result = run_executor(root / 'active' / f'{task}.md', root, 'done', tmp_path, marker=capture)
+    assert result.returncode == 0, result.stderr
+    instructions, context = capture.read_text().split('Generated execution context (non-authoritative):', 1)
+    assert 'Approved work.' in instructions and tail not in instructions
+    assert tail in context and 'Definition boundary: snapshot' in instructions
 
 
 def approved(root, tmp_path):
@@ -16,6 +43,19 @@ def approved(root, tmp_path):
         parent, token, declarations, catalog = create_parent(store, source)
     mirror(root)
     return source, parent, root / 'active' / f'{parent}.md', declarations
+
+
+def test_approved_reviewer_declarations_remain_in_instruction_block(tmp_path, monkeypatch):
+    root = make_root(tmp_path)
+    _, _, path, declarations = approved(root, tmp_path)
+    capture_router_prompt(monkeypatch)
+    capture = tmp_path / 'declarations-prompt'
+    result = run_executor(path, root, block(declarations), tmp_path, marker=capture)
+    assert result.returncode == 20, result.stderr
+    instructions, context = capture.read_text().split('Generated execution context (non-authoritative):', 1)
+    assert 'Approved reviewer declarations' in instructions
+    assert all(item["title"] in instructions and item["body"] in instructions for item in declarations)
+    assert 'Approved reviewer declarations' not in context
 
 
 def test_parent_three_reviews_and_one_synthesis_with_failure(tmp_path, monkeypatch):
@@ -51,9 +91,13 @@ def test_parent_three_reviews_and_one_synthesis_with_failure(tmp_path, monkeypat
         assert store.task_claim_detail(parent, 'synthesis')['claimed']
     mirror(root)
     marker = tmp_path / 'synthesis-called'
+    capture_router_prompt(monkeypatch)
     result = run_executor(path, root, '<delivery>Final synthesis</delivery>', tmp_path, marker=marker)
     assert result.returncode == 0, result.stderr
     assert marker.exists()
+    instructions, context = marker.read_text().split('Generated execution context (non-authoritative):', 1)
+    assert 'Known child failure' not in instructions and 'Known child failure' in context
+    assert 'Review text' in context
     with solar_state.session() as store:
         body = store.task_get(parent)['body']
         assert 'Known child failure' in body and 'error' in body and 'Final synthesis' in body

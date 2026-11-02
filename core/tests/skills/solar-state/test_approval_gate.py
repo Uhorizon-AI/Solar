@@ -483,7 +483,7 @@ def test_migration_inserts_queued_to_draft_on_existing_db(ready):
     with solar_state.cutover(ready) as cut:
         result = cut.upgrade_schema()
         again = cut.upgrade_schema()
-    assert result["from_version"] == 4 and result["to_version"] == solar_state.SCHEMA_VERSION == 8
+    assert result["from_version"] == 4 and result["to_version"] == solar_state.SCHEMA_VERSION == 9
     assert result["backup"], "an existing base is copied first"
     assert again["from_version"] == solar_state.SCHEMA_VERSION and again["backup"] is None     # idempotent
     with solar_state.session() as store:

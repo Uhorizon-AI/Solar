@@ -170,7 +170,9 @@ To run a failed task again:
 1. Fix the underlying cause: provider auth, env, binary, prompt, hook, or resource.
 2. Requeue the task with `task.requeue`. It moves `error` back to the queue and leaves object, scope and effect as they are.
 
-The task will run on the next eligible worker cycle.
+The task will run on the next eligible worker cycle only while its content approval and execution consent remain valid. Read `readiness` in the task detail/status for the next valid recovery operation.
+
+To edit a failed task, use `task.return_to_draft` directly from `error`; never requeue first merely to withdraw it again. The transaction retains diagnostics, history and counters, withdraws all prior approval/consent, and never exposes the task to a worker. Then edit, approve and (only for high-risk work) accept the native execution form. The ordinary retry via `task.requeue` keeps its existing error-body trimming behavior.
 
 Logs:
 

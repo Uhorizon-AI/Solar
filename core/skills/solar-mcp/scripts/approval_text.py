@@ -62,8 +62,8 @@ COPY = {
         update_queued_rename="only the title changes. The task keeps its place in the queue and its approval; nothing is run.",
         update_queued_material="this changes what was approved. The task returns to draft, its approval is withdrawn and a worker will not take it until it is approved again. Results of earlier runs and the run count are kept. Nothing is run.",
         draft_head="Return task to draft",
-        draft_effect="the task leaves the queue and its approval is withdrawn: a worker will not take it. Its id, instructions, schedule and history are kept. It needs a new approval to be queued again. Nothing is run.",
-        draft_refused="refused: only a queued task can be returned to draft.",
+        draft_effect="the queued or failed task returns directly to draft and its approval is withdrawn: a worker will not take it. Its id, instructions, schedule and history are kept. It needs a new approval to be queued again. Nothing is run.",
+        draft_refused="refused: only a queued or failed task can be returned to draft.",
         edit_closed="refused: a task that is {status} is not edited; prepare a revision instead.",
         lines_changed="{n} lines changed",
         schedule_head="Schedule task", days="Days", time="Time", zone="Time zone", repeats="Repeats",
@@ -89,6 +89,7 @@ COPY = {
         missing="refused: the task was not found.",
         changed="This task changed after it was read, so this approval will be refused.",
         unreadable="The task could not be read, so the effect below could not be verified.",
+        boundary_warning="The definition/history boundary is uncertain; the instructions shown may be partial. Inspect the stored task before approving.",
         access="Access", access_none="not declared: the task runs alone, with nothing else active",
         access_read="reads", access_write="writes", access_resources="holds exclusively",
         path_zone="Path zone", zone_note="declared, not verified",
@@ -127,8 +128,8 @@ COPY = {
         update_queued_rename="solo cambia el título. La tarea conserva su sitio en la cola y su aprobación; no se ejecuta nada.",
         update_queued_material="esto cambia lo aprobado. La tarea vuelve a borrador, se retira su aprobación y ningún worker la tomará hasta que se apruebe de nuevo. Se conservan los resultados de ejecuciones anteriores y el contador de ejecuciones. No se ejecuta nada.",
         draft_head="Devolver tarea a borrador",
-        draft_effect="la tarea sale de la cola y se retira su aprobación: ningún worker la tomará. Se conservan su id, instrucciones, programación e historial. Necesita una nueva aprobación para volver a la cola. No se ejecuta nada.",
-        draft_refused="se rechaza: solo se devuelve a borrador una tarea en cola.",
+        draft_effect="la tarea en cola o fallida vuelve directamente a borrador y se retira su aprobación: ningún worker la tomará. Se conservan su id, instrucciones, programación e historial. Necesita una nueva aprobación para volver a la cola. No se ejecuta nada.",
+        draft_refused="se rechaza: solo se devuelve a borrador una tarea en cola o fallida.",
         edit_closed="se rechaza: una tarea en estado {status} no se edita; prepara una revisión.",
         lines_changed="{n} líneas cambiadas",
         schedule_head="Programar tarea", days="Días", time="Hora", zone="Zona horaria", repeats="Repite",
@@ -154,6 +155,7 @@ COPY = {
         missing="se rechaza: no se encontró la tarea.",
         changed="La tarea cambió después de leerla, así que esta aprobación será rechazada.",
         unreadable="No se pudo leer la tarea, así que no se pudo verificar el efecto de abajo.",
+        boundary_warning="La frontera entre definición e historial es incierta; las instrucciones mostradas pueden ser parciales. Revisa la tarea guardada antes de aprobar.",
         access="Acceso", access_none="sin declarar: la tarea se ejecuta sola, sin nada más activo",
         access_read="lee", access_write="escribe", access_resources="reserva en exclusiva",
         path_zone="Zona de la ruta", zone_note="declarada, no verificada",
@@ -227,16 +229,16 @@ def _facts(task_id: str) -> dict | None:
             return dict(missing=True)
         values = task_views._values(task)
         title = task["title"] or ""
-        heading = f"\n# {title}\n"
-        body = task["body"] or ""
-        instructions = body[len(heading):] if body.startswith(heading) else body
+        context = solar_state.task_context(task)
+        instructions = context["instructions"]
         return dict(title=title, status=task["status"], row_version=task["row_version"],
                     values=values, priority=task["priority"],
                     approval=solar_state.approval_state(task["frontmatter"], task["body"]),
                     object=task["object"] or "",
                     scope=task["scope"] or "", effect=task["effect"] or "",
                     recurring=str(values.get("recurring") or "").lower() == "true",
-                    instructions=instructions.strip("\n").rstrip(), schedule=task_views._schedule(values))
+                    instructions=instructions.strip("\n").rstrip(), boundary=context["boundary"],
+                    schedule=task_views._schedule(values))
     except Exception:  # noqa: BLE001 - the prompt must still appear, flagged as unverified
         return None
 
@@ -629,6 +631,8 @@ def _context_rows(copy: dict, facts: dict) -> list:
             (copy["object"], _line(facts["object"], _VALUE)), (copy["scope"], _line(facts["scope"], _VALUE)),
             (copy["declared"], _line(facts["effect"], _VALUE)),
             (copy["instructions"], _excerpt(copy, facts["instructions"]))]
+    if facts.get("boundary") == "ambiguous":
+        rows.append((copy["warn"], copy["boundary_warning"]))
     if schedule.get("time") and schedule["time"] != "now":
         rows.append((copy["time"], f"{_days(copy, schedule['weekdays'])} {schedule['time']} "
                                    f"({schedule.get('timezone') or '—'})"))
@@ -705,7 +709,7 @@ def _return_to_draft(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
         return _head(copy, copy["draft_head"], [], notes)
-    effect = copy["draft_effect"] if facts["status"] == "queued" else copy["draft_refused"]
+    effect = copy["draft_effect"] if facts["status"] in ("queued", "error") else copy["draft_refused"]
     return _head(copy, copy["draft_head"], _context_rows(copy, facts) + [(copy["effect"], effect)], notes)
 
 

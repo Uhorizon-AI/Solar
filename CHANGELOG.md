@@ -6,6 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- tasks: validate authorization prerequisites before native confirmation and return structured recovery instructions; revalidate after acceptance to reject concurrent edits (#78). Failed tasks can return directly to draft without entering the queue, preserving history and withdrawing prior consent (schema v9).
+- tasks: ordinary execution and approval summaries separate the canonical definition from generated history, retaining child results and diagnostics without changing the approval digest.
+
+### Changed
+- MCP confirmation diagnostics distinguish declines, cancellations, expiry, disconnection, invalid replies and client errors. A delayed-response protocol regression test does not claim real-client resolution of #101.
+
 ## [0.61.1] - 2026-11-02
 
 ### Fixed

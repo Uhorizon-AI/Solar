@@ -265,6 +265,7 @@ def view_task(task_id: str, view: str = "detail", section: str = "",
                else solar_state.read_session())
     with session as store:
         task = _resolve(store, task_id)
+        readiness = store.task_authorization_readiness(task["id"]) if view in ("detail", "status") else None
         if view == "usage":
             return dict(id=task["id"], row_version=task["row_version"], view=view, token_usage=store.task_token_usage(task["id"]))
         events = [dict(ts=r["ts"], from_status=r["from_status"], to_status=r["to_status"],
@@ -277,6 +278,8 @@ def view_task(task_id: str, view: str = "detail", section: str = "",
     values = _values(task)
     base = dict(id=task["id"], title=task["title"], status=task["status"],
                 row_version=task["row_version"], view=view)
+    if readiness is not None:
+        base["readiness"] = readiness
     body = task["body"] or ""
     if view == "detail":
         digest = solar_state.task_digest(task["status"], task["frontmatter"], body)

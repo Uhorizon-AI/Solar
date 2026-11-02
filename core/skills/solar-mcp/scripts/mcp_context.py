@@ -22,9 +22,10 @@ import mcp_gate  # noqa: E402
 class OperationError(Exception):
     """A refusal or failure with a stable, documented code."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, details: dict | None = None):
         super().__init__(message)
         self.code = code
+        self.details = details or {}
 
 
 class WorkspaceUnresolved(RuntimeError):
