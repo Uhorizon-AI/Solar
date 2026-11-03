@@ -116,14 +116,21 @@ becomes unnecessary and the skill can be retired.
 Solar serves two modalities over the same context layer. Their goals and their
 limits differ, and neither may borrow the other's claims.
 
-| | **Solar Assistant** | **Solar Orchestrator** |
+**Status.** Solar Assistant is what exists today. Solar Orchestrator is a
+**design target**: the table and the requirements below describe what it must
+guarantee, not what the code enforces now. Identity per person, verified
+senders, scoped permissions and revocation are design work tracked in #130 and
+#129; they are not implemented. Today the gateway filters Telegram by allowed
+chat, not by person, and takes the requester's `user_id` from the message.
+
+| | **Solar Assistant** (today) | **Solar Orchestrator** (design target) |
 |---|---|---|
 | Where | The user's own computer | A VPS, under a service account separate from its operators |
 | Who | One person: builder and approver | Several people, over channels |
-| Goal | The same context, rules and memory across harnesses, with several harnesses working in parallel on different planets | Verified requesters, scoped permissions, revocation and an audit trail |
-| Approval | In the harness: its own permission prompt or the MCP confirmation | In the channel where the request arrived |
+| Goal | The same context, rules and memory across harnesses, with several harnesses working in parallel on different planets | To provide verified requesters, scoped permissions, revocation and an audit trail |
+| Approval | In the harness: its own permission prompt or the MCP confirmation | To happen in the channel where the request arrived; not built yet |
 | Console | A read-only window; never an approval surface | A read-only window; approval is not a console feature |
-| Isolation | None promised: agent and user share one system account | Only where the service account is separate from the operators; not a multi-tenant boundary |
+| Isolation | None promised: agent and user share one system account | Possible only where the service account is separate from the operators; never a multi-tenant boundary |
 
 **Assistant limits.** It runs under the user's own system account, so it cannot
 promise isolation from the agent or from the user. It is not a model, holds no
@@ -132,28 +139,44 @@ builder's instruction plus the client's own permission.
 
 The harness can use Solar's MCP as a background executor: it keeps a to-do list
 in which each item is a task (with subtasks if needed), marks it with
-`task.wait` and reacts when it finishes. Limits: `task.wait` is bounded and
-Solar does not notify a harness whose session has closed; parallelism is bounded by the
-applied capacity policy and by each task's declared access; a task that declares
-none, or does not run under an enabled reader profile, runs alone because
-providers execute with their own permissions,
-and each independent task needs its own authorization unless it runs confined or
-belongs to a parent with an approved subtask policy. Solar keeps only what must
-outlive the session; the harness's own list stays the harness's.
+`task.wait` and reacts when it finishes.
 
-**Orchestrator limits.** A request is trusted only if the channel proves the
-sender; a self-asserted identity never binds or elevates. Content from an
-unverified sender never reaches a provider. It is not isolation between people:
-MCP filtering does not isolate files that clients read with the same system
-account, so the first pilot uses shareable information only. The registry of
-people must not be editable by the agent.
+- `task.wait` waits at most 90 seconds per call, and Solar does not notify a
+  harness whose session has closed.
+- Parallelism is bounded by the applied capacity policy (`global_capacity`, 1 to
+  5, with an optional limit per provider) and by each task's declared access.
+  Parallelism is not available by default: the shipped policy has capacity 1 and
+  reader profiles disabled, so it has to be raised and the profiles enabled.
+- A task that declares no access, or does not run under an enabled and verified
+  reader profile for its provider, runs alone, because providers execute with
+  their own permissions.
+- Each independent task needs its own authorization unless it runs confined or
+  belongs to a parent with an approved subtask policy. The exception is a
+  question under `ask_readonly_v1`: inside the workspace it counts as low risk
+  and runs without `task.authorize_run`, although it only requests the client's
+  read-only mode and does not guarantee it.
+- Solar keeps only what must outlive the session; the harness's own list stays
+  the harness's.
+
+**Orchestrator requirements (not yet enforced).** Orchestrator must not be
+described as controlling these until code does:
+
+- A request is trusted only if the channel proves the sender; a self-asserted
+  identity never binds or elevates.
+- Content from an unverified sender never reaches a provider.
+- The registry of people is not editable by the agent. A separate service
+  account makes that possible; it does not establish identity by itself.
+- It is not isolation between people: MCP filtering does not isolate files that
+  clients read with the same system account, so the first pilot uses shareable
+  information only.
 
 **Common to both.**
 
 - Solar cannot refuse what happens outside its own runtime and its MCP server.
-- Unattended or deferred execution must run confined, or wait for a Solar
-  authorization. A builder's "do it" approves an idea in a turn, not a run hours
-  later with broad provider permissions.
+- Unattended or deferred execution should run confined, or wait for a Solar
+  authorization, with the `ask_readonly_v1` exception above. A builder's "do it"
+  approves an idea in a turn, not a run hours later with broad provider
+  permissions.
 - Solar-side authorization is needed for unattended unconfined runs, third-party
   sends and capability changes; not for reading, and not when a valid
   authorization already covers exactly what will happen.
