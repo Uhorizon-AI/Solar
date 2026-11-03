@@ -79,7 +79,7 @@ Fallback rule: if `solar-system` is not supervising `async-tasks`, run `ensure_a
 
 ## Workflow
 
-1. Draft: `task.create` stores a draft; `task.update` and `task.schedule` refine it. None of them queues.
+1. Draft: `task.create` stores a draft, or queues it at once only with `queue: true` (same checks as `task.approve`); `task.update` and `task.schedule` refine a draft and never queue.
 2. Approve: `task.approve` moves that draft to `queued`. A task that is already `planned` uses the same operation. There is no operation that creates the plan.
 3. Execute: the resident supervisor (kept alive by `solar-system`) claims every eligible queued task the applied policy has room for and executes each in its own process group.
 4. Complete: success sets `completed`, recurrence may requeue, failure sets `error`.
