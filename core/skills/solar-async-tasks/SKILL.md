@@ -158,7 +158,7 @@ Read a task with `solar_search` (`scope=tasks`). The status is a column. Do not 
 
 ## Parent Tasks With Subtasks
 
-Use parent tasks when final output depends on approved independent child reviews. Independence alone does not grant concurrency; in the shipped policy production capacity is 1 and reader profiles are disabled; both are configurable (`global_capacity`, 1 to 5, and `enabled_reader_profiles`).
+Use parent tasks when final output depends on approved independent child reviews. Independence alone does not grant concurrency; in the shipped policy production capacity is 1 and reader profiles are disabled; both are configurable (`global_capacity`, 1 to 5, and `enabled_reader_profiles`) through `async_execution.propose` and `async_execution.apply`, which ask for native confirmation. Raising capacity alone does not give concurrency: a task also needs an enabled reader profile verified for its provider and a declared `access_policy`.
 
 Rules:
 
