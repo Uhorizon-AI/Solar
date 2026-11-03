@@ -3,7 +3,9 @@
 A parent declares an approved batch, waits for its independent children, then
 synthesizes their terminal results in the same task. Independence alone does
 not permit parallel execution: all claims share capacity, resources and access
-admission. Production capacity is 1 and reader profiles are disabled.
+admission. In the shipped policy production capacity is 1 and reader profiles
+are disabled; both are configurable (`global_capacity`, 1 to 5, and
+`enabled_reader_profiles`).
 
 ## Prepare and approve before execution
 
