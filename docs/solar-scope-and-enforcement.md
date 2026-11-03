@@ -127,7 +127,7 @@ chat, not by person, and takes the requester's `user_id` from the message.
 |---|---|---|
 | Where | The user's own computer | A VPS, under a service account separate from its operators |
 | Who | One person: builder and approver | Several people, over channels |
-| Goal | The same context, rules and memory across harnesses, with several harnesses working in parallel on different planets | To provide verified requesters, scoped permissions, revocation and an audit trail |
+| Goal | The same context, rules and memory across harnesses, with several harnesses able to work in parallel on different planets once capacity and reader profiles are enabled | To provide verified requesters, scoped permissions, revocation and an audit trail |
 | Approval | In the harness: its own permission prompt or the MCP confirmation | To happen in the channel where the request arrived; not built yet |
 | Console | A read-only window; never an approval surface | A read-only window; approval is not a console feature |
 | Isolation | None promised: agent and user share one system account | Possible only where the service account is separate from the operators; never a multi-tenant boundary |
@@ -142,7 +142,7 @@ in which each item is a task (with subtasks if needed), marks it with
 `task.wait` and reacts when it finishes.
 
 - `task.wait` waits at most 90 seconds per call, and Solar does not notify a
-  harness whose session has closed.
+  harness whose session has closed (it can notify the configured chat through `notify_when`).
 - Parallelism is bounded by the applied capacity policy (`global_capacity`, 1 to
   5, with an optional limit per provider) and by each task's declared access.
   Parallelism is not available by default: the shipped policy has capacity 1 and
@@ -152,7 +152,7 @@ in which each item is a task (with subtasks if needed), marks it with
   their own permissions.
 - Each independent task needs its own authorization unless it runs confined or
   belongs to a parent with an approved subtask policy. The exception is a
-  question under `ask_readonly_v1`: inside the workspace it counts as low risk
+  question under `ask_readonly_v1`: when the folder and every declared path are inside the workspace it counts as low risk
   and runs without `task.authorize_run`, although it only requests the client's
   read-only mode and does not guarantee it.
 - Solar keeps only what must outlive the session; the harness's own list stays
