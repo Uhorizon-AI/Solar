@@ -141,7 +141,8 @@ OS dialog for one client or make an agent forward its own account of an answer.
 | Client | Native interaction evidence | Remaining verification |
 |---|---|---|
 | Codex | MCP form confirmation observed in the repository pilot. Native input tools are a separate surface. | Verify any proposed adapter against host permission rules; do not repurpose a clarification-only tool for permissions. |
-| Claude | `AskUserQuestion` and SDK `canUseTool` are documented native interaction hooks. | A real callback binding to Solar and client UI lifecycle tests remain unverified here. |
+| Claude | `AskUserQuestion` and SDK `canUseTool` are documented native interaction hooks (a different surface from the MCP form; see Claude Desktop). | A real callback binding to Solar and client UI lifecycle tests remain unverified here. |
+| Claude Desktop | Observed in the real-client pilot of 2026-11-02 (app version not recorded): the app advertised form support but returned `declined` without showing a form, as confirmed by the owner (Solar issue #101; upstream anthropics/claude-code#89858). Interactive Claude Code in the terminal and Codex desktop accepted the native MCP form on the first attempt. | In this pilot the decline was not a human refusal. Solar cannot tell them apart from the decline response alone (the owner's observation is kept separately); neither grants authority. Use Desktop to consult and prepare; authorize a pending run in Claude Code in the terminal or in Codex desktop. Keep the task; retrying automatically is not recommended. |
 | Cursor | Reported exact-call MCP confirmation created only a draft in the client test. | Verify any different question-tool adapter separately; do not infer it from MCP form success. |
 | Antigravity | Isolated MCP form acceptance observed on desktop 2.24.0 when the originating progress token was forwarded. | Verify the complete Solar operation and remaining UI lifecycle outcomes. |
 

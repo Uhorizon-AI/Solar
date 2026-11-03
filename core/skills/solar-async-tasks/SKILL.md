@@ -71,7 +71,7 @@ bash core/skills/solar-system/scripts/install_launchagent_macos.sh
 bash core/skills/solar-system/scripts/check_orchestrator.sh
 ```
 
-When `solar-system` supervises `async-tasks`, the agent stops after `task.approve`; the LaunchAgent picks up the queued task on its tick.
+When `solar-system` supervises `async-tasks`, the agent stops after `task.approve` (or after `task.create` with `queue: true`); the LaunchAgent picks up the queued task on its tick.
 
 Fallback rule: if `solar-system` is not supervising `async-tasks`, run `ensure_async_tasks.sh` **once** as the documented fallback and read its answer (JSON on the last line of stdout): exit `0` ready, `10` starting (a live, identified supervisor is still reconciling: do nothing, the next observation sees the same one), `20` blocked (maintenance, recovery, stale heartbeat or no live identity: report it, do not retry or start anything else), `1` failed. Never start `run_worker.sh` or any other launcher, and never bypass the runtime with direct provider CLIs. `check_async_tasks.sh` only observes (same JSON and codes).
 
@@ -158,7 +158,7 @@ Read a task with `solar_search` (`scope=tasks`). The status is a column. Do not 
 
 ## Parent Tasks With Subtasks
 
-Use parent tasks when final output depends on approved independent child reviews. Independence alone does not grant concurrency; production capacity remains 1 and reader profiles are disabled.
+Use parent tasks when final output depends on approved independent child reviews. Independence alone does not grant concurrency; in the shipped policy production capacity is 1 and reader profiles are disabled; both are configurable (`global_capacity`, 1 to 5, and `enabled_reader_profiles`) through `async_execution.propose` and `async_execution.apply`, which ask for native confirmation. Raising capacity alone does not give concurrency: a task also needs an enabled reader profile verified for its provider and a declared `access_policy`.
 
 Rules:
 
