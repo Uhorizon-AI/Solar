@@ -49,7 +49,7 @@ What the previous defaults did: Claude ran with `bypassPermissions`, where Write
 ## Not in this change
 
 - Codex kept its command in this change; forcing its `approval_policy` came afterwards (`2026-11-05-codex-approval-never-137.md`).
-- Antigravity keeps `--dangerously-skip-permissions`. Its account quota was exhausted when this was measured (about 76 hours), so its `--sandbox` flag is not verified. The documentation tells the reader to treat it as unprotected.
+- Antigravity kept `--dangerously-skip-permissions` in this change (its quota was exhausted). It moved to its own sandbox afterwards: `2026-11-05-antigravity-native-sandbox-136.md`.
 - `task.authorize_run` is unchanged: a task is not exempted from approval because a client sandbox is on.
 - The hard-link gap is documented, not closed. Closing it needs a check of link counts before a task starts.
 - No Linux run: the sandboxes were measured on macOS only. Pending on the VPS: that Claude refuses to start without `bubblewrap`/`socat` and the router shows the cause, and Cursor's exact command (`agent -p --sandbox enabled --approve-mcps --trust --workspace <root>`, version 2026.10.22 measured) applying an in-workspace edit on disk and denying one outside. Cursor's documentation says a non-interactive run without `--force` only proposes edits; on macOS 2026.10.22 they were applied.
