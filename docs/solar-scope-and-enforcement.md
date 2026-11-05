@@ -81,9 +81,9 @@ Solar starts the client as a terminal would and leaves the restrictions to the c
 
 | Client | Default launch | What the client then enforces |
 |---|---|---|
-| Codex | `--sandbox workspace-write -c approval_policy="never" -C <workspace>` | Shell and patch tool write only in the workspace; `.git/hooks`, `.git/config` and `.codex/` are protected; network is off. |
+| Codex | `--sandbox workspace-write -c approval_policy="never" -C <workspace>` | Shell and patch tool write in the workspace (and in `/tmp` under the measured configuration); `.git/hooks`, `.git/config` and `.codex/` are protected; network is off. |
 | Claude | `--permission-mode acceptEdits` with `sandbox.enabled`, `allowUnsandboxedCommands: false` and `failIfUnavailable: true` | Write and Edit stay in the workspace; the shell writes only in the workspace and `$TMPDIR`; `.git/hooks`, `.git/config`, `.claude/settings.json` and `.claude/skills` are protected; the shell has no network except the domains the user allows. The client tools `WebSearch` and `WebFetch` are allowed by Solar's settings and are not limited by the shell sandbox. |
-| Cursor | `--sandbox enabled` (no `-f`) | Shell and edit tools write only in the workspace; `.git/hooks`, `.git/config` and `.cursor/mcp.json` are protected; network is off unless `.cursor/sandbox.json` allows it. |
+| Cursor | `--sandbox enabled` (no `-f`) | Shell and edit tools write in the workspace (and in `/tmp` under the measured configuration); `.git/hooks`, `.git/config` and `.cursor/mcp.json` are protected; network is off unless `.cursor/sandbox.json` allows it. |
 | Antigravity | `--dangerously-skip-permissions` | Not verified: its quota was exhausted when this was measured. Treat it as unprotected. |
 
 Conditions of these measurements: macOS only, a clean workspace, the real `HOME`, Codex with `approval_policy = "never"` (the one Solar passes), and no extra allow rules in the user's own settings. They change what the table promises:
