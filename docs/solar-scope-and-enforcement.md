@@ -211,6 +211,30 @@ described as controlling these until code does:
   authorization already covers exactly what will happen.
 - No control is claimed that code does not execute (see the honesty rule below).
 
+## What Solar does not fix
+
+A limit that belongs to a client's own sandbox, permissions or tools is documented
+and reported to the vendor; it is not patched in Solar. Solar launches each client
+with its own sandbox on and says what that protects. It does not add a second
+layer to cover what the client leaves open.
+
+Before opening an issue or a PR about a gap, ask three questions:
+
+1. **Does the gap exist when the user runs the client directly, without Solar?**
+   If yes, it is the client's limit. Record it in the measured table and report it
+   upstream. Do not add Solar code to close it.
+2. **Would a Solar-side check cover it, or only the cases visible before the run?**
+   A check that an agent inside the workspace can get around is not a control. Do
+   not ship it: it gives the feeling of safety without the safety.
+3. **Is the control Solar's own?** Its authorization (`task.authorize_run`), its
+   audit, its MCP gate, its routing and its error reporting are Solar's job.
+
+Example: the three client sandboxes decide by path, so a hard link inside the
+workspace that points to a file outside lets a task write that file. It is listed
+in the measured table of `docs/tasks/2026-11-05-native-client-sandbox-133.md`. A
+scan before launch would see only existing links, and the agent can create one
+itself. The issue (#138) was closed as not planned on 2026-11-06.
+
 ## The honesty rule
 
 **Solar does not claim a control it does not execute.**

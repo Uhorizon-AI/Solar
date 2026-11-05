@@ -18,6 +18,7 @@ Solar follows strict architecture boundaries:
 - `core/` is versioned framework code and documentation.
 - `sun/` and `planets/` are user runtime workspaces and are gitignored.
 - Contributions in this repository should focus on `core/` and shared files.
+- Solar does not fix limits that belong to the clients' own sandboxes or permissions: those are documented and reported to the vendor. Read "What Solar does not fix" in `docs/solar-scope-and-enforcement.md` before opening an issue or PR about a security gap.
 
 Primary references:
 - `AGENTS.md`
