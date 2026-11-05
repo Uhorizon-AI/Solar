@@ -107,13 +107,16 @@ def test_dry_run_uses_the_router_python_when_python3_is_incompatible(status_env)
 
 
 def test_dry_run_names_the_cause_when_the_interpreter_is_too_old(status_env):
-    status_env["SOLAR_AI_ROUTER_PYTHON"] = str(_too_old_python())
+    old = _too_old_python()
+    status_env["SOLAR_AI_ROUTER_PYTHON"] = str(old)
+    version = subprocess.run([str(old), "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+                             capture_output=True, text=True).stdout.strip()
     status_env["SOLAR_ROUTER_PROVIDER_PRIORITY"] = "codex"
     diagnose = SCRIPT.parent / "diagnose_router.sh"
     proc = subprocess.run(["bash", str(diagnose), "--dry-run"], env=status_env, capture_output=True,
                           text=True, timeout=60)
     assert "- codex: FAIL" in proc.stdout
-    assert "the adapters need Python 3.10+" in proc.stdout and "this is 3.9" in proc.stdout and "Traceback" not in proc.stdout + proc.stderr
+    assert "the adapters need Python 3.10+" in proc.stdout and f"this is {version}" in proc.stdout and "Traceback" not in proc.stdout + proc.stderr
 
 
 def test_dry_run_reports_the_real_import_error_on_a_compatible_python(status_env, tmp_path):
