@@ -8,6 +8,8 @@ solar_resolve_paths --quiet
 ROOT_ENV_FILE="$SOLAR_WORKSPACE/.env"
 ROUTER_SCRIPT="$(solar_core_dir)/skills/solar-router/scripts/run_router.py"
 PROMPT_DEFAULT="Respond with OK"
+# The dry run imports the adapters, which need Python 3.10+: use the interpreter the router uses.
+PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 
 dry_run="false"
 verbose="false"
@@ -31,7 +33,7 @@ _format_provider_failure() {
   local provider="$1"
   local capture="$2"
   local verbose_flag="$3"
-  printf '%s' "$capture" | python3 -c '
+  printf '%s' "$capture" | "$PYTHON" -c '
 import json, os, re, sys
 
 provider = sys.argv[1]
@@ -187,31 +189,31 @@ for provider in "${providers[@]}"; do
   [[ -z "$provider" ]] && continue
 
   if [[ "$dry_run" == "true" ]]; then
-    if python3 - <<PY "$provider" "$SOLAR_WORKSPACE"
+    if "$PYTHON" - <<PY "$provider" "$SCRIPT_DIR"
 import os
 import shlex
 import shutil
 import sys
 
 provider = sys.argv[1]
-repo_root = sys.argv[2]
-codex_default = (
-    f"codex exec --skip-git-repo-check --full-auto -C {repo_root} "
-    f"--add-dir {os.path.expanduser('~/.codex')} --"
-)
-defaults = {
-    "agent": f"agent -p -f --approve-mcps --trust --workspace {repo_root}",
-    "codex": codex_default,
-    "claude": "claude -p --permission-mode bypassPermissions",
-    "agy": "agy --dangerously-skip-permissions",
-    "ollama": "ollama run solar --hidethinking --nowordwrap",
-}
-if provider not in defaults:
+# The default commands come from the adapters that run them, so this check cannot drift.
+sys.path.insert(0, sys.argv[2])
+if sys.version_info < (3, 10):  # the adapters use syntax that Python 3.9 rejects
+    print(f"cannot read the default commands: the adapters need Python 3.10+ and this is "
+          f"{sys.version_info[0]}.{sys.version_info[1]}; set SOLAR_AI_ROUTER_PYTHON to a newer interpreter")
+    raise SystemExit(1)
+try:
+    from providers import PROVIDERS
+except Exception as exc:
+    print(f"cannot read the default commands ({type(exc).__name__}): {exc}")
+    raise SystemExit(1)
+
+if provider not in PROVIDERS:
     print(f"unsupported provider in priority: {provider}")
     raise SystemExit(1)
 new_key = f"SOLAR_ROUTER_{provider.upper()}_CMD"
 old_key = f"SOLAR_AI_{provider.upper()}_CMD"
-raw = (os.getenv(new_key) or os.getenv(old_key) or defaults[provider]).strip()
+raw = (os.getenv(new_key) or os.getenv(old_key) or PROVIDERS[provider].build_default_cmd()).strip()
 cmd = shlex.split(raw)
 if not cmd:
     print(f"{new_key} is empty")
@@ -233,9 +235,9 @@ PY
   payload="$(printf '{"provider":"%s","text":"%s","request_id":"preflight_%s","session_id":"preflight","user_id":"preflight"}' \
     "$provider" "$prompt" "$provider")"
 
-  if result="$(printf '%s' "$payload" | python3 "$ROUTER_SCRIPT" 2>&1)"; then
+  if result="$(printf '%s' "$payload" | "$PYTHON" "$ROUTER_SCRIPT" 2>&1)"; then
     preview="$(
-      printf '%s' "$result" | python3 -c '
+      printf '%s' "$result" | "$PYTHON" -c '
 import json, sys
 text = sys.stdin.read()
 dec = json.JSONDecoder()

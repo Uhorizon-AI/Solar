@@ -3,6 +3,7 @@ is over is not reported as in flight."""
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 import subprocess
 from pathlib import Path
@@ -48,6 +49,8 @@ def status_env(isolated_runtime, tmp_path, monkeypatch):
     for key in ("SOLAR_ROUTER_PROVIDER_PRIORITY", "SOLAR_AI_PROVIDER_PRIORITY"):
         env.pop(key, None)
     env["_STUB_BIN"] = str(bin_dir)
+    # The dry run imports the adapters (Python 3.10+) with the interpreter the router uses.
+    env["SOLAR_AI_ROUTER_PYTHON"] = sys.executable
     return env
 
 
@@ -83,6 +86,57 @@ def test_failing_provider_is_listed_without_script_missing_note(status_env):
     block = _providers_block(proc.stdout)
     assert "- claude: FAIL" in block and "- codex: OK" in block, proc.stdout
     assert "not available" not in proc.stdout
+
+
+def _too_old_python():
+    """The system python3 when it predates 3.10 (macOS ships 3.9); skip where there is none."""
+    old = Path("/usr/bin/python3")
+    probe = subprocess.run([str(old), "-c", "import sys; print(sys.version_info >= (3, 10))"],
+                           capture_output=True, text=True) if old.exists() else None
+    if probe is None or probe.stdout.strip() != "False":
+        pytest.skip("no Python older than 3.10 on this machine")
+    return old
+
+
+def test_dry_run_uses_the_router_python_when_python3_is_incompatible(status_env):
+    _too_old_python()
+    status_env["PATH"] = status_env["_STUB_BIN"] + ":/usr/bin:/bin"  # python3 here is the old one
+    status_env["SOLAR_ROUTER_PROVIDER_PRIORITY"] = "codex,claude"
+    block = _providers_block(_run_status(status_env).stdout)
+    assert "- codex: OK" in block and "- claude: OK" in block, block
+
+
+def test_dry_run_names_the_cause_when_the_interpreter_is_too_old(status_env):
+    old = _too_old_python()
+    status_env["SOLAR_AI_ROUTER_PYTHON"] = str(old)
+    version = subprocess.run([str(old), "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+                             capture_output=True, text=True).stdout.strip()
+    status_env["SOLAR_ROUTER_PROVIDER_PRIORITY"] = "codex"
+    diagnose = SCRIPT.parent / "diagnose_router.sh"
+    proc = subprocess.run(["bash", str(diagnose), "--dry-run"], env=status_env, capture_output=True,
+                          text=True, timeout=60)
+    assert "- codex: FAIL" in proc.stdout
+    assert "the adapters need Python 3.10+" in proc.stdout and f"this is {version}" in proc.stdout and "Traceback" not in proc.stdout + proc.stderr
+
+
+def test_dry_run_reports_the_real_import_error_on_a_compatible_python(status_env, tmp_path):
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(
+        "import sys\n"
+        "class _Block:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'providers':\n"
+        "            raise ModuleNotFoundError(\"No module named 'providers'\")\n"
+        "sys.meta_path.insert(0, _Block())\n")
+    status_env["PYTHONPATH"] = str(hook)
+    status_env["SOLAR_ROUTER_PROVIDER_PRIORITY"] = "codex"
+    diagnose = SCRIPT.parent / "diagnose_router.sh"
+    proc = subprocess.run(["bash", str(diagnose), "--dry-run"], env=status_env, capture_output=True,
+                          text=True, timeout=60)
+    assert "- codex: FAIL" in proc.stdout
+    assert "ModuleNotFoundError" in proc.stdout and "No module named 'providers'" in proc.stdout
+    assert "Python 3.10" not in proc.stdout  # the interpreter is fine; do not blame its version
 
 
 def _make_task(task_id, final):

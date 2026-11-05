@@ -27,7 +27,7 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 - Accept JSON payload (router contract v3) on stdin; output structured JSON on stdout.
 - Run the selected provider with `cwd=SOLAR_WORKSPACE` so all providers see `sun/`, `planets/`, and workspace `AGENTS.md`.
 - Resolve `SOLAR_ROUTER_SYSTEM_PROMPT_FILE` and `SOLAR_ROUTER_RUNTIME_DIR` against `SOLAR_WORKSPACE` when relative.
-- Codex default command includes `-C <repo-root>` and `--add-dir ~/.codex`.
+- Default commands leave restrictions to each client's own sandbox: Codex `--sandbox workspace-write -C <repo-root>`, Claude `acceptEdits` with its sandbox enabled, Cursor `--sandbox enabled` without `-f`. Table and limits: `docs/solar-scope-and-enforcement.md`.
 - Persist conversation turns in runtime dir (JSONL) and inject continuity into each prompt: rolling `*-summary.txt` from `<solar_summary>` plus recent turns (`SOLAR_ROUTER_CONTEXT_TURNS`).
 - Inject the cross-channel intention from the continuity row in `state.sqlite`. See `references/continuity.md`.
 - Own the A3 mandate CLI (`scripts/delegation_ctl.py`). The YAML in `sun/delegations/` is opened by `solar-state`. Any caller gates mutating routines through `check` and fails closed. See `references/a3-mandates.md`. Unrelated to JIT agent/skill delegation.
@@ -55,7 +55,7 @@ scripts/
   providers/
     __init__.py        — PROVIDERS dict, exports all adapters
     base.py            — BaseProvider: resolve_binary, get_cmd, prepare_env, clean_output, run
-    claude.py          — static default_cmd
+    claude.py          — build_default_cmd() with the native sandbox settings
     codex.py           — build_default_cmd() with SOLAR_WORKSPACE + CODEX_STATE_DIR
     agy.py             — Antigravity CLI (`agy --print <prompt>`)
     agent.py           — build_default_cmd() with SOLAR_WORKSPACE

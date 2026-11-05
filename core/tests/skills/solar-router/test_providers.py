@@ -3,12 +3,14 @@ Unit tests for providers/*.py — subprocess.run is mocked throughout.
 No real AI binaries are called.
 """
 import io
+import json
 import os
+import shlex
 import unittest
 from unittest.mock import MagicMock, patch
 
 from providers.base import BaseProvider, SOLAR_WORKSPACE, SOLAR_ROOT, FALLBACK_PATHS
-from providers.claude import ClaudeProvider
+from providers.claude import ClaudeProvider, native_sandbox_settings
 from providers.codex import CodexProvider
 from providers.agy import AgyProvider
 from providers.agent import AgentProvider
@@ -377,16 +379,68 @@ class TestAgentProvider(unittest.TestCase):
         p = AgentProvider()
         self.assertIn("--approve-mcps", p.build_default_cmd())
 
+    def test_default_cmd_keeps_cursor_sandbox_on(self):
+        argv = shlex.split(AgentProvider().build_default_cmd())
+        self.assertEqual(argv[argv.index("--sandbox") + 1], "enabled")
+        for forbidden in ("-f", "--force", "--yolo"):
+            self.assertNotIn(forbidden, argv)  # `-f` runs commands outside the sandbox
+
 
 # ---------------------------------------------------------------------------
 # ClaudeProvider
 # ---------------------------------------------------------------------------
 
 class TestClaudeProvider(unittest.TestCase):
-    def test_default_cmd_is_static(self):
-        p = ClaudeProvider()
-        self.assertIn("bypassPermissions", p.default_cmd)
-        self.assertIn("--no-session-persistence", p.default_cmd)
+    def test_default_cmd_uses_native_protections(self):
+        argv = shlex.split(ClaudeProvider().build_default_cmd())
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "acceptEdits")
+        self.assertIn("--no-session-persistence", argv)
+        for forbidden in ("bypassPermissions", "--dangerously-skip-permissions"):
+            self.assertNotIn(forbidden, argv)  # Write and Edit would leave the workspace
+
+    def test_default_cmd_enables_the_sandbox_without_an_exit(self):
+        argv = shlex.split(ClaudeProvider().build_default_cmd())
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        self.assertEqual(settings["sandbox"], {"enabled": True, "autoAllowBashIfSandboxed": True,
+                                               "allowUnsandboxedCommands": False,
+                                               "failIfUnavailable": True})
+        self.assertIn("mcp__solar", settings["permissions"]["allow"])  # a headless run cannot ask for it
+
+    def test_the_sandbox_refuses_to_start_unconfined(self):
+        # Without it Claude only warns when bubblewrap or socat are missing and runs the shell open.
+        settings = native_sandbox_settings()
+        self.assertIs(settings["sandbox"]["failIfUnavailable"], True)
+
+    def test_framework_read_rule_is_an_absolute_path_with_two_slashes(self):
+        # `Read(/x)` is relative to the project; only `Read(//x)` names an absolute path.
+        rules = native_sandbox_settings()["permissions"]["allow"]
+        self.assertIn(f"Read(//{str(SOLAR_ROOT).lstrip('/')}/**)", rules)
+        self.assertTrue(all(not r.startswith("Read(/") or r.startswith("Read(//") for r in rules))
+
+    def test_stream_launches_the_default_command(self):
+        event = json.dumps({"type": "result", "result": "ok", "usage": {}})
+        proc = MagicMock()
+        proc.stdout = iter([event + "\n"])
+        proc.returncode = 0
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SOLAR_ROUTER_CLAUDE_CMD", None)
+            os.environ.pop("SOLAR_AI_CLAUDE_CMD", None)
+            p = ClaudeProvider()
+            with patch.object(p, "resolve_binary", side_effect=lambda b: b), \
+                 patch("providers.claude.subprocess.Popen", return_value=proc) as popen:
+                self.assertEqual("".join(p.stream("q")), "ok")
+                streamed = popen.call_args.args[0]
+                blocking = p.get_cmd("q")
+        base = shlex.split(p.build_default_cmd())
+        self.assertEqual(streamed[:len(base)], base)  # the same flags, then the streaming ones
+        self.assertEqual(blocking[:-1], base)
+        self.assertEqual(streamed[-1], "q")
+        self.assertIn("--include-partial-messages", streamed)
+
+    def test_env_override_replaces_the_whole_command(self):
+        with patch.dict(os.environ, {"SOLAR_ROUTER_CLAUDE_CMD": "claude -p --model x"}):
+            with patch.object(ClaudeProvider, "resolve_binary", side_effect=lambda b: b):
+                self.assertEqual(ClaudeProvider().get_cmd("q"), ["claude", "-p", "--model", "x", "q"])
 
     def test_name(self):
         self.assertEqual(ClaudeProvider().name, "claude")

@@ -4,13 +4,36 @@ import shlex
 import subprocess
 
 from cli_permissions import Finding, MCP_READ_TOOLS, MCP_SERVER, MISSING, mcp_registered, read_json, rule_list, solar_read_tools_declare_read_only, unknown
-from .base import BaseProvider, SOLAR_WORKSPACE, env_int
+from .base import BaseProvider, SOLAR_ROOT, SOLAR_WORKSPACE, env_int
+
+
+def native_sandbox_settings() -> dict:
+    """Claude's own protections, switched on for a task.
+
+    `acceptEdits` keeps Write and Edit inside the folder the client starts in; with
+    `bypassPermissions` they wrote anywhere. `sandbox.enabled` confines what the shell can
+    write, and `allowUnsandboxedCommands: false` removes the way out of that sandbox.
+    `failIfUnavailable` stops the run when the sandbox cannot start (Linux without bubblewrap
+    or socat); without it Claude only warns and runs the shell unconfined. The allow list names
+    what a non-interactive run cannot ask for: the Solar MCP, web access and reading the
+    framework, which lives outside the workspace. The root is absolute, so the rule starts
+    with two slashes (`Read(//path/**)`); with one it would be relative to the project.
+    """
+    return {
+        "sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
+                    "failIfUnavailable": True},
+        "permissions": {"allow": ["mcp__solar", "WebSearch", "WebFetch", f"Read(//{str(SOLAR_ROOT).lstrip('/')}/**)"]},
+    }
 
 
 class ClaudeProvider(BaseProvider):
     name = "claude"
-    default_cmd = "claude -p --permission-mode bypassPermissions --no-session-persistence"
     last_usage: dict | None = None
+
+    def build_default_cmd(self) -> str:
+        # Exotic installs can override the whole command with SOLAR_ROUTER_CLAUDE_CMD.
+        settings = shlex.quote(json.dumps(native_sandbox_settings(), separators=(",", ":")))
+        return f"claude -p --permission-mode acceptEdits --settings {settings} --no-session-persistence"
 
     def ask_prefix(self):
         return ["-p", "--no-session-persistence"]
@@ -66,7 +89,7 @@ class ClaudeProvider(BaseProvider):
         self.log_prompt(prompt, " --output-format stream-json --include-partial-messages")
         new_key = "SOLAR_ROUTER_CLAUDE_CMD"
         old_key = "SOLAR_AI_CLAUDE_CMD"
-        raw = (os.getenv(new_key) or os.getenv(old_key) or self.default_cmd).strip()
+        raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
         if "--output-format" not in raw:
             raw += " --output-format stream-json --verbose"
         if "--include-partial-messages" not in raw:

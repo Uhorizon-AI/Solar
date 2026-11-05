@@ -14,9 +14,10 @@ class AgentProvider(BaseProvider):
 
     def build_default_cmd(self) -> str:
         # Cursor Agent CLI: -C was removed; use --workspace. --trust avoids
-        # interactive workspace prompts in -p/headless mode.
+        # interactive workspace prompts in -p/headless mode. No `-f`: it runs every command
+        # outside Cursor's sandbox, so `--sandbox enabled` has to stand on its own.
         return (
-            f"agent -p -f --approve-mcps --trust --workspace {SOLAR_WORKSPACE}"
+            f"agent -p --sandbox enabled --approve-mcps --trust --workspace {SOLAR_WORKSPACE}"
         )
 
     def ask_prefix(self):
