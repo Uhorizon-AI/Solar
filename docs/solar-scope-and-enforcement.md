@@ -81,14 +81,15 @@ Solar starts the client as a terminal would and leaves the restrictions to the c
 
 | Client | Default launch | What the client then enforces |
 |---|---|---|
-| Codex | `--sandbox workspace-write -C <workspace>` | Shell and patch tool write only in the workspace (and `/tmp`); `.git/hooks`, `.git/config` and `.codex/` are protected; network is off. |
+| Codex | `--sandbox workspace-write -c approval_policy="never" -C <workspace>` | Shell and patch tool write only in the workspace and `/tmp`; `.git/hooks`, `.git/config` and `.codex/` are protected; network is off. |
 | Claude | `--permission-mode acceptEdits` with `sandbox.enabled`, `allowUnsandboxedCommands: false` and `failIfUnavailable: true` | Write and Edit stay in the workspace; the shell writes only in the workspace and `$TMPDIR`; `.git/hooks`, `.git/config`, `.claude/settings.json` and `.claude/skills` are protected; the shell has no network except the domains the user allows. The client tools `WebSearch` and `WebFetch` are allowed by Solar's settings and are not limited by the shell sandbox. |
-| Cursor | `--sandbox enabled` (no `-f`) | Shell and edit tools write only in the workspace; `.git/hooks`, `.git/config` and `.cursor/mcp.json` are protected; network is off unless `.cursor/sandbox.json` allows it. |
+| Cursor | `--sandbox enabled` (no `-f`) | Shell and edit tools write only in the workspace and `/tmp`; `.git/hooks`, `.git/config` and `.cursor/mcp.json` are protected; network is off unless `.cursor/sandbox.json` allows it. |
 | Antigravity | `--dangerously-skip-permissions` | Not verified: its quota was exhausted when this was measured. Treat it as unprotected. |
 
-Conditions of these measurements: macOS only, a clean workspace, the real `HOME`, Codex with `approval_policy = "never"`, and no extra allow rules in the user's own settings. They change what the table promises:
+Conditions of these measurements: macOS only, a clean workspace, the real `HOME`, Codex with `approval_policy = "never"` (the one Solar passes), and no extra allow rules in the user's own settings. They change what the table promises:
 
-- **Codex** tasks inherit the user's `approval_policy`; with `on-request` and an automatic approvals reviewer, Codex can leave its sandbox. Solar does not force `never` for tasks (it does for questions).
+- **Codex** is launched with `approval_policy="never"`, which wins over `~/.codex/config.toml`. Without it, a user with `on-request` and an automatic approvals reviewer let the patch tool write in `$HOME` (measured on 2026-11-05). A task that relied on that reviewer to leave the sandbox now fails.
+- **`/tmp`** is writable in Codex and Cursor (Claude's shell only gets `$TMPDIR`). It is the client's own rule; Solar does not change it.
 - **Claude** keeps the user's own `Edit(...)` rules and `additionalDirectories`; they can allow edits outside the workspace. On Linux the sandbox needs `bubblewrap` and `socat`; without them Claude should refuse to start (`failIfUnavailable`) instead of running the shell unconfined. That refusal is not verified on Linux.
 - **Cursor** was measured without `-f` on 2026.10.22, where edits inside the workspace were applied on disk. Cursor's documentation says a non-interactive run without `--force` only proposes edits; the behavior on Linux and in other versions is not measured.
 

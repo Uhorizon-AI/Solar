@@ -57,7 +57,7 @@ SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 - `SOLAR_ROUTER_OLLAMA_CMD`
 
 Default Agent command: `agent -p --sandbox enabled --approve-mcps --trust --workspace <repo-root>` (no `-f`: it runs commands outside Cursor's sandbox)
-Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --sandbox workspace-write -C <repo-root> --`
+Default Codex command is repo-anchored: `codex exec --skip-git-repo-check --sandbox workspace-write -c 'approval_policy="never"' -C <repo-root> --` (`never` keeps an automatic approvals reviewer in the user's config from approving a write outside the sandbox)
 Default Claude command: `claude -p --permission-mode acceptEdits --settings <json> --no-session-persistence`, where the settings enable Claude's sandbox (`sandbox.enabled`, `allowUnsandboxedCommands: false`) and allow the Solar MCP, web access and reading the framework
 The protection each default gives is described in `docs/solar-scope-and-enforcement.md` ("How Solar launches each client for a task").
 Default Agy (Antigravity) command: `agy --dangerously-skip-permissions --add-dir <repo-root>` (the adapter appends `--print <prompt>`; do not put bare `-p` before other flags — Antigravity treats `-p`/`--print` as taking the prompt value)
