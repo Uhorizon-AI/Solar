@@ -163,6 +163,14 @@ class TestAgyProvider(unittest.TestCase):
             "hello",
         ])
 
+    @patch("providers.base.shutil.which", return_value="/usr/bin/agy")
+    def test_get_cmd_keeps_a_print_flag_inside_the_settings_value(self, _which):
+        settings = '{"note":"-p --print --prompt","toolPermission":"proceed-in-sandbox"}'
+        with patch.dict(os.environ, {"SOLAR_ROUTER_AGY_CMD": f"agy --sandbox --settings {shlex.quote(settings)}"}, clear=False):
+            cmd = self.provider.get_cmd("hello")
+        self.assertEqual(cmd[cmd.index("--settings") + 1], settings)
+        self.assertEqual(cmd[-2:], ["--print", "hello"])
+
     def test_name_is_agy(self):
         self.assertEqual(self.provider.name, "agy")
         self.assertIn("agy", PROVIDERS)
