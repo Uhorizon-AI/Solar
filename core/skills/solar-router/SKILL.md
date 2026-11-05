@@ -55,7 +55,7 @@ scripts/
   providers/
     __init__.py        — PROVIDERS dict, exports all adapters
     base.py            — BaseProvider: resolve_binary, get_cmd, prepare_env, clean_output, run
-    claude.py          — static default_cmd
+    claude.py          — build_default_cmd() with the native sandbox settings
     codex.py           — build_default_cmd() with SOLAR_WORKSPACE + CODEX_STATE_DIR
     agy.py             — Antigravity CLI (`agy --print <prompt>`)
     agent.py           — build_default_cmd() with SOLAR_WORKSPACE

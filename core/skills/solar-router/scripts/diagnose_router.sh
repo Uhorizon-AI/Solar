@@ -187,31 +187,23 @@ for provider in "${providers[@]}"; do
   [[ -z "$provider" ]] && continue
 
   if [[ "$dry_run" == "true" ]]; then
-    if python3 - <<PY "$provider" "$SOLAR_WORKSPACE"
+    if python3 - <<PY "$provider" "$SCRIPT_DIR"
 import os
 import shlex
 import shutil
 import sys
 
 provider = sys.argv[1]
-repo_root = sys.argv[2]
-codex_default = (
-    f"codex exec --skip-git-repo-check --full-auto -C {repo_root} "
-    f"--add-dir {os.path.expanduser('~/.codex')} --"
-)
-defaults = {
-    "agent": f"agent -p --sandbox enabled --approve-mcps --trust --workspace {repo_root}",
-    "codex": codex_default,
-    "claude": "claude -p --permission-mode acceptEdits --settings <native sandbox json>",
-    "agy": "agy --dangerously-skip-permissions",
-    "ollama": "ollama run solar --hidethinking --nowordwrap",
-}
-if provider not in defaults:
+# The default commands come from the adapters that run them, so this check cannot drift.
+sys.path.insert(0, sys.argv[2])
+from providers import PROVIDERS
+
+if provider not in PROVIDERS:
     print(f"unsupported provider in priority: {provider}")
     raise SystemExit(1)
 new_key = f"SOLAR_ROUTER_{provider.upper()}_CMD"
 old_key = f"SOLAR_AI_{provider.upper()}_CMD"
-raw = (os.getenv(new_key) or os.getenv(old_key) or defaults[provider]).strip()
+raw = (os.getenv(new_key) or os.getenv(old_key) or PROVIDERS[provider].build_default_cmd()).strip()
 cmd = shlex.split(raw)
 if not cmd:
     print(f"{new_key} is empty")

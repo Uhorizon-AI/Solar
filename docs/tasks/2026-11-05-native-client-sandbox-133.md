@@ -40,10 +40,11 @@ What the previous defaults did: Claude ran with `bypassPermissions`, where Write
 
 ## Changes
 
-1. `providers/claude.py`: the default command is `claude -p --permission-mode acceptEdits --settings <json> --no-session-persistence`. The settings enable `sandbox.enabled`, `autoAllowBashIfSandboxed` and `allowUnsandboxedCommands: false`, and allow `mcp__solar`, `WebSearch`, `WebFetch` and reading the framework root (a headless run cannot ask for them). The streaming path now builds the same command as the blocking path.
+1. `providers/claude.py`: the default command is `claude -p --permission-mode acceptEdits --settings <json> --no-session-persistence`. The settings enable `sandbox.enabled`, `autoAllowBashIfSandboxed`, `allowUnsandboxedCommands: false` and `failIfUnavailable: true` (without it, Claude on Linux without `bubblewrap` or `socat` only warns and runs the shell unconfined), and allow `mcp__solar`, `WebSearch`, `WebFetch` and reading the framework root (a headless run cannot ask for them). The streaming path now builds the same command as the blocking path.
 2. `providers/agent.py`: the default command drops `-f` and adds `--sandbox enabled`.
-3. Documentation: new section "How Solar launches each client for a task" in `docs/solar-scope-and-enforcement.md` (the source for claims about control), plus `README.md`, `solar-router/SKILL.md`, `references/routing-policy.md` (its Codex line still named the removed `--full-auto`), `diagnose_router.sh` and `core/docs/execution-reservations.md`.
-4. Tests: the launch tests assert the sandbox flags and the absence of `bypassPermissions`, `-f`, `--force`, `--yolo`; the sandbox settings are parsed back from the command; blocking and streaming share one command; an env override still replaces the whole command.
+3. `diagnose_router.sh --dry-run` asks each adapter for its default command instead of keeping its own copy, so the diagnosis cannot drift again.
+4. Documentation: new section "How Solar launches each client for a task" in `docs/solar-scope-and-enforcement.md` (the source for claims about control), plus `README.md`, `solar-router/SKILL.md`, `references/routing-policy.md` (its Codex line still named the removed `--full-auto`), `diagnose_router.sh` and `core/docs/execution-reservations.md`.
+5. Tests: the launch tests assert the sandbox flags and the absence of `bypassPermissions`, `-f`, `--force`, `--yolo`; the sandbox settings are parsed back from the command; `stream()` is run against a simulated `Popen` and its command is compared with the blocking one; the framework read rule is pinned as `Read(//<root>/**)`; an env override still replaces the whole command.
 
 ## Not in this change
 
@@ -51,7 +52,8 @@ What the previous defaults did: Claude ran with `bypassPermissions`, where Write
 - Antigravity keeps `--dangerously-skip-permissions`. Its account quota was exhausted when this was measured (about 76 hours), so its `--sandbox` flag is not verified. The documentation tells the reader to treat it as unprotected.
 - `task.authorize_run` is unchanged: a task is not exempted from approval because a client sandbox is on.
 - The hard-link gap is documented, not closed. Closing it needs a check of link counts before a task starts.
-- No Linux run: the sandboxes were measured on macOS only.
+- No Linux run: the sandboxes were measured on macOS only. Pending on the VPS: that Claude refuses to start without `bubblewrap`/`socat` and the router shows the cause, and Cursor's exact command (`agent -p --sandbox enabled --approve-mcps --trust --workspace <root>`, version 2026.10.22 measured) applying an in-workspace edit on disk and denying one outside. Cursor's documentation says a non-interactive run without `--force` only proposes edits; on macOS 2026.10.22 they were applied.
+- Measured with Codex `approval_policy = "never"` and without extra allow rules in the user's settings. Claude keeps the user's `Edit(...)` rules and `additionalDirectories`, and Codex tasks inherit the user's approval policy.
 
 ## Risks and how to roll back
 

@@ -12,13 +12,17 @@ def native_sandbox_settings() -> dict:
 
     `acceptEdits` keeps Write and Edit inside the folder the client starts in; with
     `bypassPermissions` they wrote anywhere. `sandbox.enabled` confines what the shell can
-    write, and `allowUnsandboxedCommands: false` removes the way out of that sandbox. The
-    allow list names what a non-interactive run cannot ask for: the Solar MCP, web access and
-    reading the framework, which lives outside the workspace.
+    write, and `allowUnsandboxedCommands: false` removes the way out of that sandbox.
+    `failIfUnavailable` stops the run when the sandbox cannot start (Linux without bubblewrap
+    or socat); without it Claude only warns and runs the shell unconfined. The allow list names
+    what a non-interactive run cannot ask for: the Solar MCP, web access and reading the
+    framework, which lives outside the workspace. The root is absolute, so the rule starts
+    with two slashes (`Read(//path/**)`); with one it would be relative to the project.
     """
     return {
-        "sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False},
-        "permissions": {"allow": ["mcp__solar", "WebSearch", "WebFetch", f"Read(/{SOLAR_ROOT}/**)"]},
+        "sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
+                    "failIfUnavailable": True},
+        "permissions": {"allow": ["mcp__solar", "WebSearch", "WebFetch", f"Read(//{str(SOLAR_ROOT).lstrip('/')}/**)"]},
     }
 
 

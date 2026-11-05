@@ -3,6 +3,7 @@ is over is not reported as in flight."""
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 import subprocess
 from pathlib import Path
@@ -77,7 +78,9 @@ def test_providers_block_follows_priority_override(status_env):
 
 def test_failing_provider_is_listed_without_script_missing_note(status_env):
     os.remove(Path(status_env["_STUB_BIN"]) / "claude")
-    status_env["PATH"] = status_env["_STUB_BIN"] + ":/usr/bin:/bin"
+    # The dry run imports the adapters to read their default commands, so it needs the same
+    # interpreter as the router (3.10+), not the system python3 that /usr/bin may hold.
+    status_env["PATH"] = f'{status_env["_STUB_BIN"]}:{Path(sys.executable).parent}:/usr/bin:/bin'
     status_env["SOLAR_ROUTER_PROVIDER_PRIORITY"] = "codex,claude"
     proc = _run_status(status_env)
     block = _providers_block(proc.stdout)
