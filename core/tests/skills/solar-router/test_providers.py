@@ -234,7 +234,8 @@ class TestCodexProvider(unittest.TestCase):
         argv = shlex.split(CodexProvider().build_default_cmd())
         self.assertEqual(argv[argv.index("--sandbox") + 1], "workspace-write")
         # An automatic approvals reviewer in the user's config can approve leaving the sandbox.
-        self.assertEqual(argv[argv.index("-c") + 1], 'approval_policy="never"')
+        pairs = [(a, b) for a, b in zip(argv, argv[1:]) if a == "-c"]
+        self.assertIn(("-c", 'approval_policy="never"'), pairs)
         for forbidden in ("--dangerously-bypass-approvals-and-sandbox", "danger-full-access"):
             self.assertNotIn(forbidden, argv)
 

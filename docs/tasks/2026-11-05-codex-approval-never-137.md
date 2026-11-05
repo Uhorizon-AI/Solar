@@ -34,13 +34,14 @@ The same probe on the other clients (same day, same install): Claude denied the 
 
 ## Verified
 
-Same real `~/.codex/config.toml`, the exact command printed by the adapter, run from the workspace: file inside the workspace written; patch outside the workspace rejected (`patch rejected: writing outside of the project; rejected by user approval settings`); shell outside denied; `solar_search` works. Router tests: 836 passed; the only failure, `test_cursor_project_path_matches_the_installed_cli`, also fails on main.
+Same real `~/.codex/config.toml`, the exact command printed by the adapter, run from the workspace: file inside the workspace written; patch outside the workspace rejected (`patch rejected: writing outside of the project; rejected by user approval settings`); shell outside denied; `solar_search` works. Router tests: 836 passed; the only failure, `test_cursor_project_path_matches_the_installed_cli`, also fails on main (#139).
 
 ## Not in this change
 
 - `/tmp` stays writable in Codex and Cursor: it is each client's rule and Solar only documents it.
 - Hard links, Cursor's project path check (#139), Antigravity (#136) and the Linux runs are unchanged and still open.
 - Reading the framework root from Cursor was not probed.
+- `diagnose` and the Codex doctor only check the pinned approval policy of questions (`ask`); extending that check to the task command is separate work.
 
 ## Risks and rollback
 
@@ -50,4 +51,4 @@ A Codex task that needed the automatic reviewer to leave the sandbox now fails. 
 
 - The default Codex command contains `--sandbox workspace-write` and `approval_policy="never"`.
 - With a config that has `on-request` and an automatic reviewer, a patch outside the workspace is rejected and the Solar MCP still works. (Measured on 2026-11-05.)
-- The router tests pass.
+- The new test passes and the router suite adds no failure relative to main; the known exception is `test_cursor_project_path_matches_the_installed_cli` (#139).
