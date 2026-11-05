@@ -18,7 +18,7 @@ Solar launched Antigravity (`agy` 1.5.1) with `--dangerously-skip-permissions`, 
 ## Change
 
 1. `providers/agy.py`: the default command is `agy --sandbox --mode accept-edits --settings <json> --add-dir <workspace>`. The settings are `toolPermission: "proceed-in-sandbox"` and `permissions.allow` with `mcp(solar/solar_search)` and `mcp(solar/solar_docs)`. There is no `command(*)` rule: Antigravity documents it as allowing a command inside or outside the sandbox, and `--sandbox` does nothing where the system cannot provide it, so it could run a command with no protection.
-2. Tests: no `--dangerously-skip-permissions`, `--sandbox` kept, `--mode accept-edits`, the settings JSON parsed and compared with the adapter function, and the JSON reaches `get_cmd` as one argument before `--print`.
+2. Tests: no `--dangerously-skip-permissions`, `--sandbox` kept, `--mode accept-edits`, the settings JSON parsed and compared with the adapter function, the JSON reaches `get_cmd` as one argument before `--print`, and a `-p`/`--print` inside the `--settings` value is not stripped.
 3. The `client doctor` and `client upgrade` warnings no longer suggest the skip flag as an override (they would replace the whole command and drop the protection).
 4. Documentation: the table in `docs/solar-scope-and-enforcement.md`, `routing-policy.md`, `README.md`, `CHANGELOG.md`, and the two migration/onboarding messages that suggested the skip flag as an override.
 

@@ -63,7 +63,7 @@ The protection each default gives is described in `docs/solar-scope-and-enforcem
 Default Agy (Antigravity) command: `agy --sandbox --mode accept-edits --settings <json> --add-dir <repo-root>`. The settings are `toolPermission: proceed-in-sandbox` and the two Solar MCP read tools by name. The adapter appends `--print <prompt>`; do not put bare `-p` before other flags, because Antigravity treats `-p`/`--print` as taking the prompt value. Why there is no `command(*)` rule: `docs/solar-scope-and-enforcement.md`.
 Default Ollama command targets the local `solar` model: `ollama run solar --hidethinking --nowordwrap`
 
-Deprecated: `SOLAR_ROUTER_GEMINI_CMD` / `SOLAR_AI_GEMINI_CMD` are **not** read. Rename to `SOLAR_ROUTER_AGY_CMD`. `solar client doctor` and `solar client upgrade` warn if the old keys remain.
+Deprecated: `SOLAR_ROUTER_GEMINI_CMD` / `SOLAR_AI_GEMINI_CMD` are **not** read. Remove them and leave `SOLAR_ROUTER_AGY_CMD` unset to use the protected default; do not copy an old value (such as `gemini -y`) into it, because it replaces the whole command. `solar client doctor` and `solar client upgrade` warn if the old keys remain.
 
 ## Timeout keys
 
