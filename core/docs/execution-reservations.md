@@ -61,7 +61,7 @@ the diagnostic worker (`run_worker.sh --diagnostic`) in `$SOLAR_CLAIM_FILE`;
 ## Access declaration and the new material keys
 
 **A declaration alone never makes a task concurrent.** The providers still run with their own
-permissions (`bypassPermissions`, `workspace-write`), so `read` does not stop a write. A declared
+permissions (each client's own sandbox: `workspace-write`, Claude `acceptEdits`, Cursor `--sandbox enabled`), so `read` does not stop a write. A declared
 task is admitted next to others only when its `execution_profile` is listed in the applied
 policy's `enabled_reader_profiles`, which starts empty; any other task runs alone, declared or not,
 and readers and writers with disjoint scopes alike. Raising the capacity therefore changes nothing

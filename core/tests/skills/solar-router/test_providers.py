@@ -3,7 +3,9 @@ Unit tests for providers/*.py — subprocess.run is mocked throughout.
 No real AI binaries are called.
 """
 import io
+import json
 import os
+import shlex
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -377,16 +379,44 @@ class TestAgentProvider(unittest.TestCase):
         p = AgentProvider()
         self.assertIn("--approve-mcps", p.build_default_cmd())
 
+    def test_default_cmd_keeps_cursor_sandbox_on(self):
+        argv = shlex.split(AgentProvider().build_default_cmd())
+        self.assertEqual(argv[argv.index("--sandbox") + 1], "enabled")
+        for forbidden in ("-f", "--force", "--yolo"):
+            self.assertNotIn(forbidden, argv)  # `-f` runs commands outside the sandbox
+
 
 # ---------------------------------------------------------------------------
 # ClaudeProvider
 # ---------------------------------------------------------------------------
 
 class TestClaudeProvider(unittest.TestCase):
-    def test_default_cmd_is_static(self):
-        p = ClaudeProvider()
-        self.assertIn("bypassPermissions", p.default_cmd)
-        self.assertIn("--no-session-persistence", p.default_cmd)
+    def test_default_cmd_uses_native_protections(self):
+        argv = shlex.split(ClaudeProvider().build_default_cmd())
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "acceptEdits")
+        self.assertIn("--no-session-persistence", argv)
+        for forbidden in ("bypassPermissions", "--dangerously-skip-permissions"):
+            self.assertNotIn(forbidden, argv)  # Write and Edit would leave the workspace
+
+    def test_default_cmd_enables_the_sandbox_without_an_exit(self):
+        argv = shlex.split(ClaudeProvider().build_default_cmd())
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        self.assertEqual(settings["sandbox"], {"enabled": True, "autoAllowBashIfSandboxed": True,
+                                               "allowUnsandboxedCommands": False})
+        self.assertIn("mcp__solar", settings["permissions"]["allow"])  # a headless run cannot ask for it
+
+    def test_stream_and_run_share_the_default_command(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SOLAR_ROUTER_CLAUDE_CMD", None)
+            os.environ.pop("SOLAR_AI_CLAUDE_CMD", None)
+            p = ClaudeProvider()
+            with patch.object(p, "resolve_binary", side_effect=lambda b: b):
+                self.assertEqual(p.get_cmd("q")[:-1], shlex.split(p.build_default_cmd()))
+
+    def test_env_override_replaces_the_whole_command(self):
+        with patch.dict(os.environ, {"SOLAR_ROUTER_CLAUDE_CMD": "claude -p --model x"}):
+            with patch.object(ClaudeProvider, "resolve_binary", side_effect=lambda b: b):
+                self.assertEqual(ClaudeProvider().get_cmd("q"), ["claude", "-p", "--model", "x", "q"])
 
     def test_name(self):
         self.assertEqual(ClaudeProvider().name, "claude")

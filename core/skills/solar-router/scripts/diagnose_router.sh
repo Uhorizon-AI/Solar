@@ -200,9 +200,9 @@ codex_default = (
     f"--add-dir {os.path.expanduser('~/.codex')} --"
 )
 defaults = {
-    "agent": f"agent -p -f --approve-mcps --trust --workspace {repo_root}",
+    "agent": f"agent -p --sandbox enabled --approve-mcps --trust --workspace {repo_root}",
     "codex": codex_default,
-    "claude": "claude -p --permission-mode bypassPermissions",
+    "claude": "claude -p --permission-mode acceptEdits --settings <native sandbox json>",
     "agy": "agy --dangerously-skip-permissions",
     "ollama": "ollama run solar --hidethinking --nowordwrap",
 }
