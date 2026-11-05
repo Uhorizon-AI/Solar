@@ -113,7 +113,27 @@ def test_dry_run_names_the_cause_when_the_interpreter_is_too_old(status_env):
     proc = subprocess.run(["bash", str(diagnose), "--dry-run"], env=status_env, capture_output=True,
                           text=True, timeout=60)
     assert "- codex: FAIL" in proc.stdout
-    assert "the adapters need Python 3.10+" in proc.stdout and "Traceback" not in proc.stdout + proc.stderr
+    assert "the adapters need Python 3.10+" in proc.stdout and "this is 3.9" in proc.stdout and "Traceback" not in proc.stdout + proc.stderr
+
+
+def test_dry_run_reports_the_real_import_error_on_a_compatible_python(status_env, tmp_path):
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(
+        "import sys\n"
+        "class _Block:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'providers':\n"
+        "            raise ModuleNotFoundError(\"No module named 'providers'\")\n"
+        "sys.meta_path.insert(0, _Block())\n")
+    status_env["PYTHONPATH"] = str(hook)
+    status_env["SOLAR_ROUTER_PROVIDER_PRIORITY"] = "codex"
+    diagnose = SCRIPT.parent / "diagnose_router.sh"
+    proc = subprocess.run(["bash", str(diagnose), "--dry-run"], env=status_env, capture_output=True,
+                          text=True, timeout=60)
+    assert "- codex: FAIL" in proc.stdout
+    assert "ModuleNotFoundError" in proc.stdout and "No module named 'providers'" in proc.stdout
+    assert "Python 3.10" not in proc.stdout  # the interpreter is fine; do not blame its version
 
 
 def _make_task(task_id, final):

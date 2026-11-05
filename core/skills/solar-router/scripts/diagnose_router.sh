@@ -33,7 +33,7 @@ _format_provider_failure() {
   local provider="$1"
   local capture="$2"
   local verbose_flag="$3"
-  printf '%s' "$capture" | python3 -c '
+  printf '%s' "$capture" | "$PYTHON" -c '
 import json, os, re, sys
 
 provider = sys.argv[1]
@@ -198,11 +198,14 @@ import sys
 provider = sys.argv[1]
 # The default commands come from the adapters that run them, so this check cannot drift.
 sys.path.insert(0, sys.argv[2])
+if sys.version_info < (3, 10):  # the adapters use syntax that Python 3.9 rejects
+    print(f"cannot read the default commands: the adapters need Python 3.10+ and this is "
+          f"{sys.version_info[0]}.{sys.version_info[1]}; set SOLAR_AI_ROUTER_PYTHON to a newer interpreter")
+    raise SystemExit(1)
 try:
     from providers import PROVIDERS
-except Exception as exc:  # the adapters use syntax that Python 3.9 rejects
-    print(f"cannot read the default commands ({type(exc).__name__}): the adapters need Python 3.10+; "
-          "set SOLAR_AI_ROUTER_PYTHON to a newer interpreter")
+except Exception as exc:
+    print(f"cannot read the default commands ({type(exc).__name__}): {exc}")
     raise SystemExit(1)
 
 if provider not in PROVIDERS:
@@ -232,9 +235,9 @@ PY
   payload="$(printf '{"provider":"%s","text":"%s","request_id":"preflight_%s","session_id":"preflight","user_id":"preflight"}' \
     "$provider" "$prompt" "$provider")"
 
-  if result="$(printf '%s' "$payload" | python3 "$ROUTER_SCRIPT" 2>&1)"; then
+  if result="$(printf '%s' "$payload" | "$PYTHON" "$ROUTER_SCRIPT" 2>&1)"; then
     preview="$(
-      printf '%s' "$result" | python3 -c '
+      printf '%s' "$result" | "$PYTHON" -c '
 import json, sys
 text = sys.stdin.read()
 dec = json.JSONDecoder()
