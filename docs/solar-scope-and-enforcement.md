@@ -213,27 +213,36 @@ described as controlling these until code does:
 
 ## What Solar does not fix
 
-A limit that belongs to a client's own sandbox, permissions or tools is documented
-and reported to the vendor; it is not patched in Solar. Solar launches each client
-with its own sandbox on and says what that protects. It does not add a second
-layer to cover what the client leaves open.
+Choosing the flags that turn on each client's own sandbox is Solar's job (see
+"How Solar launches each client for a task"). A gap that stays open with those
+flags correctly set is the client's limit: it is documented and should be
+reported to the vendor, and it is not covered with a second control in Solar.
+The default launch command is what Solar guarantees; replacing it with
+`SOLAR_ROUTER_<CLIENT>_CMD` leaves the choice to the user.
 
 Before opening an issue or a PR about a gap, ask three questions:
 
-1. **Does the gap exist when the user runs the client directly, without Solar?**
-   If yes, it is the client's limit. Record it in the measured table and report it
-   upstream. Do not add Solar code to close it.
-2. **Would a Solar-side check cover it, or only the cases visible before the run?**
-   A check that an agent inside the workspace can get around is not a control. Do
-   not ship it: it gives the feeling of safety without the safety.
+1. **Does the gap persist with the native protections correctly configured?**
+   First check whether the arguments Solar chooses create or widen it (for example
+   Codex `on-request` approvals with an automatic reviewer, which Solar closes with
+   `approval_policy="never"`). If they do, fixing them is Solar's job. If the gap
+   persists with the flags set, it is the client's limit: record it in the measured
+   table and report it to the vendor.
+2. **If it is the client's limit, would a Solar-side check really cover it?**
+   A check that an agent inside the workspace can get around, or that only sees the
+   cases visible before the run, is not a control. Do not ship it: it gives the
+   feeling of safety without the safety.
 3. **Is the control Solar's own?** Its authorization (`task.authorize_run`), its
-   audit, its MCP gate, its routing and its error reporting are Solar's job.
+   audit, its MCP gate, its routing and its error reporting are Solar's job. If one
+   of them really covers the gap, implement it.
 
-Example: the three client sandboxes decide by path, so a hard link inside the
+Example: measured on macOS with Codex, Claude and Cursor (Antigravity not
+measured), the sandboxes decide by path, so a hard link already inside the
 workspace that points to a file outside lets a task write that file. It is listed
 in the measured table of `docs/tasks/2026-11-05-native-client-sandbox-133.md`. A
-scan before launch would see only existing links, and the agent can create one
-itself. The issue (#138) was closed as not planned on 2026-11-06.
+scan before launch would see only existing links; whether an agent could create a
+link itself depends on the client allowing the operation and was not measured. The
+issue (#138) was closed as not planned on 2026-11-06.
 
 ## The honesty rule
 
