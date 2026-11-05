@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 from providers.base import BaseProvider, SOLAR_WORKSPACE, SOLAR_ROOT, FALLBACK_PATHS
 from providers.claude import ClaudeProvider, native_sandbox_settings
 from providers.codex import CodexProvider
-from providers.agy import AgyProvider
+from providers.agy import AgyProvider, native_sandbox_settings as native_agy_settings
 from providers.agent import AgentProvider
 from providers.ollama import OllamaProvider
 from providers import PROVIDERS
@@ -120,8 +120,21 @@ class TestAgyProvider(unittest.TestCase):
         self.assertTrue(cmd.startswith("agy "))
         self.assertNotIn(" -p ", f" {cmd} ")
         self.assertNotIn("--print", cmd)
-        self.assertIn("--dangerously-skip-permissions", cmd)
         self.assertIn(f"--add-dir {SOLAR_WORKSPACE}", cmd)
+
+    def test_default_cmd_keeps_the_sandbox_on_and_never_skips_permissions(self):
+        argv = shlex.split(self.provider.build_default_cmd())
+        self.assertIn("--sandbox", argv)
+        self.assertEqual(argv[argv.index("--mode") + 1], "accept-edits")
+        for forbidden in ("--dangerously-skip-permissions", "-y", "--yolo", "auto"):
+            self.assertNotIn(forbidden, argv)
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        self.assertEqual(settings, native_agy_settings())
+        self.assertEqual(settings["toolPermission"], "proceed-in-sandbox")
+        allow = settings["permissions"]["allow"]
+        # No blanket rule: `command(*)` also allows a command outside the sandbox.
+        self.assertEqual(allow, ["mcp(solar/solar_search)", "mcp(solar/solar_docs)"])
+        self.assertFalse([rule for rule in allow if rule.startswith(("command", "write_file"))])
 
     @patch("providers.base.shutil.which", return_value="/usr/bin/agy")
     def test_get_cmd_binds_prompt_to_print(self, _which):
@@ -130,18 +143,20 @@ class TestAgyProvider(unittest.TestCase):
         self.assertEqual(cmd[-2:], ["--print", "review this"])
         self.assertNotIn("-p", cmd)
         # Flags must never sit where -p would eat them as the prompt value.
-        skip_idx = cmd.index("--dangerously-skip-permissions")
-        self.assertLess(skip_idx, cmd.index("--print"))
+        self.assertLess(cmd.index("--sandbox"), cmd.index("--print"))
+        self.assertLess(cmd.index("--settings"), cmd.index("--print"))
+        # The JSON survives get_cmd as one argument, untouched by the -p/--print stripping.
+        self.assertEqual(json.loads(cmd[cmd.index("--settings") + 1]), native_agy_settings())
 
     @patch("providers.base.shutil.which", return_value="/usr/bin/agy")
     def test_get_cmd_rewrites_legacy_p_before_flags(self, _which):
         with patch.dict(os.environ, {
-            "SOLAR_ROUTER_AGY_CMD": "agy -p --dangerously-skip-permissions --add-dir /tmp/ws",
+            "SOLAR_ROUTER_AGY_CMD": "agy -p --sandbox --add-dir /tmp/ws",
         }, clear=False):
             cmd = self.provider.get_cmd("hello")
         self.assertEqual(cmd, [
             "/usr/bin/agy",
-            "--dangerously-skip-permissions",
+            "--sandbox",
             "--add-dir",
             "/tmp/ws",
             "--print",

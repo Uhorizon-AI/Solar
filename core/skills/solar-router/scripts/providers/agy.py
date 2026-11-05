@@ -11,6 +11,20 @@ from .base import BaseProvider, SOLAR_WORKSPACE
 _PRINT_FLAGS = frozenset({"-p", "--print", "--prompt"})
 
 
+def native_sandbox_settings() -> dict:
+    """Session-only settings for a task: commands run only inside Antigravity's own sandbox.
+
+    `proceed-in-sandbox` runs a command automatically when it is sandboxed and needs approval to
+    leave it; headless mode cannot approve, so leaving the sandbox is refused. A blanket
+    `command(*)` allow rule is not used: Antigravity documents it as allowing a command inside or
+    outside the sandbox. The Solar MCP read tools are named one by one.
+    """
+    return {
+        "toolPermission": "proceed-in-sandbox",
+        "permissions": {"allow": [f"mcp({MCP_SERVER}/{tool})" for tool in MCP_READ_TOOLS]},
+    }
+
+
 class AgyProvider(BaseProvider):
     """Antigravity CLI provider (`agy`).
 
@@ -28,13 +42,18 @@ class AgyProvider(BaseProvider):
         # this template; get_cmd always appends --print <prompt> last so other flags
         # are never eaten as the prompt (see issue from measure-110: `-p took
         # "--dangerously-skip-permissions" as its prompt`).
-        return f"agy --dangerously-skip-permissions --add-dir {SOLAR_WORKSPACE}"
+        # `--sandbox` confines the shell; with `--mode accept-edits` the edit tool still needs a
+        # `write_file` permission outside the workspace, which headless mode cannot give. No
+        # `--dangerously-skip-permissions`: it approved everything (measured: writes in $HOME,
+        # network). SOLAR_ROUTER_AGY_CMD can still replace the whole command.
+        settings = shlex.quote(json.dumps(native_sandbox_settings(), separators=(",", ":")))
+        return f"agy --sandbox --mode accept-edits --settings {settings} --add-dir {SOLAR_WORKSPACE}"
 
     def get_cmd(self, prompt: str) -> list:
         """Build argv with the prompt bound to --print, never as a bare trailing arg.
 
         Strips any bare or ``=``-form -p/--print/--prompt from the env/default
-        template (including a misplaced ``agy -p --dangerously-skip-permissions…``)
+        template (including a misplaced ``agy -p --sandbox…``)
         and reattaches ``--print`` immediately before the real prompt.
         """
         new_key = f"SOLAR_ROUTER_{self.name.upper()}_CMD"
