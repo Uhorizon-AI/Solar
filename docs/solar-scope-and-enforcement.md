@@ -224,14 +224,15 @@ Before opening an issue or a PR about a gap, ask three questions:
 
 1. **Does the gap persist with the native protections correctly configured?**
    First check whether the arguments Solar chooses create or widen it (for example
-   Codex `on-request` approvals with an automatic reviewer, which Solar closes with
-   `approval_policy="never"`). If they do, fixing them is Solar's job. If the gap
-   persists with the flags set, it is the client's limit: record it in the measured
-   table and report it to the vendor.
+   Claude with `bypassPermissions` or Cursor with `-f`, which loosen the sandbox).
+   If they do, fixing them is Solar's job. Then check the client's effective
+   configuration, including what the user has enabled: extra write paths are not a
+   client limit. If the gap persists with the flags set and no extra configuration,
+   it is the client's limit: record it in the measured table and report it to the
+   vendor.
 2. **If it is the client's limit, would a Solar-side check really cover it?**
-   A check that an agent inside the workspace can get around, or that only sees the
-   cases visible before the run, is not a control. Do not ship it: it gives the
-   feeling of safety without the safety.
+   A check that an agent inside the workspace can get around is not a control. Do
+   not ship it: it gives the feeling of safety without the safety.
 3. **Is the control Solar's own?** Its authorization (`task.authorize_run`), its
    audit, its MCP gate, its routing and its error reporting are Solar's job. If one
    of them really covers the gap, implement it.
@@ -239,10 +240,10 @@ Before opening an issue or a PR about a gap, ask three questions:
 Example: measured on macOS with Codex, Claude and Cursor (Antigravity not
 measured), the sandboxes decide by path, so a hard link already inside the
 workspace that points to a file outside lets a task write that file. It is listed
-in the measured table of `docs/tasks/2026-11-05-native-client-sandbox-133.md`. A
-scan before launch would see only existing links; whether an agent could create a
-link itself depends on the client allowing the operation and was not measured. The
-issue (#138) was closed as not planned on 2026-11-06.
+in the measured table of `docs/tasks/2026-11-05-native-client-sandbox-133.md`. It
+is a client limit, so Solar adds no second control for it: a scan of link counts
+before launch is not implemented. The issue (#138) was closed as not planned on
+2026-11-06.
 
 ## The honesty rule
 

@@ -18,7 +18,7 @@ Solar follows strict architecture boundaries:
 - `core/` is versioned framework code and documentation.
 - `sun/` and `planets/` are user runtime workspaces and are gitignored.
 - Contributions in this repository should focus on `core/` and shared files.
-- Choosing the flags of each client's own sandbox is Solar's job; a gap that stays open with those flags set is the client's limit and is documented and reported to the vendor, not covered with a second control. Read "What Solar does not fix" in `docs/solar-scope-and-enforcement.md` before opening an issue or PR about a security gap.
+- Choosing the flags of each client's own sandbox is Solar's job; a gap that stays open with those flags set, after checking the client's effective configuration, is the client's limit and is documented and reported to the vendor, not covered with a second control. Read "What Solar does not fix" in `docs/solar-scope-and-enforcement.md` before opening an issue or PR about a security gap.
 
 Primary references:
 - `AGENTS.md`
