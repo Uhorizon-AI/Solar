@@ -89,7 +89,7 @@ Solar starts the client as a terminal would and leaves the restrictions to the c
 Conditions of these measurements: macOS only, a clean workspace, the real `HOME`, Codex with `approval_policy = "never"`, and no extra allow rules in the user's own settings. They change what the table promises:
 
 - **Codex** tasks inherit the user's `approval_policy`; with `on-request` and an automatic approvals reviewer, Codex can leave its sandbox. Solar does not force `never` for tasks (it does for questions).
-- **Claude** keeps the user's own `Edit(...)` rules and `additionalDirectories`; they can allow edits outside the workspace. On Linux the sandbox needs `bubblewrap` and `socat`; without them Claude refuses to start (`failIfUnavailable`) instead of running the shell unconfined. That refusal was not exercised on Linux.
+- **Claude** keeps the user's own `Edit(...)` rules and `additionalDirectories`; they can allow edits outside the workspace. On Linux the sandbox needs `bubblewrap` and `socat`; without them Claude should refuse to start (`failIfUnavailable`) instead of running the shell unconfined. That refusal is not verified on Linux.
 - **Cursor** was measured without `-f` on 2026.10.22, where edits inside the workspace were applied on disk. Cursor's documentation says a non-interactive run without `--force` only proposes edits; the behavior on Linux and in other versions is not measured.
 
 What this does not give, measured on macOS with Codex 0.165, Claude 2.1.318 and Cursor 2026.10.22:

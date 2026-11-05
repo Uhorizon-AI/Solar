@@ -8,6 +8,8 @@ solar_resolve_paths --quiet
 ROOT_ENV_FILE="$SOLAR_WORKSPACE/.env"
 ROUTER_SCRIPT="$(solar_core_dir)/skills/solar-router/scripts/run_router.py"
 PROMPT_DEFAULT="Respond with OK"
+# The dry run imports the adapters, which need Python 3.10+: use the interpreter the router uses.
+PYTHON="${SOLAR_AI_ROUTER_PYTHON:-python3}"
 
 dry_run="false"
 verbose="false"
@@ -187,7 +189,7 @@ for provider in "${providers[@]}"; do
   [[ -z "$provider" ]] && continue
 
   if [[ "$dry_run" == "true" ]]; then
-    if python3 - <<PY "$provider" "$SCRIPT_DIR"
+    if "$PYTHON" - <<PY "$provider" "$SCRIPT_DIR"
 import os
 import shlex
 import shutil
@@ -196,7 +198,12 @@ import sys
 provider = sys.argv[1]
 # The default commands come from the adapters that run them, so this check cannot drift.
 sys.path.insert(0, sys.argv[2])
-from providers import PROVIDERS
+try:
+    from providers import PROVIDERS
+except Exception as exc:  # the adapters use syntax that Python 3.9 rejects
+    print(f"cannot read the default commands ({type(exc).__name__}): the adapters need Python 3.10+; "
+          "set SOLAR_AI_ROUTER_PYTHON to a newer interpreter")
+    raise SystemExit(1)
 
 if provider not in PROVIDERS:
     print(f"unsupported provider in priority: {provider}")
