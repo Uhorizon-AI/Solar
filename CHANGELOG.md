@@ -7,6 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- router: Codex tasks pass `-c approval_policy="never"` next to `--sandbox workspace-write`, so an automatic approvals reviewer in `~/.codex/config.toml` can no longer let the patch tool write outside the workspace. A task that depended on that reviewer now fails; `SOLAR_ROUTER_CODEX_CMD` restores the previous command. Closes #137.
 - router: Claude tasks start with `acceptEdits` and Claude's own sandbox enabled, and Cursor tasks without `-f`, so each client's native protections apply; with `bypassPermissions` Claude's Write and Edit wrote outside the workspace and `-f` disabled Cursor's sandbox. The launch table and its limits are documented in `docs/solar-scope-and-enforcement.md`. `SOLAR_ROUTER_CLAUDE_CMD` and `SOLAR_ROUTER_AGENT_CMD` still replace the whole command.
 
 ## [0.61.2] - 2026-11-02

@@ -48,14 +48,14 @@ What the previous defaults did: Claude ran with `bypassPermissions`, where Write
 
 ## Not in this change
 
-- Codex keeps its current command. Its `approval_policy` is not forced to `never` for tasks; an automatic approvals reviewer in the user's config can still escalate. That needs its own measurement because tasks may rely on it.
+- Codex kept its command in this change; forcing its `approval_policy` came afterwards (`2026-11-05-codex-approval-never-137.md`).
 - Antigravity keeps `--dangerously-skip-permissions`. Its account quota was exhausted when this was measured (about 76 hours), so its `--sandbox` flag is not verified. The documentation tells the reader to treat it as unprotected.
 - `task.authorize_run` is unchanged: a task is not exempted from approval because a client sandbox is on.
 - The hard-link gap is documented, not closed. Closing it needs a check of link counts before a task starts.
 - No Linux run: the sandboxes were measured on macOS only. Pending on the VPS: that Claude refuses to start without `bubblewrap`/`socat` and the router shows the cause, and Cursor's exact command (`agent -p --sandbox enabled --approve-mcps --trust --workspace <root>`, version 2026.10.22 measured) applying an in-workspace edit on disk and denying one outside. Cursor's documentation says a non-interactive run without `--force` only proposes edits; on macOS 2026.10.22 they were applied.
 - `failIfUnavailable` is not proven on the path that matters. Claude 2.1.318 recognizes the key and describes it as stopping a run whose sandbox backend is missing. Starting Claude inside another Seatbelt sandbox, so that its own cannot be applied, ran no command with either value (`true`: Claude reported it could not disable the sandbox; `false`: `sandbox_apply: Operation not permitted`), because `allowUnsandboxedCommands: false` already blocks the fallback on macOS. The difference only appears on Linux without `bubblewrap`/`socat`.
 - `diagnose_router.sh --dry-run` imports the adapters, so it needs Python 3.10+: it uses `SOLAR_AI_ROUTER_PYTHON` like `status_router.sh` and names the cause instead of printing a traceback when the interpreter is older.
-- Measured with Codex `approval_policy = "never"` and without extra allow rules in the user's settings. Claude keeps the user's `Edit(...)` rules and `additionalDirectories`, and Codex tasks inherit the user's approval policy.
+- Measured with Codex `approval_policy = "never"` and without extra allow rules in the user's settings. Claude keeps the user's `Edit(...)` rules and `additionalDirectories`, and Codex tasks inherited the user's approval policy (changed in `2026-11-05-codex-approval-never-137.md`).
 
 ## Risks and how to roll back
 

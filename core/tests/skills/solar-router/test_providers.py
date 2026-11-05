@@ -230,6 +230,15 @@ class TestCodexProvider(unittest.TestCase):
         p = CodexProvider()
         self.assertIn("--skip-git-repo-check", p.build_default_cmd())
 
+    def test_default_cmd_keeps_the_sandbox_and_never_asks_for_approval(self):
+        argv = shlex.split(CodexProvider().build_default_cmd())
+        self.assertEqual(argv[argv.index("--sandbox") + 1], "workspace-write")
+        # An automatic approvals reviewer in the user's config can approve leaving the sandbox.
+        pairs = [(a, b) for a, b in zip(argv, argv[1:]) if a == "-c"]
+        self.assertIn(("-c", 'approval_policy="never"'), pairs)
+        for forbidden in ("--dangerously-bypass-approvals-and-sandbox", "danger-full-access"):
+            self.assertNotIn(forbidden, argv)
+
     @patch("providers.codex.subprocess.Popen")
     @patch("providers.base.shutil.which", return_value="/usr/bin/codex")
     def test_stream_adds_json_flag_and_yields_delta(self, _mock_which, mock_popen):

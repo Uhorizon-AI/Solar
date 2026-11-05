@@ -19,10 +19,12 @@ class CodexProvider(BaseProvider):
 
     def build_default_cmd(self) -> str:
         # Codex dropped --full-auto; current CLIs take --sandbox instead.
+        # `-c approval_policy="never"` stops an automatic `approvals_reviewer` in the user's config
+        # from approving a write outside the sandbox (measured: the patch tool wrote in $HOME).
         # Exotic installs can override the whole command with SOLAR_ROUTER_CODEX_CMD.
         return (
             "codex exec --skip-git-repo-check --sandbox workspace-write "
-            f"-C {SOLAR_WORKSPACE} --"
+            f"-c {shlex.quote(WRITE_GUARD_OVERRIDE)} -C {SOLAR_WORKSPACE} --"
         )
 
     def ask_prefix(self):
