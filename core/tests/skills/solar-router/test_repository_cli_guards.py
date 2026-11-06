@@ -663,6 +663,14 @@ def test_cursor_project_path_ignores_look_alike_functions_and_refuses_ambiguity(
     assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
 
 
+def test_cursor_project_path_fails_closed_when_the_hash_import_is_renamed(tmp_path):
+    """The hash alias is still a literal name: a future rename is refused, not guessed."""
+    renamed = _CURSOR_PATH_FIXTURE.replace('(0,n.createHash)', '(0,n.makeHash)')
+    with pytest.raises(profiles.ProfileError) as error:
+        _observe_fixture(tmp_path, renamed)
+    assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
+
+
 def test_cursor_path_observer_does_not_inherit_node_options(tmp_path, monkeypatch):
     node = shutil.which('node')
     if node is None:
