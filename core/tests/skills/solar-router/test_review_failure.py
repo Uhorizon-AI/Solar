@@ -52,3 +52,15 @@ def test_authorization_headers_hide_the_whole_credential_not_only_the_scheme():
             assert "ended" in out
     assert "dGVzdDpmaWN0aXRpb3Vz" not in rf.summarize(1, "Authorization=Basic dGVzdDpmaWN0aXRpb3Vz")
     assert "dGVzdDpmaWN0aXRpb3Vz" not in rf.summarize(1, '{"Authorization": "Basic dGVzdDpmaWN0aXRpb3Vz"}')
+
+
+def test_digest_parameters_and_a_following_secret_on_the_same_line_are_hidden():
+    """PR 145 review: the value used to stop at the first comma."""
+    out = rf.summarize(0, 'boot\nAuthorization: Digest username="alice", realm="x", nonce="n0nc3x", '
+                          'response="supersecretresponse"\nnext line is the diagnosis')
+    for leaked in ("supersecretresponse", "n0nc3x", "alice"):
+        assert leaked not in out, out
+    assert "next line is the diagnosis" in out
+    out = rf.summarize(0, "Authorization: Basic dGVzdA==, token=abc999secret\nafter")
+    assert "abc999secret" not in out and "dGVzdA" not in out and "after" in out
+    assert "supersecretresponse" not in rf.summarize(1, "Proxy-Authorization: Digest a=\"1\", response=\"supersecretresponse\"")

@@ -24,10 +24,10 @@ _SECRET_NAME = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*(?:key|token|secret|password
 _TOKEN_SHAPES = re.compile(r"(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_.-]+|sk-[A-Za-z0-9_-]{8,}|ya29\.[A-Za-z0-9_.-]+|"
                            r"gh[pous]_[A-Za-z0-9]{20,}|[A-Za-z0-9+/_-]{40,}={0,2})")
 _BEARER = re.compile(r"(?i)\bbearer\s+\S+")
-# `Authorization: Basic <credential>` / `Proxy-Authorization: ...`: the scheme word is not the secret,
-# the token after it is, and _SECRET_NAME alone stops after the scheme.
+# An Authorization / Proxy-Authorization header: the scheme word is not the secret, and a Digest value
+# carries several comma-separated parameters, so an unquoted value is hidden to the end of its line.
 _AUTH_HEADER = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)(["']?)\s*([=:])\s*"""
-                          r"""(?:[A-Za-z][A-Za-z0-9_-]*[ \t]+)?(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,}]+)""")
+                          r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\r\n]*)""")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
