@@ -105,3 +105,11 @@ def test_a_quoted_key_still_hides_a_json_value_on_the_next_line():
         assert secret not in out, (text, out)
     # An unquoted, empty header still keeps the next line's diagnosis.
     assert "denied by the sandbox" in rf.summarize(0, "Authorization:\nCommand execution denied by the sandbox")
+
+
+def test_scrubbing_twice_gives_the_same_result():
+    """The stderr reader scrubs before the cut and summarize scrubs again: the cause must survive both."""
+    text = "authorization: denied because the sandbox blocked the command\nApiKey abc123def\nAuthorization: DPoP x.1"
+    once = rf.redact(text)
+    assert rf.redact(once) == once
+    assert "sandbox blocked the command" in once

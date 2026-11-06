@@ -640,6 +640,18 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
         message = self._through_a_pipe(cause, 4096, ["some prompt that is not in the output"])
         self.assertIn("sandbox blocked the command", message)
 
+    def test_a_cut_between_a_json_key_and_its_value_hides_the_value(self):
+        """PR 145 review: the key's line was cut away and the value on the next line leaked."""
+        diagnosis = "Command execution denied by the sandbox\n"
+        for key, value in (('{"api_key":', ' "private-fixture-123"}'),
+                           ('{"Authorization":', ' "Basic dGVzdDpmaWN0aXRpb3Vz"}')):
+            payload = "x" * 30 + "\n" + key + "\n" + value + "\n" + diagnosis
+            limit = len(value) + 1 + len(diagnosis) + 3  # the cut falls inside the key's line
+            message = self._through_a_pipe(payload, limit, [])
+            self.assertNotIn("private-fixture-123", message)
+            self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)
+            self.assertIn("denied by the sandbox", message)
+
     @staticmethod
     def _through_a_pipe(payload: str, limit: int, prompts) -> str:
         """Write a small payload to a real stderr pipe and read it back bounded; never waits unbounded."""
