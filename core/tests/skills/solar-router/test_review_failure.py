@@ -64,3 +64,14 @@ def test_digest_parameters_and_a_following_secret_on_the_same_line_are_hidden():
     out = rf.summarize(0, "Authorization: Basic dGVzdA==, token=abc999secret\nafter")
     assert "abc999secret" not in out and "dGVzdA" not in out and "after" in out
     assert "supersecretresponse" not in rf.summarize(1, "Proxy-Authorization: Digest a=\"1\", response=\"supersecretresponse\"")
+
+
+def test_prose_after_an_authorization_name_keeps_its_cause_but_parameter_schemes_are_hidden():
+    """PR 145 review: `authorization: denied because ...` is a diagnosis, not a credential."""
+    out = rf.summarize(0, "authorization: denied because the sandbox blocked the command")
+    assert "sandbox blocked the command" in out
+    for line in ('Authorization: Hawk id="abc", ts="1", mac="supermac"',
+                 "Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261106/x, Signature=supersig"):
+        out = rf.summarize(0, line + "\nafter")
+        assert "supermac" not in out and "supersig" not in out and "AKIDEXAMPLE" not in out, out
+        assert "after" in out
