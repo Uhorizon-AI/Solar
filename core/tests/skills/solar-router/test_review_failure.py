@@ -94,3 +94,14 @@ def test_an_empty_header_does_not_swallow_the_next_line():
     for name in ("Authorization", "Proxy-Authorization", "token", "api_key"):
         out = rf.summarize(0, f"{name}:\nCommand execution denied by the sandbox")
         assert "denied by the sandbox" in out, (name, out)
+
+
+def test_a_quoted_key_still_hides_a_json_value_on_the_next_line():
+    """PR 145 review: valid JSON may put the value on the line after a quoted key."""
+    for text, secret in (('{"api_key":\n "private-fixture-123"}', "private-fixture-123"),
+                         ('{"Authorization":\n "Basic dGVzdDpmaWN0aXRpb3Vz"}', "dGVzdDpmaWN0aXRpb3Vz"),
+                         ('{"Authorization"\n :\n "Bearer abc999secret"}', "abc999secret")):
+        out = rf.summarize(0, text)
+        assert secret not in out, (text, out)
+    # An unquoted, empty header still keeps the next line's diagnosis.
+    assert "denied by the sandbox" in rf.summarize(0, "Authorization:\nCommand execution denied by the sandbox")
