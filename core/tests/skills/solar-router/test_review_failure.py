@@ -75,3 +75,13 @@ def test_prose_after_an_authorization_name_keeps_its_cause_but_parameter_schemes
         out = rf.summarize(0, line + "\nafter")
         assert "supermac" not in out and "supersig" not in out and "AKIDEXAMPLE" not in out, out
         assert "after" in out
+
+
+def test_any_authorization_scheme_is_hidden_to_the_end_of_the_line():
+    """PR 145 review: a list of known schemes failed open for DPoP, Zoho-oauthtoken, ApiKey, SSWS or Bot."""
+    for scheme, secret in (("DPoP", "fictitious~token.456"), ("Zoho-oauthtoken", "1000.abc123def"),
+                           ("ApiKey", "abc123def"), ("SSWS", "abc123def"), ("Bot", "abc123def")):
+        for header in ("Authorization", "Proxy-Authorization"):
+            out = rf.summarize(0, f"{header}: {scheme} {secret}\nafter the header")
+            assert secret not in out, (scheme, out)
+            assert "after the header" in out, (scheme, out)

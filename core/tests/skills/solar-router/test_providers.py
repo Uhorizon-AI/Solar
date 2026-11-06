@@ -613,19 +613,42 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
             summary = review_failure.summarize(0, kept)
             self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", summary, limit)
         self.assertEqual(AgentProvider._tail_whole_lines("short\n", 100), "short\n")
-        # And through a real pipe, with the default limit: the cut lands inside the header's first words.
-        import subprocess, sys
+        # And through a real pipe with a small payload and a small limit, so nothing can block:
+        # the cut lands 10 characters into the header line.
         diagnosis = " denied: the command permission\n"
-        total_after = 16384 + 111 - 141  # puts the cut 10 characters into the header line
-        after = "z" * (total_after - len(diagnosis)) + diagnosis
-        code = ("import sys; sys.stderr.write('a'*100 + '\\n' + 'Authorization: Basic dGVzdDpmaWN0aXRpb3Vz\\n' + "
-                + repr(after) + ")")
-        proc = subprocess.Popen([sys.executable, "-c", code], stderr=subprocess.PIPE, text=True)
-        proc.wait()
-        message = AgentProvider._empty_output_error(AgentProvider._read_stderr_bounded(proc.stderr), "", [])
+        limit = 32 + len(diagnosis)
+        message = self._through_a_pipe("a" * 10 + "\n" + header + "\n" + diagnosis, limit, [])
         self.assertIn("denied: the command permission", message)
         self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)
 
+    def test_a_cut_inside_a_multiline_prompt_still_hides_the_whole_prompt(self):
+        """PR 145 review: cutting before scrubbing dropped the prompt's first line, so the rest leaked."""
+        prompt = "first line of the private prompt\nsecond line of the private prompt\nthird line of the private prompt"
+        diagnosis = "denied: the command permission\n"
+        text = prompt + "\n" + diagnosis
+        for cut in range(1, len(prompt.split("\n")[0])):
+            kept = AgentProvider._tail_whole_lines(text, len(text) - cut, [prompt])
+            self.assertNotIn("private prompt", kept, cut)
+            self.assertIn("denied: the command permission", kept, cut)
+        message = self._through_a_pipe(text, len(text) - 5, [prompt])
+        self.assertNotIn("private prompt", message)
+        self.assertIn("denied: the command permission", message)
+
+    @staticmethod
+    def _through_a_pipe(payload: str, limit: int, prompts) -> str:
+        """Write a small payload to a real stderr pipe and read it back bounded; never waits unbounded."""
+        import subprocess, sys
+        proc = subprocess.Popen([sys.executable, "-c", f"import sys; sys.stderr.write({payload!r})"],
+                                stderr=subprocess.PIPE, text=True)
+        try:
+            proc.wait(timeout=10)
+            return AgentProvider._empty_output_error(
+                AgentProvider._read_stderr_bounded(proc.stderr, limit=limit, prompts=prompts), "", prompts)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=10)
+            proc.stderr.close()
 
 if __name__ == "__main__":
     unittest.main()

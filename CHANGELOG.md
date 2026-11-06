@@ -8,7 +8,7 @@ The format is based on Keep a Changelog.
 
 ### Fixed
 - router: a client that exits 0 with empty output now stores the bounded, secret-scrubbed tail of its stderr in the task error (`provider returned empty output (exit 0: ...)`), as #94 does for non-zero exits; with nothing on stderr the message is unchanged. Applies to `ask` and `run` in `providers/base.py` and to the Cursor and Claude streams and Ollama `run`. Closes #142.
-- router: error scrubbing now hides the whole credential of `Authorization` and `Proxy-Authorization` headers (`Basic`, `Bearer`, ...), not only the scheme word; this also covers the non-zero exit case of #94.
+- router: error scrubbing now hides the whole credential of `Authorization` and `Proxy-Authorization` headers (`Basic`, `Bearer`, ...), not only the scheme word, whatever the scheme (Basic, Bearer, DPoP, ApiKey, ...); only a diagnostic sentence such as `authorization: denied ...` keeps its cause. This also covers the non-zero exit case of #94.
 - router: the Cursor project-path check no longer depends on the bundle's minified names for the project function and the slug import (renamed in Cursor 2026.11.05), so it passes again; the function is picked by what it builds, and none or several is `cursor_project_path_shape_unknown`. The other minified names (`s`, `c`, `u`, `i.join`, `s.tmpdir`, `s.homedir`, `n.createHash`) are still literal: a rename of those fails closed. A changed limit is still refused. Closes #139.
 
 ## [0.61.3] - 2026-11-06
