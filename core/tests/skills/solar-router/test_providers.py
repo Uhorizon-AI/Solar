@@ -532,11 +532,6 @@ class TestProviderKnowsWhereItIs(unittest.TestCase):
         self.assertEqual(env["SOLAR_WORKSPACE"], "/elsewhere")
         self.assertEqual(env["SOLAR_ROOT"], "/another")
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
     """#142 on the paths that do not go through BaseProvider.run: streaming clients and Ollama."""
 
@@ -582,3 +577,31 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
                 with self.assertRaises(RuntimeError) as ctx:
                     list(provider.stream("q"))
             self.assertEqual(str(ctx.exception), "provider returned empty output")
+
+    def test_a_descendant_holding_stderr_open_does_not_hold_the_error_back(self):
+        """PR 145 review: the client exits 0 but a child keeps stderr open; the error must not wait for it."""
+        import sys
+        import tempfile
+        import time
+        script = (
+            "import subprocess, sys\n"
+            "sys.stderr.write('denied: the command permission\\n'); sys.stderr.flush()\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)'], stdout=subprocess.DEVNULL)\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "client.py")
+            with open(path, "w") as fh:
+                fh.write(script)
+            for provider, key in ((AgentProvider(), "SOLAR_ROUTER_AGENT_CMD"), (ClaudeProvider(), "SOLAR_ROUTER_CLAUDE_CMD")):
+                with patch.dict(os.environ, {key: f"{sys.executable} {path}"}), \
+                     patch.object(provider, "resolve_binary", side_effect=lambda b: b):
+                    started = time.monotonic()
+                    with self.assertRaises(RuntimeError) as ctx:
+                        list(provider.stream("a question"))
+                    elapsed = time.monotonic() - started
+                self.assertLess(elapsed, 3.0, provider.name)
+                self.assertIn("denied: the command permission", str(ctx.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -228,6 +228,38 @@ class BaseProvider(ABC):
             return summary
         return summary if detail in ("exit 0: no output", "exit 0") else f"{summary} ({detail})"
 
+    @staticmethod
+    def _read_stderr_bounded(stream, seconds: float = 1.0, limit: int = 16384) -> str:
+        """What the client already wrote to stderr, without waiting for the descriptor to close.
+
+        A descendant that outlives the client can keep stderr open; a plain read() would then wait
+        for it. Stops at EOF, `limit` bytes or `seconds`, whichever comes first. Never raises."""
+        try:
+            fd = stream.fileno()
+        except Exception:  # noqa: BLE001 - not a real pipe (already-read buffer): read what it holds
+            try:
+                return stream.read()[-limit:]
+            except Exception:  # noqa: BLE001
+                return ""
+        import selectors
+        import time
+        data = b""
+        deadline = time.monotonic() + seconds
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(fd, selectors.EVENT_READ)
+                while len(data) < limit:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not selector.select(remaining):
+                        break
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    data += chunk
+        except Exception:  # noqa: BLE001 - diagnostics must never change the outcome
+            pass
+        return data[-limit:].decode("utf-8", errors="replace")
+
     def _measurement_flags(self):
         from ask_metering import output_flags
         return output_flags(self.name)

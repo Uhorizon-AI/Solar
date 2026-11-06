@@ -138,7 +138,7 @@ class AgentProvider(BaseProvider):
                 raise RuntimeError(stderr or "provider returned non-zero")
             if not full_text:
                 # Exit 0 and nothing to show: keep what the client said on stderr (#142).
-                raise RuntimeError(self._empty_output_error(proc.stderr.read(), "", [prompt]))  # type: ignore[union-attr]
+                raise RuntimeError(self._empty_output_error(self._read_stderr_bounded(proc.stderr), "", [prompt]))
         except subprocess.TimeoutExpired:
             proc.kill()
             raise RuntimeError("provider timed out")
