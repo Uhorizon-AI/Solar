@@ -8,6 +8,7 @@ The format is based on Keep a Changelog.
 
 ### Fixed
 - router: a client that exits 0 with empty output now stores the bounded, secret-scrubbed tail of its stderr in the task error (`provider returned empty output (exit 0: ...)`), as #94 does for non-zero exits; with nothing on stderr the message is unchanged. Covers `ask` and `run` in `providers/base.py`; Cursor and Claude streaming and Ollama `run` keep their own check. Closes #142.
+- router: the Cursor project-path check reads the installed bundle by shape, not by minified names, so Cursor 2026.11.05 (which renamed them) passes again; a changed limit is still refused. Closes #139.
 
 ## [0.61.3] - 2026-11-06
 

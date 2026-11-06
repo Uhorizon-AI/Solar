@@ -236,16 +236,19 @@ function extract(marker) {
   unknownShape();
 }
 function adapt(source) {
-  return source.split("(0,a.r_)").join(" slug").split("(0,i.join)").join(" path.join")
+  // The workspace-slug import and the project function are renamed by the bundler between
+  // versions (a.r_ -> o.r_, d -> m in 2026.11.05); the logic is what Solar compares.
+  return source.replace(/\(0,\w+\.r_\)/g, " slug").split("(0,i.join)").join(" path.join")
     .split("(0,s.tmpdir)").join(" os.tmpdir").split("(0,s.homedir)").join(" os.homedir")
     .split("(0,n.createHash)").join(" crypto.createHash");
 }
 const slugSrc = adapt(extract('function s(t){return t.replace(/[^a-zA-Z0-9]/g,"-")')).replace("function s(", "function slug(");
 const dataSrc = adapt(extract("function c(){const t=process.env.CURSOR_DATA_DIR"));
 const projectsSrc = adapt(extract('function u(){return(0,i.join)(c(),"projects")}'));
-const projectSrc = adapt(extract("function d(t){let e=u();"));
+const projectName = (/function (\w+)\(t\)\{let e=u\(\);/.exec(index) || unknownShape())[1];
+const projectSrc = adapt(extract("function " + projectName + "(t){let e=u();"));
 const fn = new Function("crypto", "os", "path", "workspace",
-  slugSrc + "\n" + dataSrc + "\n" + projectsSrc + "\n" + projectSrc + "\nreturn d(workspace);");
+  slugSrc + "\n" + dataSrc + "\n" + projectsSrc + "\n" + projectSrc + "\nreturn " + projectName + "(workspace);");
 process.stdout.write(String(fn(crypto, os, path, process.argv[4])));
 """
 
