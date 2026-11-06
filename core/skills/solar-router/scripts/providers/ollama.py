@@ -67,5 +67,5 @@ class OllamaProvider(BaseProvider):
             error = stderr or stdout or "provider returned non-zero"
             raise RuntimeError(error)
         if not stdout:
-            raise RuntimeError("provider returned empty output")
+            raise RuntimeError(self._empty_output_error(stderr, "", [prompt]))
         return stdout

@@ -102,6 +102,27 @@ class TestBaseProviderRun(unittest.TestCase):
 
     @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
     @patch("providers.base.subprocess.run")
+    def test_empty_output_with_a_known_cause_stores_its_fixed_word(self, mock_run, _):
+        mock_run.return_value = _mock_proc(stdout="", stderr="warming up\nError 429: rate limit exceeded")
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.run("prompt")
+        self.assertEqual(str(ctx.exception), "provider returned empty output (exit 0: quota_or_rate_limit)")
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
+    @patch("providers.base.subprocess.run")
+    def test_empty_output_stays_plain_when_the_summary_itself_fails(self, mock_run, _):
+        mock_run.return_value = _mock_proc(stdout="", stderr="some cause")
+        with patch("review_failure.summarize", side_effect=Exception("boom")):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.provider.run("prompt")
+        self.assertEqual(str(ctx.exception), "provider returned empty output")
+        with patch("review_failure.summarize", return_value="exit 0"):  # its own internal fallback
+            with self.assertRaises(RuntimeError) as ctx:
+                self.provider.run("prompt")
+        self.assertEqual(str(ctx.exception), "provider returned empty output")
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
+    @patch("providers.base.subprocess.run")
     def test_empty_output_raises(self, mock_run, _):
         mock_run.return_value = _mock_proc(stdout="   ")
         with self.assertRaises(RuntimeError) as ctx:
@@ -514,3 +535,50 @@ class TestProviderKnowsWhereItIs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
+    """#142 on the paths that do not go through BaseProvider.run: streaming clients and Ollama."""
+
+    STDERR = "boot\nload\nsandbox\ndenied: the command permission\nretry later token=hunter2secret"
+
+    def _stream_error(self, provider, module):
+        proc = MagicMock()
+        proc.stdout = iter([])
+        proc.stderr = io.StringIO(self.STDERR)
+        proc.returncode = 0
+        with patch.object(provider, "resolve_binary", side_effect=lambda b: b), \
+             patch(f"providers.{module}.subprocess.Popen", return_value=proc):
+            with self.assertRaises(RuntimeError) as ctx:
+                list(provider.stream("a question"))
+        return str(ctx.exception)
+
+    def _assert_cause_kept(self, message):
+        self.assertTrue(message.startswith("provider returned empty output"))
+        self.assertIn("denied: the command permission", message)
+        self.assertNotIn("boot", message)  # only the last three lines
+        self.assertNotIn("hunter2secret", message)
+
+    def test_cursor_stream(self):
+        self._assert_cause_kept(self._stream_error(AgentProvider(), "agent"))
+
+    def test_claude_stream(self):
+        self._assert_cause_kept(self._stream_error(ClaudeProvider(), "claude"))
+
+    def test_ollama_run(self):
+        done = _mock_proc(stdout="", stderr=self.STDERR)
+        with patch("providers.base.shutil.which", return_value="/usr/bin/ollama"), \
+             patch("providers.ollama.subprocess.run", return_value=done):
+            with self.assertRaises(RuntimeError) as ctx:
+                OllamaProvider().run("a question")
+        self._assert_cause_kept(str(ctx.exception))
+
+    def test_streams_and_ollama_keep_the_plain_message_when_stderr_is_empty(self):
+        for provider, module in ((AgentProvider(), "agent"), (ClaudeProvider(), "claude")):
+            proc = MagicMock()
+            proc.stdout, proc.stderr, proc.returncode = iter([]), io.StringIO(""), 0
+            with patch.object(provider, "resolve_binary", side_effect=lambda b: b), \
+                 patch(f"providers.{module}.subprocess.Popen", return_value=proc):
+                with self.assertRaises(RuntimeError) as ctx:
+                    list(provider.stream("q"))
+            self.assertEqual(str(ctx.exception), "provider returned empty output")
