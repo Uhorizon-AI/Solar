@@ -41,3 +41,14 @@ def test_escaped_quotes_inside_a_secret_do_not_leak_the_tail():
     from review_failure import redact
     for text in ('{"password":"prefix\\"private-tail"}', "{'token': 'a\\'private-tail'}"):
         assert "private-tail" not in redact(text), text
+
+
+def test_authorization_headers_hide_the_whole_credential_not_only_the_scheme():
+    """PR 145 review: `Authorization: Basic <credential>` used to leave the credential in the error."""
+    for header in ("Authorization", "Proxy-Authorization", "authorization"):
+        for scheme in ("Basic", "Bearer", "Token", "Digest"):
+            out = rf.summarize(0, f"warming up\n{header}: {scheme} dGVzdDpmaWN0aXRpb3Vz\nended")
+            assert "dGVzdDpmaWN0aXRpb3Vz" not in out, (header, scheme, out)
+            assert "ended" in out
+    assert "dGVzdDpmaWN0aXRpb3Vz" not in rf.summarize(1, "Authorization=Basic dGVzdDpmaWN0aXRpb3Vz")
+    assert "dGVzdDpmaWN0aXRpb3Vz" not in rf.summarize(1, '{"Authorization": "Basic dGVzdDpmaWN0aXRpb3Vz"}')

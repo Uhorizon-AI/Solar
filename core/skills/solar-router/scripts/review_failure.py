@@ -24,6 +24,10 @@ _SECRET_NAME = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*(?:key|token|secret|password
 _TOKEN_SHAPES = re.compile(r"(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_.-]+|sk-[A-Za-z0-9_-]{8,}|ya29\.[A-Za-z0-9_.-]+|"
                            r"gh[pous]_[A-Za-z0-9]{20,}|[A-Za-z0-9+/_-]{40,}={0,2})")
 _BEARER = re.compile(r"(?i)\bbearer\s+\S+")
+# `Authorization: Basic <credential>` / `Proxy-Authorization: ...`: the scheme word is not the secret,
+# the token after it is, and _SECRET_NAME alone stops after the scheme.
+_AUTH_HEADER = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)(["']?)\s*([=:])\s*"""
+                          r"""(?:[A-Za-z][A-Za-z0-9_-]*[ \t]+)?(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,}]+)""")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
@@ -33,6 +37,7 @@ def redact(text: str, prompts=()) -> str:
         if isinstance(prompt, str) and len(prompt) >= 20:
             text = text.replace(prompt, "[PROMPT]")
     text = _BEARER.sub("Bearer [REDACTED]", text)
+    text = _AUTH_HEADER.sub(lambda m: m.group(1) + m.group(2) + m.group(3) + " [REDACTED]", text)
     text = _SECRET_NAME.sub(lambda m: m.group(1) + m.group(2) + m.group(3) + " [REDACTED]", text)
     return _TOKEN_SHAPES.sub("[REDACTED]", text)
 
