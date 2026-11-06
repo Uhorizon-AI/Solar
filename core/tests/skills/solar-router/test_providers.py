@@ -92,6 +92,16 @@ class TestBaseProviderRun(unittest.TestCase):
 
     @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
     @patch("providers.base.subprocess.run")
+    def test_empty_output_keeps_stderr_tail_and_scrubs_secrets(self, mock_run, _):
+        mock_run.return_value = _mock_proc(stdout="", stderr="a\nb\ntoken=hunter2secret\ndenied: permission")
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.run("prompt")
+        self.assertIn("empty output", str(ctx.exception))
+        self.assertIn("denied: permission", str(ctx.exception))
+        self.assertNotIn("hunter2secret", str(ctx.exception))
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
+    @patch("providers.base.subprocess.run")
     def test_empty_output_raises(self, mock_run, _):
         mock_run.return_value = _mock_proc(stdout="   ")
         with self.assertRaises(RuntimeError) as ctx:

@@ -164,6 +164,32 @@ class TestResultAndFailure(unittest.TestCase):
         self.assertNotIn("Starting agent", message)  # bounded: first lines are not the summary
         self.assertNotIn("abc123", message)  # the existing secret scrubbing still applies
 
+    def _ask_exit_zero(self, stderr, stdout=""):
+        with patch("providers.base.shutil.which", return_value="/bin/agent"), \
+             patch("providers.base.subprocess.run", return_value=_proc(returncode=0, stdout=stdout, stderr=stderr)):
+            with self.assertRaises(RuntimeError) as ctx:
+                AgentProvider().ask("q")
+        return str(ctx.exception)
+
+    def test_exit_zero_without_output_keeps_the_last_stderr_lines(self):
+        """#142: the cause the client wrote to stderr is kept, bounded, next to the short summary."""
+        message = self._ask_exit_zero("starting\nloading config\nsandbox init\n"
+                                      'jetski: no output produced\na tool required the "command" permission')
+        self.assertTrue(message.startswith("provider returned empty output"))
+        self.assertIn("no output produced", message)
+        self.assertIn('"command" permission', message)
+        self.assertNotIn("starting", message)  # only the last three lines
+
+    def test_exit_zero_with_empty_stderr_keeps_the_plain_message(self):
+        self.assertEqual(self._ask_exit_zero(""), "provider returned empty output")
+        self.assertEqual(self._ask_exit_zero("  \n", stdout="   "), "provider returned empty output")
+
+    def test_exit_zero_stderr_secret_is_not_stored(self):
+        message = self._ask_exit_zero("warming up\nAPI_TOKEN=supersecret123\nAuthorization: Bearer abcdef123456\nended")
+        self.assertIn("provider returned empty output", message)
+        self.assertNotIn("supersecret123", message)
+        self.assertNotIn("abcdef123456", message)
+
     def test_missing_binary_fails_with_a_clear_reason(self):
         with patch("providers.base.shutil.which", return_value=None):
             with self.assertRaises(RuntimeError) as ctx:

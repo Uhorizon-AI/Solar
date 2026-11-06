@@ -211,8 +211,22 @@ class BaseProvider(ABC):
             raise RuntimeError(f"{self.name} {summarize(proc.returncode, proc.stderr or '', proc.stdout or '', prompts=[prompt])}")
         output = proc.stdout.strip()
         if not output:
-            raise RuntimeError("provider returned empty output")
+            raise RuntimeError(self._empty_output_error(proc, [prompt]))
         return AskResult(self.name, self.clean_output(output), mode)
+
+    @staticmethod
+    def _empty_output_error(proc, prompts) -> str:
+        """Exit 0 with no answer: keep the short summary and add what the client said (#142).
+
+        Same bounded, secret-scrubbed tail as a non-zero exit (review_failure.summarize);
+        with nothing on stderr or stdout the message is the plain summary, as before."""
+        summary = "provider returned empty output"
+        try:
+            from review_failure import summarize
+            detail = summarize(0, proc.stderr or "", proc.stdout or "", prompts=prompts)
+        except Exception:  # noqa: BLE001 - diagnostics must never change the outcome
+            return summary
+        return summary if detail == "exit 0: no output" else f"{summary} ({detail})"
 
     def _measurement_flags(self):
         from ask_metering import output_flags
@@ -249,7 +263,7 @@ class BaseProvider(ABC):
             raise RuntimeError(error)
         output = proc.stdout.strip()
         if not output:
-            raise RuntimeError("provider returned empty output")
+            raise RuntimeError(self._empty_output_error(proc, [prompt]))
         return self.clean_output(output)
 
     def run_review(self, *, manifest, expected, profile, before_launch=lambda: None, observation_sink=None) -> str:
