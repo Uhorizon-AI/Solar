@@ -635,6 +635,34 @@ def test_cursor_project_path_survives_a_renamed_function_and_import(tmp_path):
     assert error.value.detail['reason'] == 'cursor_project_path_drift'
 
 
+def _observe_fixture(tmp_path, source):
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not installed')
+    bundle = tmp_path / 'index.js'
+    bundle.write_text(source)
+    if not (tmp_path / 'node').exists():
+        (tmp_path / 'node').symlink_to(node)
+    workspace, data, tmp = '/tmp/sr-abcdefgh/repository', '/tmp/sr-abcdefgh/home/cursor-data', '/tmp/sr-abcdefgh/tmp'
+    return guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp), \
+        guards.cursor_project_path(workspace, data_dir=data, tmpdir=tmp)
+
+
+def test_cursor_project_path_ignores_look_alike_functions_and_refuses_ambiguity(tmp_path):
+    """PR 145 review: a function starting like the project one but without its limits is not the one."""
+    decoys = 'function z(t){let e=u();return e}\nfunction x(t){let e=u();return "no"}\n'
+    observed, expected = _observe_fixture(tmp_path, decoys + _CURSOR_PATH_FIXTURE.replace('function d(t)', 'function m(t)'))
+    assert observed == expected
+    twice = _CURSOR_PATH_FIXTURE + _CURSOR_PATH_FIXTURE.replace('function d(t)', 'function q(t)')
+    with pytest.raises(profiles.ProfileError) as error:
+        _observe_fixture(tmp_path, twice)
+    assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
+    without = _CURSOR_PATH_FIXTURE.replace('function d(t){let e=u();', 'function d(t){let k=u();')
+    with pytest.raises(profiles.ProfileError) as error:
+        _observe_fixture(tmp_path, without)
+    assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
+
+
 def test_cursor_path_observer_does_not_inherit_node_options(tmp_path, monkeypatch):
     node = shutil.which('node')
     if node is None:
