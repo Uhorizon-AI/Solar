@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.61.3] - 2026-11-06
+
 ### Changed
 - router: Antigravity tasks start with `agy --sandbox --mode accept-edits` and `toolPermission: proceed-in-sandbox` (plus the two Solar MCP read tools by name) instead of `--dangerously-skip-permissions`, which let a task write in `$HOME` and use the network. `/tmp` and `.git/hooks`/`.git/config` stay writable. A task that needs network from the shell or a write in `$HOME` now fails; `SOLAR_ROUTER_AGY_CMD` restores the previous command. Verified on macOS with Antigravity 1.5.1 only. Closes #136.
 - router: Codex tasks pass `-c approval_policy="never"` next to `--sandbox workspace-write`, so an automatic approvals reviewer in `~/.codex/config.toml` can no longer let the patch tool write outside the workspace. A task that depended on that reviewer now fails; `SOLAR_ROUTER_CODEX_CMD` restores the previous command. Closes #137.
