@@ -602,8 +602,15 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
                 self.assertLess(elapsed, 3.0, provider.name)
                 self.assertIn("denied: the command permission", str(ctx.exception))
 
-    def test_a_cut_never_separates_an_authorization_header_from_its_credential(self):
-        """PR 145 review: the 16 KiB cut used to keep the credential of a header it had cut off."""
+    def test_in_memory_stderr_keeps_the_diagnosis_after_the_pipe_read_limit(self):
+        diagnosis = "Command execution denied by the sandbox"
+        payload = "noise\n" * 3000 + "Authorization: Basic dGVzdDpmaWN0aXRpb3Vz\n" + diagnosis
+        with io.StringIO(payload) as stderr:
+            message = AgentProvider._empty_output_error(AgentProvider._read_stderr_bounded(stderr), "", [])
+        self.assertIn(diagnosis, message)
+        self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)
+
+    def test_captured_pipe_output_hides_authorization_credentials(self):
         header = "Authorization: Basic dGVzdDpmaWN0aXRpb3Vz"
         diagnosis = " denied: the command permission\n"
         limit = 32 + len(diagnosis)
@@ -611,8 +618,7 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
         self.assertIn("denied: the command permission", message)
         self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)
 
-    def test_a_cut_inside_a_multiline_prompt_still_hides_the_whole_prompt(self):
-        """PR 145 review: cutting before scrubbing dropped the prompt's first line, so the rest leaked."""
+    def test_captured_pipe_output_hides_multiline_prompts(self):
         prompt = "first line of the private prompt\nsecond line of the private prompt\nthird line of the private prompt"
         diagnosis = "denied: the command permission\n"
         text = prompt + "\n" + diagnosis
@@ -626,13 +632,12 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
         message = self._through_a_pipe(cause, 4096, ["some prompt that is not in the output"])
         self.assertIn("sandbox blocked the command", message)
 
-    def test_a_cut_between_a_json_key_and_its_value_hides_the_value(self):
-        """PR 145 review: the key's line was cut away and the value on the next line leaked."""
+    def test_captured_pipe_output_hides_json_credentials_on_the_next_line(self):
         diagnosis = "Command execution denied by the sandbox\n"
         for key, value in (('{"api_key":', ' "private-fixture-123"}'),
                            ('{"Authorization":', ' "Basic dGVzdDpmaWN0aXRpb3Vz"}')):
             payload = "x" * 30 + "\n" + key + "\n" + value + "\n" + diagnosis
-            limit = len(value) + 1 + len(diagnosis) + 3  # the cut falls inside the key's line
+            limit = len(value) + 1 + len(diagnosis) + 3  # the last read can cross the byte threshold
             message = self._through_a_pipe(payload, limit, [])
             self.assertNotIn("private-fixture-123", message)
             self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)

@@ -3,6 +3,7 @@ BaseProvider — shared subprocess execution logic for all provider adapters.
 
 Contract: run(prompt) -> str, stream(prompt) -> generator
 """
+import io
 import os
 import pathlib
 import shlex
@@ -235,13 +236,12 @@ class BaseProvider(ABC):
         A descendant that outlives the client can keep stderr open; a plain read() would then wait
         for it. Stop at EOF, the deadline, or the first chunk that reaches the byte limit.
         Keep that whole chunk so summarize can redact the captured text before trimming it."""
+        if isinstance(stream, io.StringIO):
+            return "" if stream.closed else stream.read()
         try:
             fd = stream.fileno()
-        except Exception:  # noqa: BLE001 - not a real pipe (already-read buffer): read what it holds
-            try:
-                return stream.read(limit)
-            except Exception:  # noqa: BLE001
-                return ""
+        except (AttributeError, OSError, ValueError):
+            return ""
         import selectors
         import time
         data = b""

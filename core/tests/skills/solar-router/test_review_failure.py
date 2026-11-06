@@ -108,6 +108,7 @@ def test_a_quoted_key_still_hides_a_json_value_on_the_next_line():
 
 
 def test_a_redaction_marker_in_raw_stderr_does_not_exempt_a_credential():
+    """A marker in raw stderr must not exempt the rest of the authorization line."""
     for header in ("Authorization", "Proxy-Authorization"):
         for credential in ("Basic dGVzdDpmaWN0aXRpb3Vz", "DPoP fictitious~token.456"):
             text = f"{header}: [REDACTED] {credential}\nconnection refused"
