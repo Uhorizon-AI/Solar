@@ -634,6 +634,12 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
         self.assertNotIn("private prompt", message)
         self.assertIn("denied: the command permission", message)
 
+    def test_a_prose_cause_survives_the_stream_path(self):
+        """PR 145 review: scrubbing in the reader and again in summarize used to eat `denied ...`."""
+        cause = "authorization: denied because the sandbox blocked the command\n"
+        message = self._through_a_pipe(cause, 4096, ["some prompt that is not in the output"])
+        self.assertIn("sandbox blocked the command", message)
+
     @staticmethod
     def _through_a_pipe(payload: str, limit: int, prompts) -> str:
         """Write a small payload to a real stderr pipe and read it back bounded; never waits unbounded."""
@@ -649,6 +655,7 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
                 proc.kill()
                 proc.wait(timeout=10)
             proc.stderr.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -234,14 +234,12 @@ class BaseProvider(ABC):
 
         A cut in the middle of a line could separate a header such as `Authorization: Basic` from its
         credential, and the scrubber would no longer recognise it; the partial line is dropped.
-        The text is scrubbed first (prompt copies included): a cut that drops the first line of a
-        multi-line prompt would leave the rest unrecognisable."""
-        if prompts:
-            try:
-                from review_failure import redact
-                text = redact(text, prompts)
-            except Exception:  # noqa: BLE001 - diagnostics must never change the outcome
-                pass
+        Prompt copies are replaced first: a cut that drops the first line of a multi-line prompt would
+        leave the rest unrecognisable. Other secrets are scrubbed once, later, by review_failure.summarize
+        (scrubbing twice would turn `denied` into `[REDACTED]` and then eat the rest of the line)."""
+        for prompt in prompts or ():
+            if isinstance(prompt, str) and len(prompt) >= 20:
+                text = text.replace(prompt, "[PROMPT]")
         if len(text) <= limit:
             return text
         tail = text[-limit:]

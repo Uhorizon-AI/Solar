@@ -26,12 +26,15 @@ _TOKEN_SHAPES = re.compile(r"(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_.-]+|sk-[A-Za-z
 _BEARER = re.compile(r"(?i)\bbearer\s+\S+")
 # An Authorization / Proxy-Authorization header. Schemes are open-ended (Basic, DPoP, Zoho-oauthtoken,
 # ApiKey, SSWS...) and some carry comma-separated parameters, so the value is hidden to the end of its line
-# by default. The one exception is a diagnostic sentence ("authorization: denied because the sandbox blocked
-# it"), recognised by its first word: that cause is kept and only the first word is hidden, by _SECRET_NAME.
+# by default. The one exception is a short diagnostic sentence ("authorization: denied because the sandbox
+# blocked it"): a diagnostic word followed by at least three plain words (letters only) to the end of the
+# line. That cause is kept and only the first word is hidden, by _SECRET_NAME. Anything with digits or
+# punctuation after the word ("invalid abc123", "error-custom tok.4", "no-abc123") is hidden whole.
 _DIAGNOSTIC = (r"(?:denied|failed|failure|blocked|required|missing|invalid|not|no|error|forbidden|"
                r"unauthorized|unauthorised|expired|rejected|refused|unable|cannot|can't|couldn't|unsupported|"
                r"unavailable)")
-_AUTH_HEADER = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)(["']?)\s*([=:])(?!\s*""" + _DIAGNOSTIC + r"""\b)\s*"""
+_PROSE = r"[ \t]*" + _DIAGNOSTIC + r"(?![\w-])(?:[ \t]+[A-Za-z]+[.,;]?){3,}[ \t]*(?=[\r\n]|$)"
+_AUTH_HEADER = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)(["']?)\s*([=:])(?!""" + _PROSE + r""")\s*"""
                           r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"""
                           r"""|[^\r\n]+)""")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
