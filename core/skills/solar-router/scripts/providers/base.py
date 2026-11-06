@@ -229,36 +229,17 @@ class BaseProvider(ABC):
         return summary if detail in ("exit 0: no output", "exit 0") else f"{summary} ({detail})"
 
     @staticmethod
-    def _tail_whole_lines(text: str, limit: int, prompts=()) -> str:
-        """The last `limit` characters, starting at a line boundary.
-
-        A cut in the middle of a line could separate a header such as `Authorization: Basic` from its
-        credential, and the scrubber would no longer recognise it; the partial line is dropped.
-        The text is scrubbed first, with its prompt copies, over every line it holds: a cut that dropped
-        the line of a key or the first line of a prompt would leave the rest unrecognisable. The scrub is
-        idempotent, so review_failure.summarize can run it again."""
-        try:
-            from review_failure import redact
-            text = redact(text, prompts or ())
-        except Exception:  # noqa: BLE001 - diagnostics must never change the outcome
-            pass
-        if len(text) <= limit:
-            return text
-        tail = text[-limit:]
-        newline = tail.find("\n")
-        return tail[newline + 1:] if newline >= 0 else ""
-
-    @staticmethod
-    def _read_stderr_bounded(stream, seconds: float = 1.0, limit: int = 16384, prompts=()) -> str:
+    def _read_stderr_bounded(stream, seconds: float = 1.0, limit: int = 16384) -> str:
         """What the client already wrote to stderr, without waiting for the descriptor to close.
 
         A descendant that outlives the client can keep stderr open; a plain read() would then wait
-        for it. Stops at EOF, `limit` bytes or `seconds`, whichever comes first. Never raises."""
+        for it. Stop at EOF, the deadline, or the first chunk that reaches the byte limit.
+        Keep that whole chunk so summarize can redact the captured text before trimming it."""
         try:
             fd = stream.fileno()
         except Exception:  # noqa: BLE001 - not a real pipe (already-read buffer): read what it holds
             try:
-                return BaseProvider._tail_whole_lines(stream.read(), limit, prompts)
+                return stream.read(limit)
             except Exception:  # noqa: BLE001
                 return ""
         import selectors
@@ -278,7 +259,7 @@ class BaseProvider(ABC):
                     data += chunk
         except Exception:  # noqa: BLE001 - diagnostics must never change the outcome
             pass
-        return BaseProvider._tail_whole_lines(data.decode("utf-8", errors="replace"), limit, prompts)
+        return data.decode("utf-8", errors="replace")
 
     def _measurement_flags(self):
         from ask_metering import output_flags

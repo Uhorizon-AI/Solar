@@ -107,9 +107,8 @@ def test_a_quoted_key_still_hides_a_json_value_on_the_next_line():
     assert "denied by the sandbox" in rf.summarize(0, "Authorization:\nCommand execution denied by the sandbox")
 
 
-def test_scrubbing_twice_gives_the_same_result():
-    """The stderr reader scrubs before the cut and summarize scrubs again: the cause must survive both."""
-    text = "authorization: denied because the sandbox blocked the command\nApiKey abc123def\nAuthorization: DPoP x.1"
-    once = rf.redact(text)
-    assert rf.redact(once) == once
-    assert "sandbox blocked the command" in once
+def test_a_redaction_marker_in_raw_stderr_does_not_exempt_a_credential():
+    for header in ("Authorization", "Proxy-Authorization"):
+        for credential in ("Basic dGVzdDpmaWN0aXRpb3Vz", "DPoP fictitious~token.456"):
+            text = f"{header}: [REDACTED] {credential}\nconnection refused"
+            assert rf.summarize(0, text) == f"exit 0: {header}: [REDACTED] | connection refused"

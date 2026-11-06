@@ -30,13 +30,11 @@ _BEARER = re.compile(r"(?i)\bbearer\s+\S+")
 # blocked it"): a diagnostic word followed by at least three plain words (letters only) to the end of the
 # line. That cause is kept and only the first word is hidden, by _SECRET_NAME. Anything with digits or
 # punctuation after the word ("invalid abc123", "error-custom tok.4", "no-abc123") is hidden whole.
-# A value that already starts with [REDACTED] was scrubbed by an earlier pass and is left alone, so
-# scrubbing twice (the stderr reader, then summarize) gives the same result.
 _DIAGNOSTIC = (r"(?:denied|failed|failure|blocked|required|missing|invalid|not|no|error|forbidden|"
                r"unauthorized|unauthorised|expired|rejected|refused|unable|cannot|can't|couldn't|unsupported|"
                r"unavailable)")
 _PROSE = r"[ \t]*" + _DIAGNOSTIC + r"(?![\w-])(?:[ \t]+[A-Za-z]+[.,;]?){3,}[ \t]*(?=[\r\n]|$)"
-_AUTH_HEADER = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)(["'])?(?(2)\s*|[ \t]*)([=:])(?!(?:""" + _PROSE + r"""|[ \t]*\[REDACTED\]))(?(2)\s*|[ \t]*)"""
+_AUTH_HEADER = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)(["'])?(?(2)\s*|[ \t]*)([=:])(?!""" + _PROSE + r""")(?(2)\s*|[ \t]*)"""
                           r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"""
                           r"""|[^\r\n]+)""")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
