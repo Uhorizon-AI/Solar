@@ -55,6 +55,7 @@ if [[ -z "$MODE" ]]; then
 
   # The worker and the supervisor can both announce the same end: serialise check -> send -> record.
   LOCK_DIR="${TMPDIR:-/tmp}/solar-notify-${TASK_ID//[^A-Za-z0-9_.-]/_}.lock"
+  # Keep this wait below Supervisor.FAILURE_NOTIFY_TIMEOUT, with time left to record failure.
   for _ in $(seq 1 150); do
     mkdir "$LOCK_DIR" 2>/dev/null && { HAVE_LOCK=1; break; }
     [[ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +2 2>/dev/null)" ]] && rmdir "$LOCK_DIR" 2>/dev/null   # a dead holder

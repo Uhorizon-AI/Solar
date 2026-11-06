@@ -119,6 +119,17 @@ are eligible, and `failed` adds a one-line reason (the machine `error_code`, nev
 and omit execution details. The sender is resolved from the installation root;
 task data and environment remain in the workspace.
 
+The supervisor bounds its terminal failure notifier at 180 seconds, separately
+from the 30-second approval-notice deadline. This leaves the notifier's 150-second
+lock wait time to record `notify_lock_timeout` instead of being killed first.
+Shutdown still ends the sender and its process group immediately. This does not
+guarantee delivery or enable automatic retries: an interrupted sender or an
+unavailable transport remains a failed or uncertain delivery. Age-based lock
+reclamation retains its existing ownership-race limitation.
+Failure notices share one serial sender, so a stalled terminal notifier can delay
+later failure notices for up to this longer deadline; it does not delay the
+supervisor's admission/heartbeat loop or the separate approval-notice sender.
+
 ### What the notice contains
 
 A gateway parent is asked to end its reply with a `<delivery>` block: plain prose

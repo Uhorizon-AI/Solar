@@ -485,6 +485,11 @@ class Supervisor:
         return excluded
 
     NOTIFY_TIMEOUT = 30.0
+    # Terminal notifiers can spend 150 s waiting for the per-task lock before they
+    # record notify_lock_timeout. Approval notices do not take that lock and retain
+    # their short deadline. Keep the failure path bounded without killing its
+    # lock-timeout evidence first; stop still ends the whole process group at once.
+    FAILURE_NOTIFY_TIMEOUT = 180.0
     NOTICES_PER_PASS = 3
     FAILURE_IDLE = 5.0               # how long the failure sender waits for more work before it leaves
 
@@ -863,7 +868,7 @@ class Supervisor:
                                             start_new_session=True)
                     self._failure_proc = proc
                 try:
-                    proc.wait(timeout=self.NOTIFY_TIMEOUT)
+                    proc.wait(timeout=self.FAILURE_NOTIFY_TIMEOUT)
                 except subprocess.TimeoutExpired:
                     try:
                         os.killpg(proc.pid, signal.SIGKILL)
