@@ -627,6 +627,21 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
         self.assertIn("denied: the command permission", message)
         self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)
 
+    def test_truncated_stderr_pipe_hides_the_rest_of_an_open_quoted_secret(self):
+        diagnosis = "Command execution denied by the sandbox"
+        prefix = diagnosis + '\n{"password": "private-fixture visible-secret-fragment'
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd) as stderr, os.fdopen(write_fd, "w") as writer:
+            writer.write(prefix)
+            writer.flush()
+            captured = AgentProvider._read_stderr_bounded(stderr, limit=len(prefix))
+            self.assertEqual(captured, prefix)
+            writer.write(' and the rest"}\n')
+        message = AgentProvider._empty_output_error(captured, "", [])
+        self.assertIn(diagnosis, message)
+        self.assertNotIn("private-fixture", message)
+        self.assertNotIn("visible-secret-fragment", message)
+
     def test_captured_pipe_output_hides_multiline_prompts(self):
         prompt = "first line of the private prompt\nsecond line of the private prompt\nthird line of the private prompt"
         diagnosis = "denied: the command permission\n"

@@ -113,3 +113,24 @@ def test_a_redaction_marker_in_raw_stderr_does_not_exempt_a_credential():
         for credential in ("Basic dGVzdDpmaWN0aXRpb3Vz", "DPoP fictitious~token.456"):
             text = f"{header}: [REDACTED] {credential}\nconnection refused"
             assert rf.summarize(0, text) == f"exit 0: {header}: [REDACTED] | connection refused"
+
+
+def test_unterminated_quoted_values_are_redacted_through_the_end_of_the_input():
+    diagnosis = "Command execution denied by the sandbox"
+    for field in ('{"password": "', "api_key='", '{"Authorization": "'):
+        for suffix in ("", "\\", "\nsecond-secret-line"):
+            out = rf.summarize(0, f"{diagnosis}\n{field}private-fixture visible-secret-fragment{suffix}")
+            assert diagnosis in out
+            assert "private-fixture" not in out
+            assert "visible-secret-fragment" not in out
+            assert "second-secret-line" not in out
+
+
+def test_bearer_redaction_preserves_quoted_value_boundaries():
+    diagnosis = "Command execution denied by the sandbox"
+    for text in ('{"Authorization": "Bearer private-fixture"}',
+                 r'{"password": "Bearer prefix\"private-fixture"}',
+                 "api_token=Bearer private-fixture"):
+        out = rf.summarize(0, text + "\n" + diagnosis)
+        assert "private-fixture" not in out
+        assert diagnosis in out
