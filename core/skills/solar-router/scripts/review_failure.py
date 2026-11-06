@@ -20,7 +20,7 @@ SIGNATURES = (
     (re.compile(r"(unknown|invalid|unsupported|unavailable|not found).{0,40}model|model.{0,40}(not found|not available|invalid)", re.I),
      "model_unavailable"),
 )
-_SECRET_NAME = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*(?:key|token|secret|password|credential|authorization)[A-Za-z0-9_.-]*)(["']?)\s*([=:])\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,}]+)""")
+_SECRET_NAME = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*(?:key|token|secret|password|credential|authorization)[A-Za-z0-9_.-]*)(["']?)[ \t]*([=:])[ \t]*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,}]+)""")
 _TOKEN_SHAPES = re.compile(r"(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_.-]+|sk-[A-Za-z0-9_-]{8,}|ya29\.[A-Za-z0-9_.-]+|"
                            r"gh[pous]_[A-Za-z0-9]{20,}|[A-Za-z0-9+/_-]{40,}={0,2})")
 _BEARER = re.compile(r"(?i)\bbearer\s+\S+")
@@ -34,7 +34,7 @@ _DIAGNOSTIC = (r"(?:denied|failed|failure|blocked|required|missing|invalid|not|n
                r"unauthorized|unauthorised|expired|rejected|refused|unable|cannot|can't|couldn't|unsupported|"
                r"unavailable)")
 _PROSE = r"[ \t]*" + _DIAGNOSTIC + r"(?![\w-])(?:[ \t]+[A-Za-z]+[.,;]?){3,}[ \t]*(?=[\r\n]|$)"
-_AUTH_HEADER = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)(["']?)\s*([=:])(?!""" + _PROSE + r""")\s*"""
+_AUTH_HEADER = re.compile(r"""(?i)\b([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)(["']?)[ \t]*([=:])(?!""" + _PROSE + r""")[ \t]*"""
                           r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"""
                           r"""|[^\r\n]+)""")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")

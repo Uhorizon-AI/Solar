@@ -87,3 +87,10 @@ def test_any_authorization_scheme_is_hidden_to_the_end_of_the_line():
             out = rf.summarize(0, f"{header}: {scheme} {secret}\nafter the header")
             assert secret not in out and "abc123def" not in out, (scheme, out)
             assert "after the header" in out, (scheme, out)
+
+
+def test_an_empty_header_does_not_swallow_the_next_line():
+    """PR 145 review: `\\s*` around the separator crossed the newline and ate the diagnosis."""
+    for name in ("Authorization", "Proxy-Authorization", "token", "api_key"):
+        out = rf.summarize(0, f"{name}:\nCommand execution denied by the sandbox")
+        assert "denied by the sandbox" in out, (name, out)
