@@ -3,7 +3,6 @@ BaseProvider — shared subprocess execution logic for all provider adapters.
 
 Contract: run(prompt) -> str, stream(prompt) -> generator
 """
-import io
 import os
 import pathlib
 import shlex
@@ -233,11 +232,10 @@ class BaseProvider(ABC):
     def _read_stderr_bounded(stream, seconds: float = 1.0, limit: int = 16384) -> str:
         """What the client already wrote to stderr, without waiting for the descriptor to close.
 
-        A descendant that outlives the client can keep stderr open; a plain read() would then wait
-        for it. Stop at EOF, the deadline, or the first chunk that reaches the byte limit.
-        Keep that whole chunk so summarize can redact the captured text before trimming it."""
-        if isinstance(stream, io.StringIO):
-            return "" if stream.closed else stream.read()
+        Capture the initial output until EOF, the read deadline (one second by default), or
+        the chunk that reaches the byte threshold (16 KiB by default). Keep that chunk whole
+        so summarize can redact before trimming. The deadline also covers descendants that
+        outlive the client and hold the pipe open."""
         try:
             fd = stream.fileno()
         except (AttributeError, OSError, ValueError):

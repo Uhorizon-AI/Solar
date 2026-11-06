@@ -537,14 +537,18 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
 
     STDERR = "boot\nload\nsandbox\ndenied: the command permission\nretry later token=hunter2secret"
 
-    def _stream_error(self, provider, module):
-        proc = MagicMock()
-        proc.stdout = iter([])
-        proc.stderr = io.StringIO(self.STDERR)
-        proc.returncode = 0
-        with patch.object(provider, "resolve_binary", side_effect=lambda b: b), \
-             patch(f"providers.{module}.subprocess.Popen", return_value=proc):
-            with self.assertRaises(RuntimeError) as ctx:
+    def _stream_error(self, provider, module, stderr):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd) as stderr_pipe:
+            with os.fdopen(write_fd, "w") as writer:
+                writer.write(stderr)
+            proc = MagicMock()
+            proc.stdout, proc.stderr, proc.returncode = iter([]), stderr_pipe, 0
+            with (
+                patch.object(provider, "resolve_binary", side_effect=lambda b: b),
+                patch(f"providers.{module}.subprocess.Popen", return_value=proc),
+                self.assertRaises(RuntimeError) as ctx,
+            ):
                 list(provider.stream("a question"))
         return str(ctx.exception)
 
@@ -555,10 +559,10 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
         self.assertNotIn("hunter2secret", message)
 
     def test_cursor_stream(self):
-        self._assert_cause_kept(self._stream_error(AgentProvider(), "agent"))
+        self._assert_cause_kept(self._stream_error(AgentProvider(), "agent", self.STDERR))
 
     def test_claude_stream(self):
-        self._assert_cause_kept(self._stream_error(ClaudeProvider(), "claude"))
+        self._assert_cause_kept(self._stream_error(ClaudeProvider(), "claude", self.STDERR))
 
     def test_ollama_run(self):
         done = _mock_proc(stdout="", stderr=self.STDERR)
@@ -568,15 +572,9 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
                 OllamaProvider().run("a question")
         self._assert_cause_kept(str(ctx.exception))
 
-    def test_streams_and_ollama_keep_the_plain_message_when_stderr_is_empty(self):
+    def test_streams_keep_the_plain_message_when_stderr_is_empty(self):
         for provider, module in ((AgentProvider(), "agent"), (ClaudeProvider(), "claude")):
-            proc = MagicMock()
-            proc.stdout, proc.stderr, proc.returncode = iter([]), io.StringIO(""), 0
-            with patch.object(provider, "resolve_binary", side_effect=lambda b: b), \
-                 patch(f"providers.{module}.subprocess.Popen", return_value=proc):
-                with self.assertRaises(RuntimeError) as ctx:
-                    list(provider.stream("q"))
-            self.assertEqual(str(ctx.exception), "provider returned empty output")
+            self.assertEqual(self._stream_error(provider, module, ""), "provider returned empty output")
 
     def test_a_descendant_holding_stderr_open_does_not_hold_the_error_back(self):
         """PR 145 review: the client exits 0 but a child keeps stderr open; the error must not wait for it."""
@@ -602,13 +600,24 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
                 self.assertLess(elapsed, 3.0, provider.name)
                 self.assertIn("denied: the command permission", str(ctx.exception))
 
-    def test_in_memory_stderr_keeps_the_diagnosis_after_the_pipe_read_limit(self):
-        diagnosis = "Command execution denied by the sandbox"
-        payload = "noise\n" * 3000 + "Authorization: Basic dGVzdDpmaWN0aXRpb3Vz\n" + diagnosis
-        with io.StringIO(payload) as stderr:
-            message = AgentProvider._empty_output_error(AgentProvider._read_stderr_bounded(stderr), "", [])
-        self.assertIn(diagnosis, message)
-        self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)
+    def test_stderr_pipe_summarizes_the_captured_prefix_of_long_output(self):
+        import subprocess
+        import sys
+
+        initial = "Command execution denied by the sandbox"
+        final = "Final diagnostic outside the captured prefix"
+        script = f"import sys; sys.stderr.write({initial!r} + ' ' * 131072 + chr(10) + {final!r})"
+        with subprocess.Popen([sys.executable, "-c", script], stderr=subprocess.PIPE, text=True) as proc:
+            try:
+                captured = AgentProvider._read_stderr_bounded(proc.stderr)
+                _, remaining = proc.communicate(timeout=5)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+        message = AgentProvider._empty_output_error(captured, "", [])
+        self.assertIn(initial, message)
+        self.assertNotIn(final, message)
+        self.assertIn(final, remaining)
 
     def test_captured_pipe_output_hides_authorization_credentials(self):
         header = "Authorization: Basic dGVzdDpmaWN0aXRpb3Vz"
