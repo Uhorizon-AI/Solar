@@ -602,6 +602,30 @@ class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
                 self.assertLess(elapsed, 3.0, provider.name)
                 self.assertIn("denied: the command permission", str(ctx.exception))
 
+    def test_a_cut_never_separates_an_authorization_header_from_its_credential(self):
+        """PR 145 review: the 16 KiB cut used to keep the credential of a header it had cut off."""
+        import review_failure
+        header = "Authorization: Basic dGVzdDpmaWN0aXRpb3Vz"
+        # The header ends up straddling the cut: its start falls before it, its credential after.
+        text = "x" * 100 + "\n" + header + "\ndenied: the command permission\n"
+        for limit in range(len(text) - 8, len(text) - 40, -1):
+            kept = AgentProvider._tail_whole_lines(text, limit)
+            summary = review_failure.summarize(0, kept)
+            self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", summary, limit)
+        self.assertEqual(AgentProvider._tail_whole_lines("short\n", 100), "short\n")
+        # And through a real pipe, with the default limit: the cut lands inside the header's first words.
+        import subprocess, sys
+        diagnosis = " denied: the command permission\n"
+        total_after = 16384 + 111 - 141  # puts the cut 10 characters into the header line
+        after = "z" * (total_after - len(diagnosis)) + diagnosis
+        code = ("import sys; sys.stderr.write('a'*100 + '\\n' + 'Authorization: Basic dGVzdDpmaWN0aXRpb3Vz\\n' + "
+                + repr(after) + ")")
+        proc = subprocess.Popen([sys.executable, "-c", code], stderr=subprocess.PIPE, text=True)
+        proc.wait()
+        message = AgentProvider._empty_output_error(AgentProvider._read_stderr_bounded(proc.stderr), "", [])
+        self.assertIn("denied: the command permission", message)
+        self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)
+
 
 if __name__ == "__main__":
     unittest.main()
