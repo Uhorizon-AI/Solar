@@ -525,10 +525,12 @@ def test_a_snapshot_that_cannot_be_read_leaves_a_trace_instead_of_a_silent_exit(
 
 def test_the_cleanup_failure_path_announces_the_run_it_failed(tmp_path):
     """complete.sh with a failing cleanup hook: the notice is sent and recorded for the run that failed."""
-    import json
     import solar_state
     from reservation_tokens import token_of
     workspace, root, env = fixture_env(tmp_path)
+    sender = Path(env['SOLAR_ROOT']) / 'core/skills/solar-telegram/scripts/send_telegram.sh'
+    with sender.open('a') as script:
+        script.write('printf "%s\\n" "${SOLAR_NOTIFY_EXPECT_RUN:-}" > "$SOLAR_WORKSPACE/expected-run.log"\n')
     run_env = env_for(root, {**env, 'SOLAR_WORKSPACE': str(workspace)})
     assert subprocess.run(['bash', str(SCRIPTS / 'install_hooks.sh'), 'demo'], env=run_env,
                           text=True, capture_output=True, timeout=30).returncode == 0
@@ -549,6 +551,7 @@ def test_the_cleanup_failure_path_announces_the_run_it_failed(tmp_path):
     assert done.returncode == 1, done.stdout + done.stderr
     sent = (workspace / 'sent.log').read_text()
     assert 'Task failed' in sent and 'Reason: unknown' in sent
+    assert (workspace / 'expected-run.log').read_text().strip() == run
     with solar_state.session() as store:
         fields = {k: solar_state.value_of(v) for k, v in store.task_get(tid)['frontmatter']}
     assert fields['notify_delivered_run'] == run and fields['notify_delivered'] == 'true'
@@ -587,16 +590,19 @@ def test_a_cleanup_failure_whose_state_write_fails_sends_no_notice(tmp_path):
     assert not (workspace / 'sent.log').exists()
 
 
-def test_a_missing_expected_run_for_a_claimed_task_leaves_a_trace_and_sends_nothing(tmp_path):
-    workspace, root, env, task = _notify_when(tmp_path, 'error', 'completed,failed', 'notify_run: run-1\n')
+def test_a_missing_expected_run_leaves_the_current_run_untouched(tmp_path):
+    import solar_state
+    workspace, root, env, task = _notify_when(tmp_path, 'error', 'completed,failed', 'notify_run: run-2\n')
     seed(root)
+    with solar_state.session() as store:
+        before = store.task_get(task_id_of(task))['frontmatter']
     result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
                             env=env_for(root, {**env, 'SOLAR_NOTIFY_EXPECT_STATUS': 'error',
                                                'SOLAR_NOTIFY_EXPECT_RUN': ''}),
                             text=True, capture_output=True, timeout=30)
-    mirror(root)
     assert result.returncode == 1 and 'notify_expect_run_missing' in result.stderr
-    assert 'notify_error: notify_expect_run_missing' in task.read_text()
+    with solar_state.session() as store:
+        assert store.task_get(task_id_of(task))['frontmatter'] == before
     assert not (workspace / 'sent.log').exists()
 
 

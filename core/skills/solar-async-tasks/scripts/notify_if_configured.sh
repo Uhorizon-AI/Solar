@@ -102,8 +102,7 @@ else:
   # A failure the supervisor declared belongs to its run: a task claimed again meanwhile gets no stale notice.
   if [[ -n "${SOLAR_NOTIFY_EXPECT_STATUS:-}" ]]; then
     if [[ -z "${SOLAR_NOTIFY_EXPECT_RUN:-}" && -n "$RUN" ]]; then
-      # The caller could not say which run failed: sending would be a guess, staying silent a lost notice.
-      state task notice "$TASK_ID" --run "$RUN" --error notify_expect_run_missing --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null 2>&1
+      # Without the caller's run, the snapshot may belong to a different attempt.
       echo "Task notification failed: notify_expect_run_missing ($TASK_ID)" >&2
       exit 1
     fi
