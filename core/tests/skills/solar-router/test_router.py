@@ -1063,7 +1063,7 @@ class TestN8nOriginAndQueueGuards(unittest.TestCase):
         self.assertEqual(task["origin_channel"], "telegram")
         self.assertEqual(task["origin_chat_id"], "99")
         self.assertEqual(task["origin_request_id"], "tg:1")
-        self.assertEqual(task["notify_when"], "completed")
+        self.assertEqual(task["notify_when"], "completed,failed")
 
 
 if __name__ == "__main__":

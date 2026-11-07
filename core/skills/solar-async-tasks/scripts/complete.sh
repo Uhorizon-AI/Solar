@@ -62,10 +62,12 @@ if [[ "$cleanup_required" == "true" ]]; then
             fi
         done
         rm -f "$export_file"
-        state task fail "$TASK_ID" \
+        failed_run="$(state task fail "$TASK_ID" \
             --field cleanup_error=true \
-            --field "cleanup_error_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
-        bash "$SCRIPT_DIR/notify_if_configured.sh" "$TASK_ID" || true
+            --field "cleanup_error_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("run",""))')"
+        SOLAR_NOTIFY_EXPECT_STATUS=error SOLAR_NOTIFY_EXPECT_RUN="$failed_run" \
+            bash "$SCRIPT_DIR/notify_if_configured.sh" "$TASK_ID" || true
         echo "❌ Task moved to error due to cleanup failure: $TASK_ID"
         exit 1
     fi

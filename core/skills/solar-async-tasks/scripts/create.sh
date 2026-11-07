@@ -142,7 +142,7 @@ if dest == "queued":
     if meta.get("delivery_expected"):
         fields.append(("delivery_expected", "true"))
     if any(meta.get(key) for key in ("origin_channel", "origin_chat_id", "origin_request_id")):
-        fields.append(("notify_when", "completed"))
+        fields.append(("notify_when", "completed,failed"))
 
 document = "\n# " + title + "\n\n" + body
 with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:

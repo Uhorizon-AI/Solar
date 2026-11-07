@@ -663,7 +663,7 @@ def create_async_draft(
     Returns `(task_id, warning)`.
     - `task_id` is None when creation failed, including when the runtime format
       is not sqlite.
-    - `warning` is set when `notify=True` but `notify_when: completed` could not
+    - `warning` is set when `notify=True` but `notify_when: completed,failed` could not
       be stored. Callers must surface that warning so the user is not promised
       a completion ping.
     """
@@ -697,7 +697,7 @@ def create_async_draft(
                 fields.append((key, _quoted(value)))
         fields.append(("delivery_expected", "true"))
         if origin_ch or origin_chat or origin_rid:
-            fields.append(("notify_when", "completed"))
+            fields.append(("notify_when", "completed,failed"))
         status = "queued"
     else:
         desc = (strip_solar_metadata(ai_output) or ai_output or user_text).strip()[:8000]
@@ -708,7 +708,7 @@ def create_async_draft(
             task_id = store.task_create(fields, body, status=status)
             if notify:
                 try:
-                    store.task_set(task_id, "notify_when", "completed")
+                    store.task_set(task_id, "notify_when", "completed,failed")
                 except solar_state.StateError:
                     return task_id, "notify_failed"
     except solar_state.StateError:

@@ -1317,6 +1317,10 @@ def _blocked(conn: sqlite3.Connection, pairs: list[list[str]]) -> bool:
     return False
 
 
+NOTIFY_RUN_KEYS = ("notify_delivered", "notify_delivered_run", "notify_status", "notify_error",
+                   "notify_attempted_at", "failure_code")
+
+
 def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optional[str],
           *, rewrite_body: Optional[Callable[[str], str]] = None,
           fields: Optional[dict] = None, drop: Iterable[str] = (),
@@ -1336,6 +1340,11 @@ def _move(conn: sqlite3.Connection, task_id: str, to_status: str, actor: Optiona
         raise TransitionRefused(f"{current} -> {to_status} is not an allowed transition")
     pairs = json.loads(row["frontmatter"])
     body = rewrite_body(row["body"]) if rewrite_body is not None else row["body"]
+    if to_status == "active" and current != "active":
+        # Each run notifies on its own: what the previous run's notice recorded must not silence this one.
+        for key in NOTIFY_RUN_KEYS:
+            _drop_pair(pairs, key)
+        _set_pair(pairs, "notify_run", f" {uuid.uuid4().hex}")      # the run a notice belongs to
     for key in drop:
         _drop_pair(pairs, key)
     for key, value in (fields or {}).items():
@@ -2429,6 +2438,39 @@ class Session:
             _set_pair(pairs, key, f" {value}" if value != "" else "")
             _write_task(conn, task_id, row["status"], pairs, row["body"], insert=False)
 
+    def task_notice_record(self, task_id: str, run: str, *, error: Optional[str] = None,
+                           at: Optional[str] = None) -> bool:
+        """Record how the notice of one run ended, in one transaction, only while that run is current.
+        A new claim stamps a new `notify_run`; a notice that outlived its run records nothing and says so."""
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter, body FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise StateError(f"no task {task_id}")
+            pairs = json.loads(row["frontmatter"])
+            if (_field(pairs, "notify_run") or "") != run:
+                return False
+            if error is not None and _field(pairs, "notify_delivered") == "true" \
+                    and _field(pairs, "notify_delivered_run") == run:
+                return False       # a confirmed delivery of this run prevails over a late failure record
+            if error is None:
+                updates = (("notify_status", "delivered"), ("notify_error", "null"),
+                           ("notify_delivered_run", run), ("notify_delivered", "true"))
+            else:
+                updates = (("notify_status", "failed"), ("notify_error", error))
+                if at:
+                    updates += (("notify_attempted_at", at),)
+            for key, value in updates:
+                _check_field(key, value)
+                _set_pair(pairs, key, f" {value}")
+            _write_task(conn, task_id, row["status"], pairs, row["body"], insert=False)
+            return True
+
+    def task_notify_run(self, task_id: str) -> str:
+        """The run a notice belongs to: the id stamped when the task was last claimed."""
+        task = self.task_get(task_id)
+        return (_field(task["frontmatter"], "notify_run") or "") if task else ""
+
     def task_transition(self, task_id: str, to_status: str,
                         expected_from: Optional[str | Iterable[str]] = None,
                         actor: Optional[str] = None,
@@ -2871,6 +2913,15 @@ class Session:
             raise StateError(f"no task {task_id}")
         return _field(task["frontmatter"], key)
 
+    def task_snapshot(self, task_id: str) -> dict:
+        """Status, every frontmatter value and the body, from ONE read: a caller that builds a message
+        from several fields never mixes two attempts of the same task."""
+        task = self.task_get(task_id)
+        if task is None:
+            raise StateError(f"no task {task_id}")
+        return dict(id=task_id, status=task["status"], body=task["body"] or "",
+                    fields={k: value_of(rest) for k, rest in task["frontmatter"]})
+
     def task_find_origin(self, origin_request_id: str) -> Optional[str]:
         row = self.conn.execute(
             "SELECT id FROM tasks WHERE origin_request_id = ? ORDER BY created, id LIMIT 1",
@@ -3066,8 +3117,11 @@ class Session:
             return "queued"
 
     def task_fail(self, task_id: str, suffix: str, *, actor: Optional[str] = None,
-                  fields: Optional[dict] = None, token: Optional[str] = None) -> None:
-        """Move a task to error and append `suffix` to its body, together."""
+                  fields: Optional[dict] = None, token: Optional[str] = None) -> str:
+        """Move a task to error and append `suffix` to its body, together.
+        Returns the run that failed (read in the same transaction), so a notice is bound to it. The code
+        of this failure is stored with the run (`failure_code`), or dropped when the failure has none:
+        a notice never reads a code that belongs to an earlier attempt."""
         def rewrite(body: str) -> str:
             text = body.rstrip("\n")
             extra = suffix.strip("\n")
@@ -3083,7 +3137,15 @@ class Session:
                 # The execution that token belonged to is over (the task finished, or went back
                 # to the queue for its next run): it cannot fail what it no longer owns.
                 raise StaleToken(f"{task_id} is {row['status']}: that execution token has ended")
-            _move(conn, task_id, "error", actor or "fail", rewrite_body=rewrite, fields=fields)
+            codes = re.findall(r"^- error_code:[ \t]*([a-z][a-z0-9_]{0,39})[ \t]*$", suffix, re.MULTILINE)
+            merged = dict(fields or {})
+            if codes:
+                merged["failure_code"] = codes[-1]
+            _move(conn, task_id, "error", actor or "fail", rewrite_body=rewrite, fields=merged,
+                  drop=() if codes else ("failure_code",))
+            pairs = json.loads(conn.execute("SELECT frontmatter FROM tasks WHERE id = ?",
+                                            (task_id,)).fetchone()["frontmatter"])
+            return _field(pairs, "notify_run") or ""
 
     def task_await(self, task_id: str, child_ids: Iterable[str],
                    token: Optional[str] = None) -> None:
@@ -4256,6 +4318,11 @@ def _cli(argv: list[str]) -> int:
     setter.add_argument("id")
     setter.add_argument("key")
     setter.add_argument("value")
+    notice = task.add_parser("notice", help="record how the notice of one run ended; refused for an older run")
+    notice.add_argument("id")
+    notice.add_argument("--run", required=True)
+    notice.add_argument("--error", default=None, help="a failure code; omit to record delivery")
+    notice.add_argument("--at", default=None)
     move = task.add_parser("transition")
     move.add_argument("id")
     move.add_argument("to", choices=STATUSES)
@@ -4308,6 +4375,7 @@ def _cli(argv: list[str]) -> int:
     field = task.add_parser("field")
     field.add_argument("id")
     field.add_argument("key")
+    task.add_parser("snapshot").add_argument("id")
     unset = task.add_parser("unset")
     unset.add_argument("id")
     unset.add_argument("key")
@@ -4386,6 +4454,9 @@ def _cli(argv: list[str]) -> int:
                 elif args.cmd == "set":
                     s.task_set(args.id, args.key, args.value)
                     _print(dict(id=args.id, key=args.key))
+                elif args.cmd == "notice":
+                    recorded = s.task_notice_record(args.id, args.run, error=args.error, at=args.at)
+                    _print(dict(id=args.id, recorded=recorded))
                 elif args.cmd == "transition":
                     came = s.task_transition(args.id, args.to, args.expected_from, actor=args.actor,
                                              token=args.token)
@@ -4422,8 +4493,8 @@ def _cli(argv: list[str]) -> int:
                         if not sep:
                             parser.error(f"--field expects KEY=VALUE, got {item!r}")
                         fields.append((key, value))
-                    s.task_fail(args.id, args.suffix, fields=dict(fields), token=args.token)
-                    _print(dict(id=args.id, status="error"))
+                    run = s.task_fail(args.id, args.suffix, fields=dict(fields), token=args.token)
+                    _print(dict(id=args.id, status="error", run=run))
                 elif args.cmd == "await":
                     s.task_await(args.id, args.child, token=args.token)
                     _print(dict(id=args.id, status="queued"))
@@ -4448,6 +4519,8 @@ def _cli(argv: list[str]) -> int:
                     _print(dict(id=args.id, status=status))
                 elif args.cmd == "field":
                     _print(dict(id=args.id, key=args.key, value=s.task_field(args.id, args.key)))
+                elif args.cmd == "snapshot":
+                    _print(s.task_snapshot(args.id))
                 elif args.cmd == "unset":
                     s.task_unset(args.id, args.key)
                     _print(dict(id=args.id, key=args.key))

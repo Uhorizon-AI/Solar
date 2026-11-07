@@ -104,9 +104,9 @@ When a long-running user request should notify on completion:
 1. Offer to create an async task.
 2. Confirm title, objective, and priority.
 3. Create the task with `task.create` and approve it with `task.approve` (both through `solar_execute`).
-4. Set `notify_when: completed` on that task. Origin metadata does this for a gateway parent.
+4. Set `notify_when` on that task: pass it to `task.create`/`task.update` as a list of `completed` and `failed` (stored as a comma list; asking for `completed` alone is stored as `completed,-failed`). Origin metadata sets `completed,failed` for a gateway parent.
 
-On completion the runtime notifies when `notify_when: completed` is set and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
+On completion the runtime notifies when `notify_when` lists `completed` and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
 
 Delivery failures are recorded on the task as `notify_status: failed`,
 `notify_error`, and `notify_attempted_at`; the notifier returns nonzero. A successful
@@ -114,10 +114,23 @@ retry records `notify_status: delivered` and `notify_delivered: true`, so a late
 invocation skips delivery. A later run of the notifier retries after the failure is resolved. Automatic retry scheduling is not enabled.
 
 The executor also invokes the notifier after execution failure or timeout; cleanup
-failure uses the same path. Only tasks already carrying `notify_when: completed`
-are eligible, and the origin allowlist still applies. Failure messages are brief
+failure uses the same path. Only tasks whose `notify_when` lists `failed` are eligible, and so is a bare `completed` (the value older tasks carry, which always reported failures); only the explicit `completed,-failed` that `task.create`/`task.update` store for "completion only" is silent when the task fails, and the notice adds a one-line reason (the machine `error_code` of the current attempt, never the provider's text); the origin allowlist still applies. Failure messages are brief
 and omit execution details. The sender is resolved from the installation root;
 task data and environment remain in the workspace.
+
+The supervisor bounds its terminal failure notifier at 180 seconds, separately
+from the 30-second approval-notice deadline. This leaves the notifier's 150-second
+lock wait time to record `notify_lock_timeout` instead of being killed first.
+Shutdown still ends the sender and its process group immediately. This does not
+guarantee delivery or enable automatic retries: an interrupted sender or an
+unavailable transport remains a failed or uncertain delivery. The per-task lock is
+an `flock` the kernel releases when its holder ends: a slow sender keeps it, a dead
+one frees it, and there is no age-based reclaim. A failure the supervisor declares
+carries the run that failed; a task claimed again before the notifier holds its
+lock gets no notice for the old failure.
+Failure notices share one serial sender, so a stalled terminal notifier can delay
+later failure notices for up to this longer deadline; it does not delay the
+supervisor's admission/heartbeat loop or the separate approval-notice sender.
 
 ### What the notice contains
 
@@ -179,3 +192,7 @@ Logs:
 - Each task has one log, `<runtime root>/task-logs/<task-id>.log`.
 - Logs reflect the last run.
 - Logs older than seven days are cleaned by the worker.
+
+A claim clears `notify_delivered` and the other notice records, so a recurring task notifies once per run
+and a retry of the same run's notice is still deduplicated. The wait for `task.authorize_run` is announced by
+the supervisor, with the reason, for every task whatever its `notify_when` says.

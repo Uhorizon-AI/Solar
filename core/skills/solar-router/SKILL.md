@@ -32,7 +32,7 @@ For that work, create or propose a task through `solar-async-tasks`. When `solar
 - Inject the cross-channel intention from the continuity row in `state.sqlite`. See `references/continuity.md`.
 - Own the A3 mandate CLI (`scripts/delegation_ctl.py`). The YAML in `sun/delegations/` is opened by `solar-state`. Any caller gates mutating routines through `check` and fails closed. See `references/a3-mandates.md`. Unrelated to JIT agent/skill delegation.
 - Answer "where are we" on demand with `scripts/work_status.sh` (intention, machine queue, today's blockers, mandates). Read-only, no cadence: periodic briefings are recurring async tasks. Behaviour layer in `references/signal-orchestration.md`.
-- Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output. On telegram/n8n/app, `async_draft_created` queues work + `notify_when: completed` and returns a short ACK.
+- Implement `DecisionEngine`: decide `decision.kind` based on `mode`, `channel`, and AI semantic output. On telegram/n8n/app, `async_draft_created` queues work + `notify_when: completed,failed` and returns a short ACK.
 - Resolve JIT context from `metadata`: lookup agent/skills in planet → fallback to core → generate role inline if not found.
 - Append `start`/`end` audit rows through `solar-state` for each execution (including failed early-exit paths).
 

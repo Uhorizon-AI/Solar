@@ -110,7 +110,9 @@ run_one_task() {
         return 0
     fi
     if [[ "$status" == "error" ]]; then
-        bash "$SCRIPT_DIR/notify_if_configured.sh" "$task_id" || true
+        # The notice is for this failure: if the task is requeued before it goes out, nothing is sent.
+        SOLAR_NOTIFY_EXPECT_STATUS=error SOLAR_NOTIFY_EXPECT_RUN="$(task_field "$task_id" notify_run 2>/dev/null || true)" \
+            bash "$SCRIPT_DIR/notify_if_configured.sh" "$task_id" || true
     fi
     return 1
 }

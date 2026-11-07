@@ -164,6 +164,44 @@ def test_an_approval_does_not_survive_a_later_edit(solar_env):
     assert queued_count() == 0
 
 
+def _notify_when(task_id):
+    return solar_state.value_of(dict(stored(task_id)["frontmatter"]).get("notify_when"))
+
+
+def test_notify_when_is_set_on_create_and_edited_like_any_material_field(solar_env):
+    made = new_task("Close", "Do.", notify_when=["failed", "completed"])
+    assert _notify_when(made["id"]) == "completed,failed"
+    for bad in (["sometimes"], ["blocked"]):     # `blocked` is not an event: the wait notice goes out for every task
+        body, error = execute("task.create", dict(title="X", instructions="x", notify_when=bad))
+        assert error and body["code"] == "invalid_arguments"
+    assert _notify_when(new_task("Only completed", "Do.", notify_when=["completed"])["id"]) == "completed,-failed"
+    queued = run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+    out = run("task.update", dict(task_id=made["id"], expected_row_version=queued["row_version"],
+                                  notify_when=["failed"]))
+    assert out["status"] == "draft" and out["needs_approval"] is True
+    assert _notify_when(made["id"]) == "failed"
+    again = run("task.update", dict(task_id=made["id"], expected_row_version=out["row_version"], notify_when=[]))
+    assert _notify_when(made["id"]) in ("", None) and again["status"] == "draft"
+
+
+def test_a_revision_keeps_notify_when_unless_it_names_another(solar_env):
+    made = new_task("Close", "Do.", notify_when=["failed"])
+    kept = run("task.create", dict(title="Close", instructions="Do.", revises_task_id=made["id"]))
+    assert _notify_when(kept["id"]) == "failed"
+    changed = run("task.create", dict(title="Close", instructions="Do.", revises_task_id=made["id"],
+                                      notify_when=["completed"]))
+    assert _notify_when(changed["id"]) == "completed,-failed"
+
+
+def test_completion_only_survives_an_edit_and_a_revision_that_do_not_name_it(tmp_path_factory, solar_env):
+    made = new_task("Close", "Do.", notify_when=["completed"])
+    assert _notify_when(made["id"]) == "completed,-failed"
+    edited = run("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"], title="Closed"))
+    assert _notify_when(made["id"]) == "completed,-failed" and edited["status"] == "draft"
+    kept = run("task.create", dict(title="Close", instructions="Do.", revises_task_id=made["id"]))
+    assert _notify_when(kept["id"]) == "completed,-failed"          # the spelling is copied as stored
+
+
 # --------------------------------------------------------------------------
 # schedule
 # --------------------------------------------------------------------------
