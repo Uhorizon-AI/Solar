@@ -2,8 +2,8 @@
 
 # If the finished task asks for it in notify_when, send a Telegram notification
 # to the allowlisted origin chat (or TELEGRAM_CHAT_ID). notify_when is a comma
-# list of `completed` and `failed`, read literally: `completed` alone does not
-# report a failure. The approval-wait notice (--waiting) is sent for every task.
+# list of `completed` and `failed`. A bare `completed` (older tasks) also reports a failure; only the
+# explicit `completed,-failed` that task.create / task.update store for "completion only" does not. The approval-wait notice (--waiting) is sent for every task.
 # When the task carries a
 # `## Delivery` section, that is the message: the one-screen delivery the
 # executor wrote, ending in its own evidence line. Otherwise a brief line plus
@@ -34,7 +34,12 @@ esac
 if [[ -z "$MODE" ]]; then
   NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
   NOTIFY_WHEN="${NOTIFY_WHEN//[[:space:]]/}"
-  notify_wants() { [[ ",${NOTIFY_WHEN}," == *",$1,"* ]]; }
+  notify_wants() {
+    [[ ",${NOTIFY_WHEN}," == *",$1,"* ]] && return 0
+    # A bare `completed` is what tasks queued before notify_when existed carry, and it announced failures.
+    # Only the explicit `completed,-failed` (task.create / task.update) leaves a failure silent.
+    [[ "$1" == failed && ",${NOTIFY_WHEN}," == *",completed,"* && ",${NOTIFY_WHEN}," != *",-failed,"* ]]
+  }
   if [[ "$(task_status_of "$TASK_ID")" == "error" ]]; then
     notify_wants failed || exit 0
   else
@@ -55,6 +60,12 @@ if [[ -z "$MODE" ]]; then
   # one never blocks anyone.
   LOCK_FILE="${TMPDIR:-/tmp}/solar-notify-${TASK_ID//[^A-Za-z0-9_.-]/_}.flock"
   # Keep this wait below Supervisor.FAILURE_NOTIFY_TIMEOUT, with time left to record failure.
+  if ! python3 -c 'import fcntl' >/dev/null 2>&1; then
+    # Without python3 + fcntl the lock cannot be taken: say so, instead of waiting out the lock and blaming it.
+    state task notice "$TASK_ID" --run "$RUN" --error notify_lock_unavailable --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
+    echo "Task notification failed: notify_lock_unavailable ($TASK_ID)" >&2
+    exit 1
+  fi
   if { exec 9>>"$LOCK_FILE"; } 2>/dev/null; then
     for _ in $(seq 1 "${SOLAR_NOTIFY_LOCK_WAIT:-150}"); do
       python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null && { HAVE_LOCK=1; break; }
@@ -66,12 +77,31 @@ if [[ -z "$MODE" ]]; then
     echo "Task notification failed: notify_lock_timeout ($TASK_ID)" >&2
     exit 1
   fi
+
+  # One read of the task, taken with the lock held. Status, run, delivery, title, chat and the failure code
+  # all come from it, so a claim that lands later cannot mix two attempts into one message.
+  SNAPSHOT="$(state task snapshot "$TASK_ID" 2>/dev/null)" || exit 0
+  snap() {
+    printf '%s' "$SNAPSHOT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); w=sys.argv[1]
+if w=="status": print(d["status"])
+elif w=="body": sys.stdout.write(d.get("body") or "")
+else:
+    v=d["fields"].get(sys.argv[2]); print("" if v is None else v)' "$@"
+  }
+  task_status_of() { snap status; }
+  task_field() { snap field "$2"; }
+  task_body() { snap body; }
+  RUN="$(task_field "$TASK_ID" "notify_run")"          # the run of THIS snapshot; every later check is against it
   # A failure the supervisor declared belongs to its run: a task claimed again meanwhile gets no stale notice.
   if [[ -n "${SOLAR_NOTIFY_EXPECT_STATUS:-}" ]]; then
     [[ "$(task_status_of "$TASK_ID")" == "$SOLAR_NOTIFY_EXPECT_STATUS" \
-       && "$(task_field "$TASK_ID" "notify_run")" == "${SOLAR_NOTIFY_EXPECT_RUN:-}" ]] || exit 0
+       && "$RUN" == "${SOLAR_NOTIFY_EXPECT_RUN:-}" ]] || exit 0
   fi
   already_delivered && exit 0
+  # What the snapshot says is what is announced: the status may have moved since the first, unlocked look.
+  NOTIFY_WHEN="$(task_field "$TASK_ID" "notify_when")"; NOTIFY_WHEN="${NOTIFY_WHEN//[[:space:]]/}"
+  if [[ "$(task_status_of "$TASK_ID")" == "error" ]]; then notify_wants failed || exit 0; else notify_wants completed || exit 0; fi
 fi
 
 TITLE=$(task_field "$TASK_ID" "title")
@@ -148,15 +178,10 @@ if [[ "$TASK_STATUS" == "error" ]]; then
   BRIEF="Task failed and needs attention: ${TITLE}"
   LOCATION="" # Keep execution errors and sensitive details in local logs.
   # A task that asks for `failed` by name also gets the one-line reason (bounded, single line).
-  if [[ ",$(task_field "$TASK_ID" "notify_when" | tr -d '[:space:]')," == *",failed,"* ]]; then
+  if notify_wants failed; then
     # Only the machine code, never the provider's free text: it can carry paths, prompts or secrets.
-    # Failures are appended, so the current attempt's code is the last one in the body.
-    REASON="$(task_body "$TASK_ID" | awk '
-      /^## Execution Error[[:space:]]*$/ { found = 1; next }
-      found && /^## / { found = 0 }
-      found && /^- error_code:/ { code = $0; sub(/^- error_code:[[:space:]]*/, "", code) }
-      END { print code }
-    ' | head -n1 | tr -d '\r[:space:]')"
+    # The code is stored with the failure it belongs to; a failure without one says `unknown`.
+    REASON="$(task_field "$TASK_ID" "failure_code" | tr -d '\r[:space:]')"
     [[ "$REASON" =~ ^[a-z][a-z0-9_]{0,39}$ ]] || REASON="unknown"
     BRIEF="${BRIEF}"$'\n'"Reason: ${REASON}"
   fi
@@ -199,7 +224,8 @@ send_chunks() {
       sleep 1
     fi
     first=0
-    (cd "$WORKSPACE_DIR" && bash "$SEND_SCRIPT" "$chunk") || return 1
+    # fd 9 is the notice lock: the sender (and anything it leaves running) must not inherit it.
+    (cd "$WORKSPACE_DIR" && bash "$SEND_SCRIPT" "$chunk") 9>&- || return 1
   done
   return 0
 }
@@ -231,6 +257,10 @@ else
   MESSAGE="$BRIEF"
 fi
 
+# Last look before sending: the run must still be the one this message was built from.
+if [[ "$(state task field "$TASK_ID" notify_run | python3 -c 'import json,sys; print(json.load(sys.stdin).get("value") or "")')" != "$RUN" ]]; then
+  exit 0
+fi
 send_chunks "$MESSAGE" || { record_notify_failure "telegram_send_failed"; exit 1; }
 
 state task notice "$TASK_ID" --run "$RUN" >/dev/null   # one transaction, only while this run is still the current one

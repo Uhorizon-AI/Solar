@@ -91,7 +91,10 @@ _TEXT_FIELDS = ("title", "object", "scope", "effect", "provider", "planet", "age
 
 def _notify_text(tokens) -> str:
     """The stored spelling of notify_when: tokens in a fixed order, comma separated, empty to turn it off."""
-    return ",".join(t for t in ("completed", "failed") if t in tokens)
+    text = ",".join(t for t in ("completed", "failed") if t in tokens)
+    # A bare `completed` is what older tasks carry, and it has always announced failures too. A caller who
+    # asks for completion only is spelled `completed,-failed`, so the two never read alike.
+    return "completed,-failed" if text == "completed" else text
 
 
 def _now_iso() -> str:

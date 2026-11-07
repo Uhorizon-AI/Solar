@@ -618,10 +618,38 @@ def test_a_notice_is_recorded_in_one_step_and_only_for_the_current_run(ready):
         fields = {k: solar_state.value_of(v) for k, v in s.task_get(tid)["frontmatter"]}
         assert (fields["notify_status"], fields["notify_delivered"], fields["notify_delivered_run"]) == \
             ("delivered", "true", "run-2")
-        assert s.task_notice_record(tid, "run-2", error="notify_lock_timeout", at="2026-11-07T00:00:00Z") is True
-        fields = {k: solar_state.value_of(v) for k, v in s.task_get(tid)["frontmatter"]}
-        assert (fields["notify_status"], fields["notify_error"]) == ("failed", "notify_lock_timeout")
         assert s.task_notify_run(tid) == "run-2"
+        other = s.task_create([("title", '"u"'), ("notify_run", "run-9")])      # a run that failed to notify
+        assert s.task_notice_record(other, "run-9", error="notify_lock_timeout", at="2026-11-07T00:00:00Z") is True
+        fields = {k: solar_state.value_of(v) for k, v in s.task_get(other)["frontmatter"]}
+        assert (fields["notify_status"], fields["notify_error"]) == ("failed", "notify_lock_timeout")
+
+
+def test_a_confirmed_delivery_is_never_overwritten_by_a_late_failure_record(ready):
+    with session(ready, auto_backup=False) as s:
+        tid = s.task_create([("title", '"t"'), ("notify_run", "run-1")])
+        assert s.task_notice_record(tid, "run-1") is True
+        assert s.task_notice_record(tid, "run-1", error="notify_lock_timeout", at="2026-11-07T00:00:00Z") is False
+        fields = {k: solar_state.value_of(v) for k, v in s.task_get(tid)["frontmatter"]}
+        assert fields["notify_status"] == "delivered" and "notify_error" in fields
+        assert fields["notify_error"] == "null" and fields["notify_delivered"] == "true"
+
+
+def test_a_failure_returns_its_run_and_stores_its_own_code_or_none(ready):
+    with session(ready, auto_backup=False) as s:
+        tid = s.task_create([("title", '"t"')], status="queued")
+        first = s.task_claim_detail(tid, "w")
+        run1 = s.task_notify_run(tid)
+        assert s.task_fail(tid, "## Execution Error\n- error_code: first_code\n- error: x\n",
+                           token=first["token"]) == run1
+        assert dict(s.task_get(tid)["frontmatter"]).get("failure_code", "").strip() == "first_code"
+        s.task_transition(tid, "queued")
+        second = s.task_claim_detail(tid, "w")
+        run2 = s.task_notify_run(tid)
+        assert run2 != run1 and "failure_code" not in dict(s.task_get(tid)["frontmatter"])   # a new claim forgets it
+        # a failure that carries no code (a cleanup failure) stores none, so it never inherits an earlier one
+        assert s.task_fail(tid, "", token=second["token"]) == run2
+        assert "failure_code" not in dict(s.task_get(tid)["frontmatter"])
 
 
 def test_each_claim_starts_a_new_notice_run_even_for_a_retry_after_an_error(ready):

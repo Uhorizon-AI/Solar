@@ -830,8 +830,7 @@ class Supervisor:
                   f"- time: {lib.iso(time.time())}\n- provider_attempted: unknown\n- error_code: {code}\n"
                   f"- error: {why}; whether it had effects is uncertain, so it was not retried\n")
         with self._session() as store:
-            store.task_fail(task_id, suffix, token=token)
-            run = store.task_notify_run(task_id)     # the run that failed: a later claim stamps another
+            run = store.task_fail(task_id, suffix, token=token)    # the run that failed, from the same transition
         self._notify_failure(task_id, run)
 
     def _notify_failure(self, task_id: str, run: str = "") -> None:

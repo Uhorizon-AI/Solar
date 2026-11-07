@@ -104,7 +104,7 @@ When a long-running user request should notify on completion:
 1. Offer to create an async task.
 2. Confirm title, objective, and priority.
 3. Create the task with `task.create` and approve it with `task.approve` (both through `solar_execute`).
-4. Set `notify_when` on that task: pass it to `task.create`/`task.update` as a list of `completed` and `failed` (stored as a comma list, read literally). Origin metadata sets `completed,failed` for a gateway parent.
+4. Set `notify_when` on that task: pass it to `task.create`/`task.update` as a list of `completed` and `failed` (stored as a comma list; asking for `completed` alone is stored as `completed,-failed`). Origin metadata sets `completed,failed` for a gateway parent.
 
 On completion the runtime notifies when `notify_when` lists `completed` and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
 
@@ -114,8 +114,7 @@ retry records `notify_status: delivered` and `notify_delivered: true`, so a late
 invocation skips delivery. A later run of the notifier retries after the failure is resolved. Automatic retry scheduling is not enabled.
 
 The executor also invokes the notifier after execution failure or timeout; cleanup
-failure uses the same path. Only tasks whose `notify_when` lists `failed` are eligible (`completed` alone does not report a failure,
-so `completed,blocked` or `completed` is silent when the task fails), and the notice adds a one-line reason (the machine `error_code` of the current attempt, never the provider's text); the origin allowlist still applies. Failure messages are brief
+failure uses the same path. Only tasks whose `notify_when` lists `failed` are eligible, and so is a bare `completed` (the value older tasks carry, which always reported failures); only the explicit `completed,-failed` that `task.create`/`task.update` store for "completion only" is silent when the task fails, and the notice adds a one-line reason (the machine `error_code` of the current attempt, never the provider's text); the origin allowlist still applies. Failure messages are brief
 and omit execution details. The sender is resolved from the installation root;
 task data and environment remain in the workspace.
 

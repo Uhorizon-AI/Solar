@@ -174,7 +174,7 @@ def test_notify_when_is_set_on_create_and_edited_like_any_material_field(solar_e
     for bad in (["sometimes"], ["blocked"]):     # `blocked` is not an event: the wait notice goes out for every task
         body, error = execute("task.create", dict(title="X", instructions="x", notify_when=bad))
         assert error and body["code"] == "invalid_arguments"
-    assert _notify_when(new_task("Only completed", "Do.", notify_when=["completed"])["id"]) == "completed"
+    assert _notify_when(new_task("Only completed", "Do.", notify_when=["completed"])["id"]) == "completed,-failed"
     queued = run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
     out = run("task.update", dict(task_id=made["id"], expected_row_version=queued["row_version"],
                                   notify_when=["failed"]))
@@ -190,7 +190,7 @@ def test_a_revision_keeps_notify_when_unless_it_names_another(solar_env):
     assert _notify_when(kept["id"]) == "failed"
     changed = run("task.create", dict(title="Close", instructions="Do.", revises_task_id=made["id"],
                                       notify_when=["completed"]))
-    assert _notify_when(changed["id"]) == "completed"
+    assert _notify_when(changed["id"]) == "completed,-failed"
 
 
 # --------------------------------------------------------------------------
