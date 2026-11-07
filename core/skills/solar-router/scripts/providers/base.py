@@ -211,8 +211,53 @@ class BaseProvider(ABC):
             raise RuntimeError(f"{self.name} {summarize(proc.returncode, proc.stderr or '', proc.stdout or '', prompts=[prompt])}")
         output = proc.stdout.strip()
         if not output:
-            raise RuntimeError("provider returned empty output")
+            raise RuntimeError(self._empty_output_error(proc.stderr, proc.stdout, [prompt]))
         return AskResult(self.name, self.clean_output(output), mode)
+
+    @staticmethod
+    def _empty_output_error(stderr, stdout, prompts) -> str:
+        """Exit 0 with no answer: keep the short summary and add what the client said (#142).
+
+        Same bounded, secret-scrubbed tail as a non-zero exit (review_failure.summarize);
+        with nothing on stderr or stdout the message is the plain summary, as before."""
+        summary = "provider returned empty output"
+        try:
+            from review_failure import summarize
+            detail = summarize(0, stderr or "", stdout or "", prompts=prompts)
+        except Exception:  # noqa: BLE001 - diagnostics must never change the outcome
+            return summary
+        return summary if detail in ("exit 0: no output", "exit 0") else f"{summary} ({detail})"
+
+    @staticmethod
+    def _read_stderr_bounded(stream, seconds: float = 1.0, limit: int = 16384) -> str:
+        """What the client already wrote to stderr, without waiting for the descriptor to close.
+
+        Capture the initial output until EOF, the read deadline (one second by default), or
+        the chunk that reaches the byte threshold (16 KiB by default). Keep that chunk whole
+        so summarize can redact before trimming. The deadline also covers descendants that
+        outlive the client and hold the pipe open."""
+        try:
+            fd = stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            return ""
+        import selectors
+        import time
+        data = b""
+        deadline = time.monotonic() + seconds
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(fd, selectors.EVENT_READ)
+                while len(data) < limit:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not selector.select(remaining):
+                        break
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    data += chunk
+        except Exception:  # noqa: BLE001 - diagnostics must never change the outcome
+            pass
+        return data.decode("utf-8", errors="replace")
 
     def _measurement_flags(self):
         from ask_metering import output_flags
@@ -249,7 +294,7 @@ class BaseProvider(ABC):
             raise RuntimeError(error)
         output = proc.stdout.strip()
         if not output:
-            raise RuntimeError("provider returned empty output")
+            raise RuntimeError(self._empty_output_error(proc.stderr, proc.stdout, [prompt]))
         return self.clean_output(output)
 
     def run_review(self, *, manifest, expected, profile, before_launch=lambda: None, observation_sink=None) -> str:

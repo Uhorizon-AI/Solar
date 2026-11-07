@@ -92,6 +92,37 @@ class TestBaseProviderRun(unittest.TestCase):
 
     @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
     @patch("providers.base.subprocess.run")
+    def test_empty_output_keeps_stderr_tail_and_scrubs_secrets(self, mock_run, _):
+        mock_run.return_value = _mock_proc(stdout="", stderr="a\nb\ntoken=hunter2secret\ndenied: permission")
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.run("prompt")
+        self.assertIn("empty output", str(ctx.exception))
+        self.assertIn("denied: permission", str(ctx.exception))
+        self.assertNotIn("hunter2secret", str(ctx.exception))
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
+    @patch("providers.base.subprocess.run")
+    def test_empty_output_with_a_known_cause_stores_its_fixed_word(self, mock_run, _):
+        mock_run.return_value = _mock_proc(stdout="", stderr="warming up\nError 429: rate limit exceeded")
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.run("prompt")
+        self.assertEqual(str(ctx.exception), "provider returned empty output (exit 0: quota_or_rate_limit)")
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
+    @patch("providers.base.subprocess.run")
+    def test_empty_output_stays_plain_when_the_summary_itself_fails(self, mock_run, _):
+        mock_run.return_value = _mock_proc(stdout="", stderr="some cause")
+        with patch("review_failure.summarize", side_effect=Exception("boom")):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.provider.run("prompt")
+        self.assertEqual(str(ctx.exception), "provider returned empty output")
+        with patch("review_failure.summarize", return_value="exit 0"):  # its own internal fallback
+            with self.assertRaises(RuntimeError) as ctx:
+                self.provider.run("prompt")
+        self.assertEqual(str(ctx.exception), "provider returned empty output")
+
+    @patch("providers.base.shutil.which", return_value="/usr/bin/claude")
+    @patch("providers.base.subprocess.run")
     def test_empty_output_raises(self, mock_run, _):
         mock_run.return_value = _mock_proc(stdout="   ")
         with self.assertRaises(RuntimeError) as ctx:
@@ -500,6 +531,157 @@ class TestProviderKnowsWhereItIs(unittest.TestCase):
         )
         self.assertEqual(env["SOLAR_WORKSPACE"], "/elsewhere")
         self.assertEqual(env["SOLAR_ROOT"], "/another")
+
+class TestExitZeroWithoutOutputKeepsTheCause(unittest.TestCase):
+    """#142 on the paths that do not go through BaseProvider.run: streaming clients and Ollama."""
+
+    STDERR = "boot\nload\nsandbox\ndenied: the command permission\nretry later token=hunter2secret"
+
+    def _stream_error(self, provider, module, stderr):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd) as stderr_pipe:
+            with os.fdopen(write_fd, "w") as writer:
+                writer.write(stderr)
+            proc = MagicMock()
+            proc.stdout, proc.stderr, proc.returncode = iter([]), stderr_pipe, 0
+            with (
+                patch.object(provider, "resolve_binary", side_effect=lambda b: b),
+                patch(f"providers.{module}.subprocess.Popen", return_value=proc),
+                self.assertRaises(RuntimeError) as ctx,
+            ):
+                list(provider.stream("a question"))
+        return str(ctx.exception)
+
+    def _assert_cause_kept(self, message):
+        self.assertTrue(message.startswith("provider returned empty output"))
+        self.assertIn("denied: the command permission", message)
+        self.assertNotIn("boot", message)  # only the last three lines
+        self.assertNotIn("hunter2secret", message)
+
+    def test_cursor_stream(self):
+        self._assert_cause_kept(self._stream_error(AgentProvider(), "agent", self.STDERR))
+
+    def test_claude_stream(self):
+        self._assert_cause_kept(self._stream_error(ClaudeProvider(), "claude", self.STDERR))
+
+    def test_ollama_run(self):
+        done = _mock_proc(stdout="", stderr=self.STDERR)
+        with patch("providers.base.shutil.which", return_value="/usr/bin/ollama"), \
+             patch("providers.ollama.subprocess.run", return_value=done):
+            with self.assertRaises(RuntimeError) as ctx:
+                OllamaProvider().run("a question")
+        self._assert_cause_kept(str(ctx.exception))
+
+    def test_streams_keep_the_plain_message_when_stderr_is_empty(self):
+        for provider, module in ((AgentProvider(), "agent"), (ClaudeProvider(), "claude")):
+            self.assertEqual(self._stream_error(provider, module, ""), "provider returned empty output")
+
+    def test_a_descendant_holding_stderr_open_does_not_hold_the_error_back(self):
+        """PR 145 review: the client exits 0 but a child keeps stderr open; the error must not wait for it."""
+        import sys
+        import tempfile
+        import time
+        script = (
+            "import subprocess, sys\n"
+            "sys.stderr.write('denied: the command permission\\n'); sys.stderr.flush()\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)'], stdout=subprocess.DEVNULL)\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "client.py")
+            with open(path, "w") as fh:
+                fh.write(script)
+            for provider, key in ((AgentProvider(), "SOLAR_ROUTER_AGENT_CMD"), (ClaudeProvider(), "SOLAR_ROUTER_CLAUDE_CMD")):
+                with patch.dict(os.environ, {key: f"{sys.executable} {path}"}), \
+                     patch.object(provider, "resolve_binary", side_effect=lambda b: b):
+                    started = time.monotonic()
+                    with self.assertRaises(RuntimeError) as ctx:
+                        list(provider.stream("a question"))
+                    elapsed = time.monotonic() - started
+                self.assertLess(elapsed, 3.0, provider.name)
+                self.assertIn("denied: the command permission", str(ctx.exception))
+
+    def test_stderr_pipe_summarizes_the_captured_prefix_of_long_output(self):
+        import subprocess
+        import sys
+
+        initial = "Command execution denied by the sandbox"
+        final = "Final diagnostic outside the captured prefix"
+        script = f"import sys; sys.stderr.write({initial!r} + ' ' * 131072 + chr(10) + {final!r})"
+        with subprocess.Popen([sys.executable, "-c", script], stderr=subprocess.PIPE, text=True) as proc:
+            try:
+                captured = AgentProvider._read_stderr_bounded(proc.stderr)
+                _, remaining = proc.communicate(timeout=5)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+        message = AgentProvider._empty_output_error(captured, "", [])
+        self.assertIn(initial, message)
+        self.assertNotIn(final, message)
+        self.assertIn(final, remaining)
+
+    def test_captured_pipe_output_hides_authorization_credentials(self):
+        header = "Authorization: Basic dGVzdDpmaWN0aXRpb3Vz"
+        diagnosis = " denied: the command permission\n"
+        limit = 32 + len(diagnosis)
+        message = self._through_a_pipe("a" * 10 + "\n" + header + "\n" + diagnosis, limit, [])
+        self.assertIn("denied: the command permission", message)
+        self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)
+
+    def test_truncated_stderr_pipe_hides_the_rest_of_an_open_quoted_secret(self):
+        diagnosis = "Command execution denied by the sandbox"
+        prefix = diagnosis + '\n{"password": "private-fixture visible-secret-fragment'
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd) as stderr, os.fdopen(write_fd, "w") as writer:
+            writer.write(prefix)
+            writer.flush()
+            captured = AgentProvider._read_stderr_bounded(stderr, limit=len(prefix))
+            self.assertEqual(captured, prefix)
+            writer.write(' and the rest"}\n')
+        message = AgentProvider._empty_output_error(captured, "", [])
+        self.assertIn(diagnosis, message)
+        self.assertNotIn("private-fixture", message)
+        self.assertNotIn("visible-secret-fragment", message)
+
+    def test_captured_pipe_output_hides_multiline_prompts(self):
+        prompt = "first line of the private prompt\nsecond line of the private prompt\nthird line of the private prompt"
+        diagnosis = "denied: the command permission\n"
+        text = prompt + "\n" + diagnosis
+        message = self._through_a_pipe(text, len(text) - 5, [prompt])
+        self.assertNotIn("private prompt", message)
+        self.assertIn("denied: the command permission", message)
+
+    def test_a_prose_cause_survives_the_stream_path(self):
+        """PR 145 review: scrubbing in the reader and again in summarize used to eat `denied ...`."""
+        cause = "authorization: denied because the sandbox blocked the command\n"
+        message = self._through_a_pipe(cause, 4096, ["some prompt that is not in the output"])
+        self.assertIn("sandbox blocked the command", message)
+
+    def test_captured_pipe_output_hides_json_credentials_on_the_next_line(self):
+        diagnosis = "Command execution denied by the sandbox\n"
+        for key, value in (('{"api_key":', ' "private-fixture-123"}'),
+                           ('{"Authorization":', ' "Basic dGVzdDpmaWN0aXRpb3Vz"}')):
+            payload = "x" * 30 + "\n" + key + "\n" + value + "\n" + diagnosis
+            limit = len(value) + 1 + len(diagnosis) + 3  # the last read can cross the byte threshold
+            message = self._through_a_pipe(payload, limit, [])
+            self.assertNotIn("private-fixture-123", message)
+            self.assertNotIn("dGVzdDpmaWN0aXRpb3Vz", message)
+            self.assertIn("denied by the sandbox", message)
+
+    @staticmethod
+    def _through_a_pipe(payload: str, limit: int, prompts) -> str:
+        """Write a small payload to a real stderr pipe and read it back bounded; never waits unbounded."""
+        import subprocess, sys
+        proc = subprocess.Popen([sys.executable, "-c", f"import sys; sys.stderr.write({payload!r})"],
+                                stderr=subprocess.PIPE, text=True)
+        try:
+            proc.wait(timeout=10)
+            return AgentProvider._empty_output_error(
+                AgentProvider._read_stderr_bounded(proc.stderr, limit=limit), "", prompts)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=10)
+            proc.stderr.close()
 
 
 if __name__ == "__main__":

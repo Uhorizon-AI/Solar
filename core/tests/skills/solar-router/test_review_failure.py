@@ -41,3 +41,96 @@ def test_escaped_quotes_inside_a_secret_do_not_leak_the_tail():
     from review_failure import redact
     for text in ('{"password":"prefix\\"private-tail"}', "{'token': 'a\\'private-tail'}"):
         assert "private-tail" not in redact(text), text
+
+
+def test_authorization_headers_hide_the_whole_credential_not_only_the_scheme():
+    """PR 145 review: `Authorization: Basic <credential>` used to leave the credential in the error."""
+    for header in ("Authorization", "Proxy-Authorization", "authorization"):
+        for scheme in ("Basic", "Bearer", "Token", "Digest"):
+            out = rf.summarize(0, f"warming up\n{header}: {scheme} dGVzdDpmaWN0aXRpb3Vz\nended")
+            assert "dGVzdDpmaWN0aXRpb3Vz" not in out, (header, scheme, out)
+            assert "ended" in out
+    assert "dGVzdDpmaWN0aXRpb3Vz" not in rf.summarize(1, "Authorization=Basic dGVzdDpmaWN0aXRpb3Vz")
+    assert "dGVzdDpmaWN0aXRpb3Vz" not in rf.summarize(1, '{"Authorization": "Basic dGVzdDpmaWN0aXRpb3Vz"}')
+
+
+def test_digest_parameters_and_a_following_secret_on_the_same_line_are_hidden():
+    """PR 145 review: the value used to stop at the first comma."""
+    out = rf.summarize(0, 'boot\nAuthorization: Digest username="alice", realm="x", nonce="n0nc3x", '
+                          'response="supersecretresponse"\nnext line is the diagnosis')
+    for leaked in ("supersecretresponse", "n0nc3x", "alice"):
+        assert leaked not in out, out
+    assert "next line is the diagnosis" in out
+    out = rf.summarize(0, "Authorization: Basic dGVzdA==, token=abc999secret\nafter")
+    assert "abc999secret" not in out and "dGVzdA" not in out and "after" in out
+    assert "supersecretresponse" not in rf.summarize(1, "Proxy-Authorization: Digest a=\"1\", response=\"supersecretresponse\"")
+
+
+def test_prose_after_an_authorization_name_keeps_its_cause_but_parameter_schemes_are_hidden():
+    """PR 145 review: `authorization: denied because ...` is a diagnosis, not a credential."""
+    out = rf.summarize(0, "authorization: denied because the sandbox blocked the command")
+    assert "sandbox blocked the command" in out
+    for line in ('Authorization: Hawk id="abc", ts="1", mac="supermac"',
+                 "Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261106/x, Signature=supersig"):
+        out = rf.summarize(0, line + "\nafter")
+        assert "supermac" not in out and "supersig" not in out and "AKIDEXAMPLE" not in out, out
+        assert "after" in out
+
+
+def test_any_authorization_scheme_is_hidden_to_the_end_of_the_line():
+    """PR 145 review: a list of known schemes failed open for DPoP, Zoho-oauthtoken, ApiKey, SSWS or Bot."""
+    for scheme, secret in (("DPoP", "fictitious~token.456"), ("Zoho-oauthtoken", "1000.abc123def"),
+                           ("ApiKey", "abc123def"), ("SSWS", "abc123def"), ("Bot", "abc123def"),
+                           ("invalid", "abc123def"), ("expired", "abc123def"), ("missing", "abc123def"),
+                           ("Error-Custom", "fictitious~token.456"), ("no-abc123def", "x1"), ("not-abc123def", "x1")):
+        for header in ("Authorization", "Proxy-Authorization"):
+            out = rf.summarize(0, f"{header}: {scheme} {secret}\nafter the header")
+            assert secret not in out and "abc123def" not in out, (scheme, out)
+            assert "after the header" in out, (scheme, out)
+
+
+def test_an_empty_header_does_not_swallow_the_next_line():
+    """PR 145 review: `\\s*` around the separator crossed the newline and ate the diagnosis."""
+    for name in ("Authorization", "Proxy-Authorization", "token", "api_key"):
+        out = rf.summarize(0, f"{name}:\nCommand execution denied by the sandbox")
+        assert "denied by the sandbox" in out, (name, out)
+
+
+def test_a_quoted_key_still_hides_a_json_value_on_the_next_line():
+    """PR 145 review: valid JSON may put the value on the line after a quoted key."""
+    for text, secret in (('{"api_key":\n "private-fixture-123"}', "private-fixture-123"),
+                         ('{"Authorization":\n "Basic dGVzdDpmaWN0aXRpb3Vz"}', "dGVzdDpmaWN0aXRpb3Vz"),
+                         ('{"Authorization"\n :\n "Bearer abc999secret"}', "abc999secret")):
+        out = rf.summarize(0, text)
+        assert secret not in out, (text, out)
+    # An unquoted, empty header still keeps the next line's diagnosis.
+    assert "denied by the sandbox" in rf.summarize(0, "Authorization:\nCommand execution denied by the sandbox")
+
+
+def test_a_redaction_marker_in_raw_stderr_does_not_exempt_a_credential():
+    """A marker in raw stderr must not exempt the rest of the authorization line."""
+    for header in ("Authorization", "Proxy-Authorization"):
+        for credential in ("Basic dGVzdDpmaWN0aXRpb3Vz", "DPoP fictitious~token.456"):
+            text = f"{header}: [REDACTED] {credential}\nconnection refused"
+            assert rf.summarize(0, text) == f"exit 0: {header}: [REDACTED] | connection refused"
+
+
+def test_unterminated_quoted_values_are_redacted_through_the_end_of_the_input():
+    diagnosis = "Command execution denied by the sandbox"
+    for field in ('{"password": "', "api_key='", '{"Authorization": "'):
+        for suffix in ("", "\\", "\nsecond-secret-line"):
+            out = rf.summarize(0, f"{diagnosis}\n{field}private-fixture visible-secret-fragment{suffix}")
+            assert diagnosis in out
+            assert "private-fixture" not in out
+            assert "visible-secret-fragment" not in out
+            assert "second-secret-line" not in out
+
+
+def test_bearer_redaction_preserves_quoted_value_boundaries():
+    diagnosis = "Command execution denied by the sandbox"
+    for text in ('{"Authorization": "Bearer private-fixture"}',
+                 r'{"password": "Bearer prefix\"private-fixture"}',
+                 "api_token=Bearer private-fixture"):
+        out = rf.summarize(0, text + "\n" + diagnosis)
+        assert "private-fixture" not in out
+        assert diagnosis in out

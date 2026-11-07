@@ -616,6 +616,61 @@ def test_cursor_project_path_matches_a_cli_bundle_and_a_changed_limit_does_not(t
     assert error.value.detail['reason'] == 'cursor_project_path_unreadable'
 
 
+def test_cursor_project_path_survives_a_renamed_function_and_import(tmp_path):
+    """#139: Cursor 2026.11.05 renamed the project function (d -> m) and the slug import (a -> o)."""
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not installed')
+    bundle = tmp_path / 'index.js'
+    bundle.write_text(_CURSOR_PATH_FIXTURE.replace('function d(t)', 'function m(t)').replace('(0,a.r_)', '(0,o.r_)'))
+    (tmp_path / 'node').symlink_to(node)
+    workspace = '/tmp/sr-abcdefgh/repository'
+    data = '/tmp/sr-abcdefgh/home/cursor-data'
+    tmp = '/tmp/sr-abcdefgh/tmp'
+    assert guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp) == \
+        guards.cursor_project_path(workspace, data_dir=data, tmpdir=tmp)
+    bundle.write_text(_CURSOR_PATH_FIXTURE.replace('e.length>83', 'e.length>10').replace('function d(t)', 'function m(t)'))
+    with pytest.raises(profiles.ProfileError) as error:  # a changed limit is still refused
+        guards.require_cursor_project_path_current(bundle, '/tmp/ws', data_dir='/tmp/' + 'd' * 20, tmpdir='/tmp')
+    assert error.value.detail['reason'] == 'cursor_project_path_drift'
+
+
+def _observe_fixture(tmp_path, source):
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('node is not installed')
+    bundle = tmp_path / 'index.js'
+    bundle.write_text(source)
+    if not (tmp_path / 'node').exists():
+        (tmp_path / 'node').symlink_to(node)
+    workspace, data, tmp = '/tmp/sr-abcdefgh/repository', '/tmp/sr-abcdefgh/home/cursor-data', '/tmp/sr-abcdefgh/tmp'
+    return guards.observe_cursor_project_path(bundle, workspace, data_dir=data, tmpdir=tmp), \
+        guards.cursor_project_path(workspace, data_dir=data, tmpdir=tmp)
+
+
+def test_cursor_project_path_ignores_look_alike_functions_and_refuses_ambiguity(tmp_path):
+    """PR 145 review: a function starting like the project one but without its limits is not the one."""
+    decoys = 'function z(t){let e=u();return e}\nfunction x(t){let e=u();return "no"}\n'
+    observed, expected = _observe_fixture(tmp_path, decoys + _CURSOR_PATH_FIXTURE.replace('function d(t)', 'function m(t)'))
+    assert observed == expected
+    twice = _CURSOR_PATH_FIXTURE + _CURSOR_PATH_FIXTURE.replace('function d(t)', 'function q(t)')
+    with pytest.raises(profiles.ProfileError) as error:
+        _observe_fixture(tmp_path, twice)
+    assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
+    without = _CURSOR_PATH_FIXTURE.replace('function d(t){let e=u();', 'function d(t){let k=u();')
+    with pytest.raises(profiles.ProfileError) as error:
+        _observe_fixture(tmp_path, without)
+    assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
+
+
+def test_cursor_project_path_fails_closed_when_the_hash_import_is_renamed(tmp_path):
+    """The hash alias is still a literal name: a future rename is refused, not guessed."""
+    renamed = _CURSOR_PATH_FIXTURE.replace('(0,n.createHash)', '(0,n.makeHash)')
+    with pytest.raises(profiles.ProfileError) as error:
+        _observe_fixture(tmp_path, renamed)
+    assert error.value.detail['reason'] == 'cursor_project_path_shape_unknown'
+
+
 def test_cursor_path_observer_does_not_inherit_node_options(tmp_path, monkeypatch):
     node = shutil.which('node')
     if node is None:

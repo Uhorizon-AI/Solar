@@ -226,6 +226,9 @@ function unknownShape() {
 function extract(marker) {
   const start = index.indexOf(marker);
   if (start < 0) unknownShape();
+  return extractFrom(start);
+}
+function extractFrom(start) {
   const open = index.indexOf("{", start);
   let depth = 0;
   for (let i = open; i < index.length; i++) {
@@ -236,16 +239,28 @@ function extract(marker) {
   unknownShape();
 }
 function adapt(source) {
-  return source.split("(0,a.r_)").join(" slug").split("(0,i.join)").join(" path.join")
+  // The workspace-slug import and the project function are renamed by the bundler between
+  // versions (a.r_ -> o.r_, d -> m in 2026.11.05); the logic is what Solar compares.
+  return source.replace(/\(0,\w+\.r_\)/g, " slug").split("(0,i.join)").join(" path.join")
     .split("(0,s.tmpdir)").join(" os.tmpdir").split("(0,s.homedir)").join(" os.homedir")
     .split("(0,n.createHash)").join(" crypto.createHash");
 }
 const slugSrc = adapt(extract('function s(t){return t.replace(/[^a-zA-Z0-9]/g,"-")')).replace("function s(", "function slug(");
 const dataSrc = adapt(extract("function c(){const t=process.env.CURSOR_DATA_DIR"));
 const projectsSrc = adapt(extract('function u(){return(0,i.join)(c(),"projects")}'));
-const projectSrc = adapt(extract("function d(t){let e=u();"));
+// The project function is the one that builds the hashed `.cursor` fallback; a look-alike that does
+// not, or two that do, is an unknown shape rather than a guess. The limits themselves are left to
+// the comparison, so a changed limit is reported as drift.
+const candidates = [];
+for (const m of index.matchAll(/function (\w+)\(t\)\{let e=u\(\);/g)) {
+  const body = extractFrom(m.index);
+  if (body.includes('.createHash)("sha256")') && body.includes('".cursor"')) candidates.push([m[1], body]);
+}
+if (candidates.length !== 1) unknownShape();
+const projectName = candidates[0][0];
+const projectSrc = adapt(candidates[0][1]);
 const fn = new Function("crypto", "os", "path", "workspace",
-  slugSrc + "\n" + dataSrc + "\n" + projectsSrc + "\n" + projectSrc + "\nreturn d(workspace);");
+  slugSrc + "\n" + dataSrc + "\n" + projectsSrc + "\n" + projectSrc + "\nreturn " + projectName + "(workspace);");
 process.stdout.write(String(fn(crypto, os, path, process.argv[4])));
 """
 
