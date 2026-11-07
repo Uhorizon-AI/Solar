@@ -524,15 +524,104 @@ def test_a_snapshot_that_cannot_be_read_leaves_a_trace_instead_of_a_silent_exit(
 
 
 def test_the_cleanup_failure_path_announces_the_run_it_failed(tmp_path):
-    """complete.sh fails a task on a cleanup error: `state task fail` now says which run, for the notice."""
+    """complete.sh with a failing cleanup hook: the notice is sent and recorded for the run that failed."""
     import json
-    workspace, root, env, task = _notify_when(tmp_path, 'active', 'failed', 'notify_run: run-1\n')
-    seed(root)
     import solar_state
+    from reservation_tokens import token_of
+    workspace, root, env = fixture_env(tmp_path)
+    run_env = env_for(root, {**env, 'SOLAR_WORKSPACE': str(workspace)})
+    assert subprocess.run(['bash', str(SCRIPTS / 'install_hooks.sh'), 'demo'], env=run_env,
+                          text=True, capture_output=True, timeout=30).returncode == 0
     with solar_state.session() as store:
-        pass
-    out = subprocess.run(['python3', str(SCRIPTS.parents[1] / 'solar-state/scripts/solar_state.py'),
-                          'task', 'fail', task_id_of(task), '--field', 'cleanup_error=true'],
-                         env=env_for(root, env), text=True, capture_output=True, timeout=30)
-    assert out.returncode == 0, out.stderr
-    assert json.loads(out.stdout)['run'], out.stdout
+        tid = store.task_create([('title', '"Cleanup fails"'), ('priority', 'normal'), ('scheduled_time', '"now"'),
+                                 ('recurring', 'false'), ('cleanup_required', 'true'), ('resources', 'demo'),
+                                 ('notify_when', 'failed'), ('origin_chat_id', '"456"')],
+                                '\n# Cleanup fails\n', status='queued')
+    started = subprocess.run(['bash', str(SCRIPTS / 'start_next.sh')], env=run_env, text=True,
+                             capture_output=True, timeout=30)
+    assert started.returncode == 0, started.stderr
+    (root / 'hooks' / 'demo' / 'post_complete.sh').write_text('#!/bin/bash\nexit 1\n')
+    with solar_state.session() as store:
+        run = solar_state.value_of(dict(store.task_get(tid)['frontmatter'])['notify_run'])
+        token = token_of(store, tid)
+    done = subprocess.run(['bash', str(SCRIPTS / 'complete.sh'), tid], env={**run_env, 'SOLAR_TASK_TOKEN': token},
+                          text=True, capture_output=True, timeout=60)
+    assert done.returncode == 1, done.stdout + done.stderr
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Task failed' in sent and 'Reason: unknown' in sent
+    with solar_state.session() as store:
+        fields = {k: solar_state.value_of(v) for k, v in store.task_get(tid)['frontmatter']}
+    assert fields['notify_delivered_run'] == run and fields['notify_delivered'] == 'true'
+
+
+def test_a_cleanup_failure_whose_state_write_fails_sends_no_notice(tmp_path):
+    """If `state task fail` itself fails, complete.sh stops: the task is not in error, so nothing is announced."""
+    import shutil
+    import solar_state
+    workspace, root, env = fixture_env(tmp_path)
+    run_env = env_for(root, {**env, 'SOLAR_WORKSPACE': str(workspace)})
+    assert subprocess.run(['bash', str(SCRIPTS / 'install_hooks.sh'), 'demo'], env=run_env,
+                          text=True, capture_output=True, timeout=30).returncode == 0
+    with solar_state.session() as store:
+        tid = store.task_create([('title', '"Cleanup fails"'), ('priority', 'normal'), ('scheduled_time', '"now"'),
+                                 ('recurring', 'false'), ('cleanup_required', 'true'), ('resources', 'demo'),
+                                 ('notify_when', 'failed'), ('origin_chat_id', '"456"')],
+                                '\n# Cleanup fails\n', status='queued')
+    assert subprocess.run(['bash', str(SCRIPTS / 'start_next.sh')], env=run_env, text=True,
+                          capture_output=True, timeout=30).returncode == 0
+    (root / 'hooks' / 'demo' / 'post_complete.sh').write_text('#!/bin/bash\nexit 1\n')
+    shim = tmp_path / 'bin'
+    shim.mkdir()
+    real = shutil.which('python3')
+    (shim / 'python3').write_text(
+        '#!/bin/bash\nif [[ "$1" == *solar_state.py && "$2" == task && "$3" == fail ]]; then exit 1; fi\n'
+        f'exec "{real}" "$@"\n')
+    (shim / 'python3').chmod(0o755)
+    from reservation_tokens import token_of
+    with solar_state.session() as store:
+        token = token_of(store, tid)
+    done = subprocess.run(['bash', str(SCRIPTS / 'complete.sh'), tid],
+                          env={**run_env, 'SOLAR_TASK_TOKEN': token, 'PATH': f"{shim}:{env['PATH']}"},
+                          text=True, capture_output=True, timeout=60)
+    assert done.returncode != 0
+    assert not (workspace / 'sent.log').exists()
+
+
+def test_a_missing_expected_run_for_a_claimed_task_leaves_a_trace_and_sends_nothing(tmp_path):
+    workspace, root, env, task = _notify_when(tmp_path, 'error', 'completed,failed', 'notify_run: run-1\n')
+    seed(root)
+    result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
+                            env=env_for(root, {**env, 'SOLAR_NOTIFY_EXPECT_STATUS': 'error',
+                                               'SOLAR_NOTIFY_EXPECT_RUN': ''}),
+                            text=True, capture_output=True, timeout=30)
+    mirror(root)
+    assert result.returncode == 1 and 'notify_expect_run_missing' in result.stderr
+    assert 'notify_error: notify_expect_run_missing' in task.read_text()
+    assert not (workspace / 'sent.log').exists()
+
+
+def test_a_last_look_that_cannot_read_the_task_leaves_a_trace(tmp_path):
+    """The first read works; the one right before sending fails: the notice is recorded as lost."""
+    import shutil
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'completed', '')
+    seed(root)
+    shim = tmp_path / 'bin'
+    shim.mkdir()
+    counter = tmp_path / 'snapshots'
+    real = shutil.which('python3')
+    (shim / 'python3').write_text(
+        '#!/bin/bash\n'
+        'if [[ "$1" == *solar_state.py && "$2" == task && "$3" == snapshot ]]; then\n'
+        f'  n=$(cat "{counter}" 2>/dev/null || echo 0); echo $((n + 1)) > "{counter}"\n'
+        '  if [[ $n -ge 1 ]]; then exit 1; fi\n'
+        'fi\n'
+        f'exec "{real}" "$@"\n')
+    (shim / 'python3').chmod(0o755)
+    result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
+                            env=env_for(root, {**env, 'PATH': f"{shim}:{env['PATH']}"}),
+                            text=True, capture_output=True, timeout=30)
+    mirror(root)
+    assert result.returncode == 1 and 'notify_snapshot_failed' in result.stderr
+    assert 'notify_error: notify_snapshot_failed' in task.read_text()
+    assert not (workspace / 'sent.log').exists()

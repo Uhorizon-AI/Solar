@@ -101,6 +101,12 @@ else:
   RUN="$(task_field "$TASK_ID" "notify_run")"          # the run of THIS snapshot; every later check is against it
   # A failure the supervisor declared belongs to its run: a task claimed again meanwhile gets no stale notice.
   if [[ -n "${SOLAR_NOTIFY_EXPECT_STATUS:-}" ]]; then
+    if [[ -z "${SOLAR_NOTIFY_EXPECT_RUN:-}" && -n "$RUN" ]]; then
+      # The caller could not say which run failed: sending would be a guess, staying silent a lost notice.
+      state task notice "$TASK_ID" --run "$RUN" --error notify_expect_run_missing --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null 2>&1
+      echo "Task notification failed: notify_expect_run_missing ($TASK_ID)" >&2
+      exit 1
+    fi
     [[ "$(task_status_of "$TASK_ID")" == "$SOLAR_NOTIFY_EXPECT_STATUS" \
        && "$RUN" == "${SOLAR_NOTIFY_EXPECT_RUN:-}" ]] || exit 0
   fi
@@ -269,6 +275,12 @@ fi
 if [[ -z "$MODE" ]]; then
   NOW="$(state task snapshot "$TASK_ID" 2>/dev/null | python3 -c 'import json,sys
 d=json.load(sys.stdin); print(d["status"] + " " + (d["fields"].get("notify_run") or ""))' 2>/dev/null)"
+  if [[ -z "$NOW" ]]; then
+    # The last read failed: say the notice was lost, as the first read does.
+    state task notice "$TASK_ID" --run "$RUN" --error notify_snapshot_failed --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null 2>&1
+    echo "Task notification failed: notify_snapshot_failed ($TASK_ID)" >&2
+    exit 1
+  fi
   [[ "$NOW" == "$SNAPSHOT_STATUS $RUN" ]] || exit 0
 fi
 send_chunks "$MESSAGE" || { record_notify_failure "telegram_send_failed"; exit 1; }
