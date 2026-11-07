@@ -71,6 +71,9 @@ new wait) at one occurrence (a recurring task's `recurring_last_run`).
 - **Announced once.** The supervisor tells the configured chat through `notify_if_configured.sh` (`--waiting`,
   `--expired-draft`, `--expired-skipped`) when a wait begins and when it ends. Title only, never the instructions,
   never the chat a task names, and the task is not touched.
+  - The `--waiting` notice also carries a short task id (the first 8 characters of the id, longer only if another task
+    shares them) and the expiry in local time, or says the wait does not expire when the limit is off. Plain text; no
+    instructions, paths or buttons. The end-of-wait notices are unchanged.
   - It runs on its own thread, at most three notices per run, never while draining, so a slow sender never delays a
     claim, the heartbeat or a drain. A sender that hangs is ended after 30 seconds with its whole process group.
   - A notice is taken in `audit` (`approval_notice`) before it is sent and its outcome is recorded

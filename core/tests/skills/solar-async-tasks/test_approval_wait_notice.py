@@ -73,6 +73,62 @@ def test_each_notice_says_what_happened_and_nothing_else(tmp_path, mode, words):
         assert "notify_status" not in dict(store.task_get(task_id)["frontmatter"])
 
 
+def _sent(workspace):
+    return (workspace / "sent.log").read_text()
+
+
+def test_the_waiting_notice_carries_a_short_id_and_the_expiry(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    env["SOLAR_APPROVAL_WAIT_HOURS"] = "72"
+    task_id, _ = waiting_task()
+    assert notify(task_id, "--waiting", env).returncode == 0
+    sent = _sent(workspace)
+    short = task_id[:8]
+    assert f"Task: {short}" in sent and f"authorize task {short}" in sent
+    assert task_id not in sent                                  # short, never the whole id
+    assert "Expires: " in sent and "the wait ends on its own" in sent
+    assert "No expiry" not in sent
+    assert "/" not in sent.split("|", 1)[1]                      # no paths
+
+
+def test_a_wait_that_never_expires_says_so(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    env["SOLAR_APPROVAL_WAIT_HOURS"] = "0"
+    task_id, _ = waiting_task()
+    assert notify(task_id, "--waiting", env).returncode == 0
+    sent = _sent(workspace)
+    assert "No expiry: this wait does not end on its own." in sent
+    assert "Expires:" not in sent and f"Task: {task_id[:8]}" in sent
+
+
+def test_the_waiting_notice_leaks_no_instructions(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    task_id, _ = waiting_task(origin="999")
+    assert notify(task_id, "--waiting", env).returncode == 0
+    sent = _sent(workspace)
+    assert SECRET not in sent and "999" not in sent and "Review the thing" in sent
+
+
+def test_the_short_id_grows_until_no_other_task_shares_it(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    with solar_state.session() as store:
+        first = store.task_create([("title", '"A"')], "\nA\n", task_id="abcdef12-0001")
+        second = store.task_create([("title", '"B"')], "\nB\n", task_id="abcdef12-0002")
+        short_a, short_b = store.task_short_id(first), store.task_short_id(second)
+        assert store.task_short_id("abcdef12-0001") == short_a
+        assert short_a != short_b and not second.startswith(short_a) and not first.startswith(short_b)
+        assert store.task_short_id("zz") == "zz" if store.task_get("zz") else True
+
+
+@pytest.mark.parametrize("mode", ["--expired-draft", "--expired-skipped"])
+def test_the_end_of_wait_notices_are_unchanged(tmp_path, mode):
+    workspace, root, env = fixture_env(tmp_path)
+    task_id, _ = waiting_task()
+    assert notify(task_id, mode, env).returncode == 0
+    sent = _sent(workspace)
+    assert "Task:" not in sent and "Expires" not in sent
+
+
 def test_it_goes_to_the_configured_chat_never_to_the_one_the_task_names(tmp_path):
     workspace, root, env = fixture_env(tmp_path)
     task_id, _ = waiting_task(origin="999")                  # allowed, but not the configured chat
