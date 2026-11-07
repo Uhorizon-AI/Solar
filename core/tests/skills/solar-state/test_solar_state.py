@@ -609,6 +609,33 @@ def test_whatever_create_and_set_accept_reimports_identically(ready):
         other.conn.close()
 
 
+def test_a_notice_is_recorded_in_one_step_and_only_for_the_current_run(ready):
+    with session(ready, auto_backup=False) as s:
+        tid = s.task_create([("title", '"t"'), ("notify_run", "run-2")])
+        assert s.task_notice_record(tid, "run-1") is False          # the run it belonged to is over
+        assert dict(s.task_get(tid)["frontmatter"]).get("notify_delivered") is None
+        assert s.task_notice_record(tid, "run-2") is True
+        fields = {k: solar_state.value_of(v) for k, v in s.task_get(tid)["frontmatter"]}
+        assert (fields["notify_status"], fields["notify_delivered"], fields["notify_delivered_run"]) == \
+            ("delivered", "true", "run-2")
+        assert s.task_notice_record(tid, "run-2", error="notify_lock_timeout", at="2026-11-07T00:00:00Z") is True
+        fields = {k: solar_state.value_of(v) for k, v in s.task_get(tid)["frontmatter"]}
+        assert (fields["notify_status"], fields["notify_error"]) == ("failed", "notify_lock_timeout")
+        assert s.task_notify_run(tid) == "run-2"
+
+
+def test_each_claim_starts_a_new_notice_run_even_for_a_retry_after_an_error(ready):
+    with session(ready, auto_backup=False) as s:
+        tid = s.task_create([("title", '"t"'), ("notify_delivered", "true")], status="queued")
+        claim = s.task_claim_detail(tid, "w")
+        first = s.task_notify_run(tid)
+        assert first and dict(s.task_get(tid)["frontmatter"]).get("notify_delivered") is None
+        s.task_fail(tid, "## Execution Error\n- error_code: x\n", token=claim["token"])
+        s.task_transition(tid, "queued")
+        assert s.task_claim_detail(tid, "w")["claimed"]
+        assert s.task_notify_run(tid) not in ("", first)
+
+
 # --- review round 3: ids that need escaping, how the block may close ---------
 
 @pytest.mark.parametrize("tid", ['a"b', "ñ-ü", "con espacio", "a:b", "a.b-c_d"])

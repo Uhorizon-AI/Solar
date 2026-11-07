@@ -2,12 +2,17 @@
 
 # If the finished task asks for it in notify_when, send a Telegram notification
 # to the allowlisted origin chat (or TELEGRAM_CHAT_ID). notify_when is a comma
-# list of `completed`, `failed`, `blocked`; the bare legacy value `completed`
-# also reports a failure. `blocked` is announced by the supervisor (--waiting). When the task carries a
+# list of `completed` and `failed`, read literally: `completed` alone does not
+# report a failure. The approval-wait notice (--waiting) is sent for every task.
+# When the task carries a
 # `## Delivery` section, that is the message: the one-screen delivery the
 # executor wrote, ending in its own evidence line. Otherwise a brief line plus
 # the result location. Long text is chunked (~1s apart).
 # Usage: notify_if_configured.sh <task_id> [--waiting|--expired-draft|--expired-skipped]
+#
+# SOLAR_NOTIFY_EXPECT_RUN / SOLAR_NOTIFY_EXPECT_STATUS (set by the supervisor for a failure it declared):
+# the notice belongs to that run, and nothing is sent once the task has been claimed again or has left that status.
+# SOLAR_NOTIFY_LOCK_WAIT: seconds to wait for the per-task lock (default 150).
 #
 # The optional mode announces a task that waits for `task.authorize_run`, or whose wait ended. It goes
 # to the configured chat only (never the origin chat a task names), carries the title and no
@@ -26,21 +31,12 @@ case "$MODE" in
   *) echo "Unknown notification mode: $MODE" >&2; exit 2 ;;
 esac
 
-if [[ -n "$MODE" ]]; then
-  # The wait notice is the `blocked` event. A task that lists other events but not `blocked` does not get it;
-  # a task with no list (or only the legacy bare `completed` a gateway parent carries) keeps the notice.
-  WAIT_WHEN="$(task_field "$TASK_ID" "notify_when" | tr -d '[:space:]')"
-  if [[ -n "$WAIT_WHEN" && "$WAIT_WHEN" != "completed" && ",${WAIT_WHEN}," != *",blocked,"* ]]; then
-    exit 0
-  fi
-fi
-
 if [[ -z "$MODE" ]]; then
   NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
   NOTIFY_WHEN="${NOTIFY_WHEN//[[:space:]]/}"
   notify_wants() { [[ ",${NOTIFY_WHEN}," == *",$1,"* ]]; }
   if [[ "$(task_status_of "$TASK_ID")" == "error" ]]; then
-    notify_wants failed || [[ "$NOTIFY_WHEN" == "completed" ]] || exit 0
+    notify_wants failed || exit 0
   else
     notify_wants completed || exit 0
   fi
@@ -54,20 +50,27 @@ if [[ -z "$MODE" ]]; then
   already_delivered && exit 0
 
   # The worker and the supervisor can both announce the same end: serialise check -> send -> record.
-  LOCK_DIR="${TMPDIR:-/tmp}/solar-notify-${TASK_ID//[^A-Za-z0-9_.-]/_}.lock"
+  # The lock is an flock on a file descriptor this shell keeps open: the kernel releases it when the shell
+  # ends, however it ends, and never while the shell lives, so a slow sender is never evicted and a dead
+  # one never blocks anyone.
+  LOCK_FILE="${TMPDIR:-/tmp}/solar-notify-${TASK_ID//[^A-Za-z0-9_.-]/_}.flock"
   # Keep this wait below Supervisor.FAILURE_NOTIFY_TIMEOUT, with time left to record failure.
-  for _ in $(seq 1 150); do
-    mkdir "$LOCK_DIR" 2>/dev/null && { HAVE_LOCK=1; break; }
-    [[ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +2 2>/dev/null)" ]] && rmdir "$LOCK_DIR" 2>/dev/null   # a dead holder
-    sleep 1
-  done
-  if [[ -z "${HAVE_LOCK:-}" ]]; then   # the lock outlives a dead holder by 2 minutes; waiting past that never loses the notice
-    state task set "$TASK_ID" notify_status failed >/dev/null
-    state task set "$TASK_ID" notify_error notify_lock_timeout >/dev/null
+  if { exec 9>>"$LOCK_FILE"; } 2>/dev/null; then
+    for _ in $(seq 1 "${SOLAR_NOTIFY_LOCK_WAIT:-150}"); do
+      python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null && { HAVE_LOCK=1; break; }
+      sleep 1
+    done
+  fi
+  if [[ -z "${HAVE_LOCK:-}" ]]; then
+    state task notice "$TASK_ID" --run "$RUN" --error notify_lock_timeout --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
     echo "Task notification failed: notify_lock_timeout ($TASK_ID)" >&2
     exit 1
   fi
-  trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+  # A failure the supervisor declared belongs to its run: a task claimed again meanwhile gets no stale notice.
+  if [[ -n "${SOLAR_NOTIFY_EXPECT_STATUS:-}" ]]; then
+    [[ "$(task_status_of "$TASK_ID")" == "$SOLAR_NOTIFY_EXPECT_STATUS" \
+       && "$(task_field "$TASK_ID" "notify_run")" == "${SOLAR_NOTIFY_EXPECT_RUN:-}" ]] || exit 0
+  fi
   already_delivered && exit 0
 fi
 
@@ -82,9 +85,7 @@ SUN_DIR="$WORKSPACE_DIR/sun"
 SOLAR_ROOT="${SOLAR_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
 SEND_SCRIPT="$SOLAR_ROOT/core/skills/solar-telegram/scripts/send_telegram.sh"
 record_notify_failure() {
-  state task set "$TASK_ID" notify_status failed >/dev/null
-  state task set "$TASK_ID" notify_error "$1" >/dev/null
-  state task set "$TASK_ID" notify_attempted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
+  state task notice "$TASK_ID" --run "$RUN" --error "$1" --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
   echo "Task notification failed: $1 ($TASK_ID)" >&2
 }
 if [[ ! -x "$SEND_SCRIPT" ]]; then
@@ -149,10 +150,12 @@ if [[ "$TASK_STATUS" == "error" ]]; then
   # A task that asks for `failed` by name also gets the one-line reason (bounded, single line).
   if [[ ",$(task_field "$TASK_ID" "notify_when" | tr -d '[:space:]')," == *",failed,"* ]]; then
     # Only the machine code, never the provider's free text: it can carry paths, prompts or secrets.
+    # Failures are appended, so the current attempt's code is the last one in the body.
     REASON="$(task_body "$TASK_ID" | awk '
       /^## Execution Error[[:space:]]*$/ { found = 1; next }
-      found && /^## / { exit }
-      found && /^- error_code:/ { sub(/^- error_code:[[:space:]]*/, ""); print; exit }
+      found && /^## / { found = 0 }
+      found && /^- error_code:/ { code = $0; sub(/^- error_code:[[:space:]]*/, "", code) }
+      END { print code }
     ' | head -n1 | tr -d '\r[:space:]')"
     [[ "$REASON" =~ ^[a-z][a-z0-9_]{0,39}$ ]] || REASON="unknown"
     BRIEF="${BRIEF}"$'\n'"Reason: ${REASON}"
@@ -230,9 +233,4 @@ fi
 
 send_chunks "$MESSAGE" || { record_notify_failure "telegram_send_failed"; exit 1; }
 
-if [[ "$(task_field "$TASK_ID" "notify_run")" == "$RUN" ]]; then   # a new run has not started meanwhile
-  state task set "$TASK_ID" notify_status delivered >/dev/null
-  state task set "$TASK_ID" notify_error null >/dev/null
-  state task set "$TASK_ID" notify_delivered_run "$RUN" >/dev/null
-  state task set "$TASK_ID" notify_delivered true >/dev/null
-fi
+state task notice "$TASK_ID" --run "$RUN" >/dev/null   # one transaction, only while this run is still the current one

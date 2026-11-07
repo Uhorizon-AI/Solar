@@ -91,7 +91,7 @@ _TEXT_FIELDS = ("title", "object", "scope", "effect", "provider", "planet", "age
 
 def _notify_text(tokens) -> str:
     """The stored spelling of notify_when: tokens in a fixed order, comma separated, empty to turn it off."""
-    return ",".join(t for t in ("completed", "failed", "blocked") if t in tokens)
+    return ",".join(t for t in ("completed", "failed") if t in tokens)
 
 
 def _now_iso() -> str:
@@ -871,14 +871,13 @@ _REVIEW_BATCH = _obj(dict(repository=_REVIEW["properties"]["repository"],
 _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 
 _NOTIFY_WHEN = {
-    "type": "array", "uniqueItems": True, "maxItems": 3,
-    "items": {"type": "string", "enum": ["completed", "failed", "blocked"]},
+    "type": "array", "uniqueItems": True, "maxItems": 2,
+    "items": {"type": "string", "enum": ["completed", "failed"]},
     "description": "When the configured chat is told, without confirming the text (a system notice, not a message "
-                   "to third parties): completed, failed (adds the one-line reason) and blocked (the wait for "
-                   "task.authorize_run, announced with its reason; a task with no list is still told, a task that lists "
-                   "other events without blocked is not). A recurring task is told once per run. An empty list turns "
-                   "off the completed and failed notices. "
-                   "Editing it follows the usual rules: a queued task returns to draft.",
+                   "to third parties), read literally: completed, and failed (adds the one-line reason). "
+                   "`[completed]` alone does not report a failure. A recurring task is told once per run. An empty "
+                   "list turns off these notices. The wait for task.authorize_run is announced for every task, "
+                   "whatever this list says. Editing it follows the usual rules: a queued task returns to draft.",
 }
 
 OPERATIONS: dict[str, Operation] = {op.name: op for op in (

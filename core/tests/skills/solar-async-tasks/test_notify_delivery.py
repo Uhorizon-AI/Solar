@@ -31,7 +31,7 @@ def task_file(root, status='completed', extra=''):
     folder.mkdir(exist_ok=True)
     path = folder / 'delivery.md'
     path.write_text(f'---\nid: "delivery"\ntitle: "Delivery"\nstatus: {status}\n'
-                    'notify_when: completed\norigin_chat_id: "456"\n' + extra + '---\n\n# Task\n')
+                    'notify_when: completed,failed\norigin_chat_id: "456"\n' + extra + '---\n\n# Task\n')
     return path
 
 
@@ -137,13 +137,13 @@ def test_notify_when_failed_reports_failure_with_its_reason_and_not_completion(t
     assert 'Task completed' not in (workspace / 'sent.log').read_text()
 
 
-def test_notify_when_completed_alone_still_reports_failure_without_the_reason(tmp_path):
+def test_failed_adds_only_the_machine_code_never_the_provider_text(tmp_path):
     workspace, root, env = fixture_env(tmp_path)
     failed = task_file(root, 'error', '')
     failed.write_text(failed.read_text() + '\n## Execution Error\n- error: secret path /x\n')
     assert notify(failed, env).returncode == 0
     sent = (workspace / 'sent.log').read_text()
-    assert 'Task failed' in sent and 'Reason' not in sent
+    assert 'Task failed' in sent and 'Reason: unknown' in sent and 'secret' not in sent
 
 
 def test_a_new_claim_clears_the_notice_record_so_each_run_notifies_once(tmp_path):
@@ -211,36 +211,126 @@ def test_a_notice_recorded_for_an_earlier_run_does_not_silence_this_run(tmp_path
     assert 'notify_delivered_run: run-2' in task.read_text()
 
 
-@pytest.mark.parametrize('when,sent', [('completed,failed', False), ('blocked', True), ('', True),
-                                       ('completed', True)])
-def test_the_approval_wait_notice_honours_blocked(tmp_path, when, sent):
+@pytest.mark.parametrize('when', ['completed,failed', 'failed', '', 'completed'])
+def test_the_approval_wait_notice_is_sent_whatever_notify_when_lists(tmp_path, when):
     workspace, root, env = fixture_env(tmp_path)
     task = task_file(root, 'queued', '')
-    task.write_text(task.read_text().replace('notify_when: completed', f'notify_when: "{when}"'))
+    task.write_text(task.read_text().replace('notify_when: completed,failed', f'notify_when: "{when}"'))
     seed(root)
     result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task), '--waiting'],
                             env=env_for(root, env), text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
+    assert 'Waiting for your approval' in (workspace / 'sent.log').read_text()
+
+
+def _notify_when(tmp_path, status, when, body_extra=''):
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, status, body_extra)
+    task.write_text(task.read_text().replace('notify_when: completed,failed', f'notify_when: "{when}"'))
+    return workspace, root, env, task
+
+
+@pytest.mark.parametrize('when,status,sent', [
+    ('completed', 'completed', True), ('completed', 'error', False),   # `completed` alone is not the old bare value
+    ('failed', 'completed', False), ('failed', 'error', True),
+    ('completed,failed', 'completed', True), ('completed,failed', 'error', True),
+    ('', 'completed', False), ('', 'error', False)])
+def test_notify_when_is_read_literally(tmp_path, when, status, sent):
+    workspace, root, env, task = _notify_when(tmp_path, status, when)
+    assert notify(task, env).returncode == 0
     log = workspace / 'sent.log'
-    assert (log.exists() and 'Waiting for your approval' in log.read_text()) is sent
+    assert log.exists() is sent
 
 
-def test_a_lock_that_is_never_released_is_recorded_not_dropped(tmp_path):
+def test_reason_is_the_code_of_the_current_attempt(tmp_path):
+    workspace, root, env, task = _notify_when(tmp_path, 'error', 'failed')
+    task.write_text(task.read_text() + '\n## Execution Error\n- error_code: first_code\n- error: one\n'
+                    '\n## Execution Error\n- error_code: second_code\n- error: two\n')
+    assert notify(task, env).returncode == 0
+    sent = (workspace / 'sent.log').read_text()
+    assert 'Reason: second_code' in sent and 'first_code' not in sent
+
+
+def test_a_failure_notice_for_an_earlier_run_sends_nothing(tmp_path):
+    """The supervisor queued the notice for run-1; the task was claimed again (run-2) before it went out."""
+    workspace, root, env, task = _notify_when(tmp_path, 'queued', 'completed,failed', 'notify_run: run-2\n')
+    seed(root)
+    stale = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
+                           env=env_for(root, {**env, 'SOLAR_NOTIFY_EXPECT_RUN': 'run-1',
+                                              'SOLAR_NOTIFY_EXPECT_STATUS': 'error'}),
+                           text=True, capture_output=True, timeout=10)
+    assert stale.returncode == 0
+    assert not (workspace / 'sent.log').exists(), 'announced a completion for a task that is not finished'
+    assert 'notify_delivered: true' not in task.read_text()
+
+
+def test_a_failure_notice_for_the_current_run_is_sent_and_recorded_for_that_run(tmp_path):
+    workspace, root, env, task = _notify_when(tmp_path, 'error', 'failed', 'notify_run: run-1\n')
+    seed(root)
+    result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
+                            env=env_for(root, {**env, 'SOLAR_NOTIFY_EXPECT_RUN': 'run-1',
+                                               'SOLAR_NOTIFY_EXPECT_STATUS': 'error'}),
+                            text=True, capture_output=True, timeout=10)
+    mirror(root)
+    assert result.returncode == 0, result.stderr
+    assert 'notify_delivered_run: run-1' in task.read_text()
+    assert 'Task failed and needs attention' in (workspace / 'sent.log').read_text()
+
+
+def _hold_lock(tmp_path, task, seconds):
+    """A live process that holds the task's notice lock, as a slow sender would."""
+    lock = tmp_path / f'solar-notify-{task_id_of(task)}.flock'
+    holder = subprocess.Popen(
+        ['python3', '-c', 'import fcntl,sys,time;f=open(sys.argv[1],"a");fcntl.flock(f,fcntl.LOCK_EX);'
+         'print("held",flush=True);time.sleep(float(sys.argv[2]))', str(lock), str(seconds)],
+        stdout=subprocess.PIPE, text=True)
+    assert holder.stdout.readline().strip() == 'held'
+    return holder
+
+
+def test_a_lock_held_by_a_live_sender_is_never_taken_over_and_is_recorded(tmp_path):
     workspace, root, env = fixture_env(tmp_path)
     task = task_file(root, 'completed', '')
-    (tmp_path / f'solar-notify-{task_id_of(task)}.lock').mkdir()
+    holder = _hold_lock(tmp_path, task, 30)
+    try:
+        seed(root)
+        # the lock file is old: age must not matter, only whether its holder is alive
+        old = 1_600_000_000
+        os.utime(tmp_path / f'solar-notify-{task_id_of(task)}.flock', (old, old))
+        result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
+                                env=env_for(root, {**env, 'TMPDIR': str(tmp_path), 'SOLAR_NOTIFY_LOCK_WAIT': '3'}),
+                                text=True, capture_output=True, timeout=20)
+        mirror(root)
+        assert result.returncode == 1 and 'notify_lock_timeout' in result.stderr
+        assert 'notify_error: notify_lock_timeout' in task.read_text()
+        assert not (workspace / 'sent.log').exists()
+    finally:
+        holder.kill()
+
+
+def test_a_lock_whose_holder_died_does_not_block_the_next_sender(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'completed', '')
+    holder = _hold_lock(tmp_path, task, 30)
+    holder.kill()
+    holder.wait()
     seed(root)
-    # a wait of 150 s is too slow for a test: shorten it through a seq stub
-    stub = tmp_path / 'bin'
-    stub.mkdir()
-    (stub / 'seq').write_text('#!/bin/bash\necho 1\n')
-    (stub / 'seq').chmod(0o755)
-    (stub / 'sleep').write_text('#!/bin/bash\nexit 0\n')
-    (stub / 'sleep').chmod(0o755)
-    run_env = env_for(root, {**env, 'TMPDIR': str(tmp_path), 'PATH': f'{stub}:{os.environ["PATH"]}'})
     result = subprocess.run(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
-                            env=run_env, text=True, capture_output=True, timeout=20)
-    mirror(root)
-    assert result.returncode == 1 and 'notify_lock_timeout' in result.stderr
-    assert 'notify_error: notify_lock_timeout' in task.read_text()
-    assert not (workspace / 'sent.log').exists()
+                            env=env_for(root, {**env, 'TMPDIR': str(tmp_path), 'SOLAR_NOTIFY_LOCK_WAIT': '3'}),
+                            text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert (workspace / 'sent.log').read_text().count('Task completed') == 1
+
+
+def test_two_senders_at_once_send_one_notice(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    task = task_file(root, 'completed', '')
+    seed(root)
+    run_env = env_for(root, {**env, 'TMPDIR': str(tmp_path)})
+    procs = [subprocess.Popen(['bash', str(SCRIPTS / 'notify_if_configured.sh'), task_id_of(task)],
+                              env=run_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+             for _ in range(3)]
+    for proc in procs:
+        proc.communicate(timeout=30)
+        assert proc.returncode == 0
+    assert (workspace / 'sent.log').read_text().count('Task completed') == 1

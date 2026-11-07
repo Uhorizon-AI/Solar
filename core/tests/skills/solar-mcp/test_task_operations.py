@@ -171,13 +171,15 @@ def _notify_when(task_id):
 def test_notify_when_is_set_on_create_and_edited_like_any_material_field(solar_env):
     made = new_task("Close", "Do.", notify_when=["failed", "completed"])
     assert _notify_when(made["id"]) == "completed,failed"
-    body, error = execute("task.create", dict(title="X", instructions="x", notify_when=["sometimes"]))
-    assert error and body["code"] == "invalid_arguments"
+    for bad in (["sometimes"], ["blocked"]):     # `blocked` is not an event: the wait notice goes out for every task
+        body, error = execute("task.create", dict(title="X", instructions="x", notify_when=bad))
+        assert error and body["code"] == "invalid_arguments"
+    assert _notify_when(new_task("Only completed", "Do.", notify_when=["completed"])["id"]) == "completed"
     queued = run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
     out = run("task.update", dict(task_id=made["id"], expected_row_version=queued["row_version"],
-                                  notify_when=["completed", "failed", "blocked"]))
+                                  notify_when=["failed"]))
     assert out["status"] == "draft" and out["needs_approval"] is True
-    assert _notify_when(made["id"]) == "completed,failed,blocked"
+    assert _notify_when(made["id"]) == "failed"
     again = run("task.update", dict(task_id=made["id"], expected_row_version=out["row_version"], notify_when=[]))
     assert _notify_when(made["id"]) in ("", None) and again["status"] == "draft"
 

@@ -344,26 +344,22 @@ def test_a_failure_notice_queued_as_the_sender_leaves_is_still_sent(rig, tmp_pat
 
 
 def test_failure_sender_allows_the_notifier_to_record_lock_timeout(rig, tmp_path, monkeypatch):
-    """A real notifier behind a recent orphan lock must record failure before its parent kills it.
+    """A real notifier behind a lock a live sender holds must record failure before its parent kills it.
 
-    The lock is intentionally never released. Only its loop count and the supervisor's deadlines
+    The lock is intentionally never released. Only its wait and the supervisor's deadlines
     are shortened: the real shell notifier, task state and process-group supervision still run.
     The sender is a local double; no provider, secret store or network service is used.
     """
     import supervisor_support
     from queue_mirror import seed
-    from test_notify_delivery import task_file
+    from test_notify_delivery import task_file, _hold_lock
 
     _sender(tmp_path, monkeypatch, '#!/bin/bash\necho unexpected >> "$SOLAR_WORKSPACE/sent.log"\n')
     task_file(rig.task_root, 'error')
     seed(rig.task_root)
-    (tmp_path / 'solar-notify-delivery.lock').mkdir()
-    stub = tmp_path / 'bin'
-    stub.mkdir()
-    (stub / 'seq').write_text('#!/bin/bash\necho 1 2\n')
-    (stub / 'seq').chmod(0o755)
+    holder = _hold_lock(tmp_path, rig.task_root / 'error' / 'delivery.md', 60)
     monkeypatch.setenv('TMPDIR', str(tmp_path))
-    monkeypatch.setenv('PATH', f'{stub}:{os.environ["PATH"]}')
+    monkeypatch.setenv('SOLAR_NOTIFY_LOCK_WAIT', '2')
     mod = supervisor_support.supervisor_mod
     # Keep the approval budget shorter than the lock wait: reusing it here must fail this test.
     monkeypatch.setattr(mod.Supervisor, 'NOTIFY_TIMEOUT', 1.0)
@@ -379,6 +375,26 @@ def test_failure_sender_allows_the_notifier_to_record_lock_timeout(rig, tmp_path
             fields = dict(store.task_get('delivery')['frontmatter'])
         assert fields.get('notify_error', '').strip().strip('"') == 'notify_lock_timeout', fields
         assert not (rig.workspace / 'sent.log').exists()
+    finally:
+        holder.kill()
+        sup._stop_announcer()
+
+
+def test_failure_notice_carries_the_run_that_failed(rig, tmp_path, monkeypatch):
+    import supervisor_support
+    mod = supervisor_support.supervisor_mod
+    seen = tmp_path / 'env.txt'
+    fake = tmp_path / 'scripts'
+    fake.mkdir()
+    (fake / 'notify_if_configured.sh').write_text(
+        f'#!/bin/bash\necho "$1 $SOLAR_NOTIFY_EXPECT_RUN $SOLAR_NOTIFY_EXPECT_STATUS" >> "{seen}"\n')
+    monkeypatch.setattr(mod, 'HERE', fake)
+    monkeypatch.setattr(mod.Supervisor, 'FAILURE_IDLE', 0.05)
+    sup = rig.build()
+    try:
+        sup._notify_failure('some-task', 'run-7')
+        supervisor_support.wait_until(seen.exists, 5, what='the notifier to run')
+        assert seen.read_text().split() == ['some-task', 'run-7', 'error']
     finally:
         sup._stop_announcer()
 
@@ -414,7 +430,7 @@ def test_terminal_notice_budget_covers_the_unshortened_lock_wait():
     import supervisor_support
     mod = supervisor_support.supervisor_mod
     notifier = (SCRIPTS / 'notify_if_configured.sh').read_text()
-    loop = re.search(r'for _ in \$\(seq 1 (\d+)\); do.*?\n\s*sleep 1\n', notifier, re.S)
+    loop = re.search(r'for _ in \$\(seq 1 "\$\{SOLAR_NOTIFY_LOCK_WAIT:-(\d+)\}"\); do.*?\n\s*sleep 1\n', notifier, re.S)
     assert loop, 'review the lock-wait budget when its loop changes'
     assert mod.Supervisor.NOTIFY_TIMEOUT == 30.0  # approval-notice contract stays unchanged
     assert mod.Supervisor.FAILURE_NOTIFY_TIMEOUT >= int(loop[1]) + mod.Supervisor.NOTIFY_TIMEOUT

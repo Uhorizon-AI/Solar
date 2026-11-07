@@ -2438,6 +2438,36 @@ class Session:
             _set_pair(pairs, key, f" {value}" if value != "" else "")
             _write_task(conn, task_id, row["status"], pairs, row["body"], insert=False)
 
+    def task_notice_record(self, task_id: str, run: str, *, error: Optional[str] = None,
+                           at: Optional[str] = None) -> bool:
+        """Record how the notice of one run ended, in one transaction, only while that run is current.
+        A new claim stamps a new `notify_run`; a notice that outlived its run records nothing and says so."""
+        with _transaction(self.conn) as conn:
+            row = conn.execute("SELECT status, frontmatter, body FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row is None:
+                raise StateError(f"no task {task_id}")
+            pairs = json.loads(row["frontmatter"])
+            if (_field(pairs, "notify_run") or "") != run:
+                return False
+            if error is None:
+                updates = (("notify_status", "delivered"), ("notify_error", "null"),
+                           ("notify_delivered_run", run), ("notify_delivered", "true"))
+            else:
+                updates = (("notify_status", "failed"), ("notify_error", error))
+                if at:
+                    updates += (("notify_attempted_at", at),)
+            for key, value in updates:
+                _check_field(key, value)
+                _set_pair(pairs, key, f" {value}")
+            _write_task(conn, task_id, row["status"], pairs, row["body"], insert=False)
+            return True
+
+    def task_notify_run(self, task_id: str) -> str:
+        """The run a notice belongs to: the id stamped when the task was last claimed."""
+        task = self.task_get(task_id)
+        return (_field(task["frontmatter"], "notify_run") or "") if task else ""
+
     def task_transition(self, task_id: str, to_status: str,
                         expected_from: Optional[str | Iterable[str]] = None,
                         actor: Optional[str] = None,
@@ -4265,6 +4295,11 @@ def _cli(argv: list[str]) -> int:
     setter.add_argument("id")
     setter.add_argument("key")
     setter.add_argument("value")
+    notice = task.add_parser("notice", help="record how the notice of one run ended; refused for an older run")
+    notice.add_argument("id")
+    notice.add_argument("--run", required=True)
+    notice.add_argument("--error", default=None, help="a failure code; omit to record delivery")
+    notice.add_argument("--at", default=None)
     move = task.add_parser("transition")
     move.add_argument("id")
     move.add_argument("to", choices=STATUSES)
@@ -4395,6 +4430,9 @@ def _cli(argv: list[str]) -> int:
                 elif args.cmd == "set":
                     s.task_set(args.id, args.key, args.value)
                     _print(dict(id=args.id, key=args.key))
+                elif args.cmd == "notice":
+                    recorded = s.task_notice_record(args.id, args.run, error=args.error, at=args.at)
+                    _print(dict(id=args.id, recorded=recorded))
                 elif args.cmd == "transition":
                     came = s.task_transition(args.id, args.to, args.expected_from, actor=args.actor,
                                              token=args.token)
