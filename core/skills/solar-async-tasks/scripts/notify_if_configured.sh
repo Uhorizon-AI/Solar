@@ -10,7 +10,8 @@
 # the result location. Long text is chunked (~1s apart).
 # Usage: notify_if_configured.sh <task_id> [--waiting|--expired-draft|--expired-skipped]
 #
-# SOLAR_NOTIFY_EXPECT_RUN / SOLAR_NOTIFY_EXPECT_STATUS (set by the supervisor for a failure it declared):
+# SOLAR_NOTIFY_EXPECT_RUN / SOLAR_NOTIFY_EXPECT_STATUS (set by every path that announces a failure it just
+# recorded: the supervisor, the executor and the cleanup failure of complete.sh):
 # the notice belongs to that run, and nothing is sent once the task has been claimed again or has left that status.
 # SOLAR_NOTIFY_LOCK_WAIT: seconds to wait for the per-task lock (default 150).
 #
@@ -80,7 +81,12 @@ if [[ -z "$MODE" ]]; then
 
   # One read of the task, taken with the lock held. Status, run, delivery, title, chat and the failure code
   # all come from it, so a claim that lands later cannot mix two attempts into one message.
-  SNAPSHOT="$(state task snapshot "$TASK_ID" 2>/dev/null)" || exit 0
+  SNAPSHOT="$(state task snapshot "$TASK_ID" 2>/dev/null)" || {
+    # The read failed: leave a trace that this notice was lost, instead of exiting without a word.
+    state task notice "$TASK_ID" --run "$RUN" --error notify_snapshot_failed --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null 2>&1
+    echo "Task notification failed: notify_snapshot_failed ($TASK_ID)" >&2
+    exit 1
+  }
   snap() {
     printf '%s' "$SNAPSHOT" | python3 -c 'import json,sys
 d=json.load(sys.stdin); w=sys.argv[1]
@@ -99,6 +105,7 @@ else:
        && "$RUN" == "${SOLAR_NOTIFY_EXPECT_RUN:-}" ]] || exit 0
   fi
   already_delivered && exit 0
+  SNAPSHOT_STATUS="$(task_status_of "$TASK_ID")"       # the last look before sending must still find this status
   # What the snapshot says is what is announced: the status may have moved since the first, unlocked look.
   NOTIFY_WHEN="$(task_field "$TASK_ID" "notify_when")"; NOTIFY_WHEN="${NOTIFY_WHEN//[[:space:]]/}"
   if [[ "$(task_status_of "$TASK_ID")" == "error" ]]; then notify_wants failed || exit 0; else notify_wants completed || exit 0; fi
@@ -257,9 +264,12 @@ else
   MESSAGE="$BRIEF"
 fi
 
-# Last look before sending: the run must still be the one this message was built from.
-if [[ "$(state task field "$TASK_ID" notify_run | python3 -c 'import json,sys; print(json.load(sys.stdin).get("value") or "")')" != "$RUN" ]]; then
-  exit 0
+# Last look before sending: the task must still be in the status and run this message was built from.
+# A failure requeued without a new claim keeps its run but is no longer an error: it gets no notice.
+if [[ -z "$MODE" ]]; then
+  NOW="$(state task snapshot "$TASK_ID" 2>/dev/null | python3 -c 'import json,sys
+d=json.load(sys.stdin); print(d["status"] + " " + (d["fields"].get("notify_run") or ""))' 2>/dev/null)"
+  [[ "$NOW" == "$SNAPSHOT_STATUS $RUN" ]] || exit 0
 fi
 send_chunks "$MESSAGE" || { record_notify_failure "telegram_send_failed"; exit 1; }
 

@@ -193,6 +193,15 @@ def test_a_revision_keeps_notify_when_unless_it_names_another(solar_env):
     assert _notify_when(changed["id"]) == "completed,-failed"
 
 
+def test_completion_only_survives_an_edit_and_a_revision_that_do_not_name_it(tmp_path_factory, solar_env):
+    made = new_task("Close", "Do.", notify_when=["completed"])
+    assert _notify_when(made["id"]) == "completed,-failed"
+    edited = run("task.update", dict(task_id=made["id"], expected_row_version=made["row_version"], title="Closed"))
+    assert _notify_when(made["id"]) == "completed,-failed" and edited["status"] == "draft"
+    kept = run("task.create", dict(title="Close", instructions="Do.", revises_task_id=made["id"]))
+    assert _notify_when(kept["id"]) == "completed,-failed"          # the spelling is copied as stored
+
+
 # --------------------------------------------------------------------------
 # schedule
 # --------------------------------------------------------------------------

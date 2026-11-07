@@ -4493,8 +4493,8 @@ def _cli(argv: list[str]) -> int:
                         if not sep:
                             parser.error(f"--field expects KEY=VALUE, got {item!r}")
                         fields.append((key, value))
-                    s.task_fail(args.id, args.suffix, fields=dict(fields), token=args.token)
-                    _print(dict(id=args.id, status="error"))
+                    run = s.task_fail(args.id, args.suffix, fields=dict(fields), token=args.token)
+                    _print(dict(id=args.id, status="error", run=run))
                 elif args.cmd == "await":
                     s.task_await(args.id, args.child, token=args.token)
                     _print(dict(id=args.id, status="queued"))

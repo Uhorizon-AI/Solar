@@ -877,8 +877,10 @@ _NOTIFY_WHEN = {
     "type": "array", "uniqueItems": True, "maxItems": 2,
     "items": {"type": "string", "enum": ["completed", "failed"]},
     "description": "When the configured chat is told, without confirming the text (a system notice, not a message "
-                   "to third parties), read literally: completed, and failed (adds the one-line reason). "
-                   "`[completed]` alone does not report a failure. A recurring task is told once per run. An empty "
+                   "to third parties): completed, and failed (adds the one-line reason). "
+                   "`[completed]` alone is stored as `completed,-failed` and stays silent when the task fails; "
+                   "a bare `completed` written by older tasks also reports failures; `[completed, failed]` "
+                   "reports both. A recurring task is told once per run. An empty "
                    "list turns off these notices. The wait for task.authorize_run is announced for every task, "
                    "whatever this list says. Editing it follows the usual rules: a queued task returns to draft.",
 }
