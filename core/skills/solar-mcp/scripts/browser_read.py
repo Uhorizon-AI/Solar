@@ -534,6 +534,11 @@ def prepare(name: str, registry: dict, root: Path) -> dict:
                     or not all(isinstance(v, kind) and not isinstance(v, bool) for v in allowed)):
                 raise _invalid(f"enum of {key} must be a list of 1 to 32 values of the field's type "
                                "(string or integer fields only)")
+            # only values the answer filter can return: a value it would drop makes every read fail
+            if not all((0 <= v <= 10**9) if kind is int else (0 < len(v) <= 80 and v.isprintable())
+                       for v in allowed):
+                raise _invalid(f"enum of {key} holds a value that can never be returned "
+                               "(strings of 1 to 80 printable characters, integers from 0 to 10**9)")
         if spec["type"] == "string" and not allowed:
             # a free string would let page text out (a title, a name): only listed values may leave
             raise _invalid(f"the string field {key} must declare an enum of the values it may return")

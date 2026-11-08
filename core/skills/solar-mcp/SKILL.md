@@ -171,7 +171,7 @@ Browser reads are opt-in the same way, listed in `<runtime>/mcp/browser-reads.js
 The script is a function expression owned by the planet (the answer always comes back as
 `{"read": name, "data": {...fields}}`). String fields must declare an `enum`, so page text cannot leave, and the
 refusal codes a script may report must be listed in `refusals`; anything else fails. An `enum` applies to string and integer
-fields only, and each value must have the field's type. The script returns `{ready: false}`
+fields only, and each value must have the field's type and be one the answer can carry: strings of 1 to 80 printable characters, integers from 0 to 10^9. The script returns `{ready: false}`
 while the page loads, `{ready: true, refused: "<code>"}` when it must refuse (for
 example a login screen) and otherwise `{ready: true, ...fields}`. Solar never knows
 which site it is: no selector, URL or site name lives in `core/`. Changing the
