@@ -188,16 +188,27 @@ def find_tasks(query: str = "", state: str = "", limit: int = 10) -> dict:
                 truncated=len(ranked) > len(shown))
 
 
+SHORT_ID_MIN = 8        # the shortest id prefix the approval notice shows (solar_state.Session.SHORT_ID_MIN)
+
+
 def _resolve(store, task_id: str) -> dict:
     task = store.task_get(task_id)
-    if task is None:
-        stems = [row for row in store.task_list()
-                 if Path(row.get("source_name") or "").stem == task_id]
-        if len(stems) == 1:
-            task = stems[0]
-    if task is None:
+    if task is not None:
+        return task                                   # an exact id always wins
+    rows = store.task_list()
+    stems = [row for row in rows if Path(row.get("source_name") or "").stem == task_id]
+    starts = []
+    if len(task_id) >= SHORT_ID_MIN:
+        # The short id of an approval notice: a prefix names a task only when exactly one id starts with it.
+        # This read never grants anything, authorization still takes the full id.
+        starts = [row for row in rows if row["id"].startswith(task_id)]
+    # A file name and a short id that point at different tasks are a collision, not a choice.
+    found = {row["id"]: row for row in stems + starts}
+    if len(found) > 1:
+        raise ViewError("task_ambiguous", f"{len(found)} tasks match {task_id}; give more characters")
+    if not found:
         raise ViewError("task_not_found", f"no task {task_id}")
-    return task
+    return next(iter(found.values()))
 
 
 def _sections_named(body: str, titles) -> list[dict]:

@@ -3491,6 +3491,21 @@ class Session:
         pairs = json.loads(row["frontmatter"])
         return _wait_info(self.conn, task_id, pairs) if needs_run_authorization(pairs) else None
 
+    SHORT_ID_MIN = 8
+
+    def task_short_id(self, task_id: str) -> str:
+        """The shortest prefix of a task id (at least 8 characters) that no other task shares, so a person who
+        reads it on a phone can name the task without ambiguity. The whole id when it is shorter."""
+        if self.task_get(task_id) is None:
+            raise StateError(f"no task {task_id}")
+        for size in range(self.SHORT_ID_MIN, len(task_id)):
+            clash = self.conn.execute(
+                "SELECT 1 FROM tasks WHERE id != ? AND substr(id, 1, ?) = ? LIMIT 1",
+                (task_id, size, task_id[:size])).fetchone()
+            if not clash:
+                return task_id[:size]
+        return task_id
+
     # A notice is taken when its `approval_notice` row exists and no later `approval_notice_released` names it.
     _TAKEN = ("EXISTS (SELECT 1 FROM audit n WHERE n.event = 'approval_notice' AND json_extract(n.row, '$.ref') = {ref} "
               "AND NOT EXISTS (SELECT 1 FROM audit r WHERE r.event = 'approval_notice_released' "
@@ -4376,6 +4391,8 @@ def _cli(argv: list[str]) -> int:
     field.add_argument("id")
     field.add_argument("key")
     task.add_parser("snapshot").add_argument("id")
+    task.add_parser("short-id").add_argument("id")
+    task.add_parser("wait").add_argument("id")
     unset = task.add_parser("unset")
     unset.add_argument("id")
     unset.add_argument("key")
@@ -4422,6 +4439,13 @@ def _cli(argv: list[str]) -> int:
             return 0
         if args.area == "maintenance":
             _print(dict(held=maintenance_state(root) is not None, state=maintenance_state(root)))
+            return 0
+        if args.area == "task" and args.cmd in ("short-id", "wait"):
+            with read_session(root) as s:                # a question about a notice never creates a backup
+                if args.cmd == "short-id":
+                    _print(dict(id=args.id, short_id=s.task_short_id(args.id)))
+                else:
+                    _print(dict(id=args.id, wait=s.approval_wait(args.id), limit_off=approval_wait_limit() is None))
             return 0
         with session(root) as s:
             if args.area == "backup":
