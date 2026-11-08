@@ -15,8 +15,9 @@ The scope is enforced twice, and the second line does not depend on the first:
 
 The browser is the shared Solar runtime (`solar-browser`): started and stopped
 through `ensure_browser.sh`, never launched here. Only a tab this module opens is
-touched, and it is closed afterwards. Reads are serialized with a file lock; a browser
-this read started is stopped only when no other tab is left in it.
+touched, and it is closed (before the debugging socket is dropped) afterwards. Reads are
+serialized with a file lock under one absolute deadline that reserves time for cleanup; a
+browser this read started is stopped only when no other tab is left in it.
 """
 from __future__ import annotations
 
@@ -65,9 +66,10 @@ READ_EXPRESSION = read_expression()
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "solar-browser" / "scripts"
 _POLL_SECONDS = 1.0
-_READ_DEADLINE = 60.0     # the whole operation: lock, browser start, navigation and polling
+_READ_DEADLINE = 60.0     # the whole operation, cleanup included
 _STABLE_POLLS = 3
 _CALL_TIMEOUT = 20.0
+_CLEANUP_SECONDS = 8.0   # reserved inside the deadline to close the tab, stop the browser, free the lock
 
 
 # --- minimal CDP over a stdlib websocket (no dependency) ------------------------------
@@ -77,7 +79,10 @@ class _Socket:
         parts = urlsplit(url)
         if parts.hostname not in _LOCAL_HOSTS:
             raise OperationError("browser_unavailable", "The debugging endpoint is not local")
-        raw = socket.create_connection((parts.hostname, parts.port or 80), timeout=timeout)
+        try:
+            raw = socket.create_connection((parts.hostname, parts.port or 80), timeout=timeout)
+        except OSError:
+            raise OperationError("browser_unavailable", "The debugging socket did not open") from None
         self.sock = raw
         key = base64.b64encode(os.urandom(16)).decode()
         path = parts.path + (f"?{parts.query}" if parts.query else "")
@@ -86,7 +91,11 @@ class _Socket:
                      f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
         head = b""
         while b"\r\n\r\n" not in head:
-            chunk = raw.recv(1024)
+            try:
+                chunk = raw.recv(1024)
+            except OSError:
+                raw.close()
+                raise OperationError("browser_unavailable", "The debugging socket did not answer") from None
             if not chunk:
                 raise OperationError("browser_unavailable", "The debugging socket closed")
             head += chunk
@@ -173,16 +182,27 @@ class _Page:
             self.denied = True
             self._notify("Fetch.failRequest", {"requestId": request_id, "errorReason": "BlockedByClient"})
 
-    def call(self, method: str, params: dict | None = None, timeout: float = _CALL_TIMEOUT) -> dict:
+    def call(self, method: str, params: dict | None = None, until: float | None = None) -> dict:
+        """One command, answered before the absolute monotonic time `until`.
+
+        The limit is checked on every frame, so a page that keeps sending events and never
+        answers cannot hold the call (and the read lock) past the deadline.
+        """
         self.counter += 1
         mine = self.counter
-        self.socket.sock.settimeout(max(timeout, 0.05))
+        until = time.monotonic() + _CALL_TIMEOUT if until is None else until
         self.socket.send(json.dumps({"id": mine, "method": method, "params": params or {}}))
         while True:
+            left = until - time.monotonic()
+            if left <= 0:
+                raise OperationError("whatsapp_read_failed", "The page did not answer in time")
+            self.socket.sock.settimeout(left)
             try:
                 reply = json.loads(self.socket.receive())
             except socket.timeout:
                 raise OperationError("whatsapp_read_failed", "The page did not answer in time") from None
+            except OSError:
+                raise OperationError("browser_unavailable", "The debugging socket was lost") from None
             if "id" not in reply:
                 self._event(reply)
                 continue
@@ -202,11 +222,21 @@ def _endpoint() -> str:
     return f"http://{host}:{port}"
 
 
-def _http(url: str, method: str = "GET"):
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """The debugging endpoint is validated as local once; a redirect could leave it."""
+
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _http(url: str, method: str = "GET", timeout: float = 5.0):
     request = urllib.request.Request(url, method=method)
     if method == "PUT":
         request.add_header("Content-Length", "0")   # Chrome refuses a body-less PUT without it
-    with urllib.request.urlopen(request, timeout=5) as answer:  # noqa: S310 - loopback only
+    with _OPENER.open(request, timeout=max(min(timeout, 5.0), 0.2)) as answer:  # loopback only
         text = answer.read().decode()
     try:
         return json.loads(text)
@@ -214,9 +244,9 @@ def _http(url: str, method: str = "GET"):
         return text
 
 
-def _ready(endpoint: str) -> bool:
+def _ready(endpoint: str, timeout: float = 5.0) -> bool:
     try:
-        _http(f"{endpoint}/json/version")
+        _http(f"{endpoint}/json/version", timeout=timeout)
         return True
     except (OSError, urllib.error.URLError, ValueError):
         return False
@@ -239,7 +269,12 @@ def _lock_path() -> Path:
 
 def _acquire(limit: float):
     """One read at a time: a second caller waits for the first, within the same deadline."""
-    handle = open(_lock_path(), "a")
+    path = _lock_path()
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        handle = open(path, "a")
+    except OSError:
+        raise OperationError("browser_unavailable", "The read lock could not be created") from None
     while True:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -252,13 +287,14 @@ def _acquire(limit: float):
             time.sleep(0.1)
 
 
-def _other_tabs(endpoint: str) -> bool:
-    """Whether a tab other than a blank one is still open (someone else may be using the browser)."""
+def _other_tabs(endpoint: str, own: str | None, timeout: float = 2.0) -> bool:
+    """Whether a tab other than ours or a blank one is open (someone else may be using the browser)."""
     try:
-        tabs = _http(f"{endpoint}/json/list")
+        tabs = _http(f"{endpoint}/json/list", timeout=timeout)
     except (OSError, urllib.error.URLError, ValueError):
         return True    # unknown: leave the browser running
-    return any(t.get("type") == "page" and t.get("url") not in ("about:blank", "chrome://newtab/")
+    return any(t.get("type") == "page" and t.get("id") != own
+               and t.get("url") not in ("about:blank", "chrome://newtab/")
                for t in (tabs if isinstance(tabs, list) else []))
 
 
@@ -279,12 +315,19 @@ def _classify(read: dict, allowed_origin: str = ALLOWED_ORIGIN):
     return None
 
 
+def _denied() -> OperationError:
+    return OperationError("browser_scope_denied",
+                          "A navigation outside the authorized origin was refused; nothing was read")
+
+
 def whatsapp_status(deadline: float = _READ_DEADLINE, poll: float = _POLL_SECONDS) -> dict:
     """Session status, QR presence and visible chat count of WhatsApp Web, or a distinct refusal.
 
-    `deadline` and `poll` exist for tests; the operation passes nothing.
+    `deadline` is absolute for the whole call and includes the cleanup; `poll` exists for tests.
+    The operation passes nothing.
     """
-    limit = time.monotonic() + deadline
+    begun = time.monotonic()
+    limit = begun + deadline - min(_CLEANUP_SECONDS, deadline * 0.25)    # the work; the rest is cleanup
     remaining = lambda: limit - time.monotonic()  # noqa: E731
     endpoint = _endpoint()
     lock = _acquire(limit)
@@ -292,34 +335,40 @@ def whatsapp_status(deadline: float = _READ_DEADLINE, poll: float = _POLL_SECOND
     target = None
     page = None
     try:
-        if not _ready(endpoint):
-            if not _ensure("--start", remaining()) or not _ready(endpoint):
+        if not _ready(endpoint, max(remaining(), 0.2)):
+            if not _ensure("--start", remaining()) or not _ready(endpoint, max(remaining(), 0.2)):
                 raise OperationError("browser_unavailable", "The Solar browser could not be started")
             started_here = True
         try:
-            target = _http(f"{endpoint}/json/new?about:blank", method="PUT")
-        except (OSError, urllib.error.URLError, ValueError):
+            target = _http(f"{endpoint}/json/new?about:blank", method="PUT", timeout=max(remaining(), 0.2))
+            url = target["webSocketDebuggerUrl"]
+        except (OSError, urllib.error.URLError, ValueError, KeyError, TypeError):
             raise OperationError("browser_unavailable", "The browser did not open a tab") from None
-        page = _Page(_Socket(target["webSocketDebuggerUrl"], min(10.0, max(remaining(), 0.5))), ALLOWED_ORIGIN)
-        step = lambda: min(_CALL_TIMEOUT, remaining())  # noqa: E731
-        page.call("Page.enable", timeout=step())
+        page = _Page(_Socket(url, min(10.0, max(remaining(), 0.5))), ALLOWED_ORIGIN)
+        page.call("Page.enable", until=limit)
         page.call("Fetch.enable", {"patterns": [{"urlPattern": "*", "resourceType": "Document",
-                                                 "requestStage": "Request"}]}, timeout=step())
-        page.call("Page.navigate", {"url": DESTINATION}, timeout=step())
-        last, stable = None, 0
+                                                 "requestStage": "Request"}]}, until=limit)
+        navigated = page.call("Page.navigate", {"url": DESTINATION}, until=limit)
+        if navigated.get("errorText"):
+            if page.denied:
+                raise _denied()
+            raise OperationError("whatsapp_read_failed", "WhatsApp Web could not be loaded")
+        last, stable, reached = None, 0, False
         while remaining() > 0:
             time.sleep(min(poll, max(remaining(), 0)))
             answer = page.call("Runtime.evaluate", {
                 "expression": READ_EXPRESSION, "returnByValue": True, "awaitPromise": False},
-                timeout=step())
+                until=limit)
             value = (answer.get("result") or {}).get("value")
             if not isinstance(value, dict):
                 continue
+            origin = value.get("origin")
+            reached = reached or origin == ALLOWED_ORIGIN
             settled = _classify(value)
             if settled is None:
-                if page.denied:
-                    raise OperationError("browser_scope_denied",
-                                         "A navigation outside the authorized origin was refused; nothing was read")
+                # A blocked document only matters while the page has not reached WhatsApp Web itself.
+                if page.denied and not reached:
+                    raise _denied()
                 last, stable = None, 0
                 continue
             # An empty list can still be loading: the same answer must hold several polls in a row.
@@ -333,19 +382,22 @@ def whatsapp_status(deadline: float = _READ_DEADLINE, poll: float = _POLL_SECOND
                                          "WhatsApp Web asks to link the device again (QR shown)")
                 return {"status": "active", "qr_present": False,
                         "visible_chats": settled[1]["visible_chats"]}
-        if page.denied:
-            raise OperationError("browser_scope_denied",
-                                 "A navigation outside the authorized origin was refused; nothing was read")
+        if page.denied and not reached:
+            raise _denied()
         raise OperationError("whatsapp_read_failed",
                              "WhatsApp Web did not reach a readable state before the deadline")
     finally:
-        if page is not None:
-            page.socket.close()
+        # Cleanup, in this order: the tab first (so no paused request is released into a tab that
+        # is still alive), then the socket, then the browser if this read started it and no other
+        # tab is left, then the lock.
+        cleanup = max(begun + deadline - time.monotonic(), 1.0)
         if target is not None:
             try:
-                _http(f"{endpoint}/json/close/{target['id']}")
-            except (OSError, urllib.error.URLError, ValueError, KeyError):
+                _http(f"{endpoint}/json/close/{target['id']}", timeout=min(2.0, cleanup))
+            except (OSError, urllib.error.URLError, ValueError, KeyError, TypeError):
                 pass
-        if started_here and not _other_tabs(endpoint):
-            _ensure("--stop", 30.0)
+        if page is not None:
+            page.socket.close()
+        if started_here and not _other_tabs(endpoint, (target or {}).get("id") if isinstance(target, dict) else None):
+            _ensure("--stop", max(begun + deadline - time.monotonic(), 1.0))
         lock.close()

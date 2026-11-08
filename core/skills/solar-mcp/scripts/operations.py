@@ -1082,7 +1082,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         errors=("browser_unavailable", "browser_scope_denied", "whatsapp_session_expired",
                 "whatsapp_read_failed"),
         effects="Opens one tab on web.whatsapp.com in the Solar browser profile and returns three fields: "
-                "status, qr_present, visible_chats. It cannot open chats, read messages or account data, "
+                "status (active), qr_present (false: a QR is the error whatsapp_session_expired), visible_chats. It cannot open chats, read messages or account data, "
                 "visit another origin, run a caller script or send. Accepts no arguments."),
     Operation(
         "action.run", A3, "Run one registered action of one registered action skill under a live mandate.",

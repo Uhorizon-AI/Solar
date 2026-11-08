@@ -21,8 +21,11 @@ from mcp_helpers import execute
 class FakeBrowser:
     """A DevTools endpoint whose page answers `Runtime.evaluate` from a scripted list."""
 
-    def __init__(self, reads, navigation=None, tabs=()):
+    def __init__(self, reads, navigation=None, tabs=(), redirect_to=None, navigate_error=None,
+                 stream=False, lists_own_tab=False):
         self.reads = list(reads)
+        self.redirect_to, self.navigate_error = redirect_to, navigate_error
+        self.stream, self.lists_own_tab = stream, lists_own_tab
         # document requests the "browser" makes after Page.navigate (redirects, frames)
         self.navigation = list(navigation or [browser_read.DESTINATION])
         self.tabs = list(tabs)
@@ -41,10 +44,17 @@ class FakeBrowser:
                 self.wfile.write(data)
 
             def do_GET(self):
+                if self.path == "/json/version" and outer.redirect_to:
+                    self.send_response(302)
+                    self.send_header("Location", outer.redirect_to)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if self.path == "/json/version":
                     return self._json({"Browser": "fake"})
                 if self.path == "/json/list":
-                    return self._json(outer.tabs)
+                    own = [{"type": "page", "id": "tab-1", "url": browser_read.DESTINATION}]
+                    return self._json(outer.tabs + (own if outer.lists_own_tab else []))
                 if self.path.startswith("/json/close/"):
                     outer.closed.append(self.path.rsplit("/", 1)[1])
                     return self._json("Target is closing")
@@ -83,8 +93,17 @@ class FakeBrowser:
             message = json.loads(data)
             self.methods.append(message["method"])
             result = {}
+            if self.stream and message["method"] == "Page.enable":
+                try:   # a page that never answers and never stops talking
+                    while True:
+                        self._send(sock, {"method": "Network.dataReceived", "params": {}})
+                        time.sleep(0.01)
+                except OSError:
+                    return
             if message["method"] == "Page.navigate":
                 self.navigated.append(message["params"]["url"])
+                if self.navigate_error:
+                    result = {"errorText": self.navigate_error}
                 for number, url in enumerate(self.navigation):
                     self._send(sock, {"method": "Fetch.requestPaused", "params": {
                         "requestId": f"r{number}", "resourceType": "Document", "request": {"url": url}}})
@@ -252,7 +271,7 @@ def test_started_browser_is_stopped_but_a_running_one_is_left(endpoint, monkeypa
     state = {"up": False}
     fake = endpoint([page(pane=True, rows=1)])
     real = browser_read._ready
-    monkeypatch.setattr(browser_read, "_ready", lambda url: state["up"] and real(url))
+    monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
     monkeypatch.setattr(browser_read, "_ensure",
                         lambda flag, timeout=0: calls.append(flag) or state.update(up=flag == "--start") or True)
     read()
@@ -264,7 +283,7 @@ def test_a_browser_started_here_is_kept_when_another_tab_is_open(endpoint, monke
     calls, state = [], {"up": False}
     endpoint([page(pane=True, rows=1)], tabs=[{"type": "page", "url": "https://example.org/"}])
     real = browser_read._ready
-    monkeypatch.setattr(browser_read, "_ready", lambda url: state["up"] and real(url))
+    monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
     monkeypatch.setattr(browser_read, "_ensure",
                         lambda flag, timeout=0: calls.append(flag) or state.update(up=flag == "--start") or True)
     read()
@@ -302,6 +321,31 @@ CHROME = next((p for p in ("/Applications/Google Chrome.app/Contents/MacOS/Googl
                            shutil.which("google-chrome") or "") if p and Path(p).is_file()), None)
 
 
+@pytest.fixture
+def served(tmp_path):
+    """Synthetic pages served from http://127.0.0.1, so `location.origin` is a real http origin."""
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler
+    handler = partial(SimpleHTTPRequestHandler, directory=str(tmp_path))
+    handler.log_message = lambda *_: None
+    server = ThreadingHTTPServer(("127.0.0.1", 0), type("Quiet", (SimpleHTTPRequestHandler,), {
+        "log_message": lambda *_: None,
+        "__init__": lambda self, *a, **k: SimpleHTTPRequestHandler.__init__(self, *a, directory=str(tmp_path), **k)}))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+def run_expression(expression, dom, tmp_path, origin):
+    (tmp_path / "p.html").write_text(
+        f"<body>{dom}<script>document.title=JSON.stringify({expression})"
+        f";document.body.setAttribute('data-r',document.title)</script></body>")
+    out = subprocess.run([CHROME, "--headless", "--no-first-run", f"--user-data-dir={tmp_path/'u'}",
+                          "--dump-dom", f"{origin}/p.html"], capture_output=True, text=True, timeout=30).stdout
+    raw = out.split("data-r=\"", 1)[1].split("\">", 1)[0].replace("&quot;", '"')
+    return json.loads(raw)
+
+
 @pytest.mark.skipif(not CHROME, reason="Chrome not installed")
 @pytest.mark.parametrize("dom,expected", [
     ('<div id="pane-side"><div role="listitem"><span title="A">A</span></div>'
@@ -310,25 +354,108 @@ CHROME = next((p for p in ("/Applications/Google Chrome.app/Contents/MacOS/Googl
     ('<div id="pane-side"></div>', {"qr": False, "pane": True, "rows": 0}),
     ('<div data-testid="qrcode"></div>', {"qr": True, "pane": False, "rows": 0}),
 ])
-def test_read_expression_on_synthetic_pages(dom, expected, tmp_path):
-    html = tmp_path / "p.html"
-    html.write_text(f"<body>{dom}<script>document.title=JSON.stringify({browser_read.read_expression('file://')})"
-                    f";document.body.setAttribute('data-r',document.title)</script></body>")
-    out = subprocess.run([CHROME, "--headless", "--no-first-run", f"--user-data-dir={tmp_path/'u'}",
-                          "--dump-dom", html.as_uri()], capture_output=True, text=True, timeout=30).stdout
-    raw = out.split("data-r=\"", 1)[1].split("\">", 1)[0].replace("&quot;", '"')
-    got = json.loads(raw)
+def test_read_expression_on_synthetic_pages(dom, expected, tmp_path, served):
+    got = run_expression(browser_read.read_expression(served), dom, tmp_path, served)
+    assert got["origin"] == served
     assert {k: got[k] for k in expected} == expected
 
 
 @pytest.mark.skipif(not CHROME, reason="Chrome not installed")
-def test_the_expression_reads_no_selector_on_another_origin(tmp_path):
-    html = tmp_path / "p.html"
-    html.write_text(f"<body><div id=\"pane-side\"><div role=\"listitem\"><span title=\"A\">A</span></div></div>"
-                    f"<script>document.title=JSON.stringify({browser_read.READ_EXPRESSION})"
-                    f";document.body.setAttribute('data-r',document.title)</script></body>")
-    out = subprocess.run([CHROME, "--headless", "--no-first-run", f"--user-data-dir={tmp_path/'u'}",
-                          "--dump-dom", html.as_uri()], capture_output=True, text=True, timeout=30).stdout
-    raw = out.split("data-r=\"", 1)[1].split("\">", 1)[0].replace("&quot;", '"')
-    got = json.loads(raw)
-    assert (got["qr"], got["pane"], got["rows"]) == (False, False, 0) and got["origin"] != browser_read.ALLOWED_ORIGIN
+def test_the_expression_reads_no_selector_on_another_origin(tmp_path, served):
+    dom = '<div id="pane-side"><div role="listitem"><span title="A">A</span></div></div>'
+    got = run_expression(browser_read.READ_EXPRESSION, dom, tmp_path, served)
+    assert (got["qr"], got["pane"], got["rows"]) == (False, False, 0)
+    assert got["origin"] == served != browser_read.ALLOWED_ORIGIN
+
+
+def test_a_blocked_frame_before_the_pane_appears_is_not_a_denial(endpoint):
+    endpoint([page(), page(), page(pane=True, rows=3)],
+             navigation=[browser_read.DESTINATION, "https://tracker.example/frame"])
+    assert read()["visible_chats"] == 3
+
+
+def test_the_tab_is_closed_before_the_socket_is_dropped(endpoint, monkeypatch):
+    order = []
+    fake = endpoint([page(pane=True, rows=1)])
+    real_close = browser_read._Socket.close
+    monkeypatch.setattr(browser_read._Socket, "close", lambda self: order.append("socket") or real_close(self))
+    real_http = browser_read._http
+
+    def http(url, *args, **kwargs):
+        if "/json/close/" in url:
+            order.append("tab")
+        return real_http(url, *args, **kwargs)
+
+    monkeypatch.setattr(browser_read, "_http", http)
+    read()
+    assert order.index("tab") < order.index("socket")
+    assert fake.closed == ["tab-1"]
+
+
+def test_a_browser_started_here_is_stopped_even_if_its_own_tab_is_still_listed(endpoint, monkeypatch):
+    calls, state = [], {"up": False}
+    endpoint([page(pane=True, rows=1)], lists_own_tab=True)
+    real = browser_read._ready
+    monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
+    monkeypatch.setattr(browser_read, "_ensure",
+                        lambda flag, timeout=0: calls.append(flag) or state.update(up=flag == "--start") or True)
+    read()
+    assert calls == ["--start", "--stop"]
+
+
+def test_a_page_that_streams_events_forever_cannot_hold_the_lock_past_the_deadline(endpoint):
+    endpoint([page()], stream=True)
+    started = time.monotonic()
+    assert error_code(lambda: read(deadline=1.0)) == "whatsapp_read_failed"
+    assert time.monotonic() - started < 3.0
+    held = browser_read._acquire(time.monotonic() + 0.5)   # the lock is free again
+    held.close()
+
+
+def test_a_redirect_from_the_debugging_endpoint_is_not_followed(monkeypatch):
+    hits = []
+
+    class Elsewhere(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_error(404)
+
+        def log_message(self, *_):
+            pass
+
+    other = ThreadingHTTPServer(("127.0.0.1", 0), Elsewhere)
+    threading.Thread(target=other.serve_forever, daemon=True).start()
+    fake = FakeBrowser([page(pane=True, rows=1)], redirect_to=f"http://127.0.0.1:{other.server_address[1]}/x")
+    monkeypatch.setenv("SOLAR_BROWSER_DEBUG_PORT", str(fake.port))
+    monkeypatch.setattr(browser_read, "_ensure", lambda flag, timeout=0: False)
+    try:
+        assert error_code(read) == "browser_unavailable"
+        assert hits == []
+    finally:
+        other.shutdown()
+        fake.server.shutdown()
+
+
+def test_a_navigation_error_fails_early_and_distinctly(endpoint):
+    endpoint([page()], navigate_error="net::ERR_INTERNET_DISCONNECTED")
+    started = time.monotonic()
+    assert error_code(lambda: read(deadline=30)) == "whatsapp_read_failed"
+    assert time.monotonic() - started < 5
+
+
+def test_a_tab_without_a_debugging_socket_is_an_unavailable_browser(endpoint, monkeypatch):
+    endpoint([page()])
+    real = browser_read._http
+    monkeypatch.setattr(browser_read, "_http",
+                        lambda url, *a, **k: {"id": "tab-1"} if "/json/new" in url else real(url, *a, **k))
+    assert error_code(read) == "browser_unavailable"
+
+
+def test_the_read_lock_directory_is_created_and_a_bad_one_is_a_distinct_error(endpoint, monkeypatch, tmp_path):
+    endpoint([page(pane=True, rows=1)])
+    monkeypatch.setenv("SOLAR_BROWSER_PROFILE_DIR", str(tmp_path / "missing" / "profile"))
+    assert read()["visible_chats"] == 1
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    monkeypatch.setenv("SOLAR_BROWSER_PROFILE_DIR", str(blocker / "profile"))
+    assert error_code(read) == "browser_unavailable"
