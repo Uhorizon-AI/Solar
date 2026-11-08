@@ -4440,6 +4440,13 @@ def _cli(argv: list[str]) -> int:
         if args.area == "maintenance":
             _print(dict(held=maintenance_state(root) is not None, state=maintenance_state(root)))
             return 0
+        if args.area == "task" and args.cmd in ("short-id", "wait"):
+            with read_session(root) as s:                # a question about a notice never creates a backup
+                if args.cmd == "short-id":
+                    _print(dict(id=args.id, short_id=s.task_short_id(args.id)))
+                else:
+                    _print(dict(id=args.id, wait=s.approval_wait(args.id), limit_off=approval_wait_limit() is None))
+            return 0
         with session(root) as s:
             if args.area == "backup":
                 _print(dict(path=str(backup_now(s.conn, root, args.kind))))
@@ -4538,10 +4545,6 @@ def _cli(argv: list[str]) -> int:
                     _print(dict(id=args.id, key=args.key, value=s.task_field(args.id, args.key)))
                 elif args.cmd == "snapshot":
                     _print(s.task_snapshot(args.id))
-                elif args.cmd == "short-id":
-                    _print(dict(id=args.id, short_id=s.task_short_id(args.id)))
-                elif args.cmd == "wait":
-                    _print(dict(id=args.id, wait=s.approval_wait(args.id)))
                 elif args.cmd == "unset":
                     s.task_unset(args.id, args.key)
                     _print(dict(id=args.id, key=args.key))

@@ -2,6 +2,8 @@
 itself and the console, with when the wait began and when it ends. Nothing here reaches a service."""
 from __future__ import annotations
 
+import json
+
 import runtime_views
 import solar_state
 from mcp_helpers import call, execute, search
@@ -67,10 +69,37 @@ def test_the_console_shows_the_wait_with_its_dates(solar_env):
     assert data["wait_counts"]["authorization"] >= 1
 
 
-def test_the_short_id_in_the_notice_finds_exactly_one_task(solar_env):
-    first, second = make("First", queue=True), make("Second", queue=True)
+def _task_with_id(task_id, title="T"):
     with solar_state.session() as store:
-        short = store.task_short_id(first["id"])
-    found = search(scope="tasks", query=short, limit=50)["tasks"]
-    assert [t["id"] for t in found] == [first["id"]]
-    assert second["id"] not in [t["id"] for t in found]
+        return store.task_create([("title", f'"{title}"')], f"\n{title}\n", task_id=task_id)
+
+
+def test_the_short_id_in_the_notice_names_one_task_and_leads_to_authorization(solar_env):
+    made = make("Waits", queue=True)
+    claim(made["id"])
+    short = made["id"][:8]
+    shown = search(scope="tasks", task_id=short, view="detail")          # the prefix, as the notice shows it
+    assert shown["id"] == made["id"] and shown["awaiting_approval"] is True
+    out, error = execute("task.authorize_run", dict(task_id=shown["id"], expected_row_version=shown["row_version"]))
+    assert not error, out
+    assert "awaiting_approval" not in listed(made["id"])
+
+
+def test_a_title_that_contains_the_prefix_does_not_confuse_it(solar_env):
+    other = make("abcdef12 in the title")
+    target = _task_with_id("abcdef12-aaaa-4000-8000-000000000001", "Target")
+    assert search(scope="tasks", task_id="abcdef12", view="status")["id"] == target
+    assert other["id"] != target
+
+
+def test_an_ambiguous_prefix_is_refused_and_an_exact_id_wins(solar_env):
+    shorter = _task_with_id("abcdef12", "Exact")
+    longer = _task_with_id("abcdef12-0001", "Longer")
+    body, error = call("solar_search", dict(scope="tasks", task_id="abcdef1", view="status"))
+    assert error                                                     # 7 characters: not a short id
+    body, error = call("solar_search", dict(scope="tasks", task_id="abcdef12-00", view="status"))
+    assert not error and body["result"]["id"] == longer              # one match
+    assert search(scope="tasks", task_id="abcdef12", view="status")["id"] == shorter    # exact beats prefix
+    _task_with_id("abcdef12-0002", "Second")
+    body, error = call("solar_search", dict(scope="tasks", task_id="abcdef12-", view="status"))
+    assert error and "task_ambiguous" in json.dumps(body)

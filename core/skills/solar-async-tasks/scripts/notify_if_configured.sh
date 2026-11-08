@@ -139,12 +139,17 @@ if [[ ! -x "$SEND_SCRIPT" ]]; then
   exit 1
 fi
 
+# The supervisor applies SOLAR_APPROVAL_WAIT_HOURS from its own environment: the notice must announce that
+# deadline, not one a workspace `.env` might set differently.
+HAD_WAIT_HOURS="${SOLAR_APPROVAL_WAIT_HOURS+set}"; WAIT_HOURS="${SOLAR_APPROVAL_WAIT_HOURS:-}"
 if [[ -f "$WORKSPACE_DIR/.env" ]]; then
   set -a
   # shellcheck source=/dev/null
   source "$WORKSPACE_DIR/.env"
   set +a
 fi
+
+if [[ -n "$HAD_WAIT_HOURS" ]]; then export SOLAR_APPROVAL_WAIT_HOURS="$WAIT_HOURS"; else unset SOLAR_APPROVAL_WAIT_HOURS; fi
 
 # The workspace `.env` carries the visible configuration (chat id, parse mode).
 # The bot token is not there any more: it belongs to the process, and the
@@ -250,9 +255,11 @@ if [[ -n "$MODE" ]]; then
       SHORT_ID="$(state task short-id "$TASK_ID" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["short_id"])' 2>/dev/null)"
       WAIT_LINE="$(state task wait "$TASK_ID" 2>/dev/null | python3 -c 'import json,sys
 from datetime import datetime
-w = json.load(sys.stdin).get("wait")
+d = json.load(sys.stdin); w = d.get("wait")
 if w is None: sys.exit(0)
-if not w.get("expires_at"): print("No expiry: this wait does not end on its own."); sys.exit(0)
+if not w.get("expires_at"):
+    if d.get("limit_off"): print("No expiry: this wait does not end on its own.")
+    sys.exit(0)
 t = datetime.fromisoformat(w["expires_at"].replace("Z", "+00:00")).astimezone()
 print("Expires: " + t.strftime("%Y-%m-%d %H:%M %Z") + ". If nobody authorizes it by then, the wait ends on its own.")' 2>/dev/null)"
       MESSAGE="Waiting for your approval to run: ${TITLE}"

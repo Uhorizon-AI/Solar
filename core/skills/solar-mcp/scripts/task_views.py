@@ -188,6 +188,9 @@ def find_tasks(query: str = "", state: str = "", limit: int = 10) -> dict:
                 truncated=len(ranked) > len(shown))
 
 
+SHORT_ID_MIN = 8        # the shortest id prefix the approval notice shows (solar_state.Session.SHORT_ID_MIN)
+
+
 def _resolve(store, task_id: str) -> dict:
     task = store.task_get(task_id)
     if task is None:
@@ -195,6 +198,14 @@ def _resolve(store, task_id: str) -> dict:
                  if Path(row.get("source_name") or "").stem == task_id]
         if len(stems) == 1:
             task = stems[0]
+    if task is None and len(task_id) >= SHORT_ID_MIN:
+        # The short id of an approval notice: a prefix names a task only when exactly one id starts with it.
+        # An exact id has already won above; this read never grants anything, authorization still takes the full id.
+        starts = [row for row in store.task_list() if row["id"].startswith(task_id)]
+        if len(starts) > 1:
+            raise ViewError("task_ambiguous", f"{len(starts)} tasks start with {task_id}; give more characters")
+        if starts:
+            task = starts[0]
     if task is None:
         raise ViewError("task_not_found", f"no task {task_id}")
     return task
