@@ -53,7 +53,8 @@ _MAX_FIELDS = 16
 _WRAPPER = r"""(() => {
   const origin = location.origin;
   if (origin !== __ORIGIN__) { return {origin: origin, data: null}; }
-  const read = (__SCRIPT__);
+  const read = (__SCRIPT__
+  );
   return {origin: origin, data: read()};
 })()"""
 
@@ -220,7 +221,7 @@ class _Page:
         if not request_id:
             return
         url = (params.get("request") or {}).get("url", "")
-        if _origin_of(url) == self.allowed_origin:
+        if url == "about:blank" or _origin_of(url) == self.allowed_origin:
             self._notify("Fetch.continueRequest", {"requestId": request_id})
         else:
             self.denied = True
@@ -316,9 +317,11 @@ def _dotenv(root) -> dict:
 
 def _settings(root=None) -> dict:
     """Host, port and profile, resolved once with the rule of `ensure_browser.sh`:
-    workspace `.env`, then the process environment, then the default (an empty value falls through)."""
+    workspace `.env`, then the process environment, then the default."""
     fromfile = _dotenv(root)
-    return {key: fromfile.get(key) or os.environ.get(key) or _DEFAULTS[key] for key in _SETTING_KEYS}
+    # A key present in `.env` wins even when empty: the script then falls to its default, not to the environment.
+    return {key: (fromfile[key] if key in fromfile else os.environ.get(key)) or _DEFAULTS[key]
+            for key in _SETTING_KEYS}
 
 
 def _endpoint(settings: dict) -> str:
@@ -386,12 +389,19 @@ def _ready(endpoint: str, timeout: float = 5.0) -> bool:
         return False
 
 
-def _ensure(flag: str, timeout: float = 60.0, root=None) -> bool:
-    """Start or stop the browser. Runs from the workspace, where the script looks for its `.env`."""
+def _ensure(flag: str, timeout: float = 60.0, root=None, settings: dict | None = None) -> bool:
+    """Start or stop the browser with the settings already validated here.
+
+    The script would `source` the workspace `.env`, which runs every line of it; it is told not
+    to, and receives the three resolved values instead.
+    """
     script = _SCRIPTS / "ensure_browser.sh"
+    env = None
+    if settings is not None:
+        env = {**os.environ, **settings, "SOLAR_BROWSER_SKIP_DOTENV": "1"}
     try:
         done = subprocess.run(["bash", str(script), flag], capture_output=True, text=True,
-                              timeout=max(timeout, 0.1), cwd=str(root) if root else None)
+                              timeout=max(timeout, 0.1), cwd=str(root) if root else None, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return done.returncode == 0
@@ -517,6 +527,18 @@ def prepare(name: str, registry: dict, root: Path) -> dict:
         if not _NAME.fullmatch(str(key)) or not isinstance(spec, dict) \
                 or spec.get("type") not in ("integer", "boolean", "string"):
             raise _invalid("each field needs a name and a type of integer, boolean or string")
+        allowed = spec.get("enum")
+        if allowed is not None:
+            if (not isinstance(allowed, list) or not 1 <= len(allowed) <= 32
+                    or not all(isinstance(v, (str, int)) and not isinstance(v, bool) for v in allowed)):
+                raise _invalid(f"enum of {key} must be a list of 1 to 32 strings or integers")
+        if spec["type"] == "string" and not allowed:
+            # a free string would let page text out (a title, a name): only listed values may leave
+            raise _invalid(f"the string field {key} must declare an enum of the values it may return")
+    refusals = entry.get("refusals", [])
+    if (not isinstance(refusals, list) or len(refusals) > _MAX_FIELDS
+            or not all(isinstance(r, str) and _NAME.fullmatch(r) for r in refusals)):
+        raise _invalid("refusals must be a list of up to 16 plain names")
     pin = entry.get("sha256")
     if not (isinstance(pin, str) and re.fullmatch(r"[0-9a-f]{64}", pin)):
         raise _invalid("sha256 must be the 64-hex digest of the script file")
@@ -530,7 +552,8 @@ def prepare(name: str, registry: dict, root: Path) -> dict:
     if hashlib.sha256(raw).hexdigest() != pin:
         raise OperationError("browser_read_changed",
                              f"The script of {name} changed since the owner registered it; nothing ran")
-    return dict(name=name, origin=origin, url=url, script=raw.decode("utf-8"), fields=fields, root=base)
+    return dict(name=name, origin=origin, url=url, script=raw.decode("utf-8"), fields=fields,
+                refusals=refusals, root=base)
 
 
 def _shape(data: dict, fields: dict) -> dict:
@@ -578,7 +601,7 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
     completed = False    # set only when a result is about to be returned
     try:
         if not _ready(endpoint, max(remaining(), 0.2)):
-            if not _ensure("--start", remaining(), root) or not _ready(endpoint, max(remaining(), 0.2)):
+            if not _ensure("--start", remaining(), root, settings) or not _ready(endpoint, max(remaining(), 0.2)):
                 raise OperationError("browser_unavailable", "The Solar browser could not be started")
             started_here = True
         try:
@@ -620,8 +643,9 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
                 continue
             refused = data.get("refused")
             if refused is not None:
-                if not (isinstance(refused, str) and _NAME.fullmatch(refused)):
-                    raise OperationError("browser_read_failed", "The page returned an invalid refusal")
+                if refused not in entry.get("refusals", []):
+                    # only codes the owner registered may leave: a free string could carry page text
+                    raise OperationError("browser_read_failed", "The page returned a refusal that is not registered")
                 settled = ("refused", refused)
             else:
                 settled = ("ok", _shape(data, entry["fields"]))
@@ -655,7 +679,7 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
             page.socket.close()
         own = target.get("id") if isinstance(target, dict) else None
         if started_here and end - time.monotonic() > 0.5 and not _other_tabs(endpoint, own, end):
-            _ensure("--stop", end - time.monotonic(), root)
+            _ensure("--stop", end - time.monotonic(), root, settings)
         lock.close()
         if completed and not closed:
             # Success is never reported with the tab possibly still open: whatever it had paused

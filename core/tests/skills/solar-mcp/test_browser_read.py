@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import os
 import shutil
 import socket
 import struct
@@ -127,7 +128,8 @@ class FakeBrowser:
                 self.navigated.append(message["params"]["url"])
                 if self.navigate_error:
                     result = {"errorText": self.navigate_error}
-                for number, url in enumerate([] if message["params"]["url"] == "about:blank" else self.navigation):
+                for number, url in enumerate(["about:blank"] if message["params"]["url"] == "about:blank"
+                                             else self.navigation):
                     self._send(sock, {"method": "Fetch.requestPaused", "params": {
                         "requestId": f"r{number}", "resourceType": "Document", "request": {"url": url}}})
             if message["method"] in ("Fetch.continueRequest", "Fetch.failRequest"):
@@ -167,7 +169,8 @@ class FakeBrowser:
 
 ORIGIN = "https://app.example.test"
 FIELDS = {"status": {"type": "string", "enum": ["active"]}, "visible_chats": {"type": "integer"}}
-ENTRY = dict(name="sample", origin=ORIGIN, url=ORIGIN + "/", script="() => ({})", fields=FIELDS)
+ENTRY = dict(name="sample", origin=ORIGIN, url=ORIGIN + "/", script="() => ({})", fields=FIELDS,
+             refusals=["session_expired"])
 
 
 def page(origin=ORIGIN, data=None):
@@ -240,8 +243,8 @@ def test_a_refusal_the_script_reports_is_a_distinct_failure(endpoint):
     assert fake.closed == ["tab-1"]
 
 
-@pytest.mark.parametrize("code", ["has space", "x" * 200, "", None, 7])
-def test_a_refusal_must_be_a_plain_name(endpoint, code):
+@pytest.mark.parametrize("code", ["unlisted", "has space", "x" * 200, "", None, 7, "Session text from the page"])
+def test_only_a_refusal_the_owner_registered_may_leave(endpoint, code):
     endpoint([page(data={"ready": True, "refused": code})])
     assert error_code(read) in ("browser_read_failed",)
 
@@ -334,13 +337,13 @@ def test_the_wrapper_checks_the_origin_before_the_script_runs():
 
 def test_unavailable_browser_is_distinct(monkeypatch):
     monkeypatch.setenv("SOLAR_BROWSER_DEBUG_PORT", "9")
-    monkeypatch.setattr(browser_read, "_ensure", lambda flag, timeout=0, root=None: False)
+    monkeypatch.setattr(browser_read, "_ensure", lambda flag, timeout=0, root=None, settings=None: False)
     assert error_code(read) == "browser_unavailable"
 
 
 def test_started_browser_is_stopped_but_a_running_one_is_left(endpoint, monkeypatch):
     calls = []
-    monkeypatch.setattr(browser_read, "_ensure", lambda flag, timeout=0, root=None: calls.append(flag) or True)
+    monkeypatch.setattr(browser_read, "_ensure", lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or True)
     endpoint([ready(1)])
     read()
     assert calls == []   # already running: neither started nor stopped
@@ -350,7 +353,7 @@ def test_started_browser_is_stopped_but_a_running_one_is_left(endpoint, monkeypa
     real = browser_read._ready
     monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
     monkeypatch.setattr(browser_read, "_ensure",
-                        lambda flag, timeout=0, root=None: calls.append(flag) or state.update(up=flag == "--start") or True)
+                        lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
     read()
     assert calls == ["--start", "--stop"]
     assert fake.closed == ["tab-1"]
@@ -362,7 +365,7 @@ def test_a_browser_started_here_is_kept_when_another_tab_is_open(endpoint, monke
     real = browser_read._ready
     monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
     monkeypatch.setattr(browser_read, "_ensure",
-                        lambda flag, timeout=0, root=None: calls.append(flag) or state.update(up=flag == "--start") or True)
+                        lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
     read()
     assert calls == ["--start"]
 
@@ -380,7 +383,8 @@ def register(solar_env, **override):
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text("() => ({ready: true, status: 'active', visible_chats: 1})", encoding="utf-8")
     entry = dict(origin=ORIGIN, url=ORIGIN + "/", script=str(script.relative_to(solar_env.workspace)),
-                 sha256=hashlib.sha256(script.read_bytes()).hexdigest(), fields=FIELDS)
+                 sha256=hashlib.sha256(script.read_bytes()).hexdigest(), fields=FIELDS,
+                 refusals=["session_expired"])
     entry.update(override)
     folder = solar_env.runtime / "mcp"
     folder.mkdir(parents=True, exist_ok=True)
@@ -439,6 +443,14 @@ def test_a_script_that_changed_after_registration_is_refused_and_never_runs(sola
     dict(url="http://app.example.test/"),                       # page not https
     dict(fields={}),                                            # nothing declared
     dict(fields={"x": {"type": "object"}}),                     # type not allowed
+    dict(fields={"t": {"type": "string"}}),                     # a free string could carry page text
+    dict(fields={"t": {"type": "string", "enum": "active"}}),   # a string enum would match by substring
+    dict(fields={"t": {"type": "string", "enum": []}}),
+    dict(fields={"t": {"type": "string", "enum": [{"a": 1}]}}),
+    dict(fields={"t": {"type": "integer", "enum": "12"}}),
+    dict(refusals="session_expired"),                           # must be a list
+    dict(refusals=["has space"]),
+    dict(refusals=[5]),
     dict(sha256="not-a-digest"),
     dict(script="../outside.js"),                               # escapes the workspace
 ])
@@ -513,6 +525,13 @@ def test_the_wrapper_runs_the_script_on_the_registered_origin(dom, expected, tmp
 
 
 @pytest.mark.skipif(not CHROME, reason="Chrome not installed")
+def test_a_script_that_ends_in_a_line_comment_still_runs(tmp_path, served):
+    got = run_expression(browser_read.read_expression(served, "() => ({ready: true, visible_chats: 1}) // fin"),
+                         "", tmp_path, served)
+    assert got["data"] == {"ready": True, "visible_chats": 1}
+
+
+@pytest.mark.skipif(not CHROME, reason="Chrome not installed")
 def test_the_wrapper_never_runs_the_script_on_another_origin(tmp_path, served):
     dom = '<div id="list"><div role="listitem"><span title="A">A</span></div></div>'
     got = run_expression(browser_read.read_expression(ORIGIN, SAMPLE_SCRIPT), dom, tmp_path, served)
@@ -549,7 +568,7 @@ def test_a_browser_started_here_is_stopped_after_a_failed_first_close(endpoint, 
     real = browser_read._ready
     monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
     monkeypatch.setattr(browser_read, "_ensure",
-                        lambda flag, timeout=0, root=None: calls.append(flag) or state.update(up=flag == "--start") or True)
+                        lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
     read()
     assert calls == ["--start", "--stop"]
 
@@ -578,7 +597,7 @@ def test_a_redirect_from_the_debugging_endpoint_is_not_followed(monkeypatch):
     threading.Thread(target=other.serve_forever, daemon=True).start()
     fake = FakeBrowser([ready(1)], redirect_to=f"http://127.0.0.1:{other.server_address[1]}/x")
     monkeypatch.setenv("SOLAR_BROWSER_DEBUG_PORT", str(fake.port))
-    monkeypatch.setattr(browser_read, "_ensure", lambda flag, timeout=0, root=None: False)
+    monkeypatch.setattr(browser_read, "_ensure", lambda flag, timeout=0, root=None, settings=None: False)
     try:
         assert error_code(read) == "browser_unavailable"
         assert hits == []
@@ -646,7 +665,7 @@ def test_an_exhausted_cleanup_budget_frees_the_lock_inside_the_total_deadline(en
     monkeypatch.setattr(browser_read, "_http", slow_http)
     monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real_ready(url))
     monkeypatch.setattr(browser_read, "_ensure",
-                        lambda flag, timeout=0, root=None: calls.append(flag) or state.update(up=flag == "--start") or True)
+                        lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
     started = time.monotonic()
     assert error_code(lambda: read(deadline=2.0)) == "browser_unavailable"
     assert time.monotonic() - started < 2.6
@@ -721,6 +740,7 @@ def test_an_unconfirmed_close_stops_the_load_and_blanks_the_tab_before_the_socke
     assert error_code(lambda: read(deadline=3.0)) == "browser_unavailable"
     assert "Page.stopLoading" in fake.methods
     assert fake.navigated[-1] == "about:blank"
+    assert fake.decisions[-1][0] == "Fetch.continueRequest"     # blanking the tab is not refused as an external navigation
     assert fake.methods.index("Page.stopLoading") > fake.methods.index("Runtime.evaluate")
 
 
@@ -787,7 +807,7 @@ def test_the_lock_follows_the_profile_from_the_env(endpoint, tmp_path):
     ('SOLAR_BROWSER_DEBUG_PORT="9333"\n', "9333"),
     ("SOLAR_BROWSER_DEBUG_PORT='9333'\n", "9333"),
     ("SOLAR_BROWSER_DEBUG_PORT=1\nSOLAR_BROWSER_DEBUG_PORT=9333\n", "9333"),   # the later line wins
-    ("SOLAR_BROWSER_DEBUG_PORT=\n", "9222"),                                    # empty falls through
+    ("SOLAR_BROWSER_DEBUG_PORT=\n", "9222"),                                    # empty falls to the default
     ("# SOLAR_BROWSER_DEBUG_PORT=9333\n", "9222"),
     ("SOLAR_BROWSER_DEBUG_PORT_OTHER=9333\n", "9222"),
     ("", "9222"),
@@ -798,6 +818,14 @@ def test_the_env_rule_matches_the_script(tmp_path, monkeypatch, text, expected):
     root.mkdir()
     (root / ".env").write_text(text, encoding="utf-8")
     assert browser_read._settings(root)["SOLAR_BROWSER_DEBUG_PORT"] == expected
+
+
+def test_an_empty_value_in_the_env_beats_the_process_environment_like_in_the_script(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOLAR_BROWSER_DEBUG_PORT", "9333")
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / ".env").write_text("SOLAR_BROWSER_DEBUG_PORT=\n", encoding="utf-8")
+    assert browser_read._settings(root)["SOLAR_BROWSER_DEBUG_PORT"] == "9222"
 
 
 def test_without_an_env_the_process_environment_and_the_defaults_apply(tmp_path, monkeypatch):
@@ -826,7 +854,7 @@ def test_other_secrets_in_the_env_are_never_read_into_the_settings(tmp_path):
     assert set(browser_read._settings(root)) == set(browser_read._SETTING_KEYS)
 
 
-def test_the_browser_script_runs_from_the_workspace_where_it_looks_for_its_env(monkeypatch, tmp_path):
+def test_the_browser_script_gets_the_validated_values_and_is_told_to_skip_the_env(monkeypatch, tmp_path):
     seen = {}
 
     def fake_run(argv, **options):
@@ -834,5 +862,28 @@ def test_the_browser_script_runs_from_the_workspace_where_it_looks_for_its_env(m
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(browser_read.subprocess, "run", fake_run)
-    assert browser_read._ensure("--start", 5.0, tmp_path)
+    settings = {"SOLAR_BROWSER_DEBUG_HOST": "127.0.0.1", "SOLAR_BROWSER_DEBUG_PORT": "9333",
+                "SOLAR_BROWSER_PROFILE_DIR": "/tmp/x"}
+    assert browser_read._ensure("--start", 5.0, tmp_path, settings)
     assert seen["cwd"] == str(tmp_path)
+    assert seen["env"]["SOLAR_BROWSER_SKIP_DOTENV"] == "1" and seen["env"]["SOLAR_BROWSER_DEBUG_PORT"] == "9333"
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="bash not available")
+def test_a_command_in_the_env_never_runs_when_the_browser_is_started_or_stopped(tmp_path, monkeypatch):
+    """The real script, from a workspace whose .env holds a valid setting and a sentinel command."""
+    root = tmp_path / "ws"
+    (root / ".solar").mkdir(parents=True)                 # the script refuses to run outside a Solar workspace
+    (root / "sun").mkdir()
+    (root / ".solar" / "settings.json").write_text('{"version": "fixture"}\n', encoding="utf-8")
+    sentinel = tmp_path / "ran-from-env"
+    (root / ".env").write_text(f"SOLAR_BROWSER_DEBUG_PORT=9333\ntouch {sentinel}\n", encoding="utf-8")
+    settings = {"SOLAR_BROWSER_DEBUG_HOST": "127.0.0.1", "SOLAR_BROWSER_DEBUG_PORT": "39333",
+                "SOLAR_BROWSER_PROFILE_DIR": str(tmp_path / "profile")}
+    monkeypatch.setenv("SOLAR_BROWSER_LOG_PATH", str(tmp_path / "browser.log"))
+    browser_read._ensure("--stop", 20.0, root, settings)
+    assert not sentinel.exists()
+    # and the control: the very same call without the skip does execute the file
+    subprocess.run(["bash", str(browser_read._SCRIPTS / "ensure_browser.sh"), "--stop"], cwd=root,
+                   env={**os.environ, **settings}, capture_output=True, timeout=30)
+    assert sentinel.exists()
