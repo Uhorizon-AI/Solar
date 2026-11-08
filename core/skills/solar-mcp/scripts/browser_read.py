@@ -1,17 +1,20 @@
-"""One scoped browser read: WhatsApp Web session status and visible chat count.
+"""One scoped browser read of a page the owner registered.
 
-The caller supplies nothing. The destination, the script and the fields it returns
-are constants in this file, so the authorization of an operation that runs this is
-exactly its name: it cannot open a chat, visit another origin, read a message or
-account data, run a script of the caller's or send anything.
+Solar knows nothing about any site. The owner registers a read in
+`<runtime>/mcp/browser-reads.json`: the one origin it may touch, the page to open, a script
+file (a function expression) pinned by its SHA-256, and the fields it may return. The caller
+of the operation only names the read; it supplies no URL, script, selector or argument.
 
 The scope is enforced twice, and the second line does not depend on the first:
 
 1. Navigation. The Chrome `Fetch` domain pauses every document request of the tab;
-   anything outside `ALLOWED_ORIGIN` (including redirects and frames) is refused
+   anything outside the registered origin (including redirects and frames) is refused
    before it loads.
-2. The read. The expression checks `location.origin` before it touches a selector, so
-   a page on any other origin returns nothing but its origin.
+2. The read. The wrapper checks `location.origin` before it runs the script, so a page
+   on any other origin returns nothing but its origin.
+
+The script's answer is never passed through as it is: only the declared fields, with their
+declared types, leave this module. A script that changed since it was registered is refused.
 
 The browser is the shared Solar runtime (`solar-browser`): started and stopped
 through `ensure_browser.sh`, never launched here. Only a tab this module opens is
@@ -23,11 +26,12 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import hashlib
 import http.client
 import json
 import os
+import re
 import socket
-import sys
 import struct
 import subprocess
 import threading
@@ -38,33 +42,25 @@ from urllib.parse import urlsplit
 
 from mcp_context import OperationError
 
-DESTINATION = "https://web.whatsapp.com/"
-ALLOWED_ORIGIN = "https://web.whatsapp.com"
 _LOCAL_HOSTS = ("127.0.0.1", "localhost")
 _LOADING_ORIGINS = ("", "null", "about:blank")
+_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}")
+_MAX_SCRIPT = 32 * 1024
+_MAX_FIELDS = 16
 
-# The whole read. It returns scalars; it opens nothing, types nothing, and never returns
-# text from a chat (titles are only counted). A page on another origin gets no selector.
-_EXPRESSION = r"""(() => {
-  if (location.origin !== __ORIGIN__) {
-    return {origin: location.origin, qr: false, pane: false, rows: 0};
-  }
-  const qr = !!document.querySelector(
-    '[data-testid="qrcode"], canvas[aria-label*="QR"], [data-ref] canvas');
-  const pane = document.querySelector('#pane-side');
-  const rows = pane
-    ? Array.from(pane.querySelectorAll('[role="row"], [role="listitem"]'))
-        .filter(item => item.querySelector('span[title]:not([title=""])')).length
-    : 0;
-  return {origin: location.origin, qr: qr, pane: !!pane, rows: rows};
+# The wrapper. The script is the owner's pinned function expression; it only runs once the
+# page is on the registered origin. `__SCRIPT__` is substituted last so its text is never rescanned.
+_WRAPPER = r"""(() => {
+  const origin = location.origin;
+  if (origin !== __ORIGIN__) { return {origin: origin, data: null}; }
+  const read = (__SCRIPT__);
+  return {origin: origin, data: read()};
 })()"""
 
 
-def read_expression(origin: str = ALLOWED_ORIGIN) -> str:
-    return _EXPRESSION.replace("__ORIGIN__", json.dumps(origin))
+def read_expression(origin: str, script: str) -> str:
+    return _WRAPPER.replace("__ORIGIN__", json.dumps(origin)).replace("__SCRIPT__", script)
 
-
-READ_EXPRESSION = read_expression()
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "solar-browser" / "scripts"
 _POLL_SECONDS = 1.0
@@ -129,6 +125,10 @@ class _Socket:
         else:
             header += bytes([0x80 | 127]) + struct.pack(">Q", size)
         mask = os.urandom(4)
+        left = self.until - time.monotonic()
+        if left <= 0:
+            raise socket.timeout("deadline")
+        self.sock.settimeout(left)       # a peer that stops reading cannot hold a write past the deadline
         self.sock.sendall(bytes(header) + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
 
     def _fill(self) -> None:
@@ -199,9 +199,17 @@ class _Page:
         self.counter = 0
         self.denied = False     # a document request outside the allowed origin was refused
 
+    def _write(self, text: str) -> None:
+        try:
+            self.socket.send(text)
+        except socket.timeout:
+            raise OperationError("browser_read_failed", "The page did not accept the command in time") from None
+        except OSError:
+            raise OperationError("browser_unavailable", "The debugging socket was lost") from None
+
     def _notify(self, method: str, params: dict) -> None:
         self.counter += 1
-        self.socket.send(json.dumps({"id": self.counter, "method": method, "params": params}))
+        self._write(json.dumps({"id": self.counter, "method": method, "params": params}))
 
     def _event(self, message: dict) -> None:
         """Every document request is paused: only the allowed origin continues."""
@@ -227,22 +235,22 @@ class _Page:
         self.counter += 1
         mine = self.counter
         self.socket.until = time.monotonic() + _CALL_TIMEOUT if until is None else until
-        self.socket.send(json.dumps({"id": mine, "method": method, "params": params or {}}))
+        self._write(json.dumps({"id": mine, "method": method, "params": params or {}}))
         while True:
             try:
                 reply = json.loads(self.socket.receive())
             except socket.timeout:
-                raise OperationError("whatsapp_read_failed", "The page did not answer in time") from None
+                raise OperationError("browser_read_failed", "The page did not answer in time") from None
             except OSError:
                 raise OperationError("browser_unavailable", "The debugging socket was lost") from None
             except ValueError:
-                raise OperationError("whatsapp_read_failed", "The browser sent a malformed message") from None
+                raise OperationError("browser_read_failed", "The browser sent a malformed message") from None
             if "id" not in reply:
                 self._event(reply)
                 continue
             if reply.get("id") == mine:
                 if "error" in reply:
-                    raise OperationError("whatsapp_read_failed", "The browser refused the read")
+                    raise OperationError("browser_read_failed", "The browser refused the read")
                 return reply.get("result", {})
 
     def pump(self, seconds: float, until: float) -> None:
@@ -363,8 +371,8 @@ def _acquire(limit: float):
         except OSError:
             if time.monotonic() >= limit:
                 handle.close()
-                raise OperationError("whatsapp_read_failed",
-                                     "Another WhatsApp Web read kept the browser until the deadline") from None
+                raise OperationError("browser_read_failed",
+                                     "Another browser read kept the browser until the deadline") from None
             time.sleep(0.1)
 
 
@@ -421,34 +429,97 @@ def _close_tab(endpoint: str, target: dict, page, end: float) -> bool:
     return False
 
 
+def _quiesce(page, end: float) -> None:
+    """Last resort when the tab could not be confirmed closed: cancel what it is loading.
+
+    Dropping the socket ends the request interception, and Chrome may release what was paused.
+    Stopping the load and moving the tab to a blank page first cancels in-flight navigations,
+    and a last pump decides whatever was still arriving. It narrows the window; it cannot
+    close it (see "Where the guarantee ends" in SKILL.md).
+    """
+    try:
+        page.call("Page.stopLoading", until=min(end, time.monotonic() + 0.5))
+        page.call("Page.navigate", {"url": "about:blank"}, until=min(end, time.monotonic() + 0.5))
+        page.pump(0.1, end)
+    except OperationError:
+        pass
+
+
 # --- the read -------------------------------------------------------------------------
 
-def _classify(read: dict, allowed_origin: str = ALLOWED_ORIGIN):
-    """A settled answer, or None while the page has not committed to the allowed origin yet."""
-    origin = read.get("origin")
-    if origin in _LOADING_ORIGINS:
-        return None
-    if origin != allowed_origin:
-        raise OperationError("browser_scope_denied",
-                             "The page left the authorized WhatsApp Web origin; nothing was read")
-    if read.get("qr"):
-        return "qr_required", {}
-    if read.get("pane"):
-        return "active", {"visible_chats": int(read.get("rows", 0))}
-    return None
+def _invalid(message: str) -> OperationError:
+    return OperationError("browser_read_invalid", message)
+
+
+def prepare(name: str, registry: dict, root: Path) -> dict:
+    """The registered read `name`, checked, with its script text loaded and its digest verified."""
+    entry = registry.get(name) if isinstance(registry, dict) else None
+    if not isinstance(entry, dict):
+        raise OperationError("browser_read_not_registered",
+                             f"{name} is not in the owner's browser-reads registry")
+    origin, url, script_path = entry.get("origin"), entry.get("url"), entry.get("script")
+    if not (isinstance(origin, str) and isinstance(url, str) and isinstance(script_path, str)):
+        raise _invalid("origin, url and script must be strings")
+    parts = urlsplit(origin)
+    if parts.scheme != "https" or not parts.hostname or origin != f"https://{parts.netloc}":
+        raise _invalid("origin must be a bare https origin")
+    if urlsplit(url).scheme != "https" or f"https://{urlsplit(url).netloc}" != origin:
+        raise _invalid("url must be an https page on the registered origin")
+    fields = entry.get("fields")
+    if not isinstance(fields, dict) or not fields or len(fields) > _MAX_FIELDS:
+        raise _invalid("fields must declare between 1 and 16 fields")
+    for key, spec in fields.items():
+        if not _NAME.fullmatch(str(key)) or not isinstance(spec, dict) \
+                or spec.get("type") not in ("integer", "boolean", "string"):
+            raise _invalid("each field needs a name and a type of integer, boolean or string")
+    pin = entry.get("sha256")
+    if not (isinstance(pin, str) and re.fullmatch(r"[0-9a-f]{64}", pin)):
+        raise _invalid("sha256 must be the 64-hex digest of the script file")
+    base = root.resolve()
+    path = (base / script_path).resolve()
+    if base not in path.parents or not path.is_file():
+        raise _invalid("the script must be a file inside the workspace")
+    raw = path.read_bytes()
+    if len(raw) > _MAX_SCRIPT:
+        raise _invalid("the script is too large")
+    if hashlib.sha256(raw).hexdigest() != pin:
+        raise OperationError("browser_read_changed",
+                             f"The script of {name} changed since the owner registered it; nothing ran")
+    return dict(name=name, origin=origin, url=url, script=raw.decode("utf-8"), fields=fields)
+
+
+def _shape(data: dict, fields: dict) -> dict:
+    """Only the declared fields, with their declared types, leave this module."""
+    out = {}
+    for key, spec in fields.items():
+        value = data.get(key)
+        kind = spec["type"]
+        good = ((kind == "boolean" and isinstance(value, bool))
+                or (kind == "integer" and isinstance(value, int) and not isinstance(value, bool)
+                    and 0 <= value <= 10**9)
+                or (kind == "string" and isinstance(value, str) and 0 < len(value) <= 80
+                    and value.isprintable()))
+        if good and "enum" in spec:
+            good = value in spec["enum"]
+        if not good:
+            raise OperationError("browser_read_failed",
+                                 f"The page did not return the declared field {key}")
+        out[key] = value
+    return out
 
 
 def _denied() -> OperationError:
     return OperationError("browser_scope_denied",
-                          "A navigation outside the authorized origin was refused; nothing was read")
+                          "A navigation outside the registered origin was refused; nothing was read")
 
 
-def whatsapp_status(deadline: float = _READ_DEADLINE, poll: float = _POLL_SECONDS) -> dict:
-    """Session status, QR presence and visible chat count of WhatsApp Web, or a distinct refusal.
+def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _POLL_SECONDS) -> dict:
+    """Run one prepared read, or fail with a distinct refusal.
 
     `deadline` is absolute for the whole call and includes the cleanup; `poll` exists for tests.
     The operation passes nothing.
     """
+    origin, expression = entry["origin"], read_expression(entry["origin"], entry["script"])
     begun = time.monotonic()
     limit = begun + deadline - min(_CLEANUP_SECONDS, deadline * 0.25)    # the work; the rest is cleanup
     remaining = lambda: limit - time.monotonic()  # noqa: E731
@@ -457,6 +528,7 @@ def whatsapp_status(deadline: float = _READ_DEADLINE, poll: float = _POLL_SECOND
     started_here = False
     target = None
     page = None
+    completed = False    # set only when a result is about to be returned
     try:
         if not _ready(endpoint, max(remaining(), 0.2)):
             if not _ensure("--start", remaining()) or not _ready(endpoint, max(remaining(), 0.2)):
@@ -467,48 +539,59 @@ def whatsapp_status(deadline: float = _READ_DEADLINE, poll: float = _POLL_SECOND
             url = target["webSocketDebuggerUrl"]
         except (OSError, urllib.error.URLError, ValueError, KeyError, TypeError):
             raise OperationError("browser_unavailable", "The browser did not open a tab") from None
-        page = _Page(_Socket(url, min(10.0, max(remaining(), 0.5))), ALLOWED_ORIGIN)
+        page = _Page(_Socket(url, min(10.0, max(remaining(), 0.5))), origin)
         page.call("Page.enable", until=limit)
         page.call("Fetch.enable", {"patterns": [{"urlPattern": "*", "resourceType": "Document",
                                                  "requestStage": "Request"}]}, until=limit)
-        navigated = page.call("Page.navigate", {"url": DESTINATION}, until=limit)
+        navigated = page.call("Page.navigate", {"url": entry["url"]}, until=limit)
         if navigated.get("errorText"):
             if page.denied:
                 raise _denied()
-            raise OperationError("whatsapp_read_failed", "WhatsApp Web could not be loaded")
+            raise OperationError("browser_read_failed", "The page could not be loaded")
         last, stable, reached = None, 0, False
         while remaining() > 0:
             page.pump(min(poll, max(remaining(), 0)), limit)   # still deciding paused requests
             answer = page.call("Runtime.evaluate", {
-                "expression": READ_EXPRESSION, "returnByValue": True, "awaitPromise": False},
+                "expression": expression, "returnByValue": True, "awaitPromise": False},
                 until=limit)
             value = (answer.get("result") or {}).get("value")
             if not isinstance(value, dict):
                 continue
-            origin = value.get("origin")
-            reached = reached or origin == ALLOWED_ORIGIN
-            settled = _classify(value)
-            if settled is None:
-                # A blocked document only matters while the page has not reached WhatsApp Web itself.
+            seen = value.get("origin")
+            reached = reached or seen == origin
+            if seen in _LOADING_ORIGINS:
                 if page.denied and not reached:
                     raise _denied()
                 last, stable = None, 0
                 continue
+            if seen != origin:
+                raise OperationError("browser_scope_denied",
+                                     "The page left the registered origin; nothing was read")
+            data = value.get("data")
+            if not isinstance(data, dict) or data.get("ready") is not True:
+                last, stable = None, 0     # still loading
+                continue
+            refused = data.get("refused")
+            if refused is not None:
+                if not (isinstance(refused, str) and _NAME.fullmatch(refused)):
+                    raise OperationError("browser_read_failed", "The page returned an invalid refusal")
+                settled = ("refused", refused)
+            else:
+                settled = ("ok", _shape(data, entry["fields"]))
             # An empty list can still be loading: the same answer must hold several polls in a row.
             if settled == last:
                 stable += 1
             else:
                 last, stable = settled, 1
             if stable >= _STABLE_POLLS:
-                if settled[0] == "qr_required":
-                    raise OperationError("whatsapp_session_expired",
-                                         "WhatsApp Web asks to link the device again (QR shown)")
-                return {"status": "active", "qr_present": False,
-                        "visible_chats": settled[1]["visible_chats"]}
+                if settled[0] == "refused":
+                    raise OperationError("browser_read_refused", f"{entry['name']}: {settled[1]}")
+                completed = True
+                return {"read": entry["name"], "data": settled[1]}
         if page.denied and not reached:
             raise _denied()
-        raise OperationError("whatsapp_read_failed",
-                             "WhatsApp Web did not reach a readable state before the deadline")
+        raise OperationError("browser_read_failed",
+                             "The page did not reach a readable state before the deadline")
     finally:
         # Cleanup, in this order. The tab is closed and the close CONFIRMED while the socket (and
         # with it the request interception) is still up; only then is the socket dropped, so no
@@ -517,14 +600,17 @@ def whatsapp_status(deadline: float = _READ_DEADLINE, poll: float = _POLL_SECOND
         end = begun + deadline
         closed = True
         if target is not None:
-            closed = _close_tab(endpoint, target, page, end)
+            # keep a little of the cleanup time for _quiesce, in case the close is not confirmed
+            closed = _close_tab(endpoint, target, page, end - min(0.7, max(end - time.monotonic(), 0) * 0.3))
         if page is not None:
+            if not closed:
+                _quiesce(page, end)
             page.socket.close()
         own = target.get("id") if isinstance(target, dict) else None
         if started_here and end - time.monotonic() > 0.5 and not _other_tabs(endpoint, own, end):
             _ensure("--stop", end - time.monotonic())
         lock.close()
-        if not closed and sys.exc_info()[0] is None:
+        if completed and not closed:
             # Success is never reported with the tab possibly still open: whatever it had paused
             # is released when the socket drops, so the caller must know the read did not end clean.
             raise OperationError("browser_unavailable",

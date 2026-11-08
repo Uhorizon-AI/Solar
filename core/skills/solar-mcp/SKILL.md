@@ -130,7 +130,7 @@ Malformed JSON-RPC or tool arguments retain protocol errors; domain pre-confirma
 | `async_execution.apply` | A2 | Same, for one exact `revision` and `proposal_digest`. Applies that revision to the runtime's policy in one transaction if the file still holds exactly it and it validates; otherwise the applied policy stays. Every claim, manual or worker, reads the applied revision. A provider task never prepares or applies it |
 | `telegram.send` | A2 | Same, for one exact text and an explicit `chat_id`. Sending outside the machine is never implicit |
 | `browser.probe` | A0 | Starts Chrome headless with a disposable profile and reads a fixed synthetic page. Takes no arguments (no URL, session, selector or script). Returns `browser`, `headless` and the fixture marker `solar-browser-42`. Errors: `browser_unavailable`, `browser_probe_failed`. Tests browser execution only; it does not reach authenticated sites |
-| `browser.whatsapp_status` | A0 | Read-only, and the one authenticated browser read. Opens one tab on `https://web.whatsapp.com` in the Solar browser profile and returns `status` (always `active` on success), `qr_present` (always `false` on success: a QR is the error `whatsapp_session_expired`) and `visible_chats` (a count, never chat text). Takes no arguments. Errors: `browser_unavailable`, `browser_scope_denied`, `whatsapp_session_expired` (QR shown), `whatsapp_read_failed`. It cannot open chats, read messages or account data, visit another origin, run a caller script or send. It runs without approval because what it can do is fixed by its name; it uses the logged-in session of the Solar browser profile |
+| `browser.read` | A0 | Read-only. Runs one browser read **the owner registered** in `<runtime>/mcp/browser-reads.json`: one origin, one page, a script file pinned by SHA-256 and the fields it may return. The caller sends only the name (`read`), never a URL, script, selector or argument. Opens one tab in the Solar browser profile (its logged-in sessions), refuses navigation outside the origin, and returns only the declared fields (integers, booleans, short strings), never page text. Errors: `browser_read_not_registered`, `browser_read_invalid`, `browser_read_changed` (the script changed since it was registered: nothing runs), `browser_unavailable`, `browser_scope_denied`, `browser_read_refused` (the script reported a refusal such as an expired session, as `<read>: <code>`), `browser_read_failed`. It runs without approval because the owner's registration is the authorization |
 | `action.run` | A3 | The skill and action are registered **and** the mandate registered for that skill is live. A skill registered without a mandate is refused; a caller-supplied mandate is only accepted if it equals the registered one |
 
 Approvals are server-side records: they name one **operation** and one set of
@@ -154,6 +154,24 @@ Action skills are opt-in, listed in `<runtime>/mcp/action-skills.json`:
 
 **Instruction skills never become operations.** They stay native to the harness; only
 registered action verbs pass through here.
+
+Browser reads are opt-in the same way, listed in `<runtime>/mcp/browser-reads.json`
+(outside the workspace, so an agent that can edit a planet cannot widen a read):
+
+```json
+{"example-inbox": {"origin": "https://app.example.com",
+                   "url": "https://app.example.com/inbox",
+                   "script": "planets/<planet>/skills/<skill>/scripts/inbox_read.js",
+                   "sha256": "<sha256 of that file>",
+                   "fields": {"status": {"type": "string", "enum": ["active"]},
+                              "unread": {"type": "integer"}}}}
+```
+
+The script is a function expression owned by the planet: it returns `{ready: false}`
+while the page loads, `{ready: true, refused: "<code>"}` when it must refuse (for
+example a login screen) and otherwise `{ready: true, ...fields}`. Solar never knows
+which site it is: no selector, URL or site name lives in `core/`. Changing the
+script invalidates its digest until the owner registers it again.
 
 ## Sending Telegram
 
@@ -187,12 +205,18 @@ Outside, and said plainly rather than disguised:
   mediated route, not the machine;
 - a browser session already authenticated is untouched — `zoho-mail`,
   `whatsapp`, `linkedin-messages` and `linkedin-analytics` remain declarative,
-  not coercive, until their send becomes a gated tool. The one exception is the
-  fixed read `browser.whatsapp_status` (A0): it can only read the session status,
-  QR presence and chat count, and it refuses other origins in two places (the
-  navigation and the read itself). It does not stop a process running as the user
-  from using the browser's local debugging port, and it relies on Chrome to honour
-  the paused-request protocol;
+  not coercive, until their send becomes a gated tool. The exception is a read the
+  owner registered for `browser.read` (A0): it can only run that pinned script on
+  that origin and return its declared fields, and it refuses other origins in two
+  places (the navigation and the wrapper itself). What the script may read inside
+  the page is the owner's own code and registration, not something Solar can judge.
+  It does not stop a process running as the user from using the browser's local
+  debugging port, and it relies on Chrome to honour the paused-request protocol. If
+  the read tab cannot be confirmed closed and the debugging connection is then
+  dropped, Chrome may release a request that was still paused; the read reports
+  `browser_unavailable` and first stops the load and blanks the tab, which narrows
+  that window but cannot close it (the debugging protocol has no block that survives
+  a lost connection);
 - the `.env` of a planet is the planet's. Solar does not mediate it.
 
 ## Runtime dependencies

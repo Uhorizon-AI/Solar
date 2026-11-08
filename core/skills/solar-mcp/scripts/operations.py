@@ -805,10 +805,11 @@ def _require_chat(arguments: dict) -> None:
                              "Supply the exact chat_id before confirming a send")
 
 
-def _do_browser_whatsapp_status(_arguments: dict) -> dict:
-    """Fixed destination, fixed read: the caller supplies nothing."""
+def _do_browser_read(arguments: dict) -> dict:
+    """A registered read of a registered origin: the caller only names it."""
     import browser_read
-    return browser_read.whatsapp_status()
+    entry = browser_read.prepare(arguments["read"], mcp_context.browser_reads(), workspace())
+    return browser_read.scoped_read(entry)
 
 
 def _do_action_run(arguments: dict) -> dict:
@@ -1076,14 +1077,16 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         effects="Starts Chrome with a disposable profile and reads a fixed synthetic page. "
                 "Accepts no URL, session, selector, script or browser arguments."),
     Operation(
-        "browser.whatsapp_status", A0,
-        "Read WhatsApp Web session status, QR presence and visible chat count in the Solar browser profile.",
-        _obj({}),
-        errors=("browser_unavailable", "browser_scope_denied", "whatsapp_session_expired",
-                "whatsapp_read_failed"),
-        effects="Opens one tab on web.whatsapp.com in the Solar browser profile and returns three fields: "
-                "status (active), qr_present (false: a QR is the error whatsapp_session_expired), visible_chats. It cannot open chats, read messages or account data, "
-                "visit another origin, run a caller script or send. Accepts no arguments."),
+        "browser.read", A0,
+        "Run one browser read the owner registered: one origin, a pinned script, declared fields.",
+        _obj(dict(read=SLUG), required=("read",)),
+        errors=("browser_read_not_registered", "browser_read_invalid", "browser_read_changed",
+                "browser_unavailable", "browser_scope_denied", "browser_read_refused",
+                "browser_read_failed"),
+        effects="Opens one tab on the registered origin in the Solar browser profile, runs the owner's "
+                "pinned script there and returns only its declared fields. The caller supplies a name "
+                "and nothing else: no URL, script, selector or argument. Navigation outside the origin "
+                "is refused; a script that changed since it was registered is refused."),
     Operation(
         "action.run", A3, "Run one registered action of one registered action skill under a live mandate.",
         _obj(dict(skill=SLUG, action=SLUG, mandate=SLUG, automated={"type": "boolean"}),
@@ -1107,7 +1110,7 @@ HANDLERS: dict[str, Callable[[dict], dict]] = {
     "async_execution.apply": _do_async_apply,
     "telegram.send": _do_telegram_send,
     "browser.probe": _do_browser_probe,
-    "browser.whatsapp_status": _do_browser_whatsapp_status,
+    "browser.read": _do_browser_read,
     "action.run": _do_action_run,
 }
 
