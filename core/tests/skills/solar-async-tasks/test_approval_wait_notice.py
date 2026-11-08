@@ -3,6 +3,7 @@
 It goes through the task notifier that already exists, to the configured chat only, with the title and
 never the instructions, and it does not touch the task. The sender is a double that writes a log; no
 chat is reached."""
+import re
 import os
 import subprocess
 import time
@@ -89,7 +90,7 @@ def test_the_waiting_notice_carries_a_short_id_and_the_expiry(tmp_path):
     short = task_id[:8]
     assert f"Task: {short}" in sent and f"authorize task {short}" in sent
     assert task_id not in sent                                  # short, never the whole id
-    assert "Expires: " in sent and "the wait ends on its own" in sent
+    assert re.search(r"Expires: \d{4}-\d{2}-\d{2} \d{2}:\d{2}", sent) and "the wait ends on its own" in sent
     assert "No expiry" not in sent
     assert str(workspace) not in sent and str(tmp_path) not in sent      # no paths
 

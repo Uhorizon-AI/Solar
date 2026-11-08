@@ -103,3 +103,22 @@ def test_an_ambiguous_prefix_is_refused_and_an_exact_id_wins(solar_env):
     _task_with_id("abcdef12-0002", "Second")
     body, error = call("solar_search", dict(scope="tasks", task_id="abcdef12-", view="status"))
     assert error and "task_ambiguous" in json.dumps(body)
+
+
+def test_a_file_name_and_a_prefix_that_name_different_tasks_are_ambiguous(solar_env):
+    target = _task_with_id("abcdef12-aaaa-4000-8000-000000000001", "Target")
+    imported = _task_with_id("zzz-imported-task", "Imported")
+    with solar_state.session() as store:
+        store.conn.execute("UPDATE tasks SET source_name = ? WHERE id = ?", ("abcdef12.md", imported))
+    body, error = call("solar_search", dict(scope="tasks", task_id="abcdef12", view="status"))
+    assert error and "task_ambiguous" in json.dumps(body)
+    assert search(scope="tasks", task_id=target, view="status")["id"] == target     # the full id still works
+    assert search(scope="tasks", task_id="abcdef12-aaaa", view="status")["id"] == target
+    assert search(scope="tasks", task_id="zzz-imported-task", view="status")["id"] == imported
+
+
+def test_a_file_name_alone_still_finds_its_task(solar_env):
+    imported = _task_with_id("plain-task", "Imported")
+    with solar_state.session() as store:
+        store.conn.execute("UPDATE tasks SET source_name = ? WHERE id = ?", ("old-name.md", imported))
+    assert search(scope="tasks", task_id="old-name", view="status")["id"] == imported

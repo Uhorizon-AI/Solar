@@ -253,6 +253,7 @@ if [[ -n "$MODE" ]]; then
       # The short id and the expiry let the owner name the task and know the deadline from a phone.
       # Both come from solar-state; neither is the instructions, a path or the chat a task names.
       SHORT_ID="$(state task short-id "$TASK_ID" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["short_id"])' 2>/dev/null)"
+      [[ -n "$SHORT_ID" ]] || echo "Task notification: short id unavailable ($TASK_ID)" >&2
       WAIT_LINE="$(state task wait "$TASK_ID" 2>/dev/null | python3 -c 'import json,sys
 from datetime import datetime
 d = json.load(sys.stdin); w = d.get("wait")
