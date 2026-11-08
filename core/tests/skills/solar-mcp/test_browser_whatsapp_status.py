@@ -22,10 +22,10 @@ class FakeBrowser:
     """A DevTools endpoint whose page answers `Runtime.evaluate` from a scripted list."""
 
     def __init__(self, reads, navigation=None, tabs=(), redirect_to=None, navigate_error=None,
-                 stream=False, drip=False, close_failures=0, late_requests=()):
+                 stream=False, drip=False, close_failures=0, late_requests=(), garbage=False):
         self.reads = list(reads)
         self.redirect_to, self.navigate_error = redirect_to, navigate_error
-        self.stream, self.drip = stream, drip
+        self.stream, self.drip, self.garbage = stream, drip, garbage
         self.close_failures, self.late_requests = close_failures, list(late_requests)
         self.late_sent = False
         # document requests the "browser" makes after Page.navigate (redirects, frames)
@@ -104,6 +104,8 @@ class FakeBrowser:
             message = json.loads(data)
             self.methods.append(message["method"])
             result = {}
+            if self.garbage and message["method"] == "Page.enable":
+                self._send_text(sock, "this is not json")
             if self.drip and message["method"] == "Page.enable":
                 try:   # the header of a 200-byte frame, then one byte at a time, never finishing
                     sock.sendall(bytes([0x81, 126]) + struct.pack(">H", 200))
@@ -139,6 +141,11 @@ class FakeBrowser:
                 for number, url in enumerate(self.late_requests):   # requests that arrive between reads
                     self._send(sock, {"method": "Fetch.requestPaused", "params": {
                         "requestId": f"late{number}", "resourceType": "Document", "request": {"url": url}}})
+
+    @staticmethod
+    def _send_text(sock, text):
+        data = text.encode()
+        sock.sendall(bytes([0x81, len(data)]) + data)
 
     @staticmethod
     def _send(sock, body):
@@ -498,13 +505,35 @@ def test_the_socket_is_kept_until_the_tab_close_is_confirmed(endpoint, monkeypat
     assert order == [("socket", ["tab-1"])]       # dropped only after the close was confirmed
 
 
-def test_a_close_that_never_succeeds_still_ends_within_the_deadline(endpoint):
+def test_a_close_that_never_succeeds_is_an_error_not_a_success(endpoint):
     fake = endpoint([page(pane=True, rows=1)], close_failures=999)
     started = time.monotonic()
-    assert read(deadline=2.0)["visible_chats"] == 1
-    assert time.monotonic() - started < 3.0
+    assert error_code(lambda: read(deadline=2.0)) == "browser_unavailable"
+    assert time.monotonic() - started < 2.4          # inside the total deadline
     assert fake.closed == []
     held = browser_read._acquire(time.monotonic() + 0.5)   # and the lock is free
+    held.close()
+
+
+def test_an_exhausted_cleanup_budget_frees_the_lock_inside_the_total_deadline(endpoint, monkeypatch):
+    calls, state = [], {"up": False}
+    endpoint([page(pane=True, rows=1)], close_failures=999)
+    real_http, real_ready = browser_read._http, browser_read._ready
+
+    def slow_http(url, *args, **kwargs):
+        if "/json/close/" in url:
+            time.sleep(0.4)             # each attempt eats the reserve
+        return real_http(url, *args, **kwargs)
+
+    monkeypatch.setattr(browser_read, "_http", slow_http)
+    monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real_ready(url))
+    monkeypatch.setattr(browser_read, "_ensure",
+                        lambda flag, timeout=0: calls.append(flag) or state.update(up=flag == "--start") or True)
+    started = time.monotonic()
+    assert error_code(lambda: read(deadline=2.0)) == "browser_unavailable"
+    assert time.monotonic() - started < 2.6
+    assert calls == ["--start"]          # no time left to stop it: it is left running, never over the deadline
+    held = browser_read._acquire(time.monotonic() + 0.5)
     held.close()
 
 
@@ -550,3 +579,20 @@ def test_requests_that_arrive_between_reads_are_decided_while_waiting(endpoint):
     browser_read_status = browser_read.whatsapp_status(deadline=6.0, poll=0.2)
     assert browser_read_status["visible_chats"] == 1
     assert ("Fetch.failRequest", "late0") in fake.decisions
+
+
+def test_a_malformed_message_from_the_browser_is_a_typed_failure(endpoint):
+    endpoint([page()], garbage=True)
+    assert error_code(read) == "whatsapp_read_failed"
+
+
+def test_a_malformed_message_while_waiting_is_a_typed_failure():
+    class Page:
+        class socket:
+            until = 0
+            receive = staticmethod(lambda: "not json")
+    page_ = browser_read._Page.__new__(browser_read._Page)
+    page_.socket = Page.socket
+    with pytest.raises(browser_read.OperationError) as caught:
+        page_.pump(1.0, time.monotonic() + 1.0)
+    assert caught.value.code == "browser_unavailable"

@@ -27,6 +27,7 @@ import http.client
 import json
 import os
 import socket
+import sys
 import struct
 import subprocess
 import threading
@@ -234,6 +235,8 @@ class _Page:
                 raise OperationError("whatsapp_read_failed", "The page did not answer in time") from None
             except OSError:
                 raise OperationError("browser_unavailable", "The debugging socket was lost") from None
+            except ValueError:
+                raise OperationError("whatsapp_read_failed", "The browser sent a malformed message") from None
             if "id" not in reply:
                 self._event(reply)
                 continue
@@ -256,6 +259,8 @@ class _Page:
                 return
             except OSError:
                 raise OperationError("browser_unavailable", "The debugging socket was lost") from None
+            except ValueError:
+                raise OperationError("browser_unavailable", "The browser sent a malformed message") from None
             if "id" not in reply:
                 self._event(reply)
 
@@ -280,7 +285,8 @@ def _http(url: str, method: str = "GET", timeout: float = 5.0):
     socket at the deadline, so a peer that drips headers or a body byte by byte is cut too.
     """
     parts = urlsplit(url)
-    window = max(min(timeout, 5.0), 0.2)
+    window = max(min(timeout, 5.0), 0.05)
+    until = time.monotonic() + window
     conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=window)
     expired = threading.Event()
     guard = None
@@ -295,7 +301,7 @@ def _http(url: str, method: str = "GET", timeout: float = 5.0):
             except OSError:
                 pass
 
-        guard = threading.Timer(window, cut)
+        guard = threading.Timer(max(until - time.monotonic(), 0.01), cut)   # what is left after connect
         guard.daemon = True
         guard.start()
         path = parts.path + (f"?{parts.query}" if parts.query else "")
@@ -331,7 +337,7 @@ def _ensure(flag: str, timeout: float = 60.0) -> bool:
     script = _SCRIPTS / "ensure_browser.sh"
     try:
         done = subprocess.run(["bash", str(script), flag], capture_output=True, text=True,
-                              timeout=max(timeout, 1.0))
+                              timeout=max(timeout, 0.1))
     except (OSError, subprocess.TimeoutExpired):
         return False
     return done.returncode == 0
@@ -362,8 +368,14 @@ def _acquire(limit: float):
             time.sleep(0.1)
 
 
-def _other_tabs(endpoint: str, own: str | None, timeout: float = 2.0) -> bool:
-    """Whether a tab other than ours or a blank one is open (someone else may be using the browser)."""
+def _other_tabs(endpoint: str, own: str | None, end: float) -> bool:
+    """Whether a tab other than ours or a blank one is open (someone else may be using the browser).
+
+    Bounded by `end`; with no time left the answer is "yes", so the browser is left running.
+    """
+    timeout = min(2.0, end - time.monotonic())
+    if timeout <= 0.05:
+        return True
     try:
         tabs = _http(f"{endpoint}/json/list", timeout=timeout)
     except (OSError, urllib.error.URLError, ValueError):
@@ -403,7 +415,7 @@ def _close_tab(endpoint: str, target: dict, page, end: float) -> bool:
                     page.call("Page.close", until=min(end, time.monotonic() + 1.0))
             except OperationError:
                 pass
-        if _tab_gone(endpoint, tab_id, min(2.0, max(end - time.monotonic(), 0.2))):
+        if _tab_gone(endpoint, tab_id, min(2.0, max(end - time.monotonic(), 0.05))):
             return True
         time.sleep(min(0.1, max(end - time.monotonic(), 0)))
     return False
@@ -503,11 +515,17 @@ def whatsapp_status(deadline: float = _READ_DEADLINE, poll: float = _POLL_SECOND
         # paused request can be released into a tab that is still alive. Then the browser, if this
         # read started it and no other tab is left, and last the lock.
         end = begun + deadline
+        closed = True
         if target is not None:
-            _close_tab(endpoint, target, page, end)
+            closed = _close_tab(endpoint, target, page, end)
         if page is not None:
             page.socket.close()
         own = target.get("id") if isinstance(target, dict) else None
-        if started_here and not _other_tabs(endpoint, own):
-            _ensure("--stop", max(end - time.monotonic(), 1.0))
+        if started_here and end - time.monotonic() > 0.5 and not _other_tabs(endpoint, own, end):
+            _ensure("--stop", end - time.monotonic())
         lock.close()
+        if not closed and sys.exc_info()[0] is None:
+            # Success is never reported with the tab possibly still open: whatever it had paused
+            # is released when the socket drops, so the caller must know the read did not end clean.
+            raise OperationError("browser_unavailable",
+                                 "The read tab could not be confirmed closed; nothing is returned")
