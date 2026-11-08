@@ -829,7 +829,7 @@ def _do_browser_probe(_arguments: dict) -> dict:
         "document.querySelector('main').textContent='solar-browser-'%2B(6*7)"
         "%3C/script%3E"
     )
-    with tempfile.TemporaryDirectory(prefix="solar-browser-probe-") as profile:
+    with tempfile.TemporaryDirectory(prefix="solar-browser-probe-", ignore_cleanup_errors=True) as profile:
         try:
             result = subprocess.run(
                 [browser, "--headless", "--no-first-run", "--disable-background-networking",
@@ -838,8 +838,8 @@ def _do_browser_probe(_arguments: dict) -> dict:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise OperationError("browser_probe_failed", "Chrome could not read the local fixture") from exc
-    if result.returncode or "<main>solar-browser-42</main>" not in result.stdout:
-        raise OperationError("browser_probe_failed", "Chrome did not render the expected fixture")
+        if result.returncode or "<main>solar-browser-42</main>" not in result.stdout:
+            raise OperationError("browser_probe_failed", "Chrome did not render the expected fixture")
     return {"browser": "chrome", "headless": True, "fixture": "solar-browser-42"}
 
 
