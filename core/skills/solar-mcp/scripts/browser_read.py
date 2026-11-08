@@ -275,9 +275,54 @@ class _Page:
 
 # --- lifecycle ------------------------------------------------------------------------
 
-def _endpoint() -> str:
-    host = os.environ.get("SOLAR_BROWSER_DEBUG_HOST", "127.0.0.1")
-    port = os.environ.get("SOLAR_BROWSER_DEBUG_PORT", "9222")
+_SETTING_KEYS = ("SOLAR_BROWSER_DEBUG_HOST", "SOLAR_BROWSER_DEBUG_PORT", "SOLAR_BROWSER_PROFILE_DIR")
+_DEFAULTS = {"SOLAR_BROWSER_DEBUG_HOST": "127.0.0.1", "SOLAR_BROWSER_DEBUG_PORT": "9222",
+             "SOLAR_BROWSER_PROFILE_DIR": "/tmp/com.solar.browser-profile"}
+_ENV_LINE = re.compile(r"\s*(?:export\s+)?(" + "|".join(_SETTING_KEYS) + r")=(.*)$")
+_PLAIN = (re.compile(r'"([^"$`\\]*)"\s*(?:#.*)?'), re.compile(r"'([^']*)'\s*(?:#.*)?"),
+          re.compile(r"([^\s\"'$`\\#;&|<>()]*)\s*(?:#.*)?"))
+
+
+def _dotenv(root) -> dict:
+    """The three browser settings `ensure_browser.sh` would get from the workspace `.env`.
+
+    The script `source`s that file, so its values win over the process environment. Only
+    these three keys are looked at; every other line (the file holds secrets) is skipped
+    unread, and a value that is not plain text (expansion, substitution, odd quoting) is
+    refused rather than guessed. Later lines win, as in the shell.
+    """
+    if root is None:
+        return {}
+    try:
+        text = (Path(root) / ".env").read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    found = {}
+    for line in text.splitlines():
+        match = _ENV_LINE.match(line)
+        if not match:
+            continue
+        key, raw = match.group(1), match.group(2).strip()
+        for pattern in _PLAIN:
+            plain = pattern.fullmatch(raw)
+            if plain:
+                found[key] = plain.group(1)
+                break
+        else:
+            raise OperationError("browser_unavailable",
+                                 f"{key} in the workspace .env is not a plain value; use a quoted or bare string")
+    return found
+
+
+def _settings(root=None) -> dict:
+    """Host, port and profile, resolved once with the rule of `ensure_browser.sh`:
+    workspace `.env`, then the process environment, then the default (an empty value falls through)."""
+    fromfile = _dotenv(root)
+    return {key: fromfile.get(key) or os.environ.get(key) or _DEFAULTS[key] for key in _SETTING_KEYS}
+
+
+def _endpoint(settings: dict) -> str:
+    host, port = settings["SOLAR_BROWSER_DEBUG_HOST"], settings["SOLAR_BROWSER_DEBUG_PORT"]
     if host not in _LOCAL_HOSTS or not port.isdigit():
         raise OperationError("browser_unavailable", "The debugging endpoint must be local")
     return f"http://{host}:{port}"
@@ -341,24 +386,24 @@ def _ready(endpoint: str, timeout: float = 5.0) -> bool:
         return False
 
 
-def _ensure(flag: str, timeout: float = 60.0) -> bool:
+def _ensure(flag: str, timeout: float = 60.0, root=None) -> bool:
+    """Start or stop the browser. Runs from the workspace, where the script looks for its `.env`."""
     script = _SCRIPTS / "ensure_browser.sh"
     try:
         done = subprocess.run(["bash", str(script), flag], capture_output=True, text=True,
-                              timeout=max(timeout, 0.1))
+                              timeout=max(timeout, 0.1), cwd=str(root) if root else None)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return done.returncode == 0
 
 
-def _lock_path() -> Path:
-    profile = os.environ.get("SOLAR_BROWSER_PROFILE_DIR", "/tmp/com.solar.browser-profile")
-    return Path(f"{profile}.read.lock")
+def _lock_path(settings: dict) -> Path:
+    return Path(f"{settings['SOLAR_BROWSER_PROFILE_DIR']}.read.lock")
 
 
-def _acquire(limit: float):
+def _acquire(limit: float, settings: dict | None = None):
     """One read at a time: a second caller waits for the first, within the same deadline."""
-    path = _lock_path()
+    path = _lock_path(settings if settings is not None else _settings())
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         handle = open(path, "a")
@@ -485,7 +530,7 @@ def prepare(name: str, registry: dict, root: Path) -> dict:
     if hashlib.sha256(raw).hexdigest() != pin:
         raise OperationError("browser_read_changed",
                              f"The script of {name} changed since the owner registered it; nothing ran")
-    return dict(name=name, origin=origin, url=url, script=raw.decode("utf-8"), fields=fields)
+    return dict(name=name, origin=origin, url=url, script=raw.decode("utf-8"), fields=fields, root=base)
 
 
 def _shape(data: dict, fields: dict) -> dict:
@@ -523,15 +568,17 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
     begun = time.monotonic()
     limit = begun + deadline - min(_CLEANUP_SECONDS, deadline * 0.25)    # the work; the rest is cleanup
     remaining = lambda: limit - time.monotonic()  # noqa: E731
-    endpoint = _endpoint()
-    lock = _acquire(limit)
+    root = entry.get("root")
+    settings = _settings(root)
+    endpoint = _endpoint(settings)
+    lock = _acquire(limit, settings)
     started_here = False
     target = None
     page = None
     completed = False    # set only when a result is about to be returned
     try:
         if not _ready(endpoint, max(remaining(), 0.2)):
-            if not _ensure("--start", remaining()) or not _ready(endpoint, max(remaining(), 0.2)):
+            if not _ensure("--start", remaining(), root) or not _ready(endpoint, max(remaining(), 0.2)):
                 raise OperationError("browser_unavailable", "The Solar browser could not be started")
             started_here = True
         try:
@@ -608,7 +655,7 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
             page.socket.close()
         own = target.get("id") if isinstance(target, dict) else None
         if started_here and end - time.monotonic() > 0.5 and not _other_tabs(endpoint, own, end):
-            _ensure("--stop", end - time.monotonic())
+            _ensure("--stop", end - time.monotonic(), root)
         lock.close()
         if completed and not closed:
             # Success is never reported with the tab possibly still open: whatever it had paused

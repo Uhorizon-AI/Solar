@@ -173,6 +173,10 @@ example a login screen) and otherwise `{ready: true, ...fields}`. Solar never kn
 which site it is: no selector, URL or site name lives in `core/`. Changing the
 script invalidates its digest until the owner registers it again.
 
+The browser's debugging host, port and profile are resolved like `ensure_browser.sh`
+does: the workspace `.env` first, then the process environment, then the defaults.
+Only those three keys are read from `.env`, and a value that is not plain text is refused.
+
 ## Sending Telegram
 
 `telegram.send` is the route an agent has to Telegram, and the reason the
