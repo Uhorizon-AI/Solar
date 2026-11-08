@@ -16,8 +16,8 @@
 # SOLAR_NOTIFY_LOCK_WAIT: seconds to wait for the per-task lock (default 150).
 #
 # The optional mode announces a task that waits for `task.authorize_run`, or whose wait ended. It goes
-# to the configured chat only (never the origin chat a task names), carries the title, a short task id and the expiry (waiting only) and no
-# instructions, and does not touch the task.
+# to the configured chat only (never the origin chat a task names), carries the title and no instructions
+# (--waiting adds a short task id and the expiry), and does not touch the task.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
@@ -258,7 +258,9 @@ print("Expires: " + t.strftime("%Y-%m-%d %H:%M %Z") + ". If nobody authorizes it
       MESSAGE="Waiting for your approval to run: ${TITLE}"
       [[ -n "$SHORT_ID" ]] && MESSAGE="${MESSAGE}"$'\n'"Task: ${SHORT_ID}"
       MESSAGE="${MESSAGE}"$'\n'"Reason: it can change things beyond a confined read, so it needs task.authorize_run before it runs."
-      [[ -n "$WAIT_LINE" ]] && MESSAGE="${MESSAGE}"$'\n'"${WAIT_LINE}"
+      # If the wait cannot be read, say so rather than leave the owner without any word on the deadline.
+      [[ -z "$WAIT_LINE" ]] && WAIT_LINE="Expiry: not available right now; ask your assistant."
+      MESSAGE="${MESSAGE}"$'\n'"${WAIT_LINE}"
       if [[ -n "$SHORT_ID" ]]; then
         MESSAGE="${MESSAGE}"$'\n'"Ask your assistant: review and authorize task ${SHORT_ID}."
       else

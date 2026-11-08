@@ -65,3 +65,12 @@ def test_the_console_shows_the_wait_with_its_dates(solar_env):
     assert item["reason"] == "awaiting_approval" and item["kind"] == "authorization"
     assert item["since"] and item["expires_at"]
     assert data["wait_counts"]["authorization"] >= 1
+
+
+def test_the_short_id_in_the_notice_finds_exactly_one_task(solar_env):
+    first, second = make("First", queue=True), make("Second", queue=True)
+    with solar_state.session() as store:
+        short = store.task_short_id(first["id"])
+    found = search(scope="tasks", query=short, limit=50)["tasks"]
+    assert [t["id"] for t in found] == [first["id"]]
+    assert second["id"] not in [t["id"] for t in found]

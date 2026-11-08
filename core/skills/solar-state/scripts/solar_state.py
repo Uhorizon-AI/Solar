@@ -3496,6 +3496,8 @@ class Session:
     def task_short_id(self, task_id: str) -> str:
         """The shortest prefix of a task id (at least 8 characters) that no other task shares, so a person who
         reads it on a phone can name the task without ambiguity. The whole id when it is shorter."""
+        if self.task_get(task_id) is None:
+            raise StateError(f"no task {task_id}")
         for size in range(self.SHORT_ID_MIN, len(task_id)):
             clash = self.conn.execute(
                 "SELECT 1 FROM tasks WHERE id != ? AND substr(id, 1, ?) = ? LIMIT 1",

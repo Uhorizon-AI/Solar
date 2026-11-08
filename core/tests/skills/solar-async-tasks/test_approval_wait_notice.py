@@ -109,15 +109,27 @@ def test_the_waiting_notice_leaks_no_instructions(tmp_path):
     assert SECRET not in sent and "999" not in sent and "Review the thing" in sent
 
 
-def test_the_short_id_grows_until_no_other_task_shares_it(tmp_path):
-    workspace, root, env = fixture_env(tmp_path)
+def test_the_short_id_grows_only_until_no_other_task_shares_it(tmp_path):
+    fixture_env(tmp_path)
     with solar_state.session() as store:
-        first = store.task_create([("title", '"A"')], "\nA\n", task_id="abcdef12-0001")
-        second = store.task_create([("title", '"B"')], "\nB\n", task_id="abcdef12-0002")
-        short_a, short_b = store.task_short_id(first), store.task_short_id(second)
-        assert store.task_short_id("abcdef12-0001") == short_a
-        assert short_a != short_b and not second.startswith(short_a) and not first.startswith(short_b)
-        assert store.task_short_id("zz") == "zz" if store.task_get("zz") else True
+        first = store.task_create([("title", '"A"')], "\nA\n", task_id="abcdef12a-0001")
+        second = store.task_create([("title", '"B"')], "\nB\n", task_id="abcdef12b-0001")
+        alone = store.task_create([("title", '"C"')], "\nC\n", task_id="zz")
+        assert store.task_short_id(first) == "abcdef12a"        # one character past the shared 8
+        assert store.task_short_id(second) == "abcdef12b"
+        assert store.task_short_id(alone) == "zz"               # shorter than 8: the whole id
+        with pytest.raises(solar_state.StateError):
+            store.task_short_id("no-such-task")                 # never invents a prefix
+
+
+def test_a_wait_that_cannot_be_read_still_notifies_without_a_made_up_deadline(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    with solar_state.session() as store:                         # a draft is not waiting: no wait to read
+        task_id = store.task_create([("title", '"Draft"')], "\nDraft\n")
+    assert notify(task_id, "--waiting", env).returncode == 0
+    sent = _sent(workspace)
+    assert "Expiry: not available right now" in sent
+    assert "Expires:" not in sent and "No expiry" not in sent and f"Task: {task_id[:8]}" in sent
 
 
 @pytest.mark.parametrize("mode", ["--expired-draft", "--expired-skipped"])
