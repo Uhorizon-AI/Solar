@@ -130,6 +130,7 @@ Malformed JSON-RPC or tool arguments retain protocol errors; domain pre-confirma
 | `async_execution.apply` | A2 | Same, for one exact `revision` and `proposal_digest`. Applies that revision to the runtime's policy in one transaction if the file still holds exactly it and it validates; otherwise the applied policy stays. Every claim, manual or worker, reads the applied revision. A provider task never prepares or applies it |
 | `telegram.send` | A2 | Same, for one exact text and an explicit `chat_id`. Sending outside the machine is never implicit |
 | `browser.probe` | A0 | Starts Chrome headless with a disposable profile and reads a fixed synthetic page. Takes no arguments (no URL, session, selector or script). Returns `browser`, `headless` and the fixture marker `solar-browser-42`. Errors: `browser_unavailable`, `browser_probe_failed`. Tests browser execution only; it does not reach authenticated sites |
+| `browser.whatsapp_status` | A0 | Read-only, and the one authenticated browser read. Opens one tab on `https://web.whatsapp.com` in the Solar browser profile and returns `status`, `qr_present` and `visible_chats` (a count, never chat text). Takes no arguments. Errors: `browser_unavailable`, `browser_scope_denied`, `whatsapp_session_expired` (QR shown), `whatsapp_read_failed`. It cannot open chats, read messages or account data, visit another origin, run a caller script or send. It runs without approval because what it can do is fixed by its name; it uses the logged-in session of the Solar browser profile |
 | `action.run` | A3 | The skill and action are registered **and** the mandate registered for that skill is live. A skill registered without a mandate is refused; a caller-supplied mandate is only accepted if it equals the registered one |
 
 Approvals are server-side records: they name one **operation** and one set of
@@ -186,7 +187,12 @@ Outside, and said plainly rather than disguised:
   mediated route, not the machine;
 - a browser session already authenticated is untouched — `zoho-mail`,
   `whatsapp`, `linkedin-messages` and `linkedin-analytics` remain declarative,
-  not coercive, until their send becomes a gated tool;
+  not coercive, until their send becomes a gated tool. The one exception is the
+  fixed read `browser.whatsapp_status` (A0): it can only read the session status,
+  QR presence and chat count, and it refuses other origins in two places (the
+  navigation and the read itself). It does not stop a process running as the user
+  from using the browser's local debugging port, and it relies on Chrome to honour
+  the paused-request protocol;
 - the `.env` of a planet is the planet's. Solar does not mediate it.
 
 ## Runtime dependencies
