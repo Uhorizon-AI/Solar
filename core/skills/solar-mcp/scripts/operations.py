@@ -805,6 +805,12 @@ def _require_chat(arguments: dict) -> None:
                              "Supply the exact chat_id before confirming a send")
 
 
+def _do_browser_whatsapp_status(_arguments: dict) -> dict:
+    """Fixed destination, fixed read: the caller supplies nothing."""
+    import browser_read
+    return browser_read.whatsapp_status()
+
+
 def _do_action_run(arguments: dict) -> dict:
     entry = mcp_context.action_skills().get(arguments["skill"], {})
     command = list(entry.get("command") or [])
@@ -1070,6 +1076,15 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         effects="Starts Chrome with a disposable profile and reads a fixed synthetic page. "
                 "Accepts no URL, session, selector, script or browser arguments."),
     Operation(
+        "browser.whatsapp_status", A0,
+        "Read WhatsApp Web session status, QR presence and visible chat count in the Solar browser profile.",
+        _obj({}),
+        errors=("browser_unavailable", "browser_scope_denied", "whatsapp_session_expired",
+                "whatsapp_read_failed"),
+        effects="Opens one tab on web.whatsapp.com in the Solar browser profile and returns three fields: "
+                "status, qr_present, visible_chats. It cannot open chats, read messages or account data, "
+                "visit another origin, run a caller script or send. Accepts no arguments."),
+    Operation(
         "action.run", A3, "Run one registered action of one registered action skill under a live mandate.",
         _obj(dict(skill=SLUG, action=SLUG, mandate=SLUG, automated={"type": "boolean"}),
              required=("skill", "action")),
@@ -1092,6 +1107,7 @@ HANDLERS: dict[str, Callable[[dict], dict]] = {
     "async_execution.apply": _do_async_apply,
     "telegram.send": _do_telegram_send,
     "browser.probe": _do_browser_probe,
+    "browser.whatsapp_status": _do_browser_whatsapp_status,
     "action.run": _do_action_run,
 }
 

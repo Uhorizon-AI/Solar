@@ -56,6 +56,11 @@ profile. It takes no arguments and returns only the fixture marker. It tests
 browser execution through Solar MCP; it does not test provider tool discovery
 or access to authenticated websites.
 
+`browser.whatsapp_status` is the one authenticated read: WhatsApp Web session status, QR presence and
+visible chat count in the Solar browser profile. It takes no arguments and returns only those fields or a
+distinct failure (`whatsapp_session_expired`, `browser_scope_denied`, `browser_unavailable`,
+`whatsapp_read_failed`). It cannot open chats, read messages, visit other origins or send.
+
 ## Approval workflow
 
 **Where consent lives.** The client (Claude Code, Desktop, Codex, Cursor) holds the user's message and its own
