@@ -51,6 +51,11 @@ Exclusions apply to both tools. Oversized units refuse without truncation.
 
 Limits and lifecycle: [references/discovery.md](references/discovery.md).
 
+`browser.probe` reads a built-in synthetic page in a disposable headless Chrome
+profile. It takes no arguments and returns only the fixture marker. It tests
+browser execution through Solar MCP; it does not test provider tool discovery
+or access to authenticated websites.
+
 ## Approval workflow
 
 **Where consent lives.** The client (Claude Code, Desktop, Codex, Cursor) holds the user's message and its own
