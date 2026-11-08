@@ -14,8 +14,10 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -816,6 +818,31 @@ def _do_action_run(arguments: dict) -> dict:
                 stderr=(proc.stderr or "").strip()[:1000])
 
 
+def _do_browser_probe(_arguments: dict) -> dict:
+    """Read a built-in fixture without exposing a browser session to the caller."""
+    mac_chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    browser = str(mac_chrome) if mac_chrome.is_file() else shutil.which("google-chrome")
+    if not browser:
+        raise OperationError("browser_unavailable", "Google Chrome was not found")
+    fixture = (
+        "data:text/html,%3Cmain%3E%3C/main%3E%3Cscript%3E"
+        "document.querySelector('main').textContent='solar-browser-'%2B(6*7)"
+        "%3C/script%3E"
+    )
+    with tempfile.TemporaryDirectory(prefix="solar-browser-probe-", ignore_cleanup_errors=True) as profile:
+        try:
+            result = subprocess.run(
+                [browser, "--headless", "--no-first-run", "--disable-background-networking",
+                 f"--user-data-dir={profile}", "--dump-dom", fixture],
+                capture_output=True, text=True, timeout=20,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise OperationError("browser_probe_failed", "Chrome could not read the local fixture") from exc
+        if result.returncode or "<main>solar-browser-42</main>" not in result.stdout:
+            raise OperationError("browser_probe_failed", "Chrome did not render the expected fixture")
+    return {"browser": "chrome", "headless": True, "fixture": "solar-browser-42"}
+
+
 # ---------------------------------------------------------------------------
 # registry
 # ---------------------------------------------------------------------------
@@ -1037,6 +1064,12 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         external_communication=True, pre_confirm=_require_chat,
         effects="Sends outside the machine. The approval covers this exact text and chat."),
     Operation(
+        "browser.probe", A0, "Read a built-in browser fixture in an isolated headless Chrome.",
+        _obj({}),
+        errors=("browser_unavailable", "browser_probe_failed"),
+        effects="Starts Chrome with a disposable profile and reads a fixed synthetic page. "
+                "Accepts no URL, session, selector, script or browser arguments."),
+    Operation(
         "action.run", A3, "Run one registered action of one registered action skill under a live mandate.",
         _obj(dict(skill=SLUG, action=SLUG, mandate=SLUG, automated={"type": "boolean"}),
              required=("skill", "action")),
@@ -1058,6 +1091,7 @@ HANDLERS: dict[str, Callable[[dict], dict]] = {
     "async_execution.propose": _do_async_propose,
     "async_execution.apply": _do_async_apply,
     "telegram.send": _do_telegram_send,
+    "browser.probe": _do_browser_probe,
     "action.run": _do_action_run,
 }
 

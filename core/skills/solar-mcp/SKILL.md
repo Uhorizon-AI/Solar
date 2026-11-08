@@ -129,6 +129,7 @@ Malformed JSON-RPC or tool arguments retain protocol errors; domain pre-confirma
 | `async_execution.propose` | A2 | Same. Writes `<runtime>/async-tasks/config/async-execution.json` with the next revision (capacity 1 to 5, provider limits, exclusive wait, reader profiles; unnamed fields keep the applied values) and returns its digest. A proposal only: nothing changes until it is applied |
 | `async_execution.apply` | A2 | Same, for one exact `revision` and `proposal_digest`. Applies that revision to the runtime's policy in one transaction if the file still holds exactly it and it validates; otherwise the applied policy stays. Every claim, manual or worker, reads the applied revision. A provider task never prepares or applies it |
 | `telegram.send` | A2 | Same, for one exact text and an explicit `chat_id`. Sending outside the machine is never implicit |
+| `browser.probe` | A0 | Starts Chrome headless with a disposable profile and reads a fixed synthetic page. Takes no arguments (no URL, session, selector or script). Returns `browser`, `headless` and the fixture marker `solar-browser-42`. Errors: `browser_unavailable`, `browser_probe_failed`. Tests browser execution only; it does not reach authenticated sites |
 | `action.run` | A3 | The skill and action are registered **and** the mandate registered for that skill is live. A skill registered without a mandate is refused; a caller-supplied mandate is only accepted if it equals the registered one |
 
 Approvals are server-side records: they name one **operation** and one set of
