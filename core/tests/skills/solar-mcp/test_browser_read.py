@@ -881,6 +881,7 @@ def test_a_command_in_the_env_never_runs_when_the_browser_is_started_or_stopped(
     settings = {"SOLAR_BROWSER_DEBUG_HOST": "127.0.0.1", "SOLAR_BROWSER_DEBUG_PORT": "39333",
                 "SOLAR_BROWSER_PROFILE_DIR": str(tmp_path / "profile")}
     monkeypatch.setenv("SOLAR_BROWSER_LOG_PATH", str(tmp_path / "browser.log"))
+    monkeypatch.setenv("SOLAR_WORKSPACE", str(root))      # CI exports its own checkout; the script must run here
     browser_read._ensure("--stop", 20.0, root, settings)
     assert not sentinel.exists()
     # and the control: the very same call without the skip does execute the file
