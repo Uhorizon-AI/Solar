@@ -22,10 +22,12 @@ class FakeBrowser:
     """A DevTools endpoint whose page answers `Runtime.evaluate` from a scripted list."""
 
     def __init__(self, reads, navigation=None, tabs=(), redirect_to=None, navigate_error=None,
-                 stream=False, lists_own_tab=False):
+                 stream=False, drip=False, close_failures=0, late_requests=()):
         self.reads = list(reads)
         self.redirect_to, self.navigate_error = redirect_to, navigate_error
-        self.stream, self.lists_own_tab = stream, lists_own_tab
+        self.stream, self.drip = stream, drip
+        self.close_failures, self.late_requests = close_failures, list(late_requests)
+        self.late_sent = False
         # document requests the "browser" makes after Page.navigate (redirects, frames)
         self.navigation = list(navigation or [browser_read.DESTINATION])
         self.tabs = list(tabs)
@@ -53,9 +55,12 @@ class FakeBrowser:
                 if self.path == "/json/version":
                     return self._json({"Browser": "fake"})
                 if self.path == "/json/list":
-                    own = [{"type": "page", "id": "tab-1", "url": browser_read.DESTINATION}]
-                    return self._json(outer.tabs + (own if outer.lists_own_tab else []))
+                    own = [] if "tab-1" in outer.closed else [
+                        {"type": "page", "id": "tab-1", "url": browser_read.DESTINATION}]
+                    return self._json(outer.tabs + own)
                 if self.path.startswith("/json/close/"):
+                    if outer.fail_close():
+                        return self.send_error(500)
                     outer.closed.append(self.path.rsplit("/", 1)[1])
                     return self._json("Target is closing")
                 if self.headers.get("Upgrade") == "websocket":
@@ -73,6 +78,12 @@ class FakeBrowser:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def fail_close(self):
+        if self.close_failures > 0:
+            self.close_failures -= 1
+            return True
+        return False
 
     def serve_socket(self, handler):
         key = handler.headers["Sec-WebSocket-Key"]
@@ -93,6 +104,16 @@ class FakeBrowser:
             message = json.loads(data)
             self.methods.append(message["method"])
             result = {}
+            if self.drip and message["method"] == "Page.enable":
+                try:   # the header of a 200-byte frame, then one byte at a time, never finishing
+                    sock.sendall(bytes([0x81, 126]) + struct.pack(">H", 200))
+                    while True:
+                        sock.sendall(b"x")
+                        time.sleep(0.02)
+                except OSError:
+                    return
+            if message["method"] == "Page.close" and not self.fail_close():
+                self.closed.append("tab-1")
             if self.stream and message["method"] == "Page.enable":
                 try:   # a page that never answers and never stops talking
                     while True:
@@ -113,6 +134,11 @@ class FakeBrowser:
                 value = self.reads.pop(0) if len(self.reads) > 1 else self.reads[0]
                 result = {"result": {"value": value}}
             self._send(sock, {"id": message["id"], "result": result})
+            if message["method"] == "Runtime.evaluate" and not self.late_sent:
+                self.late_sent = True
+                for number, url in enumerate(self.late_requests):   # requests that arrive between reads
+                    self._send(sock, {"method": "Fetch.requestPaused", "params": {
+                        "requestId": f"late{number}", "resourceType": "Document", "request": {"url": url}}})
 
     @staticmethod
     def _send(sock, body):
@@ -392,9 +418,9 @@ def test_the_tab_is_closed_before_the_socket_is_dropped(endpoint, monkeypatch):
     assert fake.closed == ["tab-1"]
 
 
-def test_a_browser_started_here_is_stopped_even_if_its_own_tab_is_still_listed(endpoint, monkeypatch):
+def test_a_browser_started_here_is_stopped_after_a_failed_first_close(endpoint, monkeypatch):
     calls, state = [], {"up": False}
-    endpoint([page(pane=True, rows=1)], lists_own_tab=True)
+    endpoint([page(pane=True, rows=1)], close_failures=1)
     real = browser_read._ready
     monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
     monkeypatch.setattr(browser_read, "_ensure",
@@ -459,3 +485,68 @@ def test_the_read_lock_directory_is_created_and_a_bad_one_is_a_distinct_error(en
     blocker.write_text("x")
     monkeypatch.setenv("SOLAR_BROWSER_PROFILE_DIR", str(blocker / "profile"))
     assert error_code(read) == "browser_unavailable"
+
+
+def test_the_socket_is_kept_until_the_tab_close_is_confirmed(endpoint, monkeypatch):
+    order = []
+    fake = endpoint([page(pane=True, rows=1)], close_failures=2)
+    real_close = browser_read._Socket.close
+    monkeypatch.setattr(browser_read._Socket, "close",
+                        lambda self: order.append(("socket", list(fake.closed))) or real_close(self))
+    read(deadline=6.0)
+    assert fake.closed == ["tab-1"]
+    assert order == [("socket", ["tab-1"])]       # dropped only after the close was confirmed
+
+
+def test_a_close_that_never_succeeds_still_ends_within_the_deadline(endpoint):
+    fake = endpoint([page(pane=True, rows=1)], close_failures=999)
+    started = time.monotonic()
+    assert read(deadline=2.0)["visible_chats"] == 1
+    assert time.monotonic() - started < 3.0
+    assert fake.closed == []
+    held = browser_read._acquire(time.monotonic() + 0.5)   # and the lock is free
+    held.close()
+
+
+def test_a_page_that_drips_one_frame_forever_cannot_hold_the_read(endpoint):
+    endpoint([page()], drip=True)
+    started = time.monotonic()
+    assert error_code(lambda: read(deadline=1.0)) == "whatsapp_read_failed"
+    assert time.monotonic() - started < 3.0
+    held = browser_read._acquire(time.monotonic() + 0.5)
+    held.close()
+
+
+def test_an_http_body_that_drips_is_cut_at_the_deadline():
+    class Drip(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            try:
+                for _ in range(1000):
+                    self.wfile.write(b"x")
+                    self.wfile.flush()
+                    time.sleep(0.05)
+            except OSError:
+                pass
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Drip)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        started = time.monotonic()
+        with pytest.raises(OSError):
+            browser_read._http(f"http://127.0.0.1:{server.server_address[1]}/x", timeout=0.5)
+        assert time.monotonic() - started < 2.0
+    finally:
+        server.shutdown()
+
+
+def test_requests_that_arrive_between_reads_are_decided_while_waiting(endpoint):
+    fake = endpoint([page(pane=True, rows=1)], late_requests=["https://example.com/late"])
+    browser_read_status = browser_read.whatsapp_status(deadline=6.0, poll=0.2)
+    assert browser_read_status["visible_chats"] == 1
+    assert ("Fetch.failRequest", "late0") in fake.decisions
