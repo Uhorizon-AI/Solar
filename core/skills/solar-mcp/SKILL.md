@@ -170,7 +170,8 @@ Browser reads are opt-in the same way, listed in `<runtime>/mcp/browser-reads.js
 
 The script is a function expression owned by the planet (the answer always comes back as
 `{"read": name, "data": {...fields}}`). String fields must declare an `enum`, so page text cannot leave, and the
-refusal codes a script may report must be listed in `refusals`; anything else fails. The script: it returns `{ready: false}`
+refusal codes a script may report must be listed in `refusals`; anything else fails. An `enum` applies to string and integer
+fields only, and each value must have the field's type. The script returns `{ready: false}`
 while the page loads, `{ready: true, refused: "<code>"}` when it must refuse (for
 example a login screen) and otherwise `{ready: true, ...fields}`. Solar never knows
 which site it is: no selector, URL or site name lives in `core/`. Changing the
@@ -180,7 +181,7 @@ The browser's debugging host, port and profile are resolved once: the workspace 
 first, then the process environment, then the defaults. Only those three keys are read
 from `.env`, and a value that is not plain text is refused. The start and stop script
 receives the resolved values and does not `source` the `.env` on this path
-(`SOLAR_BROWSER_SKIP_DOTENV=1`), so nothing else in that file runs.
+(`SOLAR_BROWSER_SKIP_DOTENV=1`), so nothing else in that file runs. On this path only those three keys are honoured: a browser binary, log path or start timeout set in `.env` applies to the rest of Solar but not to `browser.read`.
 
 ## Sending Telegram
 

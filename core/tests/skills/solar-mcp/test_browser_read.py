@@ -448,6 +448,11 @@ def test_a_script_that_changed_after_registration_is_refused_and_never_runs(sola
     dict(fields={"t": {"type": "string", "enum": []}}),
     dict(fields={"t": {"type": "string", "enum": [{"a": 1}]}}),
     dict(fields={"t": {"type": "integer", "enum": "12"}}),
+    dict(fields={"t": {"type": "integer", "enum": None}}),             # a null enum is not a missing one
+    dict(fields={"t": {"type": "boolean", "enum": None}}),
+    dict(fields={"t": {"type": "boolean", "enum": [True]}}),
+    dict(fields={"t": {"type": "integer", "enum": ["a"]}}),            # values must have the field's type
+    dict(fields={"t": {"type": "string", "enum": [1]}}),
     dict(refusals="session_expired"),                           # must be a list
     dict(refusals=["has space"]),
     dict(refusals=[5]),

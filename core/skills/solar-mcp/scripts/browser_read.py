@@ -528,10 +528,12 @@ def prepare(name: str, registry: dict, root: Path) -> dict:
                 or spec.get("type") not in ("integer", "boolean", "string"):
             raise _invalid("each field needs a name and a type of integer, boolean or string")
         allowed = spec.get("enum")
-        if allowed is not None:
-            if (not isinstance(allowed, list) or not 1 <= len(allowed) <= 32
-                    or not all(isinstance(v, (str, int)) and not isinstance(v, bool) for v in allowed)):
-                raise _invalid(f"enum of {key} must be a list of 1 to 32 strings or integers")
+        if "enum" in spec:
+            kind = {"string": str, "integer": int}.get(spec["type"])
+            if (kind is None or not isinstance(allowed, list) or not 1 <= len(allowed) <= 32
+                    or not all(isinstance(v, kind) and not isinstance(v, bool) for v in allowed)):
+                raise _invalid(f"enum of {key} must be a list of 1 to 32 values of the field's type "
+                               "(string or integer fields only)")
         if spec["type"] == "string" and not allowed:
             # a free string would let page text out (a title, a name): only listed values may leave
             raise _invalid(f"the string field {key} must declare an enum of the values it may return")
