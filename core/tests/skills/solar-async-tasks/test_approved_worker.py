@@ -216,3 +216,176 @@ runpy.run_path({str(EXECUTE)!r}, run_name='__main__')
         assert store.task_status(parent) == 'active', 'the task was sent back to draft by a transient error'
         assert solar_state.approval_state(task['frontmatter'], task['body']) is None
         assert 'review_preparation_required' not in [r[0] for r in store.conn.execute('SELECT event FROM audit')]
+
+
+def _question(root, notify_when, tmp_path, recurring=False):
+    """An approved, claimed question (ask_readonly_v1) the executor can run with the router double."""
+    import execution_profiles as ep
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir(exist_ok=True)
+    built = ep.build_ask_envelope(provider='codex', prompt='Return the brief', cwd=str(workspace), model=None)
+    seed(root)
+    with solar_state.session() as store:
+        fields = [('title', json.dumps('Brief')), ('provider', json.dumps('codex')),
+                  ('access_policy', json.dumps(dict(version=1, mode='read', scopes=[str(workspace)], resources=[]))),
+                  ('execution_profile', json.dumps('ask_readonly_v1')),
+                  ('review_input_manifest', json.dumps(built['manifest'])),
+                  ('review_input_digest', json.dumps(built['review_input_digest']))]
+        if notify_when:
+            fields.append(('notify_when', notify_when))
+        if recurring:
+            fields.append(('recurring', 'true'))
+        task = store.task_create(fields, '\n# Brief\n\nReturn the brief.\n')
+        store.task_approve(task, expected_row_version=store.task_get(task)['row_version'])
+        assert store.task_claim_detail(task, 'test')['claimed']
+    mirror(root)
+    return task
+
+
+def _body_of(task):
+    with solar_state.session() as store:
+        return store.task_get(task)['body']
+
+
+def test_a_question_that_asks_for_delivery_records_the_block_of_the_run(tmp_path):
+    root = make_root(tmp_path)
+    task = _question(root, 'delivery,failed', tmp_path)
+    result = run_executor(root / 'active' / f'{task}.md', root, 'Work.\n<delivery>\nDECISION: nueva\n</delivery>', tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert '## Delivery\n\nDECISION: nueva' in _body_of(task)
+    with solar_state.session() as store:
+        assert store.task_field(task, 'delivery_recorded') == 'true'
+
+
+def test_a_question_without_a_block_records_nothing(tmp_path):
+    root = make_root(tmp_path)
+    task = _question(root, 'delivery,failed', tmp_path)
+    result = run_executor(root / 'active' / f'{task}.md', root, 'Nothing new today.', tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert '## Delivery' not in _body_of(task)
+    with solar_state.session() as store:
+        assert not store.task_field(task, 'delivery_recorded')
+
+
+@pytest.mark.parametrize('notify_when', ['completed', 'completed,failed', ''])
+def test_a_question_that_did_not_ask_for_delivery_keeps_its_old_behaviour(tmp_path, notify_when):
+    root = make_root(tmp_path)
+    task = _question(root, notify_when, tmp_path)
+    result = run_executor(root / 'active' / f'{task}.md', root, '<delivery>ignored</delivery>', tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert '## Delivery' not in _body_of(task)
+
+
+def _notify(root, task, tmp_path, name):
+    """Run the real notifier on the task as the executor left it; returns what the sender received."""
+    import os, subprocess
+    from queue_mirror import env_for, task_id_of
+    scripts = Path(__file__).resolve().parents[3] / 'skills/solar-async-tasks/scripts'
+    install = tmp_path / name / 'install'
+    sender = install / 'core/skills/solar-telegram/scripts/send_telegram.sh'
+    sender.parent.mkdir(parents=True)
+    sender.write_text('#!/bin/bash\nprintf "%s\\n" "$1" >> "$SENT_LOG"\n')
+    sender.chmod(0o755)
+    log = tmp_path / name / 'sent.log'
+    env = env_for(root, {**os.environ, 'SENT_LOG': str(log), 'SOLAR_ROOT': str(install),
+                         'TELEGRAM_CHAT_ID': '456', 'TELEGRAM_ALLOWED_CHAT_IDS': '456', 'TELEGRAM_BOT_TOKEN': 'fake'})
+    done = subprocess.run(['bash', str(scripts / 'notify_if_configured.sh'), task], env=env, text=True,
+                          capture_output=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    return log.read_text() if log.exists() else ''
+
+
+def _next_run(root, task, notify_when=None):
+    """Close the run as complete.sh does for a recurring task and claim it again for the next one."""
+    with solar_state.session() as store:
+        assert store.task_complete(task, token=store.reservation_for(task)['token']) == 'queued'
+        assert store.task_adopt(task, 'test-supervisor')['released']
+        if notify_when:                                   # an edit is material: it needs the approval again
+            store.task_return_to_draft(task, expected_row_version=store.task_get(task)['row_version'])
+            store.task_set(task, 'notify_when', notify_when)
+            store.task_approve(task, expected_row_version=store.task_get(task)['row_version'])
+        claimed = store.task_claim_detail(task, 'test')
+        assert claimed['claimed'], claimed
+    mirror(root)
+
+
+def test_a_scheduled_question_notifies_the_delivery_of_the_run(tmp_path):
+    root = make_root(tmp_path)
+    task = _question(root, 'delivery,failed', tmp_path)
+    assert run_executor(root / 'active' / f'{task}.md', root, 'Work.\n<delivery>\nDECISION: nueva\n</delivery>',
+                        tmp_path).returncode == 0
+    assert _notify(root, task, tmp_path, 'sent').strip() == 'DECISION: nueva'
+
+
+def test_a_scheduled_question_with_nothing_new_notifies_nothing_even_after_a_delivering_run(tmp_path):
+    root = make_root(tmp_path)
+    task = _question(root, 'delivery,failed', tmp_path, recurring=True)
+    path = root / 'active' / f'{task}.md'
+    assert run_executor(path, root, '<delivery>YESTERDAY</delivery>', tmp_path).returncode == 0
+    _next_run(root, task)
+    assert run_executor(path, root, 'Nothing new.', tmp_path).returncode == 0
+    assert 'YESTERDAY' not in _body_of(task)
+    assert _notify(root, task, tmp_path, 'sent') == ''
+
+
+def test_a_question_that_stops_asking_for_delivery_does_not_resend_the_old_one(tmp_path):
+    root = make_root(tmp_path)
+    task = _question(root, 'delivery,failed', tmp_path, recurring=True)
+    path = root / 'active' / f'{task}.md'
+    assert run_executor(path, root, '<delivery>OLD DELIVERY</delivery>', tmp_path).returncode == 0
+    assert 'OLD DELIVERY' in _body_of(task)
+    _next_run(root, task, notify_when='completed')        # the next run no longer asks for delivery
+    assert run_executor(path, root, 'Plain answer.', tmp_path).returncode == 0
+    assert '## Delivery' not in _body_of(task)
+    with solar_state.session() as store:
+        assert not store.task_field(task, 'delivery_recorded')
+    sent = _notify(root, task, tmp_path, 'sent')
+    assert 'OLD DELIVERY' not in sent and sent.startswith('Task completed')
+
+
+def _convert_to_review(root, task, tmp_path):
+    """What task.update does to a question that becomes a packet review: new profile and inputs, approved again."""
+    import hashlib
+    import execution_profiles as ep
+    source = tmp_path / 'packet.txt'
+    source.write_text('Known packet evidence.\n')
+    built = ep.build_review_envelope_v1(
+        instructions='Review the packet.', rules=[], provider='claude',
+        evidence=[dict(path=str(source), content=source.read_text(),
+                       sha256=hashlib.sha256(source.read_bytes()).hexdigest())])
+    with solar_state.session() as store:
+        assert store.task_complete(task, token=store.reservation_for(task)['token']) == 'queued'
+        assert store.task_adopt(task, 'test-supervisor')['released']
+        store.task_return_to_draft(task, expected_row_version=store.task_get(task)['row_version'])
+        for key, value in (('provider', json.dumps('claude')), ('notify_when', 'completed'),
+                           ('access_policy', json.dumps(dict(version=1, mode='read', scopes=[str(source)], resources=[]))),
+                           ('execution_profile', json.dumps('text_only_review_v1')),
+                           ('review_input_manifest', json.dumps(built['manifest'])),
+                           ('review_input_digest', json.dumps(built['review_input_digest']))):
+            store.task_set(task, key, value)
+        store.task_approve(task, expected_row_version=store.task_get(task)['row_version'])
+        claimed = store.task_claim_detail(task, 'test')
+        assert claimed['claimed'], claimed
+    mirror(root)
+
+
+def test_a_question_turned_into_a_review_does_not_resend_its_old_delivery(tmp_path, monkeypatch):
+    monkeypatch.setattr(solar_state, 'VERIFIED_PROFILES', {**solar_state.VERIFIED_PROFILES,
+                                                           'text_only_review_v1': _AnyProvider()})
+    root = make_root(tmp_path)
+    task = _question(root, 'delivery,failed', tmp_path, recurring=True)
+    path = root / 'active' / f'{task}.md'
+    assert run_executor(path, root, '<delivery>OLD DELIVERY</delivery>', tmp_path).returncode == 0
+    assert 'OLD DELIVERY' in _body_of(task)
+    _convert_to_review(root, task, tmp_path)
+    assert run_executor(path, root, 'The review is done.', tmp_path).returncode == 0
+    assert '## Delivery' not in _body_of(task)
+    with solar_state.session() as store:
+        assert not store.task_field(task, 'delivery_recorded')
+    sent = _notify(root, task, tmp_path, 'sent-review')
+    assert 'OLD DELIVERY' not in sent and sent.startswith('Task completed')
+
+
+class _AnyProvider:
+    def __contains__(self, provider):
+        return True

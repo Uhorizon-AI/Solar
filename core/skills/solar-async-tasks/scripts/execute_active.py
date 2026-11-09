@@ -378,8 +378,14 @@ def record_result_path(task_id: str, log_file: pathlib.Path) -> None:
 
 RE_DELIVERY = re.compile(r"<delivery>(.*?)</delivery>", re.IGNORECASE | re.DOTALL)
 
-# A re-run must replace its own section, never stack a second one.
-RE_DELIVERY_SECTION = re.compile(r"\n## Delivery\n.*?(?=\n## |\Z)", re.DOTALL)
+# A re-run must replace its own section, never stack a second one. The delivery may hold `##` headings of its
+# own, so it ends only at the next heading the runtime writes (solar_state.RUNTIME_SECTIONS, which task text
+# cannot contain): a `## Subtask results` after it is not part of it and is kept. notify_if_configured.sh
+# applies the same cut; a test keeps the two lists equal. A line of the delivery that is exactly one of those
+# headings is indented when it is recorded (neutralize_runtime_headings). `## Delivery` is matched exactly, here
+# and in the notifier, so a look-alike in the instructions is never taken for the section.
+_AFTER_DELIVERY = "|".join(re.escape(h[3:]) for h in solar_state.RUNTIME_SECTIONS if h != "## Delivery")
+RE_DELIVERY_SECTION = re.compile(r"\n## Delivery\n.*?(?=\n## (?:" + _AFTER_DELIVERY + r")[ \t]*(?:\n|\Z)|\Z)", re.DOTALL)
 
 # One Telegram message, well under the notifier's chunking threshold.
 DELIVERY_MAX_CHARS = 1200
@@ -414,6 +420,18 @@ def clamp_delivery(delivery: str) -> Tuple[str, bool]:
     return text[:room].rstrip() + "…\n" + tail, True
 
 
+_RUNTIME_HEADING_LINE = re.compile(r"^(## (?:Delivery|" + _AFTER_DELIVERY + r")[ \t]*)$", re.MULTILINE)
+
+
+def neutralize_runtime_headings(delivery: str) -> str:
+    """Indent a line inside the delivery that is exactly a heading the runtime writes, so the cut never takes it for one.
+
+    The provider writes the delivery and the task text cannot hold these headings, so this is the one place
+    they could appear. One leading space keeps the text readable on a phone.
+    """
+    return _RUNTIME_HEADING_LINE.sub(r" \1", delivery)
+
+
 def upsert_frontmatter_key(task_id: str, key: str, value: str) -> None:
     """Set a frontmatter key, replacing it when already present."""
     _set(str(task_id), key, value)
@@ -427,6 +445,34 @@ def set_frontmatter_flag(task_id: str, key: str, value: bool) -> None:
         _unset(str(task_id), key)
 
 
+def _without_recorded_delivery(task_id: str, body: str) -> str:
+    """The body without the delivery an earlier run recorded.
+
+    Only what the runtime appended after the approved instructions is searched: instructions may hold a
+    `## Delivery` heading of their own (a draft that never ran is not checked), and a re-run must keep them
+    whole. The boundary is the one solar_state recorded; without it (an import) the first runtime heading
+    starts the searched part, as solar_state does.
+    """
+    snapshot = _field(task_id, "definition_snapshot") or _field(task_id, "approved_definition") or None
+    tail = solar_state.runtime_tail(body, _field(task_id, "title") or None, snapshot)
+    stripped = body.rstrip()
+    if not tail or not stripped.endswith(tail):
+        return body
+    head = stripped[: len(stripped) - len(tail)]
+    # The tail starts at its first heading, so a leading newline lets the section pattern see that heading.
+    return head + RE_DELIVERY_SECTION.sub("", "\n" + tail)[1:]
+
+
+def clear_recorded_delivery(task_id: str) -> None:
+    """Forget the delivery an earlier run recorded: its section and the flags that describe it."""
+    body = _body(str(task_id))
+    cleaned = _without_recorded_delivery(str(task_id), body).rstrip() + "\n"
+    if cleaned != body:
+        _set_body(str(task_id), cleaned)
+    for flag in ("delivery_recorded", "delivery_truncated", "delivery_missing"):
+        set_frontmatter_flag(task_id, flag, False)
+
+
 def record_delivery(task_id: str, reply_text: str) -> None:
     """Copy the reply's delivery block into the task body as `## Delivery`.
 
@@ -434,18 +480,25 @@ def record_delivery(task_id: str, reply_text: str) -> None:
     run does not set it.
     """
     expected = read_frontmatter_key(task_id, "delivery_expected") == "true"
-    delivery = extract_delivery(reply_text)
+    # One line ending, whatever the provider wrote: the heading checks (here and in the notifier) are per line.
+    delivery = extract_delivery(reply_text).replace("\r\n", "\n").replace("\r", "\n")
     if delivery:
+        # After the cap, which strips the text: a first line indented before it would lose its space.
+        # The few characters this adds stay well under one Telegram message.
         delivery, truncated = clamp_delivery(delivery)
+        delivery = neutralize_runtime_headings(delivery)
     else:
         truncated = False
 
-    body = RE_DELIVERY_SECTION.sub("", _body(str(task_id))).rstrip()
+    body = _without_recorded_delivery(str(task_id), _body(str(task_id))).rstrip()
     if delivery:
         body += "\n\n## Delivery\n\n" + delivery
     _set_body(str(task_id), body + "\n")
     set_frontmatter_flag(task_id, "delivery_truncated", truncated)
     set_frontmatter_flag(task_id, "delivery_missing", expected and not delivery)
+    # What the notifier trusts for `notify_when: delivery`: this run's executor recorded a delivery.
+    # A `## Delivery` heading that came from anywhere else (task text, an import) carries no such mark.
+    set_frontmatter_flag(task_id, "delivery_recorded", bool(delivery))
 
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1188,15 @@ def main() -> int:
     record_result_path(task_file, log_file)
 
     if restricted:
+        # Only a question that asks for one (`notify_when` lists `delivery`) keeps a delivery: the block of this
+        # reply is recorded like any task's, so the notice can send it. Any other restricted run (a question that
+        # no longer asks, or a task converted into a review) must not leave an earlier run's delivery to be resent.
+        asks = (solar_state.value_of(str(execution_profile)) == "ask_readonly_v1"
+                and "delivery" in read_frontmatter_key(task_file, "notify_when").replace(" ", "").split(","))
+        if asks:
+            record_delivery(task_file, reply_text)
+        else:
+            clear_recorded_delivery(task_file)
         print(reply_text, flush=True)
         return 0
 
