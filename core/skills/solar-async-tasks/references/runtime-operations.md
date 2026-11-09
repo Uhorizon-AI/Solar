@@ -108,7 +108,7 @@ When a long-running user request should notify on completion:
 3. Create the task with `task.create` and approve it with `task.approve` (both through `solar_execute`).
 4. Set `notify_when` on that task: pass it to `task.create`/`task.update` as a list of `completed`, `delivery` and `failed` (`delivery` is opt-in: a success is announced only when this run's `## Delivery` is non-empty, never `completed` with it; stored as a comma list in the order completed, delivery, failed; asking for `completed` alone is stored as `completed,-failed`). Origin metadata sets `completed,failed` for a gateway parent.
 
-On completion the runtime notifies when `notify_when` lists `completed` and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
+On completion the runtime notifies when `notify_when` lists `completed`, or lists `delivery` and this run's `## Delivery` has text (a run with no block, or an empty one, sends nothing), and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
 
 Delivery failures are recorded on the task as `notify_status: failed`,
 `notify_error`, and `notify_attempted_at`; the notifier returns nonzero. A successful
@@ -161,7 +161,7 @@ transporting it is not the same as compressing it.
 
 Tasks created with `delivery_expected: true` that finish without the block are
 marked `delivery_missing: true`, and their notice says the task finished without
-a delivery instead of announcing it as resolved. The flag is written by the same
+a delivery instead of announcing it as resolved. With `notify_when` `delivery` (alone or with `failed`) that notice is not sent: no block, or an empty one, is silent even when `delivery_expected` is true. The flag is written by the same
 call that puts the instruction in the task body: removing the instruction must
 remove the flag, or every task would report a missing delivery. A task without
 the flag keeps the earlier notice: a brief line plus the result location.

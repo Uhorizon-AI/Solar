@@ -335,3 +335,28 @@ def test_existing_notify_values_keep_their_notices(tmp_path):
     failed = _task_with(root, "error", "completed", "# T\n")        # bare completed still reports failures
     assert _notify(failed, env).returncode == 0
     assert "Task failed and needs attention" in _sent(workspace)
+
+
+def test_delivery_alone_announces_a_success_with_text(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "completed", "delivery", "# T\n\n## Delivery\n\nDECISION: nueva\nEVIDENCIA: x\n")
+    assert _notify(task, env).returncode == 0
+    assert _sent(workspace).startswith("DECISION: nueva")
+
+
+def test_delivery_is_not_sent_twice_for_the_same_run(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "completed", "delivery", "# T\n\n## Delivery\n\nDECISION: nueva\n",
+                      'notify_run: "r1"\nnotify_delivered: true\nnotify_delivered_run: "r1"\n')
+    assert _notify(task, env).returncode == 0
+    assert _sent(workspace) == ""
+
+
+def test_expected_delivery_that_never_came_is_silent_with_the_delivery_option(tmp_path):
+    for name, when in (("alone", "delivery"), ("with_failed", "delivery,failed")):
+        workspace, root, env = _notify_env(tmp_path / name)
+        task = _task_with(root, "completed", when, "# T\n\n## Result\n\nAccount.\n",
+                          "delivery_expected: true\ndelivery_missing: true\n")
+        assert _notify(task, env).returncode == 0
+        assert "Task finished without a delivery" not in _sent(workspace)
+        assert _sent(workspace) == ""

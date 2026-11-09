@@ -227,7 +227,7 @@ fi
 # message: a fixed line plus a path to a file on the Mac cannot be read from a
 # phone. `## Result` is deliberately not read here — it is the provider's full
 # account, and sending it would be transport, not compression.
-
+# (task_delivery, which reads the section, is defined above, before the lock.)
 DELIVERY=""
 if [[ "$TASK_STATUS" != "error" ]]; then
   DELIVERY="$(task_delivery "$TASK_ID" | sed -e '/./,$!d')"

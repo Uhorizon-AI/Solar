@@ -913,7 +913,8 @@ _NOTIFY_WHEN = {
     "type": "array", "uniqueItems": True, "maxItems": 2,
     "items": {"type": "string", "enum": ["completed", "delivery", "failed"]},
     "description": "When the configured chat is told, without confirming the text (a system notice, not a message "
-                   "to third parties): completed, and failed (adds the one-line reason). "
+                   "to third parties): completed, delivery (opt-in, quiet) and failed (adds the one-line reason). "
+                   "`completed` and `delivery` are mutually exclusive: asking for both is refused. "
                    "`[completed]` alone is stored as `completed,-failed` and stays silent when the task fails; "
                    "a bare `completed` written by older tasks also reports failures; `[completed, failed]` "
                    "reports both. `delivery` is opt-in and quiet: a successful run is announced only when ITS OWN "
