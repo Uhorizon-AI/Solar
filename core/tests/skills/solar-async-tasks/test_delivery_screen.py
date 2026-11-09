@@ -405,7 +405,7 @@ def test_the_two_delivery_cuts_use_the_same_headings():
     import re
     import solar_state
     script = (SCRIPTS / "notify_if_configured.sh").read_text(encoding="utf-8")
-    in_awk = re.search(r"found && /\^## \(([^)]*)\)", script).group(1).split("|")
+    in_awk = re.search(r"on && /\^## \(([^)]*)\)", script).group(1).split("|")
     expected = [h[3:] for h in solar_state.RUNTIME_SECTIONS if h != "## Delivery"]
     assert sorted(in_awk) == sorted(expected)
 
@@ -471,3 +471,34 @@ def test_a_delivery_with_crlf_endings_and_a_leading_runtime_heading_is_sent_whol
     assert _notify(done, env).returncode == 0
     sent = _sent(workspace)
     assert "Asunto uno" in sent and "FOREIGN" not in sent
+
+
+_EXACT = "# T\n\nInstructions.\n\n## Delivery\n\nSECRET INSTRUCTIONS\n\n## Límites\n\nKEEP THIS\n"
+
+
+def _approved(body: str) -> str:
+    import solar_state
+    return "approved_definition: " + json.dumps(solar_state.definition_text(body, "T")) + "\n"
+
+
+def test_an_exact_delivery_heading_in_the_instructions_survives_an_attempt_without_a_block(tmp_path):
+    task = _task(tmp_path / "w", body=_EXACT, extra=_approved(_EXACT))
+    text = record(task, "No block this time.")
+    assert "## Delivery\n\nSECRET INSTRUCTIONS\n\n## Límites\n\nKEEP THIS" in text
+    assert "delivery_recorded" not in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1], recorded=False)
+    assert _notify(done, env).returncode == 0
+    assert _sent(workspace) == ""
+
+
+def test_a_real_delivery_replaces_only_the_recorded_one_and_is_the_one_sent(tmp_path):
+    task = _task(tmp_path / "w", body=_EXACT, extra=_approved(_EXACT))
+    record(task, "<delivery>FIRST RUN</delivery>")
+    text = record(task, "<delivery>SECOND RUN</delivery>")
+    assert "SECRET INSTRUCTIONS" in text and "KEEP THIS" in text
+    assert "FIRST RUN" not in text and "SECOND RUN" in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1])
+    assert _notify(done, env).returncode == 0
+    assert _sent(workspace).strip() == "SECOND RUN"

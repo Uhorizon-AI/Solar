@@ -445,6 +445,24 @@ def set_frontmatter_flag(task_id: str, key: str, value: bool) -> None:
         _unset(str(task_id), key)
 
 
+def _without_recorded_delivery(task_id: str, body: str) -> str:
+    """The body without the delivery an earlier run recorded.
+
+    Only what the runtime appended after the approved instructions is searched: instructions may hold a
+    `## Delivery` heading of their own (a draft that never ran is not checked), and a re-run must keep them
+    whole. The boundary is the one solar_state recorded; without it (an import) the first runtime heading
+    starts the searched part, as solar_state does.
+    """
+    snapshot = _field(task_id, "definition_snapshot") or _field(task_id, "approved_definition") or None
+    tail = solar_state.runtime_tail(body, _field(task_id, "title") or None, snapshot)
+    stripped = body.rstrip()
+    if not tail or not stripped.endswith(tail):
+        return body
+    head = stripped[: len(stripped) - len(tail)]
+    # The tail starts at its first heading, so a leading newline lets the section pattern see that heading.
+    return head + RE_DELIVERY_SECTION.sub("", "\n" + tail)[1:]
+
+
 def record_delivery(task_id: str, reply_text: str) -> None:
     """Copy the reply's delivery block into the task body as `## Delivery`.
 
@@ -462,7 +480,7 @@ def record_delivery(task_id: str, reply_text: str) -> None:
     else:
         truncated = False
 
-    body = RE_DELIVERY_SECTION.sub("", _body(str(task_id))).rstrip()
+    body = _without_recorded_delivery(str(task_id), _body(str(task_id))).rstrip()
     if delivery:
         body += "\n\n## Delivery\n\n" + delivery
     _set_body(str(task_id), body + "\n")

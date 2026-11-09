@@ -35,11 +35,14 @@ esac
 
 # The delivery may hold `##` headings of its own: it ends only at a heading the runtime writes after it.
 # Keep this list equal to solar_state.RUNTIME_SECTIONS without `## Delivery` (a test checks it).
+# The LAST exact `## Delivery` is the one the worker recorded: the instructions come before it and cannot be
+# trusted to lack that heading, so every new one starts over.
 task_delivery() {
   task_body "$1" | awk '
-    /^## Delivery$/ && !found { found = 1; next }
-    found && /^## (Subtask results|Execution Error|Result)[[:space:]]*$/ { exit }
-    found { print }
+    /^## Delivery$/ { buf = ""; on = 1; next }
+    on && /^## (Subtask results|Execution Error|Result)[[:space:]]*$/ { on = 0; next }
+    on { buf = buf $0 "\n" }
+    END { printf "%s", buf }
   '
 }
 
