@@ -20,10 +20,12 @@ scheduled_timezone: "Europe/Madrid"  # IANA zone; required by task.schedule
 
 Behavior:
 
-- A +/- 15 minute window applies around `scheduled_time`, read in `scheduled_timezone` (weekday
-  included), so the local hour holds across daylight-saving changes. An unknown zone never
-  matches. Without a zone, host local time applies (tasks created before `scheduled_timezone`).
-- A local time that does not exist on a spring-forward day (for example 02:30) is skipped that day.
+- For automatic starts, recurring tasks retain a ±15 minute window around `scheduled_time`.
+  One-off tasks become eligible at that time through the end of the minute 15 minutes later.
+- The clock and weekdays are read in `scheduled_timezone`. An unknown zone never matches.
+  Without a zone, host local time applies (tasks created before `scheduled_timezone`).
+- A nonexistent local time is skipped for a one-off task. Recurring windows may still include
+  valid minutes on either side of a clock change.
 - Tasks without schedule fields are always eligible.
 - The worker only picks eligible queued tasks.
 

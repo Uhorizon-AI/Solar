@@ -73,6 +73,36 @@ def test_claim_next_reads_the_task_zone(ready):
         assert claimed and claimed["id"] == task_id
 
 
+def test_one_off_claim_waits_until_the_nominal_time(ready):
+    with solar_state.session() as store:
+        task_id = make(store, status="queued", scheduled_time='"09:00"',
+                       scheduled_timezone=f'"{MADRID}"', recurring="false")
+        assert store.task_claim_next("w", now=utc(2026, 11, 9, 7, 45)) is None
+        assert store.task_claim_next("w", now=utc(2026, 11, 9, 7, 59)) is None
+        assert store.task_claim_next("w", now=utc(2026, 11, 9, 8, 0))["id"] == task_id
+
+
+@pytest.mark.parametrize("recurrence", [{}, {"recurring": "false"}])
+def test_legacy_one_off_claim_uses_host_time_and_waits_until_nominal(ready, recurrence):
+    with solar_state.session() as store:
+        task_id = make(store, status="queued", scheduled_time='"09:00"', **recurrence)
+        assert store.task_claim_next("w", now=datetime(2026, 11, 9, 8, 59)) is None
+        assert store.task_claim_next("w", now=datetime(2026, 11, 9, 9, 16)) is None
+        assert store.task_claim_next("w", now=datetime(2026, 11, 9, 9, 15, 59))["id"] == task_id
+
+
+@pytest.mark.parametrize("time,day,instant,expected", [
+    ("23:55", "1", utc(2026, 11, 9, 23, 10, 59), True),  # Tuesday 00:10, Monday's window
+    ("23:55", "1", utc(2026, 11, 9, 23, 11), False),
+    ("00:05", "1", utc(2026, 11, 8, 23, 0), False),     # Monday before its nominal time
+    ("02:30", "7", utc(2027, 3, 28, 1, 0), False),     # nonexistent local time
+    ("02:30", "7", utc(2027, 10, 31, 0, 30), True),    # first fold
+    ("02:30", "7", utc(2027, 10, 31, 1, 30), False),   # second fold
+])
+def test_one_off_eligibility_at_day_and_clock_boundaries(time, day, instant, expected):
+    assert scheduled_now(time, day, instant, MADRID, recurring=False) is expected
+
+
 def test_a_weekly_recurrence_is_ready_again_after_a_short_dst_week(ready):
     """Winter to summer the week is 167 hours; a 6-day interval still fires."""
     fields = [("title", '"Weekly"'), ("scheduled_time", '"17:00"'), ("scheduled_weekdays", '"5"'),

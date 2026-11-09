@@ -106,7 +106,7 @@ priority: normal
 recurring: true
 recurring_min_interval: 86400    # minimum seconds between runs (86400 = 1 day)
 recurring_max_runs: 0            # 0 = unlimited
-scheduled_time: "09:00"          # ±15 min window, read in scheduled_timezone
+scheduled_time: "09:00"          # recurring: ±15 min, read in scheduled_timezone
 scheduled_timezone: "Europe/Madrid"  # IANA zone; keeps the local hour across clock changes
 scheduled_weekdays: "1,2,3,4,5" # ISO: 1=Mon … 7=Sun
 ---
