@@ -463,6 +463,16 @@ def _without_recorded_delivery(task_id: str, body: str) -> str:
     return head + RE_DELIVERY_SECTION.sub("", "\n" + tail)[1:]
 
 
+def clear_recorded_delivery(task_id: str) -> None:
+    """Forget the delivery an earlier run recorded: its section and the flags that describe it."""
+    body = _body(str(task_id))
+    cleaned = _without_recorded_delivery(str(task_id), body).rstrip() + "\n"
+    if cleaned != body:
+        _set_body(str(task_id), cleaned)
+    for flag in ("delivery_recorded", "delivery_truncated", "delivery_missing"):
+        set_frontmatter_flag(task_id, flag, False)
+
+
 def record_delivery(task_id: str, reply_text: str) -> None:
     """Copy the reply's delivery block into the task body as `## Delivery`.
 
@@ -1180,9 +1190,12 @@ def main() -> int:
     if restricted:
         # A question keeps no delivery unless it asks for one (`notify_when` lists `delivery`): then the block of
         # this reply is recorded like any task's, so the notice can send it. Other restricted tasks are untouched.
-        if (str(execution_profile).strip("\"' ") == "ask_readonly_v1"
-                and "delivery" in read_frontmatter_key(task_file, "notify_when").replace(" ", "").split(",")):
-            record_delivery(task_file, reply_text)
+        if solar_state.value_of(str(execution_profile)) == "ask_readonly_v1":
+            if "delivery" in read_frontmatter_key(task_file, "notify_when").replace(" ", "").split(","):
+                record_delivery(task_file, reply_text)
+            else:
+                # It no longer asks (an edit changed `notify_when`): what an earlier run recorded is not this run's.
+                clear_recorded_delivery(task_file)
         print(reply_text, flush=True)
         return 0
 

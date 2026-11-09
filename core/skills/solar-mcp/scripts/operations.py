@@ -103,17 +103,13 @@ def _notify_text(tokens) -> str:
 
 def _refuse_delivery_on_restricted(notify_when, profile) -> None:
     """A review keeps no `## Delivery`, so `delivery` would stay silent for ever. A question records one when asked."""
-    if (profile and solar_state_value(profile) != "ask_readonly_v1"
+    import solar_state
+
+    if (profile and solar_state.value_of(str(profile)) != "ask_readonly_v1"
             and "delivery" in str(notify_when or "").replace(" ", "").split(",")):
         raise OperationError("invalid_arguments",
                              "`delivery` is not available on a review: it keeps no `## Delivery`. "
                              "Use `completed` or `failed`. A question (`ask`) does accept it.")
-
-
-def solar_state_value(raw) -> str:
-    import solar_state
-
-    return solar_state.value_of(str(raw)) or ""
 
 
 def _now_iso() -> str:
