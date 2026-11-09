@@ -1,6 +1,7 @@
 """The words of a confirmation: compact, human, derived from validated state, never binding."""
 import json
 import queue
+from datetime import datetime, timezone
 from pathlib import Path
 from io import StringIO
 
@@ -10,6 +11,7 @@ import approval_text
 import mcp_approve
 import mcp_server
 import operations
+import task_views
 from mcp_helpers import new_task, run, stored
 from reservation_tokens import token_of
 
@@ -171,13 +173,42 @@ def test_schedule_shows_days_time_zone_and_recurrence_limits(solar_env):
         recurring_max_runs=5, recurring_min_interval=86400))
     assert "Days: Mon, Wed" in message and "Time: 09:15" in message and "Time zone: Europe/Madrid" in message
     assert "Repeats: yes (minimum gap 24.0 h; at most 5 runs)" in message
-    assert "Next runs:" in message and "not queued" in message
+    assert "Eligible start windows:" in message and "09:00:00" in message and "09:30:00" in message
+    assert "not queued" in message
     assert_clean(message, made)
     spanish = text("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"],
                                          scheduled_time="09:15", scheduled_timezone="Europe/Madrid",
                                          scheduled_weekdays=[1, 3]), "es")
     assert "Días: lun, mié" in spanish and "Zona horaria: Europe/Madrid" in spanish
     assert "Repite: no" in spanish
+    assert "Ventanas de inicio permitidas:" in spanish and "09:15:00" in spanish
+    assert "09:30:00" in spanish
+
+
+def test_scheduled_approval_describes_the_start_window(solar_env):
+    made = new_task("One-off task")
+    run("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                              scheduled_time="09:00", scheduled_timezone="UTC"))
+    current = stored(made["id"])
+    args = dict(task_id=made["id"], expected_row_version=current["row_version"])
+    for operation in ("task.approve", "task.authorize_run"):
+        message = text(operation, args)
+        assert "Eligible start windows:" in message
+        assert "09:00:00+00:00" in message and "09:15:00+00:00" in message
+
+
+def test_scheduled_approval_shows_the_open_window_across_midnight(solar_env, monkeypatch):
+    frozen = datetime(2026, 11, 10, 0, 5, tzinfo=timezone.utc)
+    monkeypatch.setattr(task_views, "_now_utc", lambda: frozen)
+    made = new_task("Monday task")
+    scheduled = run("task.schedule", dict(
+        task_id=made["id"], expected_row_version=made["row_version"], scheduled_time="23:55",
+        scheduled_weekdays=[1], scheduled_timezone="UTC",
+    ))
+    args = dict(task_id=made["id"], expected_row_version=scheduled["row_version"])
+    for operation in ("task.approve", "task.authorize_run"):
+        message = text(operation, args)
+        assert "2026-11-09 23:55:00+00:00 → 2026-11-10 00:10:00+00:00" in message
 
 
 def test_invalid_schedule_is_reported_the_way_the_handler_refuses_it(solar_env):

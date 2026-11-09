@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime, timezone
 
 import pytest
 
 import mcp_server
 import solar_state
+import task_views
 from mcp_helpers import execute, new_task, run, search, stored
 from reservation_tokens import token_of
 
@@ -221,7 +223,64 @@ def test_schedule_stores_time_zone_and_recurrence_without_queueing(solar_env):
     assert len(out["schedule"]["next_occurrences"]) == 4
     assert all(o["weekday"] == 5 and o["local"].split("T")[1][:5] == "17:00"
                for o in out["schedule"]["next_occurrences"])
+    assert len(out["schedule"]["start_windows"]) == 4
+    assert all(set(window) == {"not_before", "not_after"} for window in out["schedule"]["start_windows"])
+    detail = search(scope="tasks", task_id=made["id"])
+    start_window = detail["schedule"]["start_windows"][0]
+    assert datetime.fromisoformat(start_window["not_before"]).strftime("%H:%M") == "16:45"
+    assert datetime.fromisoformat(start_window["not_after"]).strftime("%H:%M") == "17:15"
     assert queued_count() == 0
+
+
+def test_one_off_preview_keeps_the_open_window_across_midnight():
+    after = datetime(2026, 11, 9, 23, 5, tzinfo=timezone.utc)
+    plan = task_views.plan_schedule(time="23:55", weekdays=[1], zone=MADRID,
+                                    recurring=False, min_interval=None, after=after)
+    assert plan["start_windows"][0] == {
+        "not_before": "2026-11-09T23:55:00+01:00",
+        "not_after": "2026-11-10T00:10:00+01:00",
+    }
+    assert plan["next_occurrences"][0]["local"] == "2026-11-16T23:55:00+01:00"
+
+
+@pytest.mark.parametrize("time,weekday,after,start,end,nominal", [
+    ("02:05", 7, "2027-03-28T00:55+00:00", "2027-03-28T01:50:00+01:00",
+     "2027-03-28T01:59:00+01:00", "2027-04-04T02:05:00+02:00"),
+    ("00:05", 1, "2026-11-09T22:55+00:00", "2026-11-09T23:50:00+01:00",
+     "2026-11-09T23:59:00+01:00", "2026-11-16T00:05:00+01:00"),
+])
+def test_partial_recurring_windows_preserve_nominal_occurrences(time, weekday, after, start, end, nominal):
+    plan = task_views.plan_schedule(time=time, weekdays=[weekday], zone=MADRID,
+                                    recurring=True, min_interval=None, after=datetime.fromisoformat(after))
+    assert plan["start_windows"][0] == {"not_before": start, "not_after": end}
+    local = datetime.fromisoformat(nominal)
+    assert plan["next_occurrences"][0] == {
+        "local": nominal,
+        "utc": local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "weekday": weekday,
+        "utc_offset": local.strftime("%z"),
+    }
+    assert solar_state.scheduled_now(time, str(weekday), datetime.fromisoformat(start), MADRID)
+    assert solar_state.scheduled_now(time, str(weekday), datetime.fromisoformat(end), MADRID)
+
+
+def test_recurring_preview_preserves_both_folds_of_a_repeated_hour():
+    windows = task_views.start_windows(
+        "02:30", [7], MADRID, datetime(2027, 10, 31, 0, 20, tzinfo=timezone.utc), 2, recurring=True,
+    )
+    assert windows == [
+        {"not_before": "2027-10-31T02:15:00+02:00", "not_after": "2027-10-31T02:45:00+02:00"},
+        {"not_before": "2027-10-31T02:15:00+01:00", "not_after": "2027-10-31T02:45:00+01:00"},
+    ]
+
+
+def test_recurring_friday_preview_keeps_the_symmetric_window():
+    plan = task_views.plan_schedule(time="17:00", weekdays=[5], zone=MADRID, recurring=True,
+                                    min_interval=None, after=datetime(2027, 3, 20, tzinfo=timezone.utc))
+    assert plan["start_windows"][0] == {
+        "not_before": "2027-03-26T16:45:00+01:00",
+        "not_after": "2027-03-26T17:15:00+01:00",
+    }
 
 
 @pytest.mark.parametrize("arguments", [

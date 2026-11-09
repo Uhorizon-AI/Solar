@@ -70,7 +70,15 @@ new wait) at one occurrence (a recurring task's `recurring_last_run`).
   - reading the queue never ends a wait.
 - **Announced once.** The supervisor tells the configured chat through `notify_if_configured.sh` (`--waiting`,
   `--expired-draft`, `--expired-skipped`) when a wait begins and when it ends. Title only, never the instructions,
-  never the chat a task names, and the task is not touched.
+  never the chat a task names, and the task is not touched (`--waiting` also carries the short id and expiry below).
+  - The `--waiting` notice adds to the title a short task id (the first 8 characters of the id, longer only if another
+    task shares them) and the expiry in local time, computed with the supervisor's `SOLAR_APPROVAL_WAIT_HOURS` (the
+    notifier restores it after loading the workspace `.env`). It says "No expiry" only when the limit is off; when the
+    wait cannot be read it says "Expiry: not available right now; ask your assistant." Plain text; no instructions,
+    paths or buttons. The end-of-wait notices are unchanged.
+  - The short id is read-only: `solar_search scope=tasks task_id=<id>` accepts a prefix of 8 or more characters and
+    returns the full id and row version when exactly one task starts with it (an exact id wins; several matches are
+    refused as `task_ambiguous`). `task.authorize_run` still takes the full id and the version.
   - It runs on its own thread, at most three notices per run, never while draining, so a slow sender never delays a
     claim, the heartbeat or a drain. A sender that hangs is ended after 30 seconds with its whole process group.
   - A notice is taken in `audit` (`approval_notice`) before it is sent and its outcome is recorded

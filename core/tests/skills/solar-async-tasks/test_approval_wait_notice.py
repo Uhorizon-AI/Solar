@@ -3,6 +3,7 @@
 It goes through the task notifier that already exists, to the configured chat only, with the title and
 never the instructions, and it does not touch the task. The sender is a double that writes a log; no
 chat is reached."""
+import re
 import os
 import subprocess
 import time
@@ -34,12 +35,15 @@ def fixture_env(tmp_path):
     return workspace, root, env
 
 
+FIXED_ID = "5a1b2c3d-0000-4000-8000-000000000001"      # no run of digits that could pass for a chat id
+
+
 def waiting_task(origin=""):
     fields = [("title", '"Review the thing"')]
     if origin:
         fields.append(("origin_chat_id", f'"{origin}"'))
     with solar_state.session() as store:
-        task_id = store.task_create(fields, f"\n# Review the thing\n\n{SECRET}\n")
+        task_id = store.task_create(fields, f"\n# Review the thing\n\n{SECRET}\n", task_id=FIXED_ID)
         store.task_approve(task_id, expected_row_version=store.task_get(task_id)["row_version"], consent="client")
         return task_id, store.task_get(task_id)["row_version"]
 
@@ -71,6 +75,91 @@ def test_each_notice_says_what_happened_and_nothing_else(tmp_path, mode, words):
     with solar_state.session() as store:                      # the task is as it was
         assert store.task_get(task_id)["row_version"] == version
         assert "notify_status" not in dict(store.task_get(task_id)["frontmatter"])
+
+
+def _sent(workspace):
+    return (workspace / "sent.log").read_text()
+
+
+def test_the_waiting_notice_carries_a_short_id_and_the_expiry(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    env["SOLAR_APPROVAL_WAIT_HOURS"] = "72"
+    task_id, _ = waiting_task()
+    assert notify(task_id, "--waiting", env).returncode == 0
+    sent = _sent(workspace)
+    short = task_id[:8]
+    assert f"Task: {short}" in sent and f"authorize task {short}" in sent
+    assert task_id not in sent                                  # short, never the whole id
+    assert re.search(r"Expires: \d{4}-\d{2}-\d{2} \d{2}:\d{2}", sent) and "the wait ends on its own" in sent
+    assert "No expiry" not in sent
+    assert str(workspace) not in sent and str(tmp_path) not in sent      # no paths
+
+
+def test_the_deadline_is_the_supervisors_not_the_one_in_env_file(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    (workspace / ".env").write_text("TELEGRAM_CHAT_ID=456\nSOLAR_APPROVAL_WAIT_HOURS=0\n")
+    env["SOLAR_APPROVAL_WAIT_HOURS"] = "72"                      # what the supervisor applies
+    task_id, _ = waiting_task()
+    assert notify(task_id, "--waiting", env).returncode == 0
+    sent = _sent(workspace)
+    assert "Expires: " in sent and "No expiry" not in sent
+    (workspace / "sent.log").unlink()
+    env["SOLAR_APPROVAL_WAIT_HOURS"] = "0"                       # and the other way round
+    (workspace / ".env").write_text("TELEGRAM_CHAT_ID=456\nSOLAR_APPROVAL_WAIT_HOURS=72\n")
+    assert notify(task_id, "--waiting", env).returncode == 0
+    assert "No expiry" in _sent(workspace) and "Expires:" not in _sent(workspace)
+
+
+def test_a_wait_that_never_expires_says_so(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    env["SOLAR_APPROVAL_WAIT_HOURS"] = "0"
+    task_id, _ = waiting_task()
+    assert notify(task_id, "--waiting", env).returncode == 0
+    sent = _sent(workspace)
+    assert "No expiry: this wait does not end on its own." in sent
+    assert "Expires:" not in sent and f"Task: {task_id[:8]}" in sent
+
+
+def test_the_waiting_notice_leaks_no_instructions(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    task_id, _ = waiting_task(origin="999")
+    assert notify(task_id, "--waiting", env).returncode == 0
+    sent = _sent(workspace)
+    assert SECRET not in sent and "999" not in sent and "Review the thing" in sent
+
+
+def test_the_short_id_grows_only_until_no_other_task_shares_it(tmp_path):
+    fixture_env(tmp_path)
+    with solar_state.session() as store:
+        first = store.task_create([("title", '"A"')], "\nA\n", task_id="abcdef12a-0001")
+        second = store.task_create([("title", '"B"')], "\nB\n", task_id="abcdef12b-0001")
+        alone = store.task_create([("title", '"C"')], "\nC\n", task_id="zz")
+        assert store.task_short_id(first) == "abcdef12a"        # one character past the shared 8
+        assert store.task_short_id(second) == "abcdef12b"
+        assert store.task_short_id(alone) == "zz"               # shorter than 8: the whole id
+        with pytest.raises(solar_state.StateError):
+            store.task_short_id("no-such-task")                 # never invents a prefix
+        exact = store.task_create([("title", '"E"')], "\nE\n", task_id="abcdef12")
+        assert store.task_short_id(exact) == "abcdef12"          # whole id: the exact id wins when resolved
+
+
+def test_a_wait_that_cannot_be_read_still_notifies_without_a_made_up_deadline(tmp_path):
+    workspace, root, env = fixture_env(tmp_path)
+    with solar_state.session() as store:                         # a draft is not waiting: no wait to read
+        task_id = store.task_create([("title", '"Draft"')], "\nDraft\n")
+    assert notify(task_id, "--waiting", env).returncode == 0
+    sent = _sent(workspace)
+    assert "Expiry: not available right now" in sent
+    assert "Expires:" not in sent and "No expiry" not in sent and f"Task: {task_id[:8]}" in sent
+
+
+@pytest.mark.parametrize("mode", ["--expired-draft", "--expired-skipped"])
+def test_the_end_of_wait_notices_are_unchanged(tmp_path, mode):
+    workspace, root, env = fixture_env(tmp_path)
+    task_id, _ = waiting_task()
+    assert notify(task_id, mode, env).returncode == 0
+    sent = _sent(workspace)
+    assert "Task:" not in sent and "Expires" not in sent
 
 
 def test_it_goes_to_the_configured_chat_never_to_the_one_the_task_names(tmp_path):

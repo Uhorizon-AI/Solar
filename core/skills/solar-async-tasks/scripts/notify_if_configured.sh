@@ -16,8 +16,8 @@
 # SOLAR_NOTIFY_LOCK_WAIT: seconds to wait for the per-task lock (default 150).
 #
 # The optional mode announces a task that waits for `task.authorize_run`, or whose wait ended. It goes
-# to the configured chat only (never the origin chat a task names), carries the title and no
-# instructions, and does not touch the task.
+# to the configured chat only (never the origin chat a task names), carries the title and no instructions
+# (--waiting adds a short task id and the expiry), and does not touch the task.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task_lib.sh"
@@ -139,12 +139,17 @@ if [[ ! -x "$SEND_SCRIPT" ]]; then
   exit 1
 fi
 
+# The supervisor applies SOLAR_APPROVAL_WAIT_HOURS from its own environment: the notice must announce that
+# deadline, not one a workspace `.env` might set differently.
+HAD_WAIT_HOURS="${SOLAR_APPROVAL_WAIT_HOURS+set}"; WAIT_HOURS="${SOLAR_APPROVAL_WAIT_HOURS:-}"
 if [[ -f "$WORKSPACE_DIR/.env" ]]; then
   set -a
   # shellcheck source=/dev/null
   source "$WORKSPACE_DIR/.env"
   set +a
 fi
+
+if [[ -n "$HAD_WAIT_HOURS" ]]; then export SOLAR_APPROVAL_WAIT_HOURS="$WAIT_HOURS"; else unset SOLAR_APPROVAL_WAIT_HOURS; fi
 
 # The workspace `.env` carries the visible configuration (chat id, parse mode).
 # The bot token is not there any more: it belongs to the process, and the
@@ -245,7 +250,30 @@ send_chunks() {
 if [[ -n "$MODE" ]]; then
   case "$MODE" in
     --waiting)
-      MESSAGE="Waiting for your approval to run: ${TITLE}"$'\n'"Reason: it can change things beyond a confined read, so it needs task.authorize_run before it runs."$'\n'"Ask your assistant to review it and authorize it. If nobody does, the wait ends on its own." ;;
+      # The short id and the expiry let the owner name the task and know the deadline from a phone.
+      # Both come from solar-state; neither is the instructions, a path or the chat a task names.
+      SHORT_ID="$(state task short-id "$TASK_ID" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["short_id"])' 2>/dev/null)"
+      [[ -n "$SHORT_ID" ]] || echo "Task notification: short id unavailable ($TASK_ID)" >&2
+      WAIT_LINE="$(state task wait "$TASK_ID" 2>/dev/null | python3 -c 'import json,sys
+from datetime import datetime
+d = json.load(sys.stdin); w = d.get("wait")
+if w is None: sys.exit(0)
+if not w.get("expires_at"):
+    if d.get("limit_off"): print("No expiry: this wait does not end on its own.")
+    sys.exit(0)
+t = datetime.fromisoformat(w["expires_at"].replace("Z", "+00:00")).astimezone()
+print("Expires: " + t.strftime("%Y-%m-%d %H:%M %Z") + ". If nobody authorizes it by then, the wait ends on its own.")' 2>/dev/null)"
+      MESSAGE="Waiting for your approval to run: ${TITLE}"
+      [[ -n "$SHORT_ID" ]] && MESSAGE="${MESSAGE}"$'\n'"Task: ${SHORT_ID}"
+      MESSAGE="${MESSAGE}"$'\n'"Reason: it can change things beyond a confined read, so it needs task.authorize_run before it runs."
+      # If the wait cannot be read, say so rather than leave the owner without any word on the deadline.
+      [[ -z "$WAIT_LINE" ]] && WAIT_LINE="Expiry: not available right now; ask your assistant."
+      MESSAGE="${MESSAGE}"$'\n'"${WAIT_LINE}"
+      if [[ -n "$SHORT_ID" ]]; then
+        MESSAGE="${MESSAGE}"$'\n'"Ask your assistant: review and authorize task ${SHORT_ID}."
+      else
+        MESSAGE="${MESSAGE}"$'\n'"Ask your assistant to review it and authorize it."
+      fi ;;
     --expired-draft)
       MESSAGE="Approval wait ended: ${TITLE}"$'\n'"The task went back to draft and will not run until it is approved again." ;;
     --expired-skipped)

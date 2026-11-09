@@ -14,8 +14,10 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -803,6 +805,13 @@ def _require_chat(arguments: dict) -> None:
                              "Supply the exact chat_id before confirming a send")
 
 
+def _do_browser_read(arguments: dict) -> dict:
+    """A registered read of a registered origin: the caller only names it."""
+    import browser_read
+    entry = browser_read.prepare(arguments["read"], mcp_context.browser_reads(), workspace())
+    return browser_read.scoped_read(entry)
+
+
 def _do_action_run(arguments: dict) -> dict:
     entry = mcp_context.action_skills().get(arguments["skill"], {})
     command = list(entry.get("command") or [])
@@ -814,6 +823,31 @@ def _do_action_run(arguments: dict) -> dict:
     return dict(exit_code=proc.returncode,
                 stdout=(proc.stdout or "").strip()[:2000],
                 stderr=(proc.stderr or "").strip()[:1000])
+
+
+def _do_browser_probe(_arguments: dict) -> dict:
+    """Read a built-in fixture without exposing a browser session to the caller."""
+    mac_chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    browser = str(mac_chrome) if mac_chrome.is_file() else shutil.which("google-chrome")
+    if not browser:
+        raise OperationError("browser_unavailable", "Google Chrome was not found")
+    fixture = (
+        "data:text/html,%3Cmain%3E%3C/main%3E%3Cscript%3E"
+        "document.querySelector('main').textContent='solar-browser-'%2B(6*7)"
+        "%3C/script%3E"
+    )
+    with tempfile.TemporaryDirectory(prefix="solar-browser-probe-", ignore_cleanup_errors=True) as profile:
+        try:
+            result = subprocess.run(
+                [browser, "--headless", "--no-first-run", "--disable-background-networking",
+                 f"--user-data-dir={profile}", "--dump-dom", fixture],
+                capture_output=True, text=True, timeout=20,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise OperationError("browser_probe_failed", "Chrome could not read the local fixture") from exc
+        if result.returncode or "<main>solar-browser-42</main>" not in result.stdout:
+            raise OperationError("browser_probe_failed", "Chrome did not render the expected fixture")
+    return {"browser": "chrome", "headless": True, "fixture": "solar-browser-42"}
 
 
 # ---------------------------------------------------------------------------
@@ -1037,6 +1071,26 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         external_communication=True, pre_confirm=_require_chat,
         effects="Sends outside the machine. The approval covers this exact text and chat."),
     Operation(
+        "browser.probe", A0, "Read a built-in browser fixture in an isolated headless Chrome.",
+        _obj({}),
+        errors=("browser_unavailable", "browser_probe_failed"),
+        effects="Starts Chrome with a disposable profile and reads a fixed synthetic page. "
+                "Accepts no URL, session, selector, script or browser arguments."),
+    Operation(
+        "browser.read", A0,
+        "Run one browser read the owner registered: one origin, a pinned script, declared fields (A0 = the registration is the authorization).",
+        _obj(dict(read=SLUG), required=("read",)),
+        errors=("browser_read_not_registered", "browser_read_invalid", "browser_read_changed",
+                "browser_unavailable", "browser_scope_denied", "browser_read_refused",
+                "browser_read_failed"),
+        effects="Opens one tab on the registered origin in the Solar browser profile, runs the owner's "
+                "pinned script there and returns only its declared fields, under {read, data}. The caller "
+                "supplies a name and nothing else: no URL, script, selector or argument. A0 here means the "
+                "owner's registration is the authorization: Solar pins the script and filters the "
+                "navigation and the output, but does not verify that the script only reads. While the read "
+                "runs, navigation outside the origin is refused and a script that changed since it was "
+                "registered does not run; see SKILL.md, Where the guarantee ends."),
+    Operation(
         "action.run", A3, "Run one registered action of one registered action skill under a live mandate.",
         _obj(dict(skill=SLUG, action=SLUG, mandate=SLUG, automated={"type": "boolean"}),
              required=("skill", "action")),
@@ -1058,6 +1112,8 @@ HANDLERS: dict[str, Callable[[dict], dict]] = {
     "async_execution.propose": _do_async_propose,
     "async_execution.apply": _do_async_apply,
     "telegram.send": _do_telegram_send,
+    "browser.probe": _do_browser_probe,
+    "browser.read": _do_browser_read,
     "action.run": _do_action_run,
 }
 
