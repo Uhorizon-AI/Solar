@@ -262,3 +262,76 @@ def test_task_that_never_asked_for_a_delivery_keeps_the_old_notice(tmp_path):
     sent = (workspace / "sent.log").read_text(encoding="utf-8")
     assert sent.startswith("Task completed: Some_task")
     assert "/local/path.log" in sent
+
+
+# ---------------------------------------------------------------------------
+# notify_when: delivery (opt-in, quiet)
+# ---------------------------------------------------------------------------
+
+def _task_with(root: Path, status: str, notify_when: str, body: str, extra: str = "") -> Path:
+    folder = root / status
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "task.md"
+    path.write_text(
+        f'---\nid: "t1"\ntitle: "Some_task"\nstatus: {status}\n'
+        f'notify_when: {notify_when}\norigin_chat_id: "456"\n' + extra + "---\n\n" + body,
+        encoding="utf-8",
+    )
+    return path
+
+
+def _sent(workspace: Path) -> str:
+    log = workspace / "sent.log"
+    return log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def test_delivery_option_sends_the_delivery_once(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "completed", "delivery,failed",
+                      "# T\n\n## Delivery\n\nDECISION: nueva\nEVIDENCIA: x\n")
+    assert _notify(task, env).returncode == 0
+    assert _notify(task, env).returncode == 0          # the per-run record keeps a second call silent
+    sent = _sent(workspace)
+    assert sent.count("DECISION: nueva") == 1 and "Task completed" not in sent
+
+
+def test_delivery_option_is_silent_without_a_delivery_even_after_a_delivering_run(tmp_path):
+    # The worker side: run two has no block, so the section run one wrote is gone.
+    run_dir = tmp_path / "run"
+    task = _task(run_dir, extra="delivery_expected: true\n")
+    record(task, "<delivery>run one decision</delivery>")
+    text = record(task, "Run two: nothing new.")
+    assert "## Delivery" not in text and "run one decision" not in text
+    # The notifier side, on that very body, then on a block that is present but empty.
+    for name, body in (("absent", text.split("---\n\n", 1)[1]), ("empty", "# T\n\n## Delivery\n\n")):
+        workspace, root, env = _notify_env(tmp_path / name)
+        done = _task_with(root, "completed", "delivery,failed", body)
+        assert _notify(done, env).returncode == 0
+        assert _sent(workspace) == ""
+
+
+def test_delivery_option_with_failed_announces_a_failure(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "error", "delivery,failed", "# T\n", 'failure_code: "provider_timeout"\n')
+    assert _notify(task, env).returncode == 0
+    sent = _sent(workspace)
+    assert sent.count("Task failed and needs attention: Some_task") == 1
+    assert "Reason: provider_timeout" in sent
+
+
+def test_delivery_alone_keeps_a_failure_silent(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "error", "delivery", "# T\n")
+    assert _notify(task, env).returncode == 0
+    assert _sent(workspace) == ""
+
+
+def test_existing_notify_values_keep_their_notices(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    done = _task_with(root, "completed", "completed", "# T\n")      # no delivery: the old brief line
+    assert _notify(done, env).returncode == 0
+    assert _sent(workspace).startswith("Task completed: Some_task")
+    workspace, root, env = _notify_env(tmp_path / "failure")
+    failed = _task_with(root, "error", "completed", "# T\n")        # bare completed still reports failures
+    assert _notify(failed, env).returncode == 0
+    assert "Task failed and needs attention" in _sent(workspace)

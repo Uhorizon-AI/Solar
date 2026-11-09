@@ -2,7 +2,8 @@
 
 # If the finished task asks for it in notify_when, send a Telegram notification
 # to the allowlisted origin chat (or TELEGRAM_CHAT_ID). notify_when is a comma
-# list of `completed` and `failed`. A bare `completed` (older tasks) also reports a failure; only the
+# list of `completed`, `delivery` and `failed`. `delivery` (opt-in, quiet) announces a success only when the
+# delivery of THIS run is non-empty, and says nothing otherwise. A bare `completed` (older tasks) also reports a failure; only the
 # explicit `completed,-failed` that task.create / task.update store for "completion only" does not. The approval-wait notice (--waiting) is sent for every task.
 # When the task carries a
 # `## Delivery` section, that is the message: the one-screen delivery the
@@ -32,6 +33,14 @@ case "$MODE" in
   *) echo "Unknown notification mode: $MODE" >&2; exit 2 ;;
 esac
 
+task_delivery() {
+  task_body "$1" | awk '
+    /^## Delivery[[:space:]]*$/ { found = 1; next }
+    found && /^## / { exit }
+    found { print }
+  '
+}
+
 if [[ -z "$MODE" ]]; then
   NOTIFY_WHEN=$(task_field "$TASK_ID" "notify_when")
   NOTIFY_WHEN="${NOTIFY_WHEN//[[:space:]]/}"
@@ -44,7 +53,8 @@ if [[ -z "$MODE" ]]; then
   if [[ "$(task_status_of "$TASK_ID")" == "error" ]]; then
     notify_wants failed || exit 0
   else
-    notify_wants completed || exit 0
+    # `delivery` cannot be judged before the locked snapshot: its content is checked there.
+    notify_wants completed || notify_wants delivery || exit 0
   fi
 
   # One notice per run. The run is the id stamped at claim; a notice for an earlier run never silences this one.
@@ -113,7 +123,13 @@ else:
   SNAPSHOT_STATUS="$(task_status_of "$TASK_ID")"       # the last look before sending must still find this status
   # What the snapshot says is what is announced: the status may have moved since the first, unlocked look.
   NOTIFY_WHEN="$(task_field "$TASK_ID" "notify_when")"; NOTIFY_WHEN="${NOTIFY_WHEN//[[:space:]]/}"
-  if [[ "$(task_status_of "$TASK_ID")" == "error" ]]; then notify_wants failed || exit 0; else notify_wants completed || exit 0; fi
+  if [[ "$(task_status_of "$TASK_ID")" == "error" ]]; then
+    notify_wants failed || exit 0
+  elif ! notify_wants completed; then
+    # Delivery only: this run's own delivery or nothing. The worker clears the section when a run has none.
+    notify_wants delivery || exit 0
+    [[ -n "$(task_delivery "$TASK_ID" | sed -e '/./,$!d')" ]] || exit 0
+  fi
 fi
 
 TITLE=$(task_field "$TASK_ID" "title")
@@ -211,13 +227,6 @@ fi
 # message: a fixed line plus a path to a file on the Mac cannot be read from a
 # phone. `## Result` is deliberately not read here — it is the provider's full
 # account, and sending it would be transport, not compression.
-task_delivery() {
-  task_body "$1" | awk '
-    /^## Delivery[[:space:]]*$/ { found = 1; next }
-    found && /^## / { exit }
-    found { print }
-  '
-}
 
 DELIVERY=""
 if [[ "$TASK_STATUS" != "error" ]]; then

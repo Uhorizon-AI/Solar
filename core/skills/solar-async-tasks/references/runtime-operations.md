@@ -106,7 +106,7 @@ When a long-running user request should notify on completion:
 1. Offer to create an async task.
 2. Confirm title, objective, and priority.
 3. Create the task with `task.create` and approve it with `task.approve` (both through `solar_execute`).
-4. Set `notify_when` on that task: pass it to `task.create`/`task.update` as a list of `completed` and `failed` (stored as a comma list; asking for `completed` alone is stored as `completed,-failed`). Origin metadata sets `completed,failed` for a gateway parent.
+4. Set `notify_when` on that task: pass it to `task.create`/`task.update` as a list of `completed`, `delivery` and `failed` (`delivery` is opt-in: a success is announced only when this run's `## Delivery` is non-empty, never `completed` with it; stored as a comma list in the order completed, delivery, failed; asking for `completed` alone is stored as `completed,-failed`). Origin metadata sets `completed,failed` for a gateway parent.
 
 On completion the runtime notifies when `notify_when` lists `completed` and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
 
