@@ -591,10 +591,10 @@ def _merged_schedule(stored: dict, args: dict):
     return merged, plan
 
 
-def _start_windows(occurrences):
+def _start_windows(windows):
     return "; ".join(
         f"{item['not_before'].replace('T', ' ', 1)} → {item['not_after'].replace('T', ' ', 1)}"
-        for item in occurrences[:2]
+        for item in windows[:2]
     )
 
 
@@ -613,8 +613,8 @@ def _schedule(copy, args):
             rows.append((copy["zone"], merged["zone"]))
         cap = args.get("recurring_max_runs", facts["values"].get("recurring_max_runs"))
         rows.append((copy["repeats"], _repeats(copy, merged["recurring"], plan["recurring_min_interval"], cap)))
-        if plan["next_occurrences"]:
-            rows.append((copy["start_windows"], _start_windows(plan["next_occurrences"])))
+        if plan["start_windows"]:
+            rows.append((copy["start_windows"], _start_windows(plan["start_windows"])))
         extra += [f"{copy['warn']}: {note}" for note in plan["notes"]]
     except OperationError as exc:
         extra.append(f"{copy['warn']}: {exc}")
@@ -641,8 +641,8 @@ def _context_rows(copy: dict, facts: dict) -> list:
     if schedule.get("time") and schedule["time"] != "now":
         rows.append((copy["time"], f"{_days(copy, schedule['weekdays'])} {schedule['time']} "
                                    f"({schedule.get('timezone') or '—'})"))
-        if schedule.get("next_occurrences"):
-            rows.append((copy["start_windows"], _start_windows(schedule["next_occurrences"])))
+        if schedule.get("start_windows"):
+            rows.append((copy["start_windows"], _start_windows(schedule["start_windows"])))
     # A local executor runs this command instead of a provider: what is approved includes it.
     values = facts.get("values") or {}
     if values.get("executor") and str(values["executor"]).lower() != "provider":

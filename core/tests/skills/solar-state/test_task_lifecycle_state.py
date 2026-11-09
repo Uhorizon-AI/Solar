@@ -82,6 +82,15 @@ def test_one_off_claim_waits_until_the_nominal_time(ready):
         assert store.task_claim_next("w", now=utc(2026, 11, 9, 8, 0))["id"] == task_id
 
 
+@pytest.mark.parametrize("recurrence", [{}, {"recurring": "false"}])
+def test_legacy_one_off_claim_uses_host_time_and_waits_until_nominal(ready, recurrence):
+    with solar_state.session() as store:
+        task_id = make(store, status="queued", scheduled_time='"09:00"', **recurrence)
+        assert store.task_claim_next("w", now=datetime(2026, 11, 9, 8, 59)) is None
+        assert store.task_claim_next("w", now=datetime(2026, 11, 9, 9, 16)) is None
+        assert store.task_claim_next("w", now=datetime(2026, 11, 9, 9, 15, 59))["id"] == task_id
+
+
 @pytest.mark.parametrize("time,day,instant,expected", [
     ("23:55", "1", utc(2026, 11, 9, 23, 10, 59), True),  # Tuesday 00:10, Monday's window
     ("23:55", "1", utc(2026, 11, 9, 23, 11), False),

@@ -1,6 +1,7 @@
 """The words of a confirmation: compact, human, derived from validated state, never binding."""
 import json
 import queue
+from datetime import datetime, timezone
 from pathlib import Path
 from io import StringIO
 
@@ -10,6 +11,7 @@ import approval_text
 import mcp_approve
 import mcp_server
 import operations
+import task_views
 from mcp_helpers import new_task, run, stored
 from reservation_tokens import token_of
 
@@ -193,6 +195,24 @@ def test_scheduled_approval_describes_the_start_window(solar_env):
         message = text(operation, args)
         assert "Eligible start windows:" in message
         assert "09:00:00+00:00" in message and "09:15:00+00:00" in message
+
+
+def test_scheduled_approval_shows_the_open_window_across_midnight(solar_env, monkeypatch):
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 10, 0, 5, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr(task_views.datetime, "datetime", FrozenDateTime)
+    made = new_task("Monday task")
+    scheduled = run("task.schedule", dict(
+        task_id=made["id"], expected_row_version=made["row_version"], scheduled_time="23:55",
+        scheduled_weekdays=[1], scheduled_timezone="UTC",
+    ))
+    args = dict(task_id=made["id"], expected_row_version=scheduled["row_version"])
+    for operation in ("task.approve", "task.authorize_run"):
+        message = text(operation, args)
+        assert "2026-11-09 23:55:00+00:00 → 2026-11-10 00:10:00+00:00" in message
 
 
 def test_invalid_schedule_is_reported_the_way_the_handler_refuses_it(solar_env):

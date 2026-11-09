@@ -133,8 +133,9 @@ Malformed JSON-RPC or tool arguments retain protocol errors; domain pre-confirma
 | `browser.read` | A0 | **The owner's registration is the authorization**: Solar does not verify that the script only reads (see "Where the guarantee ends"). Runs one browser read the owner registered in `<runtime>/mcp/browser-reads.json`: one origin, one page, a script file pinned by SHA-256, the fields it may return and the refusal codes it may report. The caller sends only the name (`read`), never a URL, script, selector or argument. Opens one tab in the Solar browser profile (its logged-in sessions), refuses navigation outside the origin while it runs, and returns `{"read": name, "data": {...}}` with only the declared fields: integers, booleans and strings from a closed list (`enum`), never free page text. Errors: `browser_read_not_registered`, `browser_read_invalid`, `browser_read_changed` (the script changed since it was registered: nothing runs), `browser_unavailable`, `browser_scope_denied`, `browser_read_refused` (the script reported a registered refusal such as an expired session, as `<read>: <code>`), `browser_read_failed` |
 | `action.run` | A3 | The skill and action are registered **and** the mandate registered for that skill is live. A skill registered without a mandate is refused; a caller-supplied mandate is only accepted if it equals the registered one |
 
-Each schedule occurrence reports inclusive `not_before` and `not_after` local
-minutes with UTC offsets, including a window already open. A one-off task can
+`next_occurrences` lists upcoming nominal times. Separately, `start_windows`
+reports inclusive `not_before` and `not_after` local minutes with UTC offsets,
+including a window already open. A one-off task can
 start at its scheduled time through 15 minutes later. A recurring task retains
 its symmetric window. Eligibility depends on the schedule; an actual start also
 requires an available worker and the task's normal execution checks.
