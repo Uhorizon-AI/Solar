@@ -378,3 +378,32 @@ def test_a_rerun_replaces_a_delivery_that_holds_headings(tmp_path):
     text = record(task, "<delivery>\n## Resumen\nnew text\n</delivery>")
     assert text.count("## Delivery") == 1
     assert "old text" not in text and "old ask" not in text and "new text" in text
+
+
+def test_a_new_delivery_keeps_the_sections_the_runtime_wrote_after_it(tmp_path):
+    body = ("# T\n\n## Delivery\n\n## Resumen\nold text\n\n"
+            "## Subtask results\n\n### a — completed\n\nCHILD TEXT\n")
+    task = _task(tmp_path, body=body)
+    text = record(task, "<delivery>\n## Resumen\nnew text\n</delivery>")
+    assert "CHILD TEXT" in text and "old text" not in text and "new text" in text
+    assert text.count("## Delivery") == 1
+
+
+def test_the_notice_stops_at_a_runtime_heading_and_keeps_inner_ones(tmp_path):
+    for name, heading in (("subtasks", "## Subtask results"), ("error", "## Execution Error"), ("result", "## Result")):
+        workspace, root, env = _notify_env(tmp_path / name)
+        task = _task_with(root, "completed", "delivery",
+                          f"# T\n\n## Delivery\n\n## Resumen\nAsunto\n\n## Decision\nAprobar\n\n{heading}\n\nFOREIGN TEXT\n")
+        assert _notify(task, env).returncode == 0
+        sent = _sent(workspace)
+        assert "## Resumen" in sent and "## Decision\nAprobar" in sent
+        assert "FOREIGN TEXT" not in sent
+
+
+def test_the_two_delivery_cuts_use_the_same_headings():
+    import re
+    import solar_state
+    script = (SCRIPTS / "notify_if_configured.sh").read_text(encoding="utf-8")
+    in_awk = re.search(r"found && /\^## \(([^)]*)\)", script).group(1).split("|")
+    expected = [h[3:] for h in solar_state.RUNTIME_SECTIONS if h != "## Delivery"]
+    assert sorted(in_awk) == sorted(expected)

@@ -33,9 +33,12 @@ case "$MODE" in
   *) echo "Unknown notification mode: $MODE" >&2; exit 2 ;;
 esac
 
+# The delivery may hold `##` headings of its own: it ends only at a heading the runtime writes after it.
+# Keep this list equal to solar_state.RUNTIME_SECTIONS without `## Delivery` (a test checks it).
 task_delivery() {
   task_body "$1" | awk '
     /^## Delivery[[:space:]]*$/ && !found { found = 1; next }
+    found && /^## (Subtask results|Execution Error|Result)[[:space:]]*$/ { exit }
     found { print }
   '
 }

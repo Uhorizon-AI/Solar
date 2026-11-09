@@ -927,6 +927,7 @@ _NOTIFY_WHEN = {
     "description": "When the configured chat is told, without confirming the text (a system notice, not a message "
                    "to third parties): completed, delivery (opt-in, quiet) and failed (adds the one-line reason). "
                    "`completed` and `delivery` are mutually exclusive: asking for both is refused. "
+                   "`delivery` is also refused on a question (`ask`) or a review, which keep no `## Delivery`. "
                    "`[completed]` alone is stored as `completed,-failed` and stays silent when the task fails; "
                    "a bare `completed` written by older tasks also reports failures; `[completed, failed]` "
                    "reports both. `delivery` is opt-in and quiet: a successful run is announced only when ITS OWN "
