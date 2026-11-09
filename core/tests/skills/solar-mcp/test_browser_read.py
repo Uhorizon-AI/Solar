@@ -9,6 +9,7 @@ import struct
 import subprocess
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -898,3 +899,59 @@ def test_a_command_in_the_env_never_runs_when_the_browser_is_started_or_stopped(
     subprocess.run(["bash", str(browser_read._SCRIPTS / "ensure_browser.sh"), "--stop"], cwd=root,
                    env={**os.environ, **settings}, capture_output=True, timeout=30)
     assert sentinel.exists()
+
+
+@pytest.mark.skipif(not CHROME, reason="Chrome not installed")
+def test_quiesce_keeps_a_paused_foreign_request_from_leaving_when_the_socket_drops(tmp_path):
+    """Real Chrome: a request paused by the interception is cancelled by `_quiesce`, not released.
+
+    Dropping the debugging socket with a request still paused lets Chrome send it (checked by hand
+    while writing this test), so `_quiesce` must have cancelled it before the socket goes.
+    """
+    hits = []
+
+    class Target(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *_):
+            pass
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), Target)
+    threading.Thread(target=target.serve_forever, daemon=True).start()
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    chrome = subprocess.Popen([CHROME, "--headless", "--no-first-run", f"--user-data-dir={tmp_path/'u'}",
+                               f"--remote-debugging-port={port}", "about:blank"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        endpoint = f"http://127.0.0.1:{port}"
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(f"{endpoint}/json/version", timeout=1).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        tab = json.load(urllib.request.urlopen(urllib.request.Request(f"{endpoint}/json/new?about:blank", method="PUT")))
+        sock = browser_read._Socket(tab["webSocketDebuggerUrl"], 10)
+        page = browser_read._Page(sock, "https://allowed.example.test")
+        page._notify("Fetch.enable", {"patterns": [{"resourceType": "Document"}]})
+        page._notify("Page.navigate", {"url": f"http://127.0.0.1:{target.server_address[1]}/secret"})
+        paused, end = False, time.monotonic() + 10
+        while not paused and time.monotonic() < end:
+            sock.until = end
+            paused = json.loads(sock.receive()).get("method") == "Fetch.requestPaused"
+        assert paused and hits == []                  # held, not decided
+        browser_read._quiesce(page, time.monotonic() + 3)
+        sock.sock.close()                             # the interception ends here
+        time.sleep(2)
+        assert hits == []
+    finally:
+        chrome.terminate()
+        chrome.wait(timeout=10)
+        target.shutdown()
