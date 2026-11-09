@@ -198,12 +198,8 @@ def test_scheduled_approval_describes_the_start_window(solar_env):
 
 
 def test_scheduled_approval_shows_the_open_window_across_midnight(solar_env, monkeypatch):
-    class FrozenDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 11, 10, 0, 5, tzinfo=timezone.utc).astimezone(tz)
-
-    monkeypatch.setattr(task_views.datetime, "datetime", FrozenDateTime)
+    frozen = datetime(2026, 11, 10, 0, 5, tzinfo=timezone.utc)
+    monkeypatch.setattr(task_views, "_now_utc", lambda: frozen)
     made = new_task("Monday task")
     scheduled = run("task.schedule", dict(
         task_id=made["id"], expected_row_version=made["row_version"], scheduled_time="23:55",

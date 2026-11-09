@@ -38,6 +38,10 @@ ViewError = OperationError
 # schedule planning
 # ---------------------------------------------------------------------------
 
+def _now_utc() -> datetime.datetime:
+    return datetime.datetime.now(_UTC)
+
+
 def _zone(name: str) -> ZoneInfo:
     try:
         return ZoneInfo(name)
@@ -72,7 +76,7 @@ def next_occurrences(time: str, weekdays, zone: str, after=None, count: int = 4)
     """
     info = _zone(zone)
     hour, minute = (int(part) for part in time.split(":"))
-    after = (after or datetime.datetime.now(_UTC)).astimezone(_UTC)
+    after = (after or _now_utc()).astimezone(_UTC)
     allowed = set(weekdays or range(1, 8))
     day = after.astimezone(info).date()
     found = []
@@ -101,7 +105,7 @@ def start_windows(time: str, weekdays, zone: str, after=None, count: int = 4, *,
 
     info = _zone(zone)
     hour, minute = (int(part) for part in time.split(":"))
-    after = (after or datetime.datetime.now(_UTC)).astimezone(_UTC).replace(second=0, microsecond=0)
+    after = (after or _now_utc()).astimezone(_UTC).replace(second=0, microsecond=0)
     allowed = set(weekdays or range(1, 8))
     day = after.astimezone(info).date() - datetime.timedelta(days=1)
     found = []
@@ -156,7 +160,7 @@ def plan_schedule(*, time, weekdays, zone, recurring, min_interval, after=None) 
             raise ViewError("schedule_invalid", "scheduled_weekdays needs scheduled_time")
         if time.split(":")[0] == "02":
             notes.append("02:00-02:59 may be skipped by a clock change; only valid start minutes are shown.")
-        after = after or datetime.datetime.now(_UTC)
+        after = after or _now_utc()
         plan["next_occurrences"] = next_occurrences(time, weekdays, zone, after)
         plan["start_windows"] = start_windows(time, weekdays, zone, after, recurring=recurring)
     if recurring and scheduled:
@@ -195,7 +199,7 @@ def _schedule(values: dict) -> dict:
                  recurring_last_run=values.get("recurring_last_run"))
     try:
         if block["time"] and block["time"] != "now" and block["timezone"]:
-            after = datetime.datetime.now(_UTC)
+            after = _now_utc()
             args = (block["time"], block["weekdays"], block["timezone"], after)
             block["next_occurrences"] = next_occurrences(*args)
             block["start_windows"] = start_windows(*args, recurring=block["recurring"])
