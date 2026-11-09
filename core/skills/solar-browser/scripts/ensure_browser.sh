@@ -46,7 +46,10 @@ fi
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
-if [[ -f ".env" ]]; then
+# A caller that already resolved the settings (Solar MCP browser.read validates the three
+# SOLAR_BROWSER_* keys itself) sets SOLAR_BROWSER_SKIP_DOTENV=1 so this script never executes the
+# workspace .env: sourcing runs every line of it, not only those keys.
+if [[ -f ".env" && "${SOLAR_BROWSER_SKIP_DOTENV:-}" != "1" ]]; then
   set -a
   # shellcheck source=/dev/null
   source ".env"

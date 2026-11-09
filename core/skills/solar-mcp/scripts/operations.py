@@ -805,6 +805,13 @@ def _require_chat(arguments: dict) -> None:
                              "Supply the exact chat_id before confirming a send")
 
 
+def _do_browser_read(arguments: dict) -> dict:
+    """A registered read of a registered origin: the caller only names it."""
+    import browser_read
+    entry = browser_read.prepare(arguments["read"], mcp_context.browser_reads(), workspace())
+    return browser_read.scoped_read(entry)
+
+
 def _do_action_run(arguments: dict) -> dict:
     entry = mcp_context.action_skills().get(arguments["skill"], {})
     command = list(entry.get("command") or [])
@@ -1070,6 +1077,20 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         effects="Starts Chrome with a disposable profile and reads a fixed synthetic page. "
                 "Accepts no URL, session, selector, script or browser arguments."),
     Operation(
+        "browser.read", A0,
+        "Run one browser read the owner registered: one origin, a pinned script, declared fields (A0 = the registration is the authorization).",
+        _obj(dict(read=SLUG), required=("read",)),
+        errors=("browser_read_not_registered", "browser_read_invalid", "browser_read_changed",
+                "browser_unavailable", "browser_scope_denied", "browser_read_refused",
+                "browser_read_failed"),
+        effects="Opens one tab on the registered origin in the Solar browser profile, runs the owner's "
+                "pinned script there and returns only its declared fields, under {read, data}. The caller "
+                "supplies a name and nothing else: no URL, script, selector or argument. A0 here means the "
+                "owner's registration is the authorization: Solar pins the script and filters the "
+                "navigation and the output, but does not verify that the script only reads. While the read "
+                "runs, navigation outside the origin is refused and a script that changed since it was "
+                "registered does not run; see SKILL.md, Where the guarantee ends."),
+    Operation(
         "action.run", A3, "Run one registered action of one registered action skill under a live mandate.",
         _obj(dict(skill=SLUG, action=SLUG, mandate=SLUG, automated={"type": "boolean"}),
              required=("skill", "action")),
@@ -1092,6 +1113,7 @@ HANDLERS: dict[str, Callable[[dict], dict]] = {
     "async_execution.apply": _do_async_apply,
     "telegram.send": _do_telegram_send,
     "browser.probe": _do_browser_probe,
+    "browser.read": _do_browser_read,
     "action.run": _do_action_run,
 }
 

@@ -130,6 +130,7 @@ Malformed JSON-RPC or tool arguments retain protocol errors; domain pre-confirma
 | `async_execution.apply` | A2 | Same, for one exact `revision` and `proposal_digest`. Applies that revision to the runtime's policy in one transaction if the file still holds exactly it and it validates; otherwise the applied policy stays. Every claim, manual or worker, reads the applied revision. A provider task never prepares or applies it |
 | `telegram.send` | A2 | Same, for one exact text and an explicit `chat_id`. Sending outside the machine is never implicit |
 | `browser.probe` | A0 | Starts Chrome headless with a disposable profile and reads a fixed synthetic page. Takes no arguments (no URL, session, selector or script). Returns `browser`, `headless` and the fixture marker `solar-browser-42`. Errors: `browser_unavailable`, `browser_probe_failed`. Tests browser execution only; it does not reach authenticated sites |
+| `browser.read` | A0 | **The owner's registration is the authorization**: Solar does not verify that the script only reads (see "Where the guarantee ends"). Runs one browser read the owner registered in `<runtime>/mcp/browser-reads.json`: one origin, one page, a script file pinned by SHA-256, the fields it may return and the refusal codes it may report. The caller sends only the name (`read`), never a URL, script, selector or argument. Opens one tab in the Solar browser profile (its logged-in sessions), refuses navigation outside the origin while it runs, and returns `{"read": name, "data": {...}}` with only the declared fields: integers, booleans and strings from a closed list (`enum`), never free page text. Errors: `browser_read_not_registered`, `browser_read_invalid`, `browser_read_changed` (the script changed since it was registered: nothing runs), `browser_unavailable`, `browser_scope_denied`, `browser_read_refused` (the script reported a registered refusal such as an expired session, as `<read>: <code>`), `browser_read_failed` |
 | `action.run` | A3 | The skill and action are registered **and** the mandate registered for that skill is live. A skill registered without a mandate is refused; a caller-supplied mandate is only accepted if it equals the registered one |
 
 Approvals are server-side records: they name one **operation** and one set of
@@ -153,6 +154,34 @@ Action skills are opt-in, listed in `<runtime>/mcp/action-skills.json`:
 
 **Instruction skills never become operations.** They stay native to the harness; only
 registered action verbs pass through here.
+
+Browser reads are opt-in the same way, listed in `<runtime>/mcp/browser-reads.json`
+(outside the workspace, so an agent that can edit a planet cannot widen a read):
+
+```json
+{"example-inbox": {"origin": "https://app.example.com",
+                   "url": "https://app.example.com/inbox",
+                   "script": "planets/<planet>/skills/<skill>/scripts/inbox_read.js",
+                   "sha256": "<sha256 of that file>",
+                   "fields": {"status": {"type": "string", "enum": ["active"]},
+                              "unread": {"type": "integer"}},
+                   "refusals": ["session_expired"]}}
+```
+
+The script is a function expression owned by the planet (the answer always comes back as
+`{"read": name, "data": {...fields}}`). String fields must declare an `enum`, so page text cannot leave, and the
+refusal codes a script may report must be listed in `refusals`; anything else fails. An `enum` applies to string and integer
+fields only, and each value must have the field's type and be one the answer can carry: strings of 1 to 80 printable characters, integers from 0 to 10^9. The script returns `{ready: false}`
+while the page loads, `{ready: true, refused: "<code>"}` when it must refuse (for
+example a login screen) and otherwise `{ready: true, ...fields}`. Solar never knows
+which site it is: no selector, URL or site name lives in `core/`. Changing the
+script invalidates its digest until the owner registers it again.
+
+The browser's debugging host, port and profile are resolved once: the workspace `.env`
+first, then the process environment, then the defaults. Only those three keys are read
+from `.env`, and a value that is not plain text is refused. The start and stop script
+receives the resolved values and does not `source` the `.env` on this path
+(`SOLAR_BROWSER_SKIP_DOTENV=1`), so nothing else in that file runs. On this path only those three keys are honoured: a browser binary, log path or start timeout set in `.env` applies to the rest of Solar but not to `browser.read`.
 
 ## Sending Telegram
 
@@ -186,7 +215,21 @@ Outside, and said plainly rather than disguised:
   mediated route, not the machine;
 - a browser session already authenticated is untouched — `zoho-mail`,
   `whatsapp`, `linkedin-messages` and `linkedin-analytics` remain declarative,
-  not coercive, until their send becomes a gated tool;
+  not coercive, until their send becomes a gated tool. The exception is a read the
+  owner registered for `browser.read`, and its A0 means exactly this: **the owner's
+  registration is the authorization**. Solar pins the script by digest, refuses other
+  origins in two places (the navigation and the wrapper), and lets out only declared
+  fields (strings from a closed list), but it does not verify that the script only
+  reads. The script is JavaScript running in the logged-in session: it can click, type
+  or call `fetch` or `POST` to any origin, and the interception sees document
+  requests only, not other requests or websockets. Review a script before registering
+  its digest; a changed script stops running until it is registered again. Solar does
+  not stop a process running as the user from using the browser's local debugging
+  port, and it relies on Chrome to honour the paused-request protocol. If the read
+  tab cannot be confirmed closed and the debugging connection is then dropped, Chrome
+  may release a request that was still paused; the read reports `browser_unavailable`
+  and first stops the load and blanks the tab, which narrows that window but cannot
+  close it (the debugging protocol has no block that survives a lost connection);
 - the `.env` of a planet is the planet's. Solar does not mediate it.
 
 ## Runtime dependencies

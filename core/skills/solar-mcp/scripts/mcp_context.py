@@ -41,6 +41,21 @@ def workspace() -> Path:
     return found
 
 
+def browser_reads() -> dict:
+    """The browser reads the owner registered. Empty until the owner fills it.
+
+    Lives next to `action-skills.json`, in the runtime, outside the workspace: an agent that can
+    edit a planet cannot widen what a read may touch. Each entry names one origin, one page, a
+    script file pinned by SHA-256 and the fields it may return (see `browser_read.prepare`).
+    """
+    path = mcp_gate.gate_root() / "browser-reads.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def action_skills() -> dict:
     """Which action skills are reachable as operations. Empty until the owner fills it.
 
