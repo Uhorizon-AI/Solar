@@ -7,7 +7,7 @@ last_review: none
 # Design: identity and authority by channel, for Assistant and Orchestrator (design only, no code)
 
 **Date:** 2026-11-08
-**Status:** draft; the three open decisions were taken by the owner on 2026-11-08 (section 16); pass-0 feedback from Claude, Codex and Grok applied on 2026-11-09; pass 0 pending again on this text (launched by the owner)
+**Status:** draft; the three open decisions were taken by the owner on 2026-11-08 (section 16); pass-0 feedback from Claude, Codex and Grok applied on 2026-11-09 (two rounds); pass 0 pending again on this text (launched by the owner)
 **Base:** `abafe6e` (main)
 **Issues:** #147 (builder authority by verified channel) and the design requirements of #130 (identity and authorization by channel). Platform dependency: #129 (Linux VPS). Related: PR #148 (waiting notice with short id and expiry, closes #146), #81 (closed as not planned).
 **Strategy:** this is the design phase of priority 2 ("Orchestrator en VPS"): "first a design with no code for identity, permissions and builder authority; then the Linux platform".
@@ -83,7 +83,9 @@ Proposed content (no secrets):
 
 The profile `builder` is the only one Assistant needs. `admin` is the right to change this registry, and it is exercised only from the terminal.
 
-Not in the file: each person's `status` (active or revoked) and the channel-authorization switch mode (`off`, `observe`, `active`; off by default). They live in solar-state and are written by the same terminal command through a state function, in one transaction, because the claim and the authorization read them inside their own transactions (7.1b and 9). The file holds identity and permissions; the database holds what must be decided atomically.
+Not in the file: each person's `status` (active or revoked) and the channel-authorization switch mode (`off`, `observe`, `active`; off by default). They live in solar-state and are written by the same terminal command through a state function, because the claim and the authorization read them inside their own transactions (7.1b and 9). The file holds identity and permissions; the database holds what must be decided atomically.
+
+There is no transaction across the file and the database, so the order is fixed and the database is the source of truth: a person counts only if the file has their entry **and** the database marks them active; no database row means inactive. Enrollment writes the file entry first and the database row last, so a failure in between leaves an inactive person. Revocation and mode changes touch only the database, in one transaction. A leftover file entry without a database row is reported by `solar people status` and does nothing (negative test 23).
 
 ### 3.2 Who writes it
 
@@ -97,19 +99,19 @@ What holds:
 - No MCP operation writes it.
 - The gateway rereads it, so a stale copy cannot be poisoned.
 
-What does not hold, and must be said (honesty rule): on the user's computer the agent and the user share one system account and reads are open, so an agent started outside the default sandbox flags, or with write paths added by user settings, could write it. This is the ceiling `solar-scope-and-enforcement.md` already states. The design does not rely on the file being secret, only on it not being writable through mediated routes, and it keeps the real secrets out of what a read can use (section 7.2). On a VPS with a separate service account the file is truly unwritable by the agent; that is the requirement, and it is verified there, not assumed.
+What does not hold, and must be said (honesty rule): on the user's computer the agent and the user share one system account and reads are open, so an agent started outside the default sandbox flags, or with write paths added by user settings, could write it. This is the ceiling `solar-scope-and-enforcement.md` already states. The design does not rely on the file being secret, only on it not being writable through mediated routes, and it keeps the real secrets out of what a read can use (section 7.2). The database tables of person status and switch mode are in the app data folder too and have the same limits: the client sandboxes deny writes there on the default launch, no MCP operation writes them, and on the user's computer an agent outside the default flags could write them, as it could the file. On a VPS with a separate service account the file is truly unwritable by the agent; that is the requirement, and it is verified there, not assumed.
 
 ### 3.4 Enrollment
 
 Out of band, same steps for the builder and for any person:
 
-1. The administrator runs `solar people enroll <id>` in a terminal. Solar prints a one-time code (random, 10 minutes, stored only as a hash).
+1. The administrator runs `solar people enroll <id>` in a terminal. Solar prints a one-time code (8 characters of Crockford base32, 10 minutes, stored only as a hash; five failed attempts void it, as in 7.2).
 2. The person sends that code to the bot from their private chat.
 3. The gateway recognizes the code and hands the `user_id` and `chat_id` claimed in the message to the waiting command. Nothing is written yet.
-4. Solar sends a second one-time code straight to that `chat_id` through the Bot API, not through n8n, and the terminal asks the administrator to type it. If an intermediary kept the right code and `user_id` but replaced the `chat_id`, the second code goes to the wrong chat, nobody can type it and enrollment fails.
-5. Only when it matches does the terminal show the `user_id` and `chat_id` and ask for `y` to write the registry. In a private chat the chat id equals the user id, so proving control of the chat proves both without the person looking up a number; a group chat (negative chat id) is refused.
+4. Before anything is sent, enrollment is refused unless `user_id` and `chat_id` are the same positive number (a private chat); a group chat (negative chat id) or any mismatch fails here.
+5. Solar sends a second one-time code (same format) straight to that `chat_id` through the Bot API, not through n8n, and the terminal asks the administrator to type it. Only when it matches does the terminal show the `user_id` and `chat_id` and ask for `y` to write the registry.
 
-Steps 4 and 5 are the independent check an intermediary on the inbound path cannot reach. The first code never grants anything by itself.
+The checks close each variant of an intermediary on the inbound path. If it keeps the right code and `user_id` but replaces the `chat_id`, the numbers differ and enrollment is refused (step 4). If it replaces only the `user_id`, same. If it replaces both with its own, the second code goes to its chat and nobody can type it (step 5). The first code never grants anything by itself.
 
 ## 4. Channel adapter contract
 
@@ -134,20 +136,20 @@ deliver(person_id, text) -> sent | refused
 
 Binding a channel to a person always goes through the one-time code of 3.4. Self-asserted identity never binds or elevates.
 
-**Groups.** Every message from a group chat is rejected. People are told apart only in their private chats. This is narrower than the acceptance wording of #130 ("including in a group") and is recorded as a deliberate deviation: `from.id` inside a shared chat would need a rule that does not raise a person's rights because of the chat they share.
+**Groups.** In phase 1 only a challenge reply that arrives from a group chat is refused (test 8); every other message follows the router as today (7.1, section 5). On the authenticated route (piece K) every message from a group chat is rejected, and people are told apart only in their private chats (test 19). This is narrower than the acceptance wording of #130 ("including in a group") and is recorded as decision 4 of section 16: `from.id` inside a shared chat would need a rule that does not raise a person's rights because of the chat they share.
 
 ### 4.3 Today's gateway, as read
 
-`run_http_webhook_bridge.py` takes `user_id` from the body (`payload.get("user_id", "n8n-user")` on the n8n path) and filters Telegram by chat only (`telegram_chat_allowed`, `TELEGRAM_ALLOWED_CHAT_IDS`). The console documents that it counts distinct `user_id` values and does not present them as people. That is the gap this section closes; the list of chats stays as a coarse filter and substitutes none of the rules above.
+`run_http_webhook_bridge.py` takes `user_id` from the body (`payload.get("user_id", "n8n-user")` on the n8n path) and filters Telegram by chat only, on the n8n path (`telegram_chat_allowed`, `TELEGRAM_ALLOWED_CHAT_IDS`). The console documents that it counts distinct `user_id` values and does not present them as people. That is the gap this section closes; the list of chats stays as a coarse filter and substitutes none of the rules above.
 
 ### 4.3b Two inbound routes, not one (found in review)
 
 The bridge has two Telegram-shaped routes, and the document must say which one each piece protects:
 
 - `POST /webhook/n8n`: protected by the shared secret (`check_n8n_secret`, constant-time compare); the sender is whatever n8n writes in the body.
-- `POST /webhook/telegram` (exists whenever `TELEGRAM_BOT_TOKEN` is set): `check_n8n_secret` runs only for the n8n channel (`do_POST`), the Telegram branch checks no secret (`grep secret_token` finds nothing), and the chat filter `telegram_chat_allowed` is applied on the n8n path. On this route a forged POST that carries an allowed `chat_id` reaches the router today. Whether the route is reachable depends on whether Solar claimed the webhook (`SOLAR_GATEWAY_CLAIM_TELEGRAM`), which the gateway reference describes as absent or false on this host (not checked in `.env` here); that would make the route inactive in practice, not safe by construction.
+- `POST /webhook/telegram` (exists whenever `TELEGRAM_BOT_TOKEN` is set): `check_n8n_secret` runs only for the n8n channel (`do_POST`), the Telegram branch checks no secret (`grep secret_token` finds nothing) and does not call `telegram_chat_allowed`. A forged POST with any `chat_id` reaches the router today, as long as the route can be reached (for example through the tunnel). `SOLAR_GATEWAY_CLAIM_TELEGRAM` only decides whether Solar registers the webhook with Telegram; it does not decide whether this HTTP route answers.
 
-Consequences: until piece K, `/webhook/telegram` rejects the whole body before parsing it, whether `SOLAR_GATEWAY_CLAIM_TELEGRAM` is true or false (the flag only decides whether Solar registers the webhook with Telegram; it adds no check on the request). The cost is that the documented rollback path with the claim on is off until K. Piece E in phase 1 therefore works only on `/webhook/n8n`; on the direct route its test is that a forged update never reaches the router. Piece K gives `/webhook/telegram` a verified `secret_token` and makes it the route of the bot that serves people.
+Consequences: until piece K, `/webhook/telegram` rejects the whole body before parsing it, whether `SOLAR_GATEWAY_CLAIM_TELEGRAM` is true or false (the flag adds no check on the request). The cost is that the documented rollback path with the claim on is off until K. Piece E in phase 1 therefore works only on `/webhook/n8n`; on the direct route its test is that a forged update never reaches the router. Piece K gives `/webhook/telegram` a verified `secret_token` and makes it the route of the bot that serves people.
 
 ### 4.3c Gateway tasks already skip the wait (found in review)
 
@@ -200,19 +202,19 @@ Orchestrator only. Before the gateway creates or enqueues a task (the `task_crea
 ### 7.1 Flow
 
 1. A queued task needs `task.authorize_run` and starts waiting. The waiting notice goes out (section 11 describes the notice that PR #148 introduces).
-2. If the switch mode is `active` (or `observe`, where nothing is ever authorized) and an eligible approver has an enabled channel, the notice also carries a challenge: a random code, generated at that moment, stored as `sha256(code)` with the task id, the approval digest, the row version, the title, the approver's person id, an expiry and `used_at = null`.
+2. If the switch mode is `observe` or `active` (both emit the code; only `active` ever authorizes) and an eligible approver has an enabled channel, the notice also carries a challenge: a random code, generated at that moment, stored as `sha256(code)` with the task id, the approval digest, the row version, the title, the approver's person id, an expiry, the switch generation at issue (7.1b) and `used_at = null`.
 3. The approver replies in the private chat with the code and the short id (for example `ok 7Q2K-91XM a3f9c2e1`; the short id is an identifier, not a secret).
-4. On the n8n route (phase 1) the gateway first checks whether the message is a reply to an open challenge. If it is, a dedicated branch handles it alone: it matches the claimed `user_id` and `chat_id` against the channel bound in the registry, calls a state function `task_authorize_run_by_channel`, replies, and the text never reaches the router or a provider. Any other message continues to the router exactly as today. The function is not an MCP operation and is not in the registry. On an authenticated route (piece K) the sender is resolved as `verified` (4.1) before the same call.
-5. That function runs in one transaction. It must implement its own checks (7.4); it inherits none from the MCP route. They are: queued, valid content approval, current digest and row version, `approved_consent` equal to `client`, and authorization actually required (not already satisfied); plus: challenge unused and unexpired; digest, row version and title equal to those at issue; the replying person equals the challenge's approver and is eligible (6.3). It re-reads the switch mode in its own transaction and writes `run_authorized_digest` and `run_authorized_by` only in `active`, marks the challenge used and records the audit event.
+4. On the n8n route (phase 1) the gateway first checks whether the message has the format of a challenge reply (`ok`, an 8-character code, a short id), before looking for any open challenge. Every message with that format is handled by a dedicated branch alone and never reaches the router or a provider, including when the challenge is expired, consumed, voided or unknown, and when the switch is `off` (the reply is then ignored, not forwarded; negative test 22). The branch matches the claimed `user_id` and `chat_id` against the channel bound in the registry and calls a state function `task_authorize_run_by_channel`, then replies. Any message that does not have that format continues to the router exactly as today. The function is not an MCP operation and is not in the registry. On an authenticated route (piece K) the sender is resolved as `verified` (4.1) before the same call.
+5. That function runs in one transaction. It must implement its own checks (7.4); it inherits none from the MCP route. They are: queued, valid content approval, current digest and row version, `approved_consent` equal to `client`, and authorization actually required (not already satisfied); plus: challenge unused and unexpired; digest, row version and title equal to those at issue; the replying person equals the challenge's approver and is eligible (6.3). It re-reads the switch mode and generation in its own transaction and writes `run_authorized_digest` and `run_authorized_by` only in `active`, marks the challenge used and records the audit event.
 6. Success and every refusal produce a short reply to the same private chat, with no instructions and no content.
 
 ### 7.1b Switch modes
 
-- `off` (default): no challenge is issued and a reply is ignored.
-- `observe`: challenges are issued and verified and the outcome is recorded as would-have-authorized, but `run_authorized_digest` is never written (piece I).
+- `off` (default): no challenge is issued and a reply is ignored (not forwarded, 7.1 step 4).
+- `observe`: challenges are issued and verified, `run_authorized_digest` is never written, and the outcome is recorded with its own audit code as would-have-authorized (piece I).
 - `active`: the function writes the authorization (piece J).
 
-The mode is read at consumption, not only at issue: a code issued before the switch went to `off`, or during `observe`, never writes `run_authorized_digest`. The mode is stored in solar-state (3.1).
+The mode is read at consumption, not only at issue, and every change of mode increments a generation counter stored with the mode. A challenge stores the generation at issue and is valid only if the current generation is the same and the current mode is `active`. A code issued in `observe` therefore cannot be used after the switch goes to `active`, and one issued before `active -> off -> active` does not survive it. The mode and the generation are stored in solar-state (3.1).
 
 ### 7.2 Why the code is random
 
@@ -232,10 +234,10 @@ Reviewed on `abafe6e`: the properties the MCP route has today are not in the sta
 
 Therefore the channel function must:
 
-1. Refuse, each with its own code, unless the task is `queued` (`task_state_refused`), its content approval is valid, `approved_consent` is `client` (new code, working name `consent_not_client`) and `needs_run_authorization` is true; "already satisfied" is a refusal (`task_authorization_not_required`), never a second write. Refuse also when the switch mode is not `active`.
+1. Refuse, each with its own code, unless the task is `queued` (`task_state_refused`), its content approval is valid, `approved_consent` is `client` (new code, working name `consent_not_client`) and `needs_run_authorization` is true; "already satisfied" is a refusal (`task_authorization_not_required`), never a second write. Refuse also when the switch mode is not `active` or the challenge's generation differs from the current one. In `observe` the function writes nothing to the task and records would-have-authorized with its own audit code; in `off` the reply never reaches the function.
 2. Take no `mandate`, `authority` or approval argument at all. The A3 refusal then holds by construction: the route has no input through which a mandate could be named, and it never creates A3 authority. A run under a mandate is checked where it is today, at execution.
 3. Replace the MCP decision record with its own audit rows (issue, use, refusal, expiry; 12.1 "Recorded" and section 13) so that every outcome is traceable, and replace the `client_consent` basis with the registered-person checks of 6.3 and 4.2. The authority level is A2 formal in front of a human, consistent with the authority model. The function sends nothing: the notice and the replies go from the gateway to the chat already bound in the registry, and the External Communication Gate keeps covering `telegram.send` and every other recipient.
-4. Authorize only an eligible task. The datum is the state of the approved task itself: it declares an `access_policy` whose every scope is inside the workspace (the same physical-path rule the state already applies to read-only questions) and it declares no `executor` or `local_command`. Undeclared or indeterminate is refused and the person authorizes it in the client instead. This bounds what the channel will authorize; it does not verify what the task does, because the zone is declared, not verified (the limit of `task.create`'s zone report), and a task that sends to third parties through a browser session is outside what Solar can see. The channel does not claim to stop that.
+4. Authorize only an eligible task. The datum is the state of the approved task itself: it declares an `access_policy` whose every scope is inside the workspace, using the same physical-containment test the state applies to read-only questions (`path_zones.physically_inside_workspace`, called from `_ask_inside_workspace`, `solar_state.py:2090-2106`; to be reverified before piece D, since that function also reads fields specific to question tasks) and it declares no `executor` or `local_command`. Undeclared or indeterminate is refused and the person authorizes it in the client instead. This bounds what the channel will authorize; it does not verify what the task does, because the zone is declared, not verified (the limit of `task.create`'s zone report), and a task that sends to third parties through a browser session is outside what Solar can see. The channel does not claim to stop that.
 5. Be covered by tests that call the state function directly with each refused case, not only through the gateway.
 
 ## 8. n8n: decision by modality
@@ -248,7 +250,7 @@ The gateway trusts n8n: a shared secret proves the call came from n8n, and the s
 
 | | Own bot, own webhook | Second factor (code bound to the task) |
 |---|---|---|
-| Stops n8n forging an approval | Yes: Telegram signs the call with a `secret_token` Solar holds; n8n is out of the path | Yes: n8n forges the sender but cannot know the code, which Solar sent straight to the chat |
+| Stops n8n forging an approval | Yes: Telegram sends a `secret_token` header that Solar holds and checks; n8n is out of the path | Yes: n8n forges the sender but cannot know the code, which Solar sent straight to the chat |
 | Stops n8n forging a requester or reading content as someone else (classification, section 5) | Yes | **No**: classification still trusts the claimed sender |
 | Stops a stolen Telegram account | No | No: the code arrives in the same chat |
 | New parts | Second bot token, `setWebhook` with `secret_token`, a public route, coexistence with the n8n bot (one bot has one webhook) | A challenge table and a reply format |
@@ -284,7 +286,7 @@ Ordering. The person's status is written to solar-state in one transaction by th
 Granting or revoking `admin` or owner rights, and adding a channel to a person, require confirmation through a second bound channel of the acting administrator:
 
 - Orchestrator: the terminal command issues a one-time code that must be returned on a second enabled channel of the same administrator before the change is written.
-- Assistant: one person, one channel in v1, so the second bound channel is the terminal itself; adding a channel needs the one-time code from the first channel as in 3.4. A second channel makes the stricter rule available.
+- Assistant: one person, one channel in v1, so the second bound channel is the terminal itself; adding a channel needs the one-time code from the first channel as in 3.4. A second channel makes the stricter rule available. Every one-time code in this section has the format and failure rule of 7.2 (8 characters of Crockford base32; five failures void it).
 
 ## 11. Relation to PR #148 (priority 1) and the notice
 
@@ -296,7 +298,7 @@ Why it matters here:
 2. **Land it first.** Changing the same script twice in parallel invites conflict. #148 is independent of everything in this document and stays valid with the switch off.
 3. **Its open risk is ours.** The "Risk" section of the PR description says it is not verified that `solar_search` or `task.authorize_run` accept a prefix; the code on the branch does not state it. On the base `abafe6e` the short-id code does not exist yet, so every statement about it here must be reverified against the PR before piece F. The channel route must resolve the short id itself, refuse an ambiguous one and never guess.
 4. **One gap it leaves for Orchestrator.** The notice goes to the single configured chat (`TELEGRAM_CHAT_ID`). With several people it must go to the bound channels of the eligible approvers of that task. That is a change to the notice routing in section 14, piece F2.
-5. **Text, when the challenge is on.** The line "Ask your assistant to review and authorize" stays for the client route; the code line is added only when the switch is on and an eligible approver has an enabled channel.
+5. **Text, when the challenge is on.** The line "Ask your assistant to review and authorize" stays for the client route; the code line is added only when the switch mode is `observe` or `active` and an eligible approver has an enabled channel.
 
 ## 12. Proposed text for the documents (draft; the files are not edited here)
 
@@ -306,11 +308,11 @@ Why it matters here:
 >
 > Status: a design; no code executes any control below. Every statement that follows describes what must hold when it is built, and must not be quoted as a guarantee before then.
 >
-> A registered person's reply on a verified channel may stand in for the native confirmation of `task.authorize_run`, and for nothing else. Everything below must hold; any failure refuses and leaves the task waiting.
+> A registered person's reply with a one-time code, on a verified channel or, in Assistant, on a channel whose sender is only claimed (the code, not the claimed identity, then authorizes), may stand in for the native confirmation of `task.authorize_run`, and for nothing else. Everything below must hold; any failure refuses and leaves the task waiting.
 >
 > - **Registered people, registered out of band.** People, their profiles and their channels are recorded in a registry that only an administrator writes, from a terminal. No MCP operation, agent or channel message writes it, adds a channel or raises a right. Self-asserted identity never binds or elevates.
 > - **Verified sender.** Per channel, the platform-authenticated identifier (numeric user id on Telegram, authenticated identifier within the tenant on Chat or Teams, DKIM/DMARC-aligned From on email), in a private conversation. Names and shared chats never qualify. Where Solar authenticates the route itself, content from an unverified sender never reaches a provider, and a verified person with no permissions is treated as an unknown sender. Through an intermediary the sender is only claimed, and the code, not the claimed identity, authorizes.
-> - **Eligible approver.** The person has `may_approve` for the task's permission scope. Approval eligibility is separate from access level.
+> - **Eligible approver.** The person has `may_approve` for the task's permission scope; a task with no permission scope is authorized only by a person with the wildcard scope `*`. Approval eligibility is separate from access level.
 > - **A second factor the intermediary cannot see.** The reply carries a random one-time code (8 characters; five failures void it) that Solar sent straight to the approver's chat through the Bot API and stores only as a hash. Where the reply returns through an intermediary, that intermediary sees the code when it is used; it can apply that approval earlier, not another.
 > - **Exact content.** The code is bound to the approved digest, row version and the title shown. An edit, a rename or a new approval voids it.
 > - **Short and single use.** It expires in 30 minutes by default, configurable, never beyond the approval wait, and is consumed on use.
@@ -327,7 +329,7 @@ Also, in "Client consent and risk at execution (MCP)": add "`task.authorize_run`
 
 Assistant cell, replacing "In the harness: its own permission prompt or the MCP confirmation":
 
-> In the harness: its own permission prompt or the MCP confirmation. Optionally, for `task.authorize_run` only, the builder's reply on a verified channel with a one-time code, once enabled from a terminal (off by default; not built yet). Never `telegram.send`, third parties or capacity changes.
+> In the harness: its own permission prompt or the MCP confirmation. Optionally, for `task.authorize_run` only, the builder's reply with a one-time code on their registered channel (the sender is only claimed through n8n; the code authorizes), once enabled from a terminal (off by default; not built yet). Never `telegram.send`, third parties or capacity changes.
 
 Orchestrator cell, replacing "To happen in the channel where the request arrived; not built yet":
 
@@ -340,26 +342,28 @@ In "Orchestrator requirements (not yet enforced)", add: "Revocation is checked a
 | # | Threat | What the design does | Negative test |
 |---|---|---|---|
 | 1 | The agent's own service account is registered as an approver (self-approval) | Registry written only from a terminal on the operator account; the agent's account is refused as a person id and cannot hold a channel | Enroll with the service account's identity: refused. Challenge answered from a channel not bound to an eligible person: refused |
-| 2 | The registry is a file the agent can edit (self-elevation) | Outside the workspace, not writable through mediated routes; on the VPS, owned by the operator account | From a default-launch client, writing the registry fails; no registered operation writes it; the gateway ignores a registry with wrong owner or mode |
+| 2 | The registry, or the database tables of person status and switch mode, are writable by the agent (self-elevation) | Outside the workspace, not writable through mediated routes; on the VPS, owned by the operator account; same limit stated for the database (3.3) | From a default-launch client, writing the registry or those tables fails; no registered operation writes them; the gateway ignores a registry with wrong owner or mode |
 | 3 | n8n (or anyone behind the shared secret) forges a sender to authorize | Random code sent directly by Solar, stored hashed | Correct secret, registered `user_id`, no code: refused; wrong code: refused and counted; five failures void the challenge. A valid code authorizes, and that reply never reaches the router; an ordinary message through the same route continues as today |
 | 4 | n8n forges a sender to be classified as a known person (Orchestrator) | Own bot and webhook with a verified `secret_token`; n8n out of that path | Forged update without the secret header or with a wrong one: rejected before content. A correct header from another origin is not claimed to be stopped (network level) |
 | 5 | The agent derives or reads a valid code | Random code, hash only | Reading the state database and the secrets store does not yield a code that passes |
 | 6 | Edit or rename between notice and reply | Challenge bound to digest, row version and title | Edit then reply: refused, voided. Rename then reply: refused, new notice |
 | 7 | Identity taken from an unverified email From | Verified only with DKIM/DMARC alignment | Spoofed From without alignment: unknown sender, content not fetched |
-| 8 | Wrong person, wrong chat, group, forwarded message | `from.id` and private chat both checked; every group message rejected | Valid code from another `user_id`, or from a group: refused |
+| 8 | Wrong person, wrong chat, group, forwarded message | `from.id` and private chat both checked; a challenge reply from a group is refused (phase 1) and every group message is rejected on the authenticated route | Valid code from another `user_id`, or a challenge reply that arrives from a group: refused |
 | 9 | An unknown or unpermissioned in-organization sender reaches a provider (Orchestrator, authenticated route only) | Classify before content | Message from a known sender with no permissions: no provider call, fixed reply or none |
 | 10 | Revocation leaves pending work alive | Checks at the claim for requester, approver and mandates; status in the database; pending challenges voided | Revoke a requester with a queued approved task: it does not start. Revoke an approver: authorization withdrawn. Revoke a mandate owner: mandate suspended, recurring send blocked. Reply with a previously valid code after revoking: refused |
 | 11 | Replay or duplicate delivery of the reply | One use; update id de-duplicated | Same reply twice: first authorizes, second refused as consumed |
 | 12 | Late reply | Own short expiry inside the wait | Reply after expiry: refused, audited, no write |
-| 13 | Channel authorizes something outside its remit (send, third party, capacity, A3) | The function takes no mandate, authority or approval input and builds its own checks (7.4): client-consented, authorization required, queued, valid | State function called directly with a `mandate` or `authority` argument: not accepted. Not queued, not `approved_consent: client`, already authorized, switch not `active`: refused, each with its own code. A queued, client-consented task with undeclared or outside-workspace access, or with a local command: refused and left without `run_authorized_digest` |
+| 13 | Channel authorizes something outside its remit (send, third party, capacity, A3) | The function takes no mandate, authority or approval input and builds its own checks (7.4): client-consented, authorization required, queued, valid | State function called directly with a `mandate` or `authority` argument: not accepted. Not queued, not `approved_consent: client`, already authorized, switch not `active`: refused, each with its own code. A queued, client-consented task with undeclared or outside-workspace access, or with a local command: refused and left without `run_authorized_digest`. No test claims that an authorized task cannot ask for a third-party send through a browser session: that is outside what Solar can see (section 15) |
 | 14 | A blocked attempt stores the message body | Audit stores sender, channel, subject or identifier, and decision | A refused message leaves an audit row with no body text |
 | 15 | Cross-project confidentiality inside one planet | Not claimed: MCP filtering is not isolation | Documented; pilot uses shareable information only |
 | 16 | Stolen Telegram account or SIM | Not stopped: the code arrives in the same chat. Accepted residual risk | Documented; revoke from the terminal works without that channel |
-| 17 | Enrollment raced by n8n | A second code goes straight to the claimed chat; the administrator types it | Intermediary keeps the right code and `user_id` but replaces `chat_id`: the second code goes to the wrong chat, nothing is written. A forged `user_id`: same. A group chat: refused |
-| 18 | Switch left on by default, or turned off with codes pending | Off by default, including after upgrade; mode read again at consumption | Fresh install and upgrade: replies authorize nothing. A code issued before switching to `off`, or during `observe`: never writes `run_authorized_digest` |
+| 17 | Enrollment raced by n8n | A second code goes straight to the claimed chat; the administrator types it | Intermediary keeps the right code and `user_id` but replaces `chat_id`: refused at the number check, nothing is written. Replaces only `user_id` and keeps the legitimate chat: refused even if the administrator receives and types the second code. Replaces both with its own: the second code goes to its chat and cannot be typed. A group chat: refused |
+| 18 | Switch left on by default, or turned off with codes pending | Off by default, including after upgrade; mode read again at consumption | Fresh install and upgrade: replies authorize nothing. A live code issued in `observe` and used after the switch goes to `active`: refused. A live code issued before `active -> off -> active`: refused. Neither writes `run_authorized_digest` |
 | 19 | Two authorized people and an unknown sender (Orchestrator, authenticated route) | Adapter resolves each separately; group messages rejected | Acceptance case from #130 in their private chats, narrower than "including in a group" (4.2); a group message from either person: rejected |
 | 20 | A person with a permission to approve, or to request in scope A, enqueues a task of scope B | `may_request` resolved from trusted context at task creation (6.4) | Approve-only person and A-only requester: task of B refused and recorded; absent or ambiguous scope refused |
 | 21 | Revocation races the claim | Status in the database, serialized by the transaction (9) | Revoke after the claim read the state and before it commits: either the claim wins and the stop request applies, or the claim refuses |
+| 22 | A challenge-reply-shaped message reaches the router or a provider | Format interception before any challenge lookup (7.1 step 4) | Reply to an expired, consumed, voided or unknown challenge, and with the switch `off`: handled by the branch, no router call, no provider call. An ordinary message continues as today |
+| 23 | Enrollment or revocation fails half-way across the file and the database | Database is the source of truth; file entry written first, database row last (3.1) | Fail after the file write: the person is inactive and `status` reports the leftover. Revocation fails: the person stays active only if the database write did not commit, never half-revoked |
 
 Cross-review must also check what this document cannot prove: that no existing path already lets a gateway message reach `run_authorized_digest`. From the read, none does.
 
@@ -370,12 +374,12 @@ Sizes are relative estimates (S, M, L), not measurements.
 | Piece | Size | Closes when | Depends on |
 |---|---|---|---|
 | A. This design reviewed; the two text drafts applied to `authority-model.md` and the scope document (docs only) | S | The owner and the cross-review AIs reviewed it; texts merged | none |
-| B. People registry, reader and terminal command (enroll, add-channel, grant, revoke, status), switch mode and person status in the database | M | Tests 1, 2, 17, 18 pass; mode and owner checked; no operation can write it; enrolling a second person is refused until C2; a real enrollment with the owner's yes | A |
+| B. People registry, reader and terminal command (enroll, add-channel, grant, revoke, status), switch mode and person status in the database | M | Tests 1, 2, 17, 18 and 23 pass; mode and owner checked; no operation can write it; enrolling a second person is refused until C2; a real enrollment with the owner's yes | A |
 | C. Requester on tasks, executions and audit (`requester_person`, `requester_basis`), console column filled | M | The console shows the requester with its basis; old records stay `unknown`; no value comes from tool arguments | B |
 | C2. Permission scope field on tasks (6.1), declared by the planet that creates the task, distinct from the existing free-text `scope` column | S | A task records its permission scope, the claim and the authorization read it, an absent scope means only a person with the wildcard permission may approve, and test 20 passes | B, C |
-| D. Challenge store and `task_authorize_run_by_channel` (no transport), `run_authorized_by`, audit events | M | Tests 3, 5, 6, 11, 12, 13, 14 and 18 pass by calling the state function directly, with the rejections of 7.4 named: `task_authorization_not_required`, task not `queued`, `approved_consent` not `client`, switch not `active`, ineligible task | A, B |
-| E. Gateway: adapter contract for Telegram, sender resolution, classify before content, fixed replies, reply parsing | M | Tests 3, 8, 11 and 14 pass through the real HTTP bridge on `/webhook/n8n` with faked Telegram payloads (challenge-reply branch included); on `/webhook/telegram` a forged update never reaches the router; one real round trip with the owner's yes | B, D, and PR #148 merged |
-| F. Notice with the code line, for one approver (phase 1) | S | The notice goes to the builder's bound channel and carries the code only with the switch on; the line shows the short id as PR #148 defines it, reverified against that PR | E, PR #148 |
+| D. Challenge store and `task_authorize_run_by_channel` (no transport), `run_authorized_by`, audit events | M | Tests 3, 5, 6, 11, 12, 13, 14 and 18 pass by calling the state function directly, with the rejections of 7.4 named: `task_authorization_not_required`, task not `queued`, `approved_consent` not `client`, switch not `active`, generation mismatch, ineligible task (tests on `access_policy` inside and outside the workspace, `executor` and `local_command`); the path rule reverified | A, B |
+| E. Gateway: adapter contract for Telegram, sender resolution, fixed replies, challenge-reply branch | M | Tests 3, 8, 11, 14 and 22 pass through the real HTTP bridge on `/webhook/n8n` with faked Telegram payloads (challenge-reply branch included); on `/webhook/telegram` a forged update never reaches the router; one real round trip with the owner's yes | B, D, and PR #148 merged |
+| F. Notice with the code line, for one approver (phase 1) | S | The notice goes to the builder's bound channel and carries the code only in `observe` or `active`; the line shows the short id as PR #148 defines it, reverified against that PR | E, PR #148 |
 | F2. Notice routing to every eligible approver of the task (phase 2) | S | The notice goes to each eligible approver's bound channel and not to a single configured chat | F, B, permission scope field (piece C2) |
 | G. Revocation at the claim: requester, approver, A3 mandate owner, running work, delivery | M | Tests 10 and 21 pass in every variant; the audit names the revocation | B, C, D |
 | H. Privileged changes through a second bound channel | S | Granting or revoking admin, or adding a channel, needs the second channel; refused without it | B, E |
@@ -403,15 +407,18 @@ Order for Assistant: A, then B and D, then E and F, then I, then J. Orchestrator
 - Capacity changes, A3 mandates activation, and credential-policy changes through this door.
 - Approving or creating tasks from a channel: this authorizes only the run of an already approved task.
 - Changing how the builder converses with Solar through n8n in phase 1: ordinary messages continue to the router as today.
+- What an authorized task does: a task declared inside the workspace and with no local command may still ask for a third-party send through a browser session. The channel bounds what it will authorize and does not claim to stop that.
 - Remote console publication, SSO and corporate IAM, self-registration, several organizations or workspaces, generic task and service controls.
 - Isolation between people: MCP filtering is not filesystem or process isolation; the first pilot uses shareable information only.
 - The Linux platform itself, systemd, CLI login and instance exclusivity (#129); only what this design needs from it is listed (piece N).
 - Real-client behavior: nothing was sent or received to write this; every flow above is untested design.
 
-## 16. Decisions taken by the owner (2026-11-08)
+## 16. Decisions taken by the owner (2026-11-08 and 2026-11-09)
 
 1. An in-organization sender with no permissions is treated as an unknown sender (no "public content only" mode).
 2. On revocation of a requester, a queued task goes back to draft with its approval withdrawn.
 3. The expiry of the code starts at 30 minutes, configurable, never longer than the approval wait.
+
+4. Groups: in phase 1 only a challenge reply from a group is refused; on the authenticated route every group message is rejected and people are told apart in their private chats. This narrows the acceptance wording of #130 ("including in a group"); the note on #130 is not posted until the owner asks for it. Taken on 2026-11-09 by approving the proposal that stated this deviation.
 
 These are decisions of the design, not of an implementation: they remain open to the cross-reviews and nothing here authorizes code.
