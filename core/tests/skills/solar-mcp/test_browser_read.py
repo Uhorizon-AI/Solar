@@ -937,15 +937,25 @@ def test_quiesce_keeps_a_paused_foreign_request_from_leaving_when_the_socket_dro
                 break
             except OSError:
                 time.sleep(0.1)
-        tab = json.load(urllib.request.urlopen(urllib.request.Request(f"{endpoint}/json/new?about:blank", method="PUT")))
+        else:
+            pytest.skip("Chrome did not open its debugging port")
+        tab = json.load(urllib.request.urlopen(
+            urllib.request.Request(f"{endpoint}/json/new?about:blank", method="PUT"), timeout=10))
         sock = browser_read._Socket(tab["webSocketDebuggerUrl"], 10)
         page = browser_read._Page(sock, "https://allowed.example.test")
-        page._notify("Fetch.enable", {"patterns": [{"resourceType": "Document"}]})
-        page._notify("Page.navigate", {"url": f"http://127.0.0.1:{target.server_address[1]}/secret"})
+        page.call("Fetch.enable", {"patterns": [{"resourceType": "Document"}]}, until=time.monotonic() + 10)
+        secret = f"http://127.0.0.1:{target.server_address[1]}/secret"
+        page._notify("Page.navigate", {"url": secret})
         paused, end = False, time.monotonic() + 10
         while not paused and time.monotonic() < end:
             sock.until = end
-            paused = json.loads(sock.receive()).get("method") == "Fetch.requestPaused"
+            message = json.loads(sock.receive())
+            if message.get("method") != "Fetch.requestPaused":
+                continue
+            if message["params"]["request"]["url"] == secret:
+                paused = True                         # left undecided on purpose
+            else:
+                page._event(message)                  # about:blank continues, anything else is refused
         assert paused and hits == []                  # held, not decided
         browser_read._quiesce(page, time.monotonic() + 3)
         sock.sock.close()                             # the interception ends here
