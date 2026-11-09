@@ -463,6 +463,16 @@ def _without_recorded_delivery(task_id: str, body: str) -> str:
     return head + RE_DELIVERY_SECTION.sub("", "\n" + tail)[1:]
 
 
+def clear_recorded_delivery(task_id: str) -> None:
+    """Forget the delivery an earlier run recorded: its section and the flags that describe it."""
+    body = _body(str(task_id))
+    cleaned = _without_recorded_delivery(str(task_id), body).rstrip() + "\n"
+    if cleaned != body:
+        _set_body(str(task_id), cleaned)
+    for flag in ("delivery_recorded", "delivery_truncated", "delivery_missing"):
+        set_frontmatter_flag(task_id, flag, False)
+
+
 def record_delivery(task_id: str, reply_text: str) -> None:
     """Copy the reply's delivery block into the task body as `## Delivery`.
 
@@ -1178,6 +1188,15 @@ def main() -> int:
     record_result_path(task_file, log_file)
 
     if restricted:
+        # Only a question that asks for one (`notify_when` lists `delivery`) keeps a delivery: the block of this
+        # reply is recorded like any task's, so the notice can send it. Any other restricted run (a question that
+        # no longer asks, or a task converted into a review) must not leave an earlier run's delivery to be resent.
+        asks = (solar_state.value_of(str(execution_profile)) == "ask_readonly_v1"
+                and "delivery" in read_frontmatter_key(task_file, "notify_when").replace(" ", "").split(","))
+        if asks:
+            record_delivery(task_file, reply_text)
+        else:
+            clear_recorded_delivery(task_file)
         print(reply_text, flush=True)
         return 0
 

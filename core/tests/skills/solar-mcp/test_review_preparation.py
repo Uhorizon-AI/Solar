@@ -174,3 +174,13 @@ def test_review_batch_with_an_unsafe_alias_creates_no_parent_or_children(solar_e
     assert 'CLAUDE.md' in body['error'] and 'invalid_link_target' in body['error']
     with solar_state.read_session() as store:
         assert store.task_list() == []
+
+
+def test_a_real_review_refuses_delivery_through_the_operation(solar_env, tmp_path):
+    args = arguments(tmp_path)           # one repository: the fixture cannot be built twice in one folder
+    body, error = execute('task.create', dict(args, notify_when=['delivery', 'failed']))
+    assert error and body['code'] == 'invalid_arguments' and 'review' in body['error']
+    made = run('task.create', dict(args, notify_when=['failed']))
+    body, error = execute('task.update', dict(task_id=made['id'], expected_row_version=made['row_version'],
+                                              notify_when=['delivery']))
+    assert error and body['code'] == 'invalid_arguments'
