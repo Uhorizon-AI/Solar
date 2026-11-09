@@ -228,7 +228,7 @@ def test_notice_is_the_delivery_with_its_evidence_last(tmp_path):
     workspace, root, env = _notify_env(tmp_path)
     task = _completed(
         root,
-        'result_path: "/local/path.log"\ndelivery_expected: true\n',
+        'result_path: "/local/path.log"\ndelivery_expected: true\ndelivery_recorded: true\n',
         "# T\n\n## Result\n\nThe long account.\n\n"
         "## Delivery\n\nRESULTADO: existe x.md\nEVIDENCIA: docs/x.md\n",
     )
@@ -502,3 +502,15 @@ def test_a_real_delivery_replaces_only_the_recorded_one_and_is_the_one_sent(tmp_
     done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1])
     assert _notify(done, env).returncode == 0
     assert _sent(workspace).strip() == "SECOND RUN"
+
+
+def test_every_notify_option_ignores_a_delivery_heading_the_worker_did_not_record(tmp_path):
+    for name, when, expected in (("completed", "completed", False), ("both", "completed,failed", False),
+                                 ("expected", "completed", True)):
+        workspace, root, env = _notify_env(tmp_path / name)
+        extra = ("delivery_expected: true\ndelivery_missing: true\n" if expected else "")
+        task = _task_with(root, "completed", when, _EXACT, extra, recorded=False)
+        assert _notify(task, env).returncode == 0
+        sent = _sent(workspace)
+        assert "SECRET INSTRUCTIONS" not in sent and "KEEP THIS" not in sent
+        assert sent.startswith("Task finished without a delivery" if expected else "Task completed: Some_task")

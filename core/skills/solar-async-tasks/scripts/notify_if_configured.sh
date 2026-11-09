@@ -236,8 +236,10 @@ fi
 # phone. `## Result` is deliberately not read here — it is the provider's full
 # account, and sending it would be transport, not compression.
 # (task_delivery, which reads the section, is defined above, before the lock.)
+# Only a delivery the worker recorded for this attempt is the message, whatever `notify_when` says: a
+# `## Delivery` heading in the approved instructions carries no `delivery_recorded` and is never sent.
 DELIVERY=""
-if [[ "$TASK_STATUS" != "error" ]]; then
+if [[ "$TASK_STATUS" != "error" && "$(task_field "$TASK_ID" "delivery_recorded")" == "true" ]]; then
   DELIVERY="$(task_delivery "$TASK_ID" | sed -e '/./,$!d')"
 fi
 
