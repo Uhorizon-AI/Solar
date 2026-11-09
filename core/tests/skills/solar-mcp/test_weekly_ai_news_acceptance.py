@@ -159,3 +159,24 @@ def test_the_report_cannot_publish_by_construction(solar_env, current):
     values = {k: solar_state.value_of(v) for k, v in
               stored(search(scope="tasks", query="x")["tasks"][0]["id"])["frontmatter"]}
     assert "executor" not in values and "local_command" not in values
+
+
+def test_one_off_preview_keeps_the_open_window_across_midnight():
+    occurrence, = task_views.next_occurrences(
+        "23:55", [1], MADRID, datetime(2026, 11, 9, 23, 5, tzinfo=timezone.utc), 1,
+    )
+    assert occurrence["local"] == "2026-11-09T23:55:00+01:00"
+    assert occurrence["not_before"] == "2026-11-09T23:55:00+01:00"
+    assert occurrence["not_after"] == "2026-11-10T00:10:00+01:00"
+
+
+def test_recurring_preview_preserves_both_folds_of_a_repeated_hour():
+    windows = task_views.next_occurrences(
+        "02:30", [7], MADRID, datetime(2027, 10, 31, 0, 20, tzinfo=timezone.utc), 2,
+        recurring=True,
+    )
+    assert [(item["not_before"], item["not_after"]) for item in windows] == [
+        ("2027-10-31T02:15:00+02:00", "2027-10-31T02:45:00+02:00"),
+        ("2027-10-31T02:15:00+01:00", "2027-10-31T02:45:00+01:00"),
+    ]
+    assert [item["utc"] for item in windows] == ["2027-10-31T00:30:00Z", "2027-10-31T01:30:00Z"]

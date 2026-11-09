@@ -39,7 +39,7 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -914,13 +914,34 @@ def _clock_minutes(stamp: str) -> Optional[int]:
         return None
 
 
+def wall_clock_instants(local: datetime, zone) -> list[datetime]:
+    """Resolve a naive clock minute to UTC, including both folds of a repeated minute."""
+    if zone is None:
+        return [local]
+    instants = {
+        local.replace(tzinfo=zone, fold=fold).astimezone(timezone.utc)
+        for fold in (0, 1)
+    }
+    return sorted(instant for instant in instants
+                  if instant.astimezone(zone).replace(tzinfo=None) == local)
+
+
+def one_off_schedule_window(local: datetime, zone) -> Optional[tuple[datetime, datetime]]:
+    """Inclusive eligible minutes, starting at the first valid occurrence of the time."""
+    instants = wall_clock_instants(local, zone)
+    if not instants:
+        return None
+    start = instants[0]
+    return start, start + timedelta(minutes=SCHEDULE_MARGIN_MIN)
+
+
 def scheduled_now(scheduled_time: Optional[str], weekdays: Optional[str],
-                  now: datetime, timezone_name: Optional[str] = None) -> bool:
-    """Whether a task may start at `now`. Same window the queue used on files.
+                  now: datetime, timezone_name: Optional[str] = None, *, recurring: bool = True) -> bool:
+    """Whether an automatic claim may start at `now`.
 
     No schedule means always. `scheduled_time: now` means always. A weekday
-    list uses ISO days (Monday is 1). A clock time is ready within fifteen
-    minutes, wrapping midnight.
+    list uses ISO days (Monday is 1). Recurring clock times retain the legacy
+    symmetric window. One-off windows begin at their nominal time.
 
     `timezone_name` is an IANA zone (`Europe/Madrid`). When set, weekday and
     clock are read in that zone, so a wall-clock schedule keeps its local hour
@@ -939,14 +960,26 @@ def scheduled_now(scheduled_time: Optional[str], weekdays: Optional[str],
         return True
     if moment == "now":
         return True
-    if days:
-        allowed = {part.strip() for part in days.split(",") if part.strip()}
-        if str(now.isoweekday()) not in allowed:
-            return False
+    allowed = {part.strip() for part in days.split(",") if part.strip()}
     if not moment:
-        return True
+        return not allowed or str(now.isoweekday()) in allowed
     scheduled = _clock_minutes(moment)
     if scheduled is None:
+        return False
+    if not recurring:
+        current_minute = now.replace(second=0, microsecond=0)
+        current = (current_minute.astimezone(timezone.utc) if zone_name
+                   else current_minute.replace(tzinfo=None))
+        for days_ago in (0, 1):
+            day = now.date() - timedelta(days=days_ago)
+            if allowed and str(day.isoweekday()) not in allowed:
+                continue
+            local = datetime(day.year, day.month, day.day, scheduled // 60, scheduled % 60)
+            window = one_off_schedule_window(local, now.tzinfo if zone_name else None)
+            if window and window[0] <= current <= window[1]:
+                return True
+        return False
+    if allowed and str(now.isoweekday()) not in allowed:
         return False
     current = now.hour * 60 + now.minute
     diff = current - scheduled
@@ -2248,7 +2281,8 @@ def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual:
         if not _recurring_ready(pairs, moment.timestamp()):
             return "recurring_interval"
         if not scheduled_now(_field(pairs, "scheduled_time"), _field(pairs, "scheduled_weekdays"),
-                             moment, _field(pairs, "scheduled_timezone")):
+                             moment, _field(pairs, "scheduled_timezone"),
+                             recurring=str(_field(pairs, "recurring") or "").lower() == "true"):
             return "outside_schedule"
     reason = _approval_gate(conn, task_id, row["row_version"], pairs, row["body"], record=record)
     if reason:

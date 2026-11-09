@@ -68,7 +68,7 @@ COPY = {
         lines_changed="{n} lines changed",
         schedule_head="Schedule task", days="Days", time="Time", zone="Time zone", repeats="Repeats",
         yes="yes", no="no", every_day="every day", min_gap="minimum gap {h} h", max_runs="at most {n} runs",
-        next_runs="Next runs", schedule_effect="stores the schedule. The task is not queued; approving it is a separate step.",
+        start_windows="Eligible start windows", schedule_effect="stores the schedule. The task is not queued; approving it is a separate step.",
         schedule_planned="the task returns to draft and must be approved again.",
         approve_head="Approve task for execution", status="Status", declared="Declared effect", scope="Scope", object="Object",
         approve_effect="authorizes the task to run: it is queued with the instructions stored now and a worker will execute them. Editing it afterwards invalidates this approval.",
@@ -134,7 +134,7 @@ COPY = {
         lines_changed="{n} líneas cambiadas",
         schedule_head="Programar tarea", days="Días", time="Hora", zone="Zona horaria", repeats="Repite",
         yes="sí", no="no", every_day="todos los días", min_gap="separación mínima {h} h", max_runs="como máximo {n} ejecuciones",
-        next_runs="Próximas ejecuciones", schedule_effect="guarda la programación. La tarea no se encola; aprobarla es un paso aparte.",
+        start_windows="Ventanas de inicio permitidas", schedule_effect="guarda la programación. La tarea no se encola; aprobarla es un paso aparte.",
         schedule_planned="la tarea vuelve a borrador y debe aprobarse de nuevo.",
         approve_head="Aprobar tarea para ejecución", status="Estado", declared="Efecto declarado", scope="Alcance", object="Objeto",
         approve_effect="autoriza su ejecución: se encola con las instrucciones guardadas ahora y un worker las ejecutará. Editarla después invalida esta aprobación.",
@@ -591,6 +591,13 @@ def _merged_schedule(stored: dict, args: dict):
     return merged, plan
 
 
+def _start_windows(occurrences):
+    return "; ".join(
+        f"{item['not_before'].replace('T', ' ', 1)} → {item['not_after'].replace('T', ' ', 1)}"
+        for item in occurrences[:2]
+    )
+
+
 def _schedule(copy, args):
     facts, notes = _stored(args)
     if not facts or facts.get("missing"):
@@ -606,10 +613,8 @@ def _schedule(copy, args):
             rows.append((copy["zone"], merged["zone"]))
         cap = args.get("recurring_max_runs", facts["values"].get("recurring_max_runs"))
         rows.append((copy["repeats"], _repeats(copy, merged["recurring"], plan["recurring_min_interval"], cap)))
-        names = _DAYS[copy["lang"]]
         if plan["next_occurrences"]:
-            rows.append((copy["next_runs"], "; ".join(
-                f"{names[o['weekday'] - 1]} {o['local'][:16].replace('T', ' ')}" for o in plan["next_occurrences"][:2])))
+            rows.append((copy["start_windows"], _start_windows(plan["next_occurrences"])))
         extra += [f"{copy['warn']}: {note}" for note in plan["notes"]]
     except OperationError as exc:
         extra.append(f"{copy['warn']}: {exc}")
@@ -636,6 +641,8 @@ def _context_rows(copy: dict, facts: dict) -> list:
     if schedule.get("time") and schedule["time"] != "now":
         rows.append((copy["time"], f"{_days(copy, schedule['weekdays'])} {schedule['time']} "
                                    f"({schedule.get('timezone') or '—'})"))
+        if schedule.get("next_occurrences"):
+            rows.append((copy["start_windows"], _start_windows(schedule["next_occurrences"])))
     # A local executor runs this command instead of a provider: what is approved includes it.
     values = facts.get("values") or {}
     if values.get("executor") and str(values["executor"]).lower() != "provider":

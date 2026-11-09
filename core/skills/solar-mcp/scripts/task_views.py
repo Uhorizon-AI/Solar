@@ -45,28 +45,61 @@ def _zone(name: str) -> ZoneInfo:
         raise ViewError("schedule_invalid", f"unknown time zone {name!r}") from None
 
 
-def next_occurrences(time: str, weekdays, zone: str, after=None, count: int = 4) -> list[dict]:
-    """The next local wall-clock occurrences, with their offsets.
+def _recurring_windows(local, zone, allowed):
+    """Project the legacy recurring rule onto consecutive UTC minutes."""
+    from solar_state import SCHEDULE_MARGIN_MIN, wall_clock_instants
 
-    Local times that do not exist (the skipped hour of a spring-forward day) are
-    left out, exactly as the queue would never match them.
+    minute = datetime.timedelta(minutes=1)
+    instants = []
+    for offset in range(-SCHEDULE_MARGIN_MIN, SCHEDULE_MARGIN_MIN + 1):
+        clock = local + offset * minute
+        if clock.isoweekday() in allowed:
+            instants.extend(wall_clock_instants(clock, zone))
+    windows = []
+    for instant in sorted(instants):
+        if windows and instant == windows[-1][1] + minute:
+            windows[-1] = (windows[-1][0], instant)
+        else:
+            windows.append((instant, instant))
+    return windows
+
+
+def next_occurrences(time: str, weekdays, zone: str, after=None, count: int = 4, *,
+                     recurring: bool = False) -> list[dict]:
+    """Upcoming eligibility windows, including one already open at `after`.
+
+    Bounds are inclusive local clock minutes with UTC offsets. A repeated hour
+    can split a recurring occurrence into two distinct windows.
     """
+    from solar_state import one_off_schedule_window, wall_clock_instants
+
     info = _zone(zone)
     hour, minute = (int(part) for part in time.split(":"))
-    after = (after or datetime.datetime.now(_UTC)).astimezone(_UTC)
+    after = (after or datetime.datetime.now(_UTC)).astimezone(_UTC).replace(second=0, microsecond=0)
     allowed = set(weekdays or range(1, 8))
-    day = after.astimezone(info).date()
+    day = after.astimezone(info).date() - datetime.timedelta(days=1)
     found = []
     for _ in range(800):
-        if day.isoweekday() in allowed:
-            local = datetime.datetime(day.year, day.month, day.day, hour, minute, tzinfo=info)
-            instant = local.astimezone(_UTC)
-            exists = instant.astimezone(info).replace(tzinfo=None) == local.replace(tzinfo=None)
-            if exists and instant > after:
-                found.append(dict(local=local.isoformat(), utc=instant.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                  weekday=day.isoweekday(), utc_offset=local.strftime("%z")))
+        local = datetime.datetime(day.year, day.month, day.day, hour, minute)
+        if recurring:
+            windows = _recurring_windows(local, info, allowed)
+        else:
+            window = one_off_schedule_window(local, info) if day.isoweekday() in allowed else None
+            windows = [window] if window else []
+        nominal_instants = wall_clock_instants(local, info) if windows else []
+        for start, end in windows:
+            if end >= after:
+                nominal = next((instant for instant in nominal_instants if start <= instant <= end),
+                               nominal_instants[0] if nominal_instants else None)
+                local_nominal = nominal.astimezone(info) if nominal else local
+                found.append(dict(local=local_nominal.isoformat(),
+                                  utc=nominal.strftime("%Y-%m-%dT%H:%M:%SZ") if nominal else None,
+                                  weekday=day.isoweekday(),
+                                  utc_offset=local_nominal.strftime("%z") if nominal else None,
+                                  not_before=start.astimezone(info).isoformat(),
+                                  not_after=end.astimezone(info).isoformat()))
                 if len(found) == count:
-                    break
+                    return found
         day += datetime.timedelta(days=1)
     return found
 
@@ -103,9 +136,9 @@ def plan_schedule(*, time, weekdays, zone, recurring, min_interval, after=None) 
         _zone(zone)
         if weekdays and not time:
             raise ViewError("schedule_invalid", "scheduled_weekdays needs scheduled_time")
-        if time and time.split(":")[0] == "02":
-            notes.append("02:00-02:59 does not exist on the spring-forward day; that day is skipped.")
-        plan["next_occurrences"] = next_occurrences(time, weekdays, zone, after)
+        if time.split(":")[0] == "02":
+            notes.append("02:00-02:59 may be skipped by a clock change; only valid start minutes are shown.")
+        plan["next_occurrences"] = next_occurrences(time, weekdays, zone, after, recurring=recurring)
     if recurring and scheduled:
         longest = shortest_gap_days(weekdays) * 86400 - _INTERVAL_MARGIN
         if min_interval is None:
@@ -142,7 +175,8 @@ def _schedule(values: dict) -> dict:
                  recurring_last_run=values.get("recurring_last_run"))
     try:
         if block["time"] and block["time"] != "now" and block["timezone"]:
-            block["next_occurrences"] = next_occurrences(block["time"], block["weekdays"], block["timezone"])
+            block["next_occurrences"] = next_occurrences(
+                block["time"], block["weekdays"], block["timezone"], recurring=block["recurring"])
     except (ViewError, ValueError):
         block["next_occurrences"] = []
     if block["time"] and block["time"] != "now" and not block["timezone"]:
