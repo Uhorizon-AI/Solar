@@ -216,3 +216,59 @@ runpy.run_path({str(EXECUTE)!r}, run_name='__main__')
         assert store.task_status(parent) == 'active', 'the task was sent back to draft by a transient error'
         assert solar_state.approval_state(task['frontmatter'], task['body']) is None
         assert 'review_preparation_required' not in [r[0] for r in store.conn.execute('SELECT event FROM audit')]
+
+
+def _question(root, notify_when, tmp_path):
+    """An approved, claimed question (ask_readonly_v1) the executor can run with the router double."""
+    import execution_profiles as ep
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir(exist_ok=True)
+    built = ep.build_ask_envelope(provider='codex', prompt='Return the brief', cwd=str(workspace), model=None)
+    seed(root)
+    with solar_state.session() as store:
+        fields = [('title', json.dumps('Brief')), ('provider', json.dumps('codex')),
+                  ('access_policy', json.dumps(dict(version=1, mode='read', scopes=[str(workspace)], resources=[]))),
+                  ('execution_profile', json.dumps('ask_readonly_v1')),
+                  ('review_input_manifest', json.dumps(built['manifest'])),
+                  ('review_input_digest', json.dumps(built['review_input_digest']))]
+        if notify_when:
+            fields.append(('notify_when', notify_when))
+        task = store.task_create(fields, '\n# Brief\n\nReturn the brief.\n')
+        store.task_approve(task, expected_row_version=store.task_get(task)['row_version'])
+        assert store.task_claim_detail(task, 'test')['claimed']
+    mirror(root)
+    return task
+
+
+def _body_of(task):
+    with solar_state.session() as store:
+        return store.task_get(task)['body']
+
+
+def test_a_question_that_asks_for_delivery_records_the_block_of_the_run(tmp_path):
+    root = make_root(tmp_path)
+    task = _question(root, 'delivery,failed', tmp_path)
+    result = run_executor(root / 'active' / f'{task}.md', root, 'Work.\n<delivery>\nDECISION: nueva\n</delivery>', tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert '## Delivery\n\nDECISION: nueva' in _body_of(task)
+    with solar_state.session() as store:
+        assert store.task_field(task, 'delivery_recorded') == 'true'
+
+
+def test_a_question_without_a_block_records_nothing(tmp_path):
+    root = make_root(tmp_path)
+    task = _question(root, 'delivery,failed', tmp_path)
+    result = run_executor(root / 'active' / f'{task}.md', root, 'Nothing new today.', tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert '## Delivery' not in _body_of(task)
+    with solar_state.session() as store:
+        assert not store.task_field(task, 'delivery_recorded')
+
+
+@pytest.mark.parametrize('notify_when', ['completed', 'completed,failed', ''])
+def test_a_question_that_did_not_ask_for_delivery_keeps_its_old_behaviour(tmp_path, notify_when):
+    root = make_root(tmp_path)
+    task = _question(root, notify_when, tmp_path)
+    result = run_executor(root / 'active' / f'{task}.md', root, '<delivery>ignored</delivery>', tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert '## Delivery' not in _body_of(task)

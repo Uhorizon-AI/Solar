@@ -1178,6 +1178,11 @@ def main() -> int:
     record_result_path(task_file, log_file)
 
     if restricted:
+        # A question keeps no delivery unless it asks for one (`notify_when` lists `delivery`): then the block of
+        # this reply is recorded like any task's, so the notice can send it. Other restricted tasks are untouched.
+        if (str(execution_profile).strip("\"' ") == "ask_readonly_v1"
+                and "delivery" in read_frontmatter_key(task_file, "notify_when").replace(" ", "").split(",")):
+            record_delivery(task_file, reply_text)
         print(reply_text, flush=True)
         return 0
 

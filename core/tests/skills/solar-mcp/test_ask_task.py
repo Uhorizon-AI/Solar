@@ -568,11 +568,23 @@ def test_a_queued_review_still_says_it_is_confined(solar_env):
     assert "not confined" in operations._queued_next(frontmatter, "high")
 
 
-def test_delivery_is_refused_on_a_question_on_create_and_on_update(solar_env):
-    body, error = execute("task.create", dict(arguments(solar_env), notify_when=["delivery", "failed"]))
-    assert error and body["code"] == "invalid_arguments" and "delivery" in body["error"]
-    made = run("task.create", dict(arguments(solar_env), notify_when=["failed"]))
-    current = stored(made["id"])
-    body, error = execute("task.update", dict(task_id=made["id"], expected_row_version=current["row_version"],
-                                              notify_when=["delivery"]))
+def test_a_question_accepts_delivery_on_create_and_on_update(solar_env):
+    made = run("task.create", dict(arguments(solar_env), notify_when=["delivery", "failed"]))
+    assert fields(made["id"])["notify_when"] == "delivery,failed"
+    other = run("task.create", dict(arguments(solar_env), notify_when=["failed"]))
+    current = stored(other["id"])
+    out = run("task.update", dict(task_id=other["id"], expected_row_version=current["row_version"],
+                                  notify_when=["delivery", "failed"]))
+    assert fields(other["id"])["notify_when"] == "delivery,failed" and out["status"] == "draft"
+    body, error = execute("task.update", dict(task_id=other["id"], expected_row_version=out["row_version"],
+                                              notify_when=["completed", "delivery"]))
     assert error and body["code"] == "invalid_arguments"
+
+
+def test_a_review_still_refuses_delivery(solar_env):
+    for profile in (json.dumps("text_only_review_v1"), json.dumps("repository_readonly_v1")):
+        with pytest.raises(operations.OperationError) as refused:
+            operations._refuse_delivery_on_restricted("delivery,failed", profile)
+        assert refused.value.code == "invalid_arguments"
+    operations._refuse_delivery_on_restricted("delivery,failed", json.dumps("ask_readonly_v1"))
+    operations._refuse_delivery_on_restricted("completed", json.dumps("text_only_review_v1"))

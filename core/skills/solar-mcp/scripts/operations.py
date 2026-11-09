@@ -102,11 +102,18 @@ def _notify_text(tokens) -> str:
 
 
 def _refuse_delivery_on_restricted(notify_when, profile) -> None:
-    """A restricted task (ask, review) never stores a `## Delivery`, so `delivery` would stay silent for ever."""
-    if profile and "delivery" in str(notify_when or "").replace(" ", "").split(","):
+    """A review keeps no `## Delivery`, so `delivery` would stay silent for ever. A question records one when asked."""
+    if (profile and solar_state_value(profile) != "ask_readonly_v1"
+            and "delivery" in str(notify_when or "").replace(" ", "").split(",")):
         raise OperationError("invalid_arguments",
-                             "`delivery` is not available on a question or a review: those tasks keep no `## Delivery`. "
-                             "Use `completed` or `failed`.")
+                             "`delivery` is not available on a review: it keeps no `## Delivery`. "
+                             "Use `completed` or `failed`. A question (`ask`) does accept it.")
+
+
+def solar_state_value(raw) -> str:
+    import solar_state
+
+    return solar_state.value_of(str(raw)) or ""
 
 
 def _now_iso() -> str:
@@ -927,7 +934,7 @@ _NOTIFY_WHEN = {
     "description": "When the configured chat is told, without confirming the text (a system notice, not a message "
                    "to third parties): completed, delivery (opt-in, quiet) and failed (adds the one-line reason). "
                    "`completed` and `delivery` are mutually exclusive: asking for both is refused. "
-                   "`delivery` is also refused on a question (`ask`) or a review, which keep no `## Delivery`. "
+                   "`delivery` also works on a question (`ask`), which then records the delivery of each run; it is refused on a review, which keeps no `## Delivery`. "
                    "`[completed]` alone is stored as `completed,-failed` and stays silent when the task fails; "
                    "a bare `completed` written by older tasks also reports failures; `[completed, failed]` "
                    "reports both. `delivery` is opt-in and quiet: a successful run is announced only when ITS OWN "
