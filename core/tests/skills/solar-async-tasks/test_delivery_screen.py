@@ -268,7 +268,8 @@ def test_task_that_never_asked_for_a_delivery_keeps_the_old_notice(tmp_path):
 # notify_when: delivery (opt-in, quiet)
 # ---------------------------------------------------------------------------
 
-def _task_with(root: Path, status: str, notify_when: str, body: str, extra: str = "") -> Path:
+def _task_with(root: Path, status: str, notify_when: str, body: str, extra: str = "", recorded: bool = True) -> Path:
+    extra = ("delivery_recorded: true\n" if recorded else "") + extra
     folder = root / status
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "task.md"
@@ -407,3 +408,30 @@ def test_the_two_delivery_cuts_use_the_same_headings():
     in_awk = re.search(r"found && /\^## \(([^)]*)\)", script).group(1).split("|")
     expected = [h[3:] for h in solar_state.RUNTIME_SECTIONS if h != "## Delivery"]
     assert sorted(in_awk) == sorted(expected)
+
+
+def test_a_delivery_heading_that_the_executor_did_not_record_sends_nothing(tmp_path):
+    for name, heading in (("exact", "## Delivery"), ("trailing_space", "## Delivery ")):
+        workspace, root, env = _notify_env(tmp_path / name)
+        task = _task_with(root, "completed", "delivery",
+                          f"# T\n\nInstructions.\n\n{heading}\n\nSECRET INSTRUCTIONS\n", recorded=False)
+        assert _notify(task, env).returncode == 0
+        assert _sent(workspace) == ""
+
+
+def test_the_worker_marks_only_a_delivery_it_recorded(tmp_path):
+    task = _task(tmp_path / "a")
+    assert "delivery_recorded: true" in record(task, "<delivery>x</delivery>")
+    assert "delivery_recorded" not in record(task, "No block this time.")
+
+
+def test_a_delivery_that_holds_a_runtime_heading_is_kept_whole_and_the_next_section_is_not_sent(tmp_path):
+    task = _task(tmp_path / "w", body="# T\n")
+    text = record(task, "<delivery>\n## Result\nAsunto uno\n## Subtask results\nAsunto dos\n</delivery>")
+    assert text.count("\n## Result") == 0 and " ## Result\nAsunto uno" in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    body = text.split("---\n\n", 1)[1] + "\n## Result\n\nFOREIGN TEXT\n"
+    done = _task_with(root, "completed", "delivery", body)
+    assert _notify(done, env).returncode == 0
+    sent = _sent(workspace)
+    assert "Asunto uno" in sent and "Asunto dos" in sent and "FOREIGN TEXT" not in sent

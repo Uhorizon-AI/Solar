@@ -381,9 +381,10 @@ RE_DELIVERY = re.compile(r"<delivery>(.*?)</delivery>", re.IGNORECASE | re.DOTAL
 # A re-run must replace its own section, never stack a second one. The delivery may hold `##` headings of its
 # own, so it ends only at the next heading the runtime writes (solar_state.RUNTIME_SECTIONS, which task text
 # cannot contain): a `## Subtask results` after it is not part of it and is kept. notify_if_configured.sh
-# applies the same cut; a test keeps the two lists equal.
+# applies the same cut; a test keeps the two lists equal. A line of the delivery that is exactly one of those
+# headings is indented when it is recorded (neutralize_runtime_headings).
 _AFTER_DELIVERY = "|".join(re.escape(h[3:]) for h in solar_state.RUNTIME_SECTIONS if h != "## Delivery")
-RE_DELIVERY_SECTION = re.compile(r"\n## Delivery\n.*?(?=\n## (?:" + _AFTER_DELIVERY + r")[ \t]*(?:\n|\Z)|\Z)", re.DOTALL)
+RE_DELIVERY_SECTION = re.compile(r"\n## Delivery[ \t]*\n.*?(?=\n## (?:" + _AFTER_DELIVERY + r")[ \t]*(?:\n|\Z)|\Z)", re.DOTALL)
 
 # One Telegram message, well under the notifier's chunking threshold.
 DELIVERY_MAX_CHARS = 1200
@@ -418,6 +419,18 @@ def clamp_delivery(delivery: str) -> Tuple[str, bool]:
     return text[:room].rstrip() + "…\n" + tail, True
 
 
+_RUNTIME_HEADING_LINE = re.compile(r"^(## (?:Delivery|" + _AFTER_DELIVERY + r")[ \t]*)$", re.MULTILINE)
+
+
+def neutralize_runtime_headings(delivery: str) -> str:
+    """Indent a line inside the delivery that is exactly a heading the runtime writes, so the cut never takes it for one.
+
+    The provider writes the delivery and the task text cannot hold these headings, so this is the one place
+    they could appear. One leading space keeps the text readable on a phone.
+    """
+    return _RUNTIME_HEADING_LINE.sub(r" \1", delivery)
+
+
 def upsert_frontmatter_key(task_id: str, key: str, value: str) -> None:
     """Set a frontmatter key, replacing it when already present."""
     _set(str(task_id), key, value)
@@ -440,7 +453,10 @@ def record_delivery(task_id: str, reply_text: str) -> None:
     expected = read_frontmatter_key(task_id, "delivery_expected") == "true"
     delivery = extract_delivery(reply_text)
     if delivery:
+        # After the cap, which strips the text: a first line indented before it would lose its space.
+        # The few characters this adds stay well under one Telegram message.
         delivery, truncated = clamp_delivery(delivery)
+        delivery = neutralize_runtime_headings(delivery)
     else:
         truncated = False
 
@@ -450,6 +466,9 @@ def record_delivery(task_id: str, reply_text: str) -> None:
     _set_body(str(task_id), body + "\n")
     set_frontmatter_flag(task_id, "delivery_truncated", truncated)
     set_frontmatter_flag(task_id, "delivery_missing", expected and not delivery)
+    # What the notifier trusts for `notify_when: delivery`: this run's executor recorded a delivery.
+    # A `## Delivery` heading that came from anywhere else (task text, an import) carries no such mark.
+    set_frontmatter_flag(task_id, "delivery_recorded", bool(delivery))
 
 
 # ---------------------------------------------------------------------------

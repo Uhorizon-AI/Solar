@@ -130,6 +130,9 @@ else:
   elif ! notify_wants completed; then
     # Delivery only: this run's own delivery or nothing. The worker clears the section when a run has none.
     notify_wants delivery || exit 0
+    # Only a delivery the executor recorded for this attempt counts: a `## Delivery` heading that came from
+    # task text or an import carries no `delivery_recorded`, and sends nothing.
+    [[ "$(task_field "$TASK_ID" "delivery_recorded")" == "true" ]] || exit 0
     [[ -n "$(task_delivery "$TASK_ID" | sed -e '/./,$!d')" ]] || exit 0
   fi
 fi
