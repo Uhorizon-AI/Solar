@@ -341,3 +341,51 @@ def test_a_question_that_stops_asking_for_delivery_does_not_resend_the_old_one(t
         assert not store.task_field(task, 'delivery_recorded')
     sent = _notify(root, task, tmp_path, 'sent')
     assert 'OLD DELIVERY' not in sent and sent.startswith('Task completed')
+
+
+def _convert_to_review(root, task, tmp_path):
+    """What task.update does to a question that becomes a packet review: new profile and inputs, approved again."""
+    import hashlib
+    import execution_profiles as ep
+    source = tmp_path / 'packet.txt'
+    source.write_text('Known packet evidence.\n')
+    built = ep.build_review_envelope_v1(
+        instructions='Review the packet.', rules=[], provider='claude',
+        evidence=[dict(path=str(source), content=source.read_text(),
+                       sha256=hashlib.sha256(source.read_bytes()).hexdigest())])
+    with solar_state.session() as store:
+        assert store.task_complete(task, token=store.reservation_for(task)['token']) == 'queued'
+        assert store.task_adopt(task, 'test-supervisor')['released']
+        store.task_return_to_draft(task, expected_row_version=store.task_get(task)['row_version'])
+        for key, value in (('provider', json.dumps('claude')), ('notify_when', 'completed'),
+                           ('access_policy', json.dumps(dict(version=1, mode='read', scopes=[str(source)], resources=[]))),
+                           ('execution_profile', json.dumps('text_only_review_v1')),
+                           ('review_input_manifest', json.dumps(built['manifest'])),
+                           ('review_input_digest', json.dumps(built['review_input_digest']))):
+            store.task_set(task, key, value)
+        store.task_approve(task, expected_row_version=store.task_get(task)['row_version'])
+        claimed = store.task_claim_detail(task, 'test')
+        assert claimed['claimed'], claimed
+    mirror(root)
+
+
+def test_a_question_turned_into_a_review_does_not_resend_its_old_delivery(tmp_path, monkeypatch):
+    monkeypatch.setattr(solar_state, 'VERIFIED_PROFILES', {**solar_state.VERIFIED_PROFILES,
+                                                           'text_only_review_v1': _AnyProvider()})
+    root = make_root(tmp_path)
+    task = _question(root, 'delivery,failed', tmp_path, recurring=True)
+    path = root / 'active' / f'{task}.md'
+    assert run_executor(path, root, '<delivery>OLD DELIVERY</delivery>', tmp_path).returncode == 0
+    assert 'OLD DELIVERY' in _body_of(task)
+    _convert_to_review(root, task, tmp_path)
+    assert run_executor(path, root, 'The review is done.', tmp_path).returncode == 0
+    assert '## Delivery' not in _body_of(task)
+    with solar_state.session() as store:
+        assert not store.task_field(task, 'delivery_recorded')
+    sent = _notify(root, task, tmp_path, 'sent-review')
+    assert 'OLD DELIVERY' not in sent and sent.startswith('Task completed')
+
+
+class _AnyProvider:
+    def __contains__(self, provider):
+        return True

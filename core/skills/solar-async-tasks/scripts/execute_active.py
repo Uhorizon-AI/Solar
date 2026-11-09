@@ -1188,14 +1188,15 @@ def main() -> int:
     record_result_path(task_file, log_file)
 
     if restricted:
-        # A question keeps no delivery unless it asks for one (`notify_when` lists `delivery`): then the block of
-        # this reply is recorded like any task's, so the notice can send it. Other restricted tasks are untouched.
-        if solar_state.value_of(str(execution_profile)) == "ask_readonly_v1":
-            if "delivery" in read_frontmatter_key(task_file, "notify_when").replace(" ", "").split(","):
-                record_delivery(task_file, reply_text)
-            else:
-                # It no longer asks (an edit changed `notify_when`): what an earlier run recorded is not this run's.
-                clear_recorded_delivery(task_file)
+        # Only a question that asks for one (`notify_when` lists `delivery`) keeps a delivery: the block of this
+        # reply is recorded like any task's, so the notice can send it. Any other restricted run (a question that
+        # no longer asks, or a task converted into a review) must not leave an earlier run's delivery to be resent.
+        asks = (solar_state.value_of(str(execution_profile)) == "ask_readonly_v1"
+                and "delivery" in read_frontmatter_key(task_file, "notify_when").replace(" ", "").split(","))
+        if asks:
+            record_delivery(task_file, reply_text)
+        else:
+            clear_recorded_delivery(task_file)
         print(reply_text, flush=True)
         return 0
 
