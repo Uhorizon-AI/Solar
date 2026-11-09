@@ -37,7 +37,7 @@ esac
 # Keep this list equal to solar_state.RUNTIME_SECTIONS without `## Delivery` (a test checks it).
 task_delivery() {
   task_body "$1" | awk '
-    /^## Delivery[[:space:]]*$/ && !found { found = 1; next }
+    /^## Delivery$/ && !found { found = 1; next }
     found && /^## (Subtask results|Execution Error|Result)[[:space:]]*$/ { exit }
     found { print }
   '

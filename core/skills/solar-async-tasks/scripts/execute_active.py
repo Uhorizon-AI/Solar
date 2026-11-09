@@ -382,9 +382,10 @@ RE_DELIVERY = re.compile(r"<delivery>(.*?)</delivery>", re.IGNORECASE | re.DOTAL
 # own, so it ends only at the next heading the runtime writes (solar_state.RUNTIME_SECTIONS, which task text
 # cannot contain): a `## Subtask results` after it is not part of it and is kept. notify_if_configured.sh
 # applies the same cut; a test keeps the two lists equal. A line of the delivery that is exactly one of those
-# headings is indented when it is recorded (neutralize_runtime_headings).
+# headings is indented when it is recorded (neutralize_runtime_headings). `## Delivery` is matched exactly, here
+# and in the notifier, so a look-alike in the instructions is never taken for the section.
 _AFTER_DELIVERY = "|".join(re.escape(h[3:]) for h in solar_state.RUNTIME_SECTIONS if h != "## Delivery")
-RE_DELIVERY_SECTION = re.compile(r"\n## Delivery[ \t]*\n.*?(?=\n## (?:" + _AFTER_DELIVERY + r")[ \t]*(?:\n|\Z)|\Z)", re.DOTALL)
+RE_DELIVERY_SECTION = re.compile(r"\n## Delivery\n.*?(?=\n## (?:" + _AFTER_DELIVERY + r")[ \t]*(?:\n|\Z)|\Z)", re.DOTALL)
 
 # One Telegram message, well under the notifier's chunking threshold.
 DELIVERY_MAX_CHARS = 1200
@@ -451,7 +452,8 @@ def record_delivery(task_id: str, reply_text: str) -> None:
     run does not set it.
     """
     expected = read_frontmatter_key(task_id, "delivery_expected") == "true"
-    delivery = extract_delivery(reply_text)
+    # One line ending, whatever the provider wrote: the heading checks (here and in the notifier) are per line.
+    delivery = extract_delivery(reply_text).replace("\r\n", "\n").replace("\r", "\n")
     if delivery:
         # After the cap, which strips the text: a first line indented before it would lose its space.
         # The few characters this adds stay well under one Telegram message.

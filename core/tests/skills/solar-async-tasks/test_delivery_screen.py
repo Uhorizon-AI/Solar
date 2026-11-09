@@ -435,3 +435,39 @@ def test_a_delivery_that_holds_a_runtime_heading_is_kept_whole_and_the_next_sect
     assert _notify(done, env).returncode == 0
     sent = _sent(workspace)
     assert "Asunto uno" in sent and "Asunto dos" in sent and "FOREIGN TEXT" not in sent
+
+
+_LOOKALIKE = "# T\n\nInstructions.\n\n## Delivery \n\nSECRET INSTRUCTIONS\n\n## Límites\n\nKEEP THIS\n"
+
+
+def test_a_lookalike_heading_in_the_instructions_survives_an_attempt_without_a_block(tmp_path):
+    task = _task(tmp_path / "w", body=_LOOKALIKE)
+    text = record(task, "No block this time.")
+    assert "## Delivery \n\nSECRET INSTRUCTIONS\n\n## Límites\n\nKEEP THIS" in text
+    assert "delivery_recorded" not in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1], recorded=False)
+    assert _notify(done, env).returncode == 0
+    assert _sent(workspace) == ""
+
+
+def test_a_real_delivery_is_sent_instead_of_a_lookalike_in_the_instructions(tmp_path):
+    task = _task(tmp_path / "w", body=_LOOKALIKE)
+    text = record(task, "<delivery>REAL DELIVERY</delivery>")
+    assert "KEEP THIS" in text and "SECRET INSTRUCTIONS" in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1])
+    assert _notify(done, env).returncode == 0
+    sent = _sent(workspace)
+    assert sent.strip() == "REAL DELIVERY"
+
+
+def test_a_delivery_with_crlf_endings_and_a_leading_runtime_heading_is_sent_whole(tmp_path):
+    task = _task(tmp_path / "w", body="# T\n")
+    text = record(task, "<delivery>\r\n## Result\r\nAsunto uno\r\n</delivery>")
+    assert "\r" not in text and " ## Result\nAsunto uno" in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1] + "\n## Result\n\nFOREIGN\n")
+    assert _notify(done, env).returncode == 0
+    sent = _sent(workspace)
+    assert "Asunto uno" in sent and "FOREIGN" not in sent
