@@ -378,8 +378,9 @@ def record_result_path(task_id: str, log_file: pathlib.Path) -> None:
 
 RE_DELIVERY = re.compile(r"<delivery>(.*?)</delivery>", re.IGNORECASE | re.DOTALL)
 
-# A re-run must replace its own section, never stack a second one.
-RE_DELIVERY_SECTION = re.compile(r"\n## Delivery\n.*?(?=\n## |\Z)", re.DOTALL)
+# A re-run must replace its own section, never stack a second one. The delivery is always the last thing in
+# the body (record_delivery moves it there), and it may hold `##` headings of its own: it runs to the end.
+RE_DELIVERY_SECTION = re.compile(r"\n## Delivery\n.*\Z", re.DOTALL)
 
 # One Telegram message, well under the notifier's chunking threshold.
 DELIVERY_MAX_CHARS = 1200

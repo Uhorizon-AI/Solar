@@ -35,8 +35,7 @@ esac
 
 task_delivery() {
   task_body "$1" | awk '
-    /^## Delivery[[:space:]]*$/ { found = 1; next }
-    found && /^## / { exit }
+    /^## Delivery[[:space:]]*$/ && !found { found = 1; next }
     found { print }
   '
 }

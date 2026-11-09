@@ -198,3 +198,5 @@ Logs:
 A claim clears `notify_delivered` and the other notice records, so a recurring task notifies once per run
 and a retry of the same run's notice is still deduplicated. The wait for `task.authorize_run` is announced by
 the supervisor, with the reason, for every task whatever its `notify_when` says.
+
+`delivery` is not available on a question (`ask`) or a review: those tasks keep no `## Delivery`, and `task.create`/`task.update` refuse the combination. The `## Delivery` section is the last in the body and runs to its end, so the delivery may contain `##` headings.

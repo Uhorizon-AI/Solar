@@ -101,6 +101,14 @@ def _notify_text(tokens) -> str:
     return "completed,-failed" if text == "completed" else text
 
 
+def _refuse_delivery_on_restricted(notify_when, profile) -> None:
+    """A restricted task (ask, review) never stores a `## Delivery`, so `delivery` would stay silent for ever."""
+    if profile and "delivery" in str(notify_when or "").replace(" ", "").split(","):
+        raise OperationError("invalid_arguments",
+                             "`delivery` is not available on a question or a review: those tasks keep no `## Delivery`. "
+                             "Use `completed` or `failed`.")
+
+
 def _now_iso() -> str:
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -355,6 +363,7 @@ def _do_task_create(arguments: dict) -> dict:
         if "access_policy" in arguments:
             merged["access_policy"] = _access_text(arguments["access_policy"])
         merged.update(review_fields)
+        _refuse_delivery_on_restricted(merged.get("notify_when"), merged.get("execution_profile"))
         fields += list(merged.items())
         if source_id:
             fields.append(("revises_task_id", json.dumps(source_id)))
@@ -467,6 +476,9 @@ def _do_task_update(arguments: dict) -> dict:
         fields["notify_when"] = _notify_text(changes["notify_when"])
     if "access_policy" in changes:
         fields["access_policy"] = _access_text(changes["access_policy"])
+    _refuse_delivery_on_restricted(
+        fields.get("notify_when", solar_state.value_of(current_fields.get("notify_when") or "")),
+        fields.get("execution_profile") or current_fields.get("execution_profile"))
     body = None
     definition = None
     title = changes.get("title", old_title)

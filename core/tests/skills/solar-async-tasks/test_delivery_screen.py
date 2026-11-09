@@ -360,3 +360,21 @@ def test_expected_delivery_that_never_came_is_silent_with_the_delivery_option(tm
         assert _notify(task, env).returncode == 0
         assert "Task finished without a delivery" not in _sent(workspace)
         assert _sent(workspace) == ""
+
+
+def test_a_delivery_with_headings_is_sent_whole(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "completed", "delivery",
+                      "# T\n\n## Result\n\nAccount.\n\n## Delivery\n\n## Resumen\nAsunto uno\n\n## Decision\nAprobar\n")
+    assert _notify(task, env).returncode == 0
+    sent = _sent(workspace)
+    assert sent.startswith("## Resumen") and "Asunto uno" in sent and "## Decision\nAprobar" in sent
+    assert "Account." not in sent
+
+
+def test_a_rerun_replaces_a_delivery_that_holds_headings(tmp_path):
+    task = _task(tmp_path, extra="delivery_expected: true\n")
+    record(task, "<delivery>\n## Resumen\nold text\n## Decision\nold ask\n</delivery>")
+    text = record(task, "<delivery>\n## Resumen\nnew text\n</delivery>")
+    assert text.count("## Delivery") == 1
+    assert "old text" not in text and "old ask" not in text and "new text" in text
