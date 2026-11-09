@@ -636,3 +636,22 @@ def test_result_view_falls_back_to_the_recorded_log_path_and_stays_confined(sola
     capped = search(scope="tasks", task_id=huge, view="result")["execution_log"]
     assert capped["truncated"] is True and len(capped["text"].encode()) <= 60000
     assert search(scope="tasks", task_id=escaped, view="result")["execution_log"] is None
+
+
+def test_delivery_is_stored_in_a_fixed_order_and_not_combined_with_completed(solar_env):
+    made = new_task("Brief", "Do.", notify_when=["failed", "delivery"])
+    assert _notify_when(made["id"]) == "delivery,failed"
+    assert _notify_when(new_task("Quiet", "Do.", notify_when=["delivery"])["id"]) == "delivery"
+    body, error = execute("task.create", dict(title="X", instructions="x", notify_when=["completed", "delivery"]))
+    assert error and body["code"] == "invalid_arguments"
+
+
+def test_changing_notify_when_to_delivery_withdraws_the_approval_and_a_revision_keeps_it(solar_env):
+    made = new_task("Brief", "Do.", notify_when=["completed", "failed"])
+    queued = run("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+    out = run("task.update", dict(task_id=made["id"], expected_row_version=queued["row_version"],
+                                  notify_when=["delivery", "failed"]))
+    assert out["status"] == "draft" and out["needs_approval"] is True
+    assert _notify_when(made["id"]) == "delivery,failed"
+    kept = run("task.create", dict(title="Brief", instructions="Do.", revises_task_id=made["id"]))
+    assert _notify_when(kept["id"]) == "delivery,failed"

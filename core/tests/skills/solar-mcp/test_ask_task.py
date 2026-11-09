@@ -566,3 +566,13 @@ def test_a_queued_review_still_says_it_is_confined(solar_env):
     frontmatter = [("execution_profile", json.dumps("repository_readonly_v1"))]
     assert "confined" in operations._queued_next(frontmatter, "low")
     assert "not confined" in operations._queued_next(frontmatter, "high")
+
+
+def test_delivery_is_refused_on_a_question_on_create_and_on_update(solar_env):
+    body, error = execute("task.create", dict(arguments(solar_env), notify_when=["delivery", "failed"]))
+    assert error and body["code"] == "invalid_arguments" and "delivery" in body["error"]
+    made = run("task.create", dict(arguments(solar_env), notify_when=["failed"]))
+    current = stored(made["id"])
+    body, error = execute("task.update", dict(task_id=made["id"], expected_row_version=current["row_version"],
+                                              notify_when=["delivery"]))
+    assert error and body["code"] == "invalid_arguments"

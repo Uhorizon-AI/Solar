@@ -106,9 +106,9 @@ When a long-running user request should notify on completion:
 1. Offer to create an async task.
 2. Confirm title, objective, and priority.
 3. Create the task with `task.create` and approve it with `task.approve` (both through `solar_execute`).
-4. Set `notify_when` on that task: pass it to `task.create`/`task.update` as a list of `completed` and `failed` (stored as a comma list; asking for `completed` alone is stored as `completed,-failed`). Origin metadata sets `completed,failed` for a gateway parent.
+4. Set `notify_when` on that task: pass it to `task.create`/`task.update` as a list of `completed`, `delivery` and `failed` (`delivery` is opt-in: a success is announced only when this run's `## Delivery` is non-empty, never `completed` with it; stored as a comma list in the order completed, delivery, failed; asking for `completed` alone is stored as `completed,-failed`). Origin metadata sets `completed,failed` for a gateway parent.
 
-On completion the runtime notifies when `notify_when` lists `completed` and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
+On completion the runtime notifies when `notify_when` lists `completed`, or lists `delivery` and this run's `## Delivery` has text (a run with no block, or an empty one, sends nothing), and the origin chat is allowlisted (`origin_chat_id` or `TELEGRAM_CHAT_ID`). There is no `SOLAR_ASYNC_NOTIFY_TELEGRAM` env flag. Gateway parents get `notify_when` from origin metadata; children created already queued, without that metadata, do not.
 
 Delivery failures are recorded on the task as `notify_status: failed`,
 `notify_error`, and `notify_attempted_at`; the notifier returns nonzero. A successful
@@ -161,7 +161,7 @@ transporting it is not the same as compressing it.
 
 Tasks created with `delivery_expected: true` that finish without the block are
 marked `delivery_missing: true`, and their notice says the task finished without
-a delivery instead of announcing it as resolved. The flag is written by the same
+a delivery instead of announcing it as resolved. With `notify_when` `delivery` (alone or with `failed`) that notice is not sent: no block, or an empty one, is silent even when `delivery_expected` is true. The flag is written by the same
 call that puts the instruction in the task body: removing the instruction must
 remove the flag, or every task would report a missing delivery. A task without
 the flag keeps the earlier notice: a brief line plus the result location.
@@ -198,3 +198,5 @@ Logs:
 A claim clears `notify_delivered` and the other notice records, so a recurring task notifies once per run
 and a retry of the same run's notice is still deduplicated. The wait for `task.authorize_run` is announced by
 the supervisor, with the reason, for every task whatever its `notify_when` says.
+
+`delivery` is not available on a question (`ask`) or a review: those tasks keep no `## Delivery`, and `task.create`/`task.update` refuse the combination. The `## Delivery` section ends at the next runtime heading (`## Subtask results`, `## Execution Error` or `## Result`), so the delivery may contain other `##` headings; a delivery line that is exactly one of those headings is indented by one space when it is recorded. With `notify_when` `delivery` the notice also requires `delivery_recorded: true`, which the worker sets only when this run's reply carried a non-empty block. The heading is recognised exactly (`## Delivery` and nothing else on the line, so a look-alike in the instructions is neither replaced nor sent), and a delivery is stored with LF line endings. A re-run replaces the delivery only in what the runtime appended after the approved instructions (the boundary `solar-state` recorded), and the notice reads the last `## Delivery`, so a `## Delivery` heading inside the instructions is left whole and is never sent. No notice (`completed` included) sends a delivery the worker did not mark `delivery_recorded`; without the mark it falls back to the brief line, or to "finished without a delivery" when one was expected. A delivery recorded by an earlier version carries no mark, so a notice still pending for such a run is sent once with that fallback; the delivery stays in the task.

@@ -228,7 +228,7 @@ def test_notice_is_the_delivery_with_its_evidence_last(tmp_path):
     workspace, root, env = _notify_env(tmp_path)
     task = _completed(
         root,
-        'result_path: "/local/path.log"\ndelivery_expected: true\n',
+        'result_path: "/local/path.log"\ndelivery_expected: true\ndelivery_recorded: true\n',
         "# T\n\n## Result\n\nThe long account.\n\n"
         "## Delivery\n\nRESULTADO: existe x.md\nEVIDENCIA: docs/x.md\n",
     )
@@ -262,3 +262,255 @@ def test_task_that_never_asked_for_a_delivery_keeps_the_old_notice(tmp_path):
     sent = (workspace / "sent.log").read_text(encoding="utf-8")
     assert sent.startswith("Task completed: Some_task")
     assert "/local/path.log" in sent
+
+
+# ---------------------------------------------------------------------------
+# notify_when: delivery (opt-in, quiet)
+# ---------------------------------------------------------------------------
+
+def _task_with(root: Path, status: str, notify_when: str, body: str, extra: str = "", recorded: bool = True) -> Path:
+    extra = ("delivery_recorded: true\n" if recorded else "") + extra
+    folder = root / status
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "task.md"
+    path.write_text(
+        f'---\nid: "t1"\ntitle: "Some_task"\nstatus: {status}\n'
+        f'notify_when: {notify_when}\norigin_chat_id: "456"\n' + extra + "---\n\n" + body,
+        encoding="utf-8",
+    )
+    return path
+
+
+def _sent(workspace: Path) -> str:
+    log = workspace / "sent.log"
+    return log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def test_delivery_option_sends_the_delivery_once(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "completed", "delivery,failed",
+                      "# T\n\n## Delivery\n\nDECISION: nueva\nEVIDENCIA: x\n")
+    assert _notify(task, env).returncode == 0
+    assert _notify(task, env).returncode == 0          # the per-run record keeps a second call silent
+    sent = _sent(workspace)
+    assert sent.count("DECISION: nueva") == 1 and "Task completed" not in sent
+
+
+def test_delivery_option_is_silent_without_a_delivery_even_after_a_delivering_run(tmp_path):
+    # The worker side: run two has no block, so the section run one wrote is gone.
+    run_dir = tmp_path / "run"
+    task = _task(run_dir, extra="delivery_expected: true\n")
+    record(task, "<delivery>run one decision</delivery>")
+    text = record(task, "Run two: nothing new.")
+    assert "## Delivery" not in text and "run one decision" not in text
+    # The notifier side, on that very body, then on a block that is present but empty.
+    for name, body in (("absent", text.split("---\n\n", 1)[1]), ("empty", "# T\n\n## Delivery\n\n")):
+        workspace, root, env = _notify_env(tmp_path / name)
+        done = _task_with(root, "completed", "delivery,failed", body)
+        assert _notify(done, env).returncode == 0
+        assert _sent(workspace) == ""
+
+
+def test_delivery_option_with_failed_announces_a_failure(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "error", "delivery,failed", "# T\n", 'failure_code: "provider_timeout"\n')
+    assert _notify(task, env).returncode == 0
+    sent = _sent(workspace)
+    assert sent.count("Task failed and needs attention: Some_task") == 1
+    assert "Reason: provider_timeout" in sent
+
+
+def test_delivery_alone_keeps_a_failure_silent(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "error", "delivery", "# T\n")
+    assert _notify(task, env).returncode == 0
+    assert _sent(workspace) == ""
+
+
+def test_existing_notify_values_keep_their_notices(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    done = _task_with(root, "completed", "completed", "# T\n")      # no delivery: the old brief line
+    assert _notify(done, env).returncode == 0
+    assert _sent(workspace).startswith("Task completed: Some_task")
+    workspace, root, env = _notify_env(tmp_path / "failure")
+    failed = _task_with(root, "error", "completed", "# T\n")        # bare completed still reports failures
+    assert _notify(failed, env).returncode == 0
+    assert "Task failed and needs attention" in _sent(workspace)
+
+
+def test_delivery_alone_announces_a_success_with_text(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "completed", "delivery", "# T\n\n## Delivery\n\nDECISION: nueva\nEVIDENCIA: x\n")
+    assert _notify(task, env).returncode == 0
+    assert _sent(workspace).startswith("DECISION: nueva")
+
+
+def test_delivery_is_not_sent_twice_for_the_same_run(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "completed", "delivery", "# T\n\n## Delivery\n\nDECISION: nueva\n",
+                      'notify_run: "r1"\nnotify_delivered: true\nnotify_delivered_run: "r1"\n')
+    assert _notify(task, env).returncode == 0
+    assert _sent(workspace) == ""
+
+
+def test_expected_delivery_that_never_came_is_silent_with_the_delivery_option(tmp_path):
+    for name, when in (("alone", "delivery"), ("with_failed", "delivery,failed")):
+        workspace, root, env = _notify_env(tmp_path / name)
+        task = _task_with(root, "completed", when, "# T\n\n## Result\n\nAccount.\n",
+                          "delivery_expected: true\ndelivery_missing: true\n")
+        assert _notify(task, env).returncode == 0
+        assert "Task finished without a delivery" not in _sent(workspace)
+        assert _sent(workspace) == ""
+
+
+def test_a_delivery_with_headings_is_sent_whole(tmp_path):
+    workspace, root, env = _notify_env(tmp_path)
+    task = _task_with(root, "completed", "delivery",
+                      "# T\n\n## Result\n\nAccount.\n\n## Delivery\n\n## Resumen\nAsunto uno\n\n## Decision\nAprobar\n")
+    assert _notify(task, env).returncode == 0
+    sent = _sent(workspace)
+    assert sent.startswith("## Resumen") and "Asunto uno" in sent and "## Decision\nAprobar" in sent
+    assert "Account." not in sent
+
+
+def test_a_rerun_replaces_a_delivery_that_holds_headings(tmp_path):
+    task = _task(tmp_path, extra="delivery_expected: true\n")
+    record(task, "<delivery>\n## Resumen\nold text\n## Decision\nold ask\n</delivery>")
+    text = record(task, "<delivery>\n## Resumen\nnew text\n</delivery>")
+    assert text.count("## Delivery") == 1
+    assert "old text" not in text and "old ask" not in text and "new text" in text
+
+
+def test_a_new_delivery_keeps_the_sections_the_runtime_wrote_after_it(tmp_path):
+    body = ("# T\n\n## Delivery\n\n## Resumen\nold text\n\n"
+            "## Subtask results\n\n### a — completed\n\nCHILD TEXT\n")
+    task = _task(tmp_path, body=body)
+    text = record(task, "<delivery>\n## Resumen\nnew text\n</delivery>")
+    assert "CHILD TEXT" in text and "old text" not in text and "new text" in text
+    assert text.count("## Delivery") == 1
+
+
+def test_the_notice_stops_at_a_runtime_heading_and_keeps_inner_ones(tmp_path):
+    for name, heading in (("subtasks", "## Subtask results"), ("error", "## Execution Error"), ("result", "## Result")):
+        workspace, root, env = _notify_env(tmp_path / name)
+        task = _task_with(root, "completed", "delivery",
+                          f"# T\n\n## Delivery\n\n## Resumen\nAsunto\n\n## Decision\nAprobar\n\n{heading}\n\nFOREIGN TEXT\n")
+        assert _notify(task, env).returncode == 0
+        sent = _sent(workspace)
+        assert "## Resumen" in sent and "## Decision\nAprobar" in sent
+        assert "FOREIGN TEXT" not in sent
+
+
+def test_the_two_delivery_cuts_use_the_same_headings():
+    import re
+    import solar_state
+    script = (SCRIPTS / "notify_if_configured.sh").read_text(encoding="utf-8")
+    in_awk = re.search(r"on && /\^## \(([^)]*)\)", script).group(1).split("|")
+    expected = [h[3:] for h in solar_state.RUNTIME_SECTIONS if h != "## Delivery"]
+    assert sorted(in_awk) == sorted(expected)
+
+
+def test_a_delivery_heading_that_the_executor_did_not_record_sends_nothing(tmp_path):
+    for name, heading in (("exact", "## Delivery"), ("trailing_space", "## Delivery ")):
+        workspace, root, env = _notify_env(tmp_path / name)
+        task = _task_with(root, "completed", "delivery",
+                          f"# T\n\nInstructions.\n\n{heading}\n\nSECRET INSTRUCTIONS\n", recorded=False)
+        assert _notify(task, env).returncode == 0
+        assert _sent(workspace) == ""
+
+
+def test_the_worker_marks_only_a_delivery_it_recorded(tmp_path):
+    task = _task(tmp_path / "a")
+    assert "delivery_recorded: true" in record(task, "<delivery>x</delivery>")
+    assert "delivery_recorded" not in record(task, "No block this time.")
+
+
+def test_a_delivery_that_holds_a_runtime_heading_is_kept_whole_and_the_next_section_is_not_sent(tmp_path):
+    task = _task(tmp_path / "w", body="# T\n")
+    text = record(task, "<delivery>\n## Result\nAsunto uno\n## Subtask results\nAsunto dos\n</delivery>")
+    assert text.count("\n## Result") == 0 and " ## Result\nAsunto uno" in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    body = text.split("---\n\n", 1)[1] + "\n## Result\n\nFOREIGN TEXT\n"
+    done = _task_with(root, "completed", "delivery", body)
+    assert _notify(done, env).returncode == 0
+    sent = _sent(workspace)
+    assert "Asunto uno" in sent and "Asunto dos" in sent and "FOREIGN TEXT" not in sent
+
+
+_LOOKALIKE = "# T\n\nInstructions.\n\n## Delivery \n\nSECRET INSTRUCTIONS\n\n## Límites\n\nKEEP THIS\n"
+
+
+def test_a_lookalike_heading_in_the_instructions_survives_an_attempt_without_a_block(tmp_path):
+    task = _task(tmp_path / "w", body=_LOOKALIKE)
+    text = record(task, "No block this time.")
+    assert "## Delivery \n\nSECRET INSTRUCTIONS\n\n## Límites\n\nKEEP THIS" in text
+    assert "delivery_recorded" not in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1], recorded=False)
+    assert _notify(done, env).returncode == 0
+    assert _sent(workspace) == ""
+
+
+def test_a_real_delivery_is_sent_instead_of_a_lookalike_in_the_instructions(tmp_path):
+    task = _task(tmp_path / "w", body=_LOOKALIKE)
+    text = record(task, "<delivery>REAL DELIVERY</delivery>")
+    assert "KEEP THIS" in text and "SECRET INSTRUCTIONS" in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1])
+    assert _notify(done, env).returncode == 0
+    sent = _sent(workspace)
+    assert sent.strip() == "REAL DELIVERY"
+
+
+def test_a_delivery_with_crlf_endings_and_a_leading_runtime_heading_is_sent_whole(tmp_path):
+    task = _task(tmp_path / "w", body="# T\n")
+    text = record(task, "<delivery>\r\n## Result\r\nAsunto uno\r\n</delivery>")
+    assert "\r" not in text and " ## Result\nAsunto uno" in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1] + "\n## Result\n\nFOREIGN\n")
+    assert _notify(done, env).returncode == 0
+    sent = _sent(workspace)
+    assert "Asunto uno" in sent and "FOREIGN" not in sent
+
+
+_EXACT = "# T\n\nInstructions.\n\n## Delivery\n\nSECRET INSTRUCTIONS\n\n## Límites\n\nKEEP THIS\n"
+
+
+def _approved(body: str) -> str:
+    import solar_state
+    return "approved_definition: " + json.dumps(solar_state.definition_text(body, "T")) + "\n"
+
+
+def test_an_exact_delivery_heading_in_the_instructions_survives_an_attempt_without_a_block(tmp_path):
+    task = _task(tmp_path / "w", body=_EXACT, extra=_approved(_EXACT))
+    text = record(task, "No block this time.")
+    assert "## Delivery\n\nSECRET INSTRUCTIONS\n\n## Límites\n\nKEEP THIS" in text
+    assert "delivery_recorded" not in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1], recorded=False)
+    assert _notify(done, env).returncode == 0
+    assert _sent(workspace) == ""
+
+
+def test_a_real_delivery_replaces_only_the_recorded_one_and_is_the_one_sent(tmp_path):
+    task = _task(tmp_path / "w", body=_EXACT, extra=_approved(_EXACT))
+    record(task, "<delivery>FIRST RUN</delivery>")
+    text = record(task, "<delivery>SECOND RUN</delivery>")
+    assert "SECRET INSTRUCTIONS" in text and "KEEP THIS" in text
+    assert "FIRST RUN" not in text and "SECOND RUN" in text
+    workspace, root, env = _notify_env(tmp_path / "n")
+    done = _task_with(root, "completed", "delivery", text.split("---\n\n", 1)[1])
+    assert _notify(done, env).returncode == 0
+    assert _sent(workspace).strip() == "SECOND RUN"
+
+
+def test_every_notify_option_ignores_a_delivery_heading_the_worker_did_not_record(tmp_path):
+    for name, when, expected in (("completed", "completed", False), ("both", "completed,failed", False),
+                                 ("expected", "completed", True)):
+        workspace, root, env = _notify_env(tmp_path / name)
+        extra = ("delivery_expected: true\ndelivery_missing: true\n" if expected else "")
+        task = _task_with(root, "completed", when, _EXACT, extra, recorded=False)
+        assert _notify(task, env).returncode == 0
+        sent = _sent(workspace)
+        assert "SECRET INSTRUCTIONS" not in sent and "KEEP THIS" not in sent
+        assert sent.startswith("Task finished without a delivery" if expected else "Task completed: Some_task")

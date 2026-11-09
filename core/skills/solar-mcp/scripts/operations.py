@@ -93,10 +93,20 @@ _TEXT_FIELDS = ("title", "object", "scope", "effect", "provider", "planet", "age
 
 def _notify_text(tokens) -> str:
     """The stored spelling of notify_when: tokens in a fixed order, comma separated, empty to turn it off."""
-    text = ",".join(t for t in ("completed", "failed") if t in tokens)
+    if "completed" in tokens and "delivery" in tokens:
+        raise OperationError("invalid_arguments", "`completed` already tells every success; `delivery` is the quiet alternative. Pick one.")
+    text = ",".join(t for t in ("completed", "delivery", "failed") if t in tokens)
     # A bare `completed` is what older tasks carry, and it has always announced failures too. A caller who
     # asks for completion only is spelled `completed,-failed`, so the two never read alike.
     return "completed,-failed" if text == "completed" else text
+
+
+def _refuse_delivery_on_restricted(notify_when, profile) -> None:
+    """A restricted task (ask, review) never stores a `## Delivery`, so `delivery` would stay silent for ever."""
+    if profile and "delivery" in str(notify_when or "").replace(" ", "").split(","):
+        raise OperationError("invalid_arguments",
+                             "`delivery` is not available on a question or a review: those tasks keep no `## Delivery`. "
+                             "Use `completed` or `failed`.")
 
 
 def _now_iso() -> str:
@@ -353,6 +363,7 @@ def _do_task_create(arguments: dict) -> dict:
         if "access_policy" in arguments:
             merged["access_policy"] = _access_text(arguments["access_policy"])
         merged.update(review_fields)
+        _refuse_delivery_on_restricted(merged.get("notify_when"), merged.get("execution_profile"))
         fields += list(merged.items())
         if source_id:
             fields.append(("revises_task_id", json.dumps(source_id)))
@@ -465,6 +476,9 @@ def _do_task_update(arguments: dict) -> dict:
         fields["notify_when"] = _notify_text(changes["notify_when"])
     if "access_policy" in changes:
         fields["access_policy"] = _access_text(changes["access_policy"])
+    _refuse_delivery_on_restricted(
+        fields.get("notify_when", solar_state.value_of(current_fields.get("notify_when") or "")),
+        fields.get("execution_profile") or current_fields.get("execution_profile"))
     body = None
     definition = None
     title = changes.get("title", old_title)
@@ -909,12 +923,17 @@ _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 
 _NOTIFY_WHEN = {
     "type": "array", "uniqueItems": True, "maxItems": 2,
-    "items": {"type": "string", "enum": ["completed", "failed"]},
+    "items": {"type": "string", "enum": ["completed", "delivery", "failed"]},
     "description": "When the configured chat is told, without confirming the text (a system notice, not a message "
-                   "to third parties): completed, and failed (adds the one-line reason). "
+                   "to third parties): completed, delivery (opt-in, quiet) and failed (adds the one-line reason). "
+                   "`completed` and `delivery` are mutually exclusive: asking for both is refused. "
+                   "`delivery` is also refused on a question (`ask`) or a review, which keep no `## Delivery`. "
                    "`[completed]` alone is stored as `completed,-failed` and stays silent when the task fails; "
                    "a bare `completed` written by older tasks also reports failures; `[completed, failed]` "
-                   "reports both. A recurring task is told once per run. An empty "
+                   "reports both. `delivery` is opt-in and quiet: a successful run is announced only when ITS OWN "
+                   "<delivery> block is non-empty (the block is the message; no block, or an empty one, sends nothing, "
+                   "whatever an earlier run delivered); it combines with `failed` and not with `completed`, and on its "
+                   "own a failure stays silent. A recurring task is told once per run. An empty "
                    "list turns off these notices. The wait for task.authorize_run is announced for every task, "
                    "whatever this list says. Editing it follows the usual rules: a queued task returns to draft.",
 }
