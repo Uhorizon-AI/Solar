@@ -28,7 +28,7 @@ Approvals bind the operation name, exact arguments (a task's `expected_row_versi
 reserved under a process-shared lock before side effects. A failed execution may
 already have caused effects: it consumes the approval too. Inspect state before
 retrying. Legacy approvals without the workspace-bound hash, and approvals that name a previous tool, must be reapproved.
-`solar approve` (the operator channel, below) admits only four operations: `task.authorize_run`, `async_execution.propose`, `async_execution.apply` and `telegram.send`; anything else is refused.
+Approvals are given through the MCP form. If the client does not raise it, the agent does not bypass the approval: it tells the user and suggests they run `solar approve <operation>` in their own terminal (the operator channel, below), for `task.authorize_run`, `async_execution.propose`, `async_execution.apply` or `telegram.send`.
 Telegram confirmation requires an explicit destination (`chat_id` is required by the schema), so changing the default
 chat cannot redirect a confirmed call.
 
@@ -186,8 +186,7 @@ operation itself**: it leaves no grant behind and no `approval_id` reaches an ag
 
 This is a channel for the human operator. Agents keep using `solar_execute` and must not run
 `solar approve`. Declared limit: a TTY is defence in depth, not a boundary; an agent with a shell that
-can create a pty under the same user could still type `yes`. The old console CLI of `mcp_approve.py`
-(`grant`, `list`, `revoke`) is retired; the module keeps only the internal `grant()` and `listing()`.
+can create a pty under the same user could still type `yes`.
 
 ## Cancellation behavior
 

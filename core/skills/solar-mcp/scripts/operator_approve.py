@@ -1,7 +1,8 @@
 """`solar approve`: the operator's own channel for the four operations that ask for a form.
 
 This is for the human operator on their machine. Agents keep using `solar_execute`; the MCP
-form stays the product path and works as before. Use this when the client does not raise the
+form stays the product path and works as before. This command shares the operation registry
+and handlers of `solar-mcp` (same checks, same audit), but not the MCP transport. Use this when the client does not raise the
 form (a transport failure, not a policy decision).
 
     solar approve task.authorize_run <task id or prefix of 8+ characters>
@@ -24,9 +25,11 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_HERE = Path(__file__).resolve().parent
+for _p in (_HERE, _HERE.parents[1] / "solar-paths" / "scripts", _HERE.parents[1] / "solar-state" / "scripts"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
-import mcp_gate  # noqa: F401  (first: it puts the paths and state scripts on sys.path)
 import approval_text
 import op_schema
 import operations
