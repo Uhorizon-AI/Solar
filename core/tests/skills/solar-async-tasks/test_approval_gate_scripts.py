@@ -84,6 +84,19 @@ def test_set_recurring_needs_a_schedule_and_stores_no_interval(tmp_path):
     assert "recurring_min_interval" not in values
 
 
+def test_set_recurring_refuses_a_bad_time_or_a_missing_zone(tmp_path):
+    env = _env(tmp_path)
+    for name, fields in (
+        ("25:00", dict(scheduled_time=json.dumps("25:00"), scheduled_timezone=json.dumps("UTC"))),
+        ("09:00x", dict(scheduled_time=json.dumps("09:00x"), scheduled_timezone=json.dumps("UTC"))),
+        ("no zone", dict(scheduled_time=json.dumps("09:00"))),
+    ):
+        task_id = _task(name, **fields)
+        refused = _script(env, "set_recurring.sh", task_id)
+        assert refused.returncode != 0 and "needs a schedule" in refused.stderr, name
+        assert _values(task_id)["recurring"] == "false"
+
+
 def test_activate_fails_when_claim_rejected(tmp_path):
     env = _env(tmp_path)
     task_id = _task("Waits", "queued", blocked_by_task_ids='"nobody"')

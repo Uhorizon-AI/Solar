@@ -460,7 +460,7 @@ def test_no_extra_run_in_the_same_occurrence_after_edit_reapprove(ready):
         store.task_approve(task_id, expected_row_version=store.task_get(task_id)["row_version"])
         assert store.task_claim_next("w") is None            # the occurrence of the schedule already ran
         assert store.task_status(task_id) == "queued"
-        later = datetime.now() + timedelta(days=2)
+        later = now + timedelta(days=2)                       # same UTC time of day, two days on
         assert store.task_claim_next("w", now=later)["id"] == task_id
 
 

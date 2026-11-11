@@ -974,15 +974,28 @@ def recurring_windows(local: datetime, zone, allowed) -> list[tuple[datetime, da
     return windows
 
 
+_RECURRING_CLOCK = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+def recurring_clock_minutes(stamp: Optional[str]) -> Optional[int]:
+    """Minutes since midnight for a valid HH:MM (the pattern `task.schedule` accepts), else None."""
+    text = (stamp or "").strip()
+    if not _RECURRING_CLOCK.fullmatch(text):
+        return None
+    return _clock_minutes(text)
+
+
 def latest_recurring_occurrence(scheduled_time: Optional[str], weekdays: Optional[str],
                                 timezone_name: Optional[str], now_epoch: float) -> Optional[float]:
     """UTC epoch at which the most recent occurrence of a recurring schedule became eligible.
 
     This is what tells one occurrence from the next: a run stamped at or after it already
-    ran that occurrence. None when there is no readable clock time (a recurring task needs
-    one) or the zone is unknown. Without a zone the host's local time applies, as in
-    `scheduled_now`."""
-    scheduled = _clock_minutes((scheduled_time or "").strip())
+    ran that occurrence. An occurrence is one nominal local day; its start is the earliest
+    eligible minute of that day, so both passes of a repeated autumn hour belong to one
+    occurrence and a window that opens before midnight belongs to the next nominal day.
+    None when there is no valid clock time (a recurring task needs one) or the zone is
+    unknown. Without a zone the host's local time applies, as in `scheduled_now`."""
+    scheduled = recurring_clock_minutes(scheduled_time)
     if scheduled is None:
         return None
     zone_name = (timezone_name or "").strip()
@@ -993,13 +1006,19 @@ def latest_recurring_occurrence(scheduled_time: Optional[str], weekdays: Optiona
     allowed = {int(part) for part in (weekdays or "").split(",") if part.strip().isdigit()} or set(range(1, 8))
     today = (datetime.fromtimestamp(now_epoch, zone) if zone else datetime.fromtimestamp(now_epoch)).date()
     best = None
-    for days_ago in range(9):                         # a weekly schedule never looks back further
+    for days_ago in range(-1, 9):                     # tomorrow's window may already be open
         day = today - timedelta(days=days_ago)
-        local = datetime(day.year, day.month, day.day, scheduled // 60, scheduled % 60)
-        for start, _end in recurring_windows(local, zone, allowed):
-            start_epoch = start.timestamp() if zone else start.astimezone().timestamp()
-            if start_epoch <= now_epoch and (best is None or start_epoch > best):
-                best = start_epoch
+        try:
+            local = datetime(day.year, day.month, day.day, scheduled // 60, scheduled % 60)
+        except ValueError:
+            return None
+        windows = recurring_windows(local, zone, allowed)
+        if not windows:
+            continue
+        start = windows[0][0]
+        start_epoch = start.timestamp() if zone else start.astimezone().timestamp()
+        if start_epoch <= now_epoch and (best is None or start_epoch > best):
+            best = start_epoch
     return best
 
 
@@ -1410,7 +1429,7 @@ def _recurring_ready(pairs: list[list[str]], now_epoch: float) -> Optional[str]:
         _field(pairs, "scheduled_time"), _field(pairs, "scheduled_weekdays"),
         _field(pairs, "scheduled_timezone"), now_epoch)
     if occurrence is None:
-        if _clock_minutes((_field(pairs, "scheduled_time") or "").strip()) is None:
+        if recurring_clock_minutes(_field(pairs, "scheduled_time")) is None:
             return "recurring_without_schedule"
         return None                                   # unknown zone: `scheduled_now` holds it
     last = _field(pairs, "recurring_last_run")

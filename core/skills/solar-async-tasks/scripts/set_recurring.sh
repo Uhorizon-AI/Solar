@@ -18,8 +18,9 @@ if [[ -z "$TASK_ID" ]]; then
 fi
 
 SCHEDULED_TIME="$(task_field "$TASK_ID" "scheduled_time")"
-if [[ ! "$SCHEDULED_TIME" =~ ^[0-9]{1,2}:[0-9]{2} ]]; then
-    echo "A recurring task needs a schedule: set scheduled_time (HH:MM) and scheduled_timezone with task.schedule first." >&2
+SCHEDULED_TIMEZONE="$(task_field "$TASK_ID" "scheduled_timezone")"
+if [[ ! "$SCHEDULED_TIME" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ || -z "$SCHEDULED_TIMEZONE" ]]; then
+    echo "A recurring task needs a schedule: set scheduled_time (HH:MM, 00:00-23:59) and scheduled_timezone with task.schedule first." >&2
     exit 1
 fi
 

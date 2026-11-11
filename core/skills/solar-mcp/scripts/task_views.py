@@ -26,8 +26,6 @@ _RESULT_SECTIONS = ("Result", "Resultado", "Delivery", "Subtask results")
 _ERROR_SECTIONS = ("Execution Error", "Error")
 _IDENTITY = ("workspace_id", "agent", "planet", "responsibility", "agent_contract")
 _LIMIT_BYTES = 60000
-# A recurrence must be able to fire again even when the week is one hour shorter
-# (daylight-saving change) and the previous run finished late.
 
 
 ViewError = OperationError

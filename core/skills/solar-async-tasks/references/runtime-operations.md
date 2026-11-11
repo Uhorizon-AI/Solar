@@ -58,8 +58,10 @@ Behavior:
 Race protection:
 
 - The schedule tells one occurrence from the next. `recurring_last_run` is compared with the start of the latest occurrence (the beginning of its eligibility window, read in `scheduled_timezone`): if the task already ran at or after it, the worker skips the task and leaves it queued (`occurrence_already_ran`).
-- Because the guard follows the clock and not a fixed number of seconds, a week with a clock change neither skips an occurrence nor repeats one.
-- `recurring_min_interval` is no longer used. A legacy task that still carries it keeps working: the value is ignored.
+- An occurrence is one nominal local day. Its start is the earliest eligible minute of that day, so a window that opens before midnight belongs to the next day, and both passes of a repeated autumn hour (for example 02:30 on the night the clock goes back) are one occurrence: if the first pass ran, the second is skipped; if it was missed, the second still serves it.
+- The guard follows the clock, not a fixed number of seconds, so a week with a clock change does not shift the occurrence. A task whose clock time falls in a skipped hour keeps the valid minutes of its window.
+- `scheduled_time` must be `HH:MM` (00:00-23:59). An invalid time is `recurring_without_schedule`.
+- `recurring_min_interval` is no longer read. A task that still carries it is not stopped by it and keeps its approval, but its spacing now comes only from the schedule: see the CHANGELOG for the tasks whose frequency changes.
 - `recurring_last_run` is written after a claim that won, never before: a claim refused by the approval check (`approval_digest_mismatch`) does not consume the occurrence. Editing, returning to draft and approving again keep `recurring_run_count` and `recurring_last_run`, and add no run.
 
 ## Resource Cleanup
