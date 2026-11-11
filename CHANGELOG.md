@@ -13,6 +13,7 @@ The format is based on Keep a Changelog.
 ### Changed
 - approvals: `task_authorize_run` refuses an already-satisfied authorization inside its transaction (`task_authorization_not_required`), so two racing authorizations cannot both pass. The `client_form_not_advertised` recovery text points to `solar approve`.
 - feat(console): opening Tasks now selects Running if a task is active, else Errors if any task failed, else Queue. Drafts is no longer the default focus; pick it from the toolbar.
+- tasks: `recurring_min_interval` is removed from `solar-async-tasks`, `task.schedule`, `set_recurring.sh`, the approval text and the console. A recurring task now needs a schedule (`scheduled_time` with `scheduled_timezone`): `task.schedule` and `set_recurring.sh` refuse it without a clock time, and a claim refuses a queued one without it (`recurring_without_schedule`). The double-run guard compares `recurring_last_run` with the start of the latest schedule occurrence, so an occurrence that already ran is skipped (`occurrence_already_ran`, formerly `recurring_interval`) and a week with a clock change neither skips nor repeats one. A task that still stores `recurring_min_interval` keeps its approval and runs; the value is ignored. Closes #159.
 
 ### Removed
 - approvals: the console CLI of `mcp_approve.py` (`grant`, `list`, `revoke`, `main`). The internal `grant()` and `listing()` stay; `revoke()` is deleted, so a live approval can no longer be revoked by command: it expires (at most 15 minutes), is consumed on use, or its file in `approvals_dir()` is deleted.

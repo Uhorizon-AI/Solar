@@ -14,6 +14,7 @@ sys.path.insert(0, str(STATE))
 import solar_state  # noqa: E402
 
 from queue_mirror import env_for  # noqa: E402
+from recurring_schedule import open_now
 from reservation_tokens import token_of
 
 
@@ -61,12 +62,26 @@ def test_approve_sh_leaves_a_digest_the_claim_accepts(tmp_path):
 
 def test_activate_sh_approves_claims_and_stamps_a_recurring_run(tmp_path):
     env = _env(tmp_path)
-    task_id = _task("Recurring", recurring="true", recurring_min_interval="3600")
+    task_id = _task("Recurring", recurring="true", **open_now())
     done = _script(env, "activate.sh", task_id)
     assert done.returncode == 0 and "Activated" in done.stdout, done.stderr
     values = _values(task_id)
     assert values["status"] == "active" and values["approved_digest"].startswith("v2:")
     assert values["recurring_last_run"]
+
+
+def test_set_recurring_needs_a_schedule_and_stores_no_interval(tmp_path):
+    env = _env(tmp_path)
+    bare = _task("Bare")                                     # scheduled_time is "now": no clock time
+    refused = _script(env, "set_recurring.sh", bare)
+    assert refused.returncode != 0 and "needs a schedule" in refused.stderr
+    assert _values(bare)["recurring"] == "false"
+    scheduled = _task("Scheduled", scheduled_time=json.dumps("09:00"), scheduled_timezone=json.dumps("UTC"))
+    done = _script(env, "set_recurring.sh", scheduled, "5")
+    assert done.returncode == 0, done.stderr
+    values = _values(scheduled)
+    assert values["recurring"] == "true" and values["recurring_max_runs"] == "5"
+    assert "recurring_min_interval" not in values
 
 
 def test_activate_fails_when_claim_rejected(tmp_path):
@@ -101,7 +116,7 @@ def test_activate_fails_when_the_task_was_taken_meanwhile(tmp_path):
 
 def test_rejected_claim_does_not_stamp_last_run(tmp_path):
     env = _env(tmp_path)
-    task_id = _task("Recurring", "queued", recurring="true", recurring_min_interval="3600")
+    task_id = _task("Recurring", "queued", recurring="true", **open_now())
     _tamper(task_id)
     assert _script(env, "activate.sh", task_id).returncode != 0
     started = _script(env, "start_next.sh")

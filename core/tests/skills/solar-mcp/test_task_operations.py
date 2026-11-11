@@ -218,8 +218,7 @@ def test_schedule_stores_time_zone_and_recurrence_without_queueing(solar_env):
     assert task["status"] == "draft" and out["activated"] is False
     assert values["scheduled_time"] == "17:00" and values["scheduled_weekdays"] == "5"
     assert values["scheduled_timezone"] == MADRID and values["recurring"] == "true"
-    # Weekly, less margin for a one-hour shorter week and a late finish.
-    assert int(values["recurring_min_interval"]) == 7 * 86400 - 7200 == out["schedule"]["recurring_min_interval"]
+    assert "recurring_min_interval" not in values and "recurring_min_interval" not in out["schedule"]
     assert len(out["schedule"]["next_occurrences"]) == 4
     assert all(o["weekday"] == 5 and o["local"].split("T")[1][:5] == "17:00"
                for o in out["schedule"]["next_occurrences"])
@@ -235,7 +234,7 @@ def test_schedule_stores_time_zone_and_recurrence_without_queueing(solar_env):
 def test_one_off_preview_keeps_the_open_window_across_midnight():
     after = datetime(2026, 11, 9, 23, 5, tzinfo=timezone.utc)
     plan = task_views.plan_schedule(time="23:55", weekdays=[1], zone=MADRID,
-                                    recurring=False, min_interval=None, after=after)
+                                    recurring=False, after=after)
     assert plan["start_windows"][0] == {
         "not_before": "2026-11-09T23:55:00+01:00",
         "not_after": "2026-11-10T00:10:00+01:00",
@@ -251,7 +250,7 @@ def test_one_off_preview_keeps_the_open_window_across_midnight():
 ])
 def test_partial_recurring_windows_preserve_nominal_occurrences(time, weekday, after, start, end, nominal):
     plan = task_views.plan_schedule(time=time, weekdays=[weekday], zone=MADRID,
-                                    recurring=True, min_interval=None, after=datetime.fromisoformat(after))
+                                    recurring=True, after=datetime.fromisoformat(after))
     assert plan["start_windows"][0] == {"not_before": start, "not_after": end}
     local = datetime.fromisoformat(nominal)
     assert plan["next_occurrences"][0] == {
@@ -276,7 +275,7 @@ def test_recurring_preview_preserves_both_folds_of_a_repeated_hour():
 
 def test_recurring_friday_preview_keeps_the_symmetric_window():
     plan = task_views.plan_schedule(time="17:00", weekdays=[5], zone=MADRID, recurring=True,
-                                    min_interval=None, after=datetime(2027, 3, 20, tzinfo=timezone.utc))
+                                    after=datetime(2027, 3, 20, tzinfo=timezone.utc))
     assert plan["start_windows"][0] == {
         "not_before": "2027-03-26T16:45:00+01:00",
         "not_after": "2027-03-26T17:15:00+01:00",
@@ -287,8 +286,9 @@ def test_recurring_friday_preview_keeps_the_symmetric_window():
     dict(scheduled_time="17:00"),                                  # no zone: host-dependent hour
     dict(scheduled_time="17:00", scheduled_timezone="Nowhere/Land"),
     dict(scheduled_weekdays=[5], scheduled_timezone=MADRID),       # weekdays without a time
-    dict(scheduled_time="17:00", scheduled_timezone=MADRID, recurring=True,
-         recurring_min_interval=7 * 86400),                        # would skip after a clock change
+    dict(scheduled_time="17:00", scheduled_timezone=MADRID, recurring_min_interval=86400),  # field removed
+    dict(recurring=True),                                          # recurring needs a clock time
+    dict(scheduled_weekdays=[5], scheduled_timezone=MADRID, recurring=True),
     dict(scheduled_time="17:00", scheduled_timezone=MADRID, scheduled_weekdays=[5, 5]),
     dict(scheduled_time="25:00", scheduled_timezone=MADRID),
     dict(scheduled_time="17:00", scheduled_timezone="../../etc/passwd"),
@@ -301,11 +301,11 @@ def test_an_unsafe_schedule_is_refused_and_stores_nothing(solar_env, arguments):
     assert stored(made["id"])["row_version"] == made["row_version"]
 
 
-def test_a_daily_recurrence_gets_a_dst_safe_interval(solar_env):
+def test_a_daily_recurrence_stores_no_interval(solar_env):
     made = new_task()
     out = run("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"],
                                     scheduled_time="09:00", scheduled_timezone=MADRID, recurring=True))
-    assert out["schedule"]["recurring_min_interval"] == 86400 - 7200
+    assert "recurring_min_interval" not in out["schedule"]
     assert "02:00" not in " ".join(out["schedule"]["notes"])
     out = run("task.schedule", dict(task_id=made["id"], expected_row_version=out["row_version"],
                                     scheduled_time="02:30", scheduled_timezone=MADRID))
@@ -487,20 +487,26 @@ def test_restrictions_are_part_of_what_is_approved(solar_env):
 # legacy "scheduled_time: now" and one serialization
 # --------------------------------------------------------------------------
 
-def test_a_task_queued_with_scheduled_time_now_can_be_revised_and_made_recurring(solar_env):
+def test_a_task_queued_with_scheduled_time_now_can_be_revised_and_made_recurring_only_with_a_clock(solar_env):
     with solar_state.session() as store:
         source = store.task_create([("title", '"Queued now"'), ("scheduled_time", '"now"'), ("recurring", "false")],
                                    "\n# Queued now\n", status="queued")
     made = run("task.create", dict(title="Revision", instructions="x", revises_task_id=source))
-    # Only the recurrence changes: "now" is no clock time, so no zone is demanded and nothing crashes.
-    out = run("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"], recurring=True))
-    assert out["schedule"]["next_occurrences"] == [] and out["status"] == "draft"
+    # "now" is no clock time: recurring is refused and nothing is stored.
+    body, error = execute("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                                                recurring=True))
+    assert error and body["code"] == "schedule_invalid"
+    assert stored(made["id"])["row_version"] == made["row_version"]
+    # Without recurrence, "now" still reads and previews without a zone.
     detail = search(scope="tasks", task_id=made["id"])
     assert detail["schedule"]["time"] == "now" and "next_occurrences" not in detail["schedule"]
-    # A real clock time on top of it still needs a zone.
-    body, error = execute("task.schedule", dict(task_id=made["id"], expected_row_version=out["row_version"],
-                                                scheduled_time="17:00"))
+    # A real clock time needs a zone, and makes it recurring.
+    body, error = execute("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                                                scheduled_time="17:00", recurring=True))
     assert error and body["code"] == "schedule_invalid"
+    out = run("task.schedule", dict(task_id=made["id"], expected_row_version=made["row_version"],
+                                    scheduled_time="17:00", scheduled_timezone=MADRID, recurring=True))
+    assert out["status"] == "draft" and len(out["schedule"]["next_occurrences"]) == 4
 
 
 def test_weekdays_are_refused_without_a_real_hour_when_the_task_inherited_now(solar_env):

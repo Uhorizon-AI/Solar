@@ -133,7 +133,7 @@ def recurring_task():
     """A recurring draft with run history, approved the way the MCP flow does."""
     made = new_task("Weekly", "Do the work.")
     with solar_state.session() as store:
-        for key, value in (("recurring", "true"), ("recurring_min_interval", "86400"),
+        for key, value in (("recurring", "true"),
                            ("recurring_run_count", "3"), ("recurring_last_run", '"2026-10-01T00:00:00Z"')):
             store.task_set(made["id"], key, value)
     return made["id"]

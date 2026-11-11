@@ -84,7 +84,7 @@ _COPIED = ("priority", "provider", "planet", "agent", "responsibility", "agent_c
            "object", "scope", "effect", "notify_when", "origin_channel", "origin_chat_id",
            "resources", "cleanup_required", "cleanup_timeout",
            "scheduled_time", "scheduled_weekdays", "scheduled_timezone", "recurring",
-           "recurring_min_interval", "recurring_max_runs",
+           "recurring_max_runs",
            # What a revision may touch stays what its source declared; evidence digests do not carry over.
            "access_policy", "execution_profile")
 _TEXT_FIELDS = ("title", "object", "scope", "effect", "provider", "planet", "agent",
@@ -156,7 +156,7 @@ def _task(store, task_id: str) -> dict:
 
 
 _SCHEDULE_FIELDS = ("scheduled_time", "scheduled_weekdays", "scheduled_timezone", "recurring",
-                    "recurring_max_runs", "recurring_min_interval")
+                    "recurring_max_runs")
 
 
 def _is_derived_question(arguments: dict) -> bool:
@@ -516,10 +516,7 @@ def _do_task_schedule(arguments: dict) -> dict:
         else [int(d) for d in str(stored.get("scheduled_weekdays") or "").split(",") if d.strip().isdigit()])
     plan = task_views.plan_schedule(
         time=merged["scheduled_time"], weekdays=merged["weekdays"],
-        zone=merged["scheduled_timezone"], recurring=merged["recurring"],
-        min_interval=arguments.get("recurring_min_interval",
-                                   int(stored["recurring_min_interval"])
-                                   if str(stored.get("recurring_min_interval") or "").isdigit() else None))
+        zone=merged["scheduled_timezone"], recurring=merged["recurring"])
     fields: dict = {}
     if "scheduled_time" in arguments:
         fields["scheduled_time"] = _fm(arguments["scheduled_time"])
@@ -531,8 +528,6 @@ def _do_task_schedule(arguments: dict) -> dict:
         fields["recurring"] = _fm(arguments["recurring"])
     if "recurring_max_runs" in arguments:
         fields["recurring_max_runs"] = _fm(arguments["recurring_max_runs"])
-    if merged["recurring"] and plan["recurring_min_interval"] is not None:
-        fields["recurring_min_interval"] = _fm(plan["recurring_min_interval"])
     result = _edit(task_id, arguments["expected_row_version"], fields, None, "task.schedule")
     result["schedule"] = plan
     return result
@@ -1033,8 +1028,6 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                   scheduled_weekdays={"type": "array", "items": _WEEKDAY, "minItems": 1,
                                       "maxItems": 7, "uniqueItems": True},
                   scheduled_timezone=_ZONE, recurring={"type": "boolean"},
-                  recurring_min_interval={"type": "integer", "minimum": 3600,
-                                          "maximum": 31536000},
                   recurring_max_runs={"type": "integer", "minimum": 0, "maximum": 10000}),
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable",

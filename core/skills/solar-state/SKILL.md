@@ -206,7 +206,7 @@ demand through a read session and never writes. It returns `id`, `context`,
   frontmatter cannot be decoded). Either way `context` is `None`; `configuration`
   is still returned when readable, else `{}`.
 - `configuration` holds the stored schedule keys (`scheduled_time`,
-  `scheduled_weekdays`, `scheduled_timezone`, `recurring`, `recurring_min_interval`,
+  `scheduled_weekdays`, `scheduled_timezone`, `recurring`,
   `recurring_max_runs`, `resources`, `cleanup_required`, `cleanup_timeout`).
 - With `full=True`, `record` adds the complete row, including columns added later;
   if the frontmatter cannot be decoded, it keeps the frontmatter as stored text.

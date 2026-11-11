@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import execute_active as ea  # noqa: E402
 from queue_mirror import env_for, mirror, runtime_of, seed  # noqa: E402
+from recurring_schedule import open_now
 from reservation_tokens import token_of
 
 
@@ -267,7 +268,7 @@ def test_a_recurring_local_task_passes_the_claim_again_after_it_ran(tmp_path: Pa
     with solar_state.session() as store:
         task_id = store.task_create(
             [("title", '"Local"'), ("executor", "local"), ("local_command", f'"bash {rel}"'),
-             ("recurring", "true"), ("recurring_min_interval", "3600")],
+             ("recurring", "true"), *open_now().items()],
             "\n# Local\n\nx\n", status="queued")
         claimed = store.task_claim_next("w")
         assert claimed["id"] == task_id

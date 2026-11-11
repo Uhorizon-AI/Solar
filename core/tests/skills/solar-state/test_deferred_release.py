@@ -11,6 +11,7 @@ import pytest
 
 import solar_state as st
 from dead_process import dead_pid
+from recurring_schedule import open_now
 from test_reservations import access, claim, make, set_policy, store, verified_profile  # noqa: F401
 
 
@@ -81,7 +82,7 @@ def test_unknown_group_query_keeps_reservation_and_approval(store):
 
 def test_queued_recurrence_cannot_claim_itself_before_ending_is_released(store):
     set_policy(store, global_capacity=5)
-    a = make(store, "A", policy=access(), recurring="true", recurring_min_interval="0")
+    a = make(store, "A", policy=access(), recurring="true", **open_now())
     token = claim(store, a)["token"]
     with process() as owner:
         store.reservation_attach(a, token, pid=owner.pid)

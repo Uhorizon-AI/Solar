@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import solar_state
+from recurring_schedule import open_now
 from solar_state import TaskChanged, TransitionRefused
 from reservation_tokens import token_of
 
@@ -213,7 +214,7 @@ def test_legacy_digest_algorithm_fail_closed_or_migrates(ready):
 def test_a_recurring_task_keeps_passing_the_gate_after_it_ran(ready):
     """Delivery and results appended by the runtime are not a change of the definition."""
     with solar_state.session() as store:
-        task_id = queued(store, recurring="true", recurring_min_interval="3600")
+        task_id = queued(store, recurring="true", **open_now())
         assert store.task_claim_next("w")["id"] == task_id
         body = store.task_get(task_id)["body"]
         store.task_set_body(task_id, body.rstrip() + "\n\n## Result\n\ndone\n\n## Delivery\n\nsent\n")
@@ -227,7 +228,7 @@ def test_a_recurring_task_keeps_passing_the_gate_after_it_ran(ready):
 
 def test_rejected_claim_does_not_stamp_last_run(ready):
     with solar_state.session() as store:
-        task_id = queued(store, recurring="true", recurring_min_interval="3600")
+        task_id = queued(store, recurring="true", **open_now())
         _mismatch(store, task_id)
         before = store.task_get(task_id)
         assert store.task_claim_next("w") is None
@@ -245,7 +246,7 @@ def test_rejected_claim_does_not_stamp_last_run(ready):
 def test_edit_queued_preserves_run_count_and_last_run(ready):
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with solar_state.session() as store:
-        task_id = queued(store, recurring="true", recurring_min_interval="86400",
+        task_id = queued(store, recurring="true", **open_now(),
                          recurring_run_count="2", recurring_last_run=json.dumps(stamp))
         rows = len(store.task_list())
         events = len(audit(store, "task_renamed"))
@@ -271,7 +272,7 @@ def test_edit_queued_preserves_run_count_and_last_run(ready):
 def test_material_edit_invalidates_approval_keeps_counters(ready):
     stamp = "2026-10-01T00:00:00Z"
     with solar_state.session() as store:
-        task_id = queued(store, recurring="true", recurring_min_interval="86400",
+        task_id = queued(store, recurring="true", **open_now(),
                          recurring_run_count="2", recurring_last_run=json.dumps(stamp),
                          recurring_max_runs="9")
         approved = fm(store, task_id)["approved_digest"]
@@ -323,7 +324,7 @@ def test_a_stale_version_or_a_claim_beats_a_material_edit(ready):
 
 def test_editing_the_instructions_keeps_what_earlier_runs_wrote(ready):
     with solar_state.session() as store:
-        task_id = queued(store, recurring="true", recurring_min_interval="3600")
+        task_id = queued(store, recurring="true", **open_now())
         store.task_claim_next("w")
         store.task_set_body(task_id, store.task_get(task_id)["body"].rstrip()
                             + "\n\n## Result\n\nfirst run output\n\n## Delivery\n\nsent\n")
@@ -450,14 +451,14 @@ def test_reapprove_does_not_reset_counters(ready):
         assert values["approved_digest"].startswith("v2:") and store.task_status(task_id) == "queued"
 
 
-def test_no_extra_run_within_min_interval_after_edit_reapprove(ready):
+def test_no_extra_run_in_the_same_occurrence_after_edit_reapprove(ready):
     now = datetime.now(timezone.utc)
     with solar_state.session() as store:
-        task_id = queued(store, recurring="true", recurring_min_interval="86400",
-                         recurring_last_run=json.dumps((now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")))
+        task_id = queued(store, recurring="true", **open_now(),
+                         recurring_last_run=json.dumps((now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")))
         store.task_return_to_draft(task_id, expected_row_version=store.task_get(task_id)["row_version"])
         store.task_approve(task_id, expected_row_version=store.task_get(task_id)["row_version"])
-        assert store.task_claim_next("w") is None            # one hour into a one day interval
+        assert store.task_claim_next("w") is None            # the occurrence of the schedule already ran
         assert store.task_status(task_id) == "queued"
         later = datetime.now() + timedelta(days=2)
         assert store.task_claim_next("w", now=later)["id"] == task_id
@@ -543,7 +544,7 @@ def test_claim_vs_material_edit_one_winner(ready):
 
 def test_results_with_their_own_headings_do_not_block_the_next_run(ready):
     with solar_state.session() as store:
-        task_id = queued(store, recurring="true", recurring_min_interval="3600")
+        task_id = queued(store, recurring="true", **open_now())
         assert store.task_claim_next("w")["id"] == task_id
         body = store.task_get(task_id)["body"].rstrip()
         store.task_set_body(task_id, body + "\n\n## Subtask results\n\n## Findings\n\nx\n\n"
@@ -609,9 +610,9 @@ def test_an_imported_queued_task_keeps_its_results_when_its_instructions_are_edi
 
 def test_the_claim_stamps_the_interval_in_its_own_transaction(ready):
     with solar_state.session() as store:
-        recurring = queued(store, "R", recurring="true", recurring_min_interval="3600")
+        recurring = queued(store, "R", recurring="true", **open_now())
         plain = queued(store, "P")
-        stuck = queued(store, "S", recurring="true")
+        stuck = queued(store, "S", recurring="true", **open_now())
         _mismatch(store, stuck)
         assert store.task_claim_detail(recurring, "w", stamp_last_run=True)["claimed"] is True
         assert fm(store, recurring)["recurring_last_run"].endswith("Z")
@@ -660,7 +661,7 @@ def test_results_stay_apart_from_the_instructions_through_successive_edits(ready
     for approve_between in (False, True):
         with solar_state.session() as store:
             task_id = queued(store, f"R{int(approve_between)}", recurring="true",
-                             recurring_min_interval="3600")
+                             **open_now())
             assert store.task_claim(task_id, "w") is True
             store.task_set_body(task_id, store.task_get(task_id)["body"].rstrip() + "\n\n" + results)
             assert store.task_complete(task_id, token=token_of(store, task_id)) == "queued"
@@ -750,7 +751,7 @@ def test_the_boundary_survives_losing_only_the_approval_fields(ready):
     """A manual clean-up that drops the digest and the approved snapshot, but not the boundary."""
     results = "## Result\n\nok\n\n## Findings\n\nf\n"
     with solar_state.session() as store:
-        task_id = queued(store, recurring="true")
+        task_id = queued(store, recurring="true", **open_now())
         store.task_claim_next("w")
         store.task_set_body(task_id, store.task_get(task_id)["body"].rstrip() + "\n\n" + results)
         store.task_complete(task_id, token=token_of(store, task_id))

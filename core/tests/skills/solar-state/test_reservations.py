@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import solar_state
+from recurring_schedule import open_now
 from dead_process import dead_pid
 from reservation_tokens import token_of
 from solar_state import PolicyInvalid, StaleToken, TransitionRefused
@@ -447,7 +448,7 @@ def test_a_refused_claim_does_not_consume_the_recurring_interval(store):
     set_policy(store)
     held = make(store, "Held", policy=access())
     claim(store, held)
-    recurring = make(store, "Tick", policy=access(), recurring="true", recurring_min_interval="3600")
+    recurring = make(store, "Tick", policy=access(), recurring="true", **open_now())
     refused = store.task_claim_detail(recurring, "w", stamp_last_run=True)
     assert refused["reason"] == "global_capacity"
     assert store.task_field(recurring, "recurring_last_run") is None
@@ -458,7 +459,7 @@ def test_a_refused_claim_does_not_consume_the_recurring_interval(store):
 
 def test_a_recurring_task_never_runs_twice_at_once(store):
     set_policy(store, global_capacity=3)
-    tick = make(store, "Tick", policy=access(), recurring="true", recurring_min_interval="1")
+    tick = make(store, "Tick", policy=access(), recurring="true", **open_now())
     assert claim(store, tick)["claimed"]
     assert claim(store, tick)["reason"] == "not_queued"
     assert store.task_claim_next("w") is None
@@ -920,7 +921,7 @@ def test_provider_limits_are_matched_in_lowercase(store):
 
 def test_the_token_of_a_finished_execution_cannot_fail_the_next_run(store):
     set_policy(store)
-    tick = make(store, "Tick", policy=access("read", ["/a"]), recurring="true", recurring_min_interval="1")
+    tick = make(store, "Tick", policy=access("read", ["/a"]), recurring="true", **open_now())
     old = claim(store, tick)["token"]
     assert store.task_complete(tick, token=old) == "queued"                   # back in the queue for its next run
     with pytest.raises(StaleToken):

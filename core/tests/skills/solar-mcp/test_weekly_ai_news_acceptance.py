@@ -106,7 +106,7 @@ def test_the_weekly_update_is_prepared_as_an_unapproved_revision(solar_env, curr
     # Friday 17:00 Europe/Madrid, recurring weekly.
     assert values["scheduled_time"] == "17:00" and values["scheduled_weekdays"] == "5"
     assert values["scheduled_timezone"] == MADRID and values["recurring"] == "true"
-    assert int(values["recurring_min_interval"]) < 7 * 86400
+    assert "recurring_min_interval" not in values
     assert "recurring_run_count" not in values   # a fresh recurrence, not the old counter
 
     # Approving it is blocked while the current task can still run.
@@ -133,8 +133,7 @@ def test_the_queue_runs_it_at_17_local_on_both_sides_of_a_clock_change(solar_env
                                       scheduled_time="17:00", scheduled_weekdays=[5],
                                       scheduled_timezone=MADRID, recurring=True))
     queue_and_authorize(made["id"], sched["row_version"])
-    interval = sched["schedule"]["recurring_min_interval"]
-    assert interval == 7 * 86400 - 7200
+    assert "recurring_min_interval" not in sched["schedule"]
 
     def at(*parts):
         return datetime(*parts, tzinfo=timezone.utc)
@@ -148,6 +147,10 @@ def test_the_queue_runs_it_at_17_local_on_both_sides_of_a_clock_change(solar_env
         # The next Friday the clock reads CEST: 15:01Z is 17:01 local. One week minus an hour has passed.
         assert store.task_claim_next("w", now=at(2027, 4, 2, 16, 1)) is None         # 18:01 local: too late
         assert store.task_claim_next("w", now=at(2027, 4, 2, 15, 1))["id"] == made["id"]
+        # The 17:00 occurrence of 2 April already ran: still inside its window, it does not run again.
+        store.task_set(made["id"], "recurring_last_run", json.dumps("2027-04-02T15:01:00Z"))
+        store.task_complete(made["id"], token=token_of(store, made["id"]))
+        assert store.task_claim_next("w", now=at(2027, 4, 2, 15, 10)) is None
 
 
 def test_the_report_cannot_publish_by_construction(solar_env, current):

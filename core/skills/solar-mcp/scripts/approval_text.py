@@ -67,7 +67,7 @@ COPY = {
         edit_closed="refused: a task that is {status} is not edited; prepare a revision instead.",
         lines_changed="{n} lines changed",
         schedule_head="Schedule task", days="Days", time="Time", zone="Time zone", repeats="Repeats",
-        yes="yes", no="no", every_day="every day", min_gap="minimum gap {h} h", max_runs="at most {n} runs",
+        yes="yes", no="no", every_day="every day", max_runs="at most {n} runs",
         start_windows="Eligible start windows", schedule_effect="stores the schedule. The task is not queued; approving it is a separate step.",
         schedule_planned="the task returns to draft and must be approved again.",
         approve_head="Approve task for execution", status="Status", declared="Declared effect", scope="Scope", object="Object",
@@ -133,7 +133,7 @@ COPY = {
         edit_closed="se rechaza: una tarea en estado {status} no se edita; prepara una revisión.",
         lines_changed="{n} líneas cambiadas",
         schedule_head="Programar tarea", days="Días", time="Hora", zone="Zona horaria", repeats="Repite",
-        yes="sí", no="no", every_day="todos los días", min_gap="separación mínima {h} h", max_runs="como máximo {n} ejecuciones",
+        yes="sí", no="no", every_day="todos los días", max_runs="como máximo {n} ejecuciones",
         start_windows="Ventanas de inicio permitidas", schedule_effect="guarda la programación. La tarea no se encola; aprobarla es un paso aparte.",
         schedule_planned="la tarea vuelve a borrador y debe aprobarse de nuevo.",
         approve_head="Aprobar tarea para ejecución", status="Estado", declared="Efecto declarado", scope="Alcance", object="Objeto",
@@ -288,15 +288,12 @@ def _pair(old, new) -> tuple:
     return _exact(old, _VALUE, start), _exact(new, _VALUE, start)
 
 
-def _repeats(copy: dict, recurring: bool, interval, cap) -> str:
-    """'yes (minimum gap …; at most N runs)' or 'no', from the values that will be stored."""
+def _repeats(copy: dict, recurring: bool, cap) -> str:
+    """'yes (at most N runs)' or 'no', from the values that will be stored."""
     if not recurring:
         return copy["no"]
-    limits = []
-    if str(interval or "").isdigit() and int(interval):
-        limits.append(copy["min_gap"].format(h=round(int(interval) / 3600, 1)))
-    limits.append(copy["max_runs"].format(n=cap) if str(cap or "0") not in ("", "0") else copy["unlimited"])
-    return copy["yes"] + " (" + "; ".join(limits) + ")"
+    limit = copy["max_runs"].format(n=cap) if str(cap or "0") not in ("", "0") else copy["unlimited"]
+    return copy["yes"] + " (" + limit + ")"
 
 
 def _days(copy: dict, weekdays) -> str:
@@ -583,11 +580,8 @@ def _merged_schedule(stored: dict, args: dict):
         zone=args.get("scheduled_timezone", old("timezone")),
         recurring=args.get("recurring", bool(old("recurring"))),
         weekdays=args["scheduled_weekdays"] if "scheduled_weekdays" in args else list(old("weekdays") or []))
-    interval = args.get("recurring_min_interval")
-    if interval is None and str(old("recurring_min_interval") or "").isdigit():
-        interval = int(old("recurring_min_interval"))
     plan = task_views.plan_schedule(time=merged["time"], weekdays=merged["weekdays"], zone=merged["zone"],
-                                    recurring=merged["recurring"], min_interval=interval)
+                                    recurring=merged["recurring"])
     return merged, plan
 
 
@@ -612,7 +606,7 @@ def _schedule(copy, args):
             rows.append((copy["time"], time))
             rows.append((copy["zone"], merged["zone"]))
         cap = args.get("recurring_max_runs", facts["values"].get("recurring_max_runs"))
-        rows.append((copy["repeats"], _repeats(copy, merged["recurring"], plan["recurring_min_interval"], cap)))
+        rows.append((copy["repeats"], _repeats(copy, merged["recurring"], cap)))
         if plan["start_windows"]:
             rows.append((copy["start_windows"], _start_windows(plan["start_windows"])))
         extra += [f"{copy['warn']}: {note}" for note in plan["notes"]]
@@ -672,8 +666,7 @@ def _context_rows(copy: dict, facts: dict) -> list:
     except (KeyError, ValueError, TypeError):
         rows.append((copy["warn"], copy["review_unreadable"]))
     if facts["recurring"]:
-        rows.append((copy["repeats"], _repeats(copy, True, schedule.get("recurring_min_interval"),
-                                               schedule.get("recurring_max_runs"))))
+        rows.append((copy["repeats"], _repeats(copy, True, schedule.get("recurring_max_runs"))))
     return rows
 
 

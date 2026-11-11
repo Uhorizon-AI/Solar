@@ -33,9 +33,10 @@ Behavior:
 
 Use recurring tasks for periodic execution, such as daily searches or weekly reports.
 
-`task.schedule` also sets `recurring`, `recurring_max_runs` and `recurring_min_interval` on a draft or
-planned task. With a schedule, it derives the interval from the shortest gap between occurrences
-minus two hours and refuses a longer one: a one-hour-shorter week would otherwise skip a run.
+`task.schedule` also sets `recurring` and `recurring_max_runs` on a draft or planned task. A recurring
+task needs a schedule (`scheduled_time` and `scheduled_timezone`; weekdays optional): `task.schedule`
+refuses `recurring` without a clock time, and the worker never claims one that has none
+(`recurring_without_schedule`).
 `task.archive` retires a recurrence without deleting its history.
 
 Frontmatter:
@@ -45,7 +46,6 @@ recurring: true
 recurring_max_runs: 0          # 0 = unlimited
 recurring_run_count: 0         # auto-incremented
 recurring_last_run: ""         # auto-updated
-recurring_min_interval: 86400  # seconds
 ```
 
 Behavior:
@@ -57,9 +57,10 @@ Behavior:
 
 Race protection:
 
-- `recurring_last_run` and `recurring_min_interval` prevent duplicate execution.
-- If the interval has not elapsed, the worker skips the task and leaves it queued.
-- `recurring_last_run` is written after a claim that won, never before: a claim refused by the approval check (`approval_digest_mismatch`) does not consume the interval. Editing, returning to draft and approving again keep `recurring_run_count` and `recurring_last_run`, and add no run.
+- The schedule tells one occurrence from the next. `recurring_last_run` is compared with the start of the latest occurrence (the beginning of its eligibility window, read in `scheduled_timezone`): if the task already ran at or after it, the worker skips the task and leaves it queued (`occurrence_already_ran`).
+- Because the guard follows the clock and not a fixed number of seconds, a week with a clock change neither skips an occurrence nor repeats one.
+- `recurring_min_interval` is no longer used. A legacy task that still carries it keeps working: the value is ignored.
+- `recurring_last_run` is written after a claim that won, never before: a claim refused by the approval check (`approval_digest_mismatch`) does not consume the occurrence. Editing, returning to draft and approving again keep `recurring_run_count` and `recurring_last_run`, and add no run.
 
 ## Resource Cleanup
 

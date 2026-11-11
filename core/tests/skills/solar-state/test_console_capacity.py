@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import solar_state
+from recurring_schedule import open_now
 import runtime_views
 from test_reservations import PROFILE, make, access, set_policy, verified_profile  # noqa: F401  (the autouse fixture too)
 
@@ -133,12 +134,12 @@ def test_queue_waits_gives_the_answers_a_claim_gives(ready):
         stale = make(s, "G stale approval", policy=access(), provider="claude")
         s.conn.execute("UPDATE tasks SET body = body || ? WHERE id = ?", ("\nchanged after approval\n", stale))
         make(s, "H recurring soon", policy=access(), provider="claude", recurring="true",
-             recurring_min_interval="86400", recurring_last_run=json.dumps("2999-01-01T00:00:00Z"))
+             **open_now(), recurring_last_run=json.dumps("2999-01-01T00:00:00Z"))
         before = {w["id"]: w["reason"] for w in s.queue_waits()}
         audit_before = s.conn.execute("SELECT count(*) FROM audit").fetchone()[0]
     assert before["b-provider"] == "provider_capacity" and before["f-depends"] == "blocked_by_dependency"
     assert before["g-stale-approval"] in ("mismatch", "legacy", "absent")
-    assert before["h-recurring-soon"] == "recurring_interval"
+    assert before["h-recurring-soon"] == "occurrence_already_ran"
     would_start = [t for t, r in before.items() if r is None]
     assert would_start == ["c-free-one", "d-free-two"] and before["e-full"] == "global_capacity"
     with solar_state.read_session(ready) as store:                    # asking changed nothing
@@ -171,7 +172,7 @@ def test_the_console_judges_the_heartbeat_with_the_same_threshold_as_the_check(s
 def test_every_reason_a_claim_can_give_has_a_kind():
     reasons = ["blocked_by_dependency", "provider_capacity", "global_capacity", "scope_conflict", "resource:x",
                "exclusive_needs_idle", "blocked_by_exclusive", "drain_barrier", "maintenance", "parent_revoked",
-               "cancellation_requested", "recurring_interval", "outside_schedule", "approval_digest_mismatch",
+               "cancellation_requested", "occurrence_already_ran", "recurring_without_schedule", "outside_schedule", "approval_digest_mismatch",
                "absent", "legacy", "mismatch", "access_policy_invalid", "something_new"]
     assert all(runtime_views.wait_kind(r) for r in reasons)
     assert runtime_views.wait_kind("cancellation_requested") == "other"

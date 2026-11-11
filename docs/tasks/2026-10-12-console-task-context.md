@@ -30,7 +30,7 @@ When a task is selected in the console, show a curated "Context and follow-up" b
 
 - `context`: object or `null`. Keys present only when stored: `workspace_id`, `agent`, `planet`, `responsibility`, `agent_contract`, `continuity_checkpoint` (the object decoded by the shared parser).
 - `context_error`: `null` or a stable code: `checkpoint_invalid` (checkpoint is not a JSON object) or `frontmatter_unreadable` (stored frontmatter cannot be decoded). When set, `context` is `null`; `configuration` is still returned when it can be read, else `{}`.
-- `configuration`: `scheduled_time`, `scheduled_weekdays`, `scheduled_timezone`, `recurring`, `recurring_min_interval`, `recurring_max_runs`, `resources`, `cleanup_required`, `cleanup_timeout`; only keys that are stored.
+- `configuration`: `scheduled_time`, `scheduled_weekdays`, `scheduled_timezone`, `recurring`, `recurring_max_runs`, `resources`, `cleanup_required`, `cleanup_timeout`; only keys that are stored.
 - `record` (only with `full=1`): the complete solar-state row, including columns added in the future; if the frontmatter cannot be decoded, the raw row with the frontmatter as stored text.
 - `body_html` (only with `full=1`): sanitized HTML derived only from `record["body"]`, `null` if the body is not a string.
 - Read-only: no write session, no event, no queue, no verification of any recorded effect.

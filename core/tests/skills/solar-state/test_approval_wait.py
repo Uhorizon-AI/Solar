@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import solar_state
+from recurring_schedule import open_now
 
 HOUR = timedelta(hours=1)
 
@@ -140,19 +141,19 @@ def test_a_one_off_task_goes_back_to_draft_when_the_wait_ends(ready, clock):
 
 def test_a_recurring_task_loses_only_that_occurrence(ready, clock):
     with solar_state.session() as store:
-        task_id = waiting(store, recurring="true", recurring_min_interval="3600", scheduled_time="now")
+        task_id = waiting(store, recurring="true", **open_now(clock.at))
         before = fm(store, task_id)
         claim(store, clock)
-        claim(store, clock, 73)
+        claim(store, clock, 96)                                            # days later: the same hour
         after = fm(store, task_id)
         assert store.task_status(task_id) == "queued"                       # kept in the queue
         assert after["approved_digest"] == before["approved_digest"]       # approval kept
-        assert after["recurring"] == "true" and after["scheduled_time"] == "now"
+        assert after["recurring"] == "true" and after["scheduled_time"] == before["scheduled_time"]
         assert after["recurring_last_run"]                                 # this occurrence is spent
         assert "run_authorized_digest" not in after                        # nothing was authorized
         assert events(store, "approval_wait_expired")[0]["outcome"] == "occurrence_skipped"
         # nothing runs, and nothing is owed: the next occurrence starts a wait of its own
-        assert claim(store, clock, 2)["task"] is None
+        assert claim(store, clock, 24)["task"] is None
         assert len(events(store, "awaiting_approval")) == 2
         assert len(events(store, "approval_wait_expired")) == 1
         # authorizing the new wait lets exactly the next occurrence run
@@ -162,12 +163,12 @@ def test_a_recurring_task_loses_only_that_occurrence(ready, clock):
 
 def test_the_skipped_occurrence_is_not_run_later_in_a_burst(ready, clock):
     with solar_state.session() as store:
-        task_id = waiting(store, recurring="true", recurring_min_interval="86400")
+        task_id = waiting(store, recurring="true", **open_now(clock.at))
         claim(store, clock)
-        claim(store, clock, 73)
+        claim(store, clock, 96)
         store.task_authorize_run(task_id, expected_row_version=store.task_get(task_id)["row_version"])
-        # authorized at once, yet the interval since the skipped occurrence has not passed: no catch-up
-        assert claim(store, clock, 1)["task"] is None
+        # authorized at once, yet that occurrence was spent: no catch-up until the next one
+        assert claim(store, clock)["task"] is None
         assert claim(store, clock, 24)["task"]["id"] == task_id
 
 
@@ -295,12 +296,12 @@ def test_approving_the_same_content_again_after_the_wait_ended_starts_a_new_wait
 
 def test_a_skipped_occurrence_shows_no_false_dates_until_the_next_wait_begins(ready, clock):
     with solar_state.session() as store:
-        task_id = waiting(store, recurring="true", recurring_min_interval="3600", scheduled_time="now")
+        task_id = waiting(store, recurring="true", **open_now(clock.at))
         claim(store, clock)
-        claim(store, clock, 73)
+        claim(store, clock, 96)
         shown = store.approval_wait(task_id)
         assert shown == dict(since=None, expires_at=None)
-        claim(store, clock, 2)                                                # the next occurrence is found
+        claim(store, clock, 24)                                               # the next occurrence is found
         assert store.approval_wait(task_id)["since"] == events(store, "awaiting_approval")[-1]["ts"]
 
 
@@ -424,9 +425,9 @@ def test_an_expiry_notice_is_sent_while_it_is_still_true(ready, clock):
 
 def test_a_skipped_occurrence_notice_follows_the_approval_it_names(ready, clock):
     with solar_state.session() as store:
-        task_id = waiting(store, recurring="true", recurring_min_interval="3600", scheduled_time="now")
+        task_id = waiting(store, recurring="true", **open_now(clock.at))
         claim(store, clock)
-        claim(store, clock, 73)
+        claim(store, clock, 96)
         ref = [n for n in store.approval_notices() if n["event"] == "approval_wait_expired"][0]["ref"]
         store.task_authorize_run(task_id, expected_row_version=store.task_get(task_id)["row_version"])
         assert store.approval_notice_claim(ref) is None                        # authorized: nothing waits any more

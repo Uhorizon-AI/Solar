@@ -28,7 +28,6 @@ _IDENTITY = ("workspace_id", "agent", "planet", "responsibility", "agent_contrac
 _LIMIT_BYTES = 60000
 # A recurrence must be able to fire again even when the week is one hour shorter
 # (daylight-saving change) and the previous run finished late.
-_INTERVAL_MARGIN = 7200
 
 
 ViewError = OperationError
@@ -51,21 +50,9 @@ def _zone(name: str) -> ZoneInfo:
 
 def _recurring_windows(local, zone, allowed):
     """Project the legacy recurring rule onto consecutive UTC minutes."""
-    from solar_state import SCHEDULE_MARGIN_MIN, wall_clock_instants
+    from solar_state import recurring_windows
 
-    minute = datetime.timedelta(minutes=1)
-    instants = []
-    for offset in range(-SCHEDULE_MARGIN_MIN, SCHEDULE_MARGIN_MIN + 1):
-        clock = local + offset * minute
-        if clock.isoweekday() in allowed:
-            instants.extend(wall_clock_instants(clock, zone))
-    windows = []
-    for instant in sorted(instants):
-        if windows and instant == windows[-1][1] + minute:
-            windows[-1] = (windows[-1][0], instant)
-        else:
-            windows.append((instant, instant))
-    return windows
+    return recurring_windows(local, zone, allowed)
 
 
 def next_occurrences(time: str, weekdays, zone: str, after=None, count: int = 4) -> list[dict]:
@@ -126,20 +113,12 @@ def start_windows(time: str, weekdays, zone: str, after=None, count: int = 4, *,
     return found
 
 
-def shortest_gap_days(weekdays) -> int:
-    days = sorted(set(weekdays or range(1, 8)))
-    if len(days) == 1:
-        return 7
-    return min((days[(i + 1) % len(days)] - days[i]) % 7 or 7 for i in range(len(days)))
-
-
-def plan_schedule(*, time, weekdays, zone, recurring, min_interval, after=None) -> dict:
+def plan_schedule(*, time, weekdays, zone, recurring, after=None) -> dict:
     """Validate a schedule and derive what depends on it.
 
     A wall-clock schedule needs an explicit IANA zone: without one the hour
-    would follow whichever host runs the queue. A recurrence interval longer
-    than the shortest gap between occurrences (less a safety margin) would skip
-    runs after a daylight-saving change, so it is refused instead of stored.
+    would follow whichever host runs the queue. A recurring task needs a clock
+    time: the worker tells one occurrence from the next by it.
     """
     # `scheduled_time: now` (create.sh --queued) means "no clock restriction".
     # Weekdays are kept: without a real HH:MM they are refused below, so a task that
@@ -150,7 +129,7 @@ def plan_schedule(*, time, weekdays, zone, recurring, min_interval, after=None) 
     notes = []
     plan = dict(scheduled_time=time, scheduled_weekdays=list(weekdays or []),
                 scheduled_timezone=zone, recurring=bool(recurring),
-                recurring_min_interval=min_interval, next_occurrences=[], start_windows=[], notes=notes)
+                next_occurrences=[], start_windows=[], notes=notes)
     if scheduled:
         if not zone:
             raise ViewError("schedule_invalid",
@@ -163,15 +142,10 @@ def plan_schedule(*, time, weekdays, zone, recurring, min_interval, after=None) 
         after = after or _now_utc()
         plan["next_occurrences"] = next_occurrences(time, weekdays, zone, after)
         plan["start_windows"] = start_windows(time, weekdays, zone, after, recurring=recurring)
-    if recurring and scheduled:
-        longest = shortest_gap_days(weekdays) * 86400 - _INTERVAL_MARGIN
-        if min_interval is None:
-            plan["recurring_min_interval"] = longest
-        elif min_interval > longest:
-            raise ViewError(
-                "schedule_invalid",
-                f"recurring_min_interval {min_interval}s would skip occurrences after a clock "
-                f"change; use at most {longest}s for this schedule")
+    if recurring and not time:
+        raise ViewError("schedule_invalid",
+                        "a recurring task needs scheduled_time (and scheduled_timezone): "
+                        "its schedule is what keeps one occurrence from running twice")
     return plan
 
 
@@ -193,7 +167,6 @@ def _schedule(values: dict) -> dict:
     block = dict(time=values.get("scheduled_time"), weekdays=_weekdays(values.get("scheduled_weekdays")),
                  timezone=values.get("scheduled_timezone"),
                  recurring=str(values.get("recurring") or "").lower() == "true",
-                 recurring_min_interval=values.get("recurring_min_interval"),
                  recurring_max_runs=values.get("recurring_max_runs"),
                  recurring_run_count=values.get("recurring_run_count"),
                  recurring_last_run=values.get("recurring_last_run"))

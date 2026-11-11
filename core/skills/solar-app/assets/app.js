@@ -96,7 +96,6 @@
       tc_recorded_state_not_verified_on_opening: "Recorded state; not verified on opening",
       tc_recurrence: "Recurrence",
       tc_recurring: "Recurring",
-      tc_minimum_interval: "Minimum interval",
       tc_configured_time: "Configured time",
       tc_time_zone: "Time zone",
       tc_host_timezone_no_stored_zone: "Host timezone (no stored zone)",
@@ -302,7 +301,6 @@
       tc_recorded_state_not_verified_on_opening: "Estado registrado; no verificado al abrir",
       tc_recurrence: "Recurrencia",
       tc_recurring: "Recurrente",
-      tc_minimum_interval: "Intervalo mínimo",
       tc_configured_time: "Hora configurada",
       tc_time_zone: "Zona horaria",
       tc_host_timezone_no_stored_zone: "Zona del equipo (sin zona guardada)",
@@ -1173,14 +1171,6 @@
     return /^[-+]?0+(\.0+)?$/.test(String(value).trim()) ? t("tc_unlimited") : value;
   }
 
-  function intervalText(value) {
-    var seconds = Number(value);
-    if (value == null || value === "" || !isFinite(seconds) || seconds <= 0) return null;
-    if (seconds % 3600 === 0) return seconds / 3600 + " h";
-    if (seconds % 60 === 0) return seconds / 60 + " min";
-    return seconds + " s";
-  }
-
   function contextErrorText(code) {
     if (code === "checkpoint_invalid") return t("tc_this_task_s_stored_continuity_checkpoint");
     if (code === "frontmatter_unreadable") return t("tc_this_task_s_stored_record_could_not_be_r");
@@ -1307,7 +1297,6 @@
     var unshown = Object.keys(cp).length > 0 || Object.keys(context).some(function (name) { return context[name] !== null && typeof context[name] === "object"; });
     var configuration = asObject(data.configuration);
     if (configuration.recurring === true || configuration.recurring === "true") field(t("tc_recurrence"), t("tc_recurring"));
-    field(t("tc_minimum_interval"), intervalText(configuration.recurring_min_interval));
     field(t("tc_configured_time"), configuration.scheduled_time);
     field(t("tc_time_zone"), configuration.scheduled_timezone || (configuration.scheduled_time ? t("tc_host_timezone_no_stored_zone") : null));
     field(t("tc_weekdays"), weekdaysText(configuration.scheduled_weekdays));

@@ -956,6 +956,53 @@ def one_off_schedule_window(local: datetime, zone) -> Optional[tuple[datetime, d
     return start, start + timedelta(minutes=SCHEDULE_MARGIN_MIN)
 
 
+def recurring_windows(local: datetime, zone, allowed) -> list[tuple[datetime, datetime]]:
+    """The recurring rule's eligible minutes around one nominal local time, as runs of
+    consecutive UTC minutes (inclusive). A clock change can split one occurrence in two."""
+    minute = timedelta(minutes=1)
+    instants = []
+    for offset in range(-SCHEDULE_MARGIN_MIN, SCHEDULE_MARGIN_MIN + 1):
+        clock = local + offset * minute
+        if clock.isoweekday() in allowed:
+            instants.extend(wall_clock_instants(clock, zone))
+    windows: list[tuple[datetime, datetime]] = []
+    for instant in sorted(instants):
+        if windows and instant == windows[-1][1] + minute:
+            windows[-1] = (windows[-1][0], instant)
+        else:
+            windows.append((instant, instant))
+    return windows
+
+
+def latest_recurring_occurrence(scheduled_time: Optional[str], weekdays: Optional[str],
+                                timezone_name: Optional[str], now_epoch: float) -> Optional[float]:
+    """UTC epoch at which the most recent occurrence of a recurring schedule became eligible.
+
+    This is what tells one occurrence from the next: a run stamped at or after it already
+    ran that occurrence. None when there is no readable clock time (a recurring task needs
+    one) or the zone is unknown. Without a zone the host's local time applies, as in
+    `scheduled_now`."""
+    scheduled = _clock_minutes((scheduled_time or "").strip())
+    if scheduled is None:
+        return None
+    zone_name = (timezone_name or "").strip()
+    try:
+        zone = ZoneInfo(zone_name) if zone_name else None
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return None
+    allowed = {int(part) for part in (weekdays or "").split(",") if part.strip().isdigit()} or set(range(1, 8))
+    today = (datetime.fromtimestamp(now_epoch, zone) if zone else datetime.fromtimestamp(now_epoch)).date()
+    best = None
+    for days_ago in range(9):                         # a weekly schedule never looks back further
+        day = today - timedelta(days=days_ago)
+        local = datetime(day.year, day.month, day.day, scheduled // 60, scheduled % 60)
+        for start, _end in recurring_windows(local, zone, allowed):
+            start_epoch = start.timestamp() if zone else start.astimezone().timestamp()
+            if start_epoch <= now_epoch and (best is None or start_epoch > best):
+                best = start_epoch
+    return best
+
+
 def scheduled_now(scheduled_time: Optional[str], weekdays: Optional[str],
                   now: datetime, timezone_name: Optional[str] = None, *, recurring: bool = True) -> bool:
     """Whether an automatic claim may start at `now`.
@@ -1020,6 +1067,8 @@ MATERIAL_KEYS = (
     "responsibility", "agent_contract", "notify_when", "origin_channel", "origin_chat_id",
     "resources", "cleanup_required", "cleanup_timeout",
     "scheduled_time", "scheduled_weekdays", "scheduled_timezone",
+    # `recurring_min_interval` is no longer written or read for scheduling; it stays in the digest
+    # so a legacy task keeps the approval it already has.
     "recurring", "recurring_min_interval", "recurring_max_runs",
     # What runs when the executor is local: a change here is a different command.
     "executor", "local_command", "local_timeout",
@@ -1349,17 +1398,25 @@ def _approval_gate(conn, task_id: str, row_version: int, pairs: list[list[str]],
     return reason
 
 
-def _recurring_ready(pairs: list[list[str]], now_epoch: float) -> bool:
+def _recurring_ready(pairs: list[list[str]], now_epoch: float) -> Optional[str]:
+    """None when a recurring task may start now; otherwise why it may not.
+
+    A recurring task needs a schedule (a clock time): its occurrences are what tells a new
+    run from a repeat. `recurring_last_run` at or after the latest occurrence means that
+    occurrence already ran. A legacy `recurring_min_interval` in the file is not read."""
     if str(_field(pairs, "recurring") or "").lower() != "true":
-        return True
+        return None
+    occurrence = latest_recurring_occurrence(
+        _field(pairs, "scheduled_time"), _field(pairs, "scheduled_weekdays"),
+        _field(pairs, "scheduled_timezone"), now_epoch)
+    if occurrence is None:
+        if _clock_minutes((_field(pairs, "scheduled_time") or "").strip()) is None:
+            return "recurring_without_schedule"
+        return None                                   # unknown zone: `scheduled_now` holds it
     last = _field(pairs, "recurring_last_run")
-    if not last:
-        return True
-    try:
-        interval = int(_field(pairs, "recurring_min_interval") or "86400")
-    except ValueError:
-        interval = 86400
-    return now_epoch - _epoch(last) >= interval
+    if last and _epoch(last) >= occurrence:
+        return "occurrence_already_ran"
+    return None
 
 
 def _blocked(conn: sqlite3.Connection, pairs: list[list[str]]) -> bool:
@@ -2301,7 +2358,7 @@ def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual:
                  record: bool = True) -> Optional[str]:
     """Why a queued task cannot be claimed for reasons of its own, or None.
 
-    The worker's selection rules (the recurring interval and the schedule window) are not
+    The worker's selection rules (the schedule window and the occurrence a recurring task already ran) are not
     applied when a person starts a task by name (`manual`). Everything else is revalidated
     at every claim, inside its transaction."""
     task_id = row["id"]
@@ -2314,8 +2371,9 @@ def _eligibility(conn, row, pairs: list[list[str]], moment: datetime, *, manual:
     if _blocked(conn, pairs):
         return "blocked_by_dependency"
     if not manual:
-        if not _recurring_ready(pairs, moment.timestamp()):
-            return "recurring_interval"
+        not_ready = _recurring_ready(pairs, moment.timestamp())
+        if not_ready:
+            return not_ready
         if not scheduled_now(_field(pairs, "scheduled_time"), _field(pairs, "scheduled_weekdays"),
                              moment, _field(pairs, "scheduled_timezone"),
                              recurring=str(_field(pairs, "recurring") or "").lower() == "true"):
@@ -2966,7 +3024,7 @@ class Session:
 
         This is the manual activation: it applies the same approval, dependency,
         cancellation and reservation rules as the worker. The schedule window and the
-        recurring interval are the worker's selection rules and are not applied to a
+        already-ran-occurrence check are the worker's selection rules and are not applied to a
         task a person starts by name. With `stamp_last_run` a recurring task gets its
         `recurring_last_run` in the same transaction as the claim."""
         with _transaction(self.conn) as conn:
@@ -3086,7 +3144,7 @@ class Session:
 
         Order is priority (high, then normal, then low), then `created`, then id.
         A queued task with a cancellation request is cancelled and skipped. A
-        task waiting on another, a recurring task still inside its interval, one
+        task waiting on another, a recurring task whose occurrence already ran (or that has no schedule), one
         outside its schedule window, or one whose approval does not cover what is
         stored (`approval_digest_mismatch`) is left queued. So is a task that does
         not fit next to what runs: the global capacity, a provider limit, a scope
