@@ -78,7 +78,8 @@ running as they did.
    create or copy an identifier, and do not ask for conversational confirmation right before that prompt.
 4. Never manufacture consent with `approved=true`, an agent-authored note or a shell grant. If the client
    lacks elicitation for step 3, report the integration limitation and use a trusted operator/host
-   approval path. Never bypass the gate.
+   approval path. Never bypass the gate. The human operator can use `solar approve` (see `references/approvals.md`) for the four form-gated
+   operations; an agent never runs it.
 5. Report success only from the execution result. On uncertain failure, check the resulting state before
    requesting another execution.
 

@@ -28,7 +28,7 @@ Approvals bind the operation name, exact arguments (a task's `expected_row_versi
 reserved under a process-shared lock before side effects. A failed execution may
 already have caused effects: it consumes the approval too. Inspect state before
 retrying. Legacy approvals without the workspace-bound hash, and approvals that name a previous tool, must be reapproved.
-The operator CLI grants only registered A2 operations with valid arguments; anything else exits with status 2.
+`solar approve` (the operator channel, below) admits only four operations: `task.authorize_run`, `async_execution.propose`, `async_execution.apply` and `telegram.send`; anything else is refused.
 Telegram confirmation requires an explicit destination (`chat_id` is required by the schema), so changing the default
 chat cannot redirect a confirmed call.
 
@@ -155,21 +155,39 @@ An SDK feature is not automatically exposed by its desktop app. All four clients
 must meet the same exact-scope, expiry, single-use and cancellation checks before
 any new native question adapter can be declared verified.
 
-## Operator recovery (not an agent self-approval route)
+## Operator channel: `solar approve`
 
-The trusted operator may still manage out-of-band approvals:
+When the MCP client does not raise the form (Claude Desktop has been seen declining
+`task.authorize_run` on its own), the human operator approves from a terminal on their machine:
 
 ```bash
-python3 core/skills/solar-mcp/scripts/mcp_approve.py grant task.create --args '{"title":"Review report","instructions":"..."}'
-python3 core/skills/solar-mcp/scripts/mcp_approve.py list
-python3 core/skills/solar-mcp/scripts/mcp_approve.py revoke APPROVAL_ID
+solar approve task.authorize_run <task id or prefix of 8+ characters>
+solar approve async_execution.propose --global-capacity 4 [--provider-limit codex=2]
+solar approve async_execution.apply
+solar approve telegram.send --chat-id <id> --text "..."
 ```
 
-Use the same `SOLAR_WORKSPACE` as the server. This CLI is an administrative escape
-hatch under the user's OS authority, not proof of conversational consent. Agents
-must not run `grant` merely because a tool returned `approval_required`. An
-unsupported client needs a trusted operator or a host integration; report that
-limitation instead of asking the user to copy identifiers as the normal workflow.
+The command shows exactly what will run (the same text as the form for the fields they share, plus
+the full task id, digest and `row_version` for `task.authorize_run`, or the change against the
+policy in force for `apply`), and only the word `yes` approves. After `yes` the command **runs the
+operation itself**: it leaves no grant behind and no `approval_id` reaches an agent. Rules:
+
+- Interactive terminal required: stdin must be a TTY and the answer is read from `/dev/tty`. A pipe
+  is refused without reading a confirmation. If the state layer is unavailable it fails closed.
+  There is no `--yes` or `--force`.
+- `task.authorize_run` is bound to the `row_version` it displayed; a task that changed, or that was
+  already authorized, is refused (the check runs inside the state transaction).
+- `async_execution.apply` is refused if the proposal file or the base policy changed after it was shown.
+- `telegram.send` uses the same sender as the MCP path: explicit `chat_id`, allowed-chat list and
+  installation credentials. The operator's `yes` is the formal approval; the External Communication Gate
+  applies as on the MCP path.
+- The audit event records `channel: cli` (with tty and user) here and `channel: mcp` on the MCP path;
+  the channel is fixed by the code path, never an argument.
+
+This is a channel for the human operator. Agents keep using `solar_execute` and must not run
+`solar approve`. Declared limit: a TTY is defence in depth, not a boundary; an agent with a shell that
+can create a pty under the same user could still type `yes`. The old console CLI of `mcp_approve.py`
+(`grant`, `list`, `revoke`) is retired; the module keeps only the internal `grant()` and `listing()`.
 
 ## Cancellation behavior
 

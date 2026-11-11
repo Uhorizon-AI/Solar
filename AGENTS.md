@@ -85,6 +85,8 @@ When you need Solar state or capabilities, use the three MCP tools, not shell sc
 
 **Rule:** if Solar has a registered operation for what you need (check `solar_search scope=operations`), use `solar_execute` — do not shell out to `codex exec`, `agent -p`, `claude -p` or similar to reach Solar state or launch Solar work. Reading a task never needs approval; mutations follow each operation's authority (A2/A3) and ask their own confirmations. Contracts: `solar_docs id=operation:<name>`.
 
+**Operator channel:** `solar approve <operation>` is for the human operator at a terminal when the MCP client does not raise the approval form (`task.authorize_run`, `async_execution.propose|apply`, `telegram.send` only). It is not an agent route: never run it yourself or ask the user to paste its output; report the integration limit instead.
+
 ## Workflow Orchestration (Required)
 
 **Plan:** Enter planning mode for any non-trivial task (3+ steps or architectural decisions). If something fails, STOP and replan. Never mark done without real validation — run tests, check logs, ask "Would a senior engineer approve this?"

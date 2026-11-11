@@ -96,6 +96,7 @@ def test_import_without_snapshot_does_not_masquerade_as_new_definition(ready, st
 def test_error_to_draft_never_enters_queue_and_removes_all_authority(ready):
     with solar_state.session() as store:
         task = queued(store, recurring="true", recurring_run_count="3")
+        store.task_set(task, "approved_consent", '"client"')   # a form-approved task is the one that needs this step
         store.task_authorize_run(task, expected_row_version=store.task_get(task)["row_version"])
         claim = store.task_claim_detail(task, "test")
         store.task_fail(task, "\n## Execution Error\n\nRetain diagnostic.\n", token=claim["token"])

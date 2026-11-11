@@ -59,5 +59,5 @@ Find them with `solar_search scope=operations`; read a contract with
    a previous name is then an ordinary `unknown_tool`. There is never a second public catalog.
 4. `solar client` discovery verification accepts either catalog during the same window.
 5. Approvals granted before the upgrade name the previous tools and do not apply. They are single-use
-   and short-lived; grant again with the operation name (`mcp_approve.py grant task.approve --args ...`).
+   and short-lived; ask again through the MCP form with the operation name (the old `mcp_approve.py grant` console CLI is retired; `solar approve` covers `task.authorize_run`, `async_execution.propose|apply` and `telegram.send`).
 6. Clients that cached `tools/list` should reconnect once; the server instructions describe the new tools.

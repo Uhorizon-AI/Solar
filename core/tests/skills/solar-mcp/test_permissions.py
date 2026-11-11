@@ -153,17 +153,6 @@ def test_telegram_is_only_reachable_through_its_own_operation(solar_env, monkeyp
     assert sent == []
 
 
-def test_the_operator_approval_cli_checks_what_it_grants(solar_env, capsys):
-    import importlib
-    cli = importlib.import_module("mcp_approve")
-    assert cli.main(["x", "grant", "solar_task_create", "--args", "{}"]) == 2     # legacy name
-    assert cli.main(["x", "grant", "task.create", "--args", "{}"]) == 2           # missing required
-    assert cli.main(["x", "grant", "action.run", "--args", '{"skill":"a","action":"b"}']) == 2   # A3: not approvable
-    assert cli.main(["x", "grant", "task.create", "--args", '{"title":"t","instructions":"i","path":"/etc"}']) == 2
-    assert cli.main(["x", "grant", "task.create", "--args", '{"title":"t","instructions":"i"}']) == 0
-    assert len(mcp_approve.listing()) == 1
-
-
 def test_check_helper_is_exact_about_types():
     schema = {"type": "object", "properties": {"n": {"type": "integer"}}, "additionalProperties": False}
     assert check({"n": 1}, schema) is None
