@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import hashlib
 import os
 import sys
 from pathlib import Path
@@ -55,14 +54,26 @@ def open_terminal():
     if not sys.stdin.isatty():
         raise Refused("stdin is not an interactive terminal; run this command by hand in a terminal")
     try:
-        stream = open("/dev/tty", "r+", encoding="utf-8")
+        # Two streams: a terminal is not seekable, so one "r+" text stream is refused by Python.
+        reader = open("/dev/tty", "r", encoding="utf-8")
+        writer = open("/dev/tty", "w", encoding="utf-8")
     except OSError:
         raise Refused("there is no controlling terminal (/dev/tty); run this command by hand") from None
     try:
-        name = os.ttyname(stream.fileno())
+        # Only the controlling terminal answers tcgetpgrp for both: stdin must be that same terminal.
+        same = os.tcgetpgrp(0) == os.tcgetpgrp(reader.fileno())
+    except OSError:
+        same = False
+    if not same:
+        reader.close()
+        writer.close()
+        raise Refused("stdin and the controlling terminal are different terminals; "
+                      "run this command by hand in the terminal you are looking at")
+    try:
+        name = os.ttyname(0)
     except OSError:
         name = "/dev/tty"
-    return stream, stream, name
+    return reader, writer, name
 
 
 def confirm(screen: str, tty_in, tty_out) -> bool:
@@ -148,7 +159,8 @@ def authorize_run(typed_id: str, tty) -> int:
              *[f"{label}: {value}" for label, value in approval_text._context_rows(copy, facts) if value],
              f"{copy['effect']}: {copy['authorize_effect']}"]
     extra = ["",
-             f"Provider / executor: {values.get('provider') or '—'} / {values.get('executor') or 'provider'}",
+             "Provider / executor: " + approval_text._line(values.get("provider") or "—") + " / "
+             + approval_text._line(values.get("executor") or "provider"),
              f"Run risk: {solar_state.run_risk(pairs)}; not confined because "
              f"{solar_state.unconfined_reason(pairs)}",
              f"Approved digest: {digest[:16]}…  Row version: {facts['row_version']}"]
@@ -193,14 +205,14 @@ def propose(arguments: dict, tty) -> int:
         print("Cancelled: nothing was written.", file=sys.stderr)
         return 1
     try:
-        with solar_state.session() as store:
-            path = solar_state.write_proposal(normalized, store.root)
-            store.audit_event("async_policy_proposed", actor="cli:async_execution.propose",
-                              revision=normalized["revision"], digest=solar_state.policy_digest(normalized),
-                              **operations._where("cli", name, getpass.getuser()))
+        # Recomputed inside the write transaction: refused if the applied policy moved while the operator typed.
+        done = operations._do_async_propose(arguments, channel="cli", tty=name, user=getpass.getuser(),
+                                            expected_digest=solar_state.policy_digest(normalized))
+    except OperationError as exc:
+        raise Refused(f"{exc.code}: {exc}") from None
     except solar_state.StateError as exc:
         raise Refused(str(exc)) from None
-    print(f"Proposal written to {path} (revision {normalized['revision']}). Nothing was applied.")
+    print(f"Proposal written to {done['path']} (revision {done['revision']}). Nothing was applied.")
     return 0
 
 
@@ -233,7 +245,8 @@ def apply(tty) -> int:
         print("Cancelled: nothing was applied.", file=sys.stderr)
         return 1
     try:
-        done = operations._do_async_apply(arguments, channel="cli", tty=name, user=getpass.getuser())
+        done = operations._do_async_apply(arguments, channel="cli", tty=name, user=getpass.getuser(),
+                                          base_revision=applied["revision"])
     except OperationError as exc:
         raise Refused(f"{exc.code}: {exc}") from None
     except solar_state.StateError as exc:
@@ -253,6 +266,10 @@ def telegram_send(arguments: dict, tty) -> int:
         operations._require_chat(arguments)
     except OperationError as exc:
         raise Refused(f"{exc.code}: {exc}") from None
+    try:
+        operations._telegram_preflight(arguments)   # token and allowlist, before a consent is spent
+    except Exception as exc:  # noqa: BLE001
+        raise Refused(f"send refused: {exc}") from None
     stdin, stdout, name = tty
     # External communication: the operator's `yes` is the formal approval of this exact text and chat.
     if not confirm(_screen("telegram.send", [], _form_lines("telegram.send", arguments)), stdin, stdout):
@@ -260,6 +277,10 @@ def telegram_send(arguments: dict, tty) -> int:
         return 1
     try:
         done = operations._do_telegram_send(arguments, channel="cli", tty=name, user=getpass.getuser())
+    except operations.SendAuditFailed as exc:
+        # Delivered: never report this as a refusal, or the operator resends and duplicates the message.
+        print(f"Sent to {exc.chat_id}; audit not recorded: {exc}. Do not send it again.", file=sys.stderr)
+        return 3
     except Exception as exc:  # noqa: BLE001 - the shared sender refuses with a plain message
         raise Refused(f"send refused: {exc}") from None
     print(f"Sent to {done['chat_id']}.")

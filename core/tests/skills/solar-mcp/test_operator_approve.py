@@ -222,7 +222,7 @@ def test_apply_is_rejected_if_the_base_policy_changed_after_it_was_shown(solar_e
                      enabled_reader_profiles=current["enabled_reader_profiles"]), current["revision"]))
     terminal(monkeypatch, during=move_base)
     assert op.main(["x", "async_execution.apply"]) == 1
-    assert "policy_invalid" in capsys.readouterr().err
+    assert "proposal_changed" in capsys.readouterr().err
     with solar_state.session() as store:
         assert store.async_policy()["global_capacity"] == 2
 
@@ -305,3 +305,100 @@ def test_the_old_console_cli_is_gone(solar_env):
     assert not hasattr(mcp_approve, "main") and not hasattr(mcp_approve, "revoke")
     assert callable(mcp_approve.grant) and callable(mcp_approve.listing)
     assert operations.OPERATIONS["task.authorize_run"].authority == "A2"
+
+
+# -- review follow-ups ---------------------------------------------------------------------------------
+
+def _move_base():
+    with solar_state.session() as store:
+        current = store.async_policy()
+        store.async_policy_apply(solar_state.validate_policy_document(
+            dict(schema_version=solar_state.POLICY_SCHEMA_VERSION, revision=current["revision"] + 1,
+                 global_capacity=2, provider_capacity=current["provider_capacity"],
+                 exclusive_wait_seconds=current["exclusive_wait_seconds"],
+                 enabled_reader_profiles=current["enabled_reader_profiles"]), current["revision"]))
+
+
+def test_apply_is_bound_to_the_base_revision_even_when_the_proposal_is_far_ahead(solar_env, monkeypatch, capsys):
+    """A proposal for revision 5 over base 1 must not survive another process applying revision 2."""
+    _propose(monkeypatch)
+    with solar_state.session() as store:
+        document = solar_state.read_proposal(store.root)["document"]
+        solar_state.write_proposal(dict(document, revision=5), store.root)
+    terminal(monkeypatch, during=_move_base)
+    assert op.main(["x", "async_execution.apply"]) == 1
+    assert "proposal_changed" in capsys.readouterr().err
+    with solar_state.session() as store:
+        assert store.async_policy()["revision"] == 1     # only the other process applied
+
+
+def test_propose_is_refused_if_the_policy_moved_while_the_operator_typed(solar_env, monkeypatch, capsys):
+    terminal(monkeypatch, during=_move_base)
+    assert op.main(["x", "async_execution.propose", "--global-capacity", "3"]) == 1
+    assert "proposal_changed" in capsys.readouterr().err
+    with solar_state.session() as store:
+        assert not solar_state.read_proposal(store.root)["present"]
+
+
+def test_a_delivered_message_whose_audit_failed_is_not_reported_as_refused(solar_env, stubbed_send, monkeypatch, capsys):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "4242")
+    terminal(monkeypatch)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(solar_state, "session", broken)
+    assert op.main(["x", "telegram.send", "--chat-id", "4242", "--text", "hello"]) == 3
+    err = capsys.readouterr().err
+    assert "Sent to 4242; audit not recorded: disk full" in err and "refused" not in err
+    assert stubbed_send.exists()
+
+
+def test_telegram_checks_the_allowlist_before_asking_for_yes(solar_env, stubbed_send, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "4242")
+    out = terminal(monkeypatch)
+    assert op.main(["x", "telegram.send", "--chat-id", "999", "--text", "hello"]) == 1
+    assert "Type yes" not in out.getvalue()
+
+
+def test_provider_and_executor_cannot_alter_the_approval_screen(solar_env, monkeypatch):
+    task = work()["id"]
+    real = op._facts_from
+
+    def hostile(state, task_row, context):
+        facts = real(state, task_row, context)
+        facts["values"] = dict(facts["values"], provider="x\x1b[2K\rEVIL", executor="y\x1b[31m")
+        return facts
+    monkeypatch.setattr(op, "_facts_from", hostile)
+    out = terminal(monkeypatch, "no\n")
+    op.main(["x", "task.authorize_run", task])
+    screen = out.getvalue()
+    assert "\x1b" not in screen and "\r" not in screen and "\\x1b" in screen
+
+
+def test_open_terminal_works_on_a_real_pseudo_terminal():
+    """The streams are opened for real: a single read/write text stream on a tty is refused by Python."""
+    import os
+    import pty
+    import select
+
+    code = ("import sys; sys.path.insert(0, %r); import operator_approve as o; r, w, n = o.open_terminal(); "
+            "w.write('Q: '); w.flush(); print('GOT', r.readline().strip(), flush=True)" % str(SCRIPT.parent))
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(sys.executable, [sys.executable, "-c", code])
+    data = b""
+    for _ in range(200):
+        if select.select([fd], [], [], 0.1)[0]:
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            data += chunk
+            if b"Q: " in data and b"GOT" not in data:
+                os.write(fd, b"yes\n")
+            if b"GOT yes" in data:
+                break
+    os.waitpid(pid, 0)
+    assert b"GOT yes" in data, data

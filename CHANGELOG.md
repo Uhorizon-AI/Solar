@@ -7,13 +7,13 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
-- feat(approvals): `solar approve <operation>` is an operator channel for the four form-gated operations (`task.authorize_run`, `async_execution.propose`, `async_execution.apply`, `telegram.send`), for when the MCP client does not raise the form. It needs an interactive TTY (stdin must be a terminal; the answer is read from `/dev/tty`), shows what will run, takes only `yes` (no `--yes`), then runs the operation itself and leaves no grant. `task.authorize_run` resolves a task id prefix (8+ characters) and binds the `row_version` it showed; `apply` is refused if the proposal or the base policy changed. The audit now records `channel` (`cli` or `mcp`, set by the code path), plus tty and user on `cli`; `propose` and `telegram.send` write an audit event on both channels. A TTY is defence in depth, not a boundary (documented). Closes #161.
+- feat(approvals): `solar approve <operation>` is an operator channel for the four form-gated operations (`task.authorize_run`, `async_execution.propose`, `async_execution.apply`, `telegram.send`), for when the MCP client does not raise the form. It needs an interactive TTY (stdin must be a terminal; the answer is read from `/dev/tty`), shows what will run, takes only `yes` (no `--yes`), then runs the operation itself and leaves no grant. `task.authorize_run` resolves a task id prefix (8+ characters) and binds the `row_version` it showed; `apply` is refused if the proposal changed or the applied policy is no longer the revision the operator was shown; `propose` is refused if the policy moved while the operator typed; `telegram.send` checks the token and allowlist before asking, and a delivered message whose audit cannot be written is reported as sent (exit 3), never as refused. The audit now records `channel` (`cli` or `mcp`, set by the code path), plus tty and user on `cli`; `propose` and `telegram.send` write an audit event on both channels. A TTY is defence in depth, not a boundary (documented). Closes #161.
 
 ### Changed
 - approvals: `task_authorize_run` refuses an already-satisfied authorization inside its transaction (`task_authorization_not_required`), so two racing authorizations cannot both pass. The `client_form_not_advertised` recovery text points to `solar approve`.
 
 ### Removed
-- approvals: the console CLI of `mcp_approve.py` (`grant`, `list`, `revoke`, `main`). The internal `grant()` and `listing()` stay; `revoke()` is deleted.
+- approvals: the console CLI of `mcp_approve.py` (`grant`, `list`, `revoke`, `main`). The internal `grant()` and `listing()` stay; `revoke()` is deleted, so a live approval can no longer be revoked by command: it expires (at most 15 minutes), is consumed on use, or its file in `approvals_dir()` is deleted.
 
 ## [0.62.0] - 2026-11-09
 

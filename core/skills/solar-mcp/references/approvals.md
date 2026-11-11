@@ -184,8 +184,9 @@ operation itself**: it leaves no grant behind and no `approval_id` reaches an ag
 - The audit event records `channel: cli` (with tty and user) here and `channel: mcp` on the MCP path;
   the channel is fixed by the code path, never an argument.
 
-This is a channel for the human operator. Agents keep using `solar_execute` and must not run
-`solar approve`. Declared limit: a TTY is defence in depth, not a boundary; an agent with a shell that
+This is a channel for the human operator. Agents keep using `solar_execute`; they suggest that the user run
+`solar approve` and never run it or ask for its output. There is no command to revoke a live approval: it
+expires (at most 15 minutes) or is consumed on use, or the operator deletes its file in `approvals_dir()`. Declared limit: a TTY is defence in depth, not a boundary; an agent with a shell that
 can create a pty under the same user could still type `yes`.
 
 ## Cancellation behavior

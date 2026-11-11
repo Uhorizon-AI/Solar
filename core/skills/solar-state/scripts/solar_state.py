@@ -3478,13 +3478,18 @@ class Session:
         return _policy_row(self.conn)
 
     def async_policy_apply(self, document: Any, *, actor: Optional[str] = None,
-                           expected_digest: Optional[str] = None, channel: Optional[str] = None,
-                           tty: Optional[str] = None, user: Optional[str] = None) -> dict:
+                           expected_digest: Optional[str] = None, expected_base_revision: Optional[int] = None,
+                           channel: Optional[str] = None, tty: Optional[str] = None,
+                           user: Optional[str] = None) -> dict:
         """Apply a validated revision to the runtime's policy, in one transaction. A
         proposal that does not validate is refused and the applied one stays. With
-        `expected_digest` the document must be exactly the one that was approved."""
+        `expected_digest` the document must be exactly the one that was approved; with
+        `expected_base_revision` the policy in force must still be the one the approver saw."""
         with _transaction(self.conn) as conn:
             current = _policy_row(conn)
+            if expected_base_revision is not None and current["revision"] != expected_base_revision:
+                raise ProposalChanged(f"the applied policy changed from revision {expected_base_revision} "
+                                      f"to {current['revision']} after it was shown; nothing was applied")
             normalized = validate_policy_document(document, current["revision"])
             digest = policy_digest(normalized)
             if expected_digest is not None and digest != expected_digest:

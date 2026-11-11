@@ -439,7 +439,7 @@ def _confirmation_content(content, confirmation: dict):
                 'Native question tools are separate and cannot grant Solar approval by themselves. '
                 'Use a form-capable client or a verified host adapter; do not self-grant or retry unchanged. '
                 'The human operator can approve task.authorize_run, async_execution.propose|apply and telegram.send '
-                'from a terminal with `solar approve` (agents must not run it).'))
+                'from their own terminal with `solar approve`; suggest it to them, never run it yourself or ask for its output.'))
         # Reserved at envelope level; a handler's result stays nested under result.
         payload['confirmation'] = diagnostic
         return [dict(content[0], text=_text(payload)[0]['text'])]

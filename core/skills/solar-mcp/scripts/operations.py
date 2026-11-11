@@ -572,11 +572,14 @@ def proposal_document(applied: dict, arguments: dict) -> dict:
 
 
 def _do_async_propose(arguments: dict, *, channel: str = "mcp", tty: str | None = None,
-                      user: str | None = None) -> dict:
+                      user: str | None = None, expected_digest: str | None = None) -> dict:
     import solar_state
 
     with solar_state.session() as store:
         normalized = proposal_document(store.async_policy(), arguments)
+        if expected_digest is not None and solar_state.policy_digest(normalized) != expected_digest:
+            raise OperationError("proposal_changed", "The applied policy changed after the proposal was shown; "
+                                 "nothing was written.")
         path = solar_state.write_proposal(normalized, store.root)
         store.audit_event("async_policy_proposed", actor=_actor("async_execution.propose", channel),
                           revision=normalized["revision"], digest=solar_state.policy_digest(normalized),
@@ -587,7 +590,7 @@ def _do_async_propose(arguments: dict, *, channel: str = "mcp", tty: str | None 
 
 
 def _do_async_apply(arguments: dict, *, channel: str = "mcp", tty: str | None = None,
-                    user: str | None = None) -> dict:
+                    user: str | None = None, base_revision: int | None = None) -> dict:
     import solar_state
 
     with solar_state.session() as store:
@@ -601,6 +604,7 @@ def _do_async_apply(arguments: dict, *, channel: str = "mcp", tty: str | None = 
         try:
             applied = store.async_policy_apply(document, actor=_actor("async_execution.apply", channel),
                                                expected_digest=arguments["proposal_digest"],
+                                               expected_base_revision=base_revision,
                                                channel=channel, tty=tty, user=user)
         except solar_state.ProposalChanged as exc:
             raise OperationError("proposal_changed", str(exc)) from None
@@ -787,14 +791,17 @@ def _telegram_chat_allowed(chat_id: str, env: dict) -> bool:
     return bool(chat_id) and chat_id == (env.get("TELEGRAM_CHAT_ID") or "").strip()
 
 
-def _do_telegram_send(arguments: dict, *, channel: str = "mcp", tty: str | None = None,
-                      user: str | None = None) -> dict:
-    """Send as the Solar runtime. Reached only with an approval: see the gate.
+class SendAuditFailed(Exception):
+    """The message was delivered but its audit event could not be written (CLI channel only)."""
 
-    The token never touches the workspace. It is read here, from the installation
-    secret store, and handed to `send_telegram.sh` through the environment — that
-    script refuses to look it up on its own, so this is the mediated route.
-    """
+    def __init__(self, chat_id: str, cause: Exception):
+        super().__init__(str(cause))
+        self.chat_id = chat_id
+
+
+def _telegram_preflight(arguments: dict) -> tuple[dict, str]:
+    """The environment and the destination a send would use, refusing before anything leaves.
+    The CLI runs this before asking for `yes`, so a send that cannot happen never takes a consent."""
     import solar_secrets
 
     env = dict(os.environ)
@@ -823,6 +830,18 @@ def _do_telegram_send(arguments: dict, *, channel: str = "mcp", tty: str | None 
     env["TELEGRAM_CHAT_ID"] = chat_id
     if arguments.get("parse_mode"):
         env["TELEGRAM_PARSE_MODE"] = str(arguments["parse_mode"])
+    return env, chat_id
+
+
+def _do_telegram_send(arguments: dict, *, channel: str = "mcp", tty: str | None = None,
+                      user: str | None = None) -> dict:
+    """Send as the Solar runtime. Reached only with an approval: see the gate.
+
+    The token never touches the workspace. It is read here, from the installation
+    secret store, and handed to `send_telegram.sh` through the environment — that
+    script refuses to look it up on its own, so this is the mediated route.
+    """
+    env, chat_id = _telegram_preflight(arguments)
 
     script = _SKILLS / "solar-telegram" / "scripts" / "send_telegram.sh"
     proc = subprocess.run(["bash", str(script), str(arguments["text"])],
@@ -845,9 +864,9 @@ def _audit_send(chat_id: str, text: str, channel: str, tty: str | None, user: st
             store.audit_event("telegram_sent", actor=_actor("telegram.send", channel), chat_id=chat_id,
                               text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(), chars=len(text),
                               **_where(channel, tty, user))
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         if channel != "mcp":
-            raise
+            raise SendAuditFailed(chat_id, exc) from exc
 
 
 def _require_chat(arguments: dict) -> None:
