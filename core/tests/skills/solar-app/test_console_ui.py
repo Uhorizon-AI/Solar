@@ -262,6 +262,7 @@ const ingress = { claim_telegram: false, stamp: null, hostname: null };
 function boot(routes, hash, clipboardMode) {
   const els = {};
   const clicks = [];
+  const hashListeners = [];
   const keys = [];
   const inputs = [];
   const copied = [];
@@ -313,6 +314,7 @@ function boot(routes, hash, clipboardMode) {
     },
     location,
     history,
+    window: { addEventListener(type, fn) { if (type === "hashchange") hashListeners.push(fn); } },
     navigator: clipboardMode === "missing" ? {} : { clipboard: { writeText(text) {
       if (clipboardMode === "rejected") return Promise.reject(new Error("clipboard denied"));
       copied.push(text); return Promise.resolve();
@@ -348,6 +350,7 @@ function boot(routes, hash, clipboardMode) {
     get searchCaret() { return sandbox.document.activeElement && sandbox.document.activeElement.selectionStart; },
     get focusedFilter() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-filter") : null; },
     get focusedRecurring() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-recurring") != null : false; },
+    hashchange(hash) { location.hash = hash; hashListeners.forEach((fn) => fn()); },
     click(attrs) {
       const target = {
         setAttribute(name, value) { attrs[name] = value; },
@@ -1285,6 +1288,41 @@ async function settled() {
     await settled();
     if (ignored.els.title.textContent !== "Summary") throw new Error("hash ignored: " + bad);
   }
+
+  // Screen hashes: every screen writes its slug, a reload reopens it, and typing a hash opens it.
+  const slugs = { resumen: ["summary", "Summary"], dashboards: ["dashboards", null], ejecuciones: ["runs", null], autonomia: ["autonomy", null], ides: ["apps", null], entrada: ["channels", null], solicitante: ["requester", null], tareas: ["tasks", "Tasks"] };
+  for (const [screen, [slug]] of Object.entries(slugs)) {
+    page = await open(everything);
+    page.click({ "data-screen": screen });
+    await settled();
+    if (page.location.hash !== "#" + slug) throw new Error("screen hash for " + screen + ": " + page.location.hash);
+    const again = boot(Object.assign({ "/api/console/tasks": { body: everything } }, calm), page.location.hash);
+    await settled();
+    if (again.els.title.textContent !== page.els.title.textContent) throw new Error("reload did not reopen " + screen);
+  }
+  page = await open(everything);
+  page.hashchange("#runs");
+  await settled();
+  if (page.els.title.textContent === "Summary") throw new Error("a typed #runs hash must open Runs");
+  const runsTitle = page.els.title.textContent;
+  page.hashchange("#foo");
+  await settled();
+  if (page.els.title.textContent !== "Summary") throw new Error("an unknown hash falls back to Summary");
+  page.hashchange("");
+  await settled();
+  if (page.els.title.textContent !== "Summary") throw new Error("an empty hash falls back to Summary");
+  if (runsTitle === "Summary") throw new Error("runs title");
+
+  // A bare #tasks, typed with Tasks already open, behaves like a reload: default filter, no Recurring.
+  page = await open(everything);
+  page.hashchange("#tasks/closed+recurring");
+  await settled();
+  if (selectedChip(page.els.health.innerHTML) !== "closed") throw new Error("typed filter hash selects the group");
+  need(page.els.health.innerHTML, '<input type="checkbox" data-recurring="1" checked>', "typed hash turns Recurring on");
+  page.hashchange("#tasks");
+  await settled();
+  if (selectedChip(page.els.health.innerHTML) === "closed") throw new Error("a bare #tasks restores the default filter");
+  lack(page.els.health.innerHTML, '<input type="checkbox" data-recurring="1" checked>', "a bare #tasks clears Recurring");
 
   // Toolbar semantics, roving tabindex and keyboard.
   page = await open(everything);

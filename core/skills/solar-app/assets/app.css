@@ -1,7 +1,7 @@
 @font-face{font-family:'Inter';src:url('/assets/fonts/inter.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:swap}
 @font-face{font-family:'Montserrat';src:url('/assets/fonts/montserrat.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:swap}
 body{margin:0}
-/* Scrollbars: thin, rounded, tinted from the Solar design-system neutrals (dark default, light when .t-light is mounted) */
+/* Scrollbars: thin, rounded, tinted from the Solar design-system neutrals (dark default, light when .t-light is mounted). Literal hex on purpose: the theme variables live on .app, below html, so the document scrollbar cannot inherit them. */
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
 ::-webkit-scrollbar-thumb{background:#2A2B36;border:2px solid transparent;background-clip:content-box;border-radius:999px}

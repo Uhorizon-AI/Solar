@@ -680,13 +680,6 @@
       else location.hash = url;
     } catch (error) { /* the filter still works without a hash */ }
   }
-  function clearFilterHash() {
-    try {
-      if (typeof location === "undefined" || !/^#tasks\//.test(String(location.hash || ""))) return;
-      if (typeof history !== "undefined" && history.replaceState) history.replaceState(null, "", String(location.pathname || "") + String(location.search || ""));
-      else location.hash = "";
-    } catch (error) { /* a stale hash only affects a reload */ }
-  }
   // One hash per screen (#summary, #tasks, #runs...), so a reload reopens the same screen.
   // The slugs are fixed English words whatever the console language. Tasks keeps its own
   // deeper hash (#tasks/<filter>[+recurring]), written by writeFilterHash.
@@ -742,7 +735,7 @@
     if (id === "tareas") {
       taskContexts = {}; taskFull = {}; contextEpoch += 1;
       // The filter is decided at every opening; only the URL hash can carry it over a reload,
-      // so it seeds the first opening of a page load and is cleared on any other opening.
+      // so it seeds the first opening of a page load; any other opening rewrites the hash to a bare #tasks.
       var saved = seed || null;
       if (!saved) writeScreenHash(id);
       ui.filterAuto = !saved;
@@ -1843,8 +1836,9 @@
   if (typeof window !== "undefined" && window.addEventListener) {
     window.addEventListener("hashchange", function () {
       var filter = readFilterHash();
-      var id = filter ? "tareas" : readScreenHash();
-      if (id && (id !== ui.screen || filter)) openScreen(id, filter);
+      // Same resolution as the first opening: an empty or unknown hash falls back to Summary,
+      // and a bare #tasks reopens Tasks and decides the default filter again.
+      openScreen(filter ? "tareas" : (readScreenHash() || "resumen"), filter);
     });
   }
 })();
