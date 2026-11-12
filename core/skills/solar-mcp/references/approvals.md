@@ -172,21 +172,28 @@ the full task id, digest and `row_version` for `task.authorize_run`, or the chan
 policy in force for `apply`), and only the word `yes` approves. After `yes` the command **runs the
 operation itself**: it leaves no grant behind and no `approval_id` reaches an agent. Rules:
 
-- Interactive terminal required: stdin must be a TTY and the answer is read from `/dev/tty`. A pipe
-  is refused without reading a confirmation. If the state layer is unavailable it fails closed.
+- Interactive terminal required: stdin must be the controlling terminal itself (checked with `tcgetpgrp`)
+  and the answer is read from `/dev/tty`. A pipe, or a different terminal, is refused without reading a confirmation. If the state layer is unavailable it fails closed.
   There is no `--yes` or `--force`.
 - `task.authorize_run` is bound to the `row_version` it displayed; a task that changed, or that was
   already authorized, is refused (the check runs inside the state transaction).
-- `async_execution.apply` is refused if the proposal file or the base policy changed after it was shown.
+- `async_execution.propose` recomputes the proposal and publishes it in one write transaction; it is refused if
+  the applied policy moved after it was shown.
+- `async_execution.apply` is refused if the proposal file changed, or if the applied policy is no longer the
+  revision the operator was shown.
 - `telegram.send` uses the same sender as the MCP path: explicit `chat_id`, allowed-chat list and
-  installation credentials. The operator's `yes` is the formal approval; the External Communication Gate
-  applies as on the MCP path.
+  installation credentials, which are checked **before** `yes`, so a send that cannot happen spends no consent.
+  The operator's `yes` is the formal approval; the External Communication Gate applies as on the MCP path.
+  If the message was delivered but its audit event cannot be written, the command prints
+  `Sent to <chat>; audit not recorded` and exits `3` (not as a refusal): do not send it again.
 - The audit event records `channel: cli` (with tty and user) here and `channel: mcp` on the MCP path;
   the channel is fixed by the code path, never an argument.
 
 This is a channel for the human operator. Agents keep using `solar_execute`; they suggest that the user run
 `solar approve` and never run it or ask for its output. There is no command to revoke a live approval: it
-expires (at most 15 minutes) or is consumed on use, or the operator deletes its file in `approvals_dir()`. Declared limit: a TTY is defence in depth, not a boundary; an agent with a shell that
+expires (at most 15 minutes) or is consumed on use, or the operator deletes its file in `approvals_dir()`.
+
+Declared limit: a TTY is defence in depth, not a boundary; an agent with a shell that
 can create a pty under the same user could still type `yes`.
 
 ## Cancellation behavior

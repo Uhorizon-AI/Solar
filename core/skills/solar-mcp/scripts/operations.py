@@ -576,16 +576,14 @@ def _do_async_propose(arguments: dict, *, channel: str = "mcp", tty: str | None 
     import solar_state
 
     with solar_state.session() as store:
-        normalized = proposal_document(store.async_policy(), arguments)
-        if expected_digest is not None and solar_state.policy_digest(normalized) != expected_digest:
-            raise OperationError("proposal_changed", "The applied policy changed after the proposal was shown; "
-                                 "nothing was written.")
-        path = solar_state.write_proposal(normalized, store.root)
-        store.audit_event("async_policy_proposed", actor=_actor("async_execution.propose", channel),
-                          revision=normalized["revision"], digest=solar_state.policy_digest(normalized),
-                          **_where(channel, tty, user))
+        try:
+            normalized, path, digest = store.async_policy_propose(
+                lambda policy: proposal_document(policy, arguments), expected_digest=expected_digest,
+                actor=_actor("async_execution.propose", channel), **_where(channel, tty, user))
+        except solar_state.ProposalChanged as exc:
+            raise OperationError("proposal_changed", str(exc)) from None
     return dict(proposed=True, revision=normalized["revision"], path=str(path),
-                proposal_digest=solar_state.policy_digest(normalized), applied=False,
+                proposal_digest=digest, applied=False,
                 next="Apply it with async_execution.apply using this revision and digest.")
 
 

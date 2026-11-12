@@ -383,22 +383,54 @@ def test_open_terminal_works_on_a_real_pseudo_terminal():
 
     code = ("import sys; sys.path.insert(0, %r); import operator_approve as o; r, w, n = o.open_terminal(); "
             "w.write('Q: '); w.flush(); print('GOT', r.readline().strip(), flush=True)" % str(SCRIPT.parent))
+    import signal
+    import time
+
     pid, fd = pty.fork()
     if pid == 0:
         os.execv(sys.executable, [sys.executable, "-c", code])
     data = b""
-    for _ in range(200):
-        if select.select([fd], [], [], 0.1)[0]:
-            try:
-                chunk = os.read(fd, 4096)
-            except OSError:
-                break
-            if not chunk:
-                break
-            data += chunk
-            if b"Q: " in data and b"GOT" not in data:
-                os.write(fd, b"yes\n")
-            if b"GOT yes" in data:
-                break
-    os.waitpid(pid, 0)
+    deadline = time.monotonic() + 20
+    try:
+        while time.monotonic() < deadline and b"GOT yes" not in data:
+            if select.select([fd], [], [], 0.1)[0]:
+                try:
+                    chunk = os.read(fd, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                data += chunk
+                if b"Q: " in data and b"GOT" not in data:
+                    os.write(fd, b"yes\n")
+    finally:
+        os.close(fd)
+        try:
+            os.kill(pid, signal.SIGKILL)      # a child stuck on the terminal must not hang the suite
+        except ProcessLookupError:
+            pass
+        os.waitpid(pid, 0)
     assert b"GOT yes" in data, data
+
+
+def test_propose_publishes_under_the_same_write_lock_that_apply_needs(solar_env, monkeypatch):
+    """Another process applying a revision cannot land between the check and the published file."""
+    import threading
+    import time
+
+    events = []
+    real = solar_state.write_proposal
+
+    def racing(document, root=None):
+        worker = threading.Thread(target=lambda: (_move_base(), events.append("applied")))
+        worker.start()
+        time.sleep(0.5)                  # long enough for an unserialized apply to finish first
+        events.append("write")
+        path = real(document, root)
+        racing.worker = worker
+        return path
+    monkeypatch.setattr(solar_state, "write_proposal", racing)
+    terminal(monkeypatch)
+    assert op.main(["x", "async_execution.propose", "--global-capacity", "3"]) == 0
+    racing.worker.join(10)
+    assert events == ["write", "applied"]

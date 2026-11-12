@@ -56,7 +56,11 @@ def open_terminal():
     try:
         # Two streams: a terminal is not seekable, so one "r+" text stream is refused by Python.
         reader = open("/dev/tty", "r", encoding="utf-8")
-        writer = open("/dev/tty", "w", encoding="utf-8")
+        try:
+            writer = open("/dev/tty", "w", encoding="utf-8")
+        except OSError:
+            reader.close()
+            raise
     except OSError:
         raise Refused("there is no controlling terminal (/dev/tty); run this command by hand") from None
     try:

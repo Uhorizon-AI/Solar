@@ -3477,6 +3477,20 @@ class Session:
         """The applied configuration: what every claim reads, in its own transaction."""
         return _policy_row(self.conn)
 
+    def async_policy_propose(self, build, *, expected_digest: Optional[str] = None, **audit) -> tuple:
+        """Compute the next proposal from the policy in force, check it, publish the file and audit it,
+        all under one write transaction, so an apply cannot slip in between the check and the file.
+        `build(policy)` returns the normalized document; with `expected_digest` it must match."""
+        with _transaction(self.conn) as conn:
+            normalized = build(_policy_row(conn))
+            digest = policy_digest(normalized)
+            if expected_digest is not None and digest != expected_digest:
+                raise ProposalChanged("the applied policy changed after the proposal was shown; "
+                                      "nothing was written")
+            path = write_proposal(normalized, self.root)
+            _audit(conn, "async_policy_proposed", revision=normalized["revision"], digest=digest, **audit)
+        return normalized, path, digest
+
     def async_policy_apply(self, document: Any, *, actor: Optional[str] = None,
                            expected_digest: Optional[str] = None, expected_base_revision: Optional[int] = None,
                            channel: Optional[str] = None, tty: Optional[str] = None,
