@@ -420,7 +420,10 @@ def _write_lock_is_held() -> bool:
     other = sqlite3.connect(str(solar_state.db_path()), timeout=0, isolation_level=None)
     try:
         other.execute("BEGIN IMMEDIATE")
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as exc:
+        busy = getattr(exc, "sqlite_errorname", None) == "SQLITE_BUSY" or "database is locked" in str(exc)
+        if not busy:
+            raise                    # any other failure must not count as "the lock is held"
         return True
     else:
         other.execute("ROLLBACK")
