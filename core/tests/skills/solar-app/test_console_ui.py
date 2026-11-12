@@ -1009,7 +1009,7 @@ async function settled() {
   page = await open(only(["draft", "completed", "planned"]));
   if (selectedChip(page.els.health.innerHTML) !== "queue") throw new Error("default with no errors and nothing running");
   page = await open(only(["completed", "planned", "cancelled"]));
-  if (selectedChip(page.els.health.innerHTML) !== "queue") throw new Error("default with the three empty");
+  if (selectedChip(page.els.health.innerHTML) !== "queue") throw new Error("default with a planned task and nothing running or failed is Queue");
   page = await open(only([]));
   if (selectedChip(page.els.health.innerHTML) !== "queue") throw new Error("default with no tasks");
   // Nothing is remembered between openings.
@@ -1303,15 +1303,16 @@ async function settled() {
   page = await open(everything);
   page.hashchange("#runs");
   await settled();
-  if (page.els.title.textContent === "Summary") throw new Error("a typed #runs hash must open Runs");
   const runsTitle = page.els.title.textContent;
-  page.hashchange("#foo");
-  await settled();
-  if (page.els.title.textContent !== "Summary") throw new Error("an unknown hash falls back to Summary");
-  page.hashchange("");
-  await settled();
-  if (page.els.title.textContent !== "Summary") throw new Error("an empty hash falls back to Summary");
-  if (runsTitle === "Summary") throw new Error("runs title");
+  if (runsTitle !== "Runs") throw new Error("a typed #runs hash must open Runs: " + runsTitle);
+  for (const bad of ["#foo", ""]) {
+    page.hashchange("#runs");
+    await settled();
+    if (page.els.title.textContent !== runsTitle) throw new Error("back on Runs before " + JSON.stringify(bad));
+    page.hashchange(bad);
+    await settled();
+    if (page.els.title.textContent !== "Summary") throw new Error("hash " + JSON.stringify(bad) + " falls back to Summary");
+  }
 
   // A bare #tasks, typed with Tasks already open, behaves like a reload: default filter, no Recurring.
   page = await open(everything);
@@ -1321,7 +1322,7 @@ async function settled() {
   need(page.els.health.innerHTML, '<input type="checkbox" data-recurring="1" checked>', "typed hash turns Recurring on");
   page.hashchange("#tasks");
   await settled();
-  if (selectedChip(page.els.health.innerHTML) === "closed") throw new Error("a bare #tasks restores the default filter");
+  if (selectedChip(page.els.health.innerHTML) !== "running") throw new Error("a bare #tasks restores the default filter (Running with these data): " + selectedChip(page.els.health.innerHTML));
   lack(page.els.health.innerHTML, '<input type="checkbox" data-recurring="1" checked>', "a bare #tasks clears Recurring");
 
   // Toolbar semantics, roving tabindex and keyboard.
