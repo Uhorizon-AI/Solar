@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- feat(console): every screen has its own URL hash (`#summary`, `#tasks`, `#dashboards`, `#runs`, `#autonomy`, `#apps`, `#channels`, `#requester`), fixed English slugs written with `replaceState`, so a reload reopens the same screen. `#tasks/<group>[+recurring]` keeps working and wins over the default filter; typing a hash opens that screen, and an empty or unknown hash opens Summary. The console scrollbars follow the dark and light themes.
+
+### Changed
+- feat(console): opening Tasks now selects Running if a task is active, else Errors if any task failed, else Queue. Drafts is no longer the default focus; pick it from the toolbar.
+
 ## [0.62.0] - 2026-11-09
 
 ### Added

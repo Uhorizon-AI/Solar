@@ -262,6 +262,7 @@ const ingress = { claim_telegram: false, stamp: null, hostname: null };
 function boot(routes, hash, clipboardMode) {
   const els = {};
   const clicks = [];
+  const hashListeners = [];
   const keys = [];
   const inputs = [];
   const copied = [];
@@ -313,6 +314,7 @@ function boot(routes, hash, clipboardMode) {
     },
     location,
     history,
+    window: { addEventListener(type, fn) { if (type === "hashchange") hashListeners.push(fn); } },
     navigator: clipboardMode === "missing" ? {} : { clipboard: { writeText(text) {
       if (clipboardMode === "rejected") return Promise.reject(new Error("clipboard denied"));
       copied.push(text); return Promise.resolve();
@@ -348,6 +350,7 @@ function boot(routes, hash, clipboardMode) {
     get searchCaret() { return sandbox.document.activeElement && sandbox.document.activeElement.selectionStart; },
     get focusedFilter() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-filter") : null; },
     get focusedRecurring() { const a = sandbox.document.activeElement; return a && a.getAttribute ? a.getAttribute("data-recurring") != null : false; },
+    hashchange(hash) { location.hash = hash; hashListeners.forEach((fn) => fn()); },
     click(attrs) {
       const target = {
         setAttribute(name, value) { attrs[name] = value; },
@@ -995,18 +998,20 @@ async function settled() {
   // Recurring mark after the id, always visible, labelled, not a pill.
   need(view, '<span class="rmark" role="img" aria-label="recurring">↻</span>', "recurring mark");
 
-  // Default filter: first non-empty of Errors, Running, Drafts; else All. Decided at each opening.
+  // Default filter: Running if anything runs, else Errors if any, else Queue. Decided at each opening.
   const only = (statuses) => fixture(statuses.map((status, i) => mk("s" + i, status)));
   page = await open(everything);
-  if (selectedChip(page.els.health.innerHTML) !== "errors") throw new Error("default with errors");
+  if (selectedChip(page.els.health.innerHTML) !== "running") throw new Error("default with running and errors");
   page = await open(only(["active", "draft", "completed"]));
   if (selectedChip(page.els.health.innerHTML) !== "running") throw new Error("default with only running and drafts");
+  page = await open(only(["error", "draft", "completed"]));
+  if (selectedChip(page.els.health.innerHTML) !== "errors") throw new Error("default with errors and no running");
   page = await open(only(["draft", "completed", "planned"]));
-  if (selectedChip(page.els.health.innerHTML) !== "drafts") throw new Error("default with only drafts");
+  if (selectedChip(page.els.health.innerHTML) !== "queue") throw new Error("default with no errors and nothing running");
   page = await open(only(["completed", "planned", "cancelled"]));
-  if (selectedChip(page.els.health.innerHTML) !== "all") throw new Error("default with the three empty");
+  if (selectedChip(page.els.health.innerHTML) !== "queue") throw new Error("default with a planned task and nothing running or failed is Queue");
   page = await open(only([]));
-  if (selectedChip(page.els.health.innerHTML) !== "all") throw new Error("default with no tasks");
+  if (selectedChip(page.els.health.innerHTML) !== "queue") throw new Error("default with no tasks");
   // Nothing is remembered between openings.
   page = await open(everything);
   page.click({ "data-filter": "closed" });
@@ -1014,19 +1019,19 @@ async function settled() {
   await settled();
   page.click({ "data-screen": "tareas" });
   await settled();
-  if (selectedChip(page.els.health.innerHTML) !== "errors") throw new Error("the filter must be decided again at each opening");
+  if (selectedChip(page.els.health.innerHTML) !== "running") throw new Error("the filter must be decided again at each opening");
 
   // Hide at 0 except Errors and the selected group; Running only exists with active tasks.
   page = await open(only(["completed", "completed"]));
   view = page.els.health.innerHTML;
-  if (JSON.stringify(chipKeys(view)) !== JSON.stringify(["errors", "done", "all"])) throw new Error("hidden groups: " + JSON.stringify(chipKeys(view)));
+  if (JSON.stringify(chipKeys(view)) !== JSON.stringify(["errors", "queue", "done", "all"])) throw new Error("hidden groups: " + JSON.stringify(chipKeys(view)));
   need(view, "✓", "zero errors shows a check");
   need(view, '<span class="fg ok" aria-hidden="true">✓</span><span class="fl">Errors</span> <b class="fn">0</b>', "Errors 0 with a green check");
   lack(view, "fchip fill on bad", "Errors 0 is not red");
   lack(page.els.health.innerHTML, 'data-filter="running"', "no Running chip without active tasks");
   page = await open(everything);
   need(page.els.health.innerHTML, 'data-filter="running"', "Running chip with an active task");
-  need(page.els.health.innerHTML, "fchip fill on bad", "Errors with N > 0 is red and selected by default");
+  need(page.els.health.innerHTML, "fchip fill bad", "Errors with N > 0 is red");
   lack(page.els.health.innerHTML, 'data-filter="done" data-chip="1" aria-pressed="true"', "only the selected chip is pressed");
   // A selected group stays even when it empties.
   page = await open(only(["completed"]), { hash: "#tasks/running" });
@@ -1146,7 +1151,7 @@ async function settled() {
   need(view, 'aria-label="Done, 1 task"', "done follows the switch");
   need(view, 'aria-label="Closed, 1 task"', "closed follows the switch");
   need(view, 'aria-label="All, 5 tasks"', "all follows the switch");
-  if (!same(rowsOf(view).sort(), ["e1"])) throw new Error("switch intersects the selected group: " + JSON.stringify(rowsOf(view)));
+  if (!same(rowsOf(view).sort(), ["a1"])) throw new Error("switch intersects the selected group: " + JSON.stringify(rowsOf(view)));
   page.click({ "data-filter": "all" });
   if (!same(rowsOf(page.els.health.innerHTML).sort(), ["a1", "c2", "e1", "p1", "x2"])) throw new Error("switch with All");
   page.click({ "data-recurring": "1" });
@@ -1221,16 +1226,19 @@ async function settled() {
   const tokenGroup = (input, output, available = 1, attempts = 1) => ({ provider: "codex", model: "m", cli_version: "1", attempts,
     metrics: { input_tokens: { subtotal: input, available }, output_tokens: { subtotal: output, available } } });
   page = await open(fixture([mk("metered", "completed", { token_groups: [tokenGroup(0, 5)], duration_ms: 200000, duration_source: "timestamps" })]));
+  page.click({ "data-filter": "all" });
   view = page.els.health.innerHTML;
   need(view, 'class="task-when note"', "When is not an optional cell hidden on mobile");
   need(view, "0 → 5", "zero input is a measurement, not absence");
   need(view, "3 min 20 s", "When includes known duration");
   need(view, "Last recorded run duration", "task duration describes the last run");
   page = await open(fixture([mk("partial", "completed", { token_groups: [tokenGroup(null, 5, 1, 2)], duration_ms: 0 })]));
+  page.click({ "data-filter": "all" });
   view = page.els.health.innerHTML;
   need(view, "— → 5 · Partial", "missing counter and partial coverage are distinct");
   need(view, "0 ms", "zero duration is visible");
   page = await open(fixture([mk("unmeasured", "draft")]));
+  page.click({ "data-filter": "all" });
   lack(page.els.health.innerHTML, 'class="token-summary compact"', "no token placeholder without measurements");
   lack(page.els.health.innerHTML, 'class="task-run-duration"', "no duration placeholder without recorded time");
 
@@ -1281,8 +1289,45 @@ async function settled() {
     if (ignored.els.title.textContent !== "Summary") throw new Error("hash ignored: " + bad);
   }
 
+  // Screen hashes: every screen writes its slug, a reload reopens it, and typing a hash opens it.
+  const slugs = { resumen: ["summary", "Summary"], dashboards: ["dashboards", null], ejecuciones: ["runs", null], autonomia: ["autonomy", null], ides: ["apps", null], entrada: ["channels", null], solicitante: ["requester", null], tareas: ["tasks", "Tasks"] };
+  for (const [screen, [slug]] of Object.entries(slugs)) {
+    page = await open(everything);
+    page.click({ "data-screen": screen });
+    await settled();
+    if (page.location.hash !== "#" + slug) throw new Error("screen hash for " + screen + ": " + page.location.hash);
+    const again = boot(Object.assign({ "/api/console/tasks": { body: everything } }, calm), page.location.hash);
+    await settled();
+    if (again.els.title.textContent !== page.els.title.textContent) throw new Error("reload did not reopen " + screen);
+  }
+  page = await open(everything);
+  page.hashchange("#runs");
+  await settled();
+  const runsTitle = page.els.title.textContent;
+  if (runsTitle !== "Runs") throw new Error("a typed #runs hash must open Runs: " + runsTitle);
+  for (const bad of ["#foo", ""]) {
+    page.hashchange("#runs");
+    await settled();
+    if (page.els.title.textContent !== runsTitle) throw new Error("back on Runs before " + JSON.stringify(bad));
+    page.hashchange(bad);
+    await settled();
+    if (page.els.title.textContent !== "Summary") throw new Error("hash " + JSON.stringify(bad) + " falls back to Summary");
+  }
+
+  // A bare #tasks, typed with Tasks already open, behaves like a reload: default filter, no Recurring.
+  page = await open(everything);
+  page.hashchange("#tasks/closed+recurring");
+  await settled();
+  if (selectedChip(page.els.health.innerHTML) !== "closed") throw new Error("typed filter hash selects the group");
+  need(page.els.health.innerHTML, '<input type="checkbox" data-recurring="1" checked>', "typed hash turns Recurring on");
+  page.hashchange("#tasks");
+  await settled();
+  if (selectedChip(page.els.health.innerHTML) !== "running") throw new Error("a bare #tasks restores the default filter (Running with these data): " + selectedChip(page.els.health.innerHTML));
+  lack(page.els.health.innerHTML, '<input type="checkbox" data-recurring="1" checked>', "a bare #tasks clears Recurring");
+
   // Toolbar semantics, roving tabindex and keyboard.
   page = await open(everything);
+  page.click({ "data-filter": "errors" });
   view = page.els.health.innerHTML;
   need(view, 'role="toolbar" aria-label="Filter tasks by status"', "toolbar");
   if (!page.els.live.textContent.includes("Showing ")) throw new Error("live region announces the count");
