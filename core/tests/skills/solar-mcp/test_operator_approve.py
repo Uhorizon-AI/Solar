@@ -413,69 +413,52 @@ def test_open_terminal_works_on_a_real_pseudo_terminal():
     assert b"GOT yes" in data, data
 
 
-def test_propose_publishes_under_the_same_write_lock_that_apply_needs(solar_env, monkeypatch):
-    """Another process applying a revision cannot land between the check and the published file."""
-    import threading
+def _write_lock_is_held() -> bool:
+    """True when a second connection cannot start a write transaction right now (SQLITE_BUSY)."""
+    import sqlite3
 
-    events, failures = [], []
-    started = threading.Event()
+    other = sqlite3.connect(str(solar_state.db_path()), timeout=0, isolation_level=None)
+    try:
+        other.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError:
+        return True
+    else:
+        other.execute("ROLLBACK")
+        return False
+    finally:
+        other.close()
+
+
+def test_propose_publishes_under_the_write_lock_that_apply_needs(solar_env, monkeypatch):
+    """No other writer, apply included, can start while the proposal file is being replaced."""
+    held = []
     real = solar_state.write_proposal
 
-    def other_process():
-        try:
-            started.set()
-            _move_base()
-            events.append("applied")
-        except BaseException as exc:  # noqa: BLE001 - reported by the assertion below
-            failures.append(exc)
-
-    def racing(document, root=None):
-        worker = threading.Thread(target=other_process)
-        worker.start()
-        assert started.wait(5)
-        worker.join(0.5)                 # bounded: an unserialized apply would finish inside this window
-        assert worker.is_alive(), "apply ran while the proposal was being published"
-        events.append("write")
-        path = real(document, root)
-        racing.worker = worker
-        return path
-    monkeypatch.setattr(solar_state, "write_proposal", racing)
+    def observed(document, root=None):
+        held.append(_write_lock_is_held())
+        return real(document, root)
+    monkeypatch.setattr(solar_state, "write_proposal", observed)
     terminal(monkeypatch)
     assert op.main(["x", "async_execution.propose", "--global-capacity", "3"]) == 0
-    racing.worker.join(10)
-    assert not failures and events == ["write", "applied"]
+    assert held == [True]
 
 
 def test_apply_reads_the_proposal_under_the_write_lock(solar_env, monkeypatch):
-    """A proposal replaced while apply waits for the lock must be refused, not applied from a stale read."""
-    import threading
-    import time
-
-    _propose(monkeypatch)                                       # capacity 3, revision 1
+    """The file apply validates is read while no other writer can replace it."""
+    _propose(monkeypatch)
     with solar_state.session() as store:
         document = solar_state.read_proposal(store.root)["document"]
     digest = solar_state.policy_digest(solar_state.validate_policy_document(document, 0))
-    arguments = dict(revision=document["revision"], proposal_digest=digest)
-    outcome, started = [], threading.Event()
+    held = []
+    real = solar_state.read_proposal
 
-    def apply_it():
-        started.set()
-        try:
-            outcome.append(operations._do_async_apply(arguments, channel="cli", base_revision=0))
-        except operations.OperationError as exc:
-            outcome.append(exc)
-
-    with solar_state.session() as holder:
-        with solar_state._transaction(holder.conn):            # the write lock apply needs
-            worker = threading.Thread(target=apply_it)
-            worker.start()
-            assert started.wait(5)
-            time.sleep(0.3)                                     # apply has reached (or passed) its read
-            solar_state.write_proposal(dict(document, global_capacity=4), holder.root)
-    worker.join(10)
-    assert len(outcome) == 1 and getattr(outcome[0], "code", None) == "proposal_changed", outcome
-    with solar_state.session() as store:
-        assert store.async_policy()["revision"] == 0
+    def observed(root=None):
+        held.append(_write_lock_is_held())
+        return real(root)
+    monkeypatch.setattr(solar_state, "read_proposal", observed)
+    done = operations._do_async_apply(dict(revision=document["revision"], proposal_digest=digest),
+                                      channel="cli", base_revision=0)
+    assert done["applied"] and held == [True]
 
 
 def test_a_failure_before_the_file_leaves_the_previous_proposal(solar_env, monkeypatch, capsys):

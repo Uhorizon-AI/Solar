@@ -1119,10 +1119,12 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                   enabled_reader_profiles={"type": "array", "items": SLUG, "maxItems": 16,
                                            "uniqueItems": True}),
              required=("global_capacity",)),
-        errors=("policy_invalid", "state_unavailable"),
+        errors=("policy_invalid", "proposal_published_unaudited", "state_unavailable"),
         effects="Writes <runtime>/async-tasks/config/async-execution.json with the next revision. "
                 "The file is only a proposal: nothing changes until async_execution.apply applies it. "
-                "Fields not named keep the applied values."),
+                "Fields not named keep the applied values. If the final commit fails after the file was "
+                "replaced, the result is proposal_published_unaudited: the file is in place but its audit "
+                "event was not recorded; do not propose it again."),
     Operation(
         "async_execution.apply", A2,
         "Apply a prepared revision of the async execution configuration to the runtime.",
