@@ -7,10 +7,15 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- feat(approvals): `solar approve <operation>` is an operator channel for the four form-gated operations (`task.authorize_run`, `async_execution.propose`, `async_execution.apply`, `telegram.send`), for when the MCP client does not raise the form. It needs an interactive TTY (stdin must be a terminal; the answer is read from `/dev/tty`), shows what will run, takes only `yes` (no `--yes`), then runs the operation itself and leaves no grant. `task.authorize_run` resolves a task id prefix (8+ characters) and binds the `row_version` it showed; `apply` is refused if the proposal changed or the applied policy is no longer the revision the operator was shown; `propose` publishes under the write lock and is refused if the policy moved while the operator typed (a failed final commit is reported as published, exit 3); `apply` reads the proposal under that lock; `telegram.send` checks the token and allowlist before asking, and a delivered message whose audit cannot be written is reported as sent (exit 3), never as refused. The audit now records `channel` (`cli` or `mcp`, set by the code path), plus tty and user on `cli`; `propose` and `telegram.send` write an audit event on both channels. A TTY is defence in depth, not a boundary (documented). Closes #161.
 - feat(console): every screen has its own URL hash (`#summary`, `#tasks`, `#dashboards`, `#runs`, `#autonomy`, `#apps`, `#channels`, `#requester`), fixed English slugs written with `replaceState`, so a reload reopens the same screen. `#tasks/<group>[+recurring]` keeps working and wins over the default filter; typing a hash opens that screen, and an empty or unknown hash opens Summary. The console scrollbars follow the dark and light themes.
 
 ### Changed
+- approvals: `task_authorize_run` refuses an already-satisfied authorization inside its transaction (`task_authorization_not_required`), so two racing authorizations cannot both pass. The `client_form_not_advertised` recovery text points to `solar approve`.
 - feat(console): opening Tasks now selects Running if a task is active, else Errors if any task failed, else Queue. Drafts is no longer the default focus; pick it from the toolbar.
+
+### Removed
+- approvals: the console CLI of `mcp_approve.py` (`grant`, `list`, `revoke`, `main`). The internal `grant()` and `listing()` stay; `revoke()` is deleted, so a live approval can no longer be revoked by command: it expires (at most 15 minutes), is consumed on use, or its file in `approvals_dir()` is deleted.
 
 ## [0.62.0] - 2026-11-09
 

@@ -362,6 +362,14 @@ class TaskAuthorizationRefused(TransitionRefused):
         super().__init__(readiness["message"])
 
 
+class TaskPrefixError(StateError):
+    """An operator-typed task id matched no task, matched more than one, or is too short to trust."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
 class FormatError(StateError):
     """A task document that does not follow the frontmatter contract."""
 
@@ -381,6 +389,19 @@ class PolicyInvalid(StateError):
 
 class ProposalChanged(PolicyInvalid):
     """The proposal is not the document that was approved (its digest differs)."""
+
+
+class ProposalMissing(PolicyInvalid):
+    """There is no proposal file to apply."""
+
+
+class ProposalPublishedUnaudited(Exception):
+    """The proposal file was replaced but its transaction did not commit, so no audit row exists."""
+
+    def __init__(self, path, revision, cause: BaseException):
+        super().__init__(f"the proposal for revision {revision} was published at {path} but its audit "
+                         f"event was not recorded ({cause})")
+        self.path, self.revision = path, revision
 
 
 # ---------------------------------------------------------------------------
@@ -2159,6 +2180,21 @@ def run_risk(pairs: list[list[str]]) -> str:
     return "low" if access and access["mode"] == "read" else "high"
 
 
+def unconfined_reason(pairs: list[list[str]]) -> Optional[str]:
+    """Why the executor does not confine this task (None when it does): the plain reason `run_risk` is `high`."""
+    if run_risk(pairs) == "low":
+        return None
+    profile = (_field(pairs, "execution_profile") or "").strip()
+    provider = (_field(pairs, "provider") or "").strip().lower()
+    if not profile:
+        return "it has no restricted execution profile"
+    if provider not in VERIFIED_PROFILES.get(profile, frozenset()):
+        return f"profile {profile} has no verified implementation for provider {provider or '(none)'}"
+    if profile == "ask_readonly_v1" and not _ask_inside_workspace(pairs):
+        return "the folder it starts in, or a declared path, is outside the workspace"
+    return "its access policy is not read-only"
+
+
 def needs_run_authorization(pairs: list[list[str]]) -> bool:
     """A client-consented approval of a high-risk task is not yet permission to run it."""
     if _field(pairs, "approved_consent") != "client" or run_risk(pairs) == "low":
@@ -2422,6 +2458,31 @@ class Session:
         row = self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return _task_dict(row) if row else None
 
+    TASK_PREFIX_MIN = 8
+
+    def task_resolve_id(self, typed: str) -> str:
+        """The full id for an operator-typed id: exact, or a prefix of at least TASK_PREFIX_MIN characters
+        that matches exactly one task. Never guesses: no match, several matches and a short prefix refuse."""
+        typed = (typed or "").strip()
+        ids = [row[0] for row in self.conn.execute("SELECT id FROM tasks")]
+        if typed in ids:
+            return typed
+        if len(typed) < self.TASK_PREFIX_MIN:
+            raise TaskPrefixError("task_prefix_too_short",
+                                  f"give the full task id or at least {self.TASK_PREFIX_MIN} characters of it")
+        matches = sorted(i for i in ids if i.startswith(typed))
+        if not matches:
+            raise TaskPrefixError("task_not_found", f"no task starts with {typed}")
+        if len(matches) > 1:
+            raise TaskPrefixError("task_prefix_ambiguous",
+                                  f"{typed} matches {len(matches)} tasks; type more of the id")
+        return matches[0]
+
+    def audit_event(self, event: str, **row) -> None:
+        """One audit row for an act that has no state transition of its own (a proposal, a send)."""
+        with _transaction(self.conn) as conn:
+            _audit(conn, event, **row)
+
     def task_authorization_readiness(self, task_id: str, *, expected_row_version: Optional[int] = None) -> dict:
         return authorization_readiness(task_id, self.task_get(task_id), expected_row_version)
 
@@ -2596,7 +2657,8 @@ class Session:
         return came
 
     def task_authorize_run(self, task_id: str, *, expected_row_version: int,
-                           actor: Optional[str] = None) -> dict:
+                           actor: Optional[str] = None, channel: Optional[str] = None,
+                           tty: Optional[str] = None, user: Optional[str] = None) -> dict:
         """Authorize this exact content to run: the one step left to confirm for a high-risk task.
 
         Bound to the stored `approved_digest`: any material edit withdraws the approval and with it this
@@ -2607,12 +2669,16 @@ class Session:
             readiness = authorization_readiness(task_id, row, expected_row_version)
             if not readiness["ready"]:
                 raise TaskAuthorizationRefused(readiness)
+            if readiness["execution_authorization"] == "satisfied":
+                # Checked here, inside the transaction: a second authorization that raced the first is refused.
+                raise TaskAuthorizationRefused(dict(readiness, ready=False, code="task_authorization_not_required"))
             pairs = json.loads(row["frontmatter"])
             digest = _field(pairs, "approved_digest")
             _set_pair(pairs, "run_authorized_digest", " " + json.dumps(digest))
             _write_task(conn, task_id, "queued", pairs, row["body"], insert=False)
+            where = {key: value for key, value in dict(channel=channel, tty=tty, user=user).items() if value}
             _audit(conn, "task_run_authorized", task_id=task_id, actor=actor, digest=digest,
-                   risk=run_risk(pairs))
+                   risk=run_risk(pairs), **where)
             version = conn.execute("SELECT row_version FROM tasks WHERE id = ?", (task_id,)).fetchone()[0]
         return dict(task_id=task_id, authorized=True, digest=digest, risk=run_risk(pairs), row_version=version)
 
@@ -3424,13 +3490,52 @@ class Session:
         """The applied configuration: what every claim reads, in its own transaction."""
         return _policy_row(self.conn)
 
-    def async_policy_apply(self, document: Any, *, actor: Optional[str] = None,
-                           expected_digest: Optional[str] = None) -> dict:
+    def async_policy_propose(self, build, *, expected_digest: Optional[str] = None, **audit) -> tuple:
+        """Compute the next proposal from the policy in force, check it, publish the file and audit it,
+        all under one write transaction, so an apply cannot slip in between the check and the file.
+        `build(policy)` returns the normalized document; with `expected_digest` it must match."""
+        published = None
+        try:
+            with _transaction(self.conn) as conn:
+                normalized = build(_policy_row(conn))
+                digest = policy_digest(normalized)
+                if expected_digest is not None and digest != expected_digest:
+                    raise ProposalChanged("the applied policy changed after the proposal was shown; "
+                                          "nothing was written")
+                # Audit first, file last, COMMIT after: a failure before the file leaves the old one and
+                # no audit row; only a failed COMMIT can leave a published file, and that is reported.
+                _audit(conn, "async_policy_proposed", revision=normalized["revision"], digest=digest, **audit)
+                path = write_proposal(normalized, self.root)
+                published = (path, normalized["revision"])
+        except Exception as exc:
+            if published is not None:
+                raise ProposalPublishedUnaudited(published[0], published[1], exc) from exc
+            raise
+        return normalized, path, digest
+
+    def async_policy_apply(self, document: Any = None, *, actor: Optional[str] = None,
+                           expected_digest: Optional[str] = None, expected_base_revision: Optional[int] = None,
+                           expected_revision: Optional[int] = None,
+                           channel: Optional[str] = None, tty: Optional[str] = None,
+                           user: Optional[str] = None) -> dict:
         """Apply a validated revision to the runtime's policy, in one transaction. A
         proposal that does not validate is refused and the applied one stays. With
-        `expected_digest` the document must be exactly the one that was approved."""
+        `expected_digest` the document must be exactly the one that was approved; with
+        `expected_base_revision` the policy in force must still be the one the approver saw. Without a
+        `document`, the proposal file is read here, under the same write lock that publishes it, and must
+        be revision `expected_revision`."""
         with _transaction(self.conn) as conn:
             current = _policy_row(conn)
+            if document is None:
+                proposal = read_proposal(self.root)
+                if not proposal["present"]:
+                    raise ProposalMissing("there is no proposal file")
+                document = proposal["document"]
+                if not isinstance(document, dict) or document.get("revision") != expected_revision:
+                    raise ProposalChanged("the proposal file is not the revision that was approved")
+            if expected_base_revision is not None and current["revision"] != expected_base_revision:
+                raise ProposalChanged(f"the applied policy changed from revision {expected_base_revision} "
+                                      f"to {current['revision']} after it was shown; nothing was applied")
             normalized = validate_policy_document(document, current["revision"])
             digest = policy_digest(normalized)
             if expected_digest is not None and digest != expected_digest:
@@ -3447,7 +3552,8 @@ class Session:
             _audit(conn, "async_policy_applied", actor=actor, revision=normalized["revision"],
                    previous_revision=current["revision"],
                    global_capacity=normalized["global_capacity"],
-                   previous_global_capacity=current["global_capacity"], digest=digest)
+                   previous_global_capacity=current["global_capacity"], digest=digest,
+                   **{key: value for key, value in dict(channel=channel, tty=tty, user=user).items() if value})
             applied = _policy_row(conn)
         return dict(applied, digest=digest)
 

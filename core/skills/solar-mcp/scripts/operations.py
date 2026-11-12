@@ -116,8 +116,13 @@ def _now_iso() -> str:
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def _actor(operation: str) -> str:
-    return f"mcp:{operation}"
+def _actor(operation: str, channel: str = "mcp") -> str:
+    return f"{channel}:{operation}"
+
+
+def _where(channel: str, tty: str | None = None, user: str | None = None) -> dict:
+    """The audit fields that say where consent was obtained. `channel` is fixed by the code path."""
+    return {key: value for key, value in dict(channel=channel, tty=tty, user=user).items() if value}
 
 
 def _fm(value) -> str:
@@ -551,41 +556,54 @@ def _do_task_approve(arguments: dict) -> dict:
                       "to let it run." if waiting else "Queued; it runs when a place is free."))
 
 
-def _do_async_propose(arguments: dict) -> dict:
+def proposal_document(applied: dict, arguments: dict) -> dict:
+    """The next revision, validated and in canonical form: what a proposal writes and what the operator is shown."""
+    import solar_state
+
+    document = dict(
+        schema_version=solar_state.POLICY_SCHEMA_VERSION, revision=applied["revision"] + 1,
+        global_capacity=arguments["global_capacity"],
+        provider_capacity=({item["provider"]: item["limit"] for item in arguments["provider_limits"]}
+                           if "provider_limits" in arguments else applied["provider_capacity"]),
+        exclusive_wait_seconds=arguments.get("exclusive_wait_seconds", applied["exclusive_wait_seconds"]),
+        enabled_reader_profiles=sorted(arguments.get("enabled_reader_profiles",
+                                                     applied["enabled_reader_profiles"])))
+    return solar_state.validate_policy_document(document, applied["revision"])
+
+
+def _do_async_propose(arguments: dict, *, channel: str = "mcp", tty: str | None = None,
+                      user: str | None = None, expected_digest: str | None = None) -> dict:
     import solar_state
 
     with solar_state.session() as store:
-        applied = store.async_policy()
-        document = dict(
-            schema_version=solar_state.POLICY_SCHEMA_VERSION, revision=applied["revision"] + 1,
-            global_capacity=arguments["global_capacity"],
-            provider_capacity=({item["provider"]: item["limit"] for item in arguments["provider_limits"]}
-                               if "provider_limits" in arguments else applied["provider_capacity"]),
-            exclusive_wait_seconds=arguments.get("exclusive_wait_seconds",
-                                                 applied["exclusive_wait_seconds"]),
-            enabled_reader_profiles=sorted(arguments.get("enabled_reader_profiles",
-                                                         applied["enabled_reader_profiles"])))
-        normalized = solar_state.validate_policy_document(document, applied["revision"])
-        path = solar_state.write_proposal(normalized, store.root)
+        try:
+            normalized, path, digest = store.async_policy_propose(
+                lambda policy: proposal_document(policy, arguments), expected_digest=expected_digest,
+                actor=_actor("async_execution.propose", channel), **_where(channel, tty, user))
+        except solar_state.ProposalChanged as exc:
+            raise OperationError("proposal_changed", str(exc)) from None
+        except solar_state.ProposalPublishedUnaudited as exc:
+            raise OperationError("proposal_published_unaudited", f"{exc}. Do not propose it again.") from None
     return dict(proposed=True, revision=normalized["revision"], path=str(path),
-                proposal_digest=solar_state.policy_digest(normalized), applied=False,
+                proposal_digest=digest, applied=False,
                 next="Apply it with async_execution.apply using this revision and digest.")
 
 
-def _do_async_apply(arguments: dict) -> dict:
+def _do_async_apply(arguments: dict, *, channel: str = "mcp", tty: str | None = None,
+                    user: str | None = None, base_revision: int | None = None) -> dict:
     import solar_state
 
     with solar_state.session() as store:
-        proposal = solar_state.read_proposal(store.root)
-        if not proposal["present"]:
-            raise OperationError("proposal_missing", "There is no proposal file; prepare one with "
-                                 "async_execution.propose.")
-        document = proposal["document"]
-        if (not isinstance(document, dict) or document.get("revision") != arguments["revision"]):
-            raise OperationError("proposal_changed", "The proposal file is not the revision that was approved.")
         try:
-            applied = store.async_policy_apply(document, actor=_actor("async_execution.apply"),
-                                               expected_digest=arguments["proposal_digest"])
+            # The file is read and validated inside the write transaction that applies it.
+            applied = store.async_policy_apply(actor=_actor("async_execution.apply", channel),
+                                               expected_digest=arguments["proposal_digest"],
+                                               expected_revision=arguments["revision"],
+                                               expected_base_revision=base_revision,
+                                               channel=channel, tty=tty, user=user)
+        except solar_state.ProposalMissing:
+            raise OperationError("proposal_missing", "There is no proposal file; prepare one with "
+                                 "async_execution.propose.") from None
         except solar_state.ProposalChanged as exc:
             raise OperationError("proposal_changed", str(exc)) from None
         except solar_state.PolicyInvalid as exc:
@@ -618,7 +636,7 @@ def _do_task_authorize_run(arguments: dict) -> dict:
         with solar_state.session() as store:
             return store.task_authorize_run(arguments["task_id"],
                                             expected_row_version=arguments["expected_row_version"],
-                                            actor=_actor("task.authorize_run"))
+                                            actor=_actor("task.authorize_run"), channel="mcp")
     except solar_state.TaskAuthorizationRefused as exc:
         raise OperationError(exc.code, str(exc), details=dict(readiness=exc.readiness)) from None
 
@@ -771,13 +789,17 @@ def _telegram_chat_allowed(chat_id: str, env: dict) -> bool:
     return bool(chat_id) and chat_id == (env.get("TELEGRAM_CHAT_ID") or "").strip()
 
 
-def _do_telegram_send(arguments: dict) -> dict:
-    """Send as the Solar runtime. Reached only with an approval: see the gate.
+class SendAuditFailed(Exception):
+    """The message was delivered but its audit event could not be written (CLI channel only)."""
 
-    The token never touches the workspace. It is read here, from the installation
-    secret store, and handed to `send_telegram.sh` through the environment — that
-    script refuses to look it up on its own, so this is the mediated route.
-    """
+    def __init__(self, chat_id: str, cause: Exception):
+        super().__init__(str(cause))
+        self.chat_id = chat_id
+
+
+def _telegram_preflight(arguments: dict) -> tuple[dict, str]:
+    """The environment and the destination a send would use, refusing before anything leaves.
+    The CLI runs this before asking for `yes`, so a send that cannot happen never takes a consent."""
     import solar_secrets
 
     env = dict(os.environ)
@@ -806,6 +828,18 @@ def _do_telegram_send(arguments: dict) -> dict:
     env["TELEGRAM_CHAT_ID"] = chat_id
     if arguments.get("parse_mode"):
         env["TELEGRAM_PARSE_MODE"] = str(arguments["parse_mode"])
+    return env, chat_id
+
+
+def _do_telegram_send(arguments: dict, *, channel: str = "mcp", tty: str | None = None,
+                      user: str | None = None) -> dict:
+    """Send as the Solar runtime. Reached only with an approval: see the gate.
+
+    The token never touches the workspace. It is read here, from the installation
+    secret store, and handed to `send_telegram.sh` through the environment — that
+    script refuses to look it up on its own, so this is the mediated route.
+    """
+    env, chat_id = _telegram_preflight(arguments)
 
     script = _SKILLS / "solar-telegram" / "scripts" / "send_telegram.sh"
     proc = subprocess.run(["bash", str(script), str(arguments["text"])],
@@ -813,7 +847,24 @@ def _do_telegram_send(arguments: dict) -> dict:
                           cwd=str(workspace()), env=env)
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "send failed").strip()[:500])
+    _audit_send(chat_id, str(arguments["text"]), channel, tty, user)
     return dict(sent=True, chat_id=chat_id, output=(proc.stdout or "").strip()[:500])
+
+
+def _audit_send(chat_id: str, text: str, channel: str, tty: str | None, user: str | None) -> None:
+    """Record a sent message (destination and a digest of the text, never the text). The message is already
+    out, so a state that cannot be written does not turn a delivered send into a failure on the MCP path."""
+    import hashlib
+    import solar_state
+
+    try:
+        with solar_state.session() as store:
+            store.audit_event("telegram_sent", actor=_actor("telegram.send", channel), chat_id=chat_id,
+                              text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(), chars=len(text),
+                              **_where(channel, tty, user))
+    except Exception as exc:  # noqa: BLE001
+        if channel != "mcp":
+            raise SendAuditFailed(chat_id, exc) from exc
 
 
 def _require_chat(arguments: dict) -> None:
@@ -1068,10 +1119,12 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                   enabled_reader_profiles={"type": "array", "items": SLUG, "maxItems": 16,
                                            "uniqueItems": True}),
              required=("global_capacity",)),
-        errors=("policy_invalid", "state_unavailable"),
+        errors=("policy_invalid", "proposal_published_unaudited", "state_unavailable"),
         effects="Writes <runtime>/async-tasks/config/async-execution.json with the next revision. "
                 "The file is only a proposal: nothing changes until async_execution.apply applies it. "
-                "Fields not named keep the applied values."),
+                "Fields not named keep the applied values. If the final commit fails after the file was "
+                "replaced, the result is proposal_published_unaudited: the file is in place but its audit "
+                "event was not recorded; do not propose it again."),
     Operation(
         "async_execution.apply", A2,
         "Apply a prepared revision of the async execution configuration to the runtime.",
