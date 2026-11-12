@@ -1,6 +1,14 @@
 @font-face{font-family:'Inter';src:url('/assets/fonts/inter.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:swap}
 @font-face{font-family:'Montserrat';src:url('/assets/fonts/montserrat.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:swap}
 body{margin:0}
+/* Scrollbars: thin, rounded, tinted from the Solar design-system neutrals (dark default, light when .t-light is mounted). Literal hex on purpose: the theme variables live on .app, below html, so the document scrollbar cannot inherit them. */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-thumb{background:#2A2B36;border:2px solid transparent;background-clip:content-box;border-radius:999px}
+::-webkit-scrollbar-thumb:hover{background:#8B8B96;background-clip:content-box;border:2px solid transparent}
+html:has(.t-light) ::-webkit-scrollbar-thumb{background:#C9BFA9;background-clip:content-box}
+html:has(.t-light) ::-webkit-scrollbar-thumb:hover{background:#77736C;background-clip:content-box}
+@supports not selector(::-webkit-scrollbar){*{scrollbar-width:thin;scrollbar-color:#2A2B36 transparent}html:has(.t-light) *{scrollbar-color:#C9BFA9 transparent}}
 .t-dark{--bg:#0A0A0F;--panel:#14151C;--panel2:#1C1D26;--line:#2A2B36;--text:#F2F0EC;--muted:#8B8B96;--sel:rgba(232,163,61,.12);--brand:#E8A33D;--ok:#5FBF7F;--okbg:rgba(95,191,127,.12);--err:#FF5C4D;--errbg:rgba(255,92,77,.12);--warn:#FFB454;--warnbg:rgba(255,180,84,.12);--info:#a8c4ff;--infobg:rgba(91,140,255,.15);--neu:#9a9aa6;--neubg:#1C1D26}
 .t-light{--bg:#FFFDF8;--panel:#F7F3EC;--panel2:#EDE6D8;--line:#E0D8C8;--text:#0A0A0F;--muted:#55524C;--sel:rgba(232,163,61,.18);--brand:#C97F1E;--ok:#25703f;--okbg:rgba(95,191,127,.18);--err:#b52a1e;--errbg:rgba(255,92,77,.14);--warn:#8f5200;--warnbg:rgba(255,180,84,.24);--info:#2649b8;--infobg:rgba(91,140,255,.16);--neu:#55524C;--neubg:#EDE6D8}
 .app{display:flex;width:100%;min-height:100vh;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;font-size:13.5px;line-height:1.4}

@@ -173,10 +173,18 @@ Running (`active`), Drafts (`draft`), a 1 px separator, Queue (`planned`,
 "Recurring" checkbox sits on the right and is not a chip. Errors never hides: at 0
 it shows a green check, and selecting it shows "No tasks in error" with a link to
 the next pending group. Running exists only while a task is active. Every other
-group hides at 0 unless selected. The default filter is the first non-empty of
-Errors, Running and Drafts, else All, decided at each opening and never remembered
-between sessions; only the URL hash (`#tasks/<group>` with `+recurring`) carries it
-over a reload. The Recurring checkbox intersects the group and the chip counts
+group hides at 0 unless selected. The default filter is Running if a task is
+active, else Errors if any task failed, else Queue (Drafts is no longer the default
+focus), decided at each opening and never remembered between sessions. Every
+screen also has its own URL hash so a reload reopens it: `#summary`, `#tasks`,
+`#dashboards`, `#runs`, `#autonomy`, `#apps`, `#channels` and `#requester`. The slugs
+are fixed English words whatever the console language, and they are written with
+`history.replaceState`, so they add no history entries. Tasks keeps its deeper
+hash (`#tasks/<group>` with `+recurring`), which wins over the default filter at that
+opening; a bare `#tasks` decides the default again. An empty or unknown hash opens
+Summary, and typing a hash by hand opens that screen the same way a reload does.
+
+The Recurring checkbox intersects the group and the chip counts
 follow it. Task families sort by the parent creation time, newest first; each parent stays immediately before its matching children, which also sort newest first. A parent outside the selected status remains visible as context. Status and update time never change that order. Rows show all
 eight states as a pill with glyph and text (red only for `error`, blue only for
 `active`); recurring tasks carry a "↻" mark after the id. A parent row counts every

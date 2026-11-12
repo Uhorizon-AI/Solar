@@ -680,12 +680,23 @@
       else location.hash = url;
     } catch (error) { /* the filter still works without a hash */ }
   }
-  function clearFilterHash() {
+  // One hash per screen (#summary, #tasks, #runs...), so a reload reopens the same screen.
+  // The slugs are fixed English words whatever the console language. Tasks keeps its own
+  // deeper hash (#tasks/<filter>[+recurring]), written by writeFilterHash.
+  var SCREEN_SLUGS = { resumen: "summary", tareas: "tasks", dashboards: "dashboards", ejecuciones: "runs", autonomia: "autonomy", ides: "apps", entrada: "channels", solicitante: "requester" };
+  function readScreenHash() {
+    var match = /^#([a-z]+)$/.exec(String((typeof location !== "undefined" && location.hash) || ""));
+    if (!match) return null;
+    for (var id in SCREEN_SLUGS) if (SCREEN_SLUGS[id] === match[1]) return id;
+    return null;
+  }
+  function writeScreenHash(id) {
+    var url = "#" + SCREEN_SLUGS[id];
     try {
-      if (typeof location === "undefined" || !/^#tasks\//.test(String(location.hash || ""))) return;
-      if (typeof history !== "undefined" && history.replaceState) history.replaceState(null, "", String(location.pathname || "") + String(location.search || ""));
-      else location.hash = "";
-    } catch (error) { /* a stale hash only affects a reload */ }
+      if (typeof location !== "undefined" && location.hash === url) return;
+      if (typeof history !== "undefined" && history.replaceState) history.replaceState(null, "", url);
+      else location.hash = url;
+    } catch (error) { /* the screen still opens without a hash */ }
   }
   // The chip (or the Recurring checkbox) that holds focus, read before a repaint replaces
   // the toolbar; otherwise the one-shot intent set by a click or an arrow key.
@@ -724,15 +735,15 @@
     if (id === "tareas") {
       taskContexts = {}; taskFull = {}; contextEpoch += 1;
       // The filter is decided at every opening; only the URL hash can carry it over a reload,
-      // so it seeds the first opening of a page load and is cleared on any other opening.
+      // so it seeds the first opening of a page load; any other opening rewrites the hash to a bare #tasks.
       var saved = seed || null;
-      if (!saved) clearFilterHash();
+      if (!saved) writeScreenHash(id);
       ui.filterAuto = !saved;
       ui.filter = saved ? saved.filter : null;
       ui.recurring = saved ? saved.recurring : false;
       ui.focusKey = null;
     }
-    else clearFilterHash();
+    else writeScreenHash(id);
     ui.screen = id;
     clearInterval(timer);
     timer = 0;
@@ -956,9 +967,8 @@
     function rawCount(statuses) { return statuses.reduce(function (sum, status) { return sum + count(status).n; }, 0); }
     var totalAll = (data.statuses || []).reduce(function (sum, status) { return sum + (ui.recurring ? (count(status).recurring || 0) : count(status).n); }, 0);
     if (ui.filterAuto) {
-      // Decided at every opening: first non-empty of Errors, Running, Drafts; else All.
-      ui.filter = "all";
-      for (var g = 0; g < 3; g += 1) { if (rawCount(GROUPS[g].statuses) > 0) { ui.filter = GROUPS[g].key; break; } }
+      // Decided at every opening: Running if anything runs, else Errors if any, else Queue.
+      ui.filter = rawCount(["active"]) > 0 ? "running" : (rawCount(["error"]) > 0 ? "errors" : "queue");
     }
     var filters = GROUPS.map(function (group) {
       return { key: group.key, label: t(group.label), statuses: group.statuses, fill: !!group.fill, glyph: group.glyph, n: groupCount(group.statuses) };
@@ -1821,5 +1831,14 @@
   } catch (error) { /* default stays dark */ }
 
   var bootFilter = readFilterHash();
-  openScreen(bootFilter ? "tareas" : "resumen", bootFilter);
+  openScreen(bootFilter ? "tareas" : (readScreenHash() || "resumen"), bootFilter);
+  // Typing a hash by hand (or back/forward) opens that screen; our own writes use replaceState and do not fire this.
+  if (typeof window !== "undefined" && window.addEventListener) {
+    window.addEventListener("hashchange", function () {
+      var filter = readFilterHash();
+      // Same resolution as the first opening: an empty or unknown hash falls back to Summary,
+      // and a bare #tasks reopens Tasks and decides the default filter again.
+      openScreen(filter ? "tareas" : (readScreenHash() || "resumen"), filter);
+    });
+  }
 })();
