@@ -177,10 +177,11 @@ operation itself**: it leaves no grant behind and no `approval_id` reaches an ag
   There is no `--yes` or `--force`.
 - `task.authorize_run` is bound to the `row_version` it displayed; a task that changed, or that was
   already authorized, is refused (the check runs inside the state transaction).
-- `async_execution.propose` recomputes the proposal and publishes it in one write transaction; it is refused if
-  the applied policy moved after it was shown.
-- `async_execution.apply` is refused if the proposal file changed, or if the applied policy is no longer the
-  revision the operator was shown.
+- `async_execution.propose` recomputes the proposal and publishes it under one write lock (audit, then file,
+  then commit); it is refused if the applied policy moved after it was shown. If only the final commit fails
+  after the file was replaced, it reports `proposal_published_unaudited` and exits `3`: the file is in place.
+- `async_execution.apply` reads and validates the proposal file under that same write lock, and is refused if
+  the file changed, or if the applied policy is no longer the revision the operator was shown.
 - `telegram.send` uses the same sender as the MCP path: explicit `chat_id`, allowed-chat list and
   installation credentials, which are checked **before** `yes`, so a send that cannot happen spends no consent.
   The operator's `yes` is the formal approval; the External Communication Gate applies as on the MCP path.

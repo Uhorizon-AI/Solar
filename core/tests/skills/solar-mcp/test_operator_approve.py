@@ -416,15 +416,25 @@ def test_open_terminal_works_on_a_real_pseudo_terminal():
 def test_propose_publishes_under_the_same_write_lock_that_apply_needs(solar_env, monkeypatch):
     """Another process applying a revision cannot land between the check and the published file."""
     import threading
-    import time
 
-    events = []
+    events, failures = [], []
+    started = threading.Event()
     real = solar_state.write_proposal
 
+    def other_process():
+        try:
+            started.set()
+            _move_base()
+            events.append("applied")
+        except BaseException as exc:  # noqa: BLE001 - reported by the assertion below
+            failures.append(exc)
+
     def racing(document, root=None):
-        worker = threading.Thread(target=lambda: (_move_base(), events.append("applied")))
+        worker = threading.Thread(target=other_process)
         worker.start()
-        time.sleep(0.5)                  # long enough for an unserialized apply to finish first
+        assert started.wait(5)
+        worker.join(0.5)                 # bounded: an unserialized apply would finish inside this window
+        assert worker.is_alive(), "apply ran while the proposal was being published"
         events.append("write")
         path = real(document, root)
         racing.worker = worker
@@ -433,4 +443,75 @@ def test_propose_publishes_under_the_same_write_lock_that_apply_needs(solar_env,
     terminal(monkeypatch)
     assert op.main(["x", "async_execution.propose", "--global-capacity", "3"]) == 0
     racing.worker.join(10)
-    assert events == ["write", "applied"]
+    assert not failures and events == ["write", "applied"]
+
+
+def test_apply_reads_the_proposal_under_the_write_lock(solar_env, monkeypatch):
+    """A proposal replaced while apply waits for the lock must be refused, not applied from a stale read."""
+    import threading
+    import time
+
+    _propose(monkeypatch)                                       # capacity 3, revision 1
+    with solar_state.session() as store:
+        document = solar_state.read_proposal(store.root)["document"]
+    digest = solar_state.policy_digest(solar_state.validate_policy_document(document, 0))
+    arguments = dict(revision=document["revision"], proposal_digest=digest)
+    outcome, started = [], threading.Event()
+
+    def apply_it():
+        started.set()
+        try:
+            outcome.append(operations._do_async_apply(arguments, channel="cli", base_revision=0))
+        except operations.OperationError as exc:
+            outcome.append(exc)
+
+    with solar_state.session() as holder:
+        with solar_state._transaction(holder.conn):            # the write lock apply needs
+            worker = threading.Thread(target=apply_it)
+            worker.start()
+            assert started.wait(5)
+            time.sleep(0.3)                                     # apply has reached (or passed) its read
+            solar_state.write_proposal(dict(document, global_capacity=4), holder.root)
+    worker.join(10)
+    assert len(outcome) == 1 and getattr(outcome[0], "code", None) == "proposal_changed", outcome
+    with solar_state.session() as store:
+        assert store.async_policy()["revision"] == 0
+
+
+def test_a_failure_before_the_file_leaves_the_previous_proposal(solar_env, monkeypatch, capsys):
+    _propose(monkeypatch)
+    real = solar_state._audit
+
+    def broken(conn, event, **row):
+        if event == "async_policy_proposed":
+            raise solar_state.StateError("audit down")
+        return real(conn, event, **row)
+    monkeypatch.setattr(solar_state, "_audit", broken)
+    terminal(monkeypatch)
+    assert op.main(["x", "async_execution.propose", "--global-capacity", "4"]) == 1
+    with solar_state.session() as store:
+        assert solar_state.read_proposal(store.root)["document"]["global_capacity"] == 3
+    assert len(audit("async_policy_proposed")) == 1
+
+
+def test_a_failed_commit_after_the_file_is_reported_as_published_not_refused(solar_env, monkeypatch, capsys):
+    import sqlite3
+    from contextlib import contextmanager
+
+    _propose(monkeypatch)
+    real = solar_state._transaction
+
+    @contextmanager
+    def failing_commit(conn):
+        with real(conn) as inside:
+            yield inside
+            raise sqlite3.OperationalError("disk I/O error")
+    monkeypatch.setattr(solar_state, "_transaction", failing_commit)
+    terminal(monkeypatch)
+    assert op.main(["x", "async_execution.propose", "--global-capacity", "4"]) == 3
+    err = capsys.readouterr().err
+    assert "published" in err and "not recorded" in err and "refused" not in err
+    monkeypatch.setattr(solar_state, "_transaction", real)
+    with solar_state.session() as store:
+        assert solar_state.read_proposal(store.root)["document"]["global_capacity"] == 4
+    assert len(audit("async_policy_proposed")) == 1       # no row for the one that did not commit

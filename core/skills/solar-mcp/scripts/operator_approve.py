@@ -213,6 +213,10 @@ def propose(arguments: dict, tty) -> int:
         done = operations._do_async_propose(arguments, channel="cli", tty=name, user=getpass.getuser(),
                                             expected_digest=solar_state.policy_digest(normalized))
     except OperationError as exc:
+        if exc.code == "proposal_published_unaudited":
+            # Published, not refused: the file is in place, only its audit row is missing.
+            print(f"{exc}", file=sys.stderr)
+            return 3
         raise Refused(f"{exc.code}: {exc}") from None
     except solar_state.StateError as exc:
         raise Refused(str(exc)) from None

@@ -391,6 +391,19 @@ class ProposalChanged(PolicyInvalid):
     """The proposal is not the document that was approved (its digest differs)."""
 
 
+class ProposalMissing(PolicyInvalid):
+    """There is no proposal file to apply."""
+
+
+class ProposalPublishedUnaudited(Exception):
+    """The proposal file was replaced but its transaction did not commit, so no audit row exists."""
+
+    def __init__(self, path, revision, cause: BaseException):
+        super().__init__(f"the proposal for revision {revision} was published at {path} but its audit "
+                         f"event was not recorded ({cause})")
+        self.path, self.revision = path, revision
+
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -3481,26 +3494,45 @@ class Session:
         """Compute the next proposal from the policy in force, check it, publish the file and audit it,
         all under one write transaction, so an apply cannot slip in between the check and the file.
         `build(policy)` returns the normalized document; with `expected_digest` it must match."""
-        with _transaction(self.conn) as conn:
-            normalized = build(_policy_row(conn))
-            digest = policy_digest(normalized)
-            if expected_digest is not None and digest != expected_digest:
-                raise ProposalChanged("the applied policy changed after the proposal was shown; "
-                                      "nothing was written")
-            path = write_proposal(normalized, self.root)
-            _audit(conn, "async_policy_proposed", revision=normalized["revision"], digest=digest, **audit)
+        published = None
+        try:
+            with _transaction(self.conn) as conn:
+                normalized = build(_policy_row(conn))
+                digest = policy_digest(normalized)
+                if expected_digest is not None and digest != expected_digest:
+                    raise ProposalChanged("the applied policy changed after the proposal was shown; "
+                                          "nothing was written")
+                # Audit first, file last, COMMIT after: a failure before the file leaves the old one and
+                # no audit row; only a failed COMMIT can leave a published file, and that is reported.
+                _audit(conn, "async_policy_proposed", revision=normalized["revision"], digest=digest, **audit)
+                path = write_proposal(normalized, self.root)
+                published = (path, normalized["revision"])
+        except Exception as exc:
+            if published is not None:
+                raise ProposalPublishedUnaudited(published[0], published[1], exc) from exc
+            raise
         return normalized, path, digest
 
-    def async_policy_apply(self, document: Any, *, actor: Optional[str] = None,
+    def async_policy_apply(self, document: Any = None, *, actor: Optional[str] = None,
                            expected_digest: Optional[str] = None, expected_base_revision: Optional[int] = None,
+                           expected_revision: Optional[int] = None,
                            channel: Optional[str] = None, tty: Optional[str] = None,
                            user: Optional[str] = None) -> dict:
         """Apply a validated revision to the runtime's policy, in one transaction. A
         proposal that does not validate is refused and the applied one stays. With
         `expected_digest` the document must be exactly the one that was approved; with
-        `expected_base_revision` the policy in force must still be the one the approver saw."""
+        `expected_base_revision` the policy in force must still be the one the approver saw. Without a
+        `document`, the proposal file is read here, under the same write lock that publishes it, and must
+        be revision `expected_revision`."""
         with _transaction(self.conn) as conn:
             current = _policy_row(conn)
+            if document is None:
+                proposal = read_proposal(self.root)
+                if not proposal["present"]:
+                    raise ProposalMissing("there is no proposal file")
+                document = proposal["document"]
+                if not isinstance(document, dict) or document.get("revision") != expected_revision:
+                    raise ProposalChanged("the proposal file is not the revision that was approved")
             if expected_base_revision is not None and current["revision"] != expected_base_revision:
                 raise ProposalChanged(f"the applied policy changed from revision {expected_base_revision} "
                                       f"to {current['revision']} after it was shown; nothing was applied")

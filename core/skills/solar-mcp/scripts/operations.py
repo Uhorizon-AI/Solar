@@ -582,6 +582,8 @@ def _do_async_propose(arguments: dict, *, channel: str = "mcp", tty: str | None 
                 actor=_actor("async_execution.propose", channel), **_where(channel, tty, user))
         except solar_state.ProposalChanged as exc:
             raise OperationError("proposal_changed", str(exc)) from None
+        except solar_state.ProposalPublishedUnaudited as exc:
+            raise OperationError("proposal_published_unaudited", f"{exc}. Do not propose it again.") from None
     return dict(proposed=True, revision=normalized["revision"], path=str(path),
                 proposal_digest=digest, applied=False,
                 next="Apply it with async_execution.apply using this revision and digest.")
@@ -592,18 +594,16 @@ def _do_async_apply(arguments: dict, *, channel: str = "mcp", tty: str | None = 
     import solar_state
 
     with solar_state.session() as store:
-        proposal = solar_state.read_proposal(store.root)
-        if not proposal["present"]:
-            raise OperationError("proposal_missing", "There is no proposal file; prepare one with "
-                                 "async_execution.propose.")
-        document = proposal["document"]
-        if (not isinstance(document, dict) or document.get("revision") != arguments["revision"]):
-            raise OperationError("proposal_changed", "The proposal file is not the revision that was approved.")
         try:
-            applied = store.async_policy_apply(document, actor=_actor("async_execution.apply", channel),
+            # The file is read and validated inside the write transaction that applies it.
+            applied = store.async_policy_apply(actor=_actor("async_execution.apply", channel),
                                                expected_digest=arguments["proposal_digest"],
+                                               expected_revision=arguments["revision"],
                                                expected_base_revision=base_revision,
                                                channel=channel, tty=tty, user=user)
+        except solar_state.ProposalMissing:
+            raise OperationError("proposal_missing", "There is no proposal file; prepare one with "
+                                 "async_execution.propose.") from None
         except solar_state.ProposalChanged as exc:
             raise OperationError("proposal_changed", str(exc)) from None
         except solar_state.PolicyInvalid as exc:
