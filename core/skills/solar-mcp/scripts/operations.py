@@ -261,7 +261,7 @@ def _authorize_hint(task_id: str, row_version: int) -> str:
     import json
     import shlex
     arguments = json.dumps({"task_id": task_id, "expected_row_version": row_version})
-    return (f"(operator, in a terminal: solar approve task.authorize_run {shlex.quote(task_id)}; "
+    return (f"(operator, in a terminal: solar approve task.authorize_run -- {shlex.quote(task_id)}; "
             f"agent: solar_execute operation=task.authorize_run arguments={arguments})")
 
 

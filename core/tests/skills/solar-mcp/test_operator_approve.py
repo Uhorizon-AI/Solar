@@ -584,7 +584,9 @@ def test_a_workspace_that_cannot_be_resolved_stops_before_python(solar_env, tmp_
     broken = _other_workspace(tmp_path)
     (broken / ".solar" / "core").mkdir()          # an obsolete layout: the resolver refuses it
     done = _approve(broken, solar_env.workspace)
-    assert done.returncode == 1 and "obsolete" in done.stderr and REACHED_PYTHON not in done.stderr
+    assert done.returncode == 1 and done.stderr.startswith("ERROR") and REACHED_PYTHON not in done.stderr
+    own = _approve(broken, broken)
+    assert own.returncode == 1 and "obsolete" in own.stderr and REACHED_PYTHON not in own.stderr
 
 
 def test_help_of_one_operation_needs_no_workspace(tmp_path):
@@ -592,3 +594,22 @@ def test_help_of_one_operation_needs_no_workspace(tmp_path):
     outside.mkdir()
     done = _approve(outside, None, "task.authorize_run", "--help")
     assert done.returncode == 0 and "task" in done.stdout and "no Solar workspace" not in done.stderr
+
+
+def test_a_workspace_whose_path_says_no_workspace_found_still_stops_before_python(solar_env, tmp_path):
+    broken = _other_workspace(tmp_path / "no Solar workspace found")
+    (broken / ".solar" / "core").mkdir()
+    done = _approve(broken, solar_env.workspace)
+    assert done.returncode == 1 and done.stderr.startswith("ERROR") and REACHED_PYTHON not in done.stderr
+
+
+def test_the_parser_reads_an_id_that_starts_with_a_dash_after_double_dash():
+    options = op._parser().parse_args(["task.authorize_run", "--", "-abcdefgh"])
+    assert options.task == "-abcdefgh"
+
+
+def test_a_dash_id_named_help_does_not_skip_the_workspace_check(solar_env, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    done = _approve(outside, None, "task.authorize_run", "--", "-h")
+    assert done.returncode == 1 and "no Solar workspace found" in done.stderr

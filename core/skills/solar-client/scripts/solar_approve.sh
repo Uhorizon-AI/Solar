@@ -15,6 +15,7 @@ APPROVE=("${SOLAR_MCP_PYTHON:-python3}" "$MCP_SCRIPTS/operator_approve.py")
 
 [[ $# -gt 0 ]] || exec "${APPROVE[@]}"
 for arg in "$@"; do
+  [[ "$arg" == -- ]] && break      # after `--` come operands (a task id may start with `-`)
   case "$arg" in -h|--help) exec "${APPROVE[@]}" "$@" ;; esac
 done
 
@@ -22,17 +23,12 @@ done
 source "$RESOLVER"
 
 if [[ -n "${SOLAR_WORKSPACE:-}" ]]; then
-  # Which workspace contains the current directory? Ask the resolver without the variable.
-  probe_rc=0
-  probe_msg="$(env -u SOLAR_WORKSPACE bash -c 'source "$1" && solar_resolve_paths --quiet' _ "$RESOLVER" 2>&1)" \
-    || probe_rc=$?
-  if [[ $probe_rc -eq 0 ]]; then
-    solar_resolve_paths --quiet                                   # same workspace passes; another one conflicts
-  elif [[ "$probe_msg" == *"no Solar workspace found"* ]]; then
-    solar_resolve_paths --workspace "$SOLAR_WORKSPACE" --quiet    # in no workspace: the variable decides
+  # Is the current directory inside a workspace? A plain filesystem check: it says nothing about
+  # whether that workspace is valid, so no error message is ever interpreted.
+  if _resolve_discover >/dev/null 2>&1; then
+    solar_resolve_paths --quiet                                   # same workspace passes; another one or an invalid one stops
   else
-    printf '%s\n' "$probe_msg" >&2                                # a workspace that cannot be resolved stops here
-    exit 1
+    solar_resolve_paths --workspace "$SOLAR_WORKSPACE" --quiet    # in no workspace: the variable decides
   fi
 else
   solar_resolve_paths --quiet
