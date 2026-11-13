@@ -501,3 +501,26 @@ def test_a_failed_commit_after_the_file_is_reported_as_published_not_refused(sol
     with solar_state.session() as store:
         assert solar_state.read_proposal(store.root)["document"]["global_capacity"] == 4
     assert len(audit("async_policy_proposed")) == 1       # no row for the one that did not commit
+
+
+def test_every_screen_names_the_workspace_it_is_recorded_for(solar_env, stubbed_send, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "4242")
+    task = work()["id"]
+    workspace_id, path = solar_state._caller_workspace()
+    expected = f"Workspace: {path} (id {workspace_id})"
+    for argv in (["x", "task.authorize_run", task],
+                 ["x", "telegram.send", "--chat-id", "4242", "--text", "hello"],
+                 ["x", "async_execution.propose", "--global-capacity", "3"]):
+        out = terminal(monkeypatch, "no\n")
+        op.main(argv)
+        assert expected in out.getvalue().split("\n"), argv
+
+
+def test_the_shell_entry_resolves_the_workspace_from_the_current_directory(solar_env, tmp_path):
+    entry = Path(op.__file__).resolve().parents[2] / "solar-client" / "scripts" / "solar_approve.sh"
+    outside = tmp_path / "not-a-workspace"
+    outside.mkdir()
+    env = {k: v for k, v in __import__("os").environ.items() if k != "SOLAR_WORKSPACE"}
+    done = subprocess.run(["bash", str(entry), "task.authorize_run", "abcdef12"], cwd=outside, env=env,
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    assert done.returncode == 1 and "no Solar workspace found" in done.stderr

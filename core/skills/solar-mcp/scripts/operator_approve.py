@@ -119,8 +119,19 @@ def _form_lines(name: str, arguments: dict) -> list[str]:
     return body.rsplit("\n\n", 1)[0].split("\n")
 
 
+def _workspace_line() -> str:
+    """Which workspace this approval is recorded for, so the operator confirms it instead of assuming it."""
+    import solar_state
+
+    try:
+        workspace_id, path = solar_state._caller_workspace()
+    except solar_state.StateError as exc:
+        raise Refused(str(exc)) from None
+    return f"Workspace: {approval_text._line(path)} (id {approval_text._line(workspace_id)})"
+
+
 def _screen(name: str, extra: list[str], lines: list[str]) -> str:
-    return "\n".join(["Operator approval (solar approve): " + name, "", *lines, *extra])
+    return "\n".join(["Operator approval (solar approve): " + name, _workspace_line(), "", *lines, *extra])
 
 
 # --------------------------------------------------------------------------
@@ -159,6 +170,7 @@ def authorize_run(typed_id: str, tty) -> int:
     digest = solar_state.value_of(next((rest for key, rest in pairs if key == "approved_digest"), None)) or ""
     values = facts["values"]
     lines = [copy["authorize_head"],
+             _workspace_line(),
              f"Task id: {task_id}",
              *[f"{label}: {value}" for label, value in approval_text._context_rows(copy, facts) if value],
              f"{copy['effect']}: {copy['authorize_effect']}"]
