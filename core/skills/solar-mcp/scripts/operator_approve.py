@@ -127,7 +127,9 @@ def _workspace_line() -> str:
         workspace_id, path = solar_state._caller_workspace()
     except solar_state.StateError as exc:
         raise Refused(str(exc)) from None
-    return f"Workspace: {approval_text._line(path)} (id {approval_text._line(workspace_id)})"
+    def shown(value: str) -> str:   # spaces stay as they are; control characters and line breaks are made visible
+        return approval_text._verbatim(value).replace("\n", "\\n").replace("\t", "\\t")
+    return f"Workspace: {shown(path)} (id {shown(workspace_id)})"
 
 
 def _screen(name: str, extra: list[str], lines: list[str]) -> str:

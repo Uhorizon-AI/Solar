@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -508,19 +509,72 @@ def test_every_screen_names_the_workspace_it_is_recorded_for(solar_env, stubbed_
     task = work()["id"]
     workspace_id, path = solar_state._caller_workspace()
     expected = f"Workspace: {path} (id {workspace_id})"
+    _propose(monkeypatch)
     for argv in (["x", "task.authorize_run", task],
                  ["x", "telegram.send", "--chat-id", "4242", "--text", "hello"],
-                 ["x", "async_execution.propose", "--global-capacity", "3"]):
+                 ["x", "async_execution.propose", "--global-capacity", "3"],
+                 ["x", "async_execution.apply"]):
         out = terminal(monkeypatch, "no\n")
         op.main(argv)
         assert expected in out.getvalue().split("\n"), argv
 
 
-def test_the_shell_entry_resolves_the_workspace_from_the_current_directory(solar_env, tmp_path):
-    entry = Path(op.__file__).resolve().parents[2] / "solar-client" / "scripts" / "solar_approve.sh"
-    outside = tmp_path / "not-a-workspace"
+def test_the_workspace_line_keeps_spaces_and_shows_control_characters(monkeypatch):
+    monkeypatch.setattr(solar_state, "_caller_workspace", lambda: ("id-1", "/tmp/My  Space/ws\nWorkspace: fake\x1b[2K"))
+    line = op._workspace_line()
+    assert line == "Workspace: /tmp/My  Space/ws\\nWorkspace: fake\\x1b[2K (id id-1)" and "\n" not in line
+
+
+SOLAR = Path(op.__file__).resolve().parents[2] / "solar-client" / "scripts" / "solar"
+
+
+def _approve(cwd, workspace=None, *args):
+    env = {k: v for k, v in os.environ.items() if k != "SOLAR_WORKSPACE"}
+    if workspace is not None:
+        env["SOLAR_WORKSPACE"] = str(workspace)
+    return subprocess.run(["bash", str(SOLAR), "approve", *(args or ("task.authorize_run", "abcdef12"))],
+                          cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+
+
+def _other_workspace(tmp_path):
+    other = tmp_path / "other"
+    (other / ".solar").mkdir(parents=True)
+    (other / "sun").mkdir()
+    (other / ".solar" / "settings.json").write_text('{"version": "fixture"}\n', encoding="utf-8")
+    return other
+
+
+REACHED_PYTHON = "stdin is not an interactive terminal"
+
+
+def test_the_public_command_finds_the_workspace_from_a_subdirectory(solar_env):
+    sub = solar_env.workspace / "sun" / "delegations"
+    done = _approve(sub)
+    assert REACHED_PYTHON in done.stderr and "no Solar workspace found" not in done.stderr
+
+
+def test_the_public_command_refuses_a_directory_that_is_in_no_workspace(solar_env, tmp_path):
+    outside = tmp_path / "outside"
     outside.mkdir()
-    env = {k: v for k, v in __import__("os").environ.items() if k != "SOLAR_WORKSPACE"}
-    done = subprocess.run(["bash", str(entry), "task.authorize_run", "abcdef12"], cwd=outside, env=env,
-                          stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    done = _approve(outside)
     assert done.returncode == 1 and "no Solar workspace found" in done.stderr
+
+
+def test_an_exported_workspace_is_honoured_from_outside_any_workspace(solar_env, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    done = _approve(outside, solar_env.workspace)
+    assert REACHED_PYTHON in done.stderr and "ERROR" not in done.stderr
+
+
+def test_an_exported_workspace_that_disagrees_with_the_directory_is_refused(solar_env, tmp_path):
+    other = _other_workspace(tmp_path)
+    done = _approve(other, solar_env.workspace)
+    assert done.returncode == 1 and "conflict" in done.stderr and REACHED_PYTHON not in done.stderr
+
+
+def test_help_needs_no_workspace(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    done = _approve(outside, None, "--help")
+    assert done.returncode == 0 and "usage: solar approve" in done.stdout

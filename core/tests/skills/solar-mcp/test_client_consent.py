@@ -125,6 +125,29 @@ def test_queue_true_creates_and_queues_in_one_call_and_says_it_is_waiting_when_r
     assert stored(result["id"])["status"] == "queued"
 
 
+def _assert_copyable_hint(hint, task_id, row_version):
+    """The operator line runs as typed in a shell; the agent call carries both required arguments."""
+    assert "<" not in hint and ">" not in hint
+    assert f"solar approve task.authorize_run {task_id}" in hint
+    assert f'"task_id": "{task_id}"' in hint and f'"expected_row_version": {row_version}' in hint
+
+
+def test_the_next_hint_of_a_queued_risky_task_carries_its_real_id_and_row_version(solar_env):
+    body, error = ask("task.create", dict(title="Now", instructions="Run it", queue=True))
+    assert not error, body
+    result = body["result"]
+    _assert_copyable_hint(result["next"], result["id"], result["row_version"])
+
+
+def test_the_next_hint_of_task_approve_carries_its_real_id_and_row_version(solar_env):
+    made = make("Approve me")
+    body, error = ask("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+    assert not error, body
+    result = body["result"]
+    assert result["awaiting_approval"] is True
+    _assert_copyable_hint(result["next"], result["id"], result["row_version"])
+
+
 def test_without_queue_the_task_stays_a_draft(solar_env):
     assert make("Later")["status"] == "draft"
 

@@ -564,8 +564,8 @@ def test_a_stored_declared_read_shows_the_note_when_it_is_approved(solar_env, op
 
 def test_a_queued_review_still_says_it_is_confined(solar_env):
     frontmatter = [("execution_profile", json.dumps("repository_readonly_v1"))]
-    assert "confined" in operations._queued_next(frontmatter, "low")
-    assert "not confined" in operations._queued_next(frontmatter, "high")
+    assert "confined" in operations._queued_next(frontmatter, "low", "t1", 1)
+    assert "not confined" in operations._queued_next(frontmatter, "high", "t1", 1)
 
 
 def test_a_question_accepts_delivery_on_create_and_on_update(solar_env):
