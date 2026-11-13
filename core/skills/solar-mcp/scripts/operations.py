@@ -258,7 +258,9 @@ def _queued_next(frontmatter, risk: str) -> str:
     """What a queued task says about itself: a question is only asked for its read-only mode."""
     import solar_state
     if risk != "low":
-        return "Queued but waiting: it is not confined, so run task.authorize_run to let it run."
+        return ("Queued but waiting: it is not confined, so run task.authorize_run to let it run "
+                "(operator: solar approve task.authorize_run <task_id>; "
+                "agent: solar_execute operation=task.authorize_run).")
     if solar_state.value_of(dict(frontmatter).get("execution_profile") or "") == "ask_readonly_v1":
         return ("Queued. The client is asked for its read-only mode (a request, not a guarantee) "
                 "and it runs when a place is free.")
@@ -548,7 +550,9 @@ def _do_task_approve(arguments: dict) -> dict:
                 approved_digest=stored.get("approved_digest"), row_version=task["row_version"],
                 risk=risk, awaiting_approval=waiting,
                 next=("Waiting: it is not confined to a verified read-only profile; run task.authorize_run "
-                      "to let it run." if waiting else "Queued; it runs when a place is free."))
+                      "to let it run (operator: solar approve task.authorize_run <task_id>; "
+                      "agent: solar_execute operation=task.authorize_run)."
+                      if waiting else "Queued; it runs when a place is free."))
 
 
 def proposal_document(applied: dict, arguments: dict) -> dict:

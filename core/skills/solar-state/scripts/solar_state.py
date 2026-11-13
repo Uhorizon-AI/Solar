@@ -651,7 +651,9 @@ def _caller_workspace() -> tuple[str, str]:
     raw = os.environ.get("SOLAR_WORKSPACE", "").strip()
     if not raw:
         raise StateUnavailable(
-            "SOLAR_WORKSPACE is not set; this runtime will not serve an unknown workspace")
+            "SOLAR_WORKSPACE is not set; this runtime will not serve an unknown workspace "
+            "(export SOLAR_WORKSPACE=/path/to/workspace, or cd into the workspace and export "
+            "SOLAR_WORKSPACE=\"$(pwd)\", then retry)")
     workspace = solar_runtime.canonical(raw)
     settings = workspace / ".solar" / "settings.json"
     try:
