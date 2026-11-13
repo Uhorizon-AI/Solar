@@ -984,11 +984,9 @@ class _HostZone(tzinfo):
         return dt.replace(tzinfo=None).astimezone().utcoffset()
 
     def dst(self, dt):
-        # Current offset minus the standard one (the smaller of the 1 Jan and 1 Jul offsets).
-        naive = dt.replace(tzinfo=None)
-        current = naive.astimezone().utcoffset()
-        standard = min(datetime(naive.year, month, 1).astimezone().utcoffset() for month in (1, 7))
-        return current - standard
+        # Unknown on purpose: the scheduler only needs utcoffset()/fromutc() to place wall-clock
+        # minutes. Any estimate is wrong somewhere (Europe/Dublin has negative winter DST).
+        return None
 
     def tzname(self, dt):
         return dt.replace(tzinfo=None).astimezone().tzname()

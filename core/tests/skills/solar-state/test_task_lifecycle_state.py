@@ -272,19 +272,31 @@ def test_without_a_zone_a_skipped_spring_minute_does_not_hide_the_day(ready, mad
         assert store.task_claim_next("w", now=utc(2027, 3, 28, 1, 10).astimezone()) is None
 
 
-def test_host_zone_dst_follows_the_offset(madrid_host):
+@pytest.fixture
+def dublin_host():
+    """Pin the host clock to Europe/Dublin (negative DST in winter), restoring it afterwards."""
+    import os
+    import time
+    before = os.environ.get("TZ")
+    os.environ["TZ"] = "Europe/Dublin"
+    time.tzset()
+    yield
+    if before is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = before
+    time.tzset()
+
+
+def test_host_zone_places_the_window_in_winter_and_summer_without_guessing_dst(dublin_host):
+    """Dublin is GMT in winter and IST (UTC+1) in summer; the host adapter only resolves instants."""
     host = solar_state._HostZone()
-    hour = timedelta(hours=1)
-    for naive, expected in (
-        (datetime(2027, 1, 15, 12, 0), timedelta(0)),
-        (datetime(2027, 7, 15, 12, 0), hour),
-        (datetime(2027, 3, 28, 1, 0), timedelta(0)),      # before the spring change
-        (datetime(2027, 3, 28, 3, 30), hour),             # after it
-        (datetime(2027, 10, 31, 1, 0), hour),             # before the autumn change
-        (datetime(2027, 10, 31, 3, 30), timedelta(0)),    # after it
-    ):
-        assert host.dst(naive.replace(tzinfo=host)) == expected, naive
-        assert host.dst(naive) == expected, naive
+    assert host.dst(datetime(2027, 7, 15, 12, 0)) is None
+    every_day = {1, 2, 3, 4, 5, 6, 7}
+    winter = solar_state.recurring_windows(datetime(2027, 1, 15, 12, 0), host, every_day)
+    summer = solar_state.recurring_windows(datetime(2027, 7, 15, 12, 0), host, every_day)
+    assert winter == [(utc(2027, 1, 15, 11, 45), utc(2027, 1, 15, 12, 15))]
+    assert summer == [(utc(2027, 7, 15, 10, 45), utc(2027, 7, 15, 11, 15))]
 
 
 def test_a_stored_unpadded_hour_is_still_read(ready):
