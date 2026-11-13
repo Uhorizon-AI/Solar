@@ -522,6 +522,7 @@ SAMPLE_SCRIPT = """() => {
 }"""
 
 
+@pytest.mark.serial  # Keep real Chrome tests separate from parallel pytest workers.
 @pytest.mark.skipif(not CHROME, reason="Chrome not installed")
 @pytest.mark.parametrize("dom,expected", [
     ('<div id="list"><div role="listitem"><span title="A">A</span></div>'
@@ -535,6 +536,7 @@ def test_the_wrapper_runs_the_script_on_the_registered_origin(dom, expected, tmp
     assert got["origin"] == served and got["data"] == expected
 
 
+@pytest.mark.serial  # Keep real Chrome tests separate from parallel pytest workers.
 @pytest.mark.skipif(not CHROME, reason="Chrome not installed")
 def test_a_script_that_ends_in_a_line_comment_still_runs(tmp_path, served):
     got = run_expression(browser_read.read_expression(served, "() => ({ready: true, visible_chats: 1}) // fin"),
@@ -542,6 +544,7 @@ def test_a_script_that_ends_in_a_line_comment_still_runs(tmp_path, served):
     assert got["data"] == {"ready": True, "visible_chats": 1}
 
 
+@pytest.mark.serial  # Keep real Chrome tests separate from parallel pytest workers.
 @pytest.mark.skipif(not CHROME, reason="Chrome not installed")
 def test_the_wrapper_never_runs_the_script_on_another_origin(tmp_path, served):
     dom = '<div id="list"><div role="listitem"><span title="A">A</span></div></div>'
@@ -901,6 +904,7 @@ def test_a_command_in_the_env_never_runs_when_the_browser_is_started_or_stopped(
     assert sentinel.exists()
 
 
+@pytest.mark.serial  # Keep real Chrome tests separate from parallel pytest workers.
 @pytest.mark.skipif(not CHROME, reason="Chrome not installed")
 def test_quiesce_keeps_a_paused_foreign_request_from_leaving_when_the_socket_drops(tmp_path):
     """Real Chrome: a request paused by the interception is cancelled by `_quiesce`, not released.
