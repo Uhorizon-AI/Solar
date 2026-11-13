@@ -222,7 +222,7 @@ def test_a_window_that_opens_before_midnight_belongs_to_the_next_day(ready, tz, 
         assert store.task_claim_next("w", now=blocked) is None
 
 
-@pytest.mark.parametrize("bad", ["25:00", "12:60", "9:00", "24:00", "ab:cd"])
+@pytest.mark.parametrize("bad", ["25:00", "12:60", "24:00", "ab:cd"])
 def test_an_invalid_time_is_refused_and_does_not_block_the_next_task(ready, bad):
     now = utc(2027, 4, 2, 12, 0)
     assert solar_state.latest_recurring_occurrence(bad, None, "UTC", now.timestamp()) is None
@@ -243,6 +243,51 @@ def test_without_a_zone_the_host_clock_applies(ready):
         assert store.task_claim_next("w", now=base)["id"] == task_id                    # inside
         _finish(store, task_id, base.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         assert store.task_claim_next("w", now=base + timedelta(minutes=5)) is None      # same occurrence
+
+
+@pytest.fixture
+def madrid_host():
+    """Pin the host clock to Europe/Madrid, restoring it afterwards."""
+    import os
+    import time
+    before = os.environ.get("TZ")
+    os.environ["TZ"] = MADRID
+    time.tzset()
+    yield
+    if before is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = before
+    time.tzset()
+
+
+def test_without_a_zone_a_skipped_spring_minute_does_not_hide_the_day(ready, madrid_host):
+    """Host in Madrid, 03:05 daily, no stored zone: its window opens at 02:50, a minute that does not
+    exist on 2027-03-28. Sunday must still start once, not read Saturday's occurrence."""
+    with solar_state.session() as store:
+        task_id = _daily(store, "03:05", None, recurring_last_run='"2027-03-27T02:05:00Z"')   # Saturday 03:05 CET
+        sunday = utc(2027, 3, 28, 1, 0).astimezone()                                           # 03:00 CEST, host-local like the worker's clock
+        assert store.task_claim_next("w", now=sunday)["id"] == task_id
+        _finish(store, task_id, "2027-03-28T01:00:00Z")
+        assert store.task_claim_next("w", now=utc(2027, 3, 28, 1, 10).astimezone()) is None
+
+
+def test_a_stored_unpadded_hour_is_still_read(ready):
+    """A task saved as 9:00 keeps running as 09:00; only new schedules must be HH:MM."""
+    with solar_state.session() as store:
+        task_id = _daily(store, "9:00", "UTC")
+        pairs = store.task_get(task_id)["frontmatter"]
+        assert solar_state._recurring_ready(pairs, utc(2027, 4, 2, 9, 0).timestamp()) is None
+        assert solar_state.latest_recurring_occurrence("9:00", None, "UTC", utc(2027, 4, 2, 9, 0).timestamp()) \
+            == solar_state.latest_recurring_occurrence("09:00", None, "UTC", utc(2027, 4, 2, 9, 0).timestamp())
+        assert store.task_claim_next("w", now=utc(2027, 4, 2, 9, 0))["id"] == task_id
+
+
+def test_a_time_whose_whole_window_is_skipped_has_no_occurrence():
+    allowed = set(range(1, 8))
+    zone = ZoneInfo(MADRID)
+    assert solar_state.recurring_windows(datetime(2027, 3, 28, 2, 30), zone, allowed) == []
+    assert solar_state.recurring_windows(datetime(2027, 3, 28, 2, 50), zone, allowed)   # valid minutes kept
 
 
 def test_the_latest_occurrence_follows_the_zone_and_the_clock_change():

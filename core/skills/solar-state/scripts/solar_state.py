@@ -39,7 +39,7 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -974,13 +974,35 @@ def recurring_windows(local: datetime, zone, allowed) -> list[tuple[datetime, da
     return windows
 
 
-_RECURRING_CLOCK = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+class _HostZone(tzinfo):
+    """The host's own local zone, with its daylight-saving rules, as a tzinfo.
+
+    A naive `astimezone()` resolves in the host zone and honours `fold`; this lets the
+    same wall-clock resolution (`wall_clock_instants`) run for tasks without a stored zone."""
+
+    def utcoffset(self, dt):
+        return dt.replace(tzinfo=None).astimezone().utcoffset()
+
+    def dst(self, dt):
+        return None
+
+    def tzname(self, dt):
+        return dt.replace(tzinfo=None).astimezone().tzname()
+
+    def fromutc(self, dt):
+        return dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=self)
+
+
+_STORED_CLOCK = re.compile(r"([01]?\d|2[0-3]):[0-5]\d")
 
 
 def recurring_clock_minutes(stamp: Optional[str]) -> Optional[int]:
-    """Minutes since midnight for a valid HH:MM (the pattern `task.schedule` accepts), else None."""
+    """Minutes since midnight for a valid recurring clock time, else None.
+
+    New schedules must be HH:MM (`task.schedule`, `set_recurring.sh`); a task saved earlier
+    with an unpadded hour (`9:00`) is still read as 09:00 so its approval keeps working."""
     text = (stamp or "").strip()
-    if not _RECURRING_CLOCK.fullmatch(text):
+    if not _STORED_CLOCK.fullmatch(text):
         return None
     return _clock_minutes(text)
 
@@ -1003,8 +1025,10 @@ def latest_recurring_occurrence(scheduled_time: Optional[str], weekdays: Optiona
         zone = ZoneInfo(zone_name) if zone_name else None
     except (ZoneInfoNotFoundError, ValueError, OSError):
         return None
+    if zone is None:
+        zone = _HostZone()           # resolve host wall-clock minutes with its DST rules before computing the start
     allowed = {int(part) for part in (weekdays or "").split(",") if part.strip().isdigit()} or set(range(1, 8))
-    today = (datetime.fromtimestamp(now_epoch, zone) if zone else datetime.fromtimestamp(now_epoch)).date()
+    today = datetime.fromtimestamp(now_epoch, zone).date()
     best = None
     for days_ago in range(-1, 9):                     # tomorrow's window may already be open
         day = today - timedelta(days=days_ago)
@@ -1016,7 +1040,7 @@ def latest_recurring_occurrence(scheduled_time: Optional[str], weekdays: Optiona
         if not windows:
             continue
         start = windows[0][0]
-        start_epoch = start.timestamp() if zone else start.astimezone().timestamp()
+        start_epoch = start.timestamp()
         if start_epoch <= now_epoch and (best is None or start_epoch > best):
             best = start_epoch
     return best
