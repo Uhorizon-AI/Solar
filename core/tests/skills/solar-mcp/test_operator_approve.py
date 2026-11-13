@@ -613,3 +613,13 @@ def test_a_dash_id_named_help_does_not_skip_the_workspace_check(solar_env, tmp_p
     outside.mkdir()
     done = _approve(outside, None, "task.authorize_run", "--", "-h")
     assert done.returncode == 1 and "no Solar workspace found" in done.stderr
+
+
+def test_a_literal_id_wins_over_its_stripped_twin(solar_env):
+    for tid in ("tarea-123", "tarea-123 "):
+        with solar_state.session() as store:
+            store.task_import(f'---\nid: "{tid}"\nstatus: draft\ntitle: "T {len(tid)}"\n---\n\nBody.\n')
+    with solar_state.session() as store:
+        assert store.task_resolve_id("tarea-123 ") == "tarea-123 "
+        assert store.task_resolve_id("tarea-123") == "tarea-123"
+        assert store.task_resolve_id("  tarea-123") == "tarea-123"      # no literal match: the normalized one

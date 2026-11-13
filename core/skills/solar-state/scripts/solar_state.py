@@ -2567,8 +2567,10 @@ class Session:
     def task_resolve_id(self, typed: str) -> str:
         """The full id for an operator-typed id: exact, or a prefix of at least TASK_PREFIX_MIN characters
         that matches exactly one task. Never guesses: no match, several matches and a short prefix refuse."""
-        typed = (typed or "").strip()
         ids = [row[0] for row in self.conn.execute("SELECT id FROM tasks")]
+        if typed in ids:                       # the literal id first: an id may hold leading or trailing spaces
+            return typed
+        typed = (typed or "").strip()
         if typed in ids:
             return typed
         if len(typed) < self.TASK_PREFIX_MIN:
