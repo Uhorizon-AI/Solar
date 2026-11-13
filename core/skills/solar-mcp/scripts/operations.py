@@ -255,10 +255,14 @@ def _zone_report(arguments: dict) -> Optional[dict]:
 
 
 def _authorize_hint(task_id: str, row_version: int) -> str:
-    """How to run task.authorize_run for this task: the operator's terminal command and the agent's call."""
-    return (f"(operator, in a terminal: solar approve task.authorize_run {task_id}; "
-            f"agent: solar_execute operation=task.authorize_run "
-            f"arguments={{\"task_id\": \"{task_id}\", \"expected_row_version\": {row_version}}})")
+    """How to run task.authorize_run for this task: the operator's terminal command and the agent's call.
+
+    A task id may hold spaces or quotes, so the shell word is quoted and the arguments are real JSON."""
+    import json
+    import shlex
+    arguments = json.dumps({"task_id": task_id, "expected_row_version": row_version})
+    return (f"(operator, in a terminal: solar approve task.authorize_run {shlex.quote(task_id)}; "
+            f"agent: solar_execute operation=task.authorize_run arguments={arguments})")
 
 
 def _queued_next(frontmatter, risk: str, task_id: str, row_version: int) -> str:

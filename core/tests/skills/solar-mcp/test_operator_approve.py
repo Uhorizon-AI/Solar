@@ -578,3 +578,17 @@ def test_help_needs_no_workspace(tmp_path):
     outside.mkdir()
     done = _approve(outside, None, "--help")
     assert done.returncode == 0 and "usage: solar approve" in done.stdout
+
+
+def test_a_workspace_that_cannot_be_resolved_stops_before_python(solar_env, tmp_path):
+    broken = _other_workspace(tmp_path)
+    (broken / ".solar" / "core").mkdir()          # an obsolete layout: the resolver refuses it
+    done = _approve(broken, solar_env.workspace)
+    assert done.returncode == 1 and "obsolete" in done.stderr and REACHED_PYTHON not in done.stderr
+
+
+def test_help_of_one_operation_needs_no_workspace(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    done = _approve(outside, None, "task.authorize_run", "--help")
+    assert done.returncode == 0 and "task" in done.stdout and "no Solar workspace" not in done.stderr
