@@ -24,6 +24,17 @@ if [[ ! "$SCHEDULED_TIME" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ || -z "$SCHEDULED_T
     exit 1
 fi
 
+# Same rule as task.schedule: the zone must be one the IANA database knows.
+if ! python3 -c 'import sys
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+try:
+    ZoneInfo(sys.argv[1])
+except (ZoneInfoNotFoundError, ValueError, OSError):
+    sys.exit(1)' "$SCHEDULED_TIMEZONE"; then
+    echo "scheduled_timezone '$SCHEDULED_TIMEZONE' is not a known IANA zone (e.g. Europe/Madrid); fix it with task.schedule first." >&2
+    exit 1
+fi
+
 state task set "$TASK_ID" recurring true >/dev/null
 state task set "$TASK_ID" recurring_max_runs "$MAX_RUNS" >/dev/null
 state task set "$TASK_ID" recurring_run_count 0 >/dev/null

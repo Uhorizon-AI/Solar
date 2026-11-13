@@ -97,6 +97,18 @@ def test_set_recurring_refuses_a_bad_time_or_a_missing_zone(tmp_path):
         assert _values(task_id)["recurring"] == "false"
 
 
+def test_set_recurring_refuses_an_unknown_zone_and_accepts_a_real_one(tmp_path):
+    env = _env(tmp_path)
+    bad = _task("Bad zone", scheduled_time=json.dumps("09:00"), scheduled_timezone=json.dumps("Nowhere/Land"))
+    before = _values(bad)
+    refused = _script(env, "set_recurring.sh", bad)
+    assert refused.returncode != 0 and "IANA" in refused.stderr
+    assert _values(bad) == before and before["recurring"] == "false"
+    good = _task("Good zone", scheduled_time=json.dumps("09:00"), scheduled_timezone=json.dumps("Europe/Madrid"))
+    assert _script(env, "set_recurring.sh", good).returncode == 0
+    assert _values(good)["recurring"] == "true"
+
+
 def test_activate_fails_when_claim_rejected(tmp_path):
     env = _env(tmp_path)
     task_id = _task("Waits", "queued", blocked_by_task_ids='"nobody"')

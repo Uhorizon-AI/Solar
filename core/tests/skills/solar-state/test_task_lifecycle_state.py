@@ -272,6 +272,21 @@ def test_without_a_zone_a_skipped_spring_minute_does_not_hide_the_day(ready, mad
         assert store.task_claim_next("w", now=utc(2027, 3, 28, 1, 10).astimezone()) is None
 
 
+def test_host_zone_dst_follows_the_offset(madrid_host):
+    host = solar_state._HostZone()
+    hour = timedelta(hours=1)
+    for naive, expected in (
+        (datetime(2027, 1, 15, 12, 0), timedelta(0)),
+        (datetime(2027, 7, 15, 12, 0), hour),
+        (datetime(2027, 3, 28, 1, 0), timedelta(0)),      # before the spring change
+        (datetime(2027, 3, 28, 3, 30), hour),             # after it
+        (datetime(2027, 10, 31, 1, 0), hour),             # before the autumn change
+        (datetime(2027, 10, 31, 3, 30), timedelta(0)),    # after it
+    ):
+        assert host.dst(naive.replace(tzinfo=host)) == expected, naive
+        assert host.dst(naive) == expected, naive
+
+
 def test_a_stored_unpadded_hour_is_still_read(ready):
     """A task saved as 9:00 keeps running as 09:00; only new schedules must be HH:MM."""
     with solar_state.session() as store:

@@ -984,7 +984,11 @@ class _HostZone(tzinfo):
         return dt.replace(tzinfo=None).astimezone().utcoffset()
 
     def dst(self, dt):
-        return None
+        # Current offset minus the standard one (the smaller of the 1 Jan and 1 Jul offsets).
+        naive = dt.replace(tzinfo=None)
+        current = naive.astimezone().utcoffset()
+        standard = min(datetime(naive.year, month, 1).astimezone().utcoffset() for month in (1, 7))
+        return current - standard
 
     def tzname(self, dt):
         return dt.replace(tzinfo=None).astimezone().tzname()
