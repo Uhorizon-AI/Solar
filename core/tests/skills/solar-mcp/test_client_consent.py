@@ -8,6 +8,7 @@ the one step left with a form. Nothing here reaches a provider or a service.
 from __future__ import annotations
 
 import json
+import shlex
 
 import pytest
 
@@ -123,6 +124,37 @@ def test_queue_true_creates_and_queues_in_one_call_and_says_it_is_waiting_when_r
     assert result["status"] == "queued" and result["queued"] is True and result["risk"] == "high"
     assert result["awaiting_approval"] is True and "task.authorize_run" in result["next"]
     assert stored(result["id"])["status"] == "queued"
+
+
+def _assert_copyable_hint(hint, task_id, row_version):
+    """The operator line runs as typed in a shell; the agent call carries both required arguments."""
+    assert "<" not in hint and ">" not in hint
+    assert f"solar approve task.authorize_run -- {shlex.quote(task_id)};" in hint
+    call = hint.split("arguments=", 1)[1].rsplit(")", 1)[0]
+    assert json.loads(call) == {"task_id": task_id, "expected_row_version": row_version}
+
+
+def test_the_next_hint_of_a_queued_risky_task_carries_its_real_id_and_row_version(solar_env):
+    body, error = ask("task.create", dict(title="Now", instructions="Run it", queue=True))
+    assert not error, body
+    result = body["result"]
+    _assert_copyable_hint(result["next"], result["id"], result["row_version"])
+
+
+def test_the_next_hint_of_task_approve_carries_its_real_id_and_row_version(solar_env):
+    made = make("Approve me")
+    body, error = ask("task.approve", dict(task_id=made["id"], expected_row_version=made["row_version"]))
+    assert not error, body
+    result = body["result"]
+    assert result["awaiting_approval"] is True
+    _assert_copyable_hint(result["next"], result["id"], result["row_version"])
+
+
+def test_an_id_with_a_space_and_a_quote_is_quoted_for_the_shell_and_valid_json():
+    hint = operations._authorize_hint("my task's;id", 3)
+    command = hint.split("in a terminal: ", 1)[1].split("; agent:", 1)[0]
+    assert shlex.split(command) == ["solar", "approve", "task.authorize_run", "--", "my task's;id"]
+    assert json.loads(hint.split("arguments=", 1)[1].rsplit(")", 1)[0]) == {"task_id": "my task's;id", "expected_row_version": 3}
 
 
 def test_without_queue_the_task_stays_a_draft(solar_env):

@@ -254,11 +254,23 @@ def _zone_report(arguments: dict) -> Optional[dict]:
         return None
 
 
-def _queued_next(frontmatter, risk: str) -> str:
+def _authorize_hint(task_id: str, row_version: int) -> str:
+    """How to run task.authorize_run for this task: the operator's terminal command and the agent's call.
+
+    A task id may hold spaces or quotes, so the shell word is quoted and the arguments are real JSON."""
+    import json
+    import shlex
+    arguments = json.dumps({"task_id": task_id, "expected_row_version": row_version})
+    return (f"(operator, in a terminal: solar approve task.authorize_run -- {shlex.quote(task_id)}; "
+            f"agent: solar_execute operation=task.authorize_run arguments={arguments})")
+
+
+def _queued_next(frontmatter, risk: str, task_id: str, row_version: int) -> str:
     """What a queued task says about itself: a question is only asked for its read-only mode."""
     import solar_state
     if risk != "low":
-        return "Queued but waiting: it is not confined, so run task.authorize_run to let it run."
+        return ("Queued but waiting: it is not confined, so run task.authorize_run to let it run "
+                + _authorize_hint(task_id, row_version) + ".")
     if solar_state.value_of(dict(frontmatter).get("execution_profile") or "") == "ask_readonly_v1":
         return ("Queued. The client is asked for its read-only mode (a request, not a guarantee) "
                 "and it runs when a place is free.")
@@ -397,7 +409,7 @@ def _do_task_create(arguments: dict) -> dict:
             risk = solar_state.run_risk(queued["frontmatter"])
             result.update(status="queued", queued=True, row_version=queued["row_version"], digest=digest,
                           risk=risk, awaiting_approval=solar_state.needs_run_authorization(queued["frontmatter"]),
-                          next=_queued_next(queued["frontmatter"], risk))
+                          next=_queued_next(queued["frontmatter"], risk, task_id, queued["row_version"]))
         except solar_state.StateError as exc:
             result.update(queued=False, queue_refused=str(exc)[:300])
     if source_id:
@@ -548,7 +560,8 @@ def _do_task_approve(arguments: dict) -> dict:
                 approved_digest=stored.get("approved_digest"), row_version=task["row_version"],
                 risk=risk, awaiting_approval=waiting,
                 next=("Waiting: it is not confined to a verified read-only profile; run task.authorize_run "
-                      "to let it run." if waiting else "Queued; it runs when a place is free."))
+                      "to let it run " + _authorize_hint(task_id, task["row_version"]) + "."
+                      if waiting else "Queued; it runs when a place is free."))
 
 
 def proposal_document(applied: dict, arguments: dict) -> dict:
