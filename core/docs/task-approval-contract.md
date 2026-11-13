@@ -101,8 +101,8 @@ new wait) at one occurrence (a recurring task's `recurring_last_run`).
 - **Upgrade.** The wait counts from the approval, so a task already waiting for longer than the limit when this
   version is installed ends at its first claim, with one notice each.
 - **Limits.** A recurring task nobody authorizes starts a new wait, and sends a new notice, at each occurrence (about
-  every `recurring_min_interval`); archive or cancel it to stop them. A task out of its schedule window, blocked by a
-  dependency or inside its recurring interval can already be past its limit when it first becomes claimable, and a task
+  once per scheduled occurrence); archive or cancel it to stop them. A task out of its schedule window, blocked by a
+  dependency or past a recurring occurrence it already ran can already be past its limit when it first becomes claimable, and a task
   with a schedule window only ends on the first claim pass inside the window after the limit.
 
 ## Decisions and limits

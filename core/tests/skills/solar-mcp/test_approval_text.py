@@ -170,9 +170,9 @@ def test_schedule_shows_days_time_zone_and_recurrence_limits(solar_env):
     message = text("task.schedule", dict(
         task_id=made["id"], expected_row_version=made["row_version"], scheduled_time="09:15",
         scheduled_timezone="Europe/Madrid", scheduled_weekdays=[1, 3], recurring=True,
-        recurring_max_runs=5, recurring_min_interval=86400))
+        recurring_max_runs=5))
     assert "Days: Mon, Wed" in message and "Time: 09:15" in message and "Time zone: Europe/Madrid" in message
-    assert "Repeats: yes (minimum gap 24.0 h; at most 5 runs)" in message
+    assert "Repeats: yes (at most 5 runs)" in message
     assert "Eligible start windows:" in message and "09:00:00" in message and "09:30:00" in message
     assert "not queued" in message
     assert_clean(message, made)
@@ -412,9 +412,8 @@ def test_approve_shows_recurrence_limits_and_distinguishes_them(solar_env):
         return text("task.approve", dict(task_id=made["id"], expected_row_version=row["row_version"]))
     once = approve_text(recurring_max_runs=1)
     unlimited = approve_text()
-    capped = approve_text(recurring_max_runs=1, recurring_min_interval=86400)
     assert "at most 1 runs" in once and "unlimited" in unlimited and once != unlimited
-    assert "Repeats: yes" in once and "minimum gap 24.0 h" in capped
+    assert "Repeats: yes" in once and "minimum gap" not in once
 
 
 def test_requeue_shows_what_would_run_again(solar_env):

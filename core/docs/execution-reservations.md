@@ -22,7 +22,7 @@ fit stays `queued` and the reason is returned (never an error):
 | `execution_ending` | A queued recurrence still holds the reservation of its preceding execution |
 | `cancellation_requested`, `blocked_by_dependency`, `parent_revoked`, `access_policy_invalid`, `absent`/`legacy`/`mismatch` | Revalidated inside the same transaction |
 
-The manual activation keeps ignoring the schedule window and the recurring interval (the worker's
+The manual activation keeps ignoring the schedule window and the already-ran-occurrence check (the worker's
 selection rules); it applies everything else. A refused claim never stamps `recurring_last_run`.
 A task cannot run twice at once: its row is `active` and its reservation is unique.
 

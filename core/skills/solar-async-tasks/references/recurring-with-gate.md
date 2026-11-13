@@ -19,7 +19,7 @@ So a **delegated** routine does not keep its own authority state: it calls `dele
 
 - The task produces a diagnostic or artifact that a human must review before the next cycle
 - The output of each run informs the next execution
-- Explicit control over cadence is needed beyond `recurring_min_interval`
+- Explicit control over cadence is needed beyond the schedule
 
 ## Flow
 
@@ -104,7 +104,6 @@ created: "<ISO8601>"
 status: queued
 priority: normal
 recurring: true
-recurring_min_interval: 86400    # minimum seconds between runs (86400 = 1 day)
 recurring_max_runs: 0            # 0 = unlimited
 scheduled_time: "09:00"          # recurring: ±15 min, read in scheduled_timezone
 scheduled_timezone: "Europe/Madrid"  # IANA zone; keeps the local hour across clock changes
@@ -114,6 +113,5 @@ scheduled_weekdays: "1,2,3,4,5" # ISO: 1=Mon … 7=Sun
 
 ## Notes
 
-- The gate is independent of `recurring_min_interval` — both must be satisfied for a run to produce an artifact
 - Do not use the gate as an emergency pause. Cancel the task with `task.cancel`, or retire the recurrence with `task.archive`. There is no operation that moves it to `planned`, and the agent does not move a file or set `scheduled_time` through the shell.
 - If the task also uses subtasks (see `task-with-subtasks.md`), the gate must only be closed in the synthesis execution (execution 2), never in the child-creation execution (execution 1)

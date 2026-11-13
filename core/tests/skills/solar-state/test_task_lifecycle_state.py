@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
 import solar_state
+from recurring_schedule import open_now
 from solar_state import TaskChanged, TransitionRefused, scheduled_now
 from reservation_tokens import token_of
 
@@ -64,8 +65,7 @@ def test_without_a_zone_the_old_behaviour_is_unchanged():
 
 def test_claim_next_reads_the_task_zone(ready):
     fields = [("title", '"Weekly"'), ("scheduled_time", '"17:00"'), ("scheduled_weekdays", '"5"'),
-              ("scheduled_timezone", f'"{MADRID}"'), ("recurring", "true"),
-              ("recurring_min_interval", str(6 * 86400))]
+              ("scheduled_timezone", f'"{MADRID}"'), ("recurring", "true")]
     with solar_state.session() as store:
         task_id = store.task_create(fields, "\n# Weekly\n", status="queued")
         assert store.task_claim_next("w", now=utc(2027, 4, 2, 16, 30)) is None   # 18:30 local
@@ -104,7 +104,8 @@ def test_one_off_eligibility_at_day_and_clock_boundaries(time, day, instant, exp
 
 
 def test_a_weekly_recurrence_is_ready_again_after_a_short_dst_week(ready):
-    """Winter to summer the week is 167 hours; a 6-day interval still fires."""
+    """Winter to summer the week is 167 hours; the schedule, not a fixed gap, decides. The field of a
+    legacy task is stored and ignored."""
     fields = [("title", '"Weekly"'), ("scheduled_time", '"17:00"'), ("scheduled_weekdays", '"5"'),
               ("scheduled_timezone", f'"{MADRID}"'), ("recurring", "true"),
               ("recurring_min_interval", str(6 * 86400)),
@@ -113,6 +114,217 @@ def test_a_weekly_recurrence_is_ready_again_after_a_short_dst_week(ready):
         task_id = store.task_create(fields, "\n# Weekly\n", status="queued")
         claimed = store.task_claim_next("w", now=utc(2027, 4, 2, 15, 1))
         assert claimed and claimed["id"] == task_id
+
+
+def _weekly(store, **extra):
+    fields = [("title", '"Weekly"'), ("scheduled_time", '"17:00"'), ("scheduled_weekdays", '"5"'),
+              ("scheduled_timezone", f'"{MADRID}"'), ("recurring", "true")] + list(extra.items())
+    return store.task_create(fields, "\n# Weekly\n", status="queued")
+
+
+def _finish(store, task_id, last_run):
+    """The run ends: the worker stamped `last_run` at its claim and the task is queued again."""
+    store.task_set(task_id, "recurring_last_run", json.dumps(last_run))
+    assert store.task_complete(task_id, token=token_of(store, task_id)) == "queued"
+
+
+def test_an_occurrence_that_already_ran_is_not_run_twice(ready):
+    with solar_state.session() as store:
+        task_id = _weekly(store)
+        assert store.task_claim_next("w", now=utc(2027, 4, 2, 14, 50))["id"] == task_id   # 16:50 local, in the window
+        _finish(store, task_id, "2027-04-02T14:50:00Z")
+        for minute in (51, 59):                                                           # still the same window
+            assert store.task_claim_next("w", now=utc(2027, 4, 2, 14, minute)) is None
+        assert store.task_claim_next("w", now=utc(2027, 4, 2, 15, 10)) is None            # 17:10 local, same occurrence
+        pairs = store.task_get(task_id)["frontmatter"]
+        assert solar_state._recurring_ready(pairs, utc(2027, 4, 2, 15, 10).timestamp()) == "occurrence_already_ran"
+        assert store.task_claim_next("w", now=utc(2027, 4, 9, 14, 50))["id"] == task_id   # next Friday
+
+
+def test_a_run_before_the_window_does_not_count_as_the_occurrence(ready):
+    with solar_state.session() as store:
+        task_id = _weekly(store, recurring_last_run='"2027-04-02T10:00:00Z"')            # manual run that morning
+        assert store.task_claim_next("w", now=utc(2027, 4, 2, 15, 0))["id"] == task_id
+
+
+@pytest.mark.parametrize("last,next_run", [
+    ("2027-03-26T16:10:00Z", utc(2027, 4, 2, 15, 1)),
+    ("2027-10-29T15:10:00Z", utc(2027, 11, 5, 16, 1)),
+])
+def test_the_week_of_a_clock_change_is_neither_skipped_nor_repeated(ready, last, next_run):
+    """Friday 17:00 Madrid: 26 March is CET, 2 April is CEST (the week is 167 hours); 29 October 2027
+    is CEST and 5 November CET (169 hours). Nothing about the gap in seconds matters."""
+    with solar_state.session() as store:
+        task_id = _weekly(store, recurring_last_run=json.dumps(last))
+        assert store.task_claim_next("w", now=next_run)["id"] == task_id
+        _finish(store, task_id, next_run.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        assert store.task_claim_next("w", now=next_run.replace(minute=10)) is None
+
+
+def test_a_legacy_task_with_the_old_field_still_runs_by_its_schedule(ready):
+    with solar_state.session() as store:
+        # Its stored interval (ten days) would have blocked the next Friday; it is not read.
+        task_id = _weekly(store, recurring_min_interval=str(10 * 86400),
+                          recurring_last_run='"2027-03-26T16:05:00Z"')
+        assert store.task_claim_next("w", now=utc(2027, 4, 2, 15, 1))["id"] == task_id
+        _finish(store, task_id, "2027-04-02T15:01:00Z")
+        assert store.task_claim_next("w", now=utc(2027, 4, 2, 15, 5)) is None             # the occurrence rule still holds
+
+
+@pytest.mark.parametrize("fields", [
+    [],                                                       # no schedule at all
+    [("scheduled_time", '"now"')],                            # "now" is no clock time
+    [("scheduled_weekdays", '"1,2,3,4,5"')],                  # weekdays without a time
+])
+def test_a_recurring_task_without_a_schedule_is_never_claimed(ready, fields):
+    with solar_state.session() as store:
+        task_id = store.task_create([("title", '"Loop"'), ("recurring", "true")] + fields, "\n# Loop\n",
+                                    status="queued")
+        pairs = store.task_get(task_id)["frontmatter"]
+        assert solar_state._recurring_ready(pairs, utc(2027, 4, 2, 15, 1).timestamp()) == "recurring_without_schedule"
+        assert store.task_claim_next("w", now=utc(2027, 4, 2, 15, 1)) is None
+        assert store.task_get(task_id)["status"] == "queued"
+
+
+def _daily(store, time, tz=MADRID, **extra):
+    fields = [("title", '"Daily"'), ("scheduled_time", json.dumps(time)), ("recurring", "true")]
+    if tz:
+        fields.append(("scheduled_timezone", json.dumps(tz)))
+    return store.task_create(fields + list(extra.items()), "\n# Daily\n", status="queued")
+
+
+def test_the_repeated_autumn_hour_is_one_occurrence(ready):
+    """2027-10-31 02:30 Madrid happens twice: 00:15Z-00:45Z (CEST) and 01:15Z-01:45Z (CET)."""
+    with solar_state.session() as store:
+        task_id = _daily(store, "02:30")
+        assert store.task_claim_next("w", now=utc(2027, 10, 31, 0, 20))["id"] == task_id
+        _finish(store, task_id, "2027-10-31T00:20:00Z")
+        assert store.task_claim_next("w", now=utc(2027, 10, 31, 1, 20)) is None
+        pairs = store.task_get(task_id)["frontmatter"]
+        assert solar_state._recurring_ready(pairs, utc(2027, 10, 31, 1, 20).timestamp()) == "occurrence_already_ran"
+
+
+def test_the_second_pass_of_the_autumn_hour_serves_a_missed_first_one(ready):
+    with solar_state.session() as store:
+        task_id = _daily(store, "02:30", recurring_last_run='"2027-10-30T00:30:00Z"')
+        assert store.task_claim_next("w", now=utc(2027, 10, 31, 1, 20))["id"] == task_id
+
+
+@pytest.mark.parametrize("tz,time,last,first,blocked", [
+    ("UTC", "00:05", "2027-11-10T00:05:00Z", utc(2027, 11, 10, 23, 55), utc(2027, 11, 11, 0, 0)),
+    (MADRID, "00:10", "2027-11-09T23:10:00Z", utc(2027, 11, 10, 22, 58), utc(2027, 11, 10, 23, 0)),
+])
+def test_a_window_that_opens_before_midnight_belongs_to_the_next_day(ready, tz, time, last, first, blocked):
+    with solar_state.session() as store:
+        task_id = _daily(store, time, tz, recurring_last_run=json.dumps(last))        # already ran this morning
+        assert store.task_claim_next("w", now=first)["id"] == task_id
+        _finish(store, task_id, first.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        assert store.task_claim_next("w", now=blocked) is None
+
+
+@pytest.mark.parametrize("bad", ["25:00", "12:60", "24:00", "ab:cd"])
+def test_an_invalid_time_is_refused_and_does_not_block_the_next_task(ready, bad):
+    now = utc(2027, 4, 2, 12, 0)
+    assert solar_state.latest_recurring_occurrence(bad, None, "UTC", now.timestamp()) is None
+    with solar_state.session() as store:
+        broken = _daily(store, bad, "UTC")
+        good = _daily(store, "12:00", "UTC")
+        pairs = store.task_get(broken)["frontmatter"]
+        assert solar_state._recurring_ready(pairs, now.timestamp()) == "recurring_without_schedule"
+        assert store.task_claim_next("w", now=now)["id"] == good
+        assert store.task_get(broken)["status"] == "queued"
+
+
+def test_without_a_zone_the_host_clock_applies(ready):
+    base = datetime(2027, 4, 2, 12, 0).astimezone()                                    # 12:00 on the host
+    with solar_state.session() as store:
+        task_id = _daily(store, "12:00", None)
+        assert store.task_claim_next("w", now=base + timedelta(hours=3)) is None       # outside the window
+        assert store.task_claim_next("w", now=base)["id"] == task_id                    # inside
+        _finish(store, task_id, base.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        assert store.task_claim_next("w", now=base + timedelta(minutes=5)) is None      # same occurrence
+
+
+@pytest.fixture
+def madrid_host():
+    """Pin the host clock to Europe/Madrid, restoring it afterwards."""
+    import os
+    import time
+    before = os.environ.get("TZ")
+    os.environ["TZ"] = MADRID
+    time.tzset()
+    yield
+    if before is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = before
+    time.tzset()
+
+
+def test_without_a_zone_a_skipped_spring_minute_does_not_hide_the_day(ready, madrid_host):
+    """Host in Madrid, 03:05 daily, no stored zone: its window opens at 02:50, a minute that does not
+    exist on 2027-03-28. Sunday must still start once, not read Saturday's occurrence."""
+    with solar_state.session() as store:
+        task_id = _daily(store, "03:05", None, recurring_last_run='"2027-03-27T02:05:00Z"')   # Saturday 03:05 CET
+        sunday = utc(2027, 3, 28, 1, 0).astimezone()                                           # 03:00 CEST, host-local like the worker's clock
+        assert store.task_claim_next("w", now=sunday)["id"] == task_id
+        _finish(store, task_id, "2027-03-28T01:00:00Z")
+        assert store.task_claim_next("w", now=utc(2027, 3, 28, 1, 10).astimezone()) is None
+
+
+@pytest.fixture
+def dublin_host():
+    """Pin the host clock to Europe/Dublin (negative DST in winter), restoring it afterwards."""
+    import os
+    import time
+    before = os.environ.get("TZ")
+    os.environ["TZ"] = "Europe/Dublin"
+    time.tzset()
+    yield
+    if before is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = before
+    time.tzset()
+
+
+def test_host_zone_places_the_window_in_winter_and_summer_without_guessing_dst(dublin_host):
+    """Dublin is GMT in winter and IST (UTC+1) in summer; the host adapter only resolves instants."""
+    host = solar_state._HostZone()
+    assert host.dst(datetime(2027, 7, 15, 12, 0)) is None
+    every_day = {1, 2, 3, 4, 5, 6, 7}
+    winter = solar_state.recurring_windows(datetime(2027, 1, 15, 12, 0), host, every_day)
+    summer = solar_state.recurring_windows(datetime(2027, 7, 15, 12, 0), host, every_day)
+    assert winter == [(utc(2027, 1, 15, 11, 45), utc(2027, 1, 15, 12, 15))]
+    assert summer == [(utc(2027, 7, 15, 10, 45), utc(2027, 7, 15, 11, 15))]
+
+
+def test_a_stored_unpadded_hour_is_still_read(ready):
+    """A task saved as 9:00 keeps running as 09:00; only new schedules must be HH:MM."""
+    with solar_state.session() as store:
+        task_id = _daily(store, "9:00", "UTC")
+        pairs = store.task_get(task_id)["frontmatter"]
+        assert solar_state._recurring_ready(pairs, utc(2027, 4, 2, 9, 0).timestamp()) is None
+        assert solar_state.latest_recurring_occurrence("9:00", None, "UTC", utc(2027, 4, 2, 9, 0).timestamp()) \
+            == solar_state.latest_recurring_occurrence("09:00", None, "UTC", utc(2027, 4, 2, 9, 0).timestamp())
+        assert store.task_claim_next("w", now=utc(2027, 4, 2, 9, 0))["id"] == task_id
+
+
+def test_a_time_whose_whole_window_is_skipped_has_no_occurrence():
+    allowed = set(range(1, 8))
+    zone = ZoneInfo(MADRID)
+    assert solar_state.recurring_windows(datetime(2027, 3, 28, 2, 30), zone, allowed) == []
+    assert solar_state.recurring_windows(datetime(2027, 3, 28, 2, 50), zone, allowed)   # valid minutes kept
+
+
+def test_the_latest_occurrence_follows_the_zone_and_the_clock_change():
+    last = solar_state.latest_recurring_occurrence
+    # Friday 17:00 Madrid, window opens 15 minutes earlier: 16:45 CET / CEST.
+    assert last("17:00", "5", MADRID, utc(2027, 4, 2, 15, 1).timestamp()) == utc(2027, 4, 2, 14, 45).timestamp()
+    assert last("17:00", "5", MADRID, utc(2027, 3, 29, 12, 0).timestamp()) == utc(2027, 3, 26, 15, 45).timestamp()
+    assert last("17:00", "5", MADRID, utc(2027, 4, 2, 14, 44).timestamp()) == utc(2027, 3, 26, 15, 45).timestamp()
+    assert last("17:00", "5", "Nowhere/Land", utc(2027, 4, 2, 15, 1).timestamp()) is None
+    assert last("now", "5", MADRID, utc(2027, 4, 2, 15, 1).timestamp()) is None
 
 
 # --------------------------------------------------------------------------
@@ -253,7 +465,7 @@ def test_digest_ignores_runtime_bookkeeping_but_not_content():
 
 def test_archive_keeps_the_row_the_body_and_every_event(ready):
     with solar_state.session() as store:
-        task_id = make(store, status="queued", recurring="true")
+        task_id = make(store, status="queued", recurring="true", **open_now())
         store.task_claim_next("w")
         store.task_complete(task_id, token=token_of(store, task_id))     # recurring: back to queued
         version = store.task_get(task_id)["row_version"]

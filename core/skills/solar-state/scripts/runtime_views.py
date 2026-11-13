@@ -351,7 +351,7 @@ def _average(total, count):
 
 _CONTEXT_KEYS = ('workspace_id', 'agent', 'planet', 'responsibility', 'agent_contract')
 _CONFIGURATION_KEYS = ('scheduled_time', 'scheduled_weekdays', 'scheduled_timezone', 'recurring',
-                       'recurring_min_interval', 'recurring_max_runs', 'resources',
+                       'recurring_max_runs', 'resources',
                        'cleanup_required', 'cleanup_timeout')
 
 
@@ -519,7 +519,8 @@ _WAIT_KINDS = (
     ("parent_revoked", "recovery"),
     # not resources or capacity: the task itself is not ready (schedule, approval, cancellation, access)
     ("cancellation_requested", "other"),
-    ("recurring_interval", "other"),
+    ("occurrence_already_ran", "other"),
+    ("recurring_without_schedule", "other"),
     ("outside_schedule", "other"),
     ("approval_digest_mismatch", "other"),
     ("awaiting_approval", "authorization"),

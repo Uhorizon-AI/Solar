@@ -33,9 +33,10 @@ Behavior:
 
 Use recurring tasks for periodic execution, such as daily searches or weekly reports.
 
-`task.schedule` also sets `recurring`, `recurring_max_runs` and `recurring_min_interval` on a draft or
-planned task. With a schedule, it derives the interval from the shortest gap between occurrences
-minus two hours and refuses a longer one: a one-hour-shorter week would otherwise skip a run.
+`task.schedule` also sets `recurring` and `recurring_max_runs` on a draft or planned task. A recurring
+task needs a schedule (`scheduled_time` and `scheduled_timezone`; weekdays optional): `task.schedule`
+refuses `recurring` without a clock time, and the worker never claims one that has none
+(`recurring_without_schedule`).
 `task.archive` retires a recurrence without deleting its history.
 
 Frontmatter:
@@ -45,7 +46,6 @@ recurring: true
 recurring_max_runs: 0          # 0 = unlimited
 recurring_run_count: 0         # auto-incremented
 recurring_last_run: ""         # auto-updated
-recurring_min_interval: 86400  # seconds
 ```
 
 Behavior:
@@ -57,9 +57,12 @@ Behavior:
 
 Race protection:
 
-- `recurring_last_run` and `recurring_min_interval` prevent duplicate execution.
-- If the interval has not elapsed, the worker skips the task and leaves it queued.
-- `recurring_last_run` is written after a claim that won, never before: a claim refused by the approval check (`approval_digest_mismatch`) does not consume the interval. Editing, returning to draft and approving again keep `recurring_run_count` and `recurring_last_run`, and add no run.
+- The schedule tells one occurrence from the next. `recurring_last_run` is compared with the start of the latest occurrence (the beginning of its eligibility window, read in `scheduled_timezone`): if the task already ran at or after it, the worker skips the task and leaves it queued (`occurrence_already_ran`).
+- An occurrence is one nominal local day. Its start is the earliest eligible minute of that day, so a window that opens before midnight belongs to the next day, and both passes of a repeated autumn hour (for example 02:30 on the night the clock goes back) are one occurrence: if the first pass ran, the second is skipped; if it was missed, the second still serves it.
+- The guard follows the clock, not a fixed number of seconds, so a week with a clock change does not shift the occurrence. If only part of a task's window falls in a skipped hour, the valid minutes are kept; if no minute of the window exists, that day has no occurrence.
+- New schedules must use `HH:MM` (00:00-23:59). A task saved earlier with an unpadded hour (`9:00`) is still read as `09:00`. Any other time is invalid and gives `recurring_without_schedule`. The occurrence is read in `scheduled_timezone`; without one it uses the host's zone, with that zone's own clock-change rules.
+- `recurring_min_interval` is no longer read. A task that still carries it is not stopped by it and keeps its approval, but its spacing now comes only from the schedule: see the CHANGELOG for the tasks whose frequency changes.
+- `recurring_last_run` is written after a claim that won, never before: a claim refused by the approval check (`approval_digest_mismatch`) does not consume the occurrence. Editing, returning to draft and approving again keep `recurring_run_count` and `recurring_last_run`, and add no run.
 
 ## Resource Cleanup
 

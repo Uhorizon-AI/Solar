@@ -683,13 +683,9 @@ async function settled() {
   };
   view = await interval({ recurring: "true", recurring_min_interval: "86400" });
   need(view, "<dt class=\"k\">Recurrence</dt><dd>Recurring</dd>", "recurrence");
-  need(view, "<dt class=\"k\">Minimum interval</dt><dd>24 h</dd>", "daily cadence without a fixed time");
-  need(await interval({ recurring: true, recurring_min_interval: "5400" }), "<dd>90 min</dd>", "minutes");
-  need(await interval({ recurring: "true", recurring_min_interval: 45 }), "<dd>45 s</dd>", "seconds");
-  lack(await interval({ recurring: "false" }), "Minimum interval", "no interval when none stored");
-  lack(await interval({ recurring_min_interval: "soon" }), "Minimum interval", "unreadable interval");
+  lack(view, "Minimum interval", "a legacy interval is stored but no longer shown");
   view = await interval({ recurring: "true", recurring_min_interval: "86400" }, "es");
-  need(view, "<dt class=\"k\">Intervalo mínimo</dt><dd>24 h</dd>", "spanish cadence");
+  lack(view, "Intervalo mínimo", "spanish: no interval either");
   need(view, "<dt class=\"k\">Recurrencia</dt><dd>Recurrente</dd>", "spanish recurrence");
 
   // A newer updated_at refreshes the data but keeps the open record open.
