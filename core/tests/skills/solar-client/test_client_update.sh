@@ -716,7 +716,7 @@ drain_case "$MOCK_INSTALL_ROOT" "{\"children\": [$CHILD_ABC], \"state\": \"drain
 assert_ok "a drain that ran out of time still fails" test "$drain_ec" -ne 0
 assert_ok "the drain error names the task and its title" bash -c 'grep -q "task-abc · Review of the nightly report · agent" <<<"$1"' _ "$drain_err"
 assert_ok "the drain error says how long it has been running" bash -c 'grep -q "running [0-9]* min" <<<"$1"' _ "$drain_err"
-assert_ok "the drain error prints the exact cancel command" bash -c 'grep -q "request cancellation with: python3 .*task_cancel.py - task-abc" <<<"$1"' _ "$drain_err"
+assert_ok "the drain error prints the cancel command with its runtime" bash -c +  'grep -q "request cancellation with: env .*SOLAR_RUNTIME_ROOT=.* python3 .*task_cancel.py - task-abc" <<<"$1"' _ "$drain_err"
 assert_ok "the drain error keeps the resume instruction" bash -c 'grep -q "solar client update --resume" <<<"$1"' _ "$drain_err"
 
 SPACED_ROOT="$TMP/install with space"
@@ -731,7 +731,7 @@ assert_ok "a title with control characters stays on one cut line" bash -c \
 
 : >"$DRAIN_TITLE"
 drain_case "$MOCK_INSTALL_ROOT" "{\"children\": [$CHILD_ABC], \"state\": \"draining\"}"
-assert_ok "an empty title leaves no empty field" bash -c 'grep -q "^  - task-abc · agent · running" <<<"$1"' _ "$drain_err"
+assert_ok "an empty title leaves no empty field" bash -c 'grep -q "^  ! task-abc · agent · running" <<<"$1"' _ "$drain_err"
 
 drain_case "$MOCK_INSTALL_ROOT" '{"children": [{"task_id": "task-abc", "provider": "agent"}], "state": "draining"}'
 assert_ok "a child without a start time is listed without an age" bash -c 'grep -q "task-abc" <<<"$1" && ! grep -q "running [0-9]" <<<"$1"' _ "$drain_err"
