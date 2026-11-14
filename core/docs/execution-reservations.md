@@ -149,7 +149,8 @@ then the target's own `client_update_staged.sh` runs:
 
 A failure keeps the services stopped and the barrier held; `solar client update --resume` continues
 the same operation from its recorded phase. `solar status` shows the held phase and the resume
-command, along with the tasks still running during the drain when the supervisor can be identified.
+command. In phases `maintenance` and `ticks-paused` it also shows running tasks when the
+supervisor can be identified. Later phases show only the maintenance summary.
 One process drives it at a time: an operation lock
 (`<runtime>/maintenance.lock`, the pid and start time of the driver) is held for the whole sequence,
 so a `--resume`, a second update or a sync is refused while the original is alive. A lock whose

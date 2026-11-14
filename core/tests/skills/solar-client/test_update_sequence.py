@@ -705,12 +705,19 @@ def test_a_lock_written_without_a_verifiable_start_is_not_stolen_from_a_live_own
 def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_duplicates(rig, monkeypatch):
     """Real resident supervisor + deterministic executors; update services stay doubled."""
     import signal
-    import threading
+    import shlex
     sys.path.insert(0, str(CORE / "tests/skills/solar-async-tasks"))
     sys.path.insert(0, str(CORE / "skills/solar-async-tasks/scripts"))
     from supervisor_support import wait_until
     import supervisor_lib
     from rollout_policy import apply_policy
+
+    # The installed front end owns the short output view all the way through staging.
+    old_lib = rig.install / "core/skills/solar-client/scripts/client_lib.sh"
+    old_lib.write_bytes(subprocess.check_output(
+        ["git", "-C", str(CORE.parent), "show", "5e2d221e1d283a78173a23f70eb9ebf0cac7ca3e:core/skills/solar-client/scripts/client_lib.sh"]))
+    rig.git("add", str(old_lib))
+    rig.git("commit", "-qm", "Use the installed main output filter")
 
     rig.runtime_state(solar_state.SCHEMA_VERSION, tasks=0)
     monkeypatch.chdir(rig.ws)
@@ -736,6 +743,8 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
     wrapper.write_text(
         "import sys\n" + f"sys.path.insert(0, {str(rig.install / 'core/skills/solar-async-tasks/scripts')!r})\n" +
         "import supervisor, supervisor_lib\n" +
+        "original_view = supervisor.Execution.view\n"
+        "supervisor.Execution.view = lambda execution: dict(original_view(execution), since=None)\n" +
         f"executor = lambda task, token: [sys.executable, {str(CORE / 'tests/skills/solar-async-tasks/executor_double.py')!r}, '--task', task, '--token', token]\n" +
         "raise SystemExit(supervisor.Supervisor(supervisor_lib.Context(), executor=executor, poll=0.1, sweep=0.2).run())\n")
     env = rig.env(DOUBLE_DIR=str(double), SOLAR_CUTOVER_PS_OUTPUT_FILE=str(rig.tmp / "cutover-ps"))
@@ -743,7 +752,17 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
     original = subprocess.Popen([sys.executable, str(wrapper)], env=env, cwd=rig.ws,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     original_start = supervisor_lib.process_start(original.pid)
-    update_box = {}
+    update = None
+    update_output = rig.tmp / "update-output"
+
+    def status():
+        # Exercise the target status entry point against the isolated runtime.
+        status_env = {**env, "SOLAR_APP_TEST_MODE": "1", "SOLAR_APP_TEST_PORT": "19075",
+                      "SOLAR_BROWSER_DEBUG_PORT": "19076"}
+        out = subprocess.run(["bash", str(SCRIPTS / "solar_status.sh"), "--json"],
+                             env=status_env, cwd=rig.ws, capture_output=True, text=True, timeout=45)
+        assert out.returncode == 0, out.stdout + out.stderr
+        return json.loads(out.stdout)["maintenance_detail"]
 
     def events():
         path = double / "events.jsonl"
@@ -756,27 +775,41 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
         extra = dict(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=str(rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"),
                      SOLAR_CLIENT_ASYNC_BUSY_COMMAND="exit 1", SOLAR_CLIENT_DRAIN_TIMEOUT="60",
                      SOLAR_CUTOVER_PS_OUTPUT_FILE=str(rig.tmp / "cutover-ps"))
-        update = threading.Thread(target=lambda: update_box.setdefault("result", rig.update(
-            "--ref", "v0.0.2", "--yes", env_extra=extra)), daemon=True)
-        update.start()
+        update_env = rig.env(**extra)
+        rig.guard(update_env)
+        with update_output.open("w") as output:
+            update = subprocess.Popen(
+                ["bash", str(old_lib.with_name("client_update.sh")), "--workspace", str(rig.ws),
+                 "--ref", "v0.0.2", "--yes", "--no-sync"],
+                env=update_env, cwd=rig.ws, stdout=output, stderr=subprocess.STDOUT)
         wait_until(lambda: "drain-start" in rig.names(), 60)
         assert original.poll() is None and rig.marker() == "OLD"
+        commands = [
+            "request cancellation with: " + shlex.join([
+                "env", f"SOLAR_RUNTIME_ROOT={rig.rt}", f"SOLAR_WORKSPACE={rig.ws}", "python3",
+                str(rig.install / "core/skills/solar-async-tasks/scripts/task_cancel.py"), "-", task])
+            for task in tasks
+        ]
+        wait_until(lambda: all(command in update_output.read_text() for command in commands), 10)
+        waiting_output = update_output.read_text()
+        assert "Waiting for active tasks to finish (configured limit: 60s)." in waiting_output
+        assert all(command in waiting_output for command in commands)
+        assert update.poll() is None
         report = subprocess.run(
             ["bash", "-c", 'source "$1"; solar_client_maintenance_report "$2"', "_",
              str(SCRIPTS / "client_lib.sh"), str(rig.install)],
             env=env, cwd=rig.ws, capture_output=True, text=True, timeout=30)
         assert report.returncode == 0, report.stderr
         assert "phase=ticks-paused" in report.stdout and "solar client update --resume" in report.stdout
-        assert all(task in report.stdout for task in tasks)
+        assert all(command in report.stdout for command in commands)
+        maintenance = status()
+        assert "phase=ticks-paused" in maintenance
+        assert all(command in maintenance for command in commands)
         (double / "gates/release").touch()
-        update.join(180)
-        assert not update.is_alive()
-        done = update_box["result"]
-        assert done.returncode == 0, done.stdout + done.stderr
-        assert "Drain: active tasks will finish" in done.stdout
-        assert all(task in done.stdout for task in tasks)
+        assert update.wait(timeout=180) == 0, update_output.read_text()
         original.wait(timeout=10)
         assert original.returncode == 0 and rig.marker() == "NEW" and rig.barrier() is None
+        assert status() == ""
         with solar_state.session(rig.rt) as store:
             assert store.async_policy()["global_capacity"] == 3
             assert all(store.task_status(task) == "completed" for task in tasks)
@@ -802,6 +835,8 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
             if identity.get("started") and supervisor_lib.matches(identity.get("pid"), identity["started"])[0] == "alive":
                 os.kill(identity["pid"], signal.SIGTERM)
         (double / "gates/release").touch()
+        if update is not None and update.poll() is None:
+            update.wait(timeout=60)
         if original.poll() is None:
             original.wait(timeout=30)
 
