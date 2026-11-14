@@ -134,9 +134,12 @@ nothing, and an unreadable file counts as held.
 then the target's own `client_update_staged.sh` runs:
 
 1. barrier taken (`maintenance`); ticks paused (LaunchAgent booted out);
-2. drain: the resident supervisor is asked to drain through `stop_supervisor.sh --drain --timeout N` (when one
+2. drain: the resident supervisor is asked to drain through `stop_supervisor.sh --drain` (when one
    runs: it stops dispatching, collects its executions and exits; nothing is killed), a one-shot worker of the
-   previous design is waited for; 120 s, then the update ends with nothing replaced and the barrier held;
+   previous design is waited for; by default the update waits until active work finishes. Set
+   `SOLAR_CLIENT_DRAIN_TIMEOUT` to a positive whole number of seconds for a bounded wait; unset or
+   `0` means no deadline. If the limit expires,
+   nothing is replaced and the barrier stays held for `solar client update --resume`;
 3. the console and gateway stop;
 4. `solar_state_cutover.py migrate --apply-hook ...` takes the exclusive lock, revalidates that
    nothing runs, copies the base (`state-backups/pre-update/`), runs the hook that replaces the code,

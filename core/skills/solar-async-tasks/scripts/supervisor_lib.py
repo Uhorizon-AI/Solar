@@ -55,6 +55,12 @@ def _env_seconds(name: str, default: float, low: float, high: float) -> float:
     return min(max(value, low), high)
 
 
+def _drain_timeout(raw: str) -> int:
+    if not re.fullmatch(r"[0-9]+", raw):
+        raise argparse.ArgumentTypeError("timeout must be a non-negative whole number of seconds")
+    return int(raw)
+
+
 # Timings of the contract. The environment can only move how long an observer waits or how stale
 # a heartbeat may be judged; nothing here names another owner or another lock.
 HANDSHAKE_BUDGET = _env_seconds("SOLAR_SUPERVISOR_HANDSHAKE_SECONDS", 5.0, 0.2, 5.0)
@@ -468,11 +474,16 @@ def stop(ctx: Context, *, timeout: float, poll: float = 0.2, requested_by: str =
     """Ask the identified supervisor to stop dispatching, collect its executions and exit.
 
     Exit codes: 0 gone with nothing pending; 1 still draining when the time ran out (nothing is
-    killed); 2 refused, the owner cannot be identified; 3 gone but executions with an uncertain
-    owner or failed cleanup remain blocked."""
-    deadline = time.monotonic() + timeout
+    killed); 2 refused, the owner cannot be identified or a live candidate did not publish its
+    identity within STARTING_LIMIT (candidate_start_timeout); 3 gone but executions with an
+    uncertain owner or failed cleanup remain blocked."""
+    # Zero means wait for active executions to finish. Updates must not impose an
+    # arbitrary deadline on user work; callers may still choose a bounded drain explicitly.
+    deadline = time.monotonic() + timeout if timeout > 0 else None
     asked_for: Optional[tuple] = None
     last_seen: dict = {}
+    candidate_target: Optional[tuple] = None
+    candidate_deadline: Optional[float] = None
     while True:
         recorded = read_json(ctx.identity_file)
         owner_alive = False
@@ -492,15 +503,27 @@ def stop(ctx: Context, *, timeout: float, poll: float = 0.2, requested_by: str =
                     asked_for = target
         candidate = read_json(ctx.candidate_file)
         candidate_alive = False
+        current_candidate = None
         if not owner_alive and isinstance(candidate, dict) and candidate.get("pid") is not None:
             kind, _ = matches(candidate["pid"], candidate.get("started"))
             candidate_alive = kind == "alive"      # it may still win the lock: wait for it
+            if candidate_alive:
+                current_candidate = (candidate["pid"], candidate.get("started"))
+        if current_candidate != candidate_target:
+            candidate_target = current_candidate
+            candidate_deadline = time.monotonic() + STARTING_LIMIT if candidate_alive else None
+        if candidate_alive and candidate_deadline is not None and time.monotonic() >= candidate_deadline:
+            return 2, {"state": "refused", "reason": "candidate_start_timeout",
+                       "detail": "a candidate process stayed alive without publishing a supervisor identity"}
+        if owner_alive:
+            candidate_target = None
+            candidate_deadline = None
         if not owner_alive and not candidate_alive:
             pending = (read_json(ctx.identity_file) or last_seen or {}).get("blocked") or []
             state = {"state": "stopped", "reason": "not_running" if asked_for is None else "drained",
                      "pending": pending}
             return (3, dict(state, reason="blocked_executions")) if pending else (0, state)
-        if time.monotonic() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             current = read_json(ctx.identity_file) or last_seen or {}
             return 1, {"state": "draining", "reason": "timeout",
                        "children": current.get("children") or [], "blocked": current.get("blocked") or [],
@@ -554,7 +577,8 @@ def main(argv: list[str]) -> int:
     sub.add_parser("poke")
     stopper = sub.add_parser("stop")
     stopper.add_argument("--drain", action="store_true")
-    stopper.add_argument("--timeout", type=float, default=120.0)
+    stopper.add_argument("--timeout", type=_drain_timeout, default=0,
+                         help="maximum drain time in whole seconds; 0 waits until executions finish (default)")
     args = parser.parse_args(argv)
     ctx = Context(Path(args.runtime) if args.runtime else None)
     if args.cmd == "observe":

@@ -227,6 +227,29 @@ def test_the_whole_sequence_runs_in_order_with_an_old_supervisor_and_schema(rig)
     assert not list(rig.tmp.glob("solar-update-staging.*"))               # released: the staging copy is gone
 
 
+def test_an_update_uses_the_staged_stop_helper_when_the_live_install_is_old(rig):
+    rig.runtime_state(5)
+    live_stop = rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"
+    called = rig.tmp / "old-stop-called"
+    sh(live_stop, f'echo called > "{called}"\nexit 1\n')
+    env_extra = {
+        "SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE": "gateway,host,async-supervisor",
+        "SOLAR_CLIENT_ASYNC_BUSY_COMMAND": "exit 1",
+        "SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT": "",
+    }
+    env = rig.env(**env_extra)
+    env.pop("SOLAR_CLIENT_DRAIN_TIMEOUT")
+    rig.guard(env)
+    entry = rig.install / "core/skills/solar-client/scripts/client_update.sh"
+    done = subprocess.run(["bash", str(entry), "--workspace", str(rig.ws), "--ref", "v0.0.2", "--yes"],
+                          env=env, cwd=rig.ws, capture_output=True, text=True, timeout=300)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not called.exists(), "the staged updater must not use the old live stop helper"
+    assert rig.marker() == "NEW" and rig.barrier() is None
+    drain_start = next(row for row in rig.rows() if row["event"] == "drain-start")
+    assert drain_start["timeout"] == "0", "unset timeout must select the no-deadline default"
+
+
 def test_the_first_installation_runs_the_staged_entrypoint_with_explicit_paths(rig, tmp_path):
     rig.runtime_state(5)
     staging = tmp_path / "prepared"
@@ -297,6 +320,19 @@ def test_a_drain_that_times_out_replaces_nothing_and_a_resume_finishes_it(rig):
     assert not list(rig.tmp.glob("solar-update-staging.*"))
 
 
+def test_an_invalid_drain_timeout_is_rejected_before_it_starts_a_drain(rig):
+    env = rig.env(SOLAR_CLIENT_DRAIN_TIMEOUT="abc")
+    rig.guard(env)
+    install = rig.install
+    done = subprocess.run(
+        ["bash", "-c", 'source "$1"; solar_client_drain_async "$2"', "_",
+         str(SCRIPTS / "client_lib.sh"), str(install)],
+        env=env, cwd=rig.ws, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 1 and "whole number of seconds" in done.stderr
+    assert rig.names() == []
+    assert rig.barrier() is None
+
+
 def test_a_supervisor_that_cannot_be_drained_stops_the_update_before_it_changes_anything(rig):
     rig.runtime_state(5)
     missing = rig.tmp / "no-such-stop.sh"
@@ -304,6 +340,25 @@ def test_a_supervisor_that_cannot_be_drained_stops_the_update_before_it_changes_
     assert failed.returncode != 0 and "no way to drain it" in failed.stderr
     assert "drain-refused" in rig.names() and "host-stop" not in rig.names()
     assert rig.marker() == "OLD" and rig.schema() == 5 and rig.barrier()["phase"] == "ticks-paused"
+
+
+def test_a_candidate_start_timeout_has_specific_recovery_guidance(rig):
+    stub = sh(rig.tmp / "candidate-timeout.sh",
+              'echo \'{"state":"refused","reason":"candidate_start_timeout","detail":"not ready"}\'\nexit 2\n')
+    events = rig.tmp / "events.jsonl"
+    env = rig.env(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=stub,
+                  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="async-supervisor",
+                  SOLAR_CLIENT_DRAIN_TIMEOUT="5", SOLAR_CLIENT_UPDATE_EVENTS_FILE=str(events))
+    done = subprocess.run(["bash", "-c", f'source "{SCRIPTS}/client_lib.sh"; '
+                                       f'solar_client_drain_async "{rig.install}" 5'],
+                          env=env, cwd=rig.ws, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 1
+    assert "candidate stayed alive without publishing its identity" in done.stderr
+    assert "check_async_tasks.sh" in done.stderr and "update --resume" in done.stderr
+    assert "process table did not answer" not in done.stderr
+    rows = [json.loads(line) for line in events.read_text().splitlines()]
+    assert [row["event"] for row in rows] == ["drain-start", "drain-refused"]
+    assert rows[-1]["reason"] == "candidate_start_timeout"
 
 
 def test_a_supervisor_whose_drain_fails_is_not_killed_or_retried(rig):

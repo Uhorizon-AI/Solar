@@ -5,12 +5,13 @@
 #
 # The supervisor is identified by its published pid and start time. It is asked (through a control
 # file bound to that identity) to stop dispatching, collect its executions and close its lock when
-# they end. This script waits up to N seconds (default 120) and reports what is still running.
+# they end. It waits until they finish by default; --timeout N (whole seconds) sets an optional deadline, and
+# --timeout 0 explicitly waits without a deadline. A timed-out drain reports what is still running.
 # It never removes the lock and never kills a process: not the supervisor, not an execution.
 #
 # Exit codes: 0 gone and nothing pending (or none was running) · 1 still draining at the deadline ·
-#             2 refused: the owner cannot be identified · 3 gone, but executions with an uncertain
-#             owner or a failed cleanup remain blocked.
+#             2 refused: the owner cannot be identified or a candidate exceeded STARTING_LIMIT ·
+#             3 gone, but executions with an uncertain owner or a failed cleanup remain blocked.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

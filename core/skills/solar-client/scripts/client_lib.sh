@@ -2098,20 +2098,34 @@ if len(children) > MAX_SHOWN:
 PY
 }
 
-# The adapter that lets the old executors finish. The one-shot worker has no drain request:
-# the ticks are already paused, so it is waited for. The resident supervisor (when one runs)
-# is asked to drain through its own stop script and never killed. No uncertain owner is
-# stopped, killed or retried: a timeout ends the update here.
+# The one-shot worker has no drain request: the ticks are already paused, so it is waited for.
+# The resident supervisor is asked to drain through the stop script shipped with this updater,
+# not the one in the live install, which may predate the no-deadline contract. The default wait
+# has no deadline; SOLAR_CLIENT_DRAIN_TIMEOUT opts into a bounded wait. No task is killed.
 # Args: install_root [timeout_seconds]
 solar_client_drain_async() {
   local install_root="$1"
-  local timeout="${2:-${SOLAR_CLIENT_DRAIN_TIMEOUT:-120}}"
+  local timeout="${2:-${SOLAR_CLIENT_DRAIN_TIMEOUT:-0}}"
   local stop_script service seen_supervisor=false waited=0
-  stop_script="${SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT:-${install_root}/core/skills/solar-async-tasks/scripts/stop_supervisor.sh}"
+  local updater_stop_script="${_CLIENT_LIB_SCRIPT_DIR}/../../solar-async-tasks/scripts/stop_supervisor.sh"
+  if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: the async drain timeout must be a non-negative whole number of seconds (got: $timeout)." >&2
+    return 1
+  fi
+  if [[ -n "${SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT:-}" ]]; then
+    stop_script="$SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT"
+  elif [[ -f "$updater_stop_script" ]]; then
+    stop_script="$updater_stop_script"
+  else
+    stop_script="${install_root}/core/skills/solar-async-tasks/scripts/stop_supervisor.sh"
+  fi
   while IFS= read -r service; do
     [[ "$service" == "async-supervisor" ]] && seen_supervisor=true
   done < <(solar_client_running_services "$install_root")
   solar_client_update_event drain-start "timeout=$timeout" "supervisor=$seen_supervisor"
+  if [[ "$timeout" == "0" ]]; then
+    echo "Drain: waiting for active executions to finish without a deadline. Press Ctrl-C to pause, cancel the task, then run: solar client update --resume. Set SOLAR_CLIENT_DRAIN_TIMEOUT=<whole seconds> to cap the wait."
+  fi
   if [[ "$seen_supervisor" == true ]]; then
     if [[ ! -f "$stop_script" ]]; then
       echo "ERROR: the async supervisor is running and this install has no way to drain it ($stop_script). Nothing was changed." >&2
@@ -2121,19 +2135,28 @@ solar_client_drain_async() {
     echo "Drain: asking the async supervisor to finish its executions"
     # The output is captured (not streamed) so a drain that runs out of time can say what it waited
     # for; it is printed unchanged once the script ends.
-    local stop_code=0 stop_out=""
+    local stop_code=0 stop_out="" stop_reason=""
     stop_out="$(bash "$stop_script" --drain --timeout "$timeout")" || stop_code=$?
     [[ -n "$stop_out" ]] && printf '%s\n' "$stop_out"
     if [[ "$stop_code" -ne 0 ]]; then
-      # stop_supervisor.sh: 1 = still draining at the deadline, 2 = its owner cannot be identified,
+      stop_reason="$(printf '%s\n' "$stop_out" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1]).get("reason", ""))' 2>/dev/null || true)"
+      # stop_supervisor.sh: 1 = still draining at the deadline.
+      # 2 = owner cannot be identified or a live candidate did not publish its identity in time
+      #     (candidate_start_timeout).
       # 3 = it left but executions with an uncertain owner or a failed cleanup remain blocked.
       # Each needs something different from the person, and none of them replaced anything.
       case "$stop_code" in
         1) echo "ERROR: the async supervisor did not drain: it was still collecting its executions after ${timeout}s. Nothing was replaced and nothing was killed; the maintenance barrier stays. Let them finish (or cancel them) and run: solar client update --resume" >&2
            solar_client_describe_running "$install_root" "$stop_out" >&2
            solar_client_update_event drain-timeout "reason=supervisor" "code=$stop_code" ;;
-        2) echo "ERROR: the async supervisor's process could not be identified (the process table did not answer), so it was not asked to stop. Nothing was replaced; the maintenance barrier stays. Check the process table (ps) and the supervisor's identity with: bash $(dirname "$stop_script")/check_async_tasks.sh, then run: solar client update --resume" >&2
-           solar_client_update_event drain-refused "reason=supervisor_unidentified" "code=$stop_code" ;;
+        2)
+           if [[ "$stop_reason" == "candidate_start_timeout" ]]; then
+             echo "ERROR: the async supervisor candidate stayed alive without publishing its identity. Nothing was replaced; the maintenance barrier stays. Check the candidate with: bash $(dirname "$stop_script")/check_async_tasks.sh, resolve its process, then run: solar client update --resume" >&2
+             solar_client_update_event drain-refused "reason=candidate_start_timeout" "code=$stop_code"
+           else
+             echo "ERROR: the async supervisor's process could not be identified (the process table did not answer), so it was not asked to stop. Nothing was replaced; the maintenance barrier stays. Check the process table (ps) and the supervisor's identity with: bash $(dirname "$stop_script")/check_async_tasks.sh, then run: solar client update --resume" >&2
+             solar_client_update_event drain-refused "reason=${stop_reason:-supervisor_unidentified}" "code=$stop_code"
+           fi ;;
         3) echo "ERROR: the async supervisor stopped, but executions with an uncertain owner or a failed cleanup remain blocked (listed above). Nothing was replaced; the maintenance barrier stays. Resolve them (confirm their processes are gone, or fail/cancel the tasks) and run: solar client update --resume" >&2
            solar_client_update_event drain-blocked "reason=blocked_executions" "code=$stop_code" ;;
         *) echo "ERROR: stop_supervisor.sh failed (exit $stop_code). Nothing was replaced; the maintenance barrier stays." >&2
@@ -2145,7 +2168,7 @@ solar_client_drain_async() {
   local started=$SECONDS
   while solar_client_async_busy "$install_root" >/dev/null; do
     waited=$((SECONDS - started))
-    if [[ "$waited" -ge "$timeout" ]]; then
+    if [[ "$timeout" -gt 0 && "$waited" -ge "$timeout" ]]; then
       echo "ERROR: async-tasks were still running after ${timeout}s:" >&2
       solar_client_async_busy "$install_root" | sed 's/^/  /' >&2 || true
       echo "Nothing was replaced and no work was stopped. The maintenance barrier stays; finish or cancel the work and run: solar client update --resume" >&2

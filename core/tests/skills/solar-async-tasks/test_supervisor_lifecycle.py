@@ -515,6 +515,63 @@ def test_the_update_drain_waits_for_the_real_supervisor_and_its_executions(rig):
     assert rig.status(task) == "completed" and not alive(pid)
 
 
+def test_stop_without_timeout_waits_for_the_active_execution(rig):
+    marker = rig.tmp / "stop-default.log"
+    task = rig.local("Default drain", _mark(rig, "sleep 3", marker), timeout=60)
+    _ready(rig)
+    wait_until(lambda: "start Default drain" in _lines(marker), 30)
+    stop = subprocess.Popen(["bash", str(lib.HERE / "stop_supervisor.sh"), "--drain"],
+                            env=rig.env, cwd=rig.workspace, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    try:
+        time.sleep(0.5)
+        assert stop.poll() is None, "the default drain must not treat the omitted timeout as zero seconds"
+        assert rig.status(task) == "active"
+        out, err = stop.communicate(timeout=30)
+        assert stop.returncode == 0, out + err
+        assert rig.status(task) == "completed"
+    finally:
+        if stop.poll() is None:
+            stop.kill()
+            stop.wait()
+
+
+def test_the_update_drain_waits_without_a_deadline_when_timeout_is_zero(rig):
+    marker = rig.tmp / "update-unbounded.log"
+    rel = _mark(rig, "sleep 3", marker)
+    task = rig.local("Long in flight", rel, timeout=60)
+    pid = _ready(rig)["identity"]["pid"]
+    wait_until(lambda: "start Long in flight" in _lines(marker), 30)
+    done, names = _drain_through_the_client(rig, 0)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert names == ["drain-start", "drain-done"]
+    assert rig.status(task) == "completed" and not alive(pid)
+
+
+@pytest.mark.parametrize("timeout", ["-1", "nan", "inf", "1.5", "+1", " 1"])
+def test_stop_rejects_invalid_timeout_values(rig, timeout):
+    stop = rig.script("stop_supervisor.sh", "--drain", "--timeout", timeout)
+    assert stop.returncode == 2
+    assert "whole number of seconds" in stop.stderr
+
+
+def test_an_unidentified_candidate_cannot_hold_an_unbounded_drain_forever(rig, monkeypatch):
+    candidate = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                 start_new_session=True)
+    try:
+        started = lib.process_start(candidate.pid)
+        assert started
+        lib.write_json_atomic(rig.ctx.candidate_file, {"pid": candidate.pid, "started": started})
+        monkeypatch.setattr(lib, "STARTING_LIMIT", 0.05)
+        began = time.monotonic()
+        code, result = lib.stop(rig.ctx, timeout=0, poll=0.01)
+        assert code == 2 and result["reason"] == "candidate_start_timeout"
+        assert time.monotonic() - began < 2
+    finally:
+        os.killpg(candidate.pid, signal.SIGTERM)
+        candidate.wait(timeout=10)
+
+
 def test_the_update_drain_gives_up_without_killing_when_the_execution_is_too_long(rig):
     marker = rig.tmp / "update-long.log"
     rel = _mark(rig, "sleep 6", marker)
