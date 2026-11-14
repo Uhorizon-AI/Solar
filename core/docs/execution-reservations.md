@@ -133,7 +133,8 @@ nothing, and an unreadable file counts as held.
 `solar client update` prepares the target in a staging copy (nothing of the live install changes),
 then the target's own `client_update_staged.sh` runs:
 
-1. barrier taken (`maintenance`); ticks paused (LaunchAgent booted out);
+1. report active supervisor tasks and their cancellation commands when available, then take the
+   barrier (`maintenance`) and pause ticks (LaunchAgent booted out);
 2. drain: the resident supervisor is asked to drain through `stop_supervisor.sh --drain` (when one
    runs: it stops dispatching, collects its executions and exits; nothing is killed), a one-shot worker of the
    previous design is waited for; by default the update waits until active work finishes. Set
@@ -147,7 +148,9 @@ then the target's own `client_update_staged.sh` runs:
 5. services start, code identity and schema are verified, the ticks resume, the barrier is released.
 
 A failure keeps the services stopped and the barrier held; `solar client update --resume` continues
-the same operation from its recorded phase. One process drives it at a time: an operation lock
+the same operation from its recorded phase. `solar status` shows the held phase and the resume
+command, along with the tasks still running during the drain when the supervisor can be identified.
+One process drives it at a time: an operation lock
 (`<runtime>/maintenance.lock`, the pid and start time of the driver) is held for the whole sequence,
 so a `--resume`, a second update or a sync is refused while the original is alive. A lock whose
 process is gone is taken over; one whose owner cannot be verified, now or when the lock was

@@ -2006,13 +2006,23 @@ solar_client_maintenance_report() {
 import json, sys
 try:
     data = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception:
+    if not isinstance(data, dict):
+        raise ValueError("expected a maintenance object")
+except (OSError, ValueError):
     print("Update in progress: the maintenance barrier is unreadable; do not delete it, ask for help")
     raise SystemExit(0)
 print(f"Update in progress: phase={data.get('phase')} from={data.get('from')} to={data.get('to')} "
       f"since {data.get('started_at')}")
 print("  Claims and launchers are refused until it finishes. Run: solar client update --resume")
 PY
+  local phase snapshot
+  phase="$(solar_client_maintenance_field phase)" || return 0
+  if [[ "$phase" == maintenance || "$phase" == ticks-paused ]]; then
+    snapshot="$(solar_client_running_snapshot)" || return 0
+    if [[ -n "$snapshot" ]]; then
+      solar_client_describe_running "${1:-$SOLAR_ROOT}" "$snapshot"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -2095,6 +2105,30 @@ for child in children[:MAX_SHOWN]:
     print(f"    request cancellation with: {command}   (an active task stops when its worker acknowledges it)")
 if len(children) > MAX_SHOWN:
     print(f"  ... and {len(children) - MAX_SHOWN} more")
+PY
+}
+
+# Read a supervisor snapshot for display. The drain still verifies the owner and waits under
+# the maintenance barrier, since the set of running tasks can change after this read.
+solar_client_running_snapshot() {
+  local runtime
+  runtime="$(solar_runtime_root)" || return 0
+  python3 - "$runtime" "${SOLAR_WORKSPACE:-}" "$_CLIENT_LIB_SCRIPT_DIR/../../solar-async-tasks/scripts" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+runtime, workspace, scripts = sys.argv[1:]
+sys.path.insert(0, scripts)
+import supervisor_lib
+
+ctx = supervisor_lib.Context(Path(runtime))
+recorded = supervisor_lib.read_json(ctx.identity_file)
+if (isinstance(recorded, dict) and recorded.get("state") in ("ready", "draining")
+        and recorded.get("workspace") == workspace and recorded.get("runtime") == runtime
+        and recorded.get("children")
+        and supervisor_lib.matches(recorded.get("pid"), recorded.get("started"))[0] == "alive"):
+    print(json.dumps({"children": recorded["children"]}))
 PY
 }
 
@@ -2420,6 +2454,14 @@ _solar_client_state_cutover_locked() {
         bash "$SOLAR_CLIENT_LAUNCHCTL" print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1 && launchagent_was_loaded=true
       elif launchctl print "gui/${UID}/${launchagent_label}" >/dev/null 2>&1; then
         launchagent_was_loaded=true
+      fi
+    fi
+    if [[ " $services" == *" async-supervisor "* ]]; then
+      local snapshot
+      snapshot="$(solar_client_running_snapshot)" || snapshot=""
+      if [[ -n "$snapshot" ]]; then
+        echo "Drain: active tasks will finish before the update replaces anything."
+        solar_client_describe_running "$install_root" "$snapshot" | sed 's/^/Drain: /'
       fi
     fi
     local from_ver from_commit staging
@@ -2748,6 +2790,8 @@ solar_client_update_view() {
         fi
         printf '  %s✓%s Target version prepared and checked\n' "$c_ok" "$c_off"
         continue ;;
+      "Drain: "*)
+        printf '%s\n' "$line"; continue ;;
       "async-tasks supervisor: stopped"*) stopped="${stopped:+$stopped, }supervisor"; continue ;;
       "State: stopping console") stopped="${stopped:+$stopped, }console"; continue ;;
       "State: stopping transport gateway") stopped="${stopped:+$stopped, }gateway"; continue ;;

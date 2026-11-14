@@ -751,6 +751,8 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
 
     try:
         wait_until(lambda: len([e for e in events() if e["event"] == "start"]) == 3, 45)
+        identity_file = supervisor_lib.Context(rig.rt).identity_file
+        wait_until(lambda: len((supervisor_lib.read_json(identity_file) or {}).get("children", [])) == 3, 20)
         extra = dict(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=str(rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"),
                      SOLAR_CLIENT_ASYNC_BUSY_COMMAND="exit 1", SOLAR_CLIENT_DRAIN_TIMEOUT="60",
                      SOLAR_CUTOVER_PS_OUTPUT_FILE=str(rig.tmp / "cutover-ps"))
@@ -759,11 +761,20 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
         update.start()
         wait_until(lambda: "drain-start" in rig.names(), 60)
         assert original.poll() is None and rig.marker() == "OLD"
+        report = subprocess.run(
+            ["bash", "-c", 'source "$1"; solar_client_maintenance_report "$2"', "_",
+             str(SCRIPTS / "client_lib.sh"), str(rig.install)],
+            env=env, cwd=rig.ws, capture_output=True, text=True, timeout=30)
+        assert report.returncode == 0, report.stderr
+        assert "phase=ticks-paused" in report.stdout and "solar client update --resume" in report.stdout
+        assert all(task in report.stdout for task in tasks)
         (double / "gates/release").touch()
         update.join(180)
         assert not update.is_alive()
         done = update_box["result"]
         assert done.returncode == 0, done.stdout + done.stderr
+        assert "Drain: active tasks will finish" in done.stdout
+        assert all(task in done.stdout for task in tasks)
         original.wait(timeout=10)
         assert original.returncode == 0 and rig.marker() == "NEW" and rig.barrier() is None
         with solar_state.session(rig.rt) as store:
