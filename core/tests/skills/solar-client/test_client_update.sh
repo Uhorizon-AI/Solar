@@ -716,7 +716,7 @@ drain_case "$MOCK_INSTALL_ROOT" "{\"children\": [$CHILD_ABC], \"state\": \"drain
 assert_ok "a drain that ran out of time still fails" test "$drain_ec" -ne 0
 assert_ok "the drain error names the task and its title" bash -c 'grep -q "task-abc · Review of the nightly report · agent" <<<"$1"' _ "$drain_err"
 assert_ok "the drain error says how long it has been running" bash -c 'grep -q "running [0-9]* min" <<<"$1"' _ "$drain_err"
-assert_ok "the drain error prints the cancel command with its runtime" bash -c +  'grep -q "request cancellation with: env .*SOLAR_RUNTIME_ROOT=.* python3 .*task_cancel.py - task-abc" <<<"$1"' _ "$drain_err"
+assert_ok "the drain error prints the cancel command with its runtime" bash -c 'grep -q "request cancellation with: env .*SOLAR_RUNTIME_ROOT=.* python3 .*task_cancel.py - task-abc" <<<"$1"' _ "$drain_err"
 assert_ok "the drain error keeps the resume instruction" bash -c 'grep -q "solar client update --resume" <<<"$1"' _ "$drain_err"
 
 SPACED_ROOT="$TMP/install with space"

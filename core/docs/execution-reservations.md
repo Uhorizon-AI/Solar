@@ -151,6 +151,9 @@ A failure keeps the services stopped and the barrier held; `solar client update 
 the same operation from its recorded phase. `solar status` shows the held phase and the resume
 command. In phases `maintenance` and `ticks-paused` it also shows running tasks when the
 supervisor can be identified. Later phases show only the maintenance summary.
+During the first update from a version without this status display, follow the
+`solar client update` output for drain progress. `solar status` gains the display
+once the target code has been installed.
 One process drives it at a time: an operation lock
 (`<runtime>/maintenance.lock`, the pid and start time of the driver) is held for the whole sequence,
 so a `--resume`, a second update or a sync is refused while the original is alive. A lock whose

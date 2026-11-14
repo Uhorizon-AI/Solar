@@ -754,6 +754,16 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
     original_start = supervisor_lib.process_start(original.pid)
     update = None
     update_output = rig.tmp / "update-output"
+    resume_output = rig.tmp / "resume-output"
+
+    def start_update(output_path, *args, timeout):
+        update_env = rig.env(**{**extra, "SOLAR_CLIENT_DRAIN_TIMEOUT": timeout})
+        rig.guard(update_env)
+        with output_path.open("w") as output:
+            return subprocess.Popen(
+                ["bash", str(old_lib.with_name("client_update.sh")), "--workspace", str(rig.ws),
+                 "--no-sync", *args], env=update_env, cwd=rig.ws, stdout=output,
+                stderr=subprocess.STDOUT)
 
     def status():
         # Exercise the target status entry point against the isolated runtime.
@@ -773,15 +783,9 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
         identity_file = supervisor_lib.Context(rig.rt).identity_file
         wait_until(lambda: len((supervisor_lib.read_json(identity_file) or {}).get("children", [])) == 3, 20)
         extra = dict(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=str(rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"),
-                     SOLAR_CLIENT_ASYNC_BUSY_COMMAND="exit 1", SOLAR_CLIENT_DRAIN_TIMEOUT="60",
+                     SOLAR_CLIENT_ASYNC_BUSY_COMMAND="exit 1",
                      SOLAR_CUTOVER_PS_OUTPUT_FILE=str(rig.tmp / "cutover-ps"))
-        update_env = rig.env(**extra)
-        rig.guard(update_env)
-        with update_output.open("w") as output:
-            update = subprocess.Popen(
-                ["bash", str(old_lib.with_name("client_update.sh")), "--workspace", str(rig.ws),
-                 "--ref", "v0.0.2", "--yes", "--no-sync"],
-                env=update_env, cwd=rig.ws, stdout=output, stderr=subprocess.STDOUT)
+        update = start_update(update_output, "--ref", "v0.0.2", "--yes", timeout="5")
         wait_until(lambda: "drain-start" in rig.names(), 60)
         assert original.poll() is None and rig.marker() == "OLD"
         commands = [
@@ -792,8 +796,17 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
         ]
         wait_until(lambda: all(command in update_output.read_text() for command in commands), 10)
         waiting_output = update_output.read_text()
-        assert "Waiting for active tasks to finish (configured limit: 60s)." in waiting_output
+        assert "Waiting for active tasks to finish (configured limit: 5s)." in waiting_output
         assert all(command in waiting_output for command in commands)
+        assert update.wait(timeout=30) != 0, update_output.read_text()
+        assert "drain-timeout" in rig.names()
+        assert original.poll() is None and rig.marker() == "OLD"
+        assert rig.barrier()["phase"] == "ticks-paused"
+
+        update = start_update(resume_output, "--resume", timeout="60")
+        wait_until(lambda: rig.names().count("drain-start") == 2, 30)
+        wait_until(lambda: all(f"  ! {command}" in resume_output.read_text() for command in commands), 10)
+        assert "  ! Waiting for active tasks to finish (configured limit: 60s)." in resume_output.read_text()
         assert update.poll() is None
         report = subprocess.run(
             ["bash", "-c", 'source "$1"; solar_client_maintenance_report "$2"', "_",
@@ -806,7 +819,7 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
         assert "phase=ticks-paused" in maintenance
         assert all(command in maintenance for command in commands)
         (double / "gates/release").touch()
-        assert update.wait(timeout=180) == 0, update_output.read_text()
+        assert update.wait(timeout=180) == 0, resume_output.read_text()
         original.wait(timeout=10)
         assert original.returncode == 0 and rig.marker() == "NEW" and rig.barrier() is None
         assert status() == ""
