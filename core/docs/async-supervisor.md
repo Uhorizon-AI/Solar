@@ -100,7 +100,8 @@ Blocked entries are re-judged every few seconds and clear on their own when the 
 
 `stop_supervisor.sh --drain [--timeout N]` (the contract `solar_client_drain_async` relies on) writes a control
 request bound to the identified process, then waits: the supervisor stops dispatching, collects its executions and
-exits, releasing the lock. Exit codes: `0` gone with nothing pending (or none was running); `1` still draining at
+exits, releasing the lock. By default it waits until all executions finish; a positive `--timeout N` sets a
+deadline, while `--timeout 0` waits without one. Exit codes: `0` gone with nothing pending (or none was running); `1` still draining at
 the deadline (it reports the pending executions; nothing is killed); `2` refused, the owner cannot be identified;
 `3` gone but blocked executions remain. It never removes the lock and never signals a process by pid. `SIGTERM` to the
 supervisor is the same request.

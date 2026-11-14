@@ -23,6 +23,7 @@ import argparse
 import calendar
 import fcntl
 import json
+import math
 import os
 import re
 import signal
@@ -53,6 +54,16 @@ def _env_seconds(name: str, default: float, low: float, high: float) -> float:
     except ValueError:
         return default
     return min(max(value, low), high)
+
+
+def _drain_timeout(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("timeout must be a non-negative number of seconds") from exc
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError("timeout must be a non-negative number of seconds")
+    return value
 
 
 # Timings of the contract. The environment can only move how long an observer waits or how stale
@@ -470,7 +481,9 @@ def stop(ctx: Context, *, timeout: float, poll: float = 0.2, requested_by: str =
     Exit codes: 0 gone with nothing pending; 1 still draining when the time ran out (nothing is
     killed); 2 refused, the owner cannot be identified; 3 gone but executions with an uncertain
     owner or failed cleanup remain blocked."""
-    deadline = time.monotonic() + timeout
+    # Zero means wait for active executions to finish. Updates must not impose an
+    # arbitrary deadline on user work; callers may still choose a bounded drain explicitly.
+    deadline = time.monotonic() + timeout if timeout > 0 else None
     asked_for: Optional[tuple] = None
     last_seen: dict = {}
     while True:
@@ -500,7 +513,7 @@ def stop(ctx: Context, *, timeout: float, poll: float = 0.2, requested_by: str =
             state = {"state": "stopped", "reason": "not_running" if asked_for is None else "drained",
                      "pending": pending}
             return (3, dict(state, reason="blocked_executions")) if pending else (0, state)
-        if time.monotonic() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             current = read_json(ctx.identity_file) or last_seen or {}
             return 1, {"state": "draining", "reason": "timeout",
                        "children": current.get("children") or [], "blocked": current.get("blocked") or [],
@@ -554,7 +567,8 @@ def main(argv: list[str]) -> int:
     sub.add_parser("poke")
     stopper = sub.add_parser("stop")
     stopper.add_argument("--drain", action="store_true")
-    stopper.add_argument("--timeout", type=float, default=120.0)
+    stopper.add_argument("--timeout", type=_drain_timeout, default=0.0,
+                         help="maximum drain time in seconds; 0 waits until executions finish (default)")
     args = parser.parse_args(argv)
     ctx = Context(Path(args.runtime) if args.runtime else None)
     if args.cmd == "observe":

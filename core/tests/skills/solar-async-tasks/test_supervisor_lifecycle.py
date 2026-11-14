@@ -515,6 +515,18 @@ def test_the_update_drain_waits_for_the_real_supervisor_and_its_executions(rig):
     assert rig.status(task) == "completed" and not alive(pid)
 
 
+def test_the_update_drain_waits_without_a_deadline_when_timeout_is_zero(rig):
+    marker = rig.tmp / "update-unbounded.log"
+    rel = _mark(rig, "sleep 3", marker)
+    task = rig.local("Long in flight", rel, timeout=60)
+    pid = _ready(rig)["identity"]["pid"]
+    wait_until(lambda: "start Long in flight" in _lines(marker), 30)
+    done, names = _drain_through_the_client(rig, 0)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert names == ["drain-start", "drain-done"]
+    assert rig.status(task) == "completed" and not alive(pid)
+
+
 def test_the_update_drain_gives_up_without_killing_when_the_execution_is_too_long(rig):
     marker = rig.tmp / "update-long.log"
     rel = _mark(rig, "sleep 6", marker)
