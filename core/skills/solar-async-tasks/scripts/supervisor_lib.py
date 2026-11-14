@@ -474,8 +474,9 @@ def stop(ctx: Context, *, timeout: float, poll: float = 0.2, requested_by: str =
     """Ask the identified supervisor to stop dispatching, collect its executions and exit.
 
     Exit codes: 0 gone with nothing pending; 1 still draining when the time ran out (nothing is
-    killed); 2 refused, the owner cannot be identified; 3 gone but executions with an uncertain
-    owner or failed cleanup remain blocked."""
+    killed); 2 refused, the owner cannot be identified or a live candidate did not publish its
+    identity within STARTING_LIMIT (candidate_start_timeout); 3 gone but executions with an
+    uncertain owner or failed cleanup remain blocked."""
     # Zero means wait for active executions to finish. Updates must not impose an
     # arbitrary deadline on user work; callers may still choose a bounded drain explicitly.
     deadline = time.monotonic() + timeout if timeout > 0 else None

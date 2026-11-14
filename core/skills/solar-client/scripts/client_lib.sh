@@ -2140,7 +2140,9 @@ solar_client_drain_async() {
     [[ -n "$stop_out" ]] && printf '%s\n' "$stop_out"
     if [[ "$stop_code" -ne 0 ]]; then
       stop_reason="$(printf '%s\n' "$stop_out" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1]).get("reason", ""))' 2>/dev/null || true)"
-      # stop_supervisor.sh: 1 = still draining at the deadline, 2 = its owner cannot be identified,
+      # stop_supervisor.sh: 1 = still draining at the deadline.
+      # 2 = owner cannot be identified or a live candidate did not publish its identity in time
+      #     (candidate_start_timeout).
       # 3 = it left but executions with an uncertain owner or a failed cleanup remain blocked.
       # Each needs something different from the person, and none of them replaced anything.
       case "$stop_code" in
