@@ -44,8 +44,9 @@ The first router run after a legacy updater performs the same one-time migration
 The target version is first prepared and checked in a staging copy; the live install is
 not touched until the update runs. The sequence then runs from the staged copy
 (client_update_staged.sh): a maintenance barrier refuses every claim and launcher, the
-ticks are paused, the async work drains until active executions finish (an optional timeout aborts
-the update before anything is replaced), the other services stop, and under the exclusive state lock the
+ticks are paused, the async work drains until active executions finish (`SOLAR_CLIENT_DRAIN_TIMEOUT`
+sets an optional positive whole-number limit in seconds; unset or `0` means no deadline), the other
+services stop, and under the exclusive state lock the
 runtime is backed up, the code is replaced and the schema is migrated and validated. Only
 then are the services that were running started again, the code and schema verified, the
 ticks resumed and the barrier released. A failure keeps the barrier and the services

@@ -227,6 +227,23 @@ def test_the_whole_sequence_runs_in_order_with_an_old_supervisor_and_schema(rig)
     assert not list(rig.tmp.glob("solar-update-staging.*"))               # released: the staging copy is gone
 
 
+def test_an_update_uses_the_staged_stop_helper_when_the_live_install_is_old(rig):
+    rig.runtime_state(5)
+    live_stop = rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"
+    called = rig.tmp / "old-stop-called"
+    sh(live_stop, f'echo called > "{called}"\nexit 1\n')
+    env_extra = {
+        "SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE": "gateway,host,async-supervisor",
+        "SOLAR_CLIENT_ASYNC_BUSY_COMMAND": "exit 1",
+        "SOLAR_CLIENT_DRAIN_TIMEOUT": "0",
+        "SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT": "",
+    }
+    done = rig.update("--ref", "v0.0.2", "--yes", env_extra=env_extra)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not called.exists(), "the staged updater must not use the old live stop helper"
+    assert rig.marker() == "NEW" and rig.barrier() is None
+
+
 def test_the_first_installation_runs_the_staged_entrypoint_with_explicit_paths(rig, tmp_path):
     rig.runtime_state(5)
     staging = tmp_path / "prepared"
@@ -295,6 +312,19 @@ def test_a_drain_that_times_out_replaces_nothing_and_a_resume_finishes_it(rig):
                                      "readiness-ok", "launchctl-bootstrap", "release"])
     assert rig.marker() == "NEW" and rig.schema() == solar_state.SCHEMA_VERSION and rig.barrier() is None
     assert not list(rig.tmp.glob("solar-update-staging.*"))
+
+
+def test_an_invalid_drain_timeout_is_rejected_before_it_starts_a_drain(rig):
+    env = rig.env(SOLAR_CLIENT_DRAIN_TIMEOUT="abc")
+    rig.guard(env)
+    install = rig.install
+    done = subprocess.run(
+        ["bash", "-c", 'source "$1"; solar_client_drain_async "$2"', "_",
+         str(SCRIPTS / "client_lib.sh"), str(install)],
+        env=env, cwd=rig.ws, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 1 and "whole number of seconds" in done.stderr
+    assert rig.names() == []
+    assert rig.barrier() is None
 
 
 def test_a_supervisor_that_cannot_be_drained_stops_the_update_before_it_changes_anything(rig):

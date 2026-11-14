@@ -214,8 +214,8 @@ command exits non-zero.
 A real update prepares the target version in a staging copy first (the live install is not
 touched), then runs the target's own `client_update_staged.sh`: a maintenance barrier refuses every
 claim and launcher, the ticks are paused, the async work drains until active executions finish
-(`SOLAR_CLIENT_DRAIN_TIMEOUT` sets an optional positive limit in seconds; if it expires, nothing
-is replaced), the console and gateway stop, and under the exclusive state lock the
+(`SOLAR_CLIENT_DRAIN_TIMEOUT` accepts a positive whole number of seconds; unset or `0` means no
+deadline; if a positive limit expires, nothing is replaced), the console and gateway stop, and under the exclusive state lock the
 runtime is backed up, the code is replaced and the schema migrated and validated. Only then are
 the services that were running started, the code and schema verified, the ticks resumed and the
 barrier released (`async-supervisor` is among the services detected and drained). A failure keeps

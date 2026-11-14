@@ -2098,26 +2098,33 @@ if len(children) > MAX_SHOWN:
 PY
 }
 
-# The adapter that lets the old executors finish. The one-shot worker has no drain request:
-# the ticks are already paused, so it is waited for. The resident supervisor (when one runs)
-# is asked to drain through its own stop script and never killed. No uncertain owner is
-# stopped, killed or retried: a timeout ends the update here.
+# The one-shot worker has no drain request: the ticks are already paused, so it is waited for.
+# The resident supervisor is asked to drain through the stop script shipped with this updater,
+# not the one in the live install, which may predate the no-deadline contract. The default wait
+# has no deadline; SOLAR_CLIENT_DRAIN_TIMEOUT opts into a bounded wait. No task is killed.
 # Args: install_root [timeout_seconds]
 solar_client_drain_async() {
   local install_root="$1"
   local timeout="${2:-${SOLAR_CLIENT_DRAIN_TIMEOUT:-0}}"
   local stop_script service seen_supervisor=false waited=0
+  local updater_stop_script="${_CLIENT_LIB_SCRIPT_DIR}/../../solar-async-tasks/scripts/stop_supervisor.sh"
   if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: the async drain timeout must be a non-negative number of seconds (got: $timeout)." >&2
+    echo "ERROR: the async drain timeout must be a non-negative whole number of seconds (got: $timeout)." >&2
     return 1
   fi
-  stop_script="${SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT:-${install_root}/core/skills/solar-async-tasks/scripts/stop_supervisor.sh}"
+  if [[ -n "${SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT:-}" ]]; then
+    stop_script="$SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT"
+  elif [[ -f "$updater_stop_script" ]]; then
+    stop_script="$updater_stop_script"
+  else
+    stop_script="${install_root}/core/skills/solar-async-tasks/scripts/stop_supervisor.sh"
+  fi
   while IFS= read -r service; do
     [[ "$service" == "async-supervisor" ]] && seen_supervisor=true
   done < <(solar_client_running_services "$install_root")
   solar_client_update_event drain-start "timeout=$timeout" "supervisor=$seen_supervisor"
   if [[ "$timeout" == "0" ]]; then
-    echo "Drain: waiting for active executions to finish (no deadline)"
+    echo "Drain: waiting for active executions to finish without a deadline. Press Ctrl-C to pause, cancel the task, then run: solar client update --resume. Set SOLAR_CLIENT_DRAIN_TIMEOUT=<whole seconds> to cap the wait."
   fi
   if [[ "$seen_supervisor" == true ]]; then
     if [[ ! -f "$stop_script" ]]; then
