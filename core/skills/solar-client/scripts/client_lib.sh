@@ -2135,10 +2135,11 @@ solar_client_drain_async() {
     echo "Drain: asking the async supervisor to finish its executions"
     # The output is captured (not streamed) so a drain that runs out of time can say what it waited
     # for; it is printed unchanged once the script ends.
-    local stop_code=0 stop_out=""
+    local stop_code=0 stop_out="" stop_reason=""
     stop_out="$(bash "$stop_script" --drain --timeout "$timeout")" || stop_code=$?
     [[ -n "$stop_out" ]] && printf '%s\n' "$stop_out"
     if [[ "$stop_code" -ne 0 ]]; then
+      stop_reason="$(printf '%s\n' "$stop_out" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1]).get("reason", ""))' 2>/dev/null || true)"
       # stop_supervisor.sh: 1 = still draining at the deadline, 2 = its owner cannot be identified,
       # 3 = it left but executions with an uncertain owner or a failed cleanup remain blocked.
       # Each needs something different from the person, and none of them replaced anything.
@@ -2146,8 +2147,14 @@ solar_client_drain_async() {
         1) echo "ERROR: the async supervisor did not drain: it was still collecting its executions after ${timeout}s. Nothing was replaced and nothing was killed; the maintenance barrier stays. Let them finish (or cancel them) and run: solar client update --resume" >&2
            solar_client_describe_running "$install_root" "$stop_out" >&2
            solar_client_update_event drain-timeout "reason=supervisor" "code=$stop_code" ;;
-        2) echo "ERROR: the async supervisor's process could not be identified (the process table did not answer), so it was not asked to stop. Nothing was replaced; the maintenance barrier stays. Check the process table (ps) and the supervisor's identity with: bash $(dirname "$stop_script")/check_async_tasks.sh, then run: solar client update --resume" >&2
-           solar_client_update_event drain-refused "reason=supervisor_unidentified" "code=$stop_code" ;;
+        2)
+           if [[ "$stop_reason" == "candidate_start_timeout" ]]; then
+             echo "ERROR: the async supervisor candidate stayed alive without publishing its identity. Nothing was replaced; the maintenance barrier stays. Check the candidate with: bash $(dirname "$stop_script")/check_async_tasks.sh, resolve its process, then run: solar client update --resume" >&2
+             solar_client_update_event drain-refused "reason=candidate_start_timeout" "code=$stop_code"
+           else
+             echo "ERROR: the async supervisor's process could not be identified (the process table did not answer), so it was not asked to stop. Nothing was replaced; the maintenance barrier stays. Check the process table (ps) and the supervisor's identity with: bash $(dirname "$stop_script")/check_async_tasks.sh, then run: solar client update --resume" >&2
+             solar_client_update_event drain-refused "reason=${stop_reason:-supervisor_unidentified}" "code=$stop_code"
+           fi ;;
         3) echo "ERROR: the async supervisor stopped, but executions with an uncertain owner or a failed cleanup remain blocked (listed above). Nothing was replaced; the maintenance barrier stays. Resolve them (confirm their processes are gone, or fail/cancel the tasks) and run: solar client update --resume" >&2
            solar_client_update_event drain-blocked "reason=blocked_executions" "code=$stop_code" ;;
         *) echo "ERROR: stop_supervisor.sh failed (exit $stop_code). Nothing was replaced; the maintenance barrier stays." >&2

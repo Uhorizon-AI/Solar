@@ -519,6 +519,7 @@ def test_stop_without_timeout_waits_for_the_active_execution(rig):
     marker = rig.tmp / "stop-default.log"
     task = rig.local("Default drain", _mark(rig, "sleep 3", marker), timeout=60)
     _ready(rig)
+    wait_until(lambda: "start Default drain" in _lines(marker), 30)
     stop = subprocess.Popen(["bash", str(lib.HERE / "stop_supervisor.sh"), "--drain"],
                             env=rig.env, cwd=rig.workspace, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)

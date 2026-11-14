@@ -103,7 +103,8 @@ request bound to the identified process, then waits: the supervisor stops dispat
 exits, releasing the lock. By default it waits until all executions finish; a positive whole-number
 `--timeout N` seconds sets a deadline, while `--timeout 0` waits without one. A candidate that remains
 alive without publishing its identity is bounded by `STARTING_LIMIT`. Exit codes: `0` gone with nothing pending (or none was running); `1` still draining at
-the deadline (it reports the pending executions; nothing is killed); `2` refused, the owner cannot be identified;
+the deadline (it reports the pending executions; nothing is killed); `2` refused, the owner cannot be identified
+or a candidate stayed alive without publishing its identity (`STARTING_LIMIT`);
 `3` gone but blocked executions remain. It never removes the lock and never signals a process by pid. `SIGTERM` to the
 supervisor is the same request.
 

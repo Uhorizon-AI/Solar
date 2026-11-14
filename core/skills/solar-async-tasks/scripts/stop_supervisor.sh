@@ -10,8 +10,8 @@
 # It never removes the lock and never kills a process: not the supervisor, not an execution.
 #
 # Exit codes: 0 gone and nothing pending (or none was running) · 1 still draining at the deadline ·
-#             2 refused: the owner cannot be identified · 3 gone, but executions with an uncertain
-#             owner or a failed cleanup remain blocked.
+#             2 refused: the owner cannot be identified or a candidate exceeded STARTING_LIMIT ·
+#             3 gone, but executions with an uncertain owner or a failed cleanup remain blocked.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
