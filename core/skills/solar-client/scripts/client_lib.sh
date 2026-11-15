@@ -2160,6 +2160,7 @@ solar_client_warn_running() {
 # The resident supervisor is asked to drain through the stop script shipped with this updater,
 # not the one in the live install, which may predate the no-deadline contract. The default wait
 # has no deadline; SOLAR_CLIENT_DRAIN_TIMEOUT opts into a bounded wait. No task is killed.
+# With an older helper, only the subsequent process polling loop can announce an unbounded wait.
 # Args: install_root [timeout_seconds]
 solar_client_drain_async() {
   local install_root="$1"

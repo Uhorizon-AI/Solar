@@ -259,6 +259,13 @@ test "$polls" -eq 3
     assert not rig.busy.exists()
 
 
+def test_bundled_stop_helper_declares_wait_notice_support():
+    helper = CORE / "skills/solar-async-tasks/scripts/stop_supervisor.sh"
+    assert "# Supports --wait-notice" in helper.read_text().splitlines(), (
+        "The update client requires this exact capability marker to request the notice."
+    )
+
+
 @pytest.mark.parametrize("use_override", [True, False], ids=["override", "installed-fallback"])
 def test_an_older_stop_helper_accepts_the_default_drain(rig, use_override):
     helper = rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"

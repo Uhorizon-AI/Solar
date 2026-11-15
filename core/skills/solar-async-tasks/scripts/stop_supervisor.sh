@@ -2,6 +2,7 @@
 # stop_supervisor.sh — ask the resident supervisor to drain, and wait for it.
 #
 #   stop_supervisor.sh --drain [--timeout N] [--wait-notice MESSAGE]
+# The update client checks the following exact line before passing the option.
 # Supports --wait-notice
 #
 # The supervisor is identified by its published pid and start time. It is asked (through a control
