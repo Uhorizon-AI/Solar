@@ -893,7 +893,10 @@ def _strip_execution_error(body: str, *, title: Optional[str],
             consumed += len(line)
 
     if error_start is not None:
-        return body[:prefix] + text[:error_start]
+        trimmed = body[:prefix] + text[:error_start]
+        if not trimmed.endswith(("\n", "\r")):
+            trimmed += "\r\n" if "\r\n" in body else "\n"
+        return trimmed
     return body
 
 
@@ -1239,7 +1242,7 @@ def _after_snapshot(text: str, snapshot: Optional[str]) -> Optional[str]:
     if snapshot is None or not text.startswith(snapshot):
         return None
     rest = text[len(snapshot):]
-    if rest[:1] not in ("", "\n"):
+    if rest[:1] not in ("", "\n", "\r"):
         return None
     first = next((line for line in rest.splitlines() if line.strip()), None)
     if first is not None and not _is_runtime_heading(first):
@@ -3025,8 +3028,8 @@ class Session:
                 readiness.update(
                     code="task_approval_required",
                     content_approval=approval,
-                    message=(f"{task_id}: content approval is {approval}; "
-                             "return it to draft and approve it again"),
+                    message=(f"{task_id}: content approval is {approval}; return it to draft, "
+                             "remove any unapproved failure text from the draft, and approve it again"),
                     next_operation=dict(tool="solar_execute", arguments=dict(
                         operation="task.return_to_draft", arguments=dict(
                             task_id=task_id, expected_row_version=row["row_version"]))))
@@ -3035,6 +3038,12 @@ class Session:
             if approval is not None:
                 refuse(approval)
             snapshot = _field(pairs, "approved_definition")
+            text = definition_text(row["body"], title)
+            tail = _after_snapshot(text, snapshot)
+            if (snapshot is not None and text.startswith(snapshot) and tail is None
+                    and any(line.rstrip("\r\n") == "## Execution Error"
+                            for line in text[len(snapshot):].splitlines(keepends=True))):
+                refuse("mismatch")
             requeued_body = _strip_execution_error(
                 row["body"], title=title, approved_definition=snapshot)
             approval_after_trim = approval_state(pairs, requeued_body)

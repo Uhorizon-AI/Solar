@@ -172,6 +172,44 @@ def test_approve_cancel_and_requeue_keep_scope(ready):
             s.task_approve("missing")
 
 
+def test_requeue_strips_generated_error_after_crlf_snapshot(ready):
+    with session(ready, auto_backup=False) as s:
+        task = s.task_create([("title", '"T"')], "\r\n# T\r\n\r\nDo the work.\r\n",
+                             status="draft")
+        s.task_approve(task)
+        claim = s.task_claim_detail(task, "test")
+        s.task_fail(task, "failure", token=claim["token"])
+        snapshot = dict((k, solar_state.value_of(v)) for k, v in s.task_get(task)["frontmatter"])[
+            "approved_definition"]
+        # Model the executor's CRLF output immediately after the approved snapshot.
+        s.task_set_body(task, "\r\n# T\r\n\r\n" + snapshot +
+                        "\r\n## Execution Error\r\n- error: runtime failure\r\n")
+        s.task_requeue(task, expected_row_version=s.task_get(task)["row_version"])
+        requeued = s.task_get(task)
+        assert requeued["status"] == "queued"
+        assert "## Execution Error" not in requeued["body"]
+        assert requeued["body"].endswith("\r\n")
+        assert s.task_claim_detail(task, "test-again")["claimed"]
+
+
+def test_requeue_refuses_error_heading_without_snapshot_separator(ready):
+    with session(ready, auto_backup=False) as s:
+        task = s.task_create([("title", '"T"')], "\n# T\n\nDo the work.\n",
+                             status="draft")
+        s.task_approve(task)
+        claim = s.task_claim_detail(task, "test")
+        s.task_fail(task, "failure", token=claim["token"])
+        snapshot = dict((k, solar_state.value_of(v)) for k, v in s.task_get(task)["frontmatter"])[
+            "approved_definition"]
+        s.task_set_body(task, "\n# T\n\n" + snapshot +
+                        "## Execution Error\n- error: runtime failure\n")
+        with pytest.raises(solar_state.TaskAuthorizationRefused) as exc:
+            s.task_requeue(task, expected_row_version=s.task_get(task)["row_version"])
+        assert exc.value.code == "task_approval_required"
+        assert exc.value.readiness["content_approval"] == "mismatch"
+        assert s.task_get(task)["status"] == "error"
+
+
 def test_cancel_rolls_back_when_the_transition_is_refused(ready):
     with session(ready, auto_backup=False) as s:
         tid = s.task_create([("title", '"q"'), ("object", '"o"')], status="queued")
