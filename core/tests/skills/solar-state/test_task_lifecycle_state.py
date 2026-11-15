@@ -556,7 +556,7 @@ def test_cancel_and_requeue_honour_an_expected_version(ready):
         assert not store.cancellation_requested(queued)
         failed = make(store, status="queued")
         store.task_claim_next("w", exclude=[queued])
-        store.task_fail(failed, "boom", token=token_of(store, failed))
+        store.task_fail(failed, "## Execution Error\n- error: boom\n", token=token_of(store, failed))
         version = store.task_get(failed)["row_version"]
         with pytest.raises(TaskChanged):
             store.task_requeue(failed, expected_row_version=version + 1)
