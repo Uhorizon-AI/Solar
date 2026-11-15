@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.63.1] - 2026-11-15
+
 ### Fixed
 - task.requeue: refuse to queue a failed task whose content approval is absent, legacy or mismatched, and return the direct draft-recovery operation; valid unchanged approvals still requeue with their consent intact.
 - task.requeue: trim the generated execution error only after the approved definition, then verify the stored approval still covers the resulting body before queueing.
