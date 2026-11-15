@@ -2195,13 +2195,16 @@ solar_client_drain_async() {
     # when it sees executions, including ones published after the initial snapshot.
     local stop_code=0 stop_out="" stop_reason=""
     local -a stop_args=(--drain --timeout "$timeout")
-    if [[ -n "$drain_notice" ]]; then
+    # Only helpers that declare the option receive it. Installed and overridden
+    # helpers may predate it, so keep their original arguments.
+    if [[ -n "$drain_notice" ]] && grep -Fxq -- '# Supports --wait-notice' "$stop_script"; then
       stop_args+=(--wait-notice "$drain_notice")
     fi
     stop_out="$(bash "$stop_script" "${stop_args[@]}")" || stop_code=$?
     [[ -n "$stop_out" ]] && printf '%s\n' "$stop_out"
     # If the supervisor announced the wait, do not repeat it for remaining legacy work.
-    if [[ "$stop_out" == *'"wait_notice_shown": true'* ]]; then
+    if [[ "$stop_code" -eq 0 && -n "$drain_notice" && -n "$stop_out" ]] &&
+        printf '%s\n' "$stop_out" | python3 -c 'import json, sys; sys.exit(json.loads(sys.stdin.read().splitlines()[-1]).get("wait_notice_shown") is not True)' 2>/dev/null; then
       drain_notice=""
     fi
     if [[ "$stop_code" -ne 0 ]]; then

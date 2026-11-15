@@ -474,6 +474,9 @@ def stop(ctx: Context, *, timeout: float, poll: float = 0.2,
          requested_by: str = "stop_supervisor", wait_notice: str = "") -> tuple[int, dict]:
     """Ask the identified supervisor to stop dispatching, collect its executions and exit.
 
+    In an unbounded drain, the optional notice is emitted once a live supervisor
+    reports children. Candidate startup and blocked records alone do not trigger it.
+
     Exit codes: 0 gone with nothing pending; 1 still draining when the time ran out (nothing is
     killed); 2 refused, the owner cannot be identified or a live candidate did not publish its
     identity within STARTING_LIMIT (candidate_start_timeout); 3 gone but executions with an

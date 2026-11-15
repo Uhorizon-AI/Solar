@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # stop_supervisor.sh — ask the resident supervisor to drain, and wait for it.
 #
-#   stop_supervisor.sh --drain [--timeout N]
+#   stop_supervisor.sh --drain [--timeout N] [--wait-notice MESSAGE]
+# Supports --wait-notice
 #
 # The supervisor is identified by its published pid and start time. It is asked (through a control
 # file bound to that identity) to stop dispatching, collect its executions and close its lock when

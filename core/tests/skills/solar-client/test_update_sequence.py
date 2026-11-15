@@ -259,6 +259,43 @@ test "$polls" -eq 3
     assert not rig.busy.exists()
 
 
+@pytest.mark.parametrize("use_override", [True, False], ids=["override", "installed-fallback"])
+def test_an_older_stop_helper_accepts_the_default_drain(rig, use_override):
+    helper = rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"
+    sh(helper, '[[ "$#" -eq 3 && "$1" == --drain && "$2" == --timeout && "$3" == 0 ]] || exit 2\n'
+               'echo \'{"state":"stopped","reason":"drained"}\'\n')
+    env = rig.env(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=str(helper) if use_override else "",
+                  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="async-supervisor",
+                  SOLAR_CLIENT_ASYNC_BUSY_COMMAND="exit 1", SOLAR_CLIENT_DRAIN_TIMEOUT="0")
+    rig.guard(env)
+    # Point the staged-helper lookup outside either install to exercise its fallback.
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; _CLIENT_LIB_SCRIPT_DIR="$3"; solar_client_drain_async "$2"',
+         "_", str(SCRIPTS / "client_lib.sh"), str(rig.install), str(rig.tmp / "missing-staging")],
+        env=env, cwd=rig.ws, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"reason":"drained"' in result.stdout
+    assert "without a deadline" not in result.stdout + result.stderr
+    assert "drain-done" in rig.names()
+
+
+def test_compact_stop_result_prevents_repeating_the_notice_for_remaining_work(rig):
+    helper = sh(rig.tmp / "stop.sh", '# Supports --wait-notice\n'
+                '[[ "$4" == --wait-notice ]] || exit 2\n'
+                'printf "%s\\n" "$5" >&2\n'
+                'echo \'{"state":"stopped","wait_notice_shown":true}\'\n')
+    env = rig.env(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=helper,
+                  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="async-supervisor")
+    rig.guard(env)
+    script = 'source "$1"; busy_flag="$3"; sleep() { rm -f "$busy_flag"; }; solar_client_drain_async "$2" 0'
+    result = subprocess.run(
+        ["bash", "-c", script, "_", str(SCRIPTS / "client_lib.sh"), str(rig.install), str(rig.busy)],
+        env=env, cwd=rig.ws, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (result.stdout + result.stderr).count("without a deadline") == 1
+    assert not rig.busy.exists()
+
+
 def test_drain_announces_an_execution_published_after_the_first_supervisor_read(rig, monkeypatch):
     scripts = CORE / "skills/solar-async-tasks/scripts"
     monkeypatch.syspath_prepend(str(scripts))
