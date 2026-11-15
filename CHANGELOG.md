@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.63.2] - 2026-11-15
+
 ### Fixed
 - Release CI: verify the published release through the authenticated GitHub API so anonymous API failures do not report a successful publication as failed.
 - Client update: show the no-deadline drain notice only when waiting for active executions.
