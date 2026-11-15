@@ -470,7 +470,8 @@ def ensure(ctx: Context, *, budget: float = HANDSHAKE_BUDGET) -> dict:
 # Drain
 # ---------------------------------------------------------------------------
 
-def stop(ctx: Context, *, timeout: float, poll: float = 0.2, requested_by: str = "stop_supervisor") -> tuple[int, dict]:
+def stop(ctx: Context, *, timeout: float, poll: float = 0.2,
+         requested_by: str = "stop_supervisor", wait_notice: str = "") -> tuple[int, dict]:
     """Ask the identified supervisor to stop dispatching, collect its executions and exit.
 
     Exit codes: 0 gone with nothing pending; 1 still draining when the time ran out (nothing is
@@ -484,6 +485,7 @@ def stop(ctx: Context, *, timeout: float, poll: float = 0.2, requested_by: str =
     last_seen: dict = {}
     candidate_target: Optional[tuple] = None
     candidate_deadline: Optional[float] = None
+    notice_shown = False
     while True:
         recorded = read_json(ctx.identity_file)
         owner_alive = False
@@ -522,6 +524,8 @@ def stop(ctx: Context, *, timeout: float, poll: float = 0.2, requested_by: str =
             pending = (read_json(ctx.identity_file) or last_seen or {}).get("blocked") or []
             state = {"state": "stopped", "reason": "not_running" if asked_for is None else "drained",
                      "pending": pending}
+            if notice_shown:
+                state["wait_notice_shown"] = True
             return (3, dict(state, reason="blocked_executions")) if pending else (0, state)
         if deadline is not None and time.monotonic() >= deadline:
             current = read_json(ctx.identity_file) or last_seen or {}
@@ -529,6 +533,9 @@ def stop(ctx: Context, *, timeout: float, poll: float = 0.2, requested_by: str =
                        "children": current.get("children") or [], "blocked": current.get("blocked") or [],
                        "detail": "the supervisor was asked to drain and is still collecting its executions; "
                                  "nothing was killed"}
+        if wait_notice and deadline is None and not notice_shown and owner_alive and last_seen.get("children"):
+            print(wait_notice, file=sys.stderr, flush=True)
+            notice_shown = True
         time.sleep(poll)
 
 
@@ -579,6 +586,8 @@ def main(argv: list[str]) -> int:
     stopper.add_argument("--drain", action="store_true")
     stopper.add_argument("--timeout", type=_drain_timeout, default=0,
                          help="maximum drain time in whole seconds; 0 waits until executions finish (default)")
+    stopper.add_argument("--wait-notice", default="",
+                         help="write this message once to stderr when waiting without a deadline for executions")
     args = parser.parse_args(argv)
     ctx = Context(Path(args.runtime) if args.runtime else None)
     if args.cmd == "observe":
@@ -609,7 +618,7 @@ def main(argv: list[str]) -> int:
         if not args.drain:
             print("stop_supervisor.sh only drains: pass --drain", file=sys.stderr)
             return 64
-        code, result = stop(ctx, timeout=args.timeout)
+        code, result = stop(ctx, timeout=args.timeout, wait_notice=args.wait_notice)
         _emit(result)
         return code
     return 64

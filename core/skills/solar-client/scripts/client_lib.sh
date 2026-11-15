@@ -2164,7 +2164,7 @@ solar_client_warn_running() {
 solar_client_drain_async() {
   local install_root="$1"
   local timeout="${2:-${SOLAR_CLIENT_DRAIN_TIMEOUT:-0}}"
-  local stop_script service seen_supervisor=false waited=0 drain_notice="" snapshot=""
+  local stop_script service seen_supervisor=false waited=0 drain_notice=""
   local updater_stop_script="${_CLIENT_LIB_SCRIPT_DIR}/../../solar-async-tasks/scripts/stop_supervisor.sh"
   if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
     echo "ERROR: the async drain timeout must be a non-negative whole number of seconds (got: $timeout)." >&2
@@ -2190,19 +2190,20 @@ solar_client_drain_async() {
       solar_client_update_event drain-refused "reason=no_supervisor_stop"
       return 1
     fi
-    if [[ -n "$drain_notice" ]]; then
-      snapshot="$(solar_client_running_snapshot)" || snapshot=""
-      if [[ -n "$snapshot" ]]; then
-        printf '%s\n' "$drain_notice"
-        drain_notice=""
-      fi
-    fi
     echo "Drain: asking the async supervisor to finish its executions"
-    # The output is captured (not streamed) so a drain that runs out of time can say what it waited
-    # for; it is printed unchanged once the script ends.
+    # Keep the final JSON for diagnostics. The helper streams the wait notice on stderr
+    # when it sees executions, including ones published after the initial snapshot.
     local stop_code=0 stop_out="" stop_reason=""
-    stop_out="$(bash "$stop_script" --drain --timeout "$timeout")" || stop_code=$?
+    local -a stop_args=(--drain --timeout "$timeout")
+    if [[ -n "$drain_notice" ]]; then
+      stop_args+=(--wait-notice "$drain_notice")
+    fi
+    stop_out="$(bash "$stop_script" "${stop_args[@]}")" || stop_code=$?
     [[ -n "$stop_out" ]] && printf '%s\n' "$stop_out"
+    # If the supervisor announced the wait, do not repeat it for remaining legacy work.
+    if [[ "$stop_out" == *'"wait_notice_shown": true'* ]]; then
+      drain_notice=""
+    fi
     if [[ "$stop_code" -ne 0 ]]; then
       stop_reason="$(printf '%s\n' "$stop_out" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1]).get("reason", ""))' 2>/dev/null || true)"
       # stop_supervisor.sh: 1 = still draining at the deadline.

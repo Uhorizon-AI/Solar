@@ -664,7 +664,12 @@ function verify_remote_release() {
   local body
   if ! body="$(gh api "repos/${RELEASE_REPO}/releases/tags/${tag}")"; then
     error "Could not verify Release $tag via the authenticated GitHub API"
+    echo "Check GH_TOKEN in CI or run gh auth status locally. Inspect the API error above before retrying." >&2
     echo "Retry: bash core/scripts/create-release.sh --publish --retry --version $tag" >&2
+    exit 1
+  fi
+  if [[ -z "${body//[[:space:]]/}" ]]; then
+    error "GitHub API returned an empty response when verifying Release $tag"
     exit 1
   fi
   if ! python3 - "$body" "$tag" <<'PYVERIFY'

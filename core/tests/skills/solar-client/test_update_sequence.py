@@ -239,14 +239,71 @@ def test_an_idle_update_skips_the_no_deadline_notice(rig, services):
 
 
 def test_no_deadline_notice_is_printed_once_while_waiting_for_a_legacy_execution(rig):
+    script = """
+source "$1"
+polls=0
+busy_flag="$3"
+sleep() {
+  polls=$((polls + 1))
+  if [[ "$polls" -eq 3 ]]; then rm -f "$busy_flag"; fi
+}
+solar_client_drain_async "$2" 0
+test "$polls" -eq 3
+"""
     result = subprocess.run(
-        ["bash", "-c", 'source "$1"; busy_flag="$3"; sleep() { rm -f "$busy_flag"; }; solar_client_drain_async "$2" 0',
-         "_", str(SCRIPTS / "client_lib.sh"), str(rig.install), str(rig.busy)],
+        ["bash", "-c", script, "_", str(SCRIPTS / "client_lib.sh"), str(rig.install), str(rig.busy)],
         env=rig.env(SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host"),
         cwd=rig.ws, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.count("without a deadline") == 1
     assert not rig.busy.exists()
+
+
+def test_drain_announces_an_execution_published_after_the_first_supervisor_read(rig, monkeypatch):
+    scripts = CORE / "skills/solar-async-tasks/scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    monkeypatch.syspath_prepend(str(CORE / "tests/skills/solar-async-tasks"))
+    import supervisor_lib
+    from supervisor_support import wait_until
+
+    env = rig.env(SOLAR_CLIENT_SUPERVISOR_STOP_SCRIPT=str(scripts / "stop_supervisor.sh"),
+                  SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="async-supervisor",
+                  SOLAR_CLIENT_ASYNC_BUSY_COMMAND="exit 1")
+    rig.guard(env)
+    ctx = supervisor_lib.Context(rig.rt)
+    ctx.locks.mkdir(parents=True)
+    output = rig.tmp / "late-execution-output"
+    owner = subprocess.Popen(["sleep", "60"])
+    drain = None
+    try:
+        started = supervisor_lib.process_start(owner.pid)
+        assert started is not None
+        identity = dict(pid=owner.pid, started=started, state="ready", children=[],
+                        workspace=str(rig.ws), runtime=str(rig.rt))
+        supervisor_lib.write_json_atomic(ctx.identity_file, identity)
+        with output.open("w") as log:
+            drain = subprocess.Popen(
+                ["bash", "-c", 'source "$1"; solar_client_drain_async "$2" 0',
+                 "_", str(SCRIPTS / "client_lib.sh"), str(rig.install)],
+                env=env, cwd=rig.ws, stdout=log, stderr=subprocess.STDOUT)
+        # The control request proves the drain helper already read the empty identity.
+        wait_until(ctx.control_file.exists, 10)
+        assert drain.poll() is None and "without a deadline" not in output.read_text()
+        supervisor_lib.write_json_atomic(
+            ctx.identity_file, dict(identity, state="draining", children=[{"task_id": "late"}]))
+        wait_until(lambda: "without a deadline" in output.read_text(), 10)
+        assert drain.poll() is None and owner.poll() is None
+        owner.terminate()
+        owner.wait(timeout=10)
+        assert drain.wait(timeout=10) == 0, output.read_text()
+        assert output.read_text().count("without a deadline") == 1
+    finally:
+        if owner.poll() is None:
+            owner.kill()
+            owner.wait(timeout=10)
+        if drain is not None and drain.poll() is None:
+            # With the fixture owner gone the real stop helper will exit on its next poll.
+            drain.wait(timeout=10)
 
 
 def test_an_update_uses_the_staged_stop_helper_when_the_live_install_is_old(rig):
