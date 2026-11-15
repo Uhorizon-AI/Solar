@@ -2164,7 +2164,7 @@ solar_client_warn_running() {
 solar_client_drain_async() {
   local install_root="$1"
   local timeout="${2:-${SOLAR_CLIENT_DRAIN_TIMEOUT:-0}}"
-  local stop_script service seen_supervisor=false waited=0
+  local stop_script service seen_supervisor=false waited=0 drain_notice="" snapshot=""
   local updater_stop_script="${_CLIENT_LIB_SCRIPT_DIR}/../../solar-async-tasks/scripts/stop_supervisor.sh"
   if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
     echo "ERROR: the async drain timeout must be a non-negative whole number of seconds (got: $timeout)." >&2
@@ -2182,13 +2182,20 @@ solar_client_drain_async() {
   done < <(solar_client_running_services "$install_root")
   solar_client_update_event drain-start "timeout=$timeout" "supervisor=$seen_supervisor"
   if [[ "$timeout" == "0" ]]; then
-    echo "Drain: waiting for active executions to finish without a deadline. Press Ctrl-C to pause, cancel the task, then run: solar client update --resume. Set SOLAR_CLIENT_DRAIN_TIMEOUT=<whole seconds> to cap the wait."
+    drain_notice="Drain: waiting for active executions to finish without a deadline. Press Ctrl-C to pause, cancel the task, then run: solar client update --resume. Set SOLAR_CLIENT_DRAIN_TIMEOUT=<whole seconds> to cap the wait."
   fi
   if [[ "$seen_supervisor" == true ]]; then
     if [[ ! -f "$stop_script" ]]; then
       echo "ERROR: the async supervisor is running and this install has no way to drain it ($stop_script). Nothing was changed." >&2
       solar_client_update_event drain-refused "reason=no_supervisor_stop"
       return 1
+    fi
+    if [[ -n "$drain_notice" ]]; then
+      snapshot="$(solar_client_running_snapshot)" || snapshot=""
+      if [[ -n "$snapshot" ]]; then
+        printf '%s\n' "$drain_notice"
+        drain_notice=""
+      fi
     fi
     echo "Drain: asking the async supervisor to finish its executions"
     # The output is captured (not streamed) so a drain that runs out of time can say what it waited
@@ -2225,6 +2232,10 @@ solar_client_drain_async() {
   fi
   local started=$SECONDS
   while solar_client_async_busy "$install_root" >/dev/null; do
+    if [[ -n "$drain_notice" ]]; then
+      printf '%s\n' "$drain_notice"
+      drain_notice=""
+    fi
     waited=$((SECONDS - started))
     if [[ "$timeout" -gt 0 && "$waited" -ge "$timeout" ]]; then
       echo "ERROR: async-tasks were still running after ${timeout}s:" >&2

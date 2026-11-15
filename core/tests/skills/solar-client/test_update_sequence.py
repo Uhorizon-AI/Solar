@@ -227,6 +227,28 @@ def test_the_whole_sequence_runs_in_order_with_an_old_supervisor_and_schema(rig)
     assert not list(rig.tmp.glob("solar-update-staging.*"))               # released: the staging copy is gone
 
 
+@pytest.mark.parametrize("services", ["gateway,host", "gateway,host,async-supervisor"])
+def test_an_idle_update_skips_the_no_deadline_notice(rig, services):
+    rig.runtime_state(5)
+    rig.busy.unlink()
+    done = rig.update("--ref", "v0.0.2", "--yes", env_extra=dict(
+        SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE=services, SOLAR_CLIENT_DRAIN_TIMEOUT="0"))
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "without a deadline" not in done.stdout + done.stderr
+    assert "drain-done" in rig.names() and rig.barrier() is None
+
+
+def test_no_deadline_notice_is_printed_once_while_waiting_for_a_legacy_execution(rig):
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; busy_flag="$3"; sleep() { rm -f "$busy_flag"; }; solar_client_drain_async "$2" 0',
+         "_", str(SCRIPTS / "client_lib.sh"), str(rig.install), str(rig.busy)],
+        env=rig.env(SOLAR_CLIENT_RUNNING_SERVICES_OVERRIDE="gateway,host"),
+        cwd=rig.ws, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.count("without a deadline") == 1
+    assert not rig.busy.exists()
+
+
 def test_an_update_uses_the_staged_stop_helper_when_the_live_install_is_old(rig):
     rig.runtime_state(5)
     live_stop = rig.install / "core/skills/solar-async-tasks/scripts/stop_supervisor.sh"
@@ -803,10 +825,12 @@ def test_live_capacity_three_supervisor_drains_cutover_and_relaunches_without_du
         assert original.poll() is None and rig.marker() == "OLD"
         assert rig.barrier()["phase"] == "ticks-paused"
 
-        update = start_update(resume_output, "--resume", timeout="60")
+        update = start_update(resume_output, "--resume", timeout="0")
         wait_until(lambda: rig.names().count("drain-start") == 2, 30)
         wait_until(lambda: all(f"  ! {command}" in resume_output.read_text() for command in commands), 10)
-        assert "  ! Waiting for active tasks to finish (configured limit: 60s)." in resume_output.read_text()
+        assert "  ! Waiting for active tasks to finish." in resume_output.read_text()
+        wait_until(lambda: "without a deadline" in resume_output.read_text(), 10)
+        assert resume_output.read_text().count("without a deadline") == 1
         assert update.poll() is None
         report = subprocess.run(
             ["bash", "-c", 'source "$1"; solar_client_maintenance_report "$2"', "_",
