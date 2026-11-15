@@ -856,16 +856,44 @@ def _check_field(key: str, value: str) -> None:
         raise FormatError(f"value for {key!r} spans lines; import the document instead")
 
 
-def _strip_execution_error(body: str) -> str:
-    """Drop `## Execution Error` and everything after it.
+def _strip_execution_error(body: str, *, title: Optional[str],
+                           approved_definition: Optional[str]) -> str:
+    """Drop a generated `## Execution Error` and its tail without cutting approved text.
 
-    Same cut `requeue_from_error.sh` makes, so the next execution reads the
-    prompt and not the failure it is being asked to run again.
+    With an approval snapshot, only search the generated tail after that exact
+    definition. Snapshotless historical approvals have no reliable boundary, so
+    retain their established behavior as far as possible by cutting the last
+    error heading (the executor appends its failure after prior body content).
     """
-    lines = body.splitlines(keepends=True)
-    for index, line in enumerate(lines):
-        if line.rstrip("\r\n") == "## Execution Error":
-            return "".join(lines[:index])
+    text = definition_text(body, title)
+    if not text:
+        return body
+    prefix = body.find(text)
+    if prefix < 0:
+        return body
+
+    if approved_definition is not None:
+        tail = _after_snapshot(text, approved_definition)
+        if tail is None:
+            return body
+        search_start = len(text) - len(tail)
+        candidates = []
+        consumed = search_start
+        for line in tail.splitlines(keepends=True):
+            if line.rstrip("\r\n") == "## Execution Error":
+                candidates.append(consumed)
+            consumed += len(line)
+        error_start = candidates[0] if candidates else None
+    else:
+        error_start = None
+        consumed = 0
+        for line in text.splitlines(keepends=True):
+            if line.rstrip("\r\n") == "## Execution Error":
+                error_start = consumed
+            consumed += len(line)
+
+    if error_start is not None:
+        return body[:prefix] + text[:error_start]
     return body
 
 
@@ -2707,12 +2735,6 @@ class Session:
             return _move(conn, task_id, to_status, actor, rewrite_body=rewrite_body,
                          extra=columns or None)
 
-    def _unchanged_scope(self, task_id: str, before: tuple) -> None:
-        row = self.conn.execute(
-            "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        if row is None or tuple(row) != before:
-            raise StateError(f"{task_id}: object, scope or effect changed")
-
     def task_approve(self, task_id: str, actor: Optional[str] = None,
                      expected_row_version: Optional[int] = None, *,
                      consent: Optional[str] = None) -> str:
@@ -2975,15 +2997,17 @@ class Session:
 
     def task_requeue(self, task_id: str, actor: Optional[str] = None,
                      expected_row_version: Optional[int] = None) -> str:
-        """error -> queued, and drop `## Execution Error` plus everything after it.
+        """error -> queued only while content approval is valid.
 
-        The status change and the body cut commit in one transaction. Object,
-        scope and effect stay as they were, so the next execution reads the
-        original prompt.
+        Absent, legacy or mismatching approvals raise `TaskAuthorizationRefused`
+        with `task_approval_required` and a direct draft-recovery operation. A
+        valid unchanged approval keeps its execution consent. The generated
+        error is cut only after the approved definition, and the resulting body
+        is revalidated before the body edit and transition commit together.
         """
         with _transaction(self.conn) as conn:
             row = conn.execute(
-                "SELECT status, frontmatter, body, row_version, object, scope, effect "
+                "SELECT status, frontmatter, body, row_version "
                 "FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if row is None:
                 raise TransitionRefused(f"no task {task_id}")
@@ -2991,24 +3015,33 @@ class Session:
                 raise TransitionRefused(f"{task_id} is {row['status']}, not error")
             _check_version(task_id, row["row_version"], expected_row_version)
             pairs = json.loads(row["frontmatter"])
-            approval = approval_state(pairs, row["body"]) or "valid"
-            if approval != "valid":
+            title = _field(pairs, "title")
+
+            def refuse(approval: str) -> None:
                 readiness = authorization_readiness(task_id, dict(
                     id=task_id, status=row["status"], frontmatter=pairs,
                     body=row["body"], row_version=row["row_version"]),
                     expected_row_version)
                 readiness.update(
                     code="task_approval_required",
+                    content_approval=approval,
                     message=(f"{task_id}: content approval is {approval}; "
-                             "return it to draft and approve it again"))
+                             "return it to draft and approve it again"),
+                    next_operation=dict(tool="solar_execute", arguments=dict(
+                        operation="task.return_to_draft", arguments=dict(
+                            task_id=task_id, expected_row_version=row["row_version"]))))
                 raise TaskAuthorizationRefused(readiness)
-            before = (row["object"], row["scope"], row["effect"])
+            approval = approval_state(pairs, row["body"])
+            if approval is not None:
+                refuse(approval)
+            snapshot = _field(pairs, "approved_definition")
+            requeued_body = _strip_execution_error(
+                row["body"], title=title, approved_definition=snapshot)
+            approval_after_trim = approval_state(pairs, requeued_body)
+            if approval_after_trim is not None:
+                refuse(approval_after_trim)
             came = _move(conn, task_id, "queued", actor or "requeue",
-                         rewrite_body=_strip_execution_error)
-            after = conn.execute(
-                "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
-            if tuple(after) != before:
-                raise StateError(f"{task_id}: object, scope or effect changed")
+                         rewrite_body=lambda _body: requeued_body)
         return came
 
     def task_cancel(self, task_id: str, actor: Optional[str] = None,
@@ -4849,6 +4882,10 @@ def _cli(argv: list[str]) -> int:
                     document = json.loads(sys.stdin.read())
                     _print(s.continuity_update(lambda _current: document))
         return 0
+    except TaskAuthorizationRefused as exc:
+        print(json.dumps(dict(error=type(exc).__name__, detail=str(exc),
+                              code=exc.code, readiness=exc.readiness)), file=sys.stderr)
+        return 2
     except StateError as exc:
         print(json.dumps(dict(error=type(exc).__name__, detail=str(exc))), file=sys.stderr)
         return 2

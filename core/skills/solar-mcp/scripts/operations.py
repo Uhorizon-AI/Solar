@@ -1089,12 +1089,15 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         client_consent=True,
         effects="A queued task becomes cancelled; an active one stays active until the worker stops."),
     Operation(
-        "task.requeue", A2, "Move a task from error back to the queue.",
+        "task.requeue", A2, "Requeue a failed task only while its content approval is valid.",
         _obj(dict(task_id=TASK_ID, expected_row_version=ROW_VERSION),
              required=("task_id", "expected_row_version")),
-        errors=("task_not_found", "task_changed", "task_state_refused"),
+        errors=("task_not_found", "task_changed", "task_state_refused", "task_approval_required"),
         client_consent=True,
-        effects="Drops the recorded execution error; instructions are unchanged."),
+        effects="With valid content approval, moves the task from error to queued, drops the generated "
+                "execution error and preserves execution consent. With absent, legacy or mismatching "
+                "approval, leaves the task in error and returns task_approval_required with "
+                "readiness.next_operation set to task.return_to_draft."),
     Operation(
         "task.wait", A0, "Wait for one task to reach a terminal status and return its result view.",
         _obj(dict(task_id=TASK_ID,

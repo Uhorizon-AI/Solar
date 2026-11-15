@@ -365,6 +365,27 @@ def test_requeue_moves_an_error_back_and_drops_the_error(solar_env):
     assert "Execution Error" not in task["body"] and "Steps." in task["body"]
 
 
+def test_requeue_preserves_an_approved_error_heading_and_claims_the_task(solar_env):
+    instructions = ("Start here.\n\n## Execution Error\n\n"
+                    "This heading and text are part of the approved instructions.\nContinue.")
+    with solar_state.session() as store:
+        task_id = store.task_create([("title", '"T"')], "\n# T\n\n" + instructions + "\n")
+        store.task_approve(task_id, expected_row_version=store.task_get(task_id)["row_version"])
+        token = store.task_claim_detail(task_id, "first-worker")["token"]
+        store.task_fail(task_id, "## Execution Error\n- error: runtime failure\n", token=token)
+
+    out = run("task.requeue", dict(task_id=task_id,
+                                  expected_row_version=stored(task_id)["row_version"]))
+    task = stored(task_id)
+    assert out["to_status"] == "queued"
+    assert instructions in task["body"]
+    assert task["body"].count("## Execution Error") == 1
+    assert "runtime failure" not in task["body"]
+    with solar_state.session() as store:
+        claim = store.task_claim_detail(task_id, "second-worker")
+        assert claim["claimed"] and claim["token"]
+
+
 @pytest.mark.parametrize("broken", ["absent", "legacy", "mismatch"])
 def test_requeue_refuses_invalid_approval_and_explains_recovery(solar_env, broken):
     import solar_state

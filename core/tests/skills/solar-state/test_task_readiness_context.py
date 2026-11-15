@@ -75,6 +75,20 @@ def test_error_with_invalid_content_advertises_draft_recovery(ready, broken):
         assert not info["ready"] and info["execution_authorization"] == "not_available"
 
 
+def test_error_without_runtime_heading_refuses_requeue_when_it_changes_the_approved_definition(ready):
+    with solar_state.session() as store:
+        task = queued(store)
+        token = store.task_claim_detail(task, "test")["token"]
+        store.task_fail(task, "Unstructured failure text.\n", token=token)
+        before = store.task_get(task)
+        with pytest.raises(solar_state.TaskAuthorizationRefused) as exc:
+            store.task_requeue(task, expected_row_version=before["row_version"])
+        assert exc.value.code == "task_approval_required"
+        assert exc.value.readiness["content_approval"] == "mismatch"
+        assert exc.value.readiness["next_operation"]["arguments"]["operation"] == "task.return_to_draft"
+        assert store.task_get(task)["status"] == "error"
+
+
 @pytest.mark.parametrize("status", ["draft", "planned"])
 def test_new_definition_has_no_historical_context_or_ambiguity(ready, status):
     instructions = "Instruction.\n```md\n## Result\nAuthor example.\n```"

@@ -292,7 +292,10 @@ def test_requeueing_an_error_keeps_the_authorization_of_the_same_content(solar_e
     with solar_state.session() as store:
         token = store.task_claim_detail(task_id, "worker")["token"]
         store.task_fail(task_id, "## Execution Error\nboom", token=token)
+    approved_run_digest = solar_state.value_of(
+        dict(stored(task_id)["frontmatter"])["run_authorized_digest"])
     run("task.requeue", dict(task_id=task_id, expected_row_version=stored(task_id)["row_version"]))
+    assert solar_state.value_of(dict(stored(task_id)["frontmatter"])["run_authorized_digest"]) == approved_run_digest
     assert claim(task_id)["claimed"]
 
 

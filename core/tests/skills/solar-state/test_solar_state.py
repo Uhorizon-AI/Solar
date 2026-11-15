@@ -114,9 +114,7 @@ def test_approve_cancel_and_requeue_keep_scope(ready):
         "## Keep this\n\n"
         "The prompt the next run must still see.\n\n"
         "## Execution Error\n"
-        "- error: disk full\n\n"
-        "## Do not carry this\n"
-        "stale failure\n"
+        "- example: the approved instructions discuss a disk failure\n"
     )
     with session(ready, auto_backup=False) as s:
         draft = s.task_create(
@@ -135,20 +133,23 @@ def test_approve_cancel_and_requeue_keep_scope(ready):
         assert approved["status"] == "queued"
         assert (approved["object"], approved["scope"], approved["effect"]) == (
             "the plan", "one file", "a draft saved")
-        assert "disk full" in approved["body"]
+        assert "approved instructions discuss a disk failure" in approved["body"]
 
         s.task_transition(draft, "active")
-        s.task_transition(draft, "error", token=token_of(s, draft))
+        s.task_fail(draft, "## Execution Error\n- error: runtime disk full\n\n"
+                    "## Do not carry this\nstale failure\n", token=token_of(s, draft))
         assert s.task_requeue(draft) == "error"
         requeued = s.task_get(draft)
         assert requeued["status"] == "queued"
         assert requeued["object"] == "the plan"
         assert "The prompt the next run must still see." in requeued["body"]
-        assert "## Execution Error" not in requeued["body"]
-        assert "disk full" not in requeued["body"]
+        assert requeued["body"].count("## Execution Error") == 1
+        assert "approved instructions discuss a disk failure" in requeued["body"]
+        assert "runtime disk full" not in requeued["body"]
         assert "stale failure" not in requeued["body"]
         exported = s.task_export(draft)
-        assert "\n## Execution Error\n" not in exported
+        assert "approved instructions discuss a disk failure" in exported
+        assert "runtime disk full" not in exported
 
         s.task_transition(draft, "active")
         held = s.task_cancel(draft)
@@ -429,6 +430,27 @@ def test_cli_create_claim_show(ready):
 
     refused = _cli(ready, "task", "transition", tid, "draft")
     assert refused.returncode == 2 and "TransitionRefused" in refused.stderr
+
+
+def test_cli_requeue_refusal_includes_the_readiness_recovery(ready):
+    made = _cli(ready, "task", "create", "--status", "queued",
+                "--field", 'title="CLI retry"', "--body", "\n# CLI retry\n\nDo it.\n")
+    task_id = json.loads(made.stdout)["id"]
+    claimed = _cli(ready, "task", "claim", task_id, "--worker", "cli-test")
+    token = json.loads(claimed.stdout)["token"]
+    failed = _cli(ready, "task", "fail", task_id, "--token", token,
+                  "--suffix", "## Execution Error\n- error: failed\n")
+    assert failed.returncode == 0, failed.stderr
+    with session(ready, auto_backup=False) as store:
+        store.task_set(task_id, "approved_digest", json.dumps("legacy-digest"))
+
+    refused = _cli(ready, "task", "requeue", task_id)
+    result = json.loads(refused.stderr)
+    assert refused.returncode == 2
+    assert result["code"] == "task_approval_required"
+    assert result["readiness"]["content_approval"] == "legacy"
+    recovery = result["readiness"]["next_operation"]["arguments"]
+    assert recovery["operation"] == "task.return_to_draft"
 
 
 def test_cli_refuses_with_exit_2_when_not_migrated(root):

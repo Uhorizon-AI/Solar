@@ -8,6 +8,7 @@ The format is based on Keep a Changelog.
 
 ### Fixed
 - task.requeue: refuse to queue a failed task whose content approval is absent, legacy or mismatched, and return the direct draft-recovery operation; valid unchanged approvals still requeue with their consent intact.
+- task.requeue: trim the generated execution error only after the approved definition, then verify the stored approval still covers the resulting body before queueing.
 
 ### Changed
 - client update: show active tasks and their cancellation commands before taking the maintenance barrier. `solar status` shows the maintenance phase, running tasks during drain, and how to resume.
