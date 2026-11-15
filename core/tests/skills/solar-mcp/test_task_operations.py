@@ -365,6 +365,34 @@ def test_requeue_moves_an_error_back_and_drops_the_error(solar_env):
     assert "Execution Error" not in task["body"] and "Steps." in task["body"]
 
 
+@pytest.mark.parametrize("broken", ["absent", "legacy", "mismatch"])
+def test_requeue_refuses_invalid_approval_and_explains_recovery(solar_env, broken):
+    import solar_state
+
+    with solar_state.session() as store:
+        task_id = store.task_create([("title", '"T"')], "\n# T\n\nSteps.\n", status="queued")
+        store.task_claim_next("w")
+        store.task_fail(task_id, "\n## Execution Error\n\nboom\n",
+                        token=token_of(store, task_id))
+        invalid_digest = {"absent": "", "legacy": "old-digest",
+                          "mismatch": "v2:not-this-task"}[broken]
+        store.task_set(task_id, "approved_digest", json.dumps(invalid_digest))
+
+    body = refuse("task.requeue", dict(
+        task_id=task_id, expected_row_version=stored(task_id)["row_version"]),
+        "task_approval_required")
+    assert "content approval is " + broken in body["error"]
+    recovery = body["readiness"]["next_operation"]["arguments"]
+    assert recovery["operation"] == "task.return_to_draft"
+    assert stored(task_id)["status"] == "error"
+
+    run(recovery["operation"], recovery["arguments"])
+    draft = stored(task_id)
+    assert draft["status"] == "draft" and "boom" in draft["body"]
+    run("task.approve", dict(task_id=task_id, expected_row_version=draft["row_version"]))
+    assert stored(task_id)["status"] == "queued"
+
+
 def test_cancel_with_a_stale_version_is_refused(solar_env):
     with solar_state.session() as store:
         task_id = store.task_create([("title", '"T"')], "\n# T\n", status="queued")

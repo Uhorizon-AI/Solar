@@ -670,9 +670,12 @@ def _do_task_cancel(arguments: dict) -> dict:
 def _do_task_requeue(arguments: dict) -> dict:
     import solar_state
 
-    with solar_state.session() as store:
-        came = store.task_requeue(arguments["task_id"], actor=_actor("task.requeue"),
-                                  expected_row_version=arguments["expected_row_version"])
+    try:
+        with solar_state.session() as store:
+            came = store.task_requeue(arguments["task_id"], actor=_actor("task.requeue"),
+                                      expected_row_version=arguments["expected_row_version"])
+    except solar_state.TaskAuthorizationRefused as exc:
+        raise OperationError(exc.code, str(exc), details=dict(readiness=exc.readiness)) from None
     return dict(requeued=True, id=arguments["task_id"], from_status=came, to_status="queued")
 
 

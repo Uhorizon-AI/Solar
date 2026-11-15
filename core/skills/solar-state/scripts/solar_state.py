@@ -2981,16 +2981,34 @@ class Session:
         scope and effect stay as they were, so the next execution reads the
         original prompt.
         """
-        row = self.conn.execute(
-            "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        if row is None:
-            raise TransitionRefused(f"no task {task_id}")
-        before = tuple(row)
-        came = self.task_transition(task_id, "queued", expected_from="error",
-                                    actor=actor or "requeue",
-                                    rewrite_body=_strip_execution_error,
-                                    expected_row_version=expected_row_version)
-        self._unchanged_scope(task_id, before)
+        with _transaction(self.conn) as conn:
+            row = conn.execute(
+                "SELECT status, frontmatter, body, row_version, object, scope, effect "
+                "FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                raise TransitionRefused(f"no task {task_id}")
+            if row["status"] != "error":
+                raise TransitionRefused(f"{task_id} is {row['status']}, not error")
+            _check_version(task_id, row["row_version"], expected_row_version)
+            pairs = json.loads(row["frontmatter"])
+            approval = approval_state(pairs, row["body"]) or "valid"
+            if approval != "valid":
+                readiness = authorization_readiness(task_id, dict(
+                    id=task_id, status=row["status"], frontmatter=pairs,
+                    body=row["body"], row_version=row["row_version"]),
+                    expected_row_version)
+                readiness.update(
+                    code="task_approval_required",
+                    message=(f"{task_id}: content approval is {approval}; "
+                             "return it to draft and approve it again"))
+                raise TaskAuthorizationRefused(readiness)
+            before = (row["object"], row["scope"], row["effect"])
+            came = _move(conn, task_id, "queued", actor or "requeue",
+                         rewrite_body=_strip_execution_error)
+            after = conn.execute(
+                "SELECT object, scope, effect FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if tuple(after) != before:
+                raise StateError(f"{task_id}: object, scope or effect changed")
         return came
 
     def task_cancel(self, task_id: str, actor: Optional[str] = None,

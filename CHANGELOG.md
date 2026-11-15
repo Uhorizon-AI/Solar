@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- task.requeue: refuse to queue a failed task whose content approval is absent, legacy or mismatched, and return the direct draft-recovery operation; valid unchanged approvals still requeue with their consent intact.
+
 ### Changed
 - client update: show active tasks and their cancellation commands before taking the maintenance barrier. `solar status` shows the maintenance phase, running tasks during drain, and how to resume.
 - client update: drain active async executions without a fixed 120-second deadline by default. `SOLAR_CLIENT_DRAIN_TIMEOUT` and `stop_supervisor.sh --timeout` accept whole-number seconds; unset or `0` waits without a deadline, and a positive value bounds the wait. The staged updater uses its own supervisor stop helper so older installed versions can update safely.

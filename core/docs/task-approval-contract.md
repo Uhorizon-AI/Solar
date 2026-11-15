@@ -44,7 +44,7 @@ After the digest gate, the claim applies the risk gate (`needs_run_authorization
 `approved_consent: client` whose execution is not confined (`run_risk` high: no restricted profile with a
 verified implementation for its provider, or not read-only) stays `queued` with the reason
 `awaiting_approval` until `run_authorized_digest` equals `approved_digest`. A confined task runs at once.
-A recurring task keeps its authorization for every repeat, and `task.requeue` (error to queued) keeps it too, while the digest does not change.
+A recurring task keeps its authorization for every repeat, and `task.requeue` (error to queued) keeps it too, while the digest does not change. Requeue checks that the stored content approval is still valid before moving the task: an absent, legacy or mismatching approval leaves it in `error` and returns `task_approval_required` with `task.return_to_draft` as the recovery operation. Return it to draft, then approve it again; a valid unchanged approval still requeues without withdrawing its execution consent.
 
 ### The wait is visible, bounded and announced
 
