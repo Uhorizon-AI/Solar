@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Release CI: verify the published release through the authenticated GitHub API so anonymous API failures do not report a successful publication as failed.
+
 ## [0.63.1] - 2026-11-15
 
 ### Fixed

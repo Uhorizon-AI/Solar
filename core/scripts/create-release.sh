@@ -661,10 +661,9 @@ PYNOTES
 
 function verify_remote_release() {
   local tag="$1"
-  local api="https://api.github.com/repos/${RELEASE_REPO}/releases/tags/${tag}"
   local body
-  if ! body="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$api")"; then
-    error "Release $tag not visible via API"
+  if ! body="$(gh api "repos/${RELEASE_REPO}/releases/tags/${tag}")"; then
+    error "Could not verify Release $tag via the authenticated GitHub API"
     echo "Retry: bash core/scripts/create-release.sh --publish --retry --version $tag" >&2
     exit 1
   fi
