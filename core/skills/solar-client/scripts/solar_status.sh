@@ -242,7 +242,13 @@ else
   solar_root_label="development checkout"
 fi
 
+maintenance_detail=""
+if solar_client_maintenance_held; then
+  maintenance_detail="$(solar_client_maintenance_report "$(solar_global_install_root 2>/dev/null || printf '%s' "$SOLAR_ROOT")")"
+fi
+
 if [[ "$JSON" == true ]]; then
+  MAINTENANCE_DETAIL="$maintenance_detail" \
   SOLAR_WORKSPACE="$SOLAR_WORKSPACE" \
   SOLAR_ROOT="$SOLAR_ROOT" \
   SOLAR_ROOT_KIND="$solar_root_kind" \
@@ -278,6 +284,7 @@ print(json.dumps({
   "browser": os.environ["BROWSER_STATE"],
   "client": os.environ["CLIENT_STATE"],
   "client_detail": os.environ["CLIENT_DETAIL"],
+  "maintenance_detail": os.environ["MAINTENANCE_DETAIL"],
 }, indent=2))
 PY
   exit 0
@@ -285,6 +292,9 @@ fi
 
 echo "Solar status  SOLAR_WORKSPACE=$SOLAR_WORKSPACE"
 echo "SOLAR_ROOT=$SOLAR_ROOT ($solar_root_label)"
+if [[ -n "$maintenance_detail" ]]; then
+  printf '%s\n' "$maintenance_detail"
+fi
 block_line "host" "$host_state" "$host_detail"
 block_line "client" "$client_state" "$client_detail"
 block_line "workspace" "$workspace_state" "$workspace_detail"

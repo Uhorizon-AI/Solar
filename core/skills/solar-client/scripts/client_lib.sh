@@ -2006,13 +2006,24 @@ solar_client_maintenance_report() {
 import json, sys
 try:
     data = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception:
+    if not isinstance(data, dict):
+        raise ValueError("expected a maintenance object")
+except (OSError, ValueError):
     print("Update in progress: the maintenance barrier is unreadable; do not delete it, ask for help")
     raise SystemExit(0)
 print(f"Update in progress: phase={data.get('phase')} from={data.get('from')} to={data.get('to')} "
       f"since {data.get('started_at')}")
 print("  Claims and launchers are refused until it finishes. Run: solar client update --resume")
 PY
+  local phase snapshot install_root
+  phase="$(solar_client_maintenance_field phase)" || return 0
+  if [[ "$phase" == maintenance || "$phase" == ticks-paused ]]; then
+    snapshot="$(solar_client_running_snapshot)" || return 0
+    if [[ -n "$snapshot" ]]; then
+      install_root="$(solar_client_maintenance_field install_root)"
+      solar_client_describe_running "${1:-$SOLAR_ROOT}" "$snapshot" "$install_root" false
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -2050,19 +2061,23 @@ solar_client_async_busy() {
 # provider, how long it has been running) and the exact command that cancels it. Reads the JSON
 # stop_supervisor.sh printed; the title comes from solar-state. Says nothing when it cannot tell.
 # At most five executions are listed, each title cleaned and cut to 80 characters.
-# Args: install_root stop_output
+# Args: install_root stop_output [cancellation_install_root] [lookup_titles]
 solar_client_describe_running() {
-  local install_root="$1" stop_output="$2" state_py cancel_py
-  state_py="$(solar_client_state_py "$install_root")"
-  cancel_py="${install_root}/core/skills/solar-async-tasks/scripts/task_cancel.py"
-  python3 - "$state_py" "$cancel_py" "$stop_output" <<'PY' || true
+  local install_root="$1" stop_output="$2" state_py="" cancel_py runtime
+  # The task-field CLI may take a backup. Read-only reports use the supervisor snapshot alone.
+  if [[ "${4:-true}" == true ]]; then
+    state_py="$(solar_client_state_py "$install_root")"
+  fi
+  cancel_py="${3:-$install_root}/core/skills/solar-async-tasks/scripts/task_cancel.py"
+  runtime="$(solar_runtime_root)" || return 0
+  python3 - "$state_py" "$cancel_py" "$stop_output" "$runtime" "${SOLAR_WORKSPACE:-}" <<'PY' || true
 import json, shlex, subprocess, sys
 from datetime import datetime, timezone
 
 MAX_SHOWN = 5          # more than this and the message would take longer to build than to read
 TITLE_LIMIT = 80
 
-state_py, cancel_py, output = sys.argv[1:4]
+state_py, cancel_py, output, runtime, workspace = sys.argv[1:]
 try:
     # stop_supervisor.sh puts its JSON object on the last line.
     children = json.loads(output.strip().splitlines()[-1]).get("children") or []
@@ -2072,13 +2087,14 @@ children = [c for c in children if isinstance(c, dict) and c.get("task_id")]
 for child in children[:MAX_SHOWN]:
     task_id = child["task_id"]
     title = ""
-    try:
-        done = subprocess.run([sys.executable, state_py, "task", "field", task_id, "title"],
-                              capture_output=True, text=True, timeout=5)
-        # solar_state.py prints indented JSON over several lines: read the whole output.
-        title = (json.loads(done.stdout).get("value") or "") if done.returncode == 0 else ""
-    except (ValueError, AttributeError, OSError, subprocess.SubprocessError):
-        pass
+    if state_py:
+        try:
+            done = subprocess.run([sys.executable, "-B", state_py, "task", "field", task_id, "title"],
+                                  capture_output=True, text=True, timeout=5)
+            # solar_state.py prints indented JSON over several lines: read the whole output.
+            title = (json.loads(done.stdout).get("value") or "") if done.returncode == 0 else ""
+        except (ValueError, AttributeError, OSError, subprocess.SubprocessError):
+            pass
     title = "".join(ch if ch.isprintable() else " " for ch in str(title)).strip()
     if len(title) > TITLE_LIMIT:
         title = title[:TITLE_LIMIT - 1] + "…"
@@ -2087,15 +2103,57 @@ for child in children[:MAX_SHOWN]:
         since = datetime.strptime(child["since"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         seconds = max(0, int((datetime.now(timezone.utc) - since).total_seconds()))
         age = f"running {seconds // 60} min {seconds % 60} s"
-    except (KeyError, ValueError):
+    except (KeyError, TypeError, ValueError):
         pass
     bits = [task_id, title, child.get("provider") or "", age]
-    print("  - " + " · ".join(bit for bit in bits if bit))
-    command = shlex.join(["python3", cancel_py, "-", task_id])
-    print(f"    request cancellation with: {command}   (an active task stops when its worker acknowledges it)")
+    print("  ! " + " · ".join(bit for bit in bits if bit))
+    command = ["env", f"SOLAR_RUNTIME_ROOT={runtime}"]
+    if workspace:
+        command.append(f"SOLAR_WORKSPACE={workspace}")
+    command.extend(["python3", cancel_py, "-", task_id])
+    print(f"  ! request cancellation with: {shlex.join(command)}")
 if len(children) > MAX_SHOWN:
-    print(f"  ... and {len(children) - MAX_SHOWN} more")
+    print(f"  ! ... and {len(children) - MAX_SHOWN} more")
 PY
+}
+
+# Read a supervisor snapshot for display. The drain still verifies the owner and waits under
+# the maintenance barrier, since the set of running tasks can change after this read.
+solar_client_running_snapshot() {
+  local runtime
+  runtime="$(solar_runtime_root)" || return 0
+  # A status or --check call must not write bytecode into the installation.
+  python3 -B - "$runtime" "${SOLAR_WORKSPACE:-}" "$_CLIENT_LIB_SCRIPT_DIR/../../solar-async-tasks/scripts" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+runtime, workspace, scripts = sys.argv[1:]
+sys.path.insert(0, scripts)
+import supervisor_lib
+
+ctx = supervisor_lib.Context(Path(runtime))
+recorded = supervisor_lib.read_json(ctx.identity_file)
+if (isinstance(recorded, dict) and recorded.get("state") in ("ready", "draining")
+        and recorded.get("workspace") == workspace and recorded.get("runtime") == runtime
+        and recorded.get("children")
+        and supervisor_lib.matches(recorded.get("pid"), recorded.get("started"))[0] == "alive"):
+    print(json.dumps({"children": recorded["children"]}))
+PY
+}
+
+# The installed updater can still own the output filter. Use its existing visible prefix.
+solar_client_warn_running() {
+  local snapshot timeout="${SOLAR_CLIENT_DRAIN_TIMEOUT:-0}"
+  snapshot="$(solar_client_running_snapshot)" || return 0
+  if [[ -n "$snapshot" ]]; then
+    if [[ "$timeout" =~ ^[0-9]*[1-9][0-9]*$ ]]; then
+      echo "  ! Waiting for active tasks to finish (configured limit: ${timeout}s)."
+    else
+      echo "  ! Waiting for active tasks to finish."
+    fi
+    solar_client_describe_running "$1" "$snapshot"
+  fi
 }
 
 # The one-shot worker has no drain request: the ticks are already paused, so it is waited for.
@@ -2422,6 +2480,9 @@ _solar_client_state_cutover_locked() {
         launchagent_was_loaded=true
       fi
     fi
+    if [[ " $services" == *" async-supervisor "* ]]; then
+      solar_client_warn_running "$install_root"
+    fi
     local from_ver from_commit staging
     git_identity="$(solar_client_git_identity "$install_root")"
     read -r from_ver from_commit <<< "$git_identity"
@@ -2454,6 +2515,9 @@ _solar_client_state_cutover_locked() {
     phase=ticks-paused
   fi
   if [[ "$phase" == ticks-paused ]]; then
+    if [[ -n "$resume" && " $services" == *" async-supervisor "* ]]; then
+      solar_client_warn_running "$install_root"
+    fi
     if ! solar_client_drain_async "$install_root"; then
       echo "ERROR: the async work did not drain. Nothing was replaced." >&2
       return 1
