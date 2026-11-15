@@ -2160,11 +2160,12 @@ solar_client_warn_running() {
 # The resident supervisor is asked to drain through the stop script shipped with this updater,
 # not the one in the live install, which may predate the no-deadline contract. The default wait
 # has no deadline; SOLAR_CLIENT_DRAIN_TIMEOUT opts into a bounded wait. No task is killed.
+# With an older helper, only the subsequent process polling loop can announce an unbounded wait.
 # Args: install_root [timeout_seconds]
 solar_client_drain_async() {
   local install_root="$1"
   local timeout="${2:-${SOLAR_CLIENT_DRAIN_TIMEOUT:-0}}"
-  local stop_script service seen_supervisor=false waited=0
+  local stop_script service seen_supervisor=false waited=0 drain_notice=""
   local updater_stop_script="${_CLIENT_LIB_SCRIPT_DIR}/../../solar-async-tasks/scripts/stop_supervisor.sh"
   if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
     echo "ERROR: the async drain timeout must be a non-negative whole number of seconds (got: $timeout)." >&2
@@ -2182,7 +2183,7 @@ solar_client_drain_async() {
   done < <(solar_client_running_services "$install_root")
   solar_client_update_event drain-start "timeout=$timeout" "supervisor=$seen_supervisor"
   if [[ "$timeout" == "0" ]]; then
-    echo "Drain: waiting for active executions to finish without a deadline. Press Ctrl-C to pause, cancel the task, then run: solar client update --resume. Set SOLAR_CLIENT_DRAIN_TIMEOUT=<whole seconds> to cap the wait."
+    drain_notice="Drain: waiting for active executions to finish without a deadline. Press Ctrl-C to pause, cancel the task, then run: solar client update --resume. Set SOLAR_CLIENT_DRAIN_TIMEOUT=<whole seconds> to cap the wait."
   fi
   if [[ "$seen_supervisor" == true ]]; then
     if [[ ! -f "$stop_script" ]]; then
@@ -2191,11 +2192,22 @@ solar_client_drain_async() {
       return 1
     fi
     echo "Drain: asking the async supervisor to finish its executions"
-    # The output is captured (not streamed) so a drain that runs out of time can say what it waited
-    # for; it is printed unchanged once the script ends.
+    # Keep the final JSON for diagnostics. The helper streams the wait notice on stderr
+    # when it sees executions, including ones published after the initial snapshot.
     local stop_code=0 stop_out="" stop_reason=""
-    stop_out="$(bash "$stop_script" --drain --timeout "$timeout")" || stop_code=$?
+    local -a stop_args=(--drain --timeout "$timeout")
+    # Only helpers that declare the option receive it. Installed and overridden
+    # helpers may predate it, so keep their original arguments.
+    if [[ -n "$drain_notice" ]] && grep -Fxq -- '# Supports --wait-notice' "$stop_script"; then
+      stop_args+=(--wait-notice "$drain_notice")
+    fi
+    stop_out="$(bash "$stop_script" "${stop_args[@]}")" || stop_code=$?
     [[ -n "$stop_out" ]] && printf '%s\n' "$stop_out"
+    # If the supervisor announced the wait, do not repeat it for remaining legacy work.
+    if [[ "$stop_code" -eq 0 && -n "$drain_notice" && -n "$stop_out" ]] &&
+        printf '%s\n' "$stop_out" | python3 -c 'import json, sys; sys.exit(json.loads(sys.stdin.read().splitlines()[-1]).get("wait_notice_shown") is not True)' 2>/dev/null; then
+      drain_notice=""
+    fi
     if [[ "$stop_code" -ne 0 ]]; then
       stop_reason="$(printf '%s\n' "$stop_out" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1]).get("reason", ""))' 2>/dev/null || true)"
       # stop_supervisor.sh: 1 = still draining at the deadline.
@@ -2225,6 +2237,10 @@ solar_client_drain_async() {
   fi
   local started=$SECONDS
   while solar_client_async_busy "$install_root" >/dev/null; do
+    if [[ -n "$drain_notice" ]]; then
+      printf '%s\n' "$drain_notice"
+      drain_notice=""
+    fi
     waited=$((SECONDS - started))
     if [[ "$timeout" -gt 0 && "$waited" -ge "$timeout" ]]; then
       echo "ERROR: async-tasks were still running after ${timeout}s:" >&2

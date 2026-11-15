@@ -45,6 +45,12 @@ if [[ "${GH_RELEASE_TEST:-0}" == 1 ]]; then
   fi
 fi
 if [[ "$1" == api ]]; then
+  if [[ "$2" == */releases/tags/* ]]; then
+    [[ "${GH_RELEASE_API_FAIL:-0}" != 1 ]] || exit 1
+    body='{"tag_name":"v9.9.9","draft":false,"prerelease":false}'
+    printf '%s\n' "${GH_RELEASE_BODY-$body}"
+    exit 0
+  fi
   if [[ -n "${GH_ONLY_SHA:-}" && "$2" != *"/commits/$GH_ONLY_SHA/"* ]]; then
     printf '{"check_runs":[]}\n'
   else
@@ -83,7 +89,7 @@ for arg in "$@"; do
     exit 0
   fi
 done
-if [[ -n "${CURL_BODY:-}" ]]; then printf '%s\n' "$CURL_BODY"; else printf '%s\n' '{"tag_name":"v9.9.9","draft":false,"prerelease":false}'; fi
+exit 22  # Anonymous API requests fail; curl is only for the public bootstrap.
 STUB
 cat > "$TMP/bin/sleep" <<'STUB'
 #!/usr/bin/env bash
@@ -272,7 +278,8 @@ for operation in view create; do
   grep -q "release $operation v9.9.9 .*--repo Example/ReleaseFixture" "$GH_CALLS" && pass "release $operation uses configured repository" || fail "release $operation uses configured repository"
 done
 grep -q "repos/Example/ReleaseFixture/commits/$SHA/check-runs" "$GH_CALLS" && pass 'suite uses configured repository' || fail 'suite uses configured repository'
-grep -q 'https://api.github.com/repos/Example/ReleaseFixture/releases/tags/v9.9.9' "$CURL_CALLS" && pass 'Release API uses configured repository' || fail 'Release API uses configured repository'
+grep -q '^api repos/Example/ReleaseFixture/releases/tags/v9.9.9$' "$GH_CALLS" && pass 'Release verification uses authenticated gh for the configured repository' || fail 'Release verification uses authenticated gh for the configured repository'
+grep -q 'api.github.com' "$CURL_CALLS" && fail 'Release API is never called anonymously' || pass 'Release API is never called anonymously'
 grep -q 'https://raw.githubusercontent.com/Example/ReleaseFixture/v9.9.9/' "$CURL_CALLS" && pass 'bootstrap URL uses configured repository' || fail 'bootstrap URL uses configured repository'
 # No local tag: explain the exact non-destructive fetch needed before retry.
 git -C "$REPO" tag -d v9.9.9 > /dev/null
@@ -334,10 +341,14 @@ verify_api() {
   (
     set --
     source "$RELEASE_SH"
-    export CURL_BODY="$payload"
+    export GH_RELEASE_BODY="$payload"
     verify_remote_release v9.9.9
   ) > "$TMP/out" 2>&1
 }
+GH_RELEASE_API_FAIL=1 verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":false}' && fail 'API error fails release verification' || pass 'API error fails release verification'
+grep -q 'Check GH_TOKEN in CI or run gh auth status locally' "$TMP/out" && pass 'API failure is actionable' || fail 'API failure is actionable'
+verify_api '' && fail 'empty Release API response fails verification' || pass 'empty Release API response fails verification'
+grep -q 'empty response when verifying Release v9.9.9' "$TMP/out" && pass 'empty API response has a specific error' || fail 'empty API response has a specific error'
 verify_api '{"tag_name":"v9.9.9","draft":true,"prerelease":false}' && fail 'draft Release is not publication success' || pass 'draft Release is not publication success'
 verify_api '{"tag_name":"v9.9.9","draft":false,"prerelease":true}' && fail 'prerelease is not stable publication success' || pass 'prerelease is not stable publication success'
 verify_api '{"tag_name":"v1.0.0","draft":false,"prerelease":false}' && fail 'wrong Release identity fails verification' || pass 'wrong Release identity fails verification'

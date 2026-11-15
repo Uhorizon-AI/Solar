@@ -533,6 +533,15 @@ if args[:2] == ['auth', 'status']:
 if args and args[0] == 'api' and '/check-runs' in args[1]:
     print(json.dumps({'check_runs': [{'name': f'Suite ({platform}-latest)', 'conclusion': 'success', 'status': 'completed'} for platform in ['ubuntu', 'macos']]}))
     sys.exit(0)
+if args and args[0] == 'api' and args[1].startswith('repos/Example/Solar/releases/tags/'):
+    release = state / 'release.json'
+    if not release.exists():
+        sys.exit(1)
+    value = json.loads(release.read_text())
+    if args[1].rsplit('/', 1)[-1] != value['tag_name']:
+        sys.exit(1)
+    print(json.dumps(value))
+    sys.exit(0)
 if args[:2] == ['release', 'view']:
     if not (state / 'release.json').exists():
         sys.exit(1)
@@ -548,11 +557,12 @@ if args[:2] == ['release', 'create']:
 sys.exit(3)
 ''')
     (bins / 'curl').write_text('''#!/usr/bin/env python3
-import os, pathlib, sys
+import sys
 if '%{http_code}' in sys.argv:
     print('200', end='')
 else:
-    print((pathlib.Path(os.environ['FIXTURE_STATE']) / 'release.json').read_text())
+    print('HTTP 403 from anonymous API', file=sys.stderr)
+    sys.exit(22)
 ''')
     for executable in bins.iterdir():
         executable.chmod(0o755)
