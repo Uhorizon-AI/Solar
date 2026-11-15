@@ -2021,7 +2021,7 @@ PY
     snapshot="$(solar_client_running_snapshot)" || return 0
     if [[ -n "$snapshot" ]]; then
       install_root="$(solar_client_maintenance_field install_root)"
-      solar_client_describe_running "${1:-$SOLAR_ROOT}" "$snapshot" "$install_root"
+      solar_client_describe_running "${1:-$SOLAR_ROOT}" "$snapshot" "$install_root" false
     fi
   fi
 }
@@ -2061,10 +2061,13 @@ solar_client_async_busy() {
 # provider, how long it has been running) and the exact command that cancels it. Reads the JSON
 # stop_supervisor.sh printed; the title comes from solar-state. Says nothing when it cannot tell.
 # At most five executions are listed, each title cleaned and cut to 80 characters.
-# Args: install_root stop_output [cancellation_install_root]
+# Args: install_root stop_output [cancellation_install_root] [lookup_titles]
 solar_client_describe_running() {
-  local install_root="$1" stop_output="$2" state_py cancel_py runtime
-  state_py="$(solar_client_state_py "$install_root")"
+  local install_root="$1" stop_output="$2" state_py="" cancel_py runtime
+  # The task-field CLI may take a backup. Read-only reports use the supervisor snapshot alone.
+  if [[ "${4:-true}" == true ]]; then
+    state_py="$(solar_client_state_py "$install_root")"
+  fi
   cancel_py="${3:-$install_root}/core/skills/solar-async-tasks/scripts/task_cancel.py"
   runtime="$(solar_runtime_root)" || return 0
   python3 - "$state_py" "$cancel_py" "$stop_output" "$runtime" "${SOLAR_WORKSPACE:-}" <<'PY' || true
@@ -2084,13 +2087,14 @@ children = [c for c in children if isinstance(c, dict) and c.get("task_id")]
 for child in children[:MAX_SHOWN]:
     task_id = child["task_id"]
     title = ""
-    try:
-        done = subprocess.run([sys.executable, state_py, "task", "field", task_id, "title"],
-                              capture_output=True, text=True, timeout=5)
-        # solar_state.py prints indented JSON over several lines: read the whole output.
-        title = (json.loads(done.stdout).get("value") or "") if done.returncode == 0 else ""
-    except (ValueError, AttributeError, OSError, subprocess.SubprocessError):
-        pass
+    if state_py:
+        try:
+            done = subprocess.run([sys.executable, "-B", state_py, "task", "field", task_id, "title"],
+                                  capture_output=True, text=True, timeout=5)
+            # solar_state.py prints indented JSON over several lines: read the whole output.
+            title = (json.loads(done.stdout).get("value") or "") if done.returncode == 0 else ""
+        except (ValueError, AttributeError, OSError, subprocess.SubprocessError):
+            pass
     title = "".join(ch if ch.isprintable() else " " for ch in str(title)).strip()
     if len(title) > TITLE_LIMIT:
         title = title[:TITLE_LIMIT - 1] + "…"
@@ -2118,7 +2122,8 @@ PY
 solar_client_running_snapshot() {
   local runtime
   runtime="$(solar_runtime_root)" || return 0
-  python3 - "$runtime" "${SOLAR_WORKSPACE:-}" "$_CLIENT_LIB_SCRIPT_DIR/../../solar-async-tasks/scripts" <<'PY'
+  # A status or --check call must not write bytecode into the installation.
+  python3 -B - "$runtime" "${SOLAR_WORKSPACE:-}" "$_CLIENT_LIB_SCRIPT_DIR/../../solar-async-tasks/scripts" <<'PY'
 import json
 import sys
 from pathlib import Path
