@@ -75,6 +75,60 @@ def test_error_with_invalid_content_advertises_draft_recovery(ready, broken):
         assert not info["ready"] and info["execution_authorization"] == "not_available"
 
 
+def test_error_without_runtime_heading_refuses_requeue_when_it_changes_the_approved_definition(ready):
+    with solar_state.session() as store:
+        task = queued(store)
+        approved_definition = fm(store, task)["approved_definition"]
+        token = store.task_claim_detail(task, "test")["token"]
+        store.task_fail(task, "Unstructured failure text.\n", token=token)
+        before = store.task_get(task)
+        with pytest.raises(solar_state.TaskAuthorizationRefused) as exc:
+            store.task_requeue(task, expected_row_version=before["row_version"])
+        assert exc.value.code == "task_approval_required"
+        assert exc.value.readiness["content_approval"] == "mismatch"
+        assert exc.value.readiness["next_operation"]["arguments"]["operation"] == "task.return_to_draft"
+        assert "remove any unapproved failure text" in exc.value.readiness["message"]
+        assert store.task_get(task)["status"] == "error"
+        store.task_return_to_draft(task, expected_row_version=before["row_version"])
+        draft = store.task_get(task)
+        # Recovery must remove the unstructured runtime text before approving again.
+        store.task_set_body(task, "\n# T\n\n" + approved_definition + "\n")
+        draft = store.task_get(task)
+        store.task_approve(task, expected_row_version=draft["row_version"])
+        claim = store.task_claim_detail(task, "test-recovered")
+        assert claim["claimed"]
+        context = store.task_prompt_context(task, token=claim["token"])
+        assert context["instructions"] == approved_definition
+        assert "Unstructured failure text." not in context["instructions"]
+
+
+def test_snapshotless_requeue_preserves_authored_execution_error_heading(ready):
+    authored = "Do the work.\n\n## Execution Error\nThis is an authored example.\n"
+    with solar_state.session() as store:
+        task = store.task_create([("title", '"T"')], "\n# T\n\n" + authored,
+                                 status="queued")
+        # Model a valid historical approval that predates definition snapshots.
+        store.task_unset(task, "approved_definition")
+        store.task_unset(task, "definition_snapshot")
+        value = store.task_get(task)
+        store.task_set(task, "approved_digest", json.dumps(
+            solar_state.current_digest(value["frontmatter"], value["body"])))
+        claim = store.task_claim_detail(task, "test")
+        assert claim["claimed"]
+        store.task_fail(task, "## Execution Error\n- error: runtime failure\n",
+                        token=claim["token"])
+        store.task_requeue(task, expected_row_version=store.task_get(task)["row_version"])
+        requeued = store.task_get(task)
+        assert requeued["body"].count("## Execution Error") == 1
+        assert "This is an authored example." in requeued["body"]
+        claim = store.task_claim_detail(task, "test-again")
+        assert claim["claimed"]
+        context = store.task_prompt_context(task, token=claim["token"])
+        assert context["boundary"] == "ambiguous"
+        assert context["instructions"] == "Do the work."
+        assert "This is an authored example." in context["context"]
+
+
 @pytest.mark.parametrize("status", ["draft", "planned"])
 def test_new_definition_has_no_historical_context_or_ambiguity(ready, status):
     instructions = "Instruction.\n```md\n## Result\nAuthor example.\n```"
