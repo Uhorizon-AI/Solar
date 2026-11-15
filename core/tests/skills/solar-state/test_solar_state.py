@@ -184,7 +184,10 @@ def test_requeue_strips_generated_error_after_crlf_snapshot(ready):
         # Model the executor's CRLF output immediately after the approved snapshot.
         s.task_set_body(task, "\r\n# T\r\n\r\n" + snapshot +
                         "\r\n## Execution Error\r\n- error: runtime failure\r\n")
-        s.task_requeue(task, expected_row_version=s.task_get(task)["row_version"])
+        failed = s.task_get(task)
+        assert solar_state.runtime_tail(failed["body"], "T", snapshot) == (
+            "## Execution Error\r\n- error: runtime failure")
+        s.task_requeue(task, expected_row_version=failed["row_version"])
         requeued = s.task_get(task)
         assert requeued["status"] == "queued"
         assert "## Execution Error" not in requeued["body"]
@@ -202,9 +205,11 @@ def test_requeue_refuses_error_heading_without_snapshot_separator(ready):
         snapshot = dict((k, solar_state.value_of(v)) for k, v in s.task_get(task)["frontmatter"])[
             "approved_definition"]
         s.task_set_body(task, "\n# T\n\n" + snapshot +
-                        "## Execution Error\n- error: runtime failure\n")
+                        " \n## Execution Error\n- error: runtime failure\n")
+        failed = s.task_get(task)
+        assert solar_state.approval_state(failed["frontmatter"], failed["body"]) is None
         with pytest.raises(solar_state.TaskAuthorizationRefused) as exc:
-            s.task_requeue(task, expected_row_version=s.task_get(task)["row_version"])
+            s.task_requeue(task, expected_row_version=failed["row_version"])
         assert exc.value.code == "task_approval_required"
         assert exc.value.readiness["content_approval"] == "mismatch"
         assert s.task_get(task)["status"] == "error"

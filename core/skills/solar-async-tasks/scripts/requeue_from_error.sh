@@ -12,6 +12,6 @@ if [[ -z "$TASK_ID" ]]; then
     exit 1
 fi
 
-state task requeue "$TASK_ID" >/dev/null
+state task requeue "$TASK_ID" >/dev/null || exit $?
 echo "✅ Task $TASK_ID re-queued."
 echo "   It will run in the next eligible window (schedule/priority)."

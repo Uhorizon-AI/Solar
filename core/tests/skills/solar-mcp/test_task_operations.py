@@ -10,7 +10,7 @@ import pytest
 import mcp_server
 import solar_state
 import task_views
-from mcp_helpers import execute, new_task, run, search, stored
+from mcp_helpers import execute, new_task, queue_and_authorize, run, search, stored
 from reservation_tokens import token_of
 
 MADRID = "Europe/Madrid"
@@ -403,6 +403,7 @@ def test_requeue_refuses_invalid_approval_and_explains_recovery(solar_env, broke
         task_id=task_id, expected_row_version=stored(task_id)["row_version"]),
         "task_approval_required")
     assert "content approval is " + broken in body["error"]
+    assert ("remove any unapproved failure text" in body["error"]) == (broken == "mismatch")
     recovery = body["readiness"]["next_operation"]["arguments"]
     assert recovery["operation"] == "task.return_to_draft"
     assert stored(task_id)["status"] == "error"
@@ -412,6 +413,34 @@ def test_requeue_refuses_invalid_approval_and_explains_recovery(solar_env, broke
     assert draft["status"] == "draft" and "boom" in draft["body"]
     run("task.approve", dict(task_id=task_id, expected_row_version=draft["row_version"]))
     assert stored(task_id)["status"] == "queued"
+
+
+def test_requeue_recovers_unstructured_failure_through_mcp(solar_env):
+    instructions = "Start here.\n\n## Execution Error\nAn example in the original instructions."
+    failure = "Unstructured failure text."
+    task = new_task("T", instructions)
+    task_id = task["id"]
+    queue_and_authorize(task_id, task["row_version"])
+    with solar_state.session() as store:
+        claim = store.task_claim_detail(task_id, "first-worker")
+        assert claim["claimed"]
+        store.task_fail(task_id, failure, token=claim["token"])
+
+    refusal = refuse("task.requeue", dict(task_id=task_id,
+                     expected_row_version=stored(task_id)["row_version"]), "task_approval_required")
+    recovery = refusal["readiness"]["next_operation"]["arguments"]
+    draft = run(recovery["operation"], recovery["arguments"])
+    assert draft["status"] == "draft"
+    assert failure in stored(task_id)["body"]
+    edited = run("task.update", dict(task_id=task_id, expected_row_version=draft["row_version"],
+                                   instructions=instructions))
+    queue_and_authorize(task_id, edited["row_version"])
+    with solar_state.session() as store:
+        claim = store.task_claim_detail(task_id, "second-worker")
+        assert claim["claimed"]
+        prompt = store.task_prompt_context(task_id, token=claim["token"])
+        assert prompt["instructions"] == instructions
+        assert prompt["context"] == ""
 
 
 def test_cancel_with_a_stale_version_is_refused(solar_env):

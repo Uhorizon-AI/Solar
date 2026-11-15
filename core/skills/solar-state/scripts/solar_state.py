@@ -1255,12 +1255,17 @@ def runtime_tail(body: str, title: Optional[str] = None, snapshot: Optional[str]
     text = definition_text(body, title)
     rest = _after_snapshot(text, snapshot)
     if rest is None:
-        # No known boundary (an import): keep everything from the first runtime heading on.
-        # Keeping too much costs nothing; dropping a result cannot be undone.
-        lines = text.splitlines(keepends=True)
+        # An intact snapshot can precede unstructured failure text. Search only the
+        # suffix for recorded sections so authored headings stay in the definition.
+        candidate = text
+        if snapshot is not None and text.startswith(snapshot):
+            suffix = text[len(snapshot):]
+            if suffix.startswith(("\n", "\r")):
+                candidate = suffix
+        lines = candidate.splitlines(keepends=True)
         start = next((i for i, line in enumerate(lines) if _is_runtime_heading(line)), len(lines))
         rest = "".join(lines[start:])
-    return rest.strip("\n")
+    return rest.strip("\r\n")
 
 
 def current_definition(body: str, title: Optional[str] = None,
@@ -3025,11 +3030,14 @@ class Session:
                     id=task_id, status=row["status"], frontmatter=pairs,
                     body=row["body"], row_version=row["row_version"]),
                     expected_row_version)
+                recovery = "return it to draft and approve it again"
+                if approval == "mismatch":
+                    recovery = ("return it to draft, remove any unapproved failure text from the draft, "
+                                "and approve it again")
                 readiness.update(
                     code="task_approval_required",
                     content_approval=approval,
-                    message=(f"{task_id}: content approval is {approval}; return it to draft, "
-                             "remove any unapproved failure text from the draft, and approve it again"),
+                    message=f"{task_id}: content approval is {approval}; {recovery}",
                     next_operation=dict(tool="solar_execute", arguments=dict(
                         operation="task.return_to_draft", arguments=dict(
                             task_id=task_id, expected_row_version=row["row_version"]))))
@@ -3040,6 +3048,8 @@ class Session:
             snapshot = _field(pairs, "approved_definition")
             text = definition_text(row["body"], title)
             tail = _after_snapshot(text, snapshot)
+            # A missing line break after the snapshot can leave a generated error
+            # outside the trim boundary even when the fallback digest still matches.
             if (snapshot is not None and text.startswith(snapshot) and tail is None
                     and any(line.rstrip("\r\n") == "## Execution Error"
                             for line in text[len(snapshot):].splitlines(keepends=True))):
