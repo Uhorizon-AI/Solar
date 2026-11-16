@@ -1786,15 +1786,16 @@ def _route(raw: str, state_home: Optional[str] = None) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _state_home_request(raw: str) -> Tuple[Optional[str], Optional[Tuple[str, str, str]]]:
-    """Resolve the state home a request names, from names only: `{"planet": ..., "skill": ...}`.
+    """Resolve the state home a request names, from names only: `{"planet", "skill", "workspace"}`.
 
     Returns `(path, None)`, `(None, None)` when none is declared, or `(None, (request_id, code, message))`.
-    The request never carries a path: the router derives the official folder itself, with the same
-    function the worker uses, so no payload can open another folder. Only `async-task` requests may
-    declare one. A request that does not parse is left to `_route`.
+    The request never carries a path to open: the router derives the official folder itself, with the
+    same function the worker uses, so no payload can open another folder. Only an `async-task` request
+    may declare one, never a restricted one (`execution`), and the workspace the worker validated must
+    be this router's own. The request is parsed exactly as `_route` parses it.
     """
     try:
-        payload = json.loads(raw)
+        payload = parse_request_payload(raw)
         value = payload.get("state_home")
     except (ValueError, AttributeError):
         return None, None
@@ -1803,10 +1804,16 @@ def _state_home_request(raw: str) -> Tuple[Optional[str], Optional[Tuple[str, st
     request_id = str(payload.get("request_id") or "")
     if payload.get("channel") != "async-task":
         return None, (request_id, "state_home_invalid", "only an async-task request may declare a state home")
-    if not (isinstance(value, dict) and isinstance(value.get("planet"), str) and isinstance(value.get("skill"), str)):
-        return None, (request_id, "state_home_invalid", "state_home must be {\"planet\": ..., \"skill\": ...}")
+    if "execution" in payload:
+        return None, (request_id, "state_home_invalid", "a restricted request cannot declare a state home")
+    if not (isinstance(value, dict) and all(isinstance(value.get(k), str) for k in ("planet", "skill", "workspace"))):
+        return None, (request_id, "state_home_invalid",
+                      "state_home must be {\"planet\": ..., \"skill\": ..., \"workspace\": ...}")
+    workspace = pathlib.Path(SOLAR_WORKSPACE).resolve()
+    if pathlib.Path(value["workspace"]).resolve() != workspace:
+        return None, (request_id, "state_home_invalid", "the task's workspace is not this router's workspace")
     try:
-        return str(resolve_state_home(pathlib.Path(SOLAR_WORKSPACE), value["planet"], value["skill"])), None
+        return str(resolve_state_home(workspace, value["planet"], value["skill"])), None
     except StateHomeError as exc:
         return None, (request_id, exc.code, str(exc))
 

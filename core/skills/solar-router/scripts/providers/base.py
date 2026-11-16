@@ -100,8 +100,9 @@ class StateHomeGrant:
 
 
 # The one table of grants. A provider never builds its own flags: it asks `BaseProvider.assemble`.
-# Verified by hand on 2026-11-16 (issue #175): every client opened the folder with `--add-dir`,
-# next to its own sandbox flags. A client missing from the table (ollama) cannot receive a grant.
+# Measured by hand in issue #175 (versions listed there): every client opened the folder with `--add-dir`.
+# Not yet verified from a Solar task with each client's production sandbox flags: see the manual
+# procedure in core/docs/state-homes.md. A client missing from the table (ollama) cannot receive a grant.
 STATE_HOME_GRANTS: Dict[str, StateHomeGrant] = {
     "claude": StateHomeGrant("--add-dir", prompt_first=True),
     "codex": StateHomeGrant("--add-dir"),
@@ -113,7 +114,6 @@ STATE_HOME_GRANTS: Dict[str, StateHomeGrant] = {
 class BaseProvider(ABC):
     name: str = ""
     default_cmd: str = ""
-    # Set by the router for the duration of one request that declared a state home; None otherwise.
 
     def grant_args(self, state_home: Optional[str] = None) -> Optional[List[str]]:
         """Arguments that open the task's state home, or None when it declared none.

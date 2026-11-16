@@ -50,7 +50,9 @@ def test_declared_state_home_is_created_and_sent_to_the_router(tmp_path):
     proc, marker, *_ = run(tmp_path, [("state_home", '"watch"')])
     assert proc.returncode == 0, proc.stderr
     # names only: the router derives the folder, no path travels in the request
-    assert json.loads(marker.read_text())["state_home"] == {"planet": "p", "skill": "watch"}
+    sent = json.loads(marker.read_text())["state_home"]
+    assert {k: sent[k] for k in ("planet", "skill")} == {"planet": "p", "skill": "watch"}
+    assert set(sent) == {"planet", "skill", "workspace"}
     home = Path(tmp_path / "app-data" / "Solar" / "planets")
     assert any(d.name == "watch" for d in home.glob("*/watch"))
 

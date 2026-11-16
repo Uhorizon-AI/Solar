@@ -7,7 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
-- router: an unattended task can write to its skill's official state home (`<app data>/Solar/planets/<bucket>/<skill>/`). Opt-in on both sides: the task declares `state_home: <skill>` (covered by its approval) and the skill's SKILL.md declares `state_home: true`. One grant table in `providers/base.py` passes `--add-dir <that folder>` for claude, codex, agent and agy; nothing is added without the declaration, and a home that cannot be created fails the task with `state_home_unavailable` (no fallback). The MCP `task.create` argument is a separate step.
+- router: an unattended task can write to its skill's official state home (`<app data>/Solar/planets/<bucket>/<skill>/`). Opt-in on both sides: the task declares `state_home: <skill>` (covered by its approval; it fails with `state_home_invalid` on a restricted review or question, an `app`/`voice` preparation task or an `executor: local` task) and the skill's SKILL.md declares `state_home: true`. One grant table in `providers/base.py` passes `--add-dir <that folder>` for claude, codex, agent and agy; the worker sends the router only `{planet, skill, workspace}` and the router derives the folder itself (only on non-restricted `async-task` requests); the grant travels with each provider call; nothing is added without the declaration, and a home that cannot be created fails the task with `state_home_unavailable` (no fallback). The MCP `task.create` argument is a separate step.
 
 ### Fixed
 - routing-policy: Codex does not receive `--add-dir ~/.codex`; the document now matches `codex.py`.

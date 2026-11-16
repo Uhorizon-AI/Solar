@@ -91,8 +91,8 @@ planet state home. A skill whose state must live there opts in, on both sides:
 
 Before the provider starts, the worker resolves the folder with `planet_state_dir(path, skill,
 create=True)` so a missing home fails the task early, then sends the router only the names
-(`{"planet": ..., "skill": ...}`, never a path). The router, which accepts them only on `async-task`
-requests, derives the same official folder itself with the same function, so no request can name
+(`{"planet": ..., "skill": ..., "workspace": ...}`, never a path). The router, which accepts them only
+on `async-task` requests that are not restricted, and only when the workspace is its own, derives the same official folder itself with the same function, so no request can name
 another folder. It gives it to the provider through one table,
 `STATE_HOME_GRANTS` in `core/skills/solar-router/scripts/providers/base.py`:
 
@@ -110,8 +110,10 @@ Only that `<skill>/` folder is opened: not the planet bucket, not a sibling skil
 **No fallback.** If the skill did not opt in (`state_home_not_declared`), the names are not plain
 (`state_home_invalid`) or the folder cannot be created (`state_home_unavailable`), the task fails
 with that code; nothing is written elsewhere. The grant opens a folder; it does not replace the
-authority levels, `access_policy` or any domain gate. A restricted review or question cannot declare
-a state home.
+authority levels, `access_policy` or any domain gate. A task that cannot hold a grant fails with
+`state_home_invalid` instead of ending as a success that never had it: a restricted review or
+question, an `app` or `voice` preparation task (read-only), and an `executor: local` task (a script
+Solar runs itself, with no client sandbox to open).
 
 ### Manual verification
 

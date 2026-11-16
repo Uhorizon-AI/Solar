@@ -1164,14 +1164,14 @@ def main() -> int:
 
     # The official state home of the skill the task names (opt-in, issue #175). Resolved and created
     # before the provider starts; a home that cannot be had fails the task, never a fallback path.
-    state_home = None  # {"planet", "skill"}: names only, the router derives the folder itself
+    state_home = None  # {"planet", "skill", "workspace"}: names only, the router derives the folder itself
     if skill:
         from state_home import resolve_state_home, StateHomeError
         try:
             workspace = pathlib.Path(os.getenv("SOLAR_WORKSPACE") or task_root.parent.parent.parent).resolve()
             planet_name = read_frontmatter_key(task_file, "planet")
             resolve_state_home(workspace, planet_name, skill)  # fail the task here, before the router
-            state_home = {"planet": planet_name, "skill": skill}
+            state_home = {"planet": planet_name, "skill": skill, "workspace": str(workspace)}
         except StateHomeError as exc:
             mark_task_error(task_file, task_id, title, task_provider, exc.code, str(exc), log_file)
             return 1

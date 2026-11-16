@@ -150,9 +150,13 @@ def test_resolver_fails_clearly_when_the_home_cannot_be_created(tmp_path):
 
 # --- the router scope -------------------------------------------------------
 
-def payload_with(state_home, channel="async-task"):
+def names(ws, planet="p", skill="watch"):
+    return {"planet": planet, "skill": skill, "workspace": str(ws)}
+
+
+def payload_with(state_home, channel="async-task", **extra):
     return json.dumps(dict(request_id="r", session_id="s", user_id="u", text="hi", channel=channel,
-                           mode="direct_only", provider="claude", state_home=state_home))
+                           mode="direct_only", provider="claude", state_home=state_home, **extra))
 
 
 def test_router_passes_the_grant_with_the_call(tmp_path):
@@ -167,12 +171,12 @@ def test_router_passes_the_grant_with_the_call(tmp_path):
 
     with patch.object(router, "SOLAR_WORKSPACE", ws), \
             patch.object(PROVIDERS["claude"], "run", side_effect=fake_run):
-        out = router.route(payload_with({"planet": "p", "skill": "watch"}))
+        out = router.route(payload_with(names(ws)))
     assert out["status"] == "success" and seen["during"] == str(expected)
 
 
 @pytest.mark.parametrize("value", ["/", os.path.expanduser("~"), "/tmp", {"path": "/"},
-                                   {"planet": "p", "skill": "../other"}, {"planet": "p"}])
+                                   {"planet": "p", "skill": "../other", "workspace": "/x"}, {"planet": "p"}])
 def test_router_refuses_a_path_or_a_bad_declaration(value, tmp_path):
     ws = tmp_path / "workspace"
     make_skill(ws)
@@ -187,7 +191,7 @@ def test_router_only_grants_to_async_task_requests(tmp_path):
     make_skill(ws)
     with patch.object(router, "SOLAR_WORKSPACE", ws), \
             patch.object(PROVIDERS["claude"], "run", side_effect=AssertionError("must not run")):
-        out = router.route(payload_with({"planet": "p", "skill": "watch"}, channel="app"))
+        out = router.route(payload_with(names(ws), channel="app"))
     assert out["error_code"] == "state_home_invalid"
 
 
@@ -195,8 +199,45 @@ def test_router_refuses_a_skill_that_did_not_opt_in(tmp_path):
     ws = tmp_path / "workspace"
     make_skill(ws, declared=None)
     with patch.object(router, "SOLAR_WORKSPACE", ws):
-        out = router.route(payload_with({"planet": "p", "skill": "watch"}))
+        out = router.route(payload_with(names(ws)))
     assert out["error_code"] == "state_home_not_declared"
+
+
+def test_router_refuses_a_restricted_request_before_creating_anything(tmp_path):
+    ws = tmp_path / "workspace"
+    make_skill(ws)
+    with patch.object(router, "SOLAR_WORKSPACE", ws), \
+            patch.object(router, "resolve_state_home", side_effect=AssertionError("must not resolve")):
+        out = router.route(payload_with(names(ws), execution={"task_id": "t"}))
+    assert out["error_code"] == "state_home_invalid"
+
+
+def test_router_refuses_a_workspace_that_is_not_its_own(tmp_path):
+    ws, other = tmp_path / "workspace", tmp_path / "other"
+    make_skill(ws)
+    with patch.object(router, "SOLAR_WORKSPACE", ws):
+        out = router.route(payload_with(names(other)))
+    assert out["error_code"] == "state_home_invalid"
+
+
+def test_router_reads_the_declaration_the_way_it_dispatches_the_request(tmp_path):
+    """A request only the tolerant parser accepts (raw newline in a string) still gets its grant."""
+    ws = tmp_path / "workspace"
+    make_skill(ws)
+    strict = payload_with(names(ws))
+    raw = strict.replace('"text": "hi"', '"text": "hi\nthere"'.replace("\\n", "\n"))
+    assert "\n" in raw
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(raw)
+    seen = {}
+
+    def fake_run(prompt, **kw):
+        seen["kw"] = kw
+        return "ok"
+
+    with patch.object(router, "SOLAR_WORKSPACE", ws), patch.object(PROVIDERS["claude"], "run", side_effect=fake_run):
+        out = router.route(raw)
+    assert out["status"] == "success" and "state_home" in seen["kw"]
 
 
 def test_router_stream_refuses_with_the_same_code(tmp_path):
@@ -243,7 +284,7 @@ def test_pinned_ollama_keeps_the_state_home_error_code(tmp_path):
     ws = tmp_path / "workspace"
     make_skill(ws)
     payload = json.dumps(dict(request_id="r", session_id="s", user_id="u", text="hi", channel="async-task",
-                              mode="direct_only", provider="ollama", state_home={"planet": "p", "skill": "watch"}))
+                              mode="direct_only", provider="ollama", state_home=names(ws)))
     with patch.object(router, "SOLAR_WORKSPACE", ws):
         out = router.route(payload)
     assert out["status"] == "failed" and out["error_code"] == "state_home_unsupported_provider"
@@ -254,7 +295,7 @@ def test_home_that_vanishes_before_launch_keeps_its_code(tmp_path):
     make_skill(ws)
     gone = str(tmp_path / "gone")
     with patch.object(router, "_state_home_request", return_value=(gone, None)):
-        out = router.route(payload_with({"planet": "p", "skill": "watch"}))
+        out = router.route(payload_with(names(ws)))
     assert out["status"] == "failed" and out["error_code"] == "state_home_unavailable"
 
 
