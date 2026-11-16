@@ -1433,7 +1433,7 @@ def _restricted_route(payload, *, stream=False):
 # Core routing — streaming
 # ---------------------------------------------------------------------------
 
-def route_stream(raw: str):
+def _route_stream(raw: str):
     """Streaming variant. Yields JSONL lines; final done includes decision + reply_text."""
     if not raw:
         yield json.dumps({"type": "done", "status": "failed", "error": "missing input", "provider": None, "request_id": "unknown"})
@@ -1603,7 +1603,7 @@ def route_stream(raw: str):
 # Core routing — non-streaming
 # ---------------------------------------------------------------------------
 
-def route(raw: str) -> Dict[str, Any]:
+def _route(raw: str) -> Dict[str, Any]:
     if not raw:
         return _failed("unknown", "missing_input", "missing stdin payload")
 
@@ -1755,3 +1755,47 @@ def route(raw: str) -> Dict[str, Any]:
         "error_code": None,
         "error": None,
     }
+
+
+# ---------------------------------------------------------------------------
+# State home: the one folder a task may write to besides the workspace (issue #175)
+# ---------------------------------------------------------------------------
+
+def _declared_state_home(raw: str) -> Optional[str]:
+    """The `state_home` of a request, or None. A request that does not parse is left to `route`."""
+    try:
+        value = json.loads(raw).get("state_home")
+    except (ValueError, AttributeError):
+        return None
+    return None if value is None else str(value)
+
+
+class _StateHomeScope:
+    """Give every provider the declared state home for one request, and take it back after.
+
+    Nothing is granted unless the request names a folder. The providers refuse, each in its own
+    terms, a folder that is not a directory or a client that has no entry in the grant table.
+    """
+
+    def __init__(self, path: Optional[str]):
+        self.path = path
+
+    def __enter__(self):
+        for provider in PROVIDERS.values():
+            provider.state_home = self.path
+        return self
+
+    def __exit__(self, *exc):
+        for provider in PROVIDERS.values():
+            provider.state_home = None
+        return False
+
+
+def route(raw: str) -> Dict[str, Any]:
+    with _StateHomeScope(_declared_state_home(raw)):
+        return _route(raw)
+
+
+def route_stream(raw: str):
+    with _StateHomeScope(_declared_state_home(raw)):
+        yield from _route_stream(raw)

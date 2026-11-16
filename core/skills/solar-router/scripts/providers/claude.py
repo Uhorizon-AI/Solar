@@ -96,7 +96,7 @@ class ClaudeProvider(BaseProvider):
             raw += " --include-partial-messages"
         parts = shlex.split(raw)
         parts[0] = self.resolve_binary(parts[0])
-        cmd = parts + [prompt]
+        cmd = self.assemble(parts, prompt)
 
         env = self.prepare_env(os.environ.copy())
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)

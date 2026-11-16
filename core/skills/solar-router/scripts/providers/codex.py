@@ -92,7 +92,7 @@ class CodexProvider(BaseProvider):
         else:
             parts.append("--json")
 
-        cmd = parts + [prompt]
+        cmd = self.assemble(parts, prompt)
         env = self.prepare_env(os.environ.copy())
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
         debug = os.getenv("SOLAR_ROUTER_CODEX_DEBUG_EVENTS", "").strip() == "1"

@@ -76,8 +76,7 @@ class AgyProvider(BaseProvider):
                 continue
             out.append(tok)
             i += 1
-        out.extend(["--print", prompt])
-        return out
+        return self.assemble(out, prompt, ["--print", prompt])
 
     def ask_separator(self):
         # The prompt is the value of --print, so it can never be read as an option.

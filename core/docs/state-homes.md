@@ -79,3 +79,43 @@ Both expose the same CLI through `solar_runtime.py`:
 python3 core/skills/solar-paths/scripts/solar_runtime.py runtime async-tasks
 python3 core/skills/solar-paths/scripts/solar_runtime.py planet /path/to/planets/<planet> <skill>
 ```
+
+## Unattended tasks and their state home
+
+A task launched by the router runs inside each client's own sandbox, which denies writes to the
+planet state home. A skill whose state must live there opts in, on both sides:
+
+1. The skill's `SKILL.md` frontmatter says `state_home: true`.
+2. The task says `state_home: <skill>` (with its `planet`). It is part of what the user approves:
+   changing it needs a new approval; a task that does not declare it hashes as before.
+
+Before the provider starts, the worker resolves the folder with `planet_state_dir(path, skill,
+create=True)` and hands it to the router. The router gives it to the provider through one table,
+`STATE_HOME_GRANTS` in `core/skills/solar-router/scripts/providers/base.py`:
+
+| Client | Grant | Where the prompt goes |
+|---|---|---|
+| claude | `--add-dir <home>` | before the option (it is variadic and would swallow the prompt) |
+| codex | `--add-dir <home>` | after it, before `--` |
+| agent | `--add-dir <home>` | after it |
+| agy | `--add-dir <home>` | after it, before `--print <prompt>` |
+
+Only that `<skill>/` folder is opened: not the planet bucket, not a sibling skill, not
+`~/Library/Application Support/Solar` or `~/.local/state/solar`. A client that is not in the table
+(ollama) refuses the task. Without a declaration, no provider command changes.
+
+**No fallback.** If the skill did not opt in (`state_home_not_declared`), the names are not plain
+(`state_home_invalid`) or the folder cannot be created (`state_home_unavailable`), the task fails
+with that code; nothing is written elsewhere. The grant opens a folder; it does not replace the
+authority levels, `access_policy` or any domain gate. A restricted review or question cannot declare
+a state home.
+
+### Manual verification
+
+The sandbox itself is the client's, so the denial can only be seen with the real clients (versions
+measured in issue #175: claude 2.1.323, codex-cli 0.167.0, Cursor agent 2026.11.13, agy 1.5.9). For
+each client, run a task with `state_home` that (a) writes and reads `probe.txt` in the home,
+(b) tries to write in a sibling skill folder, in the planet bucket and in `~/.local/state/solar`,
+and expect (a) to succeed and every write in (b) to fail with `operation not permitted`. Record the
+client version and the observed result. Automated tests only check the command Solar builds.
+

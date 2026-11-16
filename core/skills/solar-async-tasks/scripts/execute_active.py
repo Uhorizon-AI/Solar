@@ -276,6 +276,7 @@ def call_router(
     prompt: str,
     provider: Optional[str],
     execution=None,
+    state_home: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Call solar-router v3 with channel=async-task, mode=direct_only.
@@ -299,6 +300,8 @@ def call_router(
         payload["provider"] = provider
     if execution is not None:
         payload["execution"] = execution
+    if state_home:
+        payload["state_home"] = state_home
 
     proc = run_managed(
         [router_python, str(router_script)],
@@ -1146,10 +1149,28 @@ def main() -> int:
             mark_task_error(task_file, task_id, title, None, mark, mark, log_file)
             return 1
 
+    # The official state home of the skill the task names (opt-in, issue #175). Resolved and created
+    # before the provider starts; a home that cannot be had fails the task, never a fallback path.
+    state_home = None
+    skill = read_frontmatter_key(task_file, "state_home").strip().strip('"')
+    if skill and restricted:
+        mark_task_error(task_file, task_id, title, task_provider, "state_home_invalid",
+                        "a restricted review or question cannot declare a state home", log_file)
+        return 1
+    if skill and read_frontmatter_key(task_file, "origin_channel") not in ("app", "voice"):
+        from state_home import resolve_state_home, StateHomeError
+        try:
+            workspace = pathlib.Path(os.getenv("SOLAR_WORKSPACE") or task_root.parent.parent.parent).resolve()
+            state_home = str(resolve_state_home(workspace, read_frontmatter_key(task_file, "planet"), skill))
+        except StateHomeError as exc:
+            mark_task_error(task_file, task_id, title, task_provider, exc.code, str(exc), log_file)
+            return 1
+
     # Call router
     print(f"  Calling router (channel=async-task, mode=direct_only, provider={task_provider or 'priority'}) ...", flush=True)
     try:
-        response = call_router(router_script, task_id, prompt, task_provider, execution=execution)
+        response = call_router(router_script, task_id, prompt, task_provider, execution=execution,
+                               state_home=state_home)
     except ProcessCancelled:
         _acknowledge(task_id)
         return 130

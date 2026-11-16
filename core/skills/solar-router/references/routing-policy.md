@@ -46,7 +46,8 @@ SOLAR_SYSTEM_FEATURES=async-tasks,transport-gateway
 
 - The router runs each provider with `cwd` = repo root.
 - Relative paths (`SOLAR_ROUTER_SYSTEM_PROMPT_FILE`, `SOLAR_ROUTER_RUNTIME_DIR`) are resolved against the repo root.
-- Codex additionally receives `-C <repo-root>` and `--add-dir ~/.codex` in its command.
+- Codex additionally receives `-C <repo-root>` in its command. It does not receive `--add-dir ~/.codex`: no client is given extra writable paths by default.
+- A task that declares `state_home` gets one more writable folder, `<app data>/Solar/planets/<bucket>/<skill>/`, through the single grant table in `providers/base.py` (`--add-dir` for claude, codex, agent and agy; claude's prompt goes before it because the option is variadic). A client without an entry (ollama) refuses. See `core/docs/state-homes.md`.
 
 ## Command overrides
 

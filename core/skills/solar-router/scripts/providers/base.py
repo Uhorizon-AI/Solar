@@ -23,6 +23,7 @@ if str(_PATHS_SCRIPTS) not in sys.path:
 import solar_runtime  # noqa: E402
 from permission_model import MCP_READ_TOOLS  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
+from state_home import StateHomeError  # noqa: E402,F401  (re-exported for the providers)
 
 SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
 
@@ -86,9 +87,69 @@ def raise_restricted_failure(provider_name: str, failure: str | None, returncode
     raise RuntimeError("restricted provider returned non-zero (" + (failure or f"exit {returncode}") + ")")
 
 
+@dataclass(frozen=True)
+class StateHomeGrant:
+    """How one client is told that a single extra folder is writable.
+
+    `prompt_first`: the client's option is variadic and would swallow a positional prompt that
+    follows it, so the prompt has to come before the option (measured on claude 2.1.323).
+    """
+
+    flag: str
+    prompt_first: bool = False
+
+
+# The one table of grants. A provider never builds its own flags: it asks `BaseProvider.assemble`.
+# Verified by hand on 2026-11-16 (issue #175): every client opened the folder with `--add-dir`,
+# next to its own sandbox flags. A client missing from the table (ollama) cannot receive a grant.
+STATE_HOME_GRANTS: Dict[str, StateHomeGrant] = {
+    "claude": StateHomeGrant("--add-dir", prompt_first=True),
+    "codex": StateHomeGrant("--add-dir"),
+    "agent": StateHomeGrant("--add-dir"),
+    "agy": StateHomeGrant("--add-dir"),
+}
+
+
 class BaseProvider(ABC):
     name: str = ""
     default_cmd: str = ""
+    # Set by the router for the duration of one request that declared a state home; None otherwise.
+    state_home: Optional[str] = None
+
+    def grant_args(self) -> Optional[List[str]]:
+        """Arguments that open the task's state home, or None when it declared none.
+
+        Refuses, with no fallback, a client that has no entry in the table, and a folder that is not
+        an absolute existing directory: the grant names exactly that folder and nothing above it.
+        """
+        if not self.state_home:
+            return None
+        grant = STATE_HOME_GRANTS.get(self.name)
+        if grant is None:
+            raise StateHomeError("state_home_unsupported_provider",
+                                 f"provider {self.name} cannot grant write access to a state home")
+        path = pathlib.Path(self.state_home)
+        if not path.is_absolute() or not path.is_dir():
+            raise StateHomeError("state_home_unavailable", f"state home is not an existing directory: {path}")
+        return [grant.flag, str(path)]
+
+    def assemble(self, parts: List[str], prompt: str, prompt_args: Optional[List[str]] = None) -> List[str]:
+        """The final argv: the client's own command, the state-home grant if any, then the prompt.
+
+        Without a state home the result is exactly `parts + prompt_args`: nothing is added.
+        `prompt_args` is what carries the prompt (`[prompt]` unless the client binds it to an option).
+        """
+        tail = list(prompt_args) if prompt_args is not None else [prompt]
+        grant = self.grant_args()
+        if grant is None:
+            return list(parts) + tail
+        if STATE_HOME_GRANTS[self.name].prompt_first:
+            return list(parts) + tail + grant
+        parts = list(parts)
+        if "--" in parts:
+            at = parts.index("--")
+            return parts[:at] + grant + parts[at:] + tail
+        return parts + grant + tail
 
     def build_default_cmd(self) -> str:
         return self.default_cmd
@@ -115,7 +176,7 @@ class BaseProvider(ABC):
         if not parts:
             raise RuntimeError(f"{new_key} is empty")
         parts[0] = self.resolve_binary(parts[0])
-        return parts + [prompt]
+        return self.assemble(parts, prompt)
 
     def prepare_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         """Tell the provider where it is, before it has to guess.
