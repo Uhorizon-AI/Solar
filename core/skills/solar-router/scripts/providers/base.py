@@ -100,9 +100,9 @@ class StateHomeGrant:
 
 
 # The one table of grants. A provider never builds its own flags: it asks `BaseProvider.assemble`.
-# Measured by hand in issue #175 (versions listed there): every client opened the folder with `--add-dir`.
-# Not yet verified from a Solar task with each client's production sandbox flags: see the manual
-# procedure in core/docs/state-homes.md. A client missing from the table (ollama) cannot receive a grant.
+# Measured in issue #175 and re-checked on 2026-11-17 through the router with each client's production
+# sandbox flags: every client opened the folder with `--add-dir` and nothing else (results in
+# core/docs/state-homes.md, "Manual verification"). A client missing from the table (ollama) cannot receive a grant.
 STATE_HOME_GRANTS: Dict[str, StateHomeGrant] = {
     "claude": StateHomeGrant("--add-dir", prompt_first=True),
     "codex": StateHomeGrant("--add-dir"),

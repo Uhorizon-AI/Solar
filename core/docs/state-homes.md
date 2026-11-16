@@ -124,3 +124,16 @@ each client, run a task with `state_home` that (a) writes and reads `probe.txt` 
 and expect (a) to succeed and every write in (b) to fail with `operation not permitted`. Record the
 client version and the observed result. Automated tests only check the command Solar builds.
 
+Result of 2026-11-17, through `run_router.py` with each client's production flags (a throwaway planet and
+its state home; the script checks the disk, not what the client says):
+
+| Client (version) | Write in the skill's home | Sibling skill | Planet bucket | `~/.local/state/solar` |
+|---|---|---|---|---|
+| claude 2.1.323 | written | denied | denied | denied |
+| codex-cli 0.167.0 | written | denied | denied | denied |
+| Cursor agent 2026.11.13 | written | denied | denied | denied |
+| agy 1.5.9 | written | denied | denied | denied |
+
+For agy the request ended `failed` (`provider_locked_failed`): the probe asked it to try the three
+forbidden writes, `write_file` was auto-denied in headless mode and the client returned no output. The
+disk shows the isolation held; a real task that writes only in its home does not hit that path.
