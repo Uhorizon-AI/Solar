@@ -70,7 +70,7 @@ class AgentProvider(BaseProvider):
                             "permissions.allow lists the Solar read tools, but no mcp.json could be read to confirm the server is registered")]
         return [Finding(self.name, "mcp_read", OK, "static", "permissions.allow lists the Solar read tools")]
 
-    def stream(self, prompt: str, *, review=None):
+    def stream(self, prompt: str, *, review=None, state_home=None):
         if review is not None:
             yield from self.stream_review(**review)
             return
@@ -84,7 +84,7 @@ class AgentProvider(BaseProvider):
             raw += " --output-format stream-json"
         parts = shlex.split(raw)
         parts[0] = self.resolve_binary(parts[0])
-        cmd = self.assemble(parts, prompt)
+        cmd = self.assemble(parts, prompt, state_home=state_home)
 
         env = self.prepare_env(os.environ.copy())
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)

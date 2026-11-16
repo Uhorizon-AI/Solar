@@ -46,12 +46,12 @@ class OllamaProvider(BaseProvider):
 
         return cleaned
 
-    def run(self, prompt: str, *, review=None) -> str:
+    def run(self, prompt: str, *, review=None, state_home=None) -> str:
         if review is not None:
             return self.run_review(**review)
-        self.grant_args()  # ollama has no grant: a declared state home is refused, never ignored
+        self.grant_args(state_home)  # ollama has no grant: a declared state home is refused, never ignored
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
-        cmd = self.get_cmd(prompt)
+        cmd = self.get_cmd(prompt, state_home=state_home)
         env = self.prepare_env(os.environ.copy())
         self.log_prompt(prompt)
         proc = subprocess.run(

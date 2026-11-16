@@ -90,7 +90,10 @@ planet state home. A skill whose state must live there opts in, on both sides:
    changing it needs a new approval; a task that does not declare it hashes as before.
 
 Before the provider starts, the worker resolves the folder with `planet_state_dir(path, skill,
-create=True)` and hands it to the router. The router gives it to the provider through one table,
+create=True)` so a missing home fails the task early, then sends the router only the names
+(`{"planet": ..., "skill": ...}`, never a path). The router, which accepts them only on `async-task`
+requests, derives the same official folder itself with the same function, so no request can name
+another folder. It gives it to the provider through one table,
 `STATE_HOME_GRANTS` in `core/skills/solar-router/scripts/providers/base.py`:
 
 | Client | Grant | Where the prompt goes |

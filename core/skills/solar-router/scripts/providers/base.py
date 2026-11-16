@@ -114,33 +114,33 @@ class BaseProvider(ABC):
     name: str = ""
     default_cmd: str = ""
     # Set by the router for the duration of one request that declared a state home; None otherwise.
-    state_home: Optional[str] = None
 
-    def grant_args(self) -> Optional[List[str]]:
+    def grant_args(self, state_home: Optional[str] = None) -> Optional[List[str]]:
         """Arguments that open the task's state home, or None when it declared none.
 
         Refuses, with no fallback, a client that has no entry in the table, and a folder that is not
         an absolute existing directory: the grant names exactly that folder and nothing above it.
         """
-        if not self.state_home:
+        if not state_home:
             return None
         grant = STATE_HOME_GRANTS.get(self.name)
         if grant is None:
             raise StateHomeError("state_home_unsupported_provider",
                                  f"provider {self.name} cannot grant write access to a state home")
-        path = pathlib.Path(self.state_home)
+        path = pathlib.Path(state_home)
         if not path.is_absolute() or not path.is_dir():
             raise StateHomeError("state_home_unavailable", f"state home is not an existing directory: {path}")
         return [grant.flag, str(path)]
 
-    def assemble(self, parts: List[str], prompt: str, prompt_args: Optional[List[str]] = None) -> List[str]:
+    def assemble(self, parts: List[str], prompt: str, prompt_args: Optional[List[str]] = None,
+                 state_home: Optional[str] = None) -> List[str]:
         """The final argv: the client's own command, the state-home grant if any, then the prompt.
 
         Without a state home the result is exactly `parts + prompt_args`: nothing is added.
         `prompt_args` is what carries the prompt (`[prompt]` unless the client binds it to an option).
         """
         tail = list(prompt_args) if prompt_args is not None else [prompt]
-        grant = self.grant_args()
+        grant = self.grant_args(state_home)
         if grant is None:
             return list(parts) + tail
         if STATE_HOME_GRANTS[self.name].prompt_first:
@@ -168,7 +168,7 @@ class BaseProvider(ABC):
             )
         return found
 
-    def get_cmd(self, prompt: str) -> List[str]:
+    def get_cmd(self, prompt: str, state_home: Optional[str] = None) -> List[str]:
         new_key = f"SOLAR_ROUTER_{self.name.upper()}_CMD"
         old_key = f"SOLAR_AI_{self.name.upper()}_CMD"
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
@@ -176,7 +176,7 @@ class BaseProvider(ABC):
         if not parts:
             raise RuntimeError(f"{new_key} is empty")
         parts[0] = self.resolve_binary(parts[0])
-        return self.assemble(parts, prompt)
+        return self.assemble(parts, prompt, state_home=state_home)
 
     def prepare_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         """Tell the provider where it is, before it has to guess.
@@ -331,15 +331,15 @@ class BaseProvider(ABC):
     def ask_separator(self) -> List[str]:
         return []
 
-    def stream(self, prompt: str, *, review=None):
+    def stream(self, prompt: str, *, review=None, state_home: Optional[str] = None):
         """Default: single chunk via run(). Override for real streaming."""
-        yield self.run(prompt, review=review)
+        yield self.run(prompt, review=review, state_home=state_home)
 
-    def run(self, prompt: str, *, review=None) -> str:
+    def run(self, prompt: str, *, review=None, state_home: Optional[str] = None) -> str:
         if review is not None:
             return self.run_review(**review)
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
-        cmd = self.get_cmd(prompt)
+        cmd = self.get_cmd(prompt, state_home=state_home)
         env = self.prepare_env(os.environ.copy())
         self.log_prompt(prompt)
         proc = subprocess.run(

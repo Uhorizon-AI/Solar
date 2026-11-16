@@ -49,8 +49,10 @@ def test_without_state_home_the_router_request_has_none(tmp_path):
 def test_declared_state_home_is_created_and_sent_to_the_router(tmp_path):
     proc, marker, *_ = run(tmp_path, [("state_home", '"watch"')])
     assert proc.returncode == 0, proc.stderr
-    sent = Path(json.loads(marker.read_text())["state_home"])
-    assert sent.is_dir() and sent.name == "watch" and sent.parent.parent.name == "planets"
+    # names only: the router derives the folder, no path travels in the request
+    assert json.loads(marker.read_text())["state_home"] == {"planet": "p", "skill": "watch"}
+    home = Path(tmp_path / "app-data" / "Solar" / "planets")
+    assert any(d.name == "watch" for d in home.glob("*/watch"))
 
 
 def test_skill_that_did_not_opt_in_fails_the_task_and_never_calls_the_router(tmp_path):
@@ -74,3 +76,13 @@ def test_state_home_is_part_of_the_approval():
     other = solar_state.material_digest(base + [["state_home", ' "other"']], "body")
     assert plain != declared != other
     assert solar_state.material_digest(list(base), "body") == plain
+
+
+@pytest.mark.parametrize("extra", [("origin_channel", '"app"'), ("origin_channel", '"voice"'), ("executor", '"local"')])
+def test_tasks_that_cannot_hold_a_grant_fail_instead_of_ignoring_it(tmp_path, extra):
+    fields = [("state_home", '"watch"'), extra]
+    if extra[0] == "executor":
+        fields.append(("local_command", '"bash planets/p/skills/watch/scripts/x.sh"'))
+    proc, marker, root, task = run(tmp_path, fields)
+    assert proc.returncode == 1 and not marker.exists()
+    assert "state_home_invalid" in (root / "error" / f"{task}.md").read_text()

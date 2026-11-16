@@ -49,7 +49,7 @@ class AgyProvider(BaseProvider):
         settings = shlex.quote(json.dumps(native_sandbox_settings(), separators=(",", ":")))
         return f"agy --sandbox --mode accept-edits --settings {settings} --add-dir {SOLAR_WORKSPACE}"
 
-    def get_cmd(self, prompt: str) -> list:
+    def get_cmd(self, prompt: str, state_home=None) -> list:
         """Build argv with the prompt bound to --print, never as a bare trailing arg.
 
         Strips any bare or ``=``-form -p/--print/--prompt from the env/default
@@ -76,7 +76,7 @@ class AgyProvider(BaseProvider):
                 continue
             out.append(tok)
             i += 1
-        return self.assemble(out, prompt, ["--print", prompt])
+        return self.assemble(out, prompt, ["--print", prompt], state_home=state_home)
 
     def ask_separator(self):
         # The prompt is the value of --print, so it can never be read as an option.

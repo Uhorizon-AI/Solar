@@ -73,7 +73,7 @@ class CodexProvider(BaseProvider):
             read = unknown(self.name, "mcp_read", "registered; only the probe shows whether a read call is approved")
         return [read, write]
 
-    def stream(self, prompt: str, *, review=None):
+    def stream(self, prompt: str, *, review=None, state_home=None):
         if review is not None:
             yield from self.stream_review(**review)
             return
@@ -92,7 +92,7 @@ class CodexProvider(BaseProvider):
         else:
             parts.append("--json")
 
-        cmd = self.assemble(parts, prompt)
+        cmd = self.assemble(parts, prompt, state_home=state_home)
         env = self.prepare_env(os.environ.copy())
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
         debug = os.getenv("SOLAR_ROUTER_CODEX_DEBUG_EVENTS", "").strip() == "1"

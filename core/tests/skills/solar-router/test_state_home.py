@@ -26,16 +26,9 @@ def home(tmp_path):
     return path
 
 
-@pytest.fixture(autouse=True)
-def clean_providers():
-    yield
-    for provider in PROVIDERS.values():
-        provider.state_home = None
-
-
-def argv(name, prompt="do it"):
+def argv(name, prompt="do it", home=None):
     with patch("providers.base.shutil.which", side_effect=lambda b, path=None: f"/bin/{b}"):
-        return PROVIDERS[name].get_cmd(prompt)
+        return PROVIDERS[name].get_cmd(prompt, state_home=str(home) if home else None)
 
 
 # --- the grant table --------------------------------------------------------
@@ -45,20 +38,24 @@ def test_table_has_exactly_the_four_verified_clients():
     assert all(g.flag == "--add-dir" for g in STATE_HOME_GRANTS.values())
 
 
-@pytest.mark.parametrize("name", GRANTED)
-def test_no_state_home_leaves_the_command_unchanged(name):
-    before = argv(name)
-    PROVIDERS[name].state_home = None
-    assert argv(name) == before
-    # only agy carries a workspace --add-dir of its own; nobody gets a second one
-    assert before.count("--add-dir") == (1 if name == "agy" else 0)
+@pytest.mark.parametrize("name,expected", [
+    ("claude", ["/bin/c", "-p", "P"]),
+    ("codex", ["/bin/c", "exec", "--", "P"]),
+    ("agent", ["/bin/c", "-p", "P"]),
+    ("agy", ["/bin/c", "--sandbox", "--print", "P"]),
+])
+def test_no_state_home_leaves_the_command_unchanged(name, expected, monkeypatch):
+    """With a fixed client command, no declaration adds nothing: exactly the command plus the prompt."""
+    monkeypatch.setenv(f"SOLAR_ROUTER_{name.upper()}_CMD", {
+        "claude": "c -p", "codex": "c exec --", "agent": "c -p", "agy": "c --sandbox"}[name])
+    assert argv(name, "P") == expected
+    assert "--add-dir" not in argv(name, "P")
 
 
 @pytest.mark.parametrize("name", GRANTED)
 def test_grant_adds_only_the_state_home(name, home):
     baseline = argv(name)
-    PROVIDERS[name].state_home = str(home)
-    granted = argv(name)
+    granted = argv(name, home=home)
     assert granted.count("--add-dir") == baseline.count("--add-dir") + 1
     # the only new path is the skill folder: no parent, no sibling
     new_paths = [a for a in granted if a.startswith("/") and a not in baseline]
@@ -66,43 +63,36 @@ def test_grant_adds_only_the_state_home(name, home):
 
 
 def test_claude_puts_the_prompt_before_the_variadic_option(home):
-    PROVIDERS["claude"].state_home = str(home)
-    cmd = argv("claude", "PROMPT")
+    cmd = argv("claude", "PROMPT", home)
     assert cmd[-3:] == ["PROMPT", "--add-dir", str(home)]
 
 
 def test_codex_grant_stays_before_the_separator(home):
-    PROVIDERS["codex"].state_home = str(home)
-    cmd = argv("codex", "PROMPT")
+    cmd = argv("codex", "PROMPT", home)
     sep = cmd.index("--")
     assert cmd.index("--add-dir") < sep and cmd[sep + 1:] == ["PROMPT"]
 
 
 def test_agent_and_agy_keep_the_prompt_last(home):
-    PROVIDERS["agent"].state_home = str(home)
-    assert argv("agent", "PROMPT")[-3:] == ["--add-dir", str(home), "PROMPT"]
-    PROVIDERS["agy"].state_home = str(home)
-    assert argv("agy", "PROMPT")[-4:] == ["--add-dir", str(home), "--print", "PROMPT"]
+    assert argv("agent", "PROMPT", home)[-3:] == ["--add-dir", str(home), "PROMPT"]
+    assert argv("agy", "PROMPT", home)[-4:] == ["--add-dir", str(home), "--print", "PROMPT"]
 
 
 def test_env_override_still_receives_the_grant(home, monkeypatch):
     monkeypatch.setenv("SOLAR_ROUTER_CODEX_CMD", "mycodex exec --")
-    PROVIDERS["codex"].state_home = str(home)
-    assert argv("codex", "P")[1:] == ["exec", "--add-dir", str(home), "--", "P"]
+    assert argv("codex", "P", home)[1:] == ["exec", "--add-dir", str(home), "--", "P"]
 
 
 def test_ollama_refuses_a_state_home(home):
-    PROVIDERS["ollama"].state_home = str(home)
     with pytest.raises(StateHomeError) as err:
-        PROVIDERS["ollama"].run("hi")
+        PROVIDERS["ollama"].run("hi", state_home=str(home))
     assert err.value.code == "state_home_unsupported_provider"
 
 
 @pytest.mark.parametrize("bad", ["relative/dir", "/does/not/exist"])
 def test_missing_or_relative_home_is_an_error_not_a_fallback(bad):
-    PROVIDERS["claude"].state_home = bad
     with pytest.raises(StateHomeError) as err:
-        argv("claude")
+        PROVIDERS["claude"].get_cmd("x", state_home=bad)
     assert err.value.code == "state_home_unavailable"
 
 
@@ -160,33 +150,112 @@ def test_resolver_fails_clearly_when_the_home_cannot_be_created(tmp_path):
 
 # --- the router scope -------------------------------------------------------
 
-def test_router_scopes_the_grant_to_one_request(home):
+def payload_with(state_home, channel="async-task"):
+    return json.dumps(dict(request_id="r", session_id="s", user_id="u", text="hi", channel=channel,
+                           mode="direct_only", provider="claude", state_home=state_home))
+
+
+def test_router_passes_the_grant_with_the_call(tmp_path):
+    ws = tmp_path / "workspace"
+    make_skill(ws)
+    expected = resolve_state_home(ws, "p", "watch")
     seen = {}
 
-    def fake_run(prompt, **_):
-        seen["during"] = PROVIDERS["claude"].state_home
+    def fake_run(prompt, **kw):
+        seen["during"] = kw.get("state_home")
         return "ok"
 
-    payload = dict(request_id="r", session_id="s", user_id="u", text="hi", channel="async-task",
-                   mode="direct_only", provider="claude", state_home=str(home))
-    with patch.object(PROVIDERS["claude"], "run", side_effect=fake_run):
-        out = router.route(json.dumps(payload))
-    assert out["status"] == "success" and seen["during"] == str(home)
-    assert PROVIDERS["claude"].state_home is None
+    with patch.object(router, "SOLAR_WORKSPACE", ws), \
+            patch.object(PROVIDERS["claude"], "run", side_effect=fake_run):
+        out = router.route(payload_with({"planet": "p", "skill": "watch"}))
+    assert out["status"] == "success" and seen["during"] == str(expected)
+
+
+@pytest.mark.parametrize("value", ["/", os.path.expanduser("~"), "/tmp", {"path": "/"},
+                                   {"planet": "p", "skill": "../other"}, {"planet": "p"}])
+def test_router_refuses_a_path_or_a_bad_declaration(value, tmp_path):
+    ws = tmp_path / "workspace"
+    make_skill(ws)
+    with patch.object(router, "SOLAR_WORKSPACE", ws), \
+            patch.object(PROVIDERS["claude"], "run", side_effect=AssertionError("must not run")):
+        out = router.route(payload_with(value))
+    assert out["status"] == "failed" and out["error_code"] == "state_home_invalid"
+
+
+def test_router_only_grants_to_async_task_requests(tmp_path):
+    ws = tmp_path / "workspace"
+    make_skill(ws)
+    with patch.object(router, "SOLAR_WORKSPACE", ws), \
+            patch.object(PROVIDERS["claude"], "run", side_effect=AssertionError("must not run")):
+        out = router.route(payload_with({"planet": "p", "skill": "watch"}, channel="app"))
+    assert out["error_code"] == "state_home_invalid"
+
+
+def test_router_refuses_a_skill_that_did_not_opt_in(tmp_path):
+    ws = tmp_path / "workspace"
+    make_skill(ws, declared=None)
+    with patch.object(router, "SOLAR_WORKSPACE", ws):
+        out = router.route(payload_with({"planet": "p", "skill": "watch"}))
+    assert out["error_code"] == "state_home_not_declared"
+
+
+def test_router_stream_refuses_with_the_same_code(tmp_path):
+    ws = tmp_path / "workspace"
+    with patch.object(router, "SOLAR_WORKSPACE", ws):
+        events = [json.loads(e) for e in router.route_stream(payload_with("/"))]
+    assert events[-1]["status"] == "failed" and events[-1]["error_code"] == "state_home_invalid"
 
 
 def test_router_without_state_home_grants_nothing():
     seen = {}
 
-    def fake_run(prompt, **_):
-        seen["during"] = PROVIDERS["claude"].state_home
+    def fake_run(prompt, **kw):
+        seen["kw"] = kw
         return "ok"
 
     payload = dict(request_id="r", session_id="s", user_id="u", text="hi", channel="async-task",
                    mode="direct_only", provider="claude")
     with patch.object(PROVIDERS["claude"], "run", side_effect=fake_run):
         router.route(json.dumps(payload))
-    assert seen["during"] is None
+    assert "state_home" not in seen["kw"]
+
+
+def test_interleaved_streams_never_share_a_grant(tmp_path):
+    """One stream with a home and one without, suspended in turn: each keeps its own."""
+    seen = {"a": [], "b": []}
+
+    def fake_stream(tag):
+        def stream(prompt, **kw):
+            for i in range(3):
+                seen[tag].append(kw.get("state_home"))
+                yield f"{tag}{i}"
+        return stream
+
+    a = router.stream_provider("x", "claude", "/granted/home")
+    b = router.stream_provider("y", "claude", None)
+    with patch.object(PROVIDERS["claude"], "stream", side_effect=lambda p, **kw: fake_stream("a" if p == "x" else "b")(p, **kw)):
+        order = [next(a), next(b), next(a), next(b), next(a), next(b)]
+    assert [c for c, _ in order] == ["a0", "b0", "a1", "b1", "a2", "b2"]
+    assert seen["a"] == ["/granted/home"] * 3 and seen["b"] == [None] * 3
+
+
+def test_pinned_ollama_keeps_the_state_home_error_code(tmp_path):
+    ws = tmp_path / "workspace"
+    make_skill(ws)
+    payload = json.dumps(dict(request_id="r", session_id="s", user_id="u", text="hi", channel="async-task",
+                              mode="direct_only", provider="ollama", state_home={"planet": "p", "skill": "watch"}))
+    with patch.object(router, "SOLAR_WORKSPACE", ws):
+        out = router.route(payload)
+    assert out["status"] == "failed" and out["error_code"] == "state_home_unsupported_provider"
+
+
+def test_home_that_vanishes_before_launch_keeps_its_code(tmp_path):
+    ws = tmp_path / "workspace"
+    make_skill(ws)
+    gone = str(tmp_path / "gone")
+    with patch.object(router, "_state_home_request", return_value=(gone, None)):
+        out = router.route(payload_with({"planet": "p", "skill": "watch"}))
+    assert out["status"] == "failed" and out["error_code"] == "state_home_unavailable"
 
 
 # --- launch through a real subprocess with a stand-in client ----------------
@@ -202,8 +271,7 @@ def test_subprocess_receives_the_grant_and_prompt(name, home, tmp_path, monkeypa
                     f"open({str(record)!r},'w').write(json.dumps(sys.argv[1:]))\nprint('done')\n")
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
-    PROVIDERS[name].state_home = str(home)
-    assert PROVIDERS[name].run("write the file") == "done"
+    assert PROVIDERS[name].run("write the file", state_home=str(home)) == "done"
     got = json.loads(record.read_text())
     assert got.count("--add-dir") >= 1 and str(home) in got
     assert "write the file" in got

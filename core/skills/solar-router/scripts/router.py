@@ -34,6 +34,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 from providers import PROVIDERS  # noqa: E402
 import solar_runtime  # noqa: E402
+from state_home import resolve_state_home, StateHomeError  # noqa: E402
 import solar_state  # noqa: E402
 from solar_paths import resolve_solar_paths, resolve_under_home as _resolve_under_home  # noqa: E402
 
@@ -1221,31 +1222,44 @@ def _provider_priority() -> List[str]:
     return result
 
 
-def run_with_fallback(prompt: str) -> tuple:
+def _grant(state_home: Optional[str]) -> tuple:
+    """Extra positional argument for the provider helpers: none unless a state home was declared."""
+    return (state_home,) if state_home else ()
+
+
+def run_with_fallback(prompt: str, state_home: Optional[str] = None) -> tuple:
     providers = _provider_priority()
     last_error: Optional[Exception] = None
     for name in providers:
         try:
-            output = PROVIDERS[name].run(prompt)
+            output = PROVIDERS[name].run(prompt, state_home=state_home) if state_home else PROVIDERS[name].run(prompt)
             return output, name
+        except StateHomeError as exc:
+            if exc.code != "state_home_unsupported_provider":
+                raise  # the home itself is unusable: another client would not fix it
+            last_error = exc
+            print(f"[solar-router] provider {name} cannot grant the state home: {exc}", file=sys.stderr)
         except Exception as exc:
             last_error = exc
             print(f"[solar-router] provider {name} failed: {exc}", file=sys.stderr)
+    if isinstance(last_error, StateHomeError):
+        raise last_error
     raise RuntimeError(f"all providers failed. last error: {last_error}")
 
 
-def run_strict_provider(provider: str, prompt: str) -> tuple:
-    output = PROVIDERS[provider].run(prompt)
+def run_strict_provider(provider: str, prompt: str, state_home: Optional[str] = None) -> tuple:
+    output = PROVIDERS[provider].run(prompt, state_home=state_home) if state_home else PROVIDERS[provider].run(prompt)
     return output, provider
 
 
-def stream_provider(prompt: str, provider_override: Optional[str] = None):
+def stream_provider(prompt: str, provider_override: Optional[str] = None, state_home: Optional[str] = None):
     if provider_override and provider_override in PROVIDERS:
         name = provider_override
     else:
         providers = _provider_priority()
         name = providers[0] if providers else next(iter(PROVIDERS))
-    for chunk in PROVIDERS[name].stream(prompt):
+    kwargs = {"state_home": state_home} if state_home else {}
+    for chunk in PROVIDERS[name].stream(prompt, **kwargs):
         yield chunk, name
 
 
@@ -1433,7 +1447,7 @@ def _restricted_route(payload, *, stream=False):
 # Core routing — streaming
 # ---------------------------------------------------------------------------
 
-def _route_stream(raw: str):
+def _route_stream(raw: str, state_home: Optional[str] = None):
     """Streaming variant. Yields JSONL lines; final done includes decision + reply_text."""
     if not raw:
         yield json.dumps({"type": "done", "status": "failed", "error": "missing input", "provider": None, "request_id": "unknown"})
@@ -1504,11 +1518,11 @@ def _route_stream(raw: str):
 
     try:
         if provider_override:
-            for chunk, provider_used in stream_provider(prompt, provider_override):
+            for chunk, provider_used in stream_provider(prompt, provider_override, *_grant(state_home)):
                 full_text_parts.append(chunk)
                 yield json.dumps({"type": "chunk", "text": chunk}, ensure_ascii=False)
         else:
-            for chunk, provider_used in stream_provider(prompt, None):
+            for chunk, provider_used in stream_provider(prompt, None, *_grant(state_home)):
                 full_text_parts.append(chunk)
                 yield json.dumps({"type": "chunk", "text": chunk}, ensure_ascii=False)
     except UnsupportedProviderPriorityError as exc:
@@ -1525,6 +1539,12 @@ def _route_stream(raw: str):
                 "error_code": "invalid_provider_priority",
             }
         )
+        return
+    except StateHomeError as exc:
+        audit_log(router_id, "end", status="failed", error_code=exc.code, error=str(exc), provider=provider_used,
+                  stream=True, duration_ms=int((time.monotonic() - t_start) * 1000), **UNMETERED_INTERACTIVE)
+        yield json.dumps({"type": "done", "status": "failed", "error": str(exc), "provider": provider_used,
+                          "request_id": request_id, "error_code": exc.code})
         return
     except Exception as exc:
         audit_log(router_id, "end", status="failed", error=str(exc), provider=provider_used, stream=True,
@@ -1603,7 +1623,7 @@ def _route_stream(raw: str):
 # Core routing — non-streaming
 # ---------------------------------------------------------------------------
 
-def _route(raw: str) -> Dict[str, Any]:
+def _route(raw: str, state_home: Optional[str] = None) -> Dict[str, Any]:
     if not raw:
         return _failed("unknown", "missing_input", "missing stdin payload")
 
@@ -1673,9 +1693,9 @@ def _route(raw: str) -> Dict[str, Any]:
     provider_used: Optional[str] = None
     try:
         if provider_override:
-            ai_output, provider_used = run_strict_provider(provider_override, prompt)
+            ai_output, provider_used = run_strict_provider(provider_override, prompt, *_grant(state_home))
         else:
-            ai_output, provider_used = run_with_fallback(prompt)
+            ai_output, provider_used = run_with_fallback(prompt, *_grant(state_home))
     except UnsupportedProviderPriorityError as exc:
         return _failed_after_audit(
             router_id,
@@ -1685,6 +1705,10 @@ def _route(raw: str) -> Dict[str, Any]:
             str(exc),
             provider_used,
             prompt_chars=len(prompt),
+        )
+    except StateHomeError as exc:
+        return _failed_after_audit(
+            router_id, t_start, request_id, exc.code, str(exc), provider_used, prompt_chars=len(prompt),
         )
     except Exception as exc:
         if provider_override:
@@ -1761,41 +1785,44 @@ def _route(raw: str) -> Dict[str, Any]:
 # State home: the one folder a task may write to besides the workspace (issue #175)
 # ---------------------------------------------------------------------------
 
-def _declared_state_home(raw: str) -> Optional[str]:
-    """The `state_home` of a request, or None. A request that does not parse is left to `route`."""
-    try:
-        value = json.loads(raw).get("state_home")
-    except (ValueError, AttributeError):
-        return None
-    return None if value is None else str(value)
+def _state_home_request(raw: str) -> Tuple[Optional[str], Optional[Tuple[str, str, str]]]:
+    """Resolve the state home a request names, from names only: `{"planet": ..., "skill": ...}`.
 
-
-class _StateHomeScope:
-    """Give every provider the declared state home for one request, and take it back after.
-
-    Nothing is granted unless the request names a folder. The providers refuse, each in its own
-    terms, a folder that is not a directory or a client that has no entry in the grant table.
+    Returns `(path, None)`, `(None, None)` when none is declared, or `(None, (request_id, code, message))`.
+    The request never carries a path: the router derives the official folder itself, with the same
+    function the worker uses, so no payload can open another folder. Only `async-task` requests may
+    declare one. A request that does not parse is left to `_route`.
     """
-
-    def __init__(self, path: Optional[str]):
-        self.path = path
-
-    def __enter__(self):
-        for provider in PROVIDERS.values():
-            provider.state_home = self.path
-        return self
-
-    def __exit__(self, *exc):
-        for provider in PROVIDERS.values():
-            provider.state_home = None
-        return False
+    try:
+        payload = json.loads(raw)
+        value = payload.get("state_home")
+    except (ValueError, AttributeError):
+        return None, None
+    if value is None:
+        return None, None
+    request_id = str(payload.get("request_id") or "")
+    if payload.get("channel") != "async-task":
+        return None, (request_id, "state_home_invalid", "only an async-task request may declare a state home")
+    if not (isinstance(value, dict) and isinstance(value.get("planet"), str) and isinstance(value.get("skill"), str)):
+        return None, (request_id, "state_home_invalid", "state_home must be {\"planet\": ..., \"skill\": ...}")
+    try:
+        return str(resolve_state_home(pathlib.Path(SOLAR_WORKSPACE), value["planet"], value["skill"])), None
+    except StateHomeError as exc:
+        return None, (request_id, exc.code, str(exc))
 
 
 def route(raw: str) -> Dict[str, Any]:
-    with _StateHomeScope(_declared_state_home(raw)):
-        return _route(raw)
+    path, refused = _state_home_request(raw)
+    if refused:
+        return _failed(*refused)
+    return _route(raw, state_home=path)
 
 
 def route_stream(raw: str):
-    with _StateHomeScope(_declared_state_home(raw)):
-        yield from _route_stream(raw)
+    path, refused = _state_home_request(raw)
+    if refused:
+        request_id, code, message = refused
+        yield json.dumps({"type": "done", "status": "failed", "error": message, "provider": None,
+                          "request_id": request_id, "error_code": code})
+        return
+    yield from _route_stream(raw, state_home=path)
