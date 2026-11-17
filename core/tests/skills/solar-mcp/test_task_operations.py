@@ -920,3 +920,42 @@ def test_the_confirmation_shows_the_effective_planet_and_skill(solar_env):
     assert "p / watch" in moved and "q / watch" in moved
     cleared = render("task.update", dict(task_id=made["id"], expected_row_version=version, state_home=""))
     assert "p / watch" in cleared and "(none)" in cleared
+
+
+def test_a_local_executor_task_cannot_declare_a_state_home_but_can_clear_one(solar_env):
+    with solar_state.session() as store:
+        local = store.task_create([("title", '"L"'), ("planet", '"p"'), ("executor", '"local"'),
+                                   ("local_command", '"true"')], "\n# L\n\nRun.\n", status="draft")
+    version = stored(local)["row_version"]
+    refuse("task.update", dict(task_id=local, expected_row_version=version, state_home="watch"), "state_home_invalid")
+    assert stored(local)["row_version"] == version and "state_home" not in _values(local)
+    with solar_state.session() as store:
+        both = store.task_create([("title", '"L2"'), ("planet", '"p"'), ("executor", '"local"'),
+                                  ("local_command", '"true"'), ("state_home", '"watch"')], "\n# L2\n\nRun.\n",
+                                 status="draft")
+    refuse("task.update", dict(task_id=both, expected_row_version=stored(both)["row_version"], title="X"),
+           "state_home_invalid")
+    run("task.update", dict(task_id=both, expected_row_version=stored(both)["row_version"], state_home=""))
+    assert not _values(both).get("state_home")
+
+
+def test_an_invalid_stored_name_is_refused_unless_the_edit_replaces_or_clears_it(solar_env):
+    with solar_state.session() as store:
+        bad = store.task_create([("title", '"B"'), ("planet", '"p"'), ("state_home", '"a..b"')],
+                                "\n# B\n\nSteps.\n", status="draft")
+    version = stored(bad)["row_version"]
+    refuse("task.update", dict(task_id=bad, expected_row_version=version, title="B2"), "state_home_invalid")
+    before = _count_tasks()
+    refuse("task.create", dict(title="R", instructions="x", revises_task_id=bad), "state_home_invalid")
+    assert _count_tasks() == before
+    run("task.update", dict(task_id=bad, expected_row_version=version, state_home="watch"))
+    assert _values(bad)["state_home"] == "watch"
+
+
+def test_clearing_a_state_home_that_is_not_there_is_no_edit(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p"))
+    run("task.approve", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
+    version = stored(made["id"])["row_version"]
+    refuse("task.update", dict(task_id=made["id"], expected_row_version=version, state_home=""), "no_changes")
+    run("task.update", dict(task_id=made["id"], expected_row_version=version, state_home="", priority="high"))
+    assert "state_home" not in _values(made["id"])

@@ -172,7 +172,7 @@ def _state_skill(arguments: dict) -> Optional[str]:
         raise OperationError(exc.code, str(exc)) from None
 
 
-def _refuse_state_home(planet, restricted: bool, origin) -> None:
+def _refuse_state_home(skill, planet, restricted: bool, origin, executor=None) -> None:
     """The refusals the worker applies at run time, raised at the edit so the task is never stored with them.
 
     Called with the EFFECTIVE values: what the edit sets over what the task (or its source) already has.
@@ -182,10 +182,14 @@ def _refuse_state_home(planet, restricted: bool, origin) -> None:
     channel = str(origin or "").strip().strip('"')
     if channel in ("app", "voice"):
         raise OperationError("state_home_invalid", f"a {channel} preparation task cannot declare a state home")
+    if str(executor or "").strip().strip('"').lower() == "local":
+        raise OperationError("state_home_invalid", "a local executor task cannot declare a state home")
     if not planet:
         raise OperationError("state_home_invalid", "state_home needs the planet the skill belongs to (`planet`)")
     check, error = _state_names()
     try:
+        # The effective skill too: a name stored by another route (an import) is refused, or replaced or cleared.
+        check("state_home", skill)
         check("planet", planet)
     except error as exc:
         raise OperationError(exc.code, str(exc)) from None
@@ -433,9 +437,9 @@ def _do_task_create(arguments: dict) -> dict:
         merged.update(review_fields)
         effective = state_skill or solar_state.value_of(merged.get("state_home") or "")
         if effective:
-            _refuse_state_home(solar_state.value_of(merged.get("planet") or ""),
+            _refuse_state_home(effective, solar_state.value_of(merged.get("planet") or ""),
                                bool(merged.get("execution_profile") or "review_batch" in arguments),
-                               merged.get("origin_channel"))
+                               merged.get("origin_channel"), merged.get("executor"))
             merged["state_home"] = json.dumps(effective)
         _refuse_delivery_on_restricted(merged.get("notify_when"), merged.get("execution_profile"))
         fields += list(merged.items())
@@ -532,6 +536,10 @@ def _do_task_update(arguments: dict) -> dict:
         current = _task(store, arguments["task_id"])
     old_title = solar_state.value_of(dict((k, v) for k, v in current["frontmatter"]).get("title")) or ""
     current_fields = dict(current["frontmatter"])
+    if changes.get("state_home") == "" and not solar_state.value_of(current_fields.get("state_home") or ""):
+        changes.pop("state_home")  # clearing what is not there is no edit: it must not send a task back to draft
+        if not changes:
+            raise OperationError("no_changes", "The task has no state_home to remove.")
     if ((current_fields.get("execution_profile") and "review_batch" in changes)
             or (current_fields.get("subtask_policy") and ("review" in changes or "ask" in changes))):
         raise OperationError("review_input_invalid", "Changing between a review and a parent batch needs a new revision.")
@@ -557,10 +565,11 @@ def _do_task_update(arguments: dict) -> dict:
         # Checked on every edit that leaves a state home in place: turning the task into a review or a
         # question, or changing its planet, must not leave a declaration the worker would refuse.
         _refuse_state_home(
-            changes.get("planet") or solar_state.value_of(current_fields.get("planet") or ""),
+            effective, changes.get("planet") or solar_state.value_of(current_fields.get("planet") or ""),
             bool(fields.get("execution_profile") or current_fields.get("execution_profile")
                  or current_fields.get("subtask_policy") or "review_batch" in changes),
-            current_fields.get("origin_channel") and solar_state.value_of(current_fields["origin_channel"]))
+            current_fields.get("origin_channel") and solar_state.value_of(current_fields["origin_channel"]),
+            current_fields.get("executor") and solar_state.value_of(current_fields["executor"]))
     if state_skill is not None:
         fields["state_home"] = json.dumps(state_skill) if state_skill else ""
     _refuse_delivery_on_restricted(

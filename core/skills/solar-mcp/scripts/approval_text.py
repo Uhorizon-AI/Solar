@@ -426,8 +426,8 @@ def _create(copy, args):
     rows = [(copy["task"], _line(args["title"], _VALUE))]
     notes = []
     source = args.get("revises_task_id")
+    facts = _facts(source) if source else None
     if source:
-        facts = _facts(source)
         if facts and not facts.get("missing"):
             rows.append((copy["revision_of"], _line(facts["title"], _VALUE)))
         else:
@@ -437,7 +437,7 @@ def _create(copy, args):
             rows.append((key, _line(args[key], _VALUE)))
     if "access_policy" in args:
         rows.append((copy["access"], _access_text(copy, dict(args["access_policy"], version=1))))
-    inherited = ((_facts(source) or {}).get("values") or {}) if source else {}
+    inherited = (facts or {}).get("values") or {}
     home = args.get("state_home", inherited.get("state_home"))
     if home:
         rows.append((copy["state_home"], _state_home_text(copy, home, args.get("planet", inherited.get("planet")))))
