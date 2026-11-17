@@ -752,3 +752,210 @@ def test_changing_notify_when_to_delivery_withdraws_the_approval_and_a_revision_
     assert _notify_when(made["id"]) == "delivery,failed"
     kept = run("task.create", dict(title="Brief", instructions="Do.", revises_task_id=made["id"]))
     assert _notify_when(kept["id"]) == "delivery,failed"
+
+
+# --------------------------------------------------------------------------
+# state_home: an MCP client declares the skill whose state folder the task may write to
+# --------------------------------------------------------------------------
+
+def _values(task_id):
+    return {k: solar_state.value_of(v) for k, v in stored(task_id)["frontmatter"]}
+
+
+def test_create_stores_the_declared_state_home_and_without_it_nothing_changes(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    assert _values(made["id"])["state_home"] == "watch"
+    plain = run("task.create", dict(title="Plain", instructions="Do.", planet="p"))
+    assert "state_home" not in _values(plain["id"])
+
+
+@pytest.mark.parametrize("name", ["../x", "a/b", "..", "a..b", ".hidden", "-x", "a b", "x\n"])
+def test_a_state_home_that_is_not_a_plain_name_is_refused_and_stores_nothing(solar_env, name):
+    with solar_state.read_session() as store:
+        before = len(store.task_list("draft"))
+    body, error = execute("task.create", dict(title="T", instructions="Do.", planet="p", state_home=name))
+    assert error, body
+    with solar_state.read_session() as store:
+        assert len(store.task_list("draft")) == before
+
+
+def test_a_state_home_needs_the_planet(solar_env):
+    refuse("task.create", dict(title="T", instructions="Do.", state_home="watch"), "state_home_invalid")
+
+
+def test_a_restricted_task_cannot_declare_a_state_home(solar_env):
+    refuse("task.create", dict(title="Q", instructions="What?", planet="p", state_home="watch",
+                               provider="claude", ask={}), "state_home_invalid")
+
+
+def test_a_preparation_task_cannot_declare_a_state_home(solar_env):
+    with solar_state.session() as store:
+        source = store.task_create([("title", '"Prep"'), ("planet", '"p"'), ("origin_channel", '"app"')],
+                                   "\n# Prep\n\nSteps.\n", status="queued")
+    refuse("task.create", dict(title="Prep 2", instructions="New.", revises_task_id=source, state_home="watch"),
+           "state_home_invalid")
+
+
+def test_update_sets_and_changes_the_state_home_and_a_queued_task_returns_to_draft(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p"))
+    version = stored(made["id"])["row_version"]
+    run("task.update", dict(task_id=made["id"], expected_row_version=version, state_home="watch"))
+    assert _values(made["id"])["state_home"] == "watch"
+    version = stored(made["id"])["row_version"]
+    run("task.approve", dict(task_id=made["id"], expected_row_version=version))
+    assert stored(made["id"])["status"] == "queued"
+    version = stored(made["id"])["row_version"]
+    run("task.update", dict(task_id=made["id"], expected_row_version=version, state_home="other"))
+    after = stored(made["id"])
+    assert after["status"] == "draft" and _values(made["id"])["state_home"] == "other"
+    assert not any(k == "approved_digest" for k, _ in after["frontmatter"])
+
+
+def test_update_refuses_a_state_home_without_planet_a_bad_name_or_a_restricted_task(solar_env):
+    made = run("task.create", dict(title="NoPlanet", instructions="Do."))
+    version = stored(made["id"])["row_version"]
+    refuse("task.update", dict(task_id=made["id"], expected_row_version=version, state_home="watch"),
+           "state_home_invalid")
+    refuse("task.update", dict(task_id=made["id"], expected_row_version=version, planet="p", state_home="a..b"),
+           "state_home_invalid")
+    run("task.update", dict(task_id=made["id"], expected_row_version=version, planet="p", state_home="watch"))
+    assert _values(made["id"])["state_home"] == "watch"
+    with solar_state.session() as store:
+        question = store.task_create([("title", '"Q"'), ("planet", '"p"'), ("execution_profile", '"ask_readonly_v1"')],
+                                     "\n# Q\n\nWhat?\n", status="draft")
+    refuse("task.update", dict(task_id=question, expected_row_version=stored(question)["row_version"],
+                               state_home="watch"), "state_home_invalid")
+
+
+def test_the_approval_text_shows_the_skill_and_its_change(solar_env):
+    import approval_text
+    shown = approval_text.render("task.create", dict(title="Watch", instructions="Do.", planet="p",
+                                                     state_home="watch"), seconds=120, lang="en")[0]
+    assert "State home" in shown and "watch" in shown
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    version = stored(made["id"])["row_version"]
+    changed = approval_text.render("task.update", dict(task_id=made["id"], expected_row_version=version,
+                                                       state_home="other"), seconds=120, lang="en")[0]
+    assert "watch" in changed and "other" in changed and "approval" in changed
+    approve = approval_text.render("task.approve", dict(task_id=made["id"], expected_row_version=version),
+                                   seconds=120, lang="en")[0]
+    assert "State home" in approve and "watch" in approve
+    assert "Carpeta de estado" in approval_text.render(
+        "task.create", dict(title="W", instructions="D", planet="p", state_home="watch"), seconds=120, lang="es")[0]
+
+
+def _count_tasks():
+    with solar_state.read_session() as store:
+        return sum(len(store.task_list(s)) for s in ("draft", "planned", "queued", "active"))
+
+
+def test_a_revision_keeps_the_state_home_through_task_create(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    revised = run("task.create", dict(title="Watch 2", instructions="New.", revises_task_id=made["id"]))
+    assert _values(revised["id"])["state_home"] == "watch"
+
+
+def test_a_restricted_revision_of_a_task_with_state_home_is_refused_and_stores_nothing(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    before = _count_tasks()
+    refuse("task.create", dict(title="Q", instructions="What?", provider="claude", ask={},
+                               revises_task_id=made["id"]), "state_home_invalid")
+    assert _count_tasks() == before
+
+
+def test_turning_a_task_with_state_home_into_a_question_is_refused_and_changes_nothing(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    version = stored(made["id"])["row_version"]
+    refuse("task.update", dict(task_id=made["id"], expected_row_version=version, provider="claude", instructions="What?", ask={}),
+           "state_home_invalid")
+    assert stored(made["id"])["row_version"] == version and "execution_profile" not in _values(made["id"])
+
+
+def test_a_planet_name_the_router_would_refuse_is_refused_before_storing(solar_env):
+    before = _count_tasks()
+    refuse("task.create", dict(title="T", instructions="Do.", planet="p:q", state_home="watch"), "state_home_invalid")
+    assert _count_tasks() == before
+    made = run("task.create", dict(title="T", instructions="Do.", planet="p"))
+    version = stored(made["id"])["row_version"]
+    run("task.update", dict(task_id=made["id"], expected_row_version=version, state_home="watch"))
+    refuse("task.update", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"],
+                               planet="p:q"), "state_home_invalid")
+
+
+def test_an_empty_state_home_removes_it_and_is_material(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    run("task.approve", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
+    run("task.update", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"],
+                            state_home=""))
+    after = stored(made["id"])
+    assert after["status"] == "draft" and not _values(made["id"]).get("state_home")
+    # Cleared reads as never declared: the digest is the one of the same task without the key.
+    pairs = [list(p) for p in after["frontmatter"]]
+    assert (solar_state.material_digest(pairs, after["body"])
+            == solar_state.material_digest([p for p in pairs if p[0] != "state_home"], after["body"]))
+    # a revision of the cleared task does not bring it back
+    revised = run("task.create", dict(title="W2", instructions="x", revises_task_id=made["id"]))
+    assert not _values(revised["id"]).get("state_home")
+
+
+def test_state_skill_checks_the_name_itself_not_only_the_schema():
+    import operations
+    assert operations._state_skill({"state_home": "watch"}) == "watch"
+    assert operations._state_skill({"state_home": ""}) == ""
+    assert operations._state_skill({}) is None
+    for bad in ("x\n", " x", "a..b", "../x", "a/b"):
+        with pytest.raises(operations.OperationError) as err:
+            operations._state_skill({"state_home": bad})
+        assert err.value.code == "state_home_invalid"
+
+
+def test_the_confirmation_shows_the_effective_planet_and_skill(solar_env):
+    import approval_text
+    render = lambda op, args: approval_text.render(op, args, seconds=120, lang="en")[0]
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    shown = render("task.create", dict(title="W2", instructions="New.", revises_task_id=made["id"]))
+    assert "p / watch" in shown          # inherited, not sent again
+    version = stored(made["id"])["row_version"]
+    moved = render("task.update", dict(task_id=made["id"], expected_row_version=version, planet="q"))
+    assert "p / watch" in moved and "q / watch" in moved
+    cleared = render("task.update", dict(task_id=made["id"], expected_row_version=version, state_home=""))
+    assert "p / watch" in cleared and "(none)" in cleared
+
+
+def test_a_local_executor_task_cannot_declare_a_state_home_but_can_clear_one(solar_env):
+    with solar_state.session() as store:
+        local = store.task_create([("title", '"L"'), ("planet", '"p"'), ("executor", '"local"'),
+                                   ("local_command", '"true"')], "\n# L\n\nRun.\n", status="draft")
+    version = stored(local)["row_version"]
+    refuse("task.update", dict(task_id=local, expected_row_version=version, state_home="watch"), "state_home_invalid")
+    assert stored(local)["row_version"] == version and "state_home" not in _values(local)
+    with solar_state.session() as store:
+        both = store.task_create([("title", '"L2"'), ("planet", '"p"'), ("executor", '"local"'),
+                                  ("local_command", '"true"'), ("state_home", '"watch"')], "\n# L2\n\nRun.\n",
+                                 status="draft")
+    refuse("task.update", dict(task_id=both, expected_row_version=stored(both)["row_version"], title="X"),
+           "state_home_invalid")
+    run("task.update", dict(task_id=both, expected_row_version=stored(both)["row_version"], state_home=""))
+    assert not _values(both).get("state_home")
+
+
+def test_an_invalid_stored_name_is_refused_unless_the_edit_replaces_or_clears_it(solar_env):
+    with solar_state.session() as store:
+        bad = store.task_create([("title", '"B"'), ("planet", '"p"'), ("state_home", '"a..b"')],
+                                "\n# B\n\nSteps.\n", status="draft")
+    version = stored(bad)["row_version"]
+    refuse("task.update", dict(task_id=bad, expected_row_version=version, title="B2"), "state_home_invalid")
+    before = _count_tasks()
+    refuse("task.create", dict(title="R", instructions="x", revises_task_id=bad), "state_home_invalid")
+    assert _count_tasks() == before
+    run("task.update", dict(task_id=bad, expected_row_version=version, state_home="watch"))
+    assert _values(bad)["state_home"] == "watch"
+
+
+def test_clearing_a_state_home_that_is_not_there_is_no_edit(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p"))
+    run("task.approve", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
+    version = stored(made["id"])["row_version"]
+    refuse("task.update", dict(task_id=made["id"], expected_row_version=version, state_home=""), "no_changes")
+    run("task.update", dict(task_id=made["id"], expected_row_version=version, state_home="", priority="high"))
+    assert "state_home" not in _values(made["id"])

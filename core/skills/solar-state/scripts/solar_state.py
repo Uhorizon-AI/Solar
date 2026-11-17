@@ -1159,6 +1159,8 @@ MATERIAL_KEYS = (
     # without a new approval.
     "state_home",
 )
+# Optional keys whose empty value means "not declared" (a cleared state home hashes as if it never existed).
+EMPTY_IS_UNDECLARED = frozenset({"state_home"})
 OPTIONAL_MATERIAL_KEYS = frozenset({
     "access_policy", "subtask_policy", "execution_profile",
     "review_input_digest", "review_input_manifest", "state_home",
@@ -1294,8 +1296,8 @@ def material_digest(pairs: list[list[str]], body: str, *, definition: Optional[s
     for key in MATERIAL_KEYS:
         raw = _get_pair(pairs, key)
         if key in OPTIONAL_MATERIAL_KEYS:
-            if raw is None:
-                continue          # not declared: not part of the snapshot (see MATERIAL_KEYS)
+            if raw is None or (key in EMPTY_IS_UNDECLARED and not value_of(raw)):
+                continue          # not declared (or cleared): not part of the snapshot (see MATERIAL_KEYS)
             material[key] = _canonical_material(key, value_of(raw))
         else:
             material[key] = value_of(raw)

@@ -90,6 +90,7 @@ COPY = {
         changed="This task changed after it was read, so this approval will be refused.",
         unreadable="The task could not be read, so the effect below could not be verified.",
         boundary_warning="The definition/history boundary is uncertain; the instructions shown may be partial. Inspect the stored task before approving.",
+        state_home="State home", state_home_value="{planet} / {skill}: the task may also write in that skill's official state folder (nothing else outside the workspace)",
         access="Access", access_none="not declared: the task runs alone, with nothing else active",
         access_read="reads", access_write="writes", access_resources="holds exclusively",
         path_zone="Path zone", zone_note="declared, not verified",
@@ -156,6 +157,7 @@ COPY = {
         changed="La tarea cambió después de leerla, así que esta aprobación será rechazada.",
         unreadable="No se pudo leer la tarea, así que no se pudo verificar el efecto de abajo.",
         boundary_warning="La frontera entre definición e historial es incierta; las instrucciones mostradas pueden ser parciales. Revisa la tarea guardada antes de aprobar.",
+        state_home="Carpeta de estado", state_home_value="{planet} / {skill}: la tarea puede escribir también en la carpeta de estado oficial de esa skill (nada más fuera del workspace)",
         access="Acceso", access_none="sin declarar: la tarea se ejecuta sola, sin nada más activo",
         access_read="lee", access_write="escribe", access_resources="reserva en exclusiva",
         path_zone="Zona de la ruta", zone_note="declarada, no verificada",
@@ -414,12 +416,18 @@ def _stored_zone_rows(copy, values, folder):
     return [(copy["path_zone"], _zone_text(copy, got))] if got else []
 
 
+def _state_home_text(copy: dict, skill, planet) -> str:
+    """The folder the task may write to is the pair planet + skill: the same skill under another planet is another folder."""
+    return copy["state_home_value"].format(skill=_line(str(skill), _VALUE),
+                                           planet=_line(str(planet or "?"), _VALUE))
+
+
 def _create(copy, args):
     rows = [(copy["task"], _line(args["title"], _VALUE))]
     notes = []
     source = args.get("revises_task_id")
+    facts = _facts(source) if source else None
     if source:
-        facts = _facts(source)
         if facts and not facts.get("missing"):
             rows.append((copy["revision_of"], _line(facts["title"], _VALUE)))
         else:
@@ -429,6 +437,10 @@ def _create(copy, args):
             rows.append((key, _line(args[key], _VALUE)))
     if "access_policy" in args:
         rows.append((copy["access"], _access_text(copy, dict(args["access_policy"], version=1))))
+    inherited = (facts or {}).get("values") or {}
+    home = args.get("state_home", inherited.get("state_home"))
+    if home:
+        rows.append((copy["state_home"], _state_home_text(copy, home, args.get("planet", inherited.get("planet")))))
     rows += _review_rows(copy, args.get("review") or args.get("review_batch") or {})
     rows += _ask_rows(args.get("ask") if args.get("ask") is not None else _derived_ask(args), copy)
     rows += _zone_rows(copy, args)
@@ -550,6 +562,13 @@ def _update(copy, args):
         if new_access != _access_text(copy, facts["values"].get("access_policy")):
             material = True
             lines.append(f"{copy['access']}: {_access_text(copy, facts['values'].get('access_policy'))} → {new_access}")
+    old_home, old_planet = facts["values"].get("state_home") or "", facts["values"].get("planet") or ""
+    new_home, new_planet = args.get("state_home", old_home), args.get("planet", old_planet)
+    if (old_home, old_planet if old_home else "") != (new_home, new_planet if new_home else ""):
+        material = True
+        before = _state_home_text(copy, old_home, old_planet) if old_home else copy["none"]
+        after = _state_home_text(copy, new_home, new_planet) if new_home else copy["none"]
+        lines.append(f"{copy['state_home']}: {before} → {after}")
     if "instructions" in args and args["instructions"].rstrip() != facts["instructions"]:
         material = True
         lines.append(copy["instructions"] + ":")
@@ -645,6 +664,8 @@ def _context_rows(copy: dict, facts: dict) -> list:
             if values.get(key):
                 rows.append((copy[key], _line(str(values[key]), _VALUE)))
     rows.append((copy["access"], _access_text(copy, values.get("access_policy"))))
+    if values.get("state_home"):
+        rows.append((copy["state_home"], _state_home_text(copy, values["state_home"], values.get("planet"))))
     try:
         manifest = json.loads(values.get("review_input_manifest") or "null")
         if values.get("execution_profile") == "ask_readonly_v1" and isinstance(manifest, dict):
