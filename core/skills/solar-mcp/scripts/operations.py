@@ -144,26 +144,39 @@ def _access_text(declared: dict) -> str:
         raise OperationError("access_policy_invalid", str(exc)) from None
 
 
+def _state_names():
+    router_scripts = str(_SKILLS / "solar-router" / "scripts")
+    if router_scripts not in sys.path:
+        sys.path.insert(0, router_scripts)
+    from state_home import _check_name, StateHomeError  # not the providers: they resolve the workspace on import
+    return _check_name, StateHomeError
+
+
 def _state_skill(arguments: dict) -> Optional[str]:
-    """The plain skill name of `state_home`, or a refusal before anything is written.
+    """The plain skill name of `state_home` ("" clears it on an update), or a refusal before anything is written.
 
     Only the name is checked here (the same rule the router applies). Resolving the folder, and that the
     skill opted in, is the worker's and the router's job at run time: MCP never touches the app data.
     """
     if "state_home" not in arguments:
         return None
-    router_scripts = str(_SKILLS / "solar-router" / "scripts")
-    if router_scripts not in sys.path:
-        sys.path.insert(0, router_scripts)
-    from state_home import _check_name, StateHomeError  # not the providers: they resolve the workspace on import
+    if arguments["state_home"] == "":
+        return ""
+    check, error = _state_names()
+    value = arguments["state_home"]
     try:
-        return _check_name("state_home", arguments["state_home"])
-    except StateHomeError as exc:
+        if value != value.strip():  # `_check_name` strips; surrounding whitespace is refused, not trimmed
+            raise error("state_home_invalid", f"state_home {value!r} is not a plain name")
+        return check("state_home", value)
+    except error as exc:
         raise OperationError(exc.code, str(exc)) from None
 
 
 def _refuse_state_home(planet, restricted: bool, origin) -> None:
-    """The refusals the worker applies at run time, raised at the edit so the task is never stored with them."""
+    """The refusals the worker applies at run time, raised at the edit so the task is never stored with them.
+
+    Called with the EFFECTIVE values: what the edit sets over what the task (or its source) already has.
+    """
     if restricted:
         raise OperationError("state_home_invalid", "a restricted review or question cannot declare a state home")
     channel = str(origin or "").strip().strip('"')
@@ -171,6 +184,11 @@ def _refuse_state_home(planet, restricted: bool, origin) -> None:
         raise OperationError("state_home_invalid", f"a {channel} preparation task cannot declare a state home")
     if not planet:
         raise OperationError("state_home_invalid", "state_home needs the planet the skill belongs to (`planet`)")
+    check, error = _state_names()
+    try:
+        check("planet", planet)
+    except error as exc:
+        raise OperationError(exc.code, str(exc)) from None
 
 
 def _body(title: str, instructions: str) -> str:
@@ -413,11 +431,12 @@ def _do_task_create(arguments: dict) -> dict:
         if "access_policy" in arguments:
             merged["access_policy"] = _access_text(arguments["access_policy"])
         merged.update(review_fields)
-        if state_skill:
+        effective = state_skill or solar_state.value_of(merged.get("state_home") or "")
+        if effective:
             _refuse_state_home(solar_state.value_of(merged.get("planet") or ""),
                                bool(merged.get("execution_profile") or "review_batch" in arguments),
                                merged.get("origin_channel"))
-            merged["state_home"] = json.dumps(state_skill)
+            merged["state_home"] = json.dumps(effective)
         _refuse_delivery_on_restricted(merged.get("notify_when"), merged.get("execution_profile"))
         fields += list(merged.items())
         if source_id:
@@ -532,13 +551,18 @@ def _do_task_update(arguments: dict) -> dict:
     if "access_policy" in changes:
         fields["access_policy"] = _access_text(changes["access_policy"])
     state_skill = _state_skill(changes)
-    if state_skill:
+    stored_home = solar_state.value_of(current_fields.get("state_home") or "")
+    effective = stored_home if state_skill is None else state_skill
+    if effective:
+        # Checked on every edit that leaves a state home in place: turning the task into a review or a
+        # question, or changing its planet, must not leave a declaration the worker would refuse.
         _refuse_state_home(
             changes.get("planet") or solar_state.value_of(current_fields.get("planet") or ""),
             bool(fields.get("execution_profile") or current_fields.get("execution_profile")
                  or current_fields.get("subtask_policy") or "review_batch" in changes),
             current_fields.get("origin_channel") and solar_state.value_of(current_fields["origin_channel"]))
-        fields["state_home"] = json.dumps(state_skill)
+    if state_skill is not None:
+        fields["state_home"] = json.dumps(state_skill) if state_skill else ""
     _refuse_delivery_on_restricted(
         fields.get("notify_when", solar_state.value_of(current_fields.get("notify_when") or "")),
         fields.get("execution_profile") or current_fields.get("execution_profile"))
@@ -1034,6 +1058,9 @@ _STATE_HOME = {"type": "string", "minLength": 1, "maxLength": 80, "pattern": r"[
                               "only stores the name. Shown in the approval; changing it needs a new approval (a queued task "
                               "returns to draft). Refused on reviews and questions."}
 
+_STATE_HOME_UPDATE = {**_STATE_HOME, "minLength": 0, "pattern": r"([A-Za-z0-9][A-Za-z0-9._-]*)?",
+                      "description": _STATE_HOME["description"] + " An empty string removes it (a material change)."}
+
 _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 
 _NOTIFY_WHEN = {
@@ -1080,7 +1107,7 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                   instructions=_INSTRUCTIONS, object=LINE(500), scope=LINE(500), effect=LINE(500),
                   priority=_PRIORITY, provider=SLUG, planet=SLUG, agent=SLUG,
                   responsibility=SLUG, notify_when=_NOTIFY_WHEN, access_policy=_ACCESS, review=_REVIEW,
-                  review_batch=_REVIEW_BATCH, ask=_ASK, state_home=_STATE_HOME),
+                  review_batch=_REVIEW_BATCH, ask=_ASK, state_home=_STATE_HOME_UPDATE),
              required=("task_id", "expected_row_version")),
         errors=("task_not_found", "task_changed", "task_active_immutable", "task_not_editable", "review_input_invalid",
                 "no_changes", "access_policy_invalid", "state_home_invalid"),

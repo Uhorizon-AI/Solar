@@ -1294,8 +1294,8 @@ def material_digest(pairs: list[list[str]], body: str, *, definition: Optional[s
     for key in MATERIAL_KEYS:
         raw = _get_pair(pairs, key)
         if key in OPTIONAL_MATERIAL_KEYS:
-            if raw is None:
-                continue          # not declared: not part of the snapshot (see MATERIAL_KEYS)
+            if raw is None or (key == "state_home" and not value_of(raw)):
+                continue          # not declared (or cleared): not part of the snapshot (see MATERIAL_KEYS)
             material[key] = _canonical_material(key, value_of(raw))
         else:
             material[key] = value_of(raw)

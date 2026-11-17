@@ -842,3 +842,81 @@ def test_the_approval_text_shows_the_skill_and_its_change(solar_env):
     assert "State home" in approve and "watch" in approve
     assert "Carpeta de estado" in approval_text.render(
         "task.create", dict(title="W", instructions="D", planet="p", state_home="watch"), seconds=120, lang="es")[0]
+
+
+def _count_tasks():
+    with solar_state.read_session() as store:
+        return sum(len(store.task_list(s)) for s in ("draft", "planned", "queued", "active"))
+
+
+def test_a_revision_keeps_the_state_home_through_task_create(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    revised = run("task.create", dict(title="Watch 2", instructions="New.", revises_task_id=made["id"]))
+    assert _values(revised["id"])["state_home"] == "watch"
+
+
+def test_a_restricted_revision_of_a_task_with_state_home_is_refused_and_stores_nothing(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    before = _count_tasks()
+    refuse("task.create", dict(title="Q", instructions="What?", provider="claude", ask={},
+                               revises_task_id=made["id"]), "state_home_invalid")
+    assert _count_tasks() == before
+
+
+def test_turning_a_task_with_state_home_into_a_question_is_refused_and_changes_nothing(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    version = stored(made["id"])["row_version"]
+    refuse("task.update", dict(task_id=made["id"], expected_row_version=version, provider="claude", instructions="What?", ask={}),
+           "state_home_invalid")
+    assert stored(made["id"])["row_version"] == version and "execution_profile" not in _values(made["id"])
+
+
+def test_a_planet_name_the_router_would_refuse_is_refused_before_storing(solar_env):
+    before = _count_tasks()
+    refuse("task.create", dict(title="T", instructions="Do.", planet="p:q", state_home="watch"), "state_home_invalid")
+    assert _count_tasks() == before
+    made = run("task.create", dict(title="T", instructions="Do.", planet="p"))
+    version = stored(made["id"])["row_version"]
+    run("task.update", dict(task_id=made["id"], expected_row_version=version, state_home="watch"))
+    refuse("task.update", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"],
+                               planet="p:q"), "state_home_invalid")
+
+
+def test_an_empty_state_home_removes_it_and_is_material(solar_env):
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    run("task.approve", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"]))
+    run("task.update", dict(task_id=made["id"], expected_row_version=stored(made["id"])["row_version"],
+                            state_home=""))
+    after = stored(made["id"])
+    assert after["status"] == "draft" and not _values(made["id"]).get("state_home")
+    # Cleared reads as never declared: the digest is the one of the same task without the key.
+    pairs = [list(p) for p in after["frontmatter"]]
+    assert (solar_state.material_digest(pairs, after["body"])
+            == solar_state.material_digest([p for p in pairs if p[0] != "state_home"], after["body"]))
+    # a revision of the cleared task does not bring it back
+    revised = run("task.create", dict(title="W2", instructions="x", revises_task_id=made["id"]))
+    assert not _values(revised["id"]).get("state_home")
+
+
+def test_state_skill_checks_the_name_itself_not_only_the_schema():
+    import operations
+    assert operations._state_skill({"state_home": "watch"}) == "watch"
+    assert operations._state_skill({"state_home": ""}) == ""
+    assert operations._state_skill({}) is None
+    for bad in ("x\n", " x", "a..b", "../x", "a/b"):
+        with pytest.raises(operations.OperationError) as err:
+            operations._state_skill({"state_home": bad})
+        assert err.value.code == "state_home_invalid"
+
+
+def test_the_confirmation_shows_the_effective_planet_and_skill(solar_env):
+    import approval_text
+    render = lambda op, args: approval_text.render(op, args, seconds=120, lang="en")[0]
+    made = run("task.create", dict(title="Watch", instructions="Do.", planet="p", state_home="watch"))
+    shown = render("task.create", dict(title="W2", instructions="New.", revises_task_id=made["id"]))
+    assert "p / watch" in shown          # inherited, not sent again
+    version = stored(made["id"])["row_version"]
+    moved = render("task.update", dict(task_id=made["id"], expected_row_version=version, planet="q"))
+    assert "p / watch" in moved and "q / watch" in moved
+    cleared = render("task.update", dict(task_id=made["id"], expected_row_version=version, state_home=""))
+    assert "p / watch" in cleared and "(none)" in cleared
