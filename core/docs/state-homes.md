@@ -148,3 +148,7 @@ For agy the full probe ended `failed` (`provider_locked_failed`): it asked the c
 forbidden writes, `write_file` was auto-denied in headless mode and the client returned no output. The
 disk shows the isolation held. A task that only writes in its home (write and read `probe.txt`)
 ended `success` on the installed router, with nothing written outside the home.
+
+On 2026-11-18 a real task did the same end to end with agy 1.5.10: created through MCP (`task.create`
+with `state_home`), authorized by the user with `solar approve`, run by the supervisor. It ended
+`completed` and wrote only the requested file in the skill's home.
