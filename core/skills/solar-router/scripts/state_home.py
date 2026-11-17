@@ -84,7 +84,9 @@ def resolve_state_home(workspace: pathlib.Path, planet: str, skill: str) -> path
                              f"state home of {skill!r} resolved outside its official location")
     try:
         root = solar_runtime.planets_root().resolve()
-        # Validate the resolved location first: a rejected request must leave nothing on disk.
+        # Validate the resolved location before creating the skill folder, so a rejected request
+        # does not create it at the target. Resolving the bucket may still register the planet in
+        # planets/index.json, as for any planet.
         home = solar_runtime.planet_state_dir(planet_dir, skill, create=False).resolve()
         if home.name != skill or home.parent.parent != root:
             raise outside

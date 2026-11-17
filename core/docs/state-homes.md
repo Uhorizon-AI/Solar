@@ -89,8 +89,9 @@ planet state home. A skill whose state must live there opts in, on both sides:
 2. The task says `state_home: <skill>` (with its `planet`). It is part of what the user approves:
    changing it needs a new approval; a task that does not declare it hashes as before.
 
-Before the provider starts, the worker resolves the folder with `planet_state_dir(path, skill,
-create=True)` so a missing home fails the task early, then sends the router only the names
+Before the provider starts, the worker resolves the folder with `resolve_state_home`: it computes the
+path without creating it, checks that it resolves under the planets folder, and only then creates it,
+so a missing home fails the task early. It then sends the router only the names
 (`{"planet": ..., "skill": ..., "workspace": ...}`, never a path). The router derives the same
 official folder itself with the same function, so no request can name another folder. It accepts
 the names only on `async-task` requests that are not restricted, and only when the workspace is its
