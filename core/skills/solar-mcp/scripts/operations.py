@@ -1068,7 +1068,10 @@ _STATE_HOME = {"type": "string", "minLength": 1, "maxLength": 80, "pattern": r"[
                               "returns to draft). Refused on reviews and questions."}
 
 _STATE_HOME_UPDATE = {**_STATE_HOME, "minLength": 0, "pattern": r"([A-Za-z0-9][A-Za-z0-9._-]*)?",
-                      "description": _STATE_HOME["description"] + " An empty string removes it (a material change)."}
+                      "description": _STATE_HOME["description"] + " An empty string removes it (a material change; on a task "
+                                                                          "without one it is no_changes). Refused with state_home_invalid on a task that uses "
+                                                                          "executor: local, and when the effective skill or planet name is not plain "
+                                                                          "(e.g. stored by an import) unless the edit replaces or clears it."}
 
 _CAPACITY = {"type": "integer", "minimum": 1, "maximum": 5}
 
