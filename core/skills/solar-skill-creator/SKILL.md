@@ -132,6 +132,7 @@ If source exists outside Solar:
 
 - `references/workflows.md`
 - `references/output-patterns.md`
+- `references/local-apps.md` (skills that ship a local app: where logic, data, server and tests live, safe defaults, checklist)
 
 ## Provenance
 
