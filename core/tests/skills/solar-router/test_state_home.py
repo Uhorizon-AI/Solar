@@ -91,7 +91,8 @@ def test_ollama_refuses_a_state_home(home):
 
 @pytest.mark.parametrize("bad", ["relative/dir", "/does/not/exist"])
 def test_missing_or_relative_home_is_an_error_not_a_fallback(bad):
-    with pytest.raises(StateHomeError) as err:
+    with patch("providers.base.shutil.which", side_effect=lambda b, path=None: f"/bin/{b}"), \
+            pytest.raises(StateHomeError) as err:
         PROVIDERS["claude"].get_cmd("x", state_home=bad)
     assert err.value.code == "state_home_unavailable"
 
@@ -146,6 +147,24 @@ def test_resolver_fails_clearly_when_the_home_cannot_be_created(tmp_path):
         with pytest.raises(StateHomeError) as err:
             resolve_state_home(ws, "p", "watch")
     assert err.value.code == "state_home_unavailable" and "denied" in str(err.value)
+
+
+def test_a_rejected_home_creates_nothing_at_the_link_target(tmp_path):
+    """The location is validated before the folder is created: a planet bucket that is a link to
+    another existing folder is refused without making the skill folder at the target."""
+    ws = tmp_path / "workspace"
+    make_skill(ws)
+    root = tmp_path / "app-data" / "Solar" / "planets"
+    root.mkdir(parents=True)
+    target = tmp_path / "elsewhere" / "p"
+    target.mkdir(parents=True)
+    (root / "p").symlink_to(target)
+    with patch("solar_runtime.planets_root", return_value=root), \
+            patch("solar_runtime.planet_bucket", return_value="p"):
+        with pytest.raises(StateHomeError) as err:
+            resolve_state_home(ws, "p", "watch")
+    assert err.value.code == "state_home_unavailable"
+    assert list(target.iterdir()) == []
 
 
 # --- the router scope -------------------------------------------------------
@@ -294,7 +313,8 @@ def test_home_that_vanishes_before_launch_keeps_its_code(tmp_path):
     ws = tmp_path / "workspace"
     make_skill(ws)
     gone = str(tmp_path / "gone")
-    with patch.object(router, "_state_home_request", return_value=(gone, None)):
+    with patch.object(router, "_state_home_request", return_value=(gone, None)), \
+            patch("providers.base.shutil.which", side_effect=lambda b, path=None: f"/bin/{b}"):
         out = router.route(payload_with(names(ws)))
     assert out["status"] == "failed" and out["error_code"] == "state_home_unavailable"
 

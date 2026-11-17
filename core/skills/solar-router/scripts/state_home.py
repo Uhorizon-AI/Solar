@@ -80,13 +80,20 @@ def resolve_state_home(workspace: pathlib.Path, planet: str, skill: str) -> path
     if not skill_declares_state_home(matches[0]):
         raise StateHomeError("state_home_not_declared",
                              f"skill {skill!r} does not declare `state_home: true` in its SKILL.md")
+    outside = StateHomeError("state_home_unavailable",
+                             f"state home of {skill!r} resolved outside its official location")
     try:
-        home = solar_runtime.planet_state_dir(planet_dir, skill, create=True)
-        home = home.resolve(strict=True)
         root = solar_runtime.planets_root().resolve()
+        # Validate the resolved location first: a rejected request must leave nothing on disk.
+        home = solar_runtime.planet_state_dir(planet_dir, skill, create=False).resolve()
+        if home.name != skill or home.parent.parent != root:
+            raise outside
+        home.mkdir(parents=True, exist_ok=True)
+        home = home.resolve(strict=True)
+    except StateHomeError:
+        raise
     except (OSError, RuntimeError, ValueError) as exc:
         raise StateHomeError("state_home_unavailable", f"cannot create the state home of {skill!r}: {exc}") from exc
     if home.name != skill or home.parent.parent != root or not home.is_dir():
-        raise StateHomeError("state_home_unavailable",
-                             f"state home of {skill!r} resolved outside its official location")
+        raise outside
     return home
