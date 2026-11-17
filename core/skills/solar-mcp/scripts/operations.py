@@ -1065,11 +1065,12 @@ _STATE_HOME = {"type": "string", "minLength": 1, "maxLength": 80, "pattern": r"[
                               "folder the unattended task may also write to, nowhere else outside the workspace. The skill "
                               "must declare `state_home: true` itself; the worker and the router resolve the folder, MCP "
                               "only stores the name. Shown in the approval; changing it needs a new approval (a queued task "
-                              "returns to draft). Refused on reviews and questions."}
+                              "returns to draft). Refused with state_home_invalid on reviews, questions, app/voice preparation tasks, "
+                              "executor: local tasks, and a name that is not plain."}
 
 _STATE_HOME_UPDATE = {**_STATE_HOME, "minLength": 0, "pattern": r"([A-Za-z0-9][A-Za-z0-9._-]*)?",
                       "description": _STATE_HOME["description"] + " An empty string removes it (a material change; on a task "
-                                                                          "without one it is no_changes). Refused with state_home_invalid on a task that uses "
+                                                                          "without one it is no_changes only when it is the only change asked; with another change that one is applied). Refused with state_home_invalid on a task that uses "
                                                                           "executor: local, and when the effective skill or planet name is not plain "
                                                                           "(e.g. stored by an import) unless the edit replaces or clears it."}
 
