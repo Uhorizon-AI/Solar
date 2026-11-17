@@ -8,7 +8,7 @@ Use this when a skill includes a small local web app (a dashboard, a triage page
 |---|---|
 | Business logic, rules, calculations, queries | `scripts/` of the skill (importable modules, no server code) |
 | Data and state (databases, decisions, caches) | The workspace data directory of the owning domain, never inside the skill |
-| Server and its page | Exception: a thin entrypoint that only parses requests, calls the skill's modules and renders. Document it in `SKILL.md`; no rules or calculations in it |
+| Server and its page | Server entrypoint in `scripts/` (for example `app_http.py`), page and static files in `assets/`, as `solar-app` does. Keep it thin: it only parses requests, calls the skill's logic modules and renders. No rules or calculations in it. Document it in `SKILL.md` |
 | Tests | Outside the skill, following the host's convention (core: `core/tests/skills/<skill>/`; planets: the planet's documented test path) |
 
 Decision rule: if a rule could be reused by a script, another agent or a test without starting the server, it belongs in `scripts/`. If it lives only in the server file, it is untestable and will drift.
@@ -31,18 +31,18 @@ Keep it to a short subsection, with detail in `references/`:
 - where the data lives,
 - which module in `scripts/` holds the logic each screen uses.
 
-If the app stays up as a long-running service, add the `Laptop runtime note (optional)` required in `SKILL.md`. Do not restate it here.
+If the app stays up as a long-running service, add the `Laptop runtime note (optional)` defined in `SKILL.md`. Do not restate it here.
 
 ## Tests
 
 - Test the `scripts/` logic directly; test the server only for its guards (origin, token, read-only paths).
-- Register every test file in the skill's runner so the host's full-suite command runs it.
+- Register the tests through the host's test discovery or suite registration (core: place them under `core/tests/skills/<skill>/`, run by `core/tests/run_suite.sh`), so the full-suite command runs them. Do not create a runner per skill unless the host's convention does.
 - Tests must use a temporary database or fixtures, never real data.
 
 ## After changing the skill
 
 - Run `solar client sync` when skills, agents or commands changed, and check the synced client folders.
-- Validate with `package_skill.py` as described in `SKILL.md`.
+- Validate with `python3 core/skills/solar-skill-creator/scripts/package_skill.py <skill-path> /tmp`.
 
 ## Final checklist
 
@@ -51,5 +51,5 @@ If the app stays up as a long-running service, add the `Laptop runtime note (opt
 3. Read-only by default; each write endpoint is documented and guarded.
 4. Binds to `127.0.0.1`, no CORS, loopback `Host` always, token and `Origin` checks on writes.
 5. `SKILL.md` documents start command, endpoints, data location and logic modules.
-6. Tests live outside the skill, are registered in the runner and pass.
+6. Tests live outside the skill, are registered with the host's test suite and pass.
 7. Skill validated and synced.

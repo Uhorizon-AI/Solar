@@ -108,6 +108,7 @@ This is not a mechanical line-count reduction. The goal is lower context load wi
   - this is a host operations concern (not a mandatory skill dependency),
   - if multiple laptops are used, only one active host should serve the same public route.
 - Do not add `Laptop runtime note` to skills that are not runtime-host dependent.
+- If a skill ships a local app, follow `references/local-apps.md`.
 - If skill scripts manage `.env`, they must write a skill-scoped compact block:
   - header comment identifying the skill,
   - contiguous variables with no blank lines inside the block,
