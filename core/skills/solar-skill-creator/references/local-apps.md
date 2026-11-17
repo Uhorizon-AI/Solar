@@ -6,7 +6,7 @@ Use this when a skill includes a small local web app (a dashboard, a triage page
 
 | Thing | Location |
 |---|---|
-| Business logic, rules, calculations, queries | `scripts/` of the skill (importable modules, no server code) |
+| Business logic, rules, calculations, queries | `scripts/` of the skill (importable modules, no server dependencies) |
 | Data and state (databases, decisions, caches) | The workspace data directory of the owning domain, never inside the skill |
 | Server and its page | Server entrypoint in `scripts/` (for example `app_http.py`), page and static files in `assets/`, as `solar-app` does. Keep it thin: it only parses requests, calls the skill's logic modules and renders. No rules or calculations in it. Document it in `SKILL.md` |
 | Tests | Outside the skill, following the host's convention (core: `core/tests/skills/<skill>/`; planets: the planet's documented test path) |
