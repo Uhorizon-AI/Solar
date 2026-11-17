@@ -143,6 +143,7 @@ writes. The check read the disk, not what the client said, and removed the throw
 | Cursor agent 2026.11.13 | written | denied | denied | denied |
 | agy 1.5.9 | written | denied | denied | denied |
 
-For agy the request ended `failed` (`provider_locked_failed`): the probe asked it to try the three
+For agy the full probe ended `failed` (`provider_locked_failed`): it asked the client to try the three
 forbidden writes, `write_file` was auto-denied in headless mode and the client returned no output. The
-disk shows the isolation held; a real task that writes only in its home does not hit that path.
+disk shows the isolation held. A task that only writes in its home (write and read `probe.txt`)
+ended `success` on the installed router, with nothing written outside the home.
