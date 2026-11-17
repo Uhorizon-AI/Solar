@@ -81,7 +81,7 @@ class ClaudeProvider(BaseProvider):
         return [unknown(self.name, "mcp_read",
                         "the Solar MCP read tools declare readOnlyHint; run the probe to confirm the call reaches the server")]
 
-    def stream(self, prompt: str, *, review=None):
+    def stream(self, prompt: str, *, review=None, state_home=None):
         if review is not None:
             yield from self.stream_review(**review)
             return
@@ -96,7 +96,7 @@ class ClaudeProvider(BaseProvider):
             raw += " --include-partial-messages"
         parts = shlex.split(raw)
         parts[0] = self.resolve_binary(parts[0])
-        cmd = parts + [prompt]
+        cmd = self.assemble(parts, prompt, state_home=state_home)
 
         env = self.prepare_env(os.environ.copy())
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)

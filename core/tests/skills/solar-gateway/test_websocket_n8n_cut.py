@@ -121,3 +121,35 @@ def test_non_n8n_uses_subprocess_run(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     )
     assert called["timeout"] == mod.AI_ROUTER_TIMEOUT_SEC
     assert result["reply_text"] == "ok"
+
+
+def test_gateway_never_forwards_a_state_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """The gateway rebuilds the router payload from explicit fields: a state_home sent by a
+    caller must not reach the router (only the local worker may declare one)."""
+    mod = _load_ws(monkeypatch, tmp_path)
+    sent = {}
+
+    class FakeCompleted:
+        stdout = json.dumps({"status": "success", "reply_text": "ok", "decision": {"kind": "direct_reply"}})
+        stderr = ""
+        returncode = 0
+
+    def fake_run(*_a, **kwargs):
+        sent.update(json.loads(kwargs["input"]))
+        return FakeCompleted()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    mod.call_router(
+        {
+            "type": "request",
+            "request_id": "r2",
+            "session_id": "s",
+            "user_id": "u",
+            "text": "hi",
+            "channel": "async-task",
+            "mode": "direct_only",
+            "state_home": {"planet": "p", "skill": "s", "workspace": "/w"},
+        }
+    )
+    assert sent["request_id"] == "r2"
+    assert "state_home" not in sent

@@ -1154,10 +1154,14 @@ MATERIAL_KEYS = (
     # means "legacy": the task runs exclusive and unrestricted, as it always did.
     "access_policy", "subtask_policy", "execution_profile",
     "review_input_digest", "review_input_manifest",
+    # The skill whose official state home the task may write to (issue #175). Optional like the
+    # others: a task that does not declare it hashes as before, and one that does cannot change it
+    # without a new approval.
+    "state_home",
 )
 OPTIONAL_MATERIAL_KEYS = frozenset({
     "access_policy", "subtask_policy", "execution_profile",
-    "review_input_digest", "review_input_manifest",
+    "review_input_digest", "review_input_manifest", "state_home",
 })
 
 # What an approval leaves in the frontmatter. `approved_definition` is the

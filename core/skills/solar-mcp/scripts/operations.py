@@ -86,7 +86,7 @@ _COPIED = ("priority", "provider", "planet", "agent", "responsibility", "agent_c
            "scheduled_time", "scheduled_weekdays", "scheduled_timezone", "recurring",
            "recurring_max_runs",
            # What a revision may touch stays what its source declared; evidence digests do not carry over.
-           "access_policy", "execution_profile")
+           "access_policy", "execution_profile", "state_home")
 _TEXT_FIELDS = ("title", "object", "scope", "effect", "provider", "planet", "agent",
                 "responsibility")
 

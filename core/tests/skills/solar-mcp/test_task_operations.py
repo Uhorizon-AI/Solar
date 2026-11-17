@@ -511,6 +511,19 @@ def test_a_revision_copies_configuration_but_leaves_the_source_alone(solar_env):
     assert stored(made["id"])["status"] == "queued" and stored(source)["status"] == "archived"
 
 
+def test_a_revision_keeps_the_state_home_and_a_changed_one_is_a_different_approval(solar_env):
+    with solar_state.session() as store:
+        source = store.task_create(
+            [("title", '"Watch"'), ("object", '"o"'), ("scope", '"s"'), ("effect", '"e"'),
+             ("planet", '"p"'), ("state_home", '"watch"')], "\n# Watch\n\nSteps.\n", status="queued")
+    made = run("task.create", dict(title="Watch (2)", instructions="New.", revises_task_id=source))
+    values = {k: solar_state.value_of(v) for k, v in stored(made["id"])["frontmatter"]}
+    assert values["state_home"] == "watch"
+    base = [["title", ' "T"'], ["planet", ' "p"']]
+    assert (solar_state.material_digest(base + [["state_home", ' "watch"']], "b")
+            != solar_state.material_digest(base + [["state_home", ' "other"']], "b"))
+
+
 def test_a_local_executor_task_is_not_revised_through_mcp(solar_env):
     with solar_state.session() as store:
         source = store.task_create(

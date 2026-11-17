@@ -23,6 +23,7 @@ if str(_PATHS_SCRIPTS) not in sys.path:
 import solar_runtime  # noqa: E402
 from permission_model import MCP_READ_TOOLS  # noqa: E402
 from solar_paths import resolve_solar_paths  # noqa: E402
+from state_home import StateHomeError  # noqa: E402,F401  (re-exported for the providers)
 
 SOLAR_WORKSPACE, SOLAR_ROOT = resolve_solar_paths()
 
@@ -86,9 +87,69 @@ def raise_restricted_failure(provider_name: str, failure: str | None, returncode
     raise RuntimeError("restricted provider returned non-zero (" + (failure or f"exit {returncode}") + ")")
 
 
+@dataclass(frozen=True)
+class StateHomeGrant:
+    """How one client is told that a single extra folder is writable.
+
+    `prompt_first`: the client's option is variadic and would swallow a positional prompt that
+    follows it, so the prompt has to come before the option (measured on claude 2.1.323).
+    """
+
+    flag: str
+    prompt_first: bool = False
+
+
+# The one table of grants. A provider never builds its own flags: it asks `BaseProvider.assemble`.
+# Measured in issue #175 and re-checked on 2026-11-17 through the router with each client's production
+# sandbox flags: every client opened the folder with `--add-dir` and nothing else (results in
+# core/docs/state-homes.md, "Manual verification"). A client missing from the table (ollama) cannot receive a grant.
+STATE_HOME_GRANTS: Dict[str, StateHomeGrant] = {
+    "claude": StateHomeGrant("--add-dir", prompt_first=True),
+    "codex": StateHomeGrant("--add-dir"),
+    "agent": StateHomeGrant("--add-dir"),
+    "agy": StateHomeGrant("--add-dir"),
+}
+
+
 class BaseProvider(ABC):
     name: str = ""
     default_cmd: str = ""
+
+    def grant_args(self, state_home: Optional[str] = None) -> Optional[List[str]]:
+        """Arguments that open the task's state home, or None when it declared none.
+
+        Refuses, with no fallback, a client that has no entry in the table, and a folder that is not
+        an absolute existing directory: the grant names exactly that folder and nothing above it.
+        """
+        if not state_home:
+            return None
+        grant = STATE_HOME_GRANTS.get(self.name)
+        if grant is None:
+            raise StateHomeError("state_home_unsupported_provider",
+                                 f"provider {self.name} cannot grant write access to a state home")
+        path = pathlib.Path(state_home)
+        if not path.is_absolute() or not path.is_dir():
+            raise StateHomeError("state_home_unavailable", f"state home is not an existing directory: {path}")
+        return [grant.flag, str(path)]
+
+    def assemble(self, parts: List[str], prompt: str, prompt_args: Optional[List[str]] = None,
+                 state_home: Optional[str] = None) -> List[str]:
+        """The final argv: the client's own command, the state-home grant if any, then the prompt.
+
+        Without a state home the result is exactly `parts + prompt_args`: nothing is added.
+        `prompt_args` is what carries the prompt (`[prompt]` unless the client binds it to an option).
+        """
+        tail = list(prompt_args) if prompt_args is not None else [prompt]
+        grant = self.grant_args(state_home)
+        if grant is None:
+            return list(parts) + tail
+        if STATE_HOME_GRANTS[self.name].prompt_first:
+            return list(parts) + tail + grant
+        parts = list(parts)
+        if "--" in parts:
+            at = parts.index("--")
+            return parts[:at] + grant + parts[at:] + tail
+        return parts + grant + tail
 
     def build_default_cmd(self) -> str:
         return self.default_cmd
@@ -107,7 +168,7 @@ class BaseProvider(ABC):
             )
         return found
 
-    def get_cmd(self, prompt: str) -> List[str]:
+    def get_cmd(self, prompt: str, state_home: Optional[str] = None) -> List[str]:
         new_key = f"SOLAR_ROUTER_{self.name.upper()}_CMD"
         old_key = f"SOLAR_AI_{self.name.upper()}_CMD"
         raw = (os.getenv(new_key) or os.getenv(old_key) or self.build_default_cmd()).strip()
@@ -115,7 +176,7 @@ class BaseProvider(ABC):
         if not parts:
             raise RuntimeError(f"{new_key} is empty")
         parts[0] = self.resolve_binary(parts[0])
-        return parts + [prompt]
+        return self.assemble(parts, prompt, state_home=state_home)
 
     def prepare_env(self, base_env: Dict[str, str]) -> Dict[str, str]:
         """Tell the provider where it is, before it has to guess.
@@ -270,15 +331,15 @@ class BaseProvider(ABC):
     def ask_separator(self) -> List[str]:
         return []
 
-    def stream(self, prompt: str, *, review=None):
+    def stream(self, prompt: str, *, review=None, state_home: Optional[str] = None):
         """Default: single chunk via run(). Override for real streaming."""
-        yield self.run(prompt, review=review)
+        yield self.run(prompt, review=review, state_home=state_home)
 
-    def run(self, prompt: str, *, review=None) -> str:
+    def run(self, prompt: str, *, review=None, state_home: Optional[str] = None) -> str:
         if review is not None:
             return self.run_review(**review)
         timeout_sec = env_int("SOLAR_ROUTER_TIMEOUT_SEC", 300)
-        cmd = self.get_cmd(prompt)
+        cmd = self.get_cmd(prompt, state_home=state_home)
         env = self.prepare_env(os.environ.copy())
         self.log_prompt(prompt)
         proc = subprocess.run(

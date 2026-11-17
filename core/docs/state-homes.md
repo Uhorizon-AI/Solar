@@ -79,3 +79,72 @@ Both expose the same CLI through `solar_runtime.py`:
 python3 core/skills/solar-paths/scripts/solar_runtime.py runtime async-tasks
 python3 core/skills/solar-paths/scripts/solar_runtime.py planet /path/to/planets/<planet> <skill>
 ```
+
+## Unattended tasks and their state home
+
+A task launched by the router runs inside each client's own sandbox, which denies writes to the
+planet state home. A skill whose state must live there opts in, on both sides:
+
+1. The skill's `SKILL.md` frontmatter says `state_home: true`.
+2. The task says `state_home: <skill>` (with its `planet`). It is part of what the user approves:
+   changing it needs a new approval; a task that does not declare it hashes as before.
+
+Before the provider starts, the worker resolves the folder with `resolve_state_home`: it computes the
+path without creating it, checks that it resolves under the planets folder, and only then creates it,
+so a missing home fails the task early. It then sends the router only the names
+(`{"planet": ..., "skill": ..., "workspace": ...}`, never a path). The router derives the same
+official folder itself with the same function, so no request can name another folder. It accepts
+the names only on `async-task` requests that are not restricted, and only when the workspace is its
+own. It gives the folder to the provider through one table, `STATE_HOME_GRANTS` in
+`core/skills/solar-router/scripts/providers/base.py`:
+
+| Client | Grant | Where the prompt goes |
+|---|---|---|
+| claude | `--add-dir <home>` | before the option (it is variadic and would swallow the prompt) |
+| codex | `--add-dir <home>` | after it, before `--` |
+| agent | `--add-dir <home>` | after it |
+| agy | `--add-dir <home>` | after it, before `--print <prompt>` |
+
+Only that `<skill>/` folder is opened: not the planet bucket, not a sibling skill, not
+`~/Library/Application Support/Solar` or `~/.local/state/solar`. A client that is not in the table
+(ollama) refuses the task. Without a declaration, no provider command changes.
+
+**No fallback.** If the skill did not opt in (`state_home_not_declared`), the names are not plain
+(`state_home_invalid`) or the folder cannot be created (`state_home_unavailable`), the task fails
+with that code; nothing is written elsewhere. The grant opens a folder; it does not replace the
+authority levels, `access_policy` or any domain gate. A task that cannot hold a grant fails with
+`state_home_invalid` instead of ending as a success that never had it: a restricted review or
+question, an `app` or `voice` preparation task (read-only), and an `executor: local` task (a script
+Solar runs itself, with no client sandbox to open).
+
+**Who validates what.** The worker validates the approval of the task. The router trusts its local
+caller: `channel` and `workspace` bound the request but do not identify the worker. The gateway
+rebuilds the router payload from explicit fields and leaves `state_home` out, so a caller on
+Telegram, n8n or the WebSocket cannot declare one (regression test in
+`core/tests/skills/solar-gateway/test_websocket_n8n_cut.py`).
+
+### Manual verification
+
+The sandbox itself is the client's, so the denial can only be seen with the real clients (versions
+measured in issue #175: claude 2.1.323, codex-cli 0.167.0, Cursor agent 2026.11.13, agy 1.5.9). For
+each client, run a task with `state_home` that (a) writes and reads `probe.txt` in the home,
+(b) tries to write in a sibling skill folder, in the planet bucket and in `~/.local/state/solar`,
+and expect (a) to succeed and every write in (b) to fail with `operation not permitted`. Record the
+client version and the observed result. Automated tests only check the command Solar builds.
+
+Result of 2026-11-17, through `run_router.py` with each client's production flags. A throwaway
+planet with one skill that has `state_home: true` was created; for each client an `async-task`
+request with `state_home` asked it to write `probe.txt` in the home and to try the three forbidden
+writes. The check read the disk, not what the client said, and removed the throwaway planet after:
+
+| Client (version) | Write in the skill's home | Sibling skill | Planet bucket | `~/.local/state/solar` |
+|---|---|---|---|---|
+| claude 2.1.323 | written | denied | denied | denied |
+| codex-cli 0.167.0 | written | denied | denied | denied |
+| Cursor agent 2026.11.13 | written | denied | denied | denied |
+| agy 1.5.9 | written | denied | denied | denied |
+
+For agy the full probe ended `failed` (`provider_locked_failed`): it asked the client to try the three
+forbidden writes, `write_file` was auto-denied in headless mode and the client returned no output. The
+disk shows the isolation held. A task that only writes in its home (write and read `probe.txt`)
+ended `success` on the installed router, with nothing written outside the home.

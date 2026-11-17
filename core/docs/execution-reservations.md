@@ -76,6 +76,10 @@ The constructor separately rejects a CLI whose flags or effective managed policy
 cannot be validated. No reader profile is enabled in production. See
 `restricted-review-profile.md` for the guarded adapter and remaining real-CLI validation.
 
+A task's `state_home` (the skill whose official state folder it may write to, `state-homes.md`) is
+a separate, optional material key. It opens one folder through the client's own option; it is not an
+`access_policy` scope, reserves nothing and does not make a task concurrent.
+
 `access_policy` is JSON: `{"version":1,"mode":"read"|"write","scopes":["/abs/path"],"resources":["name"]}`.
 A writer names at least one scope. Paths are absolute and normalized; the digest hashes the
 canonical JSON. A task without it is **legacy and exclusive**. An invalid declaration refuses the

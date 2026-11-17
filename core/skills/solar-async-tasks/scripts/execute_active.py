@@ -276,6 +276,7 @@ def call_router(
     prompt: str,
     provider: Optional[str],
     execution=None,
+    state_home: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Call solar-router v3 with channel=async-task, mode=direct_only.
@@ -299,6 +300,8 @@ def call_router(
         payload["provider"] = provider
     if execution is not None:
         payload["execution"] = execution
+    if state_home:
+        payload["state_home"] = state_home
 
     proc = run_managed(
         [router_python, str(router_script)],
@@ -1019,6 +1022,19 @@ def main() -> int:
 
     task_provider = read_frontmatter_key(task_file, "provider").strip().lower() or None
     executor = read_frontmatter_key(task_file, "executor").strip().lower()
+    # A state home is a grant to a client's sandbox. These tasks never get one (read-only restricted
+    # reviews and questions, the app/voice preparation worker, the local script executor), so a task
+    # that declares it fails here instead of ending as a success that never had the permission.
+    skill = read_frontmatter_key(task_file, "state_home").strip().strip('"')
+    if skill:
+        origin = read_frontmatter_key(task_file, "origin_channel")
+        kind = ("a restricted review or question" if restricted else
+                f"a {origin} preparation task" if origin in ("app", "voice") else
+                "a local executor task" if executor == "local" else None)
+        if kind:
+            mark_task_error(task_file, task_id, title, task_provider, "state_home_invalid",
+                            f"{kind} cannot declare a state home", log_file)
+            return 1
     if not restricted and read_frontmatter_key(task_file, "origin_channel") in ("app", "voice"):
         # Phase 1 preparation worker: read context, return text. No write/shell/MCP tools.
         task_provider = "claude"
@@ -1146,10 +1162,25 @@ def main() -> int:
             mark_task_error(task_file, task_id, title, None, mark, mark, log_file)
             return 1
 
+    # The official state home of the skill the task names (opt-in, issue #175). Resolved and created
+    # before the provider starts; a home that cannot be had fails the task, never a fallback path.
+    state_home = None  # {"planet", "skill", "workspace"}: names only, the router derives the folder itself
+    if skill:
+        from state_home import resolve_state_home, StateHomeError
+        try:
+            workspace = pathlib.Path(os.getenv("SOLAR_WORKSPACE") or task_root.parent.parent.parent).resolve()
+            planet_name = read_frontmatter_key(task_file, "planet")
+            resolve_state_home(workspace, planet_name, skill)  # fail the task here, before the router
+            state_home = {"planet": planet_name, "skill": skill, "workspace": str(workspace)}
+        except StateHomeError as exc:
+            mark_task_error(task_file, task_id, title, task_provider, exc.code, str(exc), log_file)
+            return 1
+
     # Call router
     print(f"  Calling router (channel=async-task, mode=direct_only, provider={task_provider or 'priority'}) ...", flush=True)
     try:
-        response = call_router(router_script, task_id, prompt, task_provider, execution=execution)
+        response = call_router(router_script, task_id, prompt, task_provider, execution=execution,
+                               state_home=state_home)
     except ProcessCancelled:
         _acknowledge(task_id)
         return 130
