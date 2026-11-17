@@ -91,10 +91,11 @@ planet state home. A skill whose state must live there opts in, on both sides:
 
 Before the provider starts, the worker resolves the folder with `planet_state_dir(path, skill,
 create=True)` so a missing home fails the task early, then sends the router only the names
-(`{"planet": ..., "skill": ..., "workspace": ...}`, never a path). The router, which accepts them only
-on `async-task` requests that are not restricted, and only when the workspace is its own, derives the same official folder itself with the same function, so no request can name
-another folder. It gives it to the provider through one table,
-`STATE_HOME_GRANTS` in `core/skills/solar-router/scripts/providers/base.py`:
+(`{"planet": ..., "skill": ..., "workspace": ...}`, never a path). The router derives the same
+official folder itself with the same function, so no request can name another folder. It accepts
+the names only on `async-task` requests that are not restricted, and only when the workspace is its
+own. It gives the folder to the provider through one table, `STATE_HOME_GRANTS` in
+`core/skills/solar-router/scripts/providers/base.py`:
 
 | Client | Grant | Where the prompt goes |
 |---|---|---|
@@ -115,6 +116,12 @@ authority levels, `access_policy` or any domain gate. A task that cannot hold a 
 question, an `app` or `voice` preparation task (read-only), and an `executor: local` task (a script
 Solar runs itself, with no client sandbox to open).
 
+**Who validates what.** The worker validates the approval of the task. The router trusts its local
+caller: `channel` and `workspace` bound the request but do not identify the worker. The gateway
+rebuilds the router payload from explicit fields and leaves `state_home` out, so a caller on
+Telegram, n8n or the WebSocket cannot declare one (regression test in
+`core/tests/skills/solar-gateway/test_websocket_n8n_cut.py`).
+
 ### Manual verification
 
 The sandbox itself is the client's, so the denial can only be seen with the real clients (versions
@@ -124,8 +131,10 @@ each client, run a task with `state_home` that (a) writes and reads `probe.txt` 
 and expect (a) to succeed and every write in (b) to fail with `operation not permitted`. Record the
 client version and the observed result. Automated tests only check the command Solar builds.
 
-Result of 2026-11-17, through `run_router.py` with each client's production flags (a throwaway planet and
-its state home; the script checks the disk, not what the client says):
+Result of 2026-11-17, through `run_router.py` with each client's production flags. A throwaway
+planet with one skill that has `state_home: true` was created; for each client an `async-task`
+request with `state_home` asked it to write `probe.txt` in the home and to try the three forbidden
+writes. The check read the disk, not what the client said, and removed the throwaway planet after:
 
 | Client (version) | Write in the skill's home | Sibling skill | Planet bucket | `~/.local/state/solar` |
 |---|---|---|---|---|
