@@ -50,6 +50,7 @@ err_count=0
 warn() { echo "WARN: $1"; warn_count=$((warn_count + 1)); }
 err() { echo "ERROR: $1"; err_count=$((err_count + 1)); }
 ok() { echo "OK: $1"; }
+info() { echo "INFO: $1"; }
 
 if [[ -d "$SOLAR_WORKSPACE/.solar/core" ]]; then
   err "obsolete .solar/core/ exists — run: solar client upgrade"
@@ -212,7 +213,9 @@ print(",".join(data.get("missing") or []))
 
   if [[ -n "$_leak_list" ]]; then
     _migrate_script="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_secrets.py"
-    err "installation secrets still in a file the IDE indexes: ${_leak_list//|/, } (manual steps may be needed if migrate reports ambiguous, conflicting or referenced lines; fix: $(printf 'python3 %q migrate %q' "$_migrate_script" "$SOLAR_WORKSPACE"))"
+    err "installation secrets still in a file the IDE indexes: ${_leak_list//|/, } (manual steps may be needed if migrate reports ambiguous, conflicting or referenced lines)"
+    # Same store as this diagnosis: SOLAR_SECRETS_FILE may be set only in the .env this doctor loaded.
+    info "fix: $(printf 'env SOLAR_SECRETS_FILE=%q python3 %q migrate %q' "$_secrets_path" "$_migrate_script" "$SOLAR_WORKSPACE")"
   else
     ok "no installation secret in .env or sun/.env"
   fi

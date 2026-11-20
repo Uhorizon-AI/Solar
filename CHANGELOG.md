@@ -7,7 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Fixed
-- client doctor: a secret left in `.env` after an update now shows a one-command fix, `solar_secrets.py migrate <workspace>`. It moves the keys into the 0600 store, prints names only, and leaves conflicting, ambiguous or referenced (`$NAME`) lines untouched.
+- client doctor: a secret left in `.env` after an update now shows a one-command fix, `solar_secrets.py migrate <workspace>`. It moves the keys into the 0600 store, prints names only, and leaves conflicting, ambiguous or lines mentioned by another line untouched.
 
 ## [0.64.0] - 2026-11-17
 

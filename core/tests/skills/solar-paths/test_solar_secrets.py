@@ -423,9 +423,10 @@ def _doctor_workspace(tmp_path, env_text):
 def _fix_command(doctor_output):
     import shlex
 
-    marker = "; fix: "
-    assert marker in doctor_output
-    return shlex.split(doctor_output.split(marker, 1)[1].split(")\n", 1)[0])
+    marker = "INFO: fix: "
+    lines = [line for line in doctor_output.splitlines() if line.startswith(marker)]
+    assert len(lines) == 1, doctor_output
+    return shlex.split(lines[0][len(marker):])
 
 
 def test_the_doctor_error_gives_a_command_that_clears_the_leak(tmp_path, fixture_store):
@@ -435,7 +436,7 @@ def test_the_doctor_error_gives_a_command_that_clears_the_leak(tmp_path, fixture
     assert "installation secrets still in a file the IDE indexes" in text
     assert "abc" not in text
     command = _fix_command(text)
-    assert command[0] == "python3" and command[2] == "migrate"
+    assert "migrate" in command and "python3" in command
     assert subprocess.run(command, env=env, capture_output=True).returncode == 0
     assert "no installation secret in .env or sun/.env" in doctor()
     assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "abc"
@@ -465,6 +466,19 @@ def test_any_expansion_of_the_secret_keeps_its_assignment(tmp_path, fixture_stor
     assert (workspace / ".env").read_text(encoding="utf-8") == text
     assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
     assert "Summary:" in doctor()
+
+
+def test_the_fix_command_uses_the_store_the_doctor_loaded_from_env(tmp_path, fixture_store):
+    custom = tmp_path / "custom" / "installation.env"
+    text = f"SOLAR_SECRETS_FILE={custom}\nTELEGRAM_BOT_TOKEN=abc\n"
+    workspace, env, doctor = _doctor_workspace(tmp_path, text)
+    env.pop("SOLAR_SECRETS_FILE")  # only the .env defines it, as in the report
+    command = _fix_command(doctor())
+    # A fresh terminal has no SOLAR_SECRETS_FILE: the command must carry it.
+    assert subprocess.run(command, env=env, capture_output=True).returncode == 0
+    assert solar_secrets.parse_env_file(custom)["TELEGRAM_BOT_TOKEN"] == "abc"
+    assert not fixture_store.exists()
+    assert "TELEGRAM_BOT_TOKEN" not in (workspace / ".env").read_text(encoding="utf-8")
 
 
 def test_the_doctor_says_some_leaks_need_manual_steps(tmp_path, fixture_store):

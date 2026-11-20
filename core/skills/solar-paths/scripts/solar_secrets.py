@@ -473,7 +473,7 @@ def _main(argv: list[str]) -> int:
                 "keep the one in use and delete the others by hand.\n")
         if result["referenced"]:
             sys.stderr.write(
-                "referenced: another line uses these names ($NAME); "
+                "referenced: another line mentions these names; "
                 "move them by hand together with that line.\n")
         if result["ambiguous"]:
             sys.stderr.write(
