@@ -423,7 +423,7 @@ def _doctor_workspace(tmp_path, env_text):
 def _fix_command(doctor_output):
     import shlex
 
-    marker = "(fix: "
+    marker = "; fix: "
     assert marker in doctor_output
     return shlex.split(doctor_output.split(marker, 1)[1].split(")\n", 1)[0])
 
@@ -450,6 +450,26 @@ def test_a_referenced_secret_stays_and_the_doctor_still_runs(tmp_path, fixture_s
     assert (workspace / ".env").read_text(encoding="utf-8") == text
     assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
     assert "Summary:" in doctor()  # set -u did not abort on a missing variable
+
+
+@pytest.mark.parametrize("use", [
+    'TOKEN_LENGTH="${#TELEGRAM_BOT_TOKEN}"',
+    'SERVICE_TOKEN="${TELEGRAM_BOT_TOKEN:-none}"',
+    "SERVICE_TOKEN=$TELEGRAM_BOT_TOKEN",
+])
+def test_any_expansion_of_the_secret_keeps_its_assignment(tmp_path, fixture_store, use):
+    text = f"TELEGRAM_BOT_TOKEN=abc\n{use}\n"
+    workspace, env, doctor = _doctor_workspace(tmp_path, text)
+    result = subprocess.run(_fix_command(doctor()), env=env, capture_output=True, text=True)
+    assert result.returncode == 1 and "referenced" in result.stdout
+    assert (workspace / ".env").read_text(encoding="utf-8") == text
+    assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
+    assert "Summary:" in doctor()
+
+
+def test_the_doctor_says_some_leaks_need_manual_steps(tmp_path, fixture_store):
+    workspace, env, doctor = _doctor_workspace(tmp_path, "TELEGRAM_BOT_TOKEN=abc\n")
+    assert "manual steps may be needed" in doctor()
 
 
 def test_migrate_keeps_an_array_that_hides_an_assignment(tmp_path):

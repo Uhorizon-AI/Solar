@@ -350,11 +350,17 @@ def _mentions_secret(candidates: list[Path]) -> bool:
 
 
 def _is_referenced(name: str, texts: dict[Path, list[str]]) -> bool:
-    pattern = re.compile(r"\$\{?" + re.escape(name) + r"\b")
+    """True when the name appears in any line other than its own assignment.
+
+    Deliberately broad: ``$NAME``, ``${NAME}``, ``${#NAME}``, ``${NAME:-x}`` and
+    any other expansion all mention the name, and removing the assignment would
+    break them (the doctor loads the file under ``set -u``).
+    """
+    pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])")
     return any(
         pattern.search(line)
         for lines in texts.values() for line in lines
-        if not line.lstrip().startswith("#"))
+        if not line.lstrip().startswith("#") and _secret_line_name(line) != name)
 
 
 def _migrate_locked(store: Path, candidates: list[Path]) -> dict:

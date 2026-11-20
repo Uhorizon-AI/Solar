@@ -212,7 +212,7 @@ print(",".join(data.get("missing") or []))
 
   if [[ -n "$_leak_list" ]]; then
     _migrate_script="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_secrets.py"
-    err "installation secrets still in a file the IDE indexes: ${_leak_list//|/, } (fix: $(printf 'python3 %q migrate %q' "$_migrate_script" "$SOLAR_WORKSPACE"))"
+    err "installation secrets still in a file the IDE indexes: ${_leak_list//|/, } (manual steps may be needed if migrate reports ambiguous, conflicting or referenced lines; fix: $(printf 'python3 %q migrate %q' "$_migrate_script" "$SOLAR_WORKSPACE"))"
   else
     ok "no installation secret in .env or sun/.env"
   fi
