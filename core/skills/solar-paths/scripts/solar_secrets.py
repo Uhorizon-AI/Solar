@@ -31,6 +31,7 @@ from __future__ import annotations
 import fcntl
 import os
 import re
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -66,8 +67,15 @@ def ensure_store() -> Path:
     path = secrets_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
-    if not path.exists():
-        path.write_text(_HEADER, encoding="utf-8")
+    try:
+        # Exclusive create: a process that lost a race never truncates a store
+        # another one already filled.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(_HEADER)
     os.chmod(path, 0o600)
     return path
 
@@ -187,7 +195,28 @@ def _secret_line_name(line: str) -> str:
     return stripped.partition("=")[0].strip().removeprefix("export ").strip()
 
 
+def _line_complete(line: str) -> bool:
+    """False when the line opens a quote it does not close or continues on the next."""
+    if line.rstrip("\r\n").endswith("\\"):
+        return False
+    try:
+        shlex.split(line, comments=True, posix=True)
+    except ValueError:
+        return False
+    return True
+
+
 def _interpret_value(line: str) -> str | None:
+    value = _interpret_raw(line)
+    if value is not None:
+        try:
+            value.encode("utf-8")  # strict: the store is read as strict UTF-8
+        except UnicodeEncodeError:
+            return None
+    return value
+
+
+def _interpret_raw(line: str) -> str | None:
     """The value of one assignment as a shell reads it, or None if ambiguous.
 
     Only values that can be read without executing anything are interpreted: a
@@ -210,7 +239,7 @@ def _interpret_value(line: str) -> str | None:
 
 def _atomic_write(path: Path, text: str, mode: int) -> None:
     """Replace ``path`` through a private temp file in the same directory."""
-    path = path.resolve()  # a symlinked .env stays a symlink
+    path = path.resolve()  # write through a symlink, onto its target
     fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as handle:
@@ -242,10 +271,13 @@ def migrate(workspace: Path) -> dict:
     The store is written, and its new text checked, before any ``.env`` is
     touched. The whole run holds a lock on the store, so two migrations sharing
     one store cannot overwrite each other. A store that is one of the ``.env``
-    files refuses to run.
+    files refuses to run, before anything is created or its mode changed. A
+    ``.env`` with a quote left open or a line continued with ``\\`` cannot be
+    split into assignments safely: its secrets are reported as ambiguous and the
+    file is not touched. POSIX only (``fcntl``), like the rest of Solar.
     """
     workspace = Path(workspace)
-    store = ensure_store().resolve()
+    store = secrets_file().resolve()
     candidates: list[Path] = []
     for candidate in (workspace / ".env", workspace / "sun" / ".env"):
         if not candidate.exists():
@@ -256,37 +288,61 @@ def migrate(workspace: Path) -> dict:
         if real not in candidates:
             candidates.append(real)
 
+    if not _mentions_secret(candidates):
+        return dict(moved=[], dropped=[], removed_empty=[], conflicts=[], ambiguous=[])
+
+    store.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(store.parent, 0o700)
     lock_path = store.parent / ".installation.lock"
     with open(lock_path, "a", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
+            ensure_store()
             return _migrate_locked(store, candidates)
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _mentions_secret(candidates: list[Path]) -> bool:
+    for path in candidates:
+        try:
+            raw = path.read_text(encoding="utf-8", errors="surrogateescape")
+        except OSError:
+            continue
+        if any(_secret_line_name(line) in KNOWN_SECRETS for line in raw.splitlines()):
+            return True
+    return False
 
 
 def _migrate_locked(store: Path, candidates: list[Path]) -> dict:
     stored = read()
     texts: dict[Path, list[str]] = {}
     found: dict[str, list[tuple[Path, int, str | None]]] = {}
+    ambiguous_files: list[str] = []
     for path in candidates:
         try:
             raw = path.read_text(encoding="utf-8", errors="surrogateescape")
         except OSError:
             continue
         texts[path] = raw.splitlines(keepends=True)
+        safe = all(_line_complete(line) for line in texts[path])
         for index, line in enumerate(texts[path]):
             name = _secret_line_name(line)
-            if name in KNOWN_SECRETS:
-                found.setdefault(name, []).append((path, index, _interpret_value(line)))
+            if name not in KNOWN_SECRETS:
+                continue
+            if not safe:
+                ambiguous_files.append(f"{path}:{name}")
+                continue
+            found.setdefault(name, []).append((path, index, _interpret_value(line)))
 
     result: dict[str, list[str]] = dict(
-        moved=[], dropped=[], removed_empty=[], conflicts=[], ambiguous=[])
+        moved=[], dropped=[], removed_empty=[], conflicts=[], ambiguous=ambiguous_files)
     to_store: dict[str, str] = {}
     remove: dict[Path, set[int]] = {}
+    blocked = {entry.rsplit(":", 1)[1] for entry in ambiguous_files}
     for name, hits in found.items():
         label = [f"{path}:{name}" for path, _, _ in hits]
-        if any(value is None for _, _, value in hits):
+        if name in blocked or any(value is None for _, _, value in hits):
             result["ambiguous"].extend(label)
             continue
         values = {value for _, _, value in hits if value}

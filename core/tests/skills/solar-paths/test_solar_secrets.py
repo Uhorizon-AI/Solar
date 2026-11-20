@@ -339,10 +339,15 @@ def test_migrate_leaves_a_line_with_a_trailing_comment(tmp_path):
 
 def test_migrate_refuses_when_the_store_is_an_env_file(tmp_path, monkeypatch):
     workspace = _workspace(tmp_path, "TELEGRAM_BOT_TOKEN=abc\n")
+    os.chmod(workspace, 0o755)
+    os.chmod(workspace / ".env", 0o644)
     monkeypatch.setenv("SOLAR_SECRETS_FILE", str(workspace / ".env"))
     result = _run_migrate(workspace)
     assert result.returncode == 1 and "refused" in result.stderr
     assert (workspace / ".env").read_text(encoding="utf-8") == "TELEGRAM_BOT_TOKEN=abc\n"
+    # Refusing must not have changed the modes of the file or its folder.
+    assert stat.S_IMODE((workspace / ".env").stat().st_mode) == 0o644
+    assert stat.S_IMODE(workspace.stat().st_mode) == 0o755
 
 
 def test_migrate_removes_an_empty_assignment_and_says_so(tmp_path):
@@ -423,3 +428,54 @@ def test_the_doctor_error_gives_a_command_that_clears_the_leak(tmp_path, fixture
     assert subprocess.run(command, env=env, capture_output=True).returncode == 0
     assert "no installation secret in .env or sun/.env" in doctor()
     assert json.dumps(solar_secrets.read()).count("abc") == 1
+
+
+def test_ensure_store_never_truncates_when_it_loses_the_creation_race(fixture_store, monkeypatch):
+    solar_secrets.ensure_store()
+    fixture_store.write_text("TELEGRAM_BOT_TOKEN=abc\n", encoding="utf-8")
+    # This process believes the store is missing, as if it checked before the
+    # other one created and filled it.
+    real_exists = Path.exists
+    monkeypatch.setattr(
+        Path, "exists", lambda self: False if self == fixture_store else real_exists(self))
+    solar_secrets.ensure_store()
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "abc"
+
+
+def test_migrate_with_nothing_to_move_creates_no_store_and_no_lock(tmp_path, fixture_store):
+    workspace = _workspace(tmp_path, "TELEGRAM_CHAT_ID=999\n")
+    result = _run_migrate(workspace)
+    assert result.returncode == 0 and "nothing to migrate" in result.stdout
+    assert not fixture_store.exists()
+    assert not (fixture_store.parent / ".installation.lock").exists()
+
+
+def test_migrate_leaves_an_env_with_a_multiline_string_alone(tmp_path):
+    text = 'NOTE="first line\nTELEGRAM_BOT_TOKEN=inside-a-string\nlast"\nOTHER=1\n'
+    workspace = _workspace(tmp_path, text)
+    result = _run_migrate(workspace)
+    assert result.returncode == 1 and "ambiguous" in result.stdout
+    assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
+    assert (workspace / ".env").read_text(encoding="utf-8") == text
+
+
+def test_an_unsafe_env_blocks_the_same_name_in_the_other_file(tmp_path):
+    workspace = _workspace(tmp_path, 'NOTE="open\nTELEGRAM_BOT_TOKEN=x\n')
+    (workspace / "sun").mkdir()
+    sun_env = workspace / "sun" / ".env"
+    sun_env.write_text("TELEGRAM_BOT_TOKEN=abc\n", encoding="utf-8")
+    assert _run_migrate(workspace).returncode == 1
+    assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
+    assert sun_env.read_text(encoding="utf-8") == "TELEGRAM_BOT_TOKEN=abc\n"
+
+
+def test_migrate_keeps_a_secret_whose_value_is_not_valid_utf8(tmp_path, fixture_store):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    original = b"TELEGRAM_BOT_TOKEN='ab\xe9cd'\n"
+    (workspace / ".env").write_bytes(original)
+    result = _run_migrate(workspace)
+    assert result.returncode == 1 and "ambiguous" in result.stdout
+    assert (workspace / ".env").read_bytes() == original
+    # The store must still be readable as strict UTF-8 afterwards.
+    assert solar_secrets.read() == {}
