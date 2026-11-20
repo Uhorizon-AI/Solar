@@ -195,8 +195,26 @@ def _secret_line_name(line: str) -> str:
     return stripped.partition("=")[0].strip().removeprefix("export ").strip()
 
 
+_ASSIGNMENT = re.compile(r"\s*(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _plain_line(line: str) -> bool:
+    """A blank line, a comment or a strict ``NAME=`` assignment, and no heredoc.
+
+    Anything else is shell syntax (a command, ``NAME =x``, ``<<``): a later line
+    that looks like an assignment may then not be one, so the file is not
+    migrated at all.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return True
+    return "<<" not in line and _ASSIGNMENT.match(line) is not None
+
+
 def _line_complete(line: str) -> bool:
     """False when the line opens a quote it does not close or continues on the next."""
+    if line.lstrip().startswith("#"):
+        return True
     if line.rstrip("\r\n").endswith("\\"):
         return False
     try:
@@ -227,7 +245,12 @@ def _interpret_raw(line: str) -> str | None:
     value = line.strip()
     if value.startswith("export "):
         value = value[len("export "):].lstrip()
-    value = value.partition("=")[2].strip()
+    after = value.partition("=")[2]
+    if not after.strip():
+        return ""
+    if after[0] in " \t":
+        return None  # `NAME= cmd` runs cmd with NAME empty; it assigns nothing
+    value = after.strip()
     if len(value) >= 2 and value[0] == value[-1] == "'" and "'" not in value[1:-1]:
         return value[1:-1]
     if len(value) >= 2 and value[0] == value[-1] == '"' and _PLAIN_DOUBLE.fullmatch(value[1:-1]):
@@ -272,9 +295,10 @@ def migrate(workspace: Path) -> dict:
     touched. The whole run holds a lock on the store, so two migrations sharing
     one store cannot overwrite each other. A store that is one of the ``.env``
     files refuses to run, before anything is created or its mode changed. A
-    ``.env`` with a quote left open or a line continued with ``\\`` cannot be
-    split into assignments safely: its secrets are reported as ambiguous and the
-    file is not touched. POSIX only (``fcntl``), like the rest of Solar.
+    ``.env`` with a quote left open, a line continued with ``\\``, a heredoc or
+    any line that is not a plain assignment cannot be split into assignments
+    safely: its secrets are reported as ambiguous and the file is not touched.
+    A ``.env`` that exists but cannot be read refuses to run. POSIX only (``fcntl``), like the rest of Solar.
     """
     workspace = Path(workspace)
     store = secrets_file().resolve()
@@ -307,8 +331,8 @@ def _mentions_secret(candidates: list[Path]) -> bool:
     for path in candidates:
         try:
             raw = path.read_text(encoding="utf-8", errors="surrogateescape")
-        except OSError:
-            continue
+        except OSError as exc:
+            raise MigrationRefused(f"cannot read {path}: {exc.strerror}") from exc
         if any(_secret_line_name(line) in KNOWN_SECRETS for line in raw.splitlines()):
             return True
     return False
@@ -322,10 +346,10 @@ def _migrate_locked(store: Path, candidates: list[Path]) -> dict:
     for path in candidates:
         try:
             raw = path.read_text(encoding="utf-8", errors="surrogateescape")
-        except OSError:
-            continue
+        except OSError as exc:
+            raise MigrationRefused(f"cannot read {path}: {exc.strerror}") from exc
         texts[path] = raw.splitlines(keepends=True)
-        safe = all(_line_complete(line) for line in texts[path])
+        safe = all(_line_complete(line) and _plain_line(line) for line in texts[path])
         for index, line in enumerate(texts[path]):
             name = _secret_line_name(line)
             if name not in KNOWN_SECRETS:

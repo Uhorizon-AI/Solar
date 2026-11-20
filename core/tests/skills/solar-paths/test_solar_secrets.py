@@ -433,12 +433,20 @@ def test_the_doctor_error_gives_a_command_that_clears_the_leak(tmp_path, fixture
 def test_ensure_store_never_truncates_when_it_loses_the_creation_race(fixture_store, monkeypatch):
     solar_secrets.ensure_store()
     fixture_store.write_text("TELEGRAM_BOT_TOKEN=abc\n", encoding="utf-8")
-    # This process believes the store is missing, as if it checked before the
-    # other one created and filled it.
-    real_exists = Path.exists
-    monkeypatch.setattr(
-        Path, "exists", lambda self: False if self == fixture_store else real_exists(self))
+    # Another process created the file between our attempt and the open: the
+    # exclusive create fails and must leave the filled store alone.
+    real_open = os.open
+    attempts = []
+
+    def racing_open(path, flags, *args, **kwargs):
+        if Path(path) == fixture_store and flags & os.O_EXCL:
+            attempts.append(path)
+            raise FileExistsError(path)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", racing_open)
     solar_secrets.ensure_store()
+    assert attempts, "ensure_store did not try an exclusive create"
     assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "abc"
 
 
@@ -479,3 +487,38 @@ def test_migrate_keeps_a_secret_whose_value_is_not_valid_utf8(tmp_path, fixture_
     assert (workspace / ".env").read_bytes() == original
     # The store must still be readable as strict UTF-8 afterwards.
     assert solar_secrets.read() == {}
+
+
+@pytest.mark.parametrize("text", [
+    "cat <<EOF\nTELEGRAM_BOT_TOKEN=inside-heredoc\nEOF\n",
+    "TELEGRAM_BOT_TOKEN= true\n",
+    "TELEGRAM_BOT_TOKEN =abc\n",
+    "echo hi\nTELEGRAM_BOT_TOKEN=abc\n",
+])
+def test_migrate_keeps_what_bash_would_not_assign_to_the_token(tmp_path, text):
+    workspace = _workspace(tmp_path, text)
+    result = _run_migrate(workspace)
+    assert result.returncode == 1 and "ambiguous" in result.stdout
+    assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
+    assert (workspace / ".env").read_text(encoding="utf-8") == text
+
+
+def test_migrate_refuses_an_env_it_cannot_read(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root reads any file")
+    workspace = _workspace(tmp_path, "TELEGRAM_BOT_TOKEN=abc\n")
+    env_file = workspace / ".env"
+    os.chmod(env_file, 0o000)
+    try:
+        result = _run_migrate(workspace)
+    finally:
+        os.chmod(env_file, 0o600)
+    assert result.returncode == 1 and "refused" in result.stderr
+    assert str(env_file) in result.stderr
+    assert env_file.read_text(encoding="utf-8") == "TELEGRAM_BOT_TOKEN=abc\n"
+
+
+def test_a_comment_ending_in_a_backslash_does_not_block_the_migration(tmp_path):
+    workspace = _workspace(tmp_path, "# note \\\nTELEGRAM_BOT_TOKEN=abc\n")
+    assert _run_migrate(workspace).returncode == 0
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "abc"
