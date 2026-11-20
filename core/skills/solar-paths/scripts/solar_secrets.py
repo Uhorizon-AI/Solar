@@ -28,8 +28,11 @@ the token into the harness — not the machine.
 
 from __future__ import annotations
 
+import fcntl
 import os
+import re
 import sys
+import tempfile
 from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parent
@@ -69,18 +72,8 @@ def ensure_store() -> Path:
     return path
 
 
-def parse_env_file(path) -> dict[str, str]:
-    """KEY=VALUE lines into a mapping. A missing file is empty, not an error.
-
-    Deliberately dumb: no interpolation, no command substitution. Used for the
-    store and for reading the workspace's visible configuration without handing
-    a `.env` to a shell.
-    """
+def _parse_text(raw: str) -> dict[str, str]:
     values: dict[str, str] = {}
-    try:
-        raw = Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return values
     for line in raw.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -97,6 +90,20 @@ def parse_env_file(path) -> dict[str, str]:
         if key:
             values[key] = value
     return values
+
+
+def parse_env_file(path) -> dict[str, str]:
+    """KEY=VALUE lines into a mapping. A missing file is empty, not an error.
+
+    Deliberately dumb: no interpolation, no command substitution. Used for the
+    store and for reading the workspace's visible configuration without handing
+    a `.env` to a shell.
+    """
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    return _parse_text(raw)
 
 
 def read() -> dict[str, str]:
@@ -169,6 +176,10 @@ def workspace_leaks(workspace: Path) -> list[str]:
     return leaks
 
 
+_SIMPLE_VALUE = re.compile(r"[A-Za-z0-9_.:/@+=,%-]*")
+_PLAIN_DOUBLE = re.compile(r'[^"\\$`]*')
+
+
 def _secret_line_name(line: str) -> str:
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
@@ -176,100 +187,142 @@ def _secret_line_name(line: str) -> str:
     return stripped.partition("=")[0].strip().removeprefix("export ").strip()
 
 
+def _interpret_value(line: str) -> str | None:
+    """The value of one assignment as a shell reads it, or None if ambiguous.
+
+    Only values that can be read without executing anything are interpreted: a
+    plain word, a single-quoted string, or a double-quoted string with no
+    expansion. A trailing comment, a space, ``$``, a backtick or a backslash
+    makes it ambiguous, and an ambiguous line is never moved or deleted.
+    """
+    value = line.strip()
+    if value.startswith("export "):
+        value = value[len("export "):].lstrip()
+    value = value.partition("=")[2].strip()
+    if len(value) >= 2 and value[0] == value[-1] == "'" and "'" not in value[1:-1]:
+        return value[1:-1]
+    if len(value) >= 2 and value[0] == value[-1] == '"' and _PLAIN_DOUBLE.fullmatch(value[1:-1]):
+        return value[1:-1]
+    if _SIMPLE_VALUE.fullmatch(value):
+        return value
+    return None
+
+
 def _atomic_write(path: Path, text: str, mode: int) -> None:
-    tmp = path.with_name(path.name + ".solar-tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    """Replace ``path`` through a private temp file in the same directory."""
+    path = path.resolve()  # a symlinked .env stays a symlink
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as handle:
             handle.write(text)
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        os.chmod(tmp_name, mode)
+        os.replace(tmp_name, path)
     finally:
-        if tmp.exists():
-            tmp.unlink()
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
+class MigrationRefused(Exception):
+    """The migration cannot run safely; nothing was changed."""
 
 
 def migrate(workspace: Path) -> dict:
     """Move ``KNOWN_SECRETS`` from the workspace ``.env`` files into the store.
 
-    Never prints or returns a value, only names. For each leaked name:
+    Never prints or returns a value, only ``path:NAME`` entries. Each name is
+    resolved over the store and both ``.env`` files before anything is written:
 
-    * the store has no value: the value is copied into the store (0600), then
-      the line is removed from the ``.env``;
-    * the store already holds the same value: the stale line is removed;
-    * the store holds a different value: nothing is touched and the name is
-      reported as a conflict, because either copy could be the one in use.
+    * one value, store has none: copied into the store (0600), line removed;
+    * one value, store has the same: the stale line is removed;
+    * more than one distinct value: conflict, nothing touched for that name;
+    * a line that is not plainly readable (trailing comment, expansion):
+      ambiguous, nothing touched for that name;
+    * an empty assignment carries no value and is removed.
 
-    The store is written and re-read before any ``.env`` line is removed, so a
-    failure never leaves the value in neither place.
+    The store is written, and its new text checked, before any ``.env`` is
+    touched. The whole run holds a lock on the store, so two migrations sharing
+    one store cannot overwrite each other. A store that is one of the ``.env``
+    files refuses to run.
     """
     workspace = Path(workspace)
-    stored = read()
-    moved: list[str] = []
-    dropped: list[str] = []
-    conflicts: list[str] = []
-    pending: dict[Path, list[str]] = {}
-    to_store: dict[str, str] = {}
-
+    store = ensure_store().resolve()
+    candidates: list[Path] = []
     for candidate in (workspace / ".env", workspace / "sun" / ".env"):
+        if not candidate.exists():
+            continue
+        real = candidate.resolve()
+        if real == store:
+            raise MigrationRefused(f"the secret store is the same file as {candidate}")
+        if real not in candidates:
+            candidates.append(real)
+
+    lock_path = store.parent / ".installation.lock"
+    with open(lock_path, "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            raw = candidate.read_text(encoding="utf-8")
+            return _migrate_locked(store, candidates)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _migrate_locked(store: Path, candidates: list[Path]) -> dict:
+    stored = read()
+    texts: dict[Path, list[str]] = {}
+    found: dict[str, list[tuple[Path, int, str | None]]] = {}
+    for path in candidates:
+        try:
+            raw = path.read_text(encoding="utf-8", errors="surrogateescape")
         except OSError:
             continue
-        lines = raw.splitlines(keepends=True)
-        kept: list[str] = []
-        changed = False
-        for line in lines:
+        texts[path] = raw.splitlines(keepends=True)
+        for index, line in enumerate(texts[path]):
             name = _secret_line_name(line)
-            if name not in KNOWN_SECRETS:
-                kept.append(line)
-                continue
-            value = parse_env_file_line(line)
-            current = to_store.get(name) or stored.get(name, "")
+            if name in KNOWN_SECRETS:
+                found.setdefault(name, []).append((path, index, _interpret_value(line)))
+
+    result: dict[str, list[str]] = dict(
+        moved=[], dropped=[], removed_empty=[], conflicts=[], ambiguous=[])
+    to_store: dict[str, str] = {}
+    remove: dict[Path, set[int]] = {}
+    for name, hits in found.items():
+        label = [f"{path}:{name}" for path, _, _ in hits]
+        if any(value is None for _, _, value in hits):
+            result["ambiguous"].extend(label)
+            continue
+        values = {value for _, _, value in hits if value}
+        if stored.get(name):
+            values.add(stored[name])
+        if len(values) > 1:
+            result["conflicts"].extend(label)
+            continue
+        for (path, index, value), entry in zip(hits, label):
+            remove.setdefault(path, set()).add(index)
             if not value:
-                changed = True  # an empty assignment carries nothing to keep
-                continue
-            if current and current != value:
-                conflicts.append(f"{candidate}:{name}")
-                kept.append(line)
-                continue
-            if not current:
-                to_store[name] = value
-                moved.append(f"{candidate}:{name}")
+                result["removed_empty"].append(entry)
+            elif stored.get(name):
+                result["dropped"].append(entry)
             else:
-                dropped.append(f"{candidate}:{name}")
-            changed = True
-        if changed:
-            pending[candidate] = kept
+                result["moved"].append(entry)
+        if values and not stored.get(name):
+            to_store[name] = next(iter(values))
 
     if to_store:
-        path = ensure_store()
-        text = path.read_text(encoding="utf-8")
+        old = store.read_text(encoding="utf-8")
+        kept = [line for line in old.splitlines(keepends=True)
+                if _secret_line_name(line) not in to_store]
+        text = "".join(kept)
         if text and not text.endswith("\n"):
             text += "\n"
-        for name, value in to_store.items():
-            text += f"{name}={value}\n"
-        _atomic_write(path, text, 0o600)
-        after = read()
-        if any(after.get(name) != value for name, value in to_store.items()):
-            raise RuntimeError("secret store did not keep the migrated values; .env untouched")
+        text += "".join(f"{name}={value}\n" for name, value in to_store.items())
+        check = _parse_text(text)
+        if any(check.get(name) != value for name, value in to_store.items()):
+            raise MigrationRefused("the secret store would not keep the values; nothing changed")
+        _atomic_write(store, text, 0o600)
 
-    for candidate, kept in pending.items():
-        mode = candidate.stat().st_mode & 0o777
-        _atomic_write(candidate, "".join(kept), mode)
-
-    return dict(moved=moved, dropped=dropped, conflicts=conflicts)
-
-
-def parse_env_file_line(line: str) -> str:
-    """The value of one KEY=VALUE line, parsed the way ``parse_env_file`` does."""
-    line = line.strip()
-    if line.startswith("export "):
-        line = line[len("export "):].lstrip()
-    value = line.partition("=")[2].strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        value = value[1:-1]
-    return value
+    for path, indexes in remove.items():
+        kept = [line for i, line in enumerate(texts[path]) if i not in indexes]
+        _atomic_write(path, "".join(kept), path.stat().st_mode & 0o777)
+    return result
 
 
 def _main(argv: list[str]) -> int:
@@ -297,20 +350,23 @@ def _main(argv: list[str]) -> int:
             return 2
         try:
             result = migrate(Path(argv[2]))
-        except RuntimeError as exc:
-            sys.stderr.write(f"migrate failed: {exc}\n")
+        except MigrationRefused as exc:
+            sys.stderr.write(f"migrate refused: {exc}\n")
             return 1
-        for label in ("moved", "dropped", "conflicts"):
-            for entry in result[label]:
+        for label, entries in result.items():
+            for entry in entries:
                 print(f"{label}: {entry}")
         if not any(result.values()):
             print("nothing to migrate")
         if result["conflicts"]:
             sys.stderr.write(
-                "conflict: the store and the .env hold different values; "
-                "keep the one in use and delete the other by hand.\n")
-            return 1
-        return 0
+                "conflict: different values for the same name; "
+                "keep the one in use and delete the others by hand.\n")
+        if result["ambiguous"]:
+            sys.stderr.write(
+                "ambiguous: these lines are not plain KEY=VALUE (comment, quotes, "
+                "expansion); move them by hand.\n")
+        return 1 if result["conflicts"] or result["ambiguous"] else 0
     if command == "names":
         for name in sorted(read()):
             print(name)

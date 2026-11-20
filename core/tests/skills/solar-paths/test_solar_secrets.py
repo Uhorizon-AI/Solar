@@ -307,3 +307,119 @@ def test_migrate_also_covers_sun_env_and_keeps_file_mode(tmp_path):
     assert solar_secrets.read()["SOLAR_N8N_WEBHOOK_SECRET"] == "s3cret"
     assert stat.S_IMODE(sun_env.stat().st_mode) == 0o640
     assert solar_secrets.workspace_leaks(workspace) == []
+
+
+def test_migrate_conflict_between_env_files_touches_nothing(tmp_path, fixture_store):
+    workspace = _workspace(tmp_path, "TELEGRAM_BOT_TOKEN=one\n")
+    (workspace / "sun").mkdir()
+    (workspace / "sun" / ".env").write_text("TELEGRAM_BOT_TOKEN=two\n", encoding="utf-8")
+    result = _run_migrate(workspace)
+    assert result.returncode == 1 and "conflict" in result.stderr
+    assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
+    assert (workspace / ".env").read_text(encoding="utf-8") == "TELEGRAM_BOT_TOKEN=one\n"
+    assert (workspace / "sun" / ".env").read_text(encoding="utf-8") == "TELEGRAM_BOT_TOKEN=two\n"
+
+
+def test_migrate_conflict_inside_one_file_touches_nothing(tmp_path):
+    text = "TELEGRAM_BOT_TOKEN=one\nTELEGRAM_BOT_TOKEN=two\n"
+    workspace = _workspace(tmp_path, text)
+    assert _run_migrate(workspace).returncode == 1
+    assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
+    assert (workspace / ".env").read_text(encoding="utf-8") == text
+
+
+def test_migrate_leaves_a_line_with_a_trailing_comment(tmp_path):
+    text = "TELEGRAM_BOT_TOKEN=abc # bot token\n"
+    workspace = _workspace(tmp_path, text)
+    result = _run_migrate(workspace)
+    assert result.returncode == 1 and "ambiguous" in result.stdout
+    assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
+    assert (workspace / ".env").read_text(encoding="utf-8") == text
+
+
+def test_migrate_refuses_when_the_store_is_an_env_file(tmp_path, monkeypatch):
+    workspace = _workspace(tmp_path, "TELEGRAM_BOT_TOKEN=abc\n")
+    monkeypatch.setenv("SOLAR_SECRETS_FILE", str(workspace / ".env"))
+    result = _run_migrate(workspace)
+    assert result.returncode == 1 and "refused" in result.stderr
+    assert (workspace / ".env").read_text(encoding="utf-8") == "TELEGRAM_BOT_TOKEN=abc\n"
+
+
+def test_migrate_removes_an_empty_assignment_and_says_so(tmp_path):
+    workspace = _workspace(tmp_path, "TELEGRAM_BOT_TOKEN=\nKEEP=1\n")
+    result = _run_migrate(workspace)
+    assert result.returncode == 0
+    assert "removed_empty" in result.stdout and "nothing to migrate" not in result.stdout
+    assert (workspace / ".env").read_text(encoding="utf-8") == "KEEP=1\n"
+
+
+def test_migrate_replaces_an_empty_line_in_the_store(tmp_path, fixture_store):
+    solar_secrets.ensure_store()
+    fixture_store.write_text("TELEGRAM_BOT_TOKEN=\n", encoding="utf-8")
+    workspace = _workspace(tmp_path, "TELEGRAM_BOT_TOKEN=abc\n")
+    assert _run_migrate(workspace).returncode == 0
+    assert fixture_store.read_text(encoding="utf-8").count("TELEGRAM_BOT_TOKEN") == 1
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "abc"
+
+
+def test_migrate_keeps_a_symlinked_env_and_non_utf8_bytes(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    real = tmp_path / "real.env"
+    real.write_bytes(b"NOTE=caf\xe9\nTELEGRAM_BOT_TOKEN=abc\n")
+    (workspace / ".env").symlink_to(real)
+    assert _run_migrate(workspace).returncode == 0
+    assert (workspace / ".env").is_symlink()
+    assert real.read_bytes() == b"NOTE=caf\xe9\n"
+
+
+def test_two_migrations_sharing_one_store_keep_both_values(tmp_path):
+    first = tmp_path / "one"
+    second = tmp_path / "two"
+    for ws, line in ((first, "TELEGRAM_BOT_TOKEN=aaa\n"), (second, "SOLAR_N8N_WEBHOOK_SECRET=bbb\n")):
+        ws.mkdir()
+        (ws / ".env").write_text(line, encoding="utf-8")
+    procs = [
+        subprocess.Popen(
+            [sys.executable, str(_SCRIPTS / "solar_secrets.py"), "migrate", str(ws)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ.copy())
+        for _ in range(5) for ws in (first, second)
+    ]
+    assert all(p.wait() == 0 for p in procs)
+    stored = solar_secrets.read()
+    assert stored["TELEGRAM_BOT_TOKEN"] == "aaa"
+    assert stored["SOLAR_N8N_WEBHOOK_SECRET"] == "bbb"
+
+
+def test_the_doctor_error_gives_a_command_that_clears_the_leak(tmp_path, fixture_store):
+    """End to end on a scratch workspace that carries its own copy of core/."""
+    import json
+    import shlex
+    import shutil
+
+    workspace = tmp_path / "ws"
+    (workspace / ".solar").mkdir(parents=True)
+    (workspace / ".solar" / "settings.json").write_text("{}", encoding="utf-8")
+    (workspace / "sun").mkdir()
+    (workspace / ".env").write_text("TELEGRAM_BOT_TOKEN=abc\n", encoding="utf-8")
+    for name in ("skills", "scripts"):
+        shutil.copytree(_CORE / name, workspace / "core" / name,
+                        ignore=shutil.ignore_patterns("__pycache__", ".venv"))
+    env = {k: v for k, v in os.environ.items() if k != "SOLAR_WORKSPACE"}
+    env["SOLAR_RUNTIME_ROOT"] = str(tmp_path / "runtime")
+
+    def doctor():
+        out = subprocess.run(
+            ["bash", str(workspace / "core/skills/solar-client/scripts/client_doctor.sh")],
+            capture_output=True, text=True, env=env, cwd=workspace, timeout=120)
+        return out.stdout + out.stderr
+
+    text = doctor()
+    marker = "(fix: "
+    assert "installation secrets still in a file the IDE indexes" in text
+    assert marker in text and "abc" not in text
+    command = shlex.split(text.split(marker, 1)[1].split(")\n", 1)[0])
+    assert command[0] == "python3" and command[2] == "migrate"
+    assert subprocess.run(command, env=env, capture_output=True).returncode == 0
+    assert "no installation secret in .env or sun/.env" in doctor()
+    assert json.dumps(solar_secrets.read()).count("abc") == 1

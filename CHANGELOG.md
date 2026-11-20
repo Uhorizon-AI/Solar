@@ -7,7 +7,7 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Fixed
-- client doctor: an installation secret still in `.env` / `sun/.env` after an update now points at a one-command fix. New `solar_secrets.py migrate <workspace>` moves `TELEGRAM_BOT_TOKEN` / `SOLAR_N8N_WEBHOOK_SECRET` into the 0600 store and removes the line from the `.env`, printing names only, never values. It writes and re-reads the store before touching the `.env`, is idempotent, and leaves a conflicting value in place and reports it.
+- client doctor: a secret left in `.env` after an update now shows a one-command fix, `solar_secrets.py migrate <workspace>`. It moves the keys into the 0600 store, prints names only, and leaves conflicting or ambiguous lines untouched.
 
 ## [0.64.0] - 2026-11-17
 

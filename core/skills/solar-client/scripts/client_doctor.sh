@@ -211,7 +211,8 @@ print(",".join(data.get("missing") or []))
   _store_missing="$(printf '%s\n' "$_leaks" | sed -n 4p)"
 
   if [[ -n "$_leak_list" ]]; then
-    err "installation secrets still in a file the IDE indexes: ${_leak_list//|/, } (fix: python3 $SCRIPT_DIR/../../solar-paths/scripts/solar_secrets.py migrate \"$SOLAR_WORKSPACE\")"
+    _migrate_script="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_secrets.py"
+    err "installation secrets still in a file the IDE indexes: ${_leak_list//|/, } (fix: $(printf 'python3 %q migrate %q' "$_migrate_script" "$SOLAR_WORKSPACE"))"
   else
     ok "no installation secret in .env or sun/.env"
   fi
