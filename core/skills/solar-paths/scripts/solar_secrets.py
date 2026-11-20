@@ -169,6 +169,109 @@ def workspace_leaks(workspace: Path) -> list[str]:
     return leaks
 
 
+def _secret_line_name(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return ""
+    return stripped.partition("=")[0].strip().removeprefix("export ").strip()
+
+
+def _atomic_write(path: Path, text: str, mode: int) -> None:
+    tmp = path.with_name(path.name + ".solar-tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def migrate(workspace: Path) -> dict:
+    """Move ``KNOWN_SECRETS`` from the workspace ``.env`` files into the store.
+
+    Never prints or returns a value, only names. For each leaked name:
+
+    * the store has no value: the value is copied into the store (0600), then
+      the line is removed from the ``.env``;
+    * the store already holds the same value: the stale line is removed;
+    * the store holds a different value: nothing is touched and the name is
+      reported as a conflict, because either copy could be the one in use.
+
+    The store is written and re-read before any ``.env`` line is removed, so a
+    failure never leaves the value in neither place.
+    """
+    workspace = Path(workspace)
+    stored = read()
+    moved: list[str] = []
+    dropped: list[str] = []
+    conflicts: list[str] = []
+    pending: dict[Path, list[str]] = {}
+    to_store: dict[str, str] = {}
+
+    for candidate in (workspace / ".env", workspace / "sun" / ".env"):
+        try:
+            raw = candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        lines = raw.splitlines(keepends=True)
+        kept: list[str] = []
+        changed = False
+        for line in lines:
+            name = _secret_line_name(line)
+            if name not in KNOWN_SECRETS:
+                kept.append(line)
+                continue
+            value = parse_env_file_line(line)
+            current = to_store.get(name) or stored.get(name, "")
+            if not value:
+                changed = True  # an empty assignment carries nothing to keep
+                continue
+            if current and current != value:
+                conflicts.append(f"{candidate}:{name}")
+                kept.append(line)
+                continue
+            if not current:
+                to_store[name] = value
+                moved.append(f"{candidate}:{name}")
+            else:
+                dropped.append(f"{candidate}:{name}")
+            changed = True
+        if changed:
+            pending[candidate] = kept
+
+    if to_store:
+        path = ensure_store()
+        text = path.read_text(encoding="utf-8")
+        if text and not text.endswith("\n"):
+            text += "\n"
+        for name, value in to_store.items():
+            text += f"{name}={value}\n"
+        _atomic_write(path, text, 0o600)
+        after = read()
+        if any(after.get(name) != value for name, value in to_store.items()):
+            raise RuntimeError("secret store did not keep the migrated values; .env untouched")
+
+    for candidate, kept in pending.items():
+        mode = candidate.stat().st_mode & 0o777
+        _atomic_write(candidate, "".join(kept), mode)
+
+    return dict(moved=moved, dropped=dropped, conflicts=conflicts)
+
+
+def parse_env_file_line(line: str) -> str:
+    """The value of one KEY=VALUE line, parsed the way ``parse_env_file`` does."""
+    line = line.strip()
+    if line.startswith("export "):
+        line = line[len("export "):].lstrip()
+    value = line.partition("=")[2].strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1]
+    return value
+
+
 def _main(argv: list[str]) -> int:
     command = argv[1] if len(argv) > 1 else "status"
     if command == "path":
@@ -188,12 +291,32 @@ def _main(argv: list[str]) -> int:
             ok = report["exists"] and report["secure"] and not report["missing"]
             return 0 if ok else 1
         return 0
+    if command == "migrate":
+        if len(argv) < 3:
+            sys.stderr.write("usage: solar_secrets.py migrate <workspace>\n")
+            return 2
+        try:
+            result = migrate(Path(argv[2]))
+        except RuntimeError as exc:
+            sys.stderr.write(f"migrate failed: {exc}\n")
+            return 1
+        for label in ("moved", "dropped", "conflicts"):
+            for entry in result[label]:
+                print(f"{label}: {entry}")
+        if not any(result.values()):
+            print("nothing to migrate")
+        if result["conflicts"]:
+            sys.stderr.write(
+                "conflict: the store and the .env hold different values; "
+                "keep the one in use and delete the other by hand.\n")
+            return 1
+        return 0
     if command == "names":
         for name in sorted(read()):
             print(name)
         return 0
     sys.stderr.write(
-        "usage: solar_secrets.py [path|ensure|status [workspace]|check [workspace]|names]\n"
+        "usage: solar_secrets.py [path|ensure|migrate <workspace>|status [workspace]|check [workspace]|names]\n"
         "There is no verb that prints a value: this is not a vault UX.\n")
     return 2
 

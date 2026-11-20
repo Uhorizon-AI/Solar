@@ -241,3 +241,69 @@ def test_the_bash_loader_survives_a_machine_with_no_store(tmp_path):
         env={**os.environ, "SOLAR_SECRETS_FILE": str(tmp_path / "nothing.env")})
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "survived"
+
+
+def _workspace(tmp_path, env_text):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".env").write_text(env_text, encoding="utf-8")
+    return workspace
+
+
+def _run_migrate(workspace):
+    return subprocess.run(
+        [sys.executable, str(_SCRIPTS / "solar_secrets.py"), "migrate", str(workspace)],
+        capture_output=True, text=True, env=os.environ.copy())
+
+
+def test_migrate_moves_a_leaked_key_into_the_store_and_prints_no_value(tmp_path, fixture_store):
+    workspace = _workspace(
+        tmp_path, "TELEGRAM_CHAT_ID=999\nTELEGRAM_BOT_TOKEN=123:abc\nOTHER=1\n")
+    result = _run_migrate(workspace)
+    assert result.returncode == 0
+    assert "123:abc" not in result.stdout + result.stderr
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "123:abc"
+    assert stat.S_IMODE(fixture_store.stat().st_mode) == 0o600
+    # Visible configuration stays; the secret line is gone; no leak remains.
+    assert (workspace / ".env").read_text(encoding="utf-8") == "TELEGRAM_CHAT_ID=999\nOTHER=1\n"
+    assert solar_secrets.workspace_leaks(workspace) == []
+
+
+def test_migrate_is_idempotent(tmp_path):
+    workspace = _workspace(tmp_path, "TELEGRAM_BOT_TOKEN=123:abc\n")
+    assert _run_migrate(workspace).returncode == 0
+    again = _run_migrate(workspace)
+    assert again.returncode == 0 and "nothing to migrate" in again.stdout
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "123:abc"
+
+
+def test_migrate_drops_a_stale_copy_equal_to_the_store(tmp_path, fixture_store):
+    solar_secrets.ensure_store()
+    fixture_store.write_text("TELEGRAM_BOT_TOKEN=123:abc\n", encoding="utf-8")
+    workspace = _workspace(tmp_path, 'export TELEGRAM_BOT_TOKEN="123:abc"\n')
+    assert _run_migrate(workspace).returncode == 0
+    assert (workspace / ".env").read_text(encoding="utf-8") == ""
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "123:abc"
+
+
+def test_migrate_never_overwrites_a_different_value(tmp_path, fixture_store):
+    solar_secrets.ensure_store()
+    fixture_store.write_text("TELEGRAM_BOT_TOKEN=stored\n", encoding="utf-8")
+    workspace = _workspace(tmp_path, "TELEGRAM_BOT_TOKEN=other\n")
+    result = _run_migrate(workspace)
+    assert result.returncode == 1 and "conflict" in result.stderr
+    assert "stored" not in result.stdout and "other" not in result.stdout
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "stored"
+    assert (workspace / ".env").read_text(encoding="utf-8") == "TELEGRAM_BOT_TOKEN=other\n"
+
+
+def test_migrate_also_covers_sun_env_and_keeps_file_mode(tmp_path):
+    workspace = _workspace(tmp_path, "A=1\n")
+    (workspace / "sun").mkdir()
+    sun_env = workspace / "sun" / ".env"
+    sun_env.write_text("SOLAR_N8N_WEBHOOK_SECRET=s3cret\n", encoding="utf-8")
+    os.chmod(sun_env, 0o640)
+    assert _run_migrate(workspace).returncode == 0
+    assert solar_secrets.read()["SOLAR_N8N_WEBHOOK_SECRET"] == "s3cret"
+    assert stat.S_IMODE(sun_env.stat().st_mode) == 0o640
+    assert solar_secrets.workspace_leaks(workspace) == []
