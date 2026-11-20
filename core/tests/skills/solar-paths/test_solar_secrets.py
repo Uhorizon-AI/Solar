@@ -436,7 +436,11 @@ def test_the_doctor_error_gives_a_command_that_clears_the_leak(tmp_path, fixture
     assert "installation secrets still in a file the IDE indexes" in text
     assert "abc" not in text
     command = _fix_command(text)
-    assert "migrate" in command and "python3" in command
+    store = solar_secrets.secrets_file()
+    assert command[0] == "env" and command[1] == f"SOLAR_SECRETS_FILE={store}"
+    assert command[2] == "python3" and command[4] == "migrate"
+    assert Path(command[3]).name == "solar_secrets.py"
+    assert command[-1] == str(workspace.resolve()) or command[-1] == str(workspace)
     assert subprocess.run(command, env=env, capture_output=True).returncode == 0
     assert "no installation secret in .env or sun/.env" in doctor()
     assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "abc"
