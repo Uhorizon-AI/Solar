@@ -195,6 +195,7 @@ def _secret_line_name(line: str) -> str:
     return stripped.partition("=")[0].strip().removeprefix("export ").strip()
 
 
+_QUOTED = re.compile(r"\'[^\']*\'|\"[^\"]*\"")
 _ASSIGNMENT = re.compile(r"\s*(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=")
 
 
@@ -208,7 +209,13 @@ def _plain_line(line: str) -> bool:
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
         return True
-    return "<<" not in line and _ASSIGNMENT.match(line) is not None
+    if "<<" in line or _ASSIGNMENT.match(line) is None:
+        return False
+    # Outside quotes and a trailing comment, parentheses or a backtick open an
+    # array or a substitution that can span lines: `NOTE=(` swallows what follows.
+    bare = _QUOTED.sub("", line.partition("=")[2])
+    bare = re.split(r"\s#", bare, maxsplit=1)[0]
+    return not any(char in bare for char in "()`")
 
 
 def _line_complete(line: str) -> bool:
@@ -298,13 +305,16 @@ def migrate(workspace: Path) -> dict:
     ``.env`` with a quote left open, a line continued with ``\\``, a heredoc or
     any line that is not a plain assignment cannot be split into assignments
     safely: its secrets are reported as ambiguous and the file is not touched.
-    A ``.env`` that exists but cannot be read refuses to run. POSIX only (``fcntl``), like the rest of Solar.
+    A name that another line refers to (``$NAME``, ``${NAME}``) stays where it
+    is and is reported as referenced: removing it would break that line.
+    A regular ``.env`` that cannot be read refuses to run.
+    POSIX only (``fcntl``), like the rest of Solar.
     """
     workspace = Path(workspace)
     store = secrets_file().resolve()
     candidates: list[Path] = []
     for candidate in (workspace / ".env", workspace / "sun" / ".env"):
-        if not candidate.exists():
+        if not candidate.is_file():
             continue
         real = candidate.resolve()
         if real == store:
@@ -313,7 +323,8 @@ def migrate(workspace: Path) -> dict:
             candidates.append(real)
 
     if not _mentions_secret(candidates):
-        return dict(moved=[], dropped=[], removed_empty=[], conflicts=[], ambiguous=[])
+        return dict(moved=[], dropped=[], removed_empty=[], conflicts=[],
+                    ambiguous=[], referenced=[])
 
     store.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(store.parent, 0o700)
@@ -338,6 +349,14 @@ def _mentions_secret(candidates: list[Path]) -> bool:
     return False
 
 
+def _is_referenced(name: str, texts: dict[Path, list[str]]) -> bool:
+    pattern = re.compile(r"\$\{?" + re.escape(name) + r"\b")
+    return any(
+        pattern.search(line)
+        for lines in texts.values() for line in lines
+        if not line.lstrip().startswith("#"))
+
+
 def _migrate_locked(store: Path, candidates: list[Path]) -> dict:
     stored = read()
     texts: dict[Path, list[str]] = {}
@@ -360,7 +379,8 @@ def _migrate_locked(store: Path, candidates: list[Path]) -> dict:
             found.setdefault(name, []).append((path, index, _interpret_value(line)))
 
     result: dict[str, list[str]] = dict(
-        moved=[], dropped=[], removed_empty=[], conflicts=[], ambiguous=ambiguous_files)
+        moved=[], dropped=[], removed_empty=[], conflicts=[],
+        ambiguous=ambiguous_files, referenced=[])
     to_store: dict[str, str] = {}
     remove: dict[Path, set[int]] = {}
     blocked = {entry.rsplit(":", 1)[1] for entry in ambiguous_files}
@@ -368,6 +388,9 @@ def _migrate_locked(store: Path, candidates: list[Path]) -> dict:
         label = [f"{path}:{name}" for path, _, _ in hits]
         if name in blocked or any(value is None for _, _, value in hits):
             result["ambiguous"].extend(label)
+            continue
+        if _is_referenced(name, texts):
+            result["referenced"].extend(label)
             continue
         values = {value for _, _, value in hits if value}
         if stored.get(name):
@@ -442,11 +465,16 @@ def _main(argv: list[str]) -> int:
             sys.stderr.write(
                 "conflict: different values for the same name; "
                 "keep the one in use and delete the others by hand.\n")
+        if result["referenced"]:
+            sys.stderr.write(
+                "referenced: another line uses these names ($NAME); "
+                "move them by hand together with that line.\n")
         if result["ambiguous"]:
             sys.stderr.write(
                 "ambiguous: these lines are not plain KEY=VALUE (comment, quotes, "
                 "expansion); move them by hand.\n")
-        return 1 if result["conflicts"] or result["ambiguous"] else 0
+        blocked = result["conflicts"] or result["ambiguous"] or result["referenced"]
+        return 1 if blocked else 0
     if command == "names":
         for name in sorted(read()):
             print(name)

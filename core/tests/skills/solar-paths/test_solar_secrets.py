@@ -396,17 +396,15 @@ def test_two_migrations_sharing_one_store_keep_both_values(tmp_path):
     assert stored["SOLAR_N8N_WEBHOOK_SECRET"] == "bbb"
 
 
-def test_the_doctor_error_gives_a_command_that_clears_the_leak(tmp_path, fixture_store):
-    """End to end on a scratch workspace that carries its own copy of core/."""
-    import json
-    import shlex
+def _doctor_workspace(tmp_path, env_text):
+    """A scratch workspace carrying its own copy of core/, and a doctor runner."""
     import shutil
 
     workspace = tmp_path / "ws"
     (workspace / ".solar").mkdir(parents=True)
     (workspace / ".solar" / "settings.json").write_text("{}", encoding="utf-8")
     (workspace / "sun").mkdir()
-    (workspace / ".env").write_text("TELEGRAM_BOT_TOKEN=abc\n", encoding="utf-8")
+    (workspace / ".env").write_text(env_text, encoding="utf-8")
     for name in ("skills", "scripts"):
         shutil.copytree(_CORE / name, workspace / "core" / name,
                         ignore=shutil.ignore_patterns("__pycache__", ".venv"))
@@ -419,15 +417,64 @@ def test_the_doctor_error_gives_a_command_that_clears_the_leak(tmp_path, fixture
             capture_output=True, text=True, env=env, cwd=workspace, timeout=120)
         return out.stdout + out.stderr
 
-    text = doctor()
+    return workspace, env, doctor
+
+
+def _fix_command(doctor_output):
+    import shlex
+
     marker = "(fix: "
+    assert marker in doctor_output
+    return shlex.split(doctor_output.split(marker, 1)[1].split(")\n", 1)[0])
+
+
+def test_the_doctor_error_gives_a_command_that_clears_the_leak(tmp_path, fixture_store):
+    """End to end on a scratch workspace that carries its own copy of core/."""
+    workspace, env, doctor = _doctor_workspace(tmp_path, "TELEGRAM_BOT_TOKEN=abc\n")
+    text = doctor()
     assert "installation secrets still in a file the IDE indexes" in text
-    assert marker in text and "abc" not in text
-    command = shlex.split(text.split(marker, 1)[1].split(")\n", 1)[0])
+    assert "abc" not in text
+    command = _fix_command(text)
     assert command[0] == "python3" and command[2] == "migrate"
     assert subprocess.run(command, env=env, capture_output=True).returncode == 0
     assert "no installation secret in .env or sun/.env" in doctor()
-    assert json.dumps(solar_secrets.read()).count("abc") == 1
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "abc"
+
+
+def test_a_referenced_secret_stays_and_the_doctor_still_runs(tmp_path, fixture_store):
+    text = 'TELEGRAM_BOT_TOKEN=abc\nSERVICE_TOKEN="$TELEGRAM_BOT_TOKEN"\n'
+    workspace, env, doctor = _doctor_workspace(tmp_path, text)
+    command = _fix_command(doctor())
+    result = subprocess.run(command, env=env, capture_output=True, text=True)
+    assert result.returncode == 1 and "referenced" in result.stdout
+    assert (workspace / ".env").read_text(encoding="utf-8") == text
+    assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
+    assert "Summary:" in doctor()  # set -u did not abort on a missing variable
+
+
+def test_migrate_keeps_an_array_that_hides_an_assignment(tmp_path):
+    text = "NOTE=(\nTELEGRAM_BOT_TOKEN=fixture\nOTHER=)\n"
+    workspace = _workspace(tmp_path, text)
+    result = _run_migrate(workspace)
+    assert result.returncode == 1 and "ambiguous" in result.stdout
+    assert "TELEGRAM_BOT_TOKEN" not in solar_secrets.read()
+    assert (workspace / ".env").read_text(encoding="utf-8") == text
+
+
+def test_parentheses_inside_quotes_or_a_comment_do_not_block(tmp_path):
+    workspace = _workspace(
+        tmp_path, "NOTE='a (b)'\nOTHER=\"c (d)\" # (e)\nTELEGRAM_BOT_TOKEN=abc\n")
+    assert _run_migrate(workspace).returncode == 0
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "abc"
+
+
+def test_a_directory_named_env_does_not_block_the_migration(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / ".env").mkdir(parents=True)
+    (workspace / "sun").mkdir()
+    (workspace / "sun" / ".env").write_text("TELEGRAM_BOT_TOKEN=abc\n", encoding="utf-8")
+    assert _run_migrate(workspace).returncode == 0
+    assert solar_secrets.read()["TELEGRAM_BOT_TOKEN"] == "abc"
 
 
 def test_ensure_store_never_truncates_when_it_loses_the_creation_race(fixture_store, monkeypatch):
