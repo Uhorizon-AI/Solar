@@ -50,6 +50,7 @@ err_count=0
 warn() { echo "WARN: $1"; warn_count=$((warn_count + 1)); }
 err() { echo "ERROR: $1"; err_count=$((err_count + 1)); }
 ok() { echo "OK: $1"; }
+info() { echo "INFO: $1"; }
 
 if [[ -d "$SOLAR_WORKSPACE/.solar/core" ]]; then
   err "obsolete .solar/core/ exists — run: solar client upgrade"
@@ -193,7 +194,6 @@ fi
 # tells Louis whether that is still true, without printing a value.
 _secrets_report="$(python3 "$SCRIPT_DIR/../../solar-paths/scripts/solar_secrets.py" status "$SOLAR_WORKSPACE" 2>/dev/null || true)"
 if [[ -n "$_secrets_report" ]]; then
-  _secrets_path="$(python3 "$SCRIPT_DIR/../../solar-paths/scripts/solar_secrets.py" path 2>/dev/null || echo "?")"
   _leaks="$(printf '%s' "$_secrets_report" | python3 -c '
 import json, sys
 try:
@@ -204,21 +204,30 @@ print("|".join(data.get("workspace_leaks") or []))
 print("yes" if data.get("exists") else "no")
 print("yes" if data.get("secure") else "no")
 print(",".join(data.get("missing") or []))
+print(data.get("path") or "")
 ')"
   _leak_list="$(printf '%s\n' "$_leaks" | sed -n 1p)"
   _store_exists="$(printf '%s\n' "$_leaks" | sed -n 2p)"
   _store_secure="$(printf '%s\n' "$_leaks" | sed -n 3p)"
   _store_missing="$(printf '%s\n' "$_leaks" | sed -n 4p)"
+  # The path the diagnosis itself used (SOLAR_SECRETS_FILE may come from the .env this doctor loaded).
+  _secrets_path="$(printf '%s\n' "$_leaks" | sed -n 5p)"
 
   if [[ -n "$_leak_list" ]]; then
-    err "installation secrets still in a file the IDE indexes: ${_leak_list//|/, }"
+    _migrate_script="$(cd "$SCRIPT_DIR/../../solar-paths/scripts" && pwd)/solar_secrets.py"
+    err "installation secrets still in a file the IDE indexes: ${_leak_list//|/, } (manual steps may be needed if migrate reports ambiguous, conflicting or referenced lines)"
+    if [[ -n "$_secrets_path" ]]; then
+      info "fix: $(printf 'env SOLAR_SECRETS_FILE=%q python3 %q migrate %q' "$_secrets_path" "$_migrate_script" "$SOLAR_WORKSPACE")"
+    else
+      warn "cannot tell which secret store this diagnosis used, so no migrate command is suggested"
+    fi
   else
     ok "no installation secret in .env or sun/.env"
   fi
   if [[ "$_store_exists" != "yes" ]]; then
-    warn "no installation secret store yet at $_secrets_path (create it with solar_secrets.py ensure)"
+    warn "no installation secret store yet at ${_secrets_path:-?} (create it with solar_secrets.py ensure)"
   elif [[ "$_store_secure" != "yes" ]]; then
-    err "installation secret store is not 0600: $_secrets_path"
+    err "installation secret store is not 0600: ${_secrets_path:-?}"
   elif [[ -n "$_store_missing" ]]; then
     warn "installation secret store has no ${_store_missing} (transports that need it will fail closed)"
   else
