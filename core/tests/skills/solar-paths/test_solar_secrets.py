@@ -485,6 +485,28 @@ def test_the_fix_command_uses_the_store_the_doctor_loaded_from_env(tmp_path, fix
     assert "TELEGRAM_BOT_TOKEN" not in (workspace / ".env").read_text(encoding="utf-8")
 
 
+def test_the_doctor_suggests_no_command_when_status_has_no_path(tmp_path, fixture_store):
+    workspace, env, doctor = _doctor_workspace(tmp_path, "TELEGRAM_BOT_TOKEN=abc\n")
+    real = workspace / "core/skills/solar-paths/scripts/solar_secrets.py"
+    real.rename(real.with_name("solar_secrets_real.py"))
+    # A status that answers without a store path, as a broken script would.
+    real.write_text(
+        "import json, subprocess, sys\n"
+        "out = subprocess.run([sys.executable, __file__.replace('solar_secrets.py',"
+        " 'solar_secrets_real.py'), *sys.argv[1:]], capture_output=True, text=True)\n"
+        "if len(sys.argv) > 1 and sys.argv[1] == 'status':\n"
+        "    data = json.loads(out.stdout); data.pop('path', None)\n"
+        "    print(json.dumps(data))\n"
+        "else:\n"
+        "    sys.stdout.write(out.stdout)\n",
+        encoding="utf-8")
+    text = doctor()
+    assert "installation secrets still in a file the IDE indexes" in text
+    assert "cannot tell which secret store this diagnosis used" in text
+    assert "INFO: fix:" not in text
+    assert "Summary:" in text
+
+
 def test_the_doctor_says_some_leaks_need_manual_steps(tmp_path, fixture_store):
     workspace, env, doctor = _doctor_workspace(tmp_path, "TELEGRAM_BOT_TOKEN=abc\n")
     assert "manual steps may be needed" in doctor()
