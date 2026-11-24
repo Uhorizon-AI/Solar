@@ -136,7 +136,7 @@ Define tools, skills, and templates in the Core, then effortlessly deploy them a
     <td align="center"><strong>Works<br/>with</strong></td>
     <td align="center"><a href="https://claude.ai/code"><img src="docs/assets/claude.svg" width="32" alt="Claude Code" /><br/><sub>Claude Code</sub></a></td>
     <td align="center"><a href="https://github.com/openai/codex"><img src="docs/assets/codex.svg" width="32" alt="Codex" /><br/><sub>Codex</sub></a></td>
-    <td align="center"><a href="https://gemini.google.com/"><img src="docs/assets/gemini.svg" width="32" alt="Gemini" /><br/><sub>Gemini</sub></a></td>
+    <td align="center"><a href="https://antigravity.google/"><img src="docs/assets/antigravity.svg" width="32" alt="Antigravity" /><br/><sub>Antigravity</sub></a></td>
     <td align="center"><a href="https://cursor.com"><img src="docs/assets/cursor.svg" width="32" alt="Cursor" /><br/><sub>Cursor</sub></a></td>
     <td align="center"><a href="https://ollama.com"><img src="docs/assets/ollama.svg" width="32" alt="Ollama" /><br/><sub>Ollama</sub></a></td>
   </tr>
