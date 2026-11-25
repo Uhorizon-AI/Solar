@@ -4,7 +4,7 @@
 
 The marks are trademarks of their owners. They are used only to show compatibility with those clients, and the library's MIT license does not cover them. Brand guidelines: [OpenAI](https://openai.com/brand/), [Google](https://about.google/brand-resource-center/).
 
-The library is distributed under this license:
+The library is distributed under the MIT license below. The text is copied from the `LICENSE` file of the Lobe Icons repository, because the npm package does not ship one (its `package.json` declares MIT):
 
 ```text
 MIT License
