@@ -10,6 +10,7 @@ The format is based on Keep a Changelog.
 - README: the "Works with" table now uses the official Codex logo and lists Antigravity; the Gemini placeholder (`docs/assets/gemini.svg`) is deleted, since the `gemini` provider was retired for `agy`. Remaining Gemini mentions in the text now say Antigravity. `docs/assets/NOTICE.md` records the source and MIT license of the two third-party logos.
 
 ### Fixed
+- router: the restricted Claude profile no longer refuses Team and Enterprise accounts whose admin console has no managed settings (`doctor_unrecognized`, #191). `claude doctor` on those accounts exits while the remote fetch is still running and never prints `not fetched`, so the check now also accepts `Managed settings (remote): checking...` with `Organization policy: Loaded from api.anthropic.com` when the CLI's own cache of server-managed settings (`~/.claude/remote-settings.json`) is readable, empty and synced within the last hour. Real managed settings, a stale or unreadable cache and any other wording still refuse, with the new reasons `remote_policy_present`, `remote_policy_cache_stale` and `remote_policy_cache_unreadable`.
 - client doctor: a secret left in `.env` after an update now shows a one-command fix, `solar_secrets.py migrate <workspace>`. It moves the keys into the 0600 store, prints names only, and leaves conflicting, ambiguous or cross-referenced lines untouched.
 
 ## [0.64.0] - 2026-11-17

@@ -78,8 +78,20 @@ The inspection has two parts, and a launch needs both to say "no policy":
   environment and a private cwd). Only the wording of an account with no
   organization policy counts (`Managed settings (remote): not fetched ...` and
   `Organization policy: not applicable ...`). Any other wording, a non-zero exit
-  or a timeout is unknown. Accounts with an organization policy are therefore
-  unsupported until their wording is known: the profile fails closed.
+  or a timeout is unknown, and the profile fails closed.
+  A Team or Enterprise account never reaches `not fetched`: doctor exits while
+  the remote fetch is still running (`Managed settings (remote): checking...`)
+  and lists the organization's product options as `Organization policy: Loaded
+  from api.anthropic.com`. Waiting and re-running does not change it. That exact
+  pair counts only together with the CLI's own cache of the server-managed
+  settings, `<HOME>/.claude/remote-settings.json`, which the next process loads at
+  startup: it must be readable, empty (`{}`), and its `.synced-at` stamp no older
+  than one hour (`REMOTE_SETTINGS_MAX_AGE`). Otherwise the refusal says why:
+  `remote_policy_present` (the admin has managed settings),
+  `remote_policy_cache_stale` (open Claude Code once so it syncs, then retry) or
+  `remote_policy_cache_unreadable`. The cache is a user-owned file, unlike the
+  root-owned local sources above; it is trusted as the policy the CLI itself would
+  start with, not as an attestation of the admin console.
 
 There is no environment or prompt switch to bypass it. Tests substitute a
 simulated policy or a CLI double; an opt-in smoke test (`SOLAR_TEST_REAL_CLAUDE=1`)

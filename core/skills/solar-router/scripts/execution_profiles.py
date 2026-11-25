@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 
 PROFILE = "text_only_review_v1"
 COMPOSITION = "review_envelope_v1"
@@ -209,6 +210,11 @@ MANAGED_ROOTS = ("/Library/Application Support/ClaudeCode", "/etc/claude-code")
 MANAGED_PREFERENCES = ("/Library/Managed Preferences/com.anthropic.claudecode.plist",
                        "/Library/Managed Preferences/{user}/com.anthropic.claudecode.plist")
 DOCTOR_TIMEOUT = 30
+# The CLI's own cache of server-managed settings, `<HOME>/.claude/remote-settings.json`, written next
+# to a `.synced-at` file holding the epoch milliseconds of the last successful sync. The CLI loads this
+# cache at startup, so it is the policy the next process would start with.
+REMOTE_SETTINGS_CACHE = ".claude/remote-settings.json"
+REMOTE_SETTINGS_MAX_AGE = 3600  # seconds; a cache older than this is not proof of the current policy
 
 
 def _read_policy_object(path: Path):
@@ -250,13 +256,40 @@ def _local_managed_policy():
     return found
 
 
+def _remote_settings_cache(env: dict):
+    """None when the CLI's cache of server-managed settings is fresh and empty, else the fixed reason it
+    is not proof of an empty policy: remote_policy_cache_unreadable, remote_policy_cache_stale or
+    remote_policy_present. Only the HOME the restricted process will use is read."""
+    home = Path(env.get("HOME") or Path.home())
+    path = home / REMOTE_SETTINGS_CACHE
+    document = _read_policy_object(path)
+    try:
+        synced = int(Path(str(path) + ".synced-at").read_text(encoding="utf-8").strip()) / 1000
+    except (OSError, ValueError):
+        synced = None
+    if document is None or synced is None:
+        return "remote_policy_cache_unreadable"
+    if document:
+        return "remote_policy_present"
+    if not -60 <= time.time() - synced <= REMOTE_SETTINGS_MAX_AGE:
+        return "remote_policy_cache_stale"
+    return None
+
+
 def _doctor_check(binary: str, env: dict, cwd: str):
     """None when `claude doctor` reports an account with no organization policy, else the fixed reason
-    it could not be proven: doctor_unavailable, doctor_timeout, doctor_failed or doctor_unrecognized.
+    it could not be proven: doctor_unavailable, doctor_timeout, doctor_failed or doctor_unrecognized
+    (or a `remote_policy_*` reason, see below).
 
     `claude doctor` is the CLI's own read-only diagnosis of where policy loaded from, and it covers
     what no local file can show (server-managed settings). Only the exact wording of an account with
-    no organization policy counts; anything else, or any failure to ask, is not proof of absence."""
+    no organization policy counts; anything else, or any failure to ask, is not proof of absence.
+
+    A Team or Enterprise account never reaches `not fetched`: doctor exits while the remote fetch is
+    still in progress (`Managed settings (remote): checking…`) and reports the organization's product
+    options as `Organization policy: Loaded from api.anthropic.com`. That wording alone proves nothing
+    either way, so it counts only together with the CLI's own cache of the server-managed settings,
+    which must be readable, synced within REMOTE_SETTINGS_MAX_AGE and empty."""
     try:
         result = subprocess.run([binary, "doctor"], env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=DOCTOR_TIMEOUT, check=False)
@@ -275,6 +308,8 @@ def _doctor_check(binary: str, env: dict, cwd: str):
     organization = lines.get("organization policy", "")
     if remote.startswith("not fetched") and organization.startswith("not applicable"):
         return None
+    if remote.startswith("checking") and organization.startswith("loaded from api.anthropic.com"):
+        return _remote_settings_cache(env)
     return "doctor_unrecognized"
 
 
