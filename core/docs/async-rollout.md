@@ -45,9 +45,11 @@ Before requesting an operational change, collect and review:
   restricted constructor. Its remote-policy check currently recognizes only
   `Managed settings (remote): not fetched ...` and
   `Organization policy: not applicable ...`, or, on a Team/Enterprise account,
-  `Managed settings (remote): checking...` plus `Organization policy: Loaded from
-  api.anthropic.com` with a fresh, empty `~/.claude/remote-settings.json` (see
-  `restricted-review-profile.md`). A CLI upgrade, wording change,
+  the exact `Managed settings (remote): checking... (fetch in progress; re-run in
+  a moment)` plus `Organization policy: Loaded from api.anthropic.com` with an
+  empty `~/.claude/remote-settings.json` synced after the check began (see
+  `restricted-review-profile.md`; observed on Claude Code 2.1.323, Team plan).
+  A CLI upgrade, wording change,
   unknown/unreadable policy, timeout or nonempty managed policy is a stop
   condition, not a reason to loosen the parser. Revalidate after CLI/account
   policy changes; do not infer confinement from model output.

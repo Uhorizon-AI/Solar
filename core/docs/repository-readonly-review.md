@@ -292,7 +292,9 @@ The help and policy checks and the credentials check keep
 fixed `reason`, `option`). Stage `help`: `help_unavailable`, `help_timeout`,
 `help_failed`, `help_format_unknown`, `required_option_missing` and
 `required_value_unadvertised`. Stage `policy`: `doctor_unavailable`,
-`doctor_timeout`, `doctor_unrecognized`, `config_not_loaded`,
+`doctor_timeout`, `doctor_unrecognized`, `remote_policy_present`,
+`remote_policy_sync_pending`, `remote_policy_cache_unreadable`,
+`remote_policy_home_unavailable` (Claude only), `config_not_loaded`,
 `mcp_servers_present`, `cloud_policy_unconfirmed`, `feature_enabled`,
 `approval_not_never` and `managed_filesystem_present`. Stage `credentials`:
 `credentials_unavailable`, when the CLI auth file is missing. Other launch

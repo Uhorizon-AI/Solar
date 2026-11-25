@@ -79,19 +79,29 @@ The inspection has two parts, and a launch needs both to say "no policy":
   organization policy counts (`Managed settings (remote): not fetched ...` and
   `Organization policy: not applicable ...`). Any other wording, a non-zero exit
   or a timeout is unknown, and the profile fails closed.
-  A Team or Enterprise account never reaches `not fetched`: doctor exits while
-  the remote fetch is still running (`Managed settings (remote): checking...`)
-  and lists the organization's product options as `Organization policy: Loaded
-  from api.anthropic.com`. Waiting and re-running does not change it. That exact
-  pair counts only together with the CLI's own cache of the server-managed
-  settings, `<HOME>/.claude/remote-settings.json`, which the next process loads at
-  startup: it must be readable, empty (`{}`), and its `.synced-at` stamp no older
-  than one hour (`REMOTE_SETTINGS_MAX_AGE`). Otherwise the refusal says why:
-  `remote_policy_present` (the admin has managed settings),
-  `remote_policy_cache_stale` (open Claude Code once so it syncs, then retry) or
-  `remote_policy_cache_unreadable`. The cache is a user-owned file, unlike the
-  root-owned local sources above; it is trusted as the policy the CLI itself would
-  start with, not as an attestation of the admin console.
+  A Team or Enterprise account never reaches `not fetched` (observed on Claude
+  Code 2.1.323, Team plan): doctor exits while the remote fetch is still running
+  and prints exactly `Managed settings (remote): checking... (fetch in progress;
+  re-run in a moment)` and `Organization policy: Loaded from api.anthropic.com`
+  (the second line lists the organization's product options, not managed
+  settings). Waiting and re-running never changes that wording. Each doctor run
+  does start a background sync of the CLI's cache of the server-managed settings,
+  `<HOME>/.claude/remote-settings.json`, and stamps `.synced-at` (epoch
+  milliseconds) when it finishes, less than a second later. So the exact pair
+  counts only when that stamp is newer than the start of this check (the check
+  waits up to `REMOTE_SETTINGS_SYNC_WAIT`, 10 s) and the cache read after it is
+  `{}`. The wording must match in full (the ellipsis may be `...` or `…`); a
+  suffix, a repeated or contradictory line, or any other wording stays
+  `doctor_unrecognized`. `HOME` comes only from the restricted environment (no
+  fallback to the caller's). A refusal says why: `remote_policy_present` (the
+  admin has managed settings), `remote_policy_sync_pending` (no sync finished in
+  time; retry), `remote_policy_cache_unreadable` (missing, malformed, future-dated
+  or rewritten while read) or `remote_policy_home_unavailable`.
+  Trust limit: the cache is a user-owned file, unlike the root-owned local sources
+  above. It is trusted as the policy the CLI itself loads at startup, which a sync
+  just refreshed, not as an attestation against a process that can already write
+  the user's home. An admin change made after that sync is picked up by the next
+  check, not by a launch already running.
 
 There is no environment or prompt switch to bypass it. Tests substitute a
 simulated policy or a CLI double; an opt-in smoke test (`SOLAR_TEST_REAL_CLAUDE=1`)

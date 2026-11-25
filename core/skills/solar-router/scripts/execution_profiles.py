@@ -210,17 +210,23 @@ MANAGED_ROOTS = ("/Library/Application Support/ClaudeCode", "/etc/claude-code")
 MANAGED_PREFERENCES = ("/Library/Managed Preferences/com.anthropic.claudecode.plist",
                        "/Library/Managed Preferences/{user}/com.anthropic.claudecode.plist")
 DOCTOR_TIMEOUT = 30
-# The CLI's own cache of server-managed settings, `<HOME>/.claude/remote-settings.json`, written next
-# to a `.synced-at` file holding the epoch milliseconds of the last successful sync. The CLI loads this
-# cache at startup, so it is the policy the next process would start with.
+# The CLI's own cache of server-managed settings, `<HOME>/.claude/remote-settings.json`, with a
+# `.synced-at` file next to it holding the epoch milliseconds of its last successful sync. The CLI
+# loads this cache at startup. Every `claude doctor` starts a background sync that finishes right after
+# the command exits, so a stamp newer than the start of the check proves a sync completed during it.
 REMOTE_SETTINGS_CACHE = ".claude/remote-settings.json"
-REMOTE_SETTINGS_MAX_AGE = 3600  # seconds; a cache older than this is not proof of the current policy
+REMOTE_SETTINGS_SYNC_WAIT = 10.0  # seconds to wait for that sync before giving up
+REMOTE_SETTINGS_POLL = 0.25
+REMOTE_SETTINGS_CLOCK_SKEW_MS = 60_000
+# The only wording of a Team/Enterprise account whose remote fetch has not been read yet.
+DOCTOR_REMOTE_PENDING = "checking... (fetch in progress; re-run in a moment)"
+DOCTOR_ORGANIZATION_LOADED = "loaded from api.anthropic.com"
 
 
 def _read_policy_object(path: Path):
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return document if isinstance(document, dict) else None
 
@@ -256,24 +262,51 @@ def _local_managed_policy():
     return found
 
 
-def _remote_settings_cache(env: dict):
-    """None when the CLI's cache of server-managed settings is fresh and empty, else the fixed reason it
-    is not proof of an empty policy: remote_policy_cache_unreadable, remote_policy_cache_stale or
-    remote_policy_present. Only the HOME the restricted process will use is read."""
-    home = Path(env.get("HOME") or Path.home())
-    path = home / REMOTE_SETTINGS_CACHE
-    document = _read_policy_object(path)
+def _sync_stamp(path: Path):
+    """The `.synced-at` stamp in epoch milliseconds, or None when it is missing or not a plain integer."""
     try:
-        synced = int(Path(str(path) + ".synced-at").read_text(encoding="utf-8").strip()) / 1000
+        raw = path.read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
-        synced = None
-    if document is None or synced is None:
-        return "remote_policy_cache_unreadable"
-    if document:
-        return "remote_policy_present"
-    if not -60 <= time.time() - synced <= REMOTE_SETTINGS_MAX_AGE:
-        return "remote_policy_cache_stale"
-    return None
+        return None
+    return int(raw) if raw.isascii() and raw.isdigit() and len(raw) <= 16 else None
+
+
+def _remote_settings_cache(env: dict, started_ms: int):
+    """None when the CLI's cache of server-managed settings was synced after `started_ms` and is empty,
+    else the fixed reason it is not proof of an empty policy: remote_policy_home_unavailable,
+    remote_policy_cache_unreadable, remote_policy_sync_pending or remote_policy_present. Only the HOME
+    the restricted process will use is read; there is no fallback to the caller's own HOME."""
+    home = env.get("HOME")
+    if not isinstance(home, str) or not os.path.isabs(home):
+        return "remote_policy_home_unavailable"
+    path = Path(home) / REMOTE_SETTINGS_CACHE
+    stamp_path = Path(str(path) + ".synced-at")
+    deadline = time.monotonic() + REMOTE_SETTINGS_SYNC_WAIT
+    while True:
+        stamp = _sync_stamp(stamp_path)
+        if stamp is not None and stamp >= started_ms:
+            break
+        if time.monotonic() >= deadline:
+            return "remote_policy_cache_unreadable" if stamp is None else "remote_policy_sync_pending"
+        time.sleep(REMOTE_SETTINGS_POLL)
+    if stamp > int(time.time() * 1000) + REMOTE_SETTINGS_CLOCK_SKEW_MS:
+        return "remote_policy_cache_unreadable"          # a stamp from the future is not a sync
+    document = _read_policy_object(path)
+    if document is None or _sync_stamp(stamp_path) != stamp:
+        return "remote_policy_cache_unreadable"          # unreadable, or rewritten while it was read
+    return "remote_policy_present" if document else None
+
+
+def _doctor_lines(stdout: str) -> dict:
+    """`key: value` lines of the doctor report, lower-cased, with the ellipsis normalized. A key that
+    appears twice maps to None: contradictory or duplicated answers are never evidence."""
+    lines: dict = {}
+    for line in stdout.splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            key = key.strip().lower()
+            lines[key] = None if key in lines else value.strip().lower().replace("\u2026", "...")
+    return lines
 
 
 def _doctor_check(binary: str, env: dict, cwd: str):
@@ -286,10 +319,13 @@ def _doctor_check(binary: str, env: dict, cwd: str):
     no organization policy counts; anything else, or any failure to ask, is not proof of absence.
 
     A Team or Enterprise account never reaches `not fetched`: doctor exits while the remote fetch is
-    still in progress (`Managed settings (remote): checking…`) and reports the organization's product
-    options as `Organization policy: Loaded from api.anthropic.com`. That wording alone proves nothing
-    either way, so it counts only together with the CLI's own cache of the server-managed settings,
-    which must be readable, synced within REMOTE_SETTINGS_MAX_AGE and empty."""
+    still in progress (`Managed settings (remote): checking...`) and reports the organization's product
+    options as `Organization policy: Loaded from api.anthropic.com`. That exact pair proves nothing
+    by itself. The same command starts a background sync of the CLI's cache of the server-managed
+    settings, so the pair counts only when that cache is stamped as synced after this check began
+    and is empty. The cache is a user-owned file: it is trusted as the policy the CLI itself loads at
+    startup, not as an attestation against a process that can write the user's home."""
+    started_ms = int(time.time() * 1000)
     try:
         result = subprocess.run([binary, "doctor"], env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=DOCTOR_TIMEOUT, check=False)
@@ -299,17 +335,13 @@ def _doctor_check(binary: str, env: dict, cwd: str):
         return "doctor_unavailable"
     if result.returncode:
         return "doctor_failed"
-    lines = {}
-    for line in result.stdout.splitlines():
-        key, sep, value = line.partition(":")
-        if sep:
-            lines[key.strip().lower()] = value.strip().lower()
-    remote = lines.get("managed settings (remote)", "")
-    organization = lines.get("organization policy", "")
+    lines = _doctor_lines(result.stdout)
+    remote = lines.get("managed settings (remote)") or ""
+    organization = lines.get("organization policy") or ""
     if remote.startswith("not fetched") and organization.startswith("not applicable"):
         return None
-    if remote.startswith("checking") and organization.startswith("loaded from api.anthropic.com"):
-        return _remote_settings_cache(env)
+    if remote == DOCTOR_REMOTE_PENDING and organization == DOCTOR_ORGANIZATION_LOADED:
+        return _remote_settings_cache(env, started_ms)
     return "doctor_unrecognized"
 
 
