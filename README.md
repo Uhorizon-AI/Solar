@@ -53,7 +53,7 @@
 
 ## Solar is right for you if
 
-- ✅ You operate **multiple AI clients** (Claude, Codex, Gemini) and need a consistent operating model.
+- ✅ You operate **multiple AI clients** (Claude, Codex, Antigravity) and need a consistent operating model.
 - ✅ You want to enforce **different governance rules** per domain without mixing contexts.
 - ✅ You need to scale from **solo workflows to multi-project operations**.
 - ✅ You are a founder, operator, or developer who relies on AIs to **execute reliable workflows**.
@@ -75,7 +75,7 @@ Isolated domain workspaces. Each planet has its own specialized agents, rules, a
 </td>
 <td align="center" width="33%">
 <h3>🤖 Unified Runtime</h3>
-Bring your own AI provider (Claude, Codex, Gemini). A single consistent runtime interacts across everything.
+Bring your own AI provider (Claude, Codex, Antigravity). A single consistent runtime interacts across everything.
 </td>
 </tr>
 <tr>
@@ -101,7 +101,7 @@ Define tools, skills, and templates in the Core, then effortlessly deploy them a
 | Without Solar                                                                                                                     | With Solar                                                                                                                         |
 | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | ❌ Your AI assistant mixes context between your SaaS product code and your client sales emails.                              | ✅ Context is completely isolated. Code stays in the Engineering planet, Sales stays in the Go-To-Market planet.                                                |
-| ❌ Changing between Claude, Gemini, and Codex means rewriting your workflow scripts or dealing with completely different logic. | ✅ The OS abstracts the provider. You get a unified runtime regardless of which AI acts inside the planet.                  |
+| ❌ Changing between Claude, Codex, and Antigravity means rewriting your workflow scripts or dealing with completely different logic. | ✅ The OS abstracts the provider. You get a unified runtime regardless of which AI acts inside the planet.                  |
 | ❌ You spend time babysitting AI loops or finding out your AI hallucinated because it applied general rules to a specific domain. | ✅ Governance is layered. Global rules override framework rules, domain rules override global rules. AIs know exactly how to behave. |
 | ❌ Replicating an AI workflow for 5 different clients involves copy-pasting system prompts across 5 different tools.                           | ✅ One framework. Spin up a new Planet for each client. Each inherits core capabilities but retains private memory.                    |
 
@@ -136,7 +136,7 @@ Define tools, skills, and templates in the Core, then effortlessly deploy them a
     <td align="center"><strong>Works<br/>with</strong></td>
     <td align="center"><a href="https://claude.ai/code"><img src="docs/assets/claude.svg" width="32" alt="Claude Code" /><br/><sub>Claude Code</sub></a></td>
     <td align="center"><a href="https://github.com/openai/codex"><img src="docs/assets/codex.svg" width="32" alt="Codex" /><br/><sub>Codex</sub></a></td>
-    <td align="center"><a href="https://gemini.google.com/"><img src="docs/assets/gemini.svg" width="32" alt="Gemini" /><br/><sub>Gemini</sub></a></td>
+    <td align="center"><a href="https://antigravity.google/"><img src="docs/assets/antigravity.svg" width="32" alt="Antigravity" /><br/><sub>Antigravity</sub></a></td>
     <td align="center"><a href="https://cursor.com"><img src="docs/assets/cursor.svg" width="32" alt="Cursor" /><br/><sub>Cursor</sub></a></td>
     <td align="center"><a href="https://ollama.com"><img src="docs/assets/ollama.svg" width="32" alt="Ollama" /><br/><sub>Ollama</sub></a></td>
   </tr>

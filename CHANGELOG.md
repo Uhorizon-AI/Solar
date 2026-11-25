@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- README: the "Works with" table now uses the official Codex logo and lists Antigravity; the Gemini placeholder (`docs/assets/gemini.svg`) is deleted, since the `gemini` provider was retired for `agy`. Remaining Gemini mentions in the text now say Antigravity. `docs/assets/NOTICE.md` records the source and MIT license of the two third-party logos.
+
 ### Fixed
 - client doctor: a secret left in `.env` after an update now shows a one-command fix, `solar_secrets.py migrate <workspace>`. It moves the keys into the 0600 store, prints names only, and leaves conflicting, ambiguous or cross-referenced lines untouched.
 
