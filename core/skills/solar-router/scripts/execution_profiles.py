@@ -217,7 +217,6 @@ DOCTOR_TIMEOUT = 30
 REMOTE_SETTINGS_CACHE = ".claude/remote-settings.json"
 REMOTE_SETTINGS_SYNC_WAIT = 10.0  # seconds to wait for that sync before giving up
 REMOTE_SETTINGS_POLL = 0.25
-REMOTE_SETTINGS_CLOCK_SKEW_MS = 60_000
 # The only wording of a Team/Enterprise account whose remote fetch has not been read yet.
 DOCTOR_REMOTE_PENDING = "checking... (fetch in progress; re-run in a moment)"
 DOCTOR_ORGANIZATION_LOADED = "loaded from api.anthropic.com"
@@ -272,7 +271,7 @@ def _sync_stamp(path: Path):
 
 
 def _remote_settings_cache(env: dict, started_ms: int):
-    """None when the CLI's cache of server-managed settings was synced after `started_ms` and is empty,
+    """None when the CLI's cache of server-managed settings was synced strictly after `started_ms` and is empty,
     else the fixed reason it is not proof of an empty policy: remote_policy_home_unavailable,
     remote_policy_cache_unreadable, remote_policy_sync_pending or remote_policy_present. Only the HOME
     the restricted process will use is read; there is no fallback to the caller's own HOME."""
@@ -284,12 +283,12 @@ def _remote_settings_cache(env: dict, started_ms: int):
     deadline = time.monotonic() + REMOTE_SETTINGS_SYNC_WAIT
     while True:
         stamp = _sync_stamp(stamp_path)
-        if stamp is not None and stamp >= started_ms:
+        if stamp is not None and stamp > started_ms:
             break
         if time.monotonic() >= deadline:
             return "remote_policy_cache_unreadable" if stamp is None else "remote_policy_sync_pending"
         time.sleep(REMOTE_SETTINGS_POLL)
-    if stamp > int(time.time() * 1000) + REMOTE_SETTINGS_CLOCK_SKEW_MS:
+    if stamp > time.time_ns() // 1_000_000:
         return "remote_policy_cache_unreadable"          # a stamp from the future is not a sync
     document = _read_policy_object(path)
     if document is None or _sync_stamp(stamp_path) != stamp:
@@ -325,7 +324,7 @@ def _doctor_check(binary: str, env: dict, cwd: str):
     settings, so the pair counts only when that cache is stamped as synced after this check began
     and is empty. The cache is a user-owned file: it is trusted as the policy the CLI itself loads at
     startup, not as an attestation against a process that can write the user's home."""
-    started_ms = int(time.time() * 1000)
+    started_ms = time.time_ns() // 1_000_000
     try:
         result = subprocess.run([binary, "doctor"], env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=DOCTOR_TIMEOUT, check=False)

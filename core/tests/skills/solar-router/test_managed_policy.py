@@ -175,6 +175,29 @@ def test_a_stamp_from_the_future_is_not_a_sync(machine, tmp_path, fast_sync):
     assert why_of(fake_claude(tmp_path, doctor_out=TEAM), tmp_path) == (None, ['remote_policy_cache_unreadable'])
 
 
+def stamped(tmp_path, stamp_ms, body='{}'):
+    cache_path(tmp_path).write_text(body)
+    Path(str(cache_path(tmp_path)) + '.synced-at').write_text(str(stamp_ms))
+    return {'HOME': str(tmp_path / 'home')}
+
+
+def now_ms():
+    return time.time_ns() // 1_000_000
+
+
+def test_the_sync_stamp_must_be_strictly_newer_than_the_start_of_the_check(machine, tmp_path, fast_sync):
+    started = now_ms() - 5000
+    assert profiles._remote_settings_cache(stamped(tmp_path, started), started) == 'remote_policy_sync_pending'
+    assert profiles._remote_settings_cache(stamped(tmp_path, started - 1), started) == 'remote_policy_sync_pending'
+    assert profiles._remote_settings_cache(stamped(tmp_path, started + 1), started) is None
+
+
+def test_a_stamp_ahead_of_the_clock_is_refused_with_no_tolerance(machine, tmp_path, fast_sync):
+    started = now_ms() - 5000
+    assert profiles._remote_settings_cache(stamped(tmp_path, now_ms() + 2000), started) == 'remote_policy_cache_unreadable'
+    assert profiles._remote_settings_cache(stamped(tmp_path, now_ms() - 100), started) is None
+
+
 @pytest.mark.parametrize('body', ['{not json', '[]', '"text"', '[' * 100000 + ']' * 100000])
 def test_a_synced_cache_that_is_not_a_json_object_is_unreadable(machine, tmp_path, fast_sync, body):
     binary = fake_claude(tmp_path, doctor_out=TEAM, sync=body)

@@ -81,8 +81,9 @@ The inspection has two parts, and a launch needs both to say "no policy":
   or a timeout is unknown, and the profile fails closed.
   A Team or Enterprise account never reaches `not fetched` (observed on Claude
   Code 2.1.323, Team plan): doctor exits while the remote fetch is still running
-  and prints exactly `Managed settings (remote): checking... (fetch in progress;
-  re-run in a moment)` and `Organization policy: Loaded from api.anthropic.com`
+  and prints exactly `Managed settings (remote): checking… (fetch in progress;
+  re-run in a moment)` (real form, with the `…` character; the ASCII `...` is
+  tolerated) and `Organization policy: Loaded from api.anthropic.com`
   (the second line lists the organization's product options, not managed
   settings). Waiting and re-running never changes that wording. Each doctor run
   does start a background sync of the CLI's cache of the server-managed settings,
@@ -97,6 +98,14 @@ The inspection has two parts, and a launch needs both to say "no policy":
   admin has managed settings), `remote_policy_sync_pending` (no sync finished in
   time; retry), `remote_policy_cache_unreadable` (missing, malformed, future-dated
   or rewritten while read) or `remote_policy_home_unavailable`.
+  Observed on 2026-11-25 (Claude Code 2.1.323, macOS arm64, Team plan, no managed
+  settings in the admin console): `claude doctor` took 0.9 s and printed the two
+  lines above, also on three further runs 8 s apart; `remote-settings.json`
+  held `{}` and its `.synced-at` was 787 s old before the run and newer than the
+  start of the run 0.6 s after it. Other signals were checked and expose nothing
+  about managed settings: `claude doctor --json` does not exist (`unknown option`)
+  and `claude auth status` lists only login, organization and plan fields. The
+  effect of a failed fetch on the cache and the Enterprise plan were not observed.
   Trust limit: the cache is a user-owned file, unlike the root-owned local sources
   above. It is trusted as the policy the CLI itself loads at startup, which a sync
   just refreshed, not as an attestation against a process that can already write
@@ -112,7 +121,7 @@ are set (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`), as the interactive
 adapter does: the profile adds no credential and no billing mode of its own, and
 with neither set the CLI authenticates with the OAuth login under `HOME`.
 
-Claude Code 2.1.285 advertised the flags on 2026-10-17. Its help and the
+Claude Code 2.1.285 advertised the flags on 2026-10-17 (the Team policy path below was observed later, on 2.1.323). Its help and the
 [CLI reference](https://code.claude.com/docs/en/cli-reference) say managed policy
 survives safe/restricted modes. [Managed settings](https://code.claude.com/docs/en/managed-settings)
 can have remote and OS sources; inspecting one local file cannot attest them.
