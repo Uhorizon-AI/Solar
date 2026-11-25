@@ -292,14 +292,18 @@ The help and policy checks and the credentials check keep
 fixed `reason`, `option`). Stage `help`: `help_unavailable`, `help_timeout`,
 `help_failed`, `help_format_unknown`, `required_option_missing` and
 `required_value_unadvertised`. Stage `policy`: `doctor_unavailable`,
-`doctor_timeout`, `doctor_unrecognized`, `config_not_loaded`,
+`doctor_timeout`, `doctor_failed`, `doctor_unrecognized`, `remote_policy_present`,
+`remote_policy_sync_pending`, `remote_policy_cache_unreadable`,
+`remote_policy_home_unavailable` (Claude only), `config_not_loaded`,
 `mcp_servers_present`, `cloud_policy_unconfirmed`, `feature_enabled`,
 `approval_not_never` and `managed_filesystem_present`. Stage `credentials`:
 `credentials_unavailable`, when the CLI auth file is missing. Other launch
 refusals (an unknown provider, a command or flag override) keep the bare code.
 Never weaken this parser to turn an unsupported host into success.
 
-The inspected local CLI versions were Codex 0.162.1 and Claude Code 2.1.285.
+The inspected local CLI versions were Codex 0.162.1 and Claude Code 2.1.285 (the
+Claude Team policy path was inspected later, on 2.1.323; see
+`restricted-review-profile.md`).
 The [Codex configuration reference](https://developers.openai.com/codex/config-reference)
 and [managed configuration](https://developers.openai.com/codex/enterprise/managed-configuration)
 explain why sandbox selection alone is insufficient for hooks/MCP. Help and
