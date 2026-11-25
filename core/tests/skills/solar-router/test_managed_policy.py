@@ -192,10 +192,12 @@ def test_the_sync_stamp_must_be_strictly_newer_than_the_start_of_the_check(machi
     assert profiles._remote_settings_cache(stamped(tmp_path, started + 1), started) is None
 
 
-def test_a_stamp_ahead_of_the_clock_is_refused_with_no_tolerance(machine, tmp_path, fast_sync):
-    started = now_ms() - 5000
-    assert profiles._remote_settings_cache(stamped(tmp_path, now_ms() + 2000), started) == 'remote_policy_cache_unreadable'
-    assert profiles._remote_settings_cache(stamped(tmp_path, now_ms() - 100), started) is None
+def test_a_stamp_ahead_of_the_clock_is_refused_with_no_tolerance(machine, tmp_path, fast_sync, monkeypatch):
+    now = 1_800_000_000_000
+    monkeypatch.setattr(profiles.time, 'time_ns', lambda: now * 1_000_000)     # a fixed wall clock
+    started = now - 5000
+    assert profiles._remote_settings_cache(stamped(tmp_path, now + 1), started) == 'remote_policy_cache_unreadable'
+    assert profiles._remote_settings_cache(stamped(tmp_path, now), started) is None
 
 
 @pytest.mark.parametrize('body', ['{not json', '[]', '"text"', '[' * 100000 + ']' * 100000])

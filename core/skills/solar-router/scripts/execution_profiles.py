@@ -214,10 +214,14 @@ DOCTOR_TIMEOUT = 30
 # `.synced-at` file next to it holding the epoch milliseconds of its last successful sync. The CLI
 # loads this cache at startup. Every `claude doctor` starts a background sync that finishes right after
 # the command exits, so a stamp newer than the start of the check proves a sync completed during it.
+# (A sync still running from an earlier doctor could also end inside the window; either way the cache
+# read is the CLI's own, freshly synced one.) Both clocks are wall time: a clock jump during the wait
+# can only end in a refusal, never in an acceptance.
 REMOTE_SETTINGS_CACHE = ".claude/remote-settings.json"
 REMOTE_SETTINGS_SYNC_WAIT = 10.0  # seconds to wait for that sync before giving up
 REMOTE_SETTINGS_POLL = 0.25
-# The only wording of a Team/Enterprise account whose remote fetch has not been read yet.
+# The only wording of a Team/Enterprise account whose remote fetch has not been read yet. The real
+# output uses the `…` character; `_doctor_lines` normalizes it to the ASCII form compared here.
 DOCTOR_REMOTE_PENDING = "checking... (fetch in progress; re-run in a moment)"
 DOCTOR_ORGANIZATION_LOADED = "loaded from api.anthropic.com"
 

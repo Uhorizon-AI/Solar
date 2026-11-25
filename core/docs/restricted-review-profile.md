@@ -105,12 +105,20 @@ The inspection has two parts, and a launch needs both to say "no policy":
   start of the run 0.6 s after it. Other signals were checked and expose nothing
   about managed settings: `claude doctor --json` does not exist (`unknown option`)
   and `claude auth status` lists only login, organization and plan fields. The
-  effect of a failed fetch on the cache and the Enterprise plan were not observed.
+  effect of a failed fetch on the cache and the Enterprise plan were not observed,
+  and neither was the order in which the CLI writes the cache and its stamp (the
+  check reads the stamp again after the body and refuses if it changed, but a
+  stamp written before its body is an assumption, not an observation). The
+  timings above are those of this one Team account on 2.1.323; they are not a
+  promise for other plans or versions.
   Trust limit: the cache is a user-owned file, unlike the root-owned local sources
   above. It is trusted as the policy the CLI itself loads at startup, which a sync
   just refreshed, not as an attestation against a process that can already write
   the user's home. An admin change made after that sync is picked up by the next
-  check, not by a launch already running.
+  check, not by a launch already running. Both the start of the check and the
+  stamp are wall-clock times, so a clock jump during the wait can only end in a
+  refusal (`remote_policy_sync_pending` or `remote_policy_cache_unreadable`),
+  never in an acceptance.
 
 There is no environment or prompt switch to bypass it. Tests substitute a
 simulated policy or a CLI double; an opt-in smoke test (`SOLAR_TEST_REAL_CLAUDE=1`)
