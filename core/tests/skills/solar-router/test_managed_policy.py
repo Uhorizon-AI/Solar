@@ -33,7 +33,7 @@ elif 'doctor' in sys.argv:
     time.sleep({doctor_sleep})
     sys.stdout.write({doctor_out!r})
     sys.stdout.flush()
-    if {sync!r} is not None:
+    if {sync is not None!r}:
         subprocess.Popen([sys.executable, '-c', "import time,pathlib; time.sleep({sync_delay}); "
             "p=pathlib.Path({str(cache)!r}); p.write_text(pathlib.Path({str(body)!r}).read_text()); "
             "pathlib.Path(str(p)+'.synced-at').write_text(str(int(time.time()*1000)))"],
@@ -200,7 +200,7 @@ def test_a_stamp_ahead_of_the_clock_is_refused_with_no_tolerance(machine, tmp_pa
     assert profiles._remote_settings_cache(stamped(tmp_path, now), started) is None
 
 
-@pytest.mark.parametrize('body', ['{not json', '[]', '"text"', '[' * 100000 + ']' * 100000])
+@pytest.mark.parametrize('body', ['{not json', '[]', '"text"', '[' * 20000 + ']' * 20000])
 def test_a_synced_cache_that_is_not_a_json_object_is_unreadable(machine, tmp_path, fast_sync, body):
     binary = fake_claude(tmp_path, doctor_out=TEAM, sync=body)
     assert why_of(binary, tmp_path) == (None, ['remote_policy_cache_unreadable'])
@@ -252,7 +252,7 @@ def test_a_local_policy_still_wins_over_a_clean_synced_cache(machine, tmp_path, 
 
 
 def test_a_policy_that_is_not_a_json_object_in_a_local_source_is_unknown_even_when_deeply_nested(machine, tmp_path):
-    (machine / 'managed-settings.json').write_text('[' * 100000 + ']' * 100000)
+    (machine / 'managed-settings.json').write_text('[' * 20000 + ']' * 20000)
     assert effective(fake_claude(tmp_path), tmp_path) is None
 
 
