@@ -375,8 +375,30 @@ def test_a_tab_of_the_origin_that_was_already_open_is_reused_and_left_open(endpo
     user_tab(fake)
     assert read() == {"read": "sample", "data": {"status": "active", "visible_chats": 4}}
     assert not fake.created and fake.closed == []
+    assert fake.navigated == [ENTRY["url"]]      # the user's tab was on /chats, the read is on /
+    assert "Fetch.enable" not in fake.methods
+
+
+def test_a_reused_tab_already_on_the_registered_page_is_not_navigated(endpoint):
+    fake = endpoint([ready(2)])
+    user_tab(fake, path="/")
+    assert read() == {"read": "sample", "data": {"status": "active", "visible_chats": 2}}
+    assert fake.navigated == [] and "Page.navigate" not in fake.methods
+    assert not fake.created and fake.closed == []
+
+
+def test_a_fragment_does_not_make_a_reused_tab_another_page(endpoint):
+    fake = endpoint([ready(2)])
+    user_tab(fake, path="/#chat")
+    read()
     assert fake.navigated == []
-    assert "Page.navigate" not in fake.methods and "Fetch.enable" not in fake.methods
+
+
+def test_a_reused_tab_that_cannot_reach_the_registered_page_fails_and_stays_open(endpoint):
+    fake = endpoint([ready(2)], navigate_error="net::ERR_FAILED")
+    user_tab(fake)
+    assert error_code(read) == "browser_read_failed"
+    assert fake.closed == [] and not fake.created
 
 
 def test_a_reused_tab_is_not_closed_when_the_read_fails(endpoint):
@@ -440,7 +462,7 @@ def test_a_reused_tab_that_has_left_the_origin_is_denied_and_left_alone(endpoint
     fake = endpoint([page(origin="https://elsewhere.example.test", data=None)])
     user_tab(fake)
     assert error_code(read) == "browser_scope_denied"
-    assert fake.closed == [] and fake.navigated == [] and not fake.created
+    assert fake.closed == [] and not fake.created
 
 
 def test_a_tab_on_another_port_of_the_host_is_not_the_origin(endpoint):

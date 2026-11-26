@@ -20,9 +20,10 @@ declared types, leave this module. A script that changed since it was registered
 The browser is the shared Solar runtime (`solar-browser`): started and stopped
 through `ensure_browser.sh`, never launched here. A tab this module opens is closed (before
 the debugging socket is dropped) afterwards. When exactly one page tab of the registered
-origin is already open, the read attaches to it as it is (no navigation, no request
-interception: only the wrapper's origin check applies) and never closes it; several are
-refused with `browser_tab_ambiguous`, and none means a tab of its own. Reads are
+origin is already open, the read attaches to it (no request interception: only the wrapper's
+origin check applies), takes it to the registered page only when it is on another one, and
+never closes it; several are refused with `browser_tab_ambiguous`, and none means a tab of its
+own. Reads are
 serialized with a file lock under one absolute deadline that reserves time for cleanup; a
 browser this read started is stopped only when no other tab is left in it.
 """
@@ -42,7 +43,7 @@ import threading
 import time
 import urllib.error
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urldefrag, urlsplit
 
 from mcp_context import OperationError
 
@@ -649,6 +650,14 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
                                  "The tab of the origin could not be attached" if reused
                                  else "The browser did not open a tab") from None
         page = _Page(_Socket(url, min(10.0, max(remaining(), 0.5))), origin)
+        if reused and urldefrag(existing[0].get("url") or "").url != urldefrag(entry["url"]).url:
+            # The read has a page of its own (the registered URL) and the reused tab is somewhere else
+            # on the origin: bring it there, or the script would wait for a page that never comes.
+            # The target is the owner's registered URL, never the caller's; no interception on a tab
+            # that is not ours, so the wrapper's origin check still guards what runs.
+            navigated = page.call("Page.navigate", {"url": entry["url"]}, until=limit)
+            if navigated.get("errorText"):
+                raise OperationError("browser_read_failed", "The page could not be loaded")
         if not reused:
             page.call("Page.enable", until=limit)
             page.call("Fetch.enable", {"patterns": [{"urlPattern": "*", "resourceType": "Document",
