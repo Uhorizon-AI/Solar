@@ -131,7 +131,7 @@ Malformed JSON-RPC or tool arguments retain protocol errors; domain pre-confirma
 | `async_execution.apply` | A2 | Same, for one exact `revision` and `proposal_digest`. Applies that revision to the runtime's policy in one transaction if the file still holds exactly it and it validates; otherwise the applied policy stays. Every claim, manual or worker, reads the applied revision. A provider task never prepares or applies it |
 | `telegram.send` | A2 | Same, for one exact text and an explicit `chat_id`. Sending outside the machine is never implicit |
 | `browser.probe` | A0 | Starts Chrome headless with a disposable profile and reads a fixed synthetic page. Takes no arguments (no URL, session, selector or script). Returns `browser`, `headless` and the fixture marker `solar-browser-42`. Errors: `browser_unavailable`, `browser_probe_failed`. Tests browser execution only; it does not reach authenticated sites |
-| `browser.read` | A0 | **The owner's registration is the authorization**: Solar does not verify that the script only reads (see "Where the guarantee ends"). Runs one browser read the owner registered in `<runtime>/mcp/browser-reads.json`: one origin, one page, a script file pinned by SHA-256, the fields it may return and the refusal codes it may report. The caller sends only the name (`read`), never a URL, script, selector or argument. Opens one tab in the Solar browser profile (its logged-in sessions), refuses navigation outside the origin while it runs, and returns `{"read": name, "data": {...}}` with only the declared fields: integers, booleans and strings from a closed list (`enum`), never free page text. Errors: `browser_read_not_registered`, `browser_read_invalid`, `browser_read_changed` (the script changed since it was registered: nothing runs), `browser_unavailable`, `browser_scope_denied`, `browser_read_refused` (the script reported a registered refusal such as an expired session, as `<read>: <code>`), `browser_read_failed` |
+| `browser.read` | A0 | **The owner's registration is the authorization**: Solar does not verify that the script only reads (see "Where the guarantee ends"). Runs one browser read the owner registered in `<runtime>/mcp/browser-reads.json`: one origin, one page, a script file pinned by SHA-256, the fields it may return and the refusal codes it may report. The caller sends only the name (`read`), never a URL, script, selector or argument. Opens one tab in the Solar browser profile (its logged-in sessions), refuses navigation outside the origin while it runs, and closes it afterwards. If exactly one page tab of the registered origin is already open, it reuses that tab as it is instead (no navigation, no request interception: the wrapper's origin check still runs) and never closes it; with several it fails with `browser_tab_ambiguous` and touches none. Either way it returns `{"read": name, "data": {...}}` with only the declared fields: integers, booleans and strings from a closed list (`enum`), never free page text. Errors: `browser_read_not_registered`, `browser_read_invalid`, `browser_read_changed` (the script changed since it was registered: nothing runs), `browser_unavailable`, `browser_scope_denied`, `browser_tab_ambiguous` (several tabs of the origin are open), `browser_read_refused` (the script reported a registered refusal such as an expired session, as `<read>: <code>`), `browser_read_failed` |
 | `action.run` | A3 | The skill and action are registered **and** the mandate registered for that skill is live. A skill registered without a mandate is refused; a caller-supplied mandate is only accepted if it equals the registered one |
 
 `next_occurrences` lists upcoming nominal times. Separately, `start_windows`
@@ -226,12 +226,21 @@ Outside, and said plainly rather than disguised:
   not coercive, until their send becomes a gated tool. The exception is a read the
   owner registered for `browser.read`, and its A0 means exactly this: **the owner's
   registration is the authorization**. Solar pins the script by digest, refuses other
-  origins in two places (the navigation and the wrapper), and lets out only declared
-  fields (strings from a closed list), but it does not verify that the script only
-  reads. The script is JavaScript running in the logged-in session: it can click, type
-  or call `fetch` or `POST` to any origin, and the interception sees document
-  requests only, not other requests or websockets. Review a script before registering
-  its digest; a changed script stops running until it is registered again. Solar does
+  origins in two places (the navigation and the wrapper) in the tab it opens, and lets
+  out only declared fields (strings from a closed list), but it does not verify that the
+  script only reads. In a tab that was already open and is reused, only the wrapper
+  checks the origin, before the script runs; nothing intercepts requests there, so the
+  script runs in the user's live session and can leave that tab on another page. The
+  read reports `browser_scope_denied` only if a poll finds the page loaded on another
+  origin; a move that starts after the last poll of the read (the third stable result
+  ends it) goes unreported. It reports `browser_read_failed` if the read does not settle
+  before the deadline, and it does not undo the move. The script is JavaScript running
+  in the logged-in session: it runs on each poll that finds the page on the registered
+  origin, until three identical results in a row settle the read (in the user's live
+  session when the tab is reused), and it can click, type or call `fetch` or `POST` to
+  any origin, and the interception sees document requests only, not other requests or
+  websockets. Review a script before registering its digest; a changed script stops
+  running until it is registered again. Solar does
   not stop a process running as the user from using the browser's local debugging
   port, and it relies on Chrome to honour the paused-request protocol. If the read
   tab cannot be confirmed closed and the debugging connection is then dropped, Chrome

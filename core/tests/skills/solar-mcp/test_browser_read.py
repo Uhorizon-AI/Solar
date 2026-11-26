@@ -34,6 +34,7 @@ class FakeBrowser:
         self.navigation = list(navigation or [ENTRY["url"]])
         self.tabs = list(tabs)
         self.navigated, self.closed, self.methods, self.decisions = [], [], [], []
+        self.created = False    # the read's own tab exists only after /json/new
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -57,7 +58,7 @@ class FakeBrowser:
                 if self.path == "/json/version":
                     return self._json({"Browser": "fake"})
                 if self.path == "/json/list":
-                    own = [] if "tab-1" in outer.closed else [
+                    own = [] if "tab-1" in outer.closed or not outer.created else [
                         {"type": "page", "id": "tab-1", "url": ENTRY["url"]}]
                     return self._json(outer.tabs + own)
                 if self.path.startswith("/json/close/"):
@@ -73,6 +74,7 @@ class FakeBrowser:
                 if self.headers.get("Content-Length") != "0":
                     return self.send_error(411)   # Chrome refuses a body-less PUT without it
                 if self.path.startswith("/json/new"):
+                    outer.created = True
                     return self._json({"id": "tab-1", "webSocketDebuggerUrl":
                                        f"ws://127.0.0.1:{outer.port}/devtools/page/tab-1"})
                 self.send_error(404)
@@ -358,6 +360,134 @@ def test_started_browser_is_stopped_but_a_running_one_is_left(endpoint, monkeypa
     read()
     assert calls == ["--start", "--stop"]
     assert fake.closed == ["tab-1"]
+
+
+def user_tab(fake, tab_id="user-1", path="/chats"):
+    """A tab of the registered origin that was open before the read (the user's, not ours)."""
+    tab = {"type": "page", "id": tab_id, "url": ORIGIN + path,
+           "webSocketDebuggerUrl": f"ws://127.0.0.1:{fake.port}/devtools/page/{tab_id}"}
+    fake.tabs.append(tab)
+    return tab
+
+
+def test_a_tab_of_the_origin_that_was_already_open_is_reused_and_left_open(endpoint):
+    fake = endpoint([ready(4)])
+    user_tab(fake)
+    assert read() == {"read": "sample", "data": {"status": "active", "visible_chats": 4}}
+    assert not fake.created and fake.closed == []
+    assert fake.navigated == []
+    assert "Page.navigate" not in fake.methods and "Fetch.enable" not in fake.methods
+
+
+def test_a_reused_tab_is_not_closed_when_the_read_fails(endpoint):
+    fake = endpoint([refused()])
+    user_tab(fake)
+    assert error_code(read) == "browser_read_refused"
+    assert fake.closed == [] and not fake.created
+
+
+def test_a_reused_tab_that_never_becomes_readable_is_left_open(endpoint):
+    fake = endpoint([loading()])
+    user_tab(fake)
+    assert error_code(lambda: read(deadline=1.0)) == "browser_read_failed"
+    assert fake.closed == []
+
+
+def test_several_tabs_of_the_origin_are_refused_and_none_is_touched(endpoint):
+    fake = endpoint([ready(1)])
+    user_tab(fake, "user-1")
+    user_tab(fake, "user-2")
+    assert error_code(read) == "browser_tab_ambiguous"
+    assert not fake.created and fake.closed == [] and fake.methods == []
+
+
+def test_a_tab_of_another_origin_or_kind_is_not_reused(endpoint):
+    fake = endpoint([ready(2)], tabs=[
+        {"type": "page", "id": "o", "url": "https://other.example.test/"},
+        {"type": "service_worker", "id": "w", "url": ORIGIN + "/sw.js"},
+        {"type": "page", "id": "look", "url": ORIGIN + ".evil.test/"}])
+    assert read()["data"]["visible_chats"] == 2
+    assert fake.created and fake.closed == ["tab-1"]
+
+
+def test_a_tab_of_the_origin_without_a_debugging_socket_is_unavailable_not_replaced(endpoint):
+    fake = endpoint([ready(1)], tabs=[{"type": "page", "id": "busy", "url": ORIGIN + "/chats"}])
+    assert error_code(read) == "browser_unavailable"
+    assert not fake.created and fake.closed == []
+
+
+def test_the_published_contract_lists_the_ambiguity_error():
+    contract = operations.OPERATIONS["browser.read"]
+    assert "browser_tab_ambiguous" in contract.errors
+    assert "reused" in contract.effects and "browser_tab_ambiguous" in contract.effects
+
+
+def test_a_failure_listing_the_open_tabs_is_unavailable_and_opens_nothing(endpoint, monkeypatch):
+    fake = endpoint([ready(1)])
+    real = browser_read._http
+
+    def listing_fails(url, *a, **k):
+        if "/json/list" in url:
+            raise OSError("no list")
+        return real(url, *a, **k)
+
+    monkeypatch.setattr(browser_read, "_http", listing_fails)
+    assert error_code(read) == "browser_unavailable"
+    assert not fake.created and fake.closed == []
+
+
+def test_a_reused_tab_that_has_left_the_origin_is_denied_and_left_alone(endpoint):
+    fake = endpoint([page(origin="https://elsewhere.example.test", data=None)])
+    user_tab(fake)
+    assert error_code(read) == "browser_scope_denied"
+    assert fake.closed == [] and fake.navigated == [] and not fake.created
+
+
+def test_a_tab_on_another_port_of_the_host_is_not_the_origin(endpoint):
+    fake = endpoint([ready(3)], tabs=[{"type": "page", "id": "p", "url": ORIGIN + ":8443/"}])
+    assert read()["data"]["visible_chats"] == 3
+    assert fake.created and fake.closed == ["tab-1"]
+
+
+def test_a_browser_started_here_is_not_stopped_over_a_reused_tab(endpoint, monkeypatch):
+    calls, state = [], {"up": False}
+    fake = endpoint([ready(1)])
+    user_tab(fake)    # e.g. Chrome restored the profile's session when it started
+    real = browser_read._ready
+    monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
+    monkeypatch.setattr(browser_read, "_ensure",
+                        lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
+    read()
+    assert calls == ["--start"]    # no "--stop": the tab belongs to someone else
+    assert fake.closed == []
+
+
+def test_a_browser_started_here_with_two_tabs_of_the_origin_is_not_stopped(endpoint, monkeypatch):
+    calls, state = [], {"up": False}
+    fake = endpoint([ready(1)])
+    user_tab(fake, "user-1")
+    user_tab(fake, "user-2")
+    real = browser_read._ready
+    monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
+    monkeypatch.setattr(browser_read, "_ensure",
+                        lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
+    assert error_code(read) == "browser_tab_ambiguous"
+    assert calls == ["--start"]    # the restored tabs are someone else's: the browser is left running
+    assert fake.closed == [] and not fake.created
+
+
+def test_a_tab_list_that_is_not_a_list_means_no_tab_of_the_origin(endpoint, monkeypatch):
+    fake = endpoint([ready(5)])
+    real = browser_read._http
+
+    def not_a_list(url, *a, **k):
+        if "/json/list" in url and not fake.created:
+            return {}
+        return real(url, *a, **k)
+
+    monkeypatch.setattr(browser_read, "_http", not_a_list)
+    assert read()["data"]["visible_chats"] == 5
+    assert fake.created and fake.closed == ["tab-1"]
 
 
 def test_a_browser_started_here_is_kept_when_another_tab_is_open(endpoint, monkeypatch):

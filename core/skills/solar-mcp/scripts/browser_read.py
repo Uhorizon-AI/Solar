@@ -5,7 +5,8 @@ Solar knows nothing about any site. The owner registers a read in
 file (a function expression) pinned by its SHA-256, and the fields it may return. The caller
 of the operation only names the read; it supplies no URL, script, selector or argument.
 
-The scope is enforced twice, and the second line does not depend on the first:
+In a tab this module opens, the scope is enforced twice, and the second line does not
+depend on the first (a reused tab has only the second):
 
 1. Navigation. The Chrome `Fetch` domain pauses every document request of the tab;
    anything outside the registered origin (including redirects and frames) is refused
@@ -17,8 +18,11 @@ The script's answer is never passed through as it is: only the declared fields, 
 declared types, leave this module. A script that changed since it was registered is refused.
 
 The browser is the shared Solar runtime (`solar-browser`): started and stopped
-through `ensure_browser.sh`, never launched here. Only a tab this module opens is
-touched, and it is closed (before the debugging socket is dropped) afterwards. Reads are
+through `ensure_browser.sh`, never launched here. A tab this module opens is closed (before
+the debugging socket is dropped) afterwards. When exactly one page tab of the registered
+origin is already open, the read attaches to it as it is (no navigation, no request
+interception: only the wrapper's origin check applies) and never closes it; several are
+refused with `browser_tab_ambiguous`, and none means a tab of its own. Reads are
 serialized with a file lock under one absolute deadline that reserves time for cleanup; a
 browser this read started is stopped only when no other tab is left in it.
 """
@@ -456,6 +460,22 @@ def _tab_gone(endpoint: str, tab_id, timeout: float) -> bool:
     return isinstance(tabs, list) and all(t.get("id") != tab_id for t in tabs)
 
 
+def _origin_tabs(endpoint: str, origin: str, timeout: float) -> list:
+    """Page tabs already open on `origin` (the user's, or an earlier session's)."""
+    try:
+        tabs = _http(f"{endpoint}/json/list", timeout=timeout)
+    except (OSError, urllib.error.URLError, ValueError):
+        raise OperationError("browser_unavailable", "The open tabs could not be listed") from None
+    found = []
+    for tab in tabs if isinstance(tabs, list) else []:
+        if not isinstance(tab, dict) or tab.get("type") != "page":
+            continue
+        parts = urlsplit(tab.get("url") if isinstance(tab.get("url"), str) else "")
+        if parts.scheme and parts.netloc and f"{parts.scheme}://{parts.netloc}" == origin:
+            found.append(tab)
+    return found
+
+
 def _close_tab(endpoint: str, target: dict, page, end: float) -> bool:
     """Close our tab and confirm it is gone, retrying until `end`. Returns whether it was confirmed.
 
@@ -603,6 +623,7 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
     endpoint = _endpoint(settings)
     lock = _acquire(limit, settings)
     started_here = False
+    reused = False    # attached to a tab that was already open: never closed, browser never stopped
     target = None
     page = None
     completed = False    # set only when a result is about to be returned
@@ -611,20 +632,32 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
             if not _ensure("--start", remaining(), root, settings) or not _ready(endpoint, max(remaining(), 0.2)):
                 raise OperationError("browser_unavailable", "The Solar browser could not be started")
             started_here = True
+        existing = _origin_tabs(endpoint, origin, max(remaining(), 0.2))
+        if len(existing) > 1:
+            raise OperationError("browser_tab_ambiguous",
+                                 "More than one tab of the registered origin is open; close the extra ones")
+        reused = bool(existing)
         try:
-            target = _http(f"{endpoint}/json/new?about:blank", method="PUT", timeout=max(remaining(), 0.2))
-            url = target["webSocketDebuggerUrl"]
+            if reused:
+                target = None    # never ours: it is not closed, only detached from
+                url = existing[0]["webSocketDebuggerUrl"]
+            else:
+                target = _http(f"{endpoint}/json/new?about:blank", method="PUT", timeout=max(remaining(), 0.2))
+                url = target["webSocketDebuggerUrl"]
         except (OSError, urllib.error.URLError, ValueError, KeyError, TypeError):
-            raise OperationError("browser_unavailable", "The browser did not open a tab") from None
+            raise OperationError("browser_unavailable",
+                                 "The tab of the origin could not be attached" if reused
+                                 else "The browser did not open a tab") from None
         page = _Page(_Socket(url, min(10.0, max(remaining(), 0.5))), origin)
-        page.call("Page.enable", until=limit)
-        page.call("Fetch.enable", {"patterns": [{"urlPattern": "*", "resourceType": "Document",
-                                                 "requestStage": "Request"}]}, until=limit)
-        navigated = page.call("Page.navigate", {"url": entry["url"]}, until=limit)
-        if navigated.get("errorText"):
-            if page.denied:
-                raise _denied()
-            raise OperationError("browser_read_failed", "The page could not be loaded")
+        if not reused:
+            page.call("Page.enable", until=limit)
+            page.call("Fetch.enable", {"patterns": [{"urlPattern": "*", "resourceType": "Document",
+                                                     "requestStage": "Request"}]}, until=limit)
+            navigated = page.call("Page.navigate", {"url": entry["url"]}, until=limit)
+            if navigated.get("errorText"):
+                if page.denied:
+                    raise _denied()
+                raise OperationError("browser_read_failed", "The page could not be loaded")
         last, stable, reached = None, 0, False
         while remaining() > 0:
             page.pump(min(poll, max(remaining(), 0)), limit)   # still deciding paused requests
@@ -685,7 +718,7 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
                 _quiesce(page, end)
             page.socket.close()
         own = target.get("id") if isinstance(target, dict) else None
-        if started_here and end - time.monotonic() > 0.5 and not _other_tabs(endpoint, own, end):
+        if started_here and not reused and end - time.monotonic() > 0.5 and not _other_tabs(endpoint, own, end):
             _ensure("--stop", end - time.monotonic(), root, settings)
         lock.close()
         if completed and not closed:
