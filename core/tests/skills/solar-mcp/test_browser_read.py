@@ -462,6 +462,34 @@ def test_a_browser_started_here_is_not_stopped_over_a_reused_tab(endpoint, monke
     assert fake.closed == []
 
 
+def test_a_browser_started_here_with_two_tabs_of_the_origin_is_not_stopped(endpoint, monkeypatch):
+    calls, state = [], {"up": False}
+    fake = endpoint([ready(1)])
+    user_tab(fake, "user-1")
+    user_tab(fake, "user-2")
+    real = browser_read._ready
+    monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
+    monkeypatch.setattr(browser_read, "_ensure",
+                        lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
+    assert error_code(read) == "browser_tab_ambiguous"
+    assert calls == ["--start"]    # the restored tabs are someone else's: the browser is left running
+    assert fake.closed == [] and not fake.created
+
+
+def test_a_tab_list_that_is_not_a_list_means_no_tab_of_the_origin(endpoint, monkeypatch):
+    fake = endpoint([ready(5)])
+    real = browser_read._http
+
+    def not_a_list(url, *a, **k):
+        if "/json/list" in url and not fake.created:
+            return {}
+        return real(url, *a, **k)
+
+    monkeypatch.setattr(browser_read, "_http", not_a_list)
+    assert read()["data"]["visible_chats"] == 5
+    assert fake.created and fake.closed == ["tab-1"]
+
+
 def test_a_browser_started_here_is_kept_when_another_tab_is_open(endpoint, monkeypatch):
     calls, state = [], {"up": False}
     endpoint([ready(1)], tabs=[{"type": "page", "url": "https://example.org/"}])

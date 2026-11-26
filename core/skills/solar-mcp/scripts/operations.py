@@ -1271,7 +1271,8 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
                 "navigation and the output, but does not verify that the script only reads. While the read "
                 "runs in a tab of its own, navigation outside the origin is refused (on a reused tab only "
                 "the wrapper's origin check applies) and a script that changed since it was registered "
-                "does not run; see SKILL.md, Where the guarantee ends."),
+                "does not run. The script runs on every poll, at least three times per read; see "
+                "SKILL.md, Where the guarantee ends."),
     Operation(
         "action.run", A3, "Run one registered action of one registered action skill under a live mandate.",
         _obj(dict(skill=SLUG, action=SLUG, mandate=SLUG, automated={"type": "boolean"}),

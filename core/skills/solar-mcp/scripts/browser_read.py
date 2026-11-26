@@ -5,7 +5,8 @@ Solar knows nothing about any site. The owner registers a read in
 file (a function expression) pinned by its SHA-256, and the fields it may return. The caller
 of the operation only names the read; it supplies no URL, script, selector or argument.
 
-The scope is enforced twice, and the second line does not depend on the first:
+In a tab this module opens, the scope is enforced twice, and the second line does not
+depend on the first (a reused tab has only the second):
 
 1. Navigation. The Chrome `Fetch` domain pauses every document request of the tab;
    anything outside the registered origin (including redirects and frames) is refused
