@@ -415,12 +415,13 @@ def test_a_reused_tab_that_never_becomes_readable_is_left_open(endpoint):
     assert fake.closed == []
 
 
-def test_several_tabs_of_the_origin_are_refused_and_none_is_touched(endpoint):
+def test_several_tabs_of_the_origin_get_a_tab_of_their_own_and_none_is_touched(endpoint):
     fake = endpoint([ready(1)])
     user_tab(fake, "user-1")
     user_tab(fake, "user-2")
-    assert error_code(read) == "browser_tab_ambiguous"
-    assert not fake.created and fake.closed == [] and fake.methods == []
+    assert read()["data"]["visible_chats"] == 1
+    assert fake.created and fake.closed == ["tab-1"]    # only ours is closed
+    assert fake.navigated == [ENTRY["url"]]
 
 
 def test_a_tab_of_another_origin_or_kind_is_not_reused(endpoint):
@@ -438,10 +439,10 @@ def test_a_tab_of_the_origin_without_a_debugging_socket_is_unavailable_not_repla
     assert not fake.created and fake.closed == []
 
 
-def test_the_published_contract_lists_the_ambiguity_error():
+def test_the_published_contract_no_longer_has_an_ambiguity_error():
     contract = operations.OPERATIONS["browser.read"]
-    assert "browser_tab_ambiguous" in contract.errors
-    assert "reused" in contract.effects and "browser_tab_ambiguous" in contract.effects
+    assert "browser_tab_ambiguous" not in contract.errors
+    assert "reused" in contract.effects and "none or several" in contract.effects
 
 
 def test_a_failure_listing_the_open_tabs_is_unavailable_and_opens_nothing(endpoint, monkeypatch):
@@ -493,9 +494,9 @@ def test_a_browser_started_here_with_two_tabs_of_the_origin_is_not_stopped(endpo
     monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
     monkeypatch.setattr(browser_read, "_ensure",
                         lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
-    assert error_code(read) == "browser_tab_ambiguous"
+    assert read()["data"]["visible_chats"] == 1
     assert calls == ["--start"]    # the restored tabs are someone else's: the browser is left running
-    assert fake.closed == [] and not fake.created
+    assert fake.closed == ["tab-1"]    # only our own tab
 
 
 def test_a_tab_list_that_is_not_a_list_means_no_tab_of_the_origin(endpoint, monkeypatch):

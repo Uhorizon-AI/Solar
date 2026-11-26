@@ -1259,13 +1259,13 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "Run one browser read the owner registered: one origin, a pinned script, declared fields (A0 = the registration is the authorization).",
         _obj(dict(read=SLUG), required=("read",)),
         errors=("browser_read_not_registered", "browser_read_invalid", "browser_read_changed",
-                "browser_unavailable", "browser_scope_denied", "browser_tab_ambiguous",
+                "browser_unavailable", "browser_scope_denied",
                 "browser_read_refused", "browser_read_failed"),
         effects="Opens one tab on the registered origin in the Solar browser profile, runs the owner's "
                 "pinned script there and returns only its declared fields, under {read, data}. If exactly "
                 "one page tab of that origin is already open it is reused instead: taken to the registered "
-                "page only if it is on another one, with no request interception, and never closed; with several the read fails with "
-                "browser_tab_ambiguous and touches none. The caller "
+                "page only if it is on another one, with no request interception, and never closed; with none or several it "
+                "opens a tab of its own (and closes it) and touches none of them. The caller "
                 "supplies a name and nothing else: no URL, script, selector or argument. A0 here means the "
                 "owner's registration is the authorization: Solar pins the script and filters the "
                 "navigation and the output, but does not verify that the script only reads. While the read "

@@ -22,8 +22,7 @@ through `ensure_browser.sh`, never launched here. A tab this module opens is clo
 the debugging socket is dropped) afterwards. When exactly one page tab of the registered
 origin is already open, the read attaches to it (no request interception: only the wrapper's
 origin check applies), takes it to the registered page only when it is on another one, and
-never closes it; several are refused with `browser_tab_ambiguous`, and none means a tab of its
-own. Reads are
+never closes it; none or several mean a tab of its own, opened and closed here. Reads are
 serialized with a file lock under one absolute deadline that reserves time for cleanup; a
 browser this read started is stopped only when no other tab is left in it.
 """
@@ -634,10 +633,9 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
                 raise OperationError("browser_unavailable", "The Solar browser could not be started")
             started_here = True
         existing = _origin_tabs(endpoint, origin, max(remaining(), 0.2))
-        if len(existing) > 1:
-            raise OperationError("browser_tab_ambiguous",
-                                 "More than one tab of the registered origin is open; close the extra ones")
-        reused = bool(existing)
+        # Exactly one tab of the origin: reuse it. None or several (no way to tell which is the
+        # user's): a tab of our own, created and closed here. The read never fails for that.
+        reused = len(existing) == 1
         try:
             if reused:
                 target = None    # never ours: it is not closed, only detached from
