@@ -233,13 +233,12 @@ Outside, and said plainly rather than disguised:
   script runs in the user's live session and can leave that tab on another page. The
   read reports `browser_scope_denied` only if a poll finds the page loaded on another
   origin; a move that starts after the last poll of the read (the third stable result
-  ends it) goes unreported. It reports `browser_read_failed` if the page does not load
+  ends it) goes unreported. It reports `browser_read_failed` if the read does not settle
   before the deadline, and it does not undo the move. The script is JavaScript running
-  in the logged-in session: it runs on every poll (at least three times per read, in
-  the user's live session when the tab is reused), and it can click, type or call
-  `fetch` or `POST` to any origin, and the interception sees document requests only,
-  not other requests or websockets. Review a script before registering
-  its digest; a changed script stops running until it is registered again. Solar does
+  in the logged-in session: it runs once per poll, until three identical results settle
+  the read (in the user's live session when the tab is reused), and it can click, type
+  or call `fetch` or `POST` to any origin, and the interception sees document requests
+  only, not other requests or websockets. Review a script before registering its digest; a changed script stops running until it is registered again. Solar does
   not stop a process running as the user from using the browser's local debugging
   port, and it relies on Chrome to honour the paused-request protocol. If the read
   tab cannot be confirmed closed and the debugging connection is then dropped, Chrome
