@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- mcp: `browser.read` reuses the page tab of the registered origin when exactly one is already open in the Solar browser, instead of opening a second one. It does not navigate or intercept requests there, runs only the pinned script (whose origin check still applies) and never closes that tab, also on error or timeout. With none open it creates and closes its own tab as before; with several it fails with the new `browser_tab_ambiguous` and touches none. Aimed at single-session sites such as WhatsApp Web (#188). Whether a second tab really harms the original session was not measured.
+
 ## [0.64.1] - 2026-11-26
 
 ### Changed
