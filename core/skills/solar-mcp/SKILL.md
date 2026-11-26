@@ -235,9 +235,8 @@ Outside, and said plainly rather than disguised:
   `browser_read_failed` if it does not load before the deadline, and it does not undo
   the move. The script is JavaScript running in the logged-in session: it runs on every
   poll (at least three times per read, in the user's live session when the tab is
-  reused), and it can click, type
-  or call `fetch` or `POST` to any origin, and the interception sees document
-  requests only, not other requests or websockets. Review a script before registering
+  reused), and it can click, type or call `fetch` or `POST` to any origin, and the
+  interception sees document requests only, not other requests or websockets. Review a script before registering
   its digest; a changed script stops running until it is registered again. Solar does
   not stop a process running as the user from using the browser's local debugging
   port, and it relies on Chrome to honour the paused-request protocol. If the read
