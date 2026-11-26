@@ -416,6 +416,52 @@ def test_a_tab_of_the_origin_without_a_debugging_socket_is_unavailable_not_repla
     assert not fake.created and fake.closed == []
 
 
+def test_the_published_contract_lists_the_ambiguity_error():
+    contract = operations.OPERATIONS["browser.read"]
+    assert "browser_tab_ambiguous" in contract.errors
+    assert "reused" in contract.effects and "browser_tab_ambiguous" in contract.effects
+
+
+def test_a_failure_listing_the_open_tabs_is_unavailable_and_opens_nothing(endpoint, monkeypatch):
+    fake = endpoint([ready(1)])
+    real = browser_read._http
+
+    def listing_fails(url, *a, **k):
+        if "/json/list" in url:
+            raise OSError("no list")
+        return real(url, *a, **k)
+
+    monkeypatch.setattr(browser_read, "_http", listing_fails)
+    assert error_code(read) == "browser_unavailable"
+    assert not fake.created and fake.closed == []
+
+
+def test_a_reused_tab_that_has_left_the_origin_is_denied_and_left_alone(endpoint):
+    fake = endpoint([page(origin="https://elsewhere.example.test", data=None)])
+    user_tab(fake)
+    assert error_code(read) == "browser_scope_denied"
+    assert fake.closed == [] and fake.navigated == [] and not fake.created
+
+
+def test_a_tab_on_another_port_of_the_host_is_not_the_origin(endpoint):
+    fake = endpoint([ready(3)], tabs=[{"type": "page", "id": "p", "url": ORIGIN + ":8443/"}])
+    assert read()["data"]["visible_chats"] == 3
+    assert fake.created and fake.closed == ["tab-1"]
+
+
+def test_a_browser_started_here_is_not_stopped_over_a_reused_tab(endpoint, monkeypatch):
+    calls, state = [], {"up": False}
+    fake = endpoint([ready(1)])
+    user_tab(fake)    # e.g. Chrome restored the profile's session when it started
+    real = browser_read._ready
+    monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
+    monkeypatch.setattr(browser_read, "_ensure",
+                        lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
+    read()
+    assert calls == ["--start"]    # no "--stop": the tab belongs to someone else
+    assert fake.closed == []
+
+
 def test_a_browser_started_here_is_kept_when_another_tab_is_open(endpoint, monkeypatch):
     calls, state = [], {"up": False}
     endpoint([ready(1)], tabs=[{"type": "page", "url": "https://example.org/"}])

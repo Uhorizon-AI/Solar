@@ -17,11 +17,11 @@ The script's answer is never passed through as it is: only the declared fields, 
 declared types, leave this module. A script that changed since it was registered is refused.
 
 The browser is the shared Solar runtime (`solar-browser`): started and stopped
-through `ensure_browser.sh`, never launched here. Only a tab this module opens is
-touched, and it is closed (before the debugging socket is dropped) afterwards. When exactly
-one page tab of the registered origin is already open, the read reuses it as it is (no
-navigation, no request interception) and never closes it; several are refused with
-`browser_tab_ambiguous`, and none means a tab of its own. Reads are
+through `ensure_browser.sh`, never launched here. A tab this module opens is closed (before
+the debugging socket is dropped) afterwards. When exactly one page tab of the registered
+origin is already open, the read attaches to it as it is (no navigation, no request
+interception: only the wrapper's origin check applies) and never closes it; several are
+refused with `browser_tab_ambiguous`, and none means a tab of its own. Reads are
 serialized with a file lock under one absolute deadline that reserves time for cleanup; a
 browser this read started is stopped only when no other tab is left in it.
 """
@@ -622,6 +622,7 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
     endpoint = _endpoint(settings)
     lock = _acquire(limit, settings)
     started_here = False
+    reused = False    # attached to a tab that was already open: never closed, browser never stopped
     target = None
     page = None
     completed = False    # set only when a result is about to be returned
@@ -716,7 +717,7 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
                 _quiesce(page, end)
             page.socket.close()
         own = target.get("id") if isinstance(target, dict) else None
-        if started_here and end - time.monotonic() > 0.5 and not _other_tabs(endpoint, own, end):
+        if started_here and not reused and end - time.monotonic() > 0.5 and not _other_tabs(endpoint, own, end):
             _ensure("--stop", end - time.monotonic(), root, settings)
         lock.close()
         if completed and not closed:

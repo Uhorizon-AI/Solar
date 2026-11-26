@@ -226,9 +226,12 @@ Outside, and said plainly rather than disguised:
   not coercive, until their send becomes a gated tool. The exception is a read the
   owner registered for `browser.read`, and its A0 means exactly this: **the owner's
   registration is the authorization**. Solar pins the script by digest, refuses other
-  origins in two places (the navigation and the wrapper), and lets out only declared
-  fields (strings from a closed list), but it does not verify that the script only
-  reads. The script is JavaScript running in the logged-in session: it can click, type
+  origins in two places (the navigation and the wrapper) in the tab it opens, and lets
+  out only declared fields (strings from a closed list), but it does not verify that the
+  script only reads. In a tab that was already open and is reused, only the wrapper
+  checks the origin, before the script runs; nothing intercepts requests there, so the
+  script runs in the user's live session and can leave that tab on another page, which
+  the read reports as `browser_scope_denied` and does not undo. The script is JavaScript running in the logged-in session: it can click, type
   or call `fetch` or `POST` to any origin, and the interception sees document
   requests only, not other requests or websockets. Review a script before registering
   its digest; a changed script stops running until it is registered again. Solar does
