@@ -789,7 +789,8 @@ def test_a_script_that_ends_in_a_line_comment_still_runs(tmp_path, served):
 def test_the_wrapper_never_runs_the_script_on_another_origin(tmp_path, served):
     dom = '<div id="list"><div role="listitem"><span title="A">A</span></div></div>'
     got = run_expression(browser_read.read_expression(ORIGIN, SAMPLE_SCRIPT), dom, tmp_path, served)
-    assert got == {"origin": served, "data": None}
+    # Wrong origin: script must not run (data null). href is still reported for settlement.
+    assert got == {"origin": served, "href": f"{served}/p.html", "data": None}
 
 
 def test_a_blocked_frame_before_the_page_is_ready_is_not_a_denial(endpoint):
