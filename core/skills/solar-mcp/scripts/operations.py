@@ -1259,21 +1259,23 @@ OPERATIONS: dict[str, Operation] = {op.name: op for op in (
         "Run one browser read the owner registered: one origin, a pinned script, declared fields (A0 = the registration is the authorization).",
         _obj(dict(read=SLUG), required=("read",)),
         errors=("browser_read_not_registered", "browser_read_invalid", "browser_read_changed",
-                "browser_unavailable", "browser_scope_denied", "browser_tab_ambiguous",
+                "browser_unavailable", "browser_scope_denied",
                 "browser_read_refused", "browser_read_failed"),
         effects="Opens one tab on the registered origin in the Solar browser profile, runs the owner's "
                 "pinned script there and returns only its declared fields, under {read, data}. If exactly "
-                "one page tab of that origin is already open it is reused as it is instead: no navigation, "
-                "no request interception, and it is never closed; with several the read fails with "
-                "browser_tab_ambiguous and touches none. The caller "
-                "supplies a name and nothing else: no URL, script, selector or argument. A0 here means the "
-                "owner's registration is the authorization: Solar pins the script and filters the "
-                "navigation and the output, but does not verify that the script only reads. While the read "
-                "runs in a tab of its own, navigation outside the origin is refused (on a reused tab only "
-                "the wrapper's origin check applies) and a script that changed since it was registered "
-                "does not run. The script runs on each poll that finds the page on the registered "
-                "origin, until three identical results in a row settle the read; see "
-                "SKILL.md, Where the guarantee ends."),
+                "one page tab of that origin is already open it is reused instead: taken to the registered "
+                "page only if it is on another one (empty path equals `/`; fragment ignored), with no "
+                "request interception, and never closed; with none or several it opens a tab of its own "
+                "(and closes it) and touches none of them. On a reused tab a redirect that leaves the "
+                "origin is reported, not undone; dialogs are not auto-accepted. Settlement waits until "
+                "location.href matches the registered page. The caller supplies a name and nothing else: "
+                "no URL, script, selector or argument. A0 here means the owner's registration is the "
+                "authorization: Solar pins the script and filters the navigation and the output, but "
+                "does not verify that the script only reads. While the read runs in a tab of its own, "
+                "navigation outside the origin is refused (on a reused tab only the wrapper's origin "
+                "check applies) and a script that changed since it was registered does not run. The "
+                "script runs on each poll that finds the registered page, until three identical results "
+                "in a row settle the read; see SKILL.md, Where the guarantee ends."),
     Operation(
         "action.run", A3, "Run one registered action of one registered action skill under a live mandate.",
         _obj(dict(skill=SLUG, action=SLUG, mandate=SLUG, automated={"type": "boolean"}),

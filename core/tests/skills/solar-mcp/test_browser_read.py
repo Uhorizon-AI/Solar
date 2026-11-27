@@ -24,16 +24,22 @@ class FakeBrowser:
     """A DevTools endpoint whose page answers `Runtime.evaluate` from a scripted list."""
 
     def __init__(self, reads, navigation=None, tabs=(), redirect_to=None, navigate_error=None,
-                 stream=False, drip=False, close_failures=0, late_requests=(), garbage=False):
+                 stream=False, drip=False, close_failures=0, late_requests=(), garbage=False,
+                 navigate_delay_evaluates=0):
         self.reads = list(reads)
         self.redirect_to, self.navigate_error = redirect_to, navigate_error
         self.stream, self.drip, self.garbage = stream, drip, garbage
         self.close_failures, self.late_requests = close_failures, list(late_requests)
+        self.navigate_delay_evaluates = navigate_delay_evaluates
         self.late_sent = False
         # document requests the "browser" makes after Page.navigate (redirects, frames)
         self.navigation = list(navigation or [ENTRY["url"]])
         self.tabs = list(tabs)
         self.navigated, self.closed, self.methods, self.decisions = [], [], [], []
+        self.methods_by_target = []   # (target id, method) so multi-tab tests name the socket
+        self.urls = {}                # current page URL per target (updated on navigate)
+        self._pending_nav = {}
+        self._delay_left = {}
         self.created = False    # the read's own tab exists only after /json/new
         outer = self
 
@@ -89,6 +95,12 @@ class FakeBrowser:
             return True
         return False
 
+    def _set_url(self, target_id, url):
+        self.urls[target_id] = url
+        for tab in self.tabs:
+            if tab.get("id") == target_id:
+                tab["url"] = url
+
     def serve_socket(self, handler):
         key = handler.headers["Sec-WebSocket-Key"]
         accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest())
@@ -96,6 +108,14 @@ class FakeBrowser:
                             b"Connection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n")
         handler.wfile.flush()
         sock = handler.connection
+        target_id = handler.path.rsplit("/", 1)[-1]
+        if target_id not in self.urls:
+            for tab in self.tabs:
+                if tab.get("id") == target_id:
+                    self.urls[target_id] = tab.get("url") or "about:blank"
+                    break
+            else:
+                self.urls[target_id] = "about:blank"
         while True:
             head = self._exact(sock, 2)
             if not head:
@@ -107,6 +127,7 @@ class FakeBrowser:
             data = bytes(b ^ mask[i % 4] for i, b in enumerate(self._exact(sock, size)))
             message = json.loads(data)
             self.methods.append(message["method"])
+            self.methods_by_target.append((target_id, message["method"]))
             result = {}
             if self.garbage and message["method"] == "Page.enable":
                 self._send_text(sock, "this is not json")
@@ -128,10 +149,16 @@ class FakeBrowser:
                 except OSError:
                     return
             if message["method"] == "Page.navigate":
-                self.navigated.append(message["params"]["url"])
+                nav_url = message["params"]["url"]
+                self.navigated.append(nav_url)
                 if self.navigate_error:
                     result = {"errorText": self.navigate_error}
-                for number, url in enumerate(["about:blank"] if message["params"]["url"] == "about:blank"
+                if self.navigate_delay_evaluates > 0 and nav_url != "about:blank":
+                    self._pending_nav[target_id] = nav_url
+                    self._delay_left[target_id] = self.navigate_delay_evaluates
+                else:
+                    self._set_url(target_id, nav_url)
+                for number, url in enumerate(["about:blank"] if nav_url == "about:blank"
                                              else self.navigation):
                     self._send(sock, {"method": "Fetch.requestPaused", "params": {
                         "requestId": f"r{number}", "resourceType": "Document", "request": {"url": url}}})
@@ -139,6 +166,14 @@ class FakeBrowser:
                 self.decisions.append((message["method"], message["params"]["requestId"]))
             if message["method"] == "Runtime.evaluate":
                 value = self.reads.pop(0) if len(self.reads) > 1 else self.reads[0]
+                value = dict(value)
+                if "href" not in value:
+                    value["href"] = self.urls.get(target_id, ENTRY["url"])
+                # Commit a delayed navigation only after this evaluate still saw the old href.
+                if target_id in self._delay_left and self._delay_left[target_id] > 0:
+                    self._delay_left[target_id] -= 1
+                    if self._delay_left[target_id] == 0:
+                        self._set_url(target_id, self._pending_nav.pop(target_id))
                 result = {"result": {"value": value}}
             self._send(sock, {"id": message["id"], "result": result})
             if message["method"] == "Runtime.evaluate" and not self.late_sent:
@@ -176,9 +211,12 @@ ENTRY = dict(name="sample", origin=ORIGIN, url=ORIGIN + "/", script="() => ({})"
              refusals=["session_expired"])
 
 
-def page(origin=ORIGIN, data=None):
-    """What the wrapper evaluates to: the page's origin and what the script returned there."""
-    return {"origin": origin, "data": data}
+def page(origin=ORIGIN, data=None, href=None):
+    """What the wrapper evaluates to: the page's origin, href, and what the script returned there."""
+    out = {"origin": origin, "data": data}
+    if href is not None:
+        out["href"] = href
+    return out
 
 
 def loading():
@@ -332,10 +370,18 @@ def test_a_second_read_waits_for_the_first_and_gives_up_at_the_deadline(endpoint
 def test_the_wrapper_checks_the_origin_before_the_script_runs():
     expression = browser_read.read_expression(ORIGIN, "() => ({marker: 1})")
     assert "location.origin" in expression and '"https://app.example.test"' in expression
+    assert "location.href" in expression
     assert expression.index("origin !==") < expression.index("marker")
     # the script is substituted last: its own text is never rescanned for placeholders
     tricky = browser_read.read_expression(ORIGIN, "() => '__ORIGIN__'")
     assert tricky.count("'__ORIGIN__'") == 1
+
+
+def test_same_page_normalizes_empty_path_and_ignores_fragment():
+    assert browser_read._same_page(ORIGIN, ORIGIN + "/")
+    assert browser_read._same_page(ORIGIN + "/", ORIGIN + "/#section")
+    assert not browser_read._same_page(ORIGIN + "/", ORIGIN + "/?filter=unread")
+    assert not browser_read._same_page(ORIGIN + "/a", ORIGIN + "/b")
 
 
 def test_unavailable_browser_is_distinct(monkeypatch):
@@ -375,8 +421,67 @@ def test_a_tab_of_the_origin_that_was_already_open_is_reused_and_left_open(endpo
     user_tab(fake)
     assert read() == {"read": "sample", "data": {"status": "active", "visible_chats": 4}}
     assert not fake.created and fake.closed == []
+    assert fake.navigated == [ENTRY["url"]]      # the user's tab was on /chats, the read is on /
+    assert "Fetch.enable" not in fake.methods
+
+
+def test_a_reused_tab_already_on_the_registered_page_is_not_navigated(endpoint):
+    fake = endpoint([ready(2)])
+    user_tab(fake, path="/")
+    assert read() == {"read": "sample", "data": {"status": "active", "visible_chats": 2}}
+    assert fake.navigated == [] and "Page.navigate" not in fake.methods
+    assert not fake.created and fake.closed == []
+
+
+def test_empty_path_and_slash_compare_equal_without_rewriting_the_registered_url(endpoint):
+    """Chrome often shows `https://host/` while the registry may hold `https://host`."""
+    fake = endpoint([ready(2)])
+    user_tab(fake, path="/")
+    entry = dict(ENTRY, url=ORIGIN)    # empty path; navigate must still use this exact string if needed
+    assert browser_read.scoped_read(entry, deadline=3.0, poll=0)["data"]["visible_chats"] == 2
+    assert fake.navigated == [] and "Page.navigate" not in fake.methods
+    assert not fake.created and fake.closed == []
+
+
+def test_a_fragment_does_not_make_a_reused_tab_another_page(endpoint):
+    fake = endpoint([ready(2)])
+    user_tab(fake, path="/#chat")
+    read()
     assert fake.navigated == []
-    assert "Page.navigate" not in fake.methods and "Fetch.enable" not in fake.methods
+
+
+def test_a_different_query_is_another_page_and_navigates_to_the_registered_url(endpoint):
+    fake = endpoint([ready(2)])
+    user_tab(fake, path="/?filter=unread")
+    assert read()["data"]["visible_chats"] == 2
+    assert fake.navigated == [ENTRY["url"]]
+    assert not fake.created and fake.closed == []
+
+
+def test_a_reused_tab_that_cannot_reach_the_registered_page_fails_and_stays_open(endpoint):
+    fake = endpoint([ready(2)], navigate_error="net::ERR_FAILED")
+    user_tab(fake)
+    assert error_code(read) == "browser_read_failed"
+    assert fake.closed == [] and not fake.created
+
+
+def test_a_reused_tab_redirect_outside_the_origin_is_denied_without_closing_or_fetch(endpoint):
+    # No Fetch on a reused tab: a redirect (e.g. SSO) is only caught when the wrapper sees the origin.
+    fake = endpoint([page(origin="https://sso.example.test", data=None)])
+    user_tab(fake, path="/chats")
+    assert error_code(read) == "browser_scope_denied"
+    assert fake.closed == [] and not fake.created
+    assert fake.navigated == [ENTRY["url"]]
+    assert "Fetch.enable" not in fake.methods
+
+
+def test_settlement_ignores_ready_answers_from_the_previous_page_after_navigate(endpoint):
+    # Two evaluates still report the old href; only then does the fake commit the navigation.
+    fake = endpoint([ready(1), ready(1), ready(9), ready(9), ready(9)], navigate_delay_evaluates=2)
+    user_tab(fake, path="/chats")
+    assert read()["data"]["visible_chats"] == 9
+    assert fake.navigated == [ENTRY["url"]]
+    assert fake.urls.get("user-1") == ENTRY["url"]
 
 
 def test_a_reused_tab_is_not_closed_when_the_read_fails(endpoint):
@@ -393,12 +498,17 @@ def test_a_reused_tab_that_never_becomes_readable_is_left_open(endpoint):
     assert fake.closed == []
 
 
-def test_several_tabs_of_the_origin_are_refused_and_none_is_touched(endpoint):
+def test_several_tabs_of_the_origin_get_a_tab_of_their_own_and_none_is_touched(endpoint):
     fake = endpoint([ready(1)])
     user_tab(fake, "user-1")
     user_tab(fake, "user-2")
-    assert error_code(read) == "browser_tab_ambiguous"
-    assert not fake.created and fake.closed == [] and fake.methods == []
+    assert read()["data"]["visible_chats"] == 1
+    assert fake.created and fake.closed == ["tab-1"]    # only ours is closed
+    assert fake.navigated == [ENTRY["url"]]
+    assert "Fetch.enable" in fake.methods
+    commanded = {target for target, method in fake.methods_by_target
+                 if method in ("Page.navigate", "Runtime.evaluate", "Fetch.enable")}
+    assert commanded == {"tab-1"}    # user sockets never receive commands
 
 
 def test_a_tab_of_another_origin_or_kind_is_not_reused(endpoint):
@@ -416,10 +526,10 @@ def test_a_tab_of_the_origin_without_a_debugging_socket_is_unavailable_not_repla
     assert not fake.created and fake.closed == []
 
 
-def test_the_published_contract_lists_the_ambiguity_error():
+def test_the_published_contract_no_longer_has_an_ambiguity_error():
     contract = operations.OPERATIONS["browser.read"]
-    assert "browser_tab_ambiguous" in contract.errors
-    assert "reused" in contract.effects and "browser_tab_ambiguous" in contract.effects
+    assert "browser_tab_ambiguous" not in contract.errors
+    assert "reused" in contract.effects and "none or several" in contract.effects
 
 
 def test_a_failure_listing_the_open_tabs_is_unavailable_and_opens_nothing(endpoint, monkeypatch):
@@ -440,7 +550,7 @@ def test_a_reused_tab_that_has_left_the_origin_is_denied_and_left_alone(endpoint
     fake = endpoint([page(origin="https://elsewhere.example.test", data=None)])
     user_tab(fake)
     assert error_code(read) == "browser_scope_denied"
-    assert fake.closed == [] and fake.navigated == [] and not fake.created
+    assert fake.closed == [] and not fake.created
 
 
 def test_a_tab_on_another_port_of_the_host_is_not_the_origin(endpoint):
@@ -471,9 +581,9 @@ def test_a_browser_started_here_with_two_tabs_of_the_origin_is_not_stopped(endpo
     monkeypatch.setattr(browser_read, "_ready", lambda url, timeout=0: state["up"] and real(url))
     monkeypatch.setattr(browser_read, "_ensure",
                         lambda flag, timeout=0, root=None, settings=None: calls.append(flag) or state.update(up=flag == "--start") or True)
-    assert error_code(read) == "browser_tab_ambiguous"
+    assert read()["data"]["visible_chats"] == 1
     assert calls == ["--start"]    # the restored tabs are someone else's: the browser is left running
-    assert fake.closed == [] and not fake.created
+    assert fake.closed == ["tab-1"]    # only our own tab
 
 
 def test_a_tab_list_that_is_not_a_list_means_no_tab_of_the_origin(endpoint, monkeypatch):
@@ -679,7 +789,8 @@ def test_a_script_that_ends_in_a_line_comment_still_runs(tmp_path, served):
 def test_the_wrapper_never_runs_the_script_on_another_origin(tmp_path, served):
     dom = '<div id="list"><div role="listitem"><span title="A">A</span></div></div>'
     got = run_expression(browser_read.read_expression(ORIGIN, SAMPLE_SCRIPT), dom, tmp_path, served)
-    assert got == {"origin": served, "data": None}
+    # Wrong origin: script must not run (data null). href is still reported for settlement.
+    assert got == {"origin": served, "href": f"{served}/p.html", "data": None}
 
 
 def test_a_blocked_frame_before_the_page_is_ready_is_not_a_denial(endpoint):
