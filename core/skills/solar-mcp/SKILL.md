@@ -229,18 +229,28 @@ Outside, and said plainly rather than disguised:
   origins in two places (the navigation and the wrapper) in the tab it opens, and lets
   out only declared fields (strings from a closed list), but it does not verify that the
   script only reads. In a tab that was already open and is reused, only the wrapper
-  checks the origin, before the script runs; nothing intercepts requests there, so the
-  script runs in the user's live session and can leave that tab on another page. The
-  read reports `browser_scope_denied` only if a poll finds the page loaded on another
-  origin; a move that starts after the last poll of the read (the third stable result
-  ends it) goes unreported. It reports `browser_read_failed` if the read does not settle
-  before the deadline, and it does not undo the move. The script is JavaScript running
-  in the logged-in session: it runs on each poll that finds the page on the registered
-  origin, until three identical results in a row settle the read (in the user's live
-  session when the tab is reused), and it can click, type or call `fetch` or `POST` to
-  any origin, and the interception sees document requests only, not other requests or
-  websockets. Review a script before registering its digest; a changed script stops
-  running until it is registered again. Solar does
+  checks the origin, before the script runs; nothing intercepts requests there. When
+  that single tab is on another page of the origin, `browser.read` issues `Page.navigate`
+  to the owner's registered URL (not the caller's) and leaves the tab open afterwards;
+  empty path and `/` compare equal for that decision, and a fragment alone does not
+  count as another page. A navigate Solar starts can itself redirect off-origin (for
+  example an SSO bounce): the read then reports `browser_scope_denied` and does not
+  undo the move. Solar never auto-accepts `beforeunload` or other JavaScript dialogs;
+  a navigate blocked by one fails at the deadline (or the browser may discard a draft)
+  without Solar clicking through. Settlement requires `location.href` (fragment ignored)
+  to match the registered page before identical script answers may count, so a ready
+  answer from the previous page cannot settle the read. The script runs in the user's
+  live session and can leave that tab on another page after the read. The read reports
+  `browser_scope_denied` only if a poll finds the page loaded on another origin; a move
+  that starts after the last poll of the read (the third stable result ends it) goes
+  unreported. It reports `browser_read_failed` if the read does not settle before the
+  deadline, and it does not undo the move. The script is JavaScript running in the
+  logged-in session: it runs on each poll that finds the registered page, until three
+  identical results in a row settle the read (in the user's live session when the tab
+  is reused), and it can click, type or call `fetch` or `POST` to any origin, and the
+  interception (only on a tab Solar opened) sees document requests only, not other
+  requests or websockets. Review a script before registering its digest; a changed
+  script stops running until it is registered again. Solar does
   not stop a process running as the user from using the browser's local debugging
   port, and it relies on Chrome to honour the paused-request protocol. If the read
   tab cannot be confirmed closed and the debugging connection is then dropped, Chrome

@@ -22,9 +22,13 @@ through `ensure_browser.sh`, never launched here. A tab this module opens is clo
 the debugging socket is dropped) afterwards. When exactly one page tab of the registered
 origin is already open, the read attaches to it (no request interception: only the wrapper's
 origin check applies), takes it to the registered page only when it is on another one, and
-never closes it; none or several mean a tab of its own, opened and closed here. Reads are
-serialized with a file lock under one absolute deadline that reserves time for cleanup; a
-browser this read started is stopped only when no other tab is left in it.
+never closes it; none or several mean a tab of its own, opened and closed here. A reused-tab
+navigation is not intercepted: a redirect that leaves the origin is reported as
+`browser_scope_denied` and is not undone; Solar never auto-accepts `beforeunload` or other
+dialogs. Settlement requires the page URL (fragment ignored; empty path equals `/`) to match
+the registered URL before identical script answers may count. Reads are serialized with a
+file lock under one absolute deadline that reserves time for cleanup; a browser this read
+started is stopped only when no other tab is left in it.
 """
 from __future__ import annotations
 
@@ -56,10 +60,11 @@ _MAX_FIELDS = 16
 # page is on the registered origin. `__SCRIPT__` is substituted last so its text is never rescanned.
 _WRAPPER = r"""(() => {
   const origin = location.origin;
-  if (origin !== __ORIGIN__) { return {origin: origin, data: null}; }
+  const href = location.href;
+  if (origin !== __ORIGIN__) { return {origin: origin, href: href, data: null}; }
   const read = (__SCRIPT__
   );
-  return {origin: origin, data: read()};
+  return {origin: origin, href: href, data: read()};
 })()"""
 
 
@@ -195,6 +200,19 @@ class _Socket:
 def _origin_of(url: str) -> str:
     parts = urlsplit(url)
     return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else url
+
+
+def _same_page(left: str, right: str) -> bool:
+    """Whether two URLs name the same page for reuse and settlement.
+
+    Fragments are ignored. An empty path and `/` compare equal. The registered URL
+    string passed to `Page.navigate` is never rewritten; this only compares.
+    """
+    def identity(url: str) -> tuple:
+        parts = urlsplit(urldefrag(url or "").url)
+        return (parts.scheme, parts.netloc, parts.path or "/", parts.query)
+
+    return identity(left) == identity(right)
 
 
 class _Page:
@@ -648,11 +666,12 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
                                  "The tab of the origin could not be attached" if reused
                                  else "The browser did not open a tab") from None
         page = _Page(_Socket(url, min(10.0, max(remaining(), 0.5))), origin)
-        if reused and urldefrag(existing[0].get("url") or "").url != urldefrag(entry["url"]).url:
+        if reused and not _same_page(existing[0].get("url") or "", entry["url"]):
             # The read has a page of its own (the registered URL) and the reused tab is somewhere else
             # on the origin: bring it there, or the script would wait for a page that never comes.
-            # The target is the owner's registered URL, never the caller's; no interception on a tab
-            # that is not ours, so the wrapper's origin check still guards what runs.
+            # The target is the owner's registered URL as registered (not rewritten); no interception
+            # on a tab that is not ours, so the wrapper's origin check still guards what runs.
+            # Dialogs (beforeunload, etc.) are not auto-accepted: a stuck navigate fails at the deadline.
             navigated = page.call("Page.navigate", {"url": entry["url"]}, until=limit)
             if navigated.get("errorText"):
                 raise OperationError("browser_read_failed", "The page could not be loaded")
@@ -684,6 +703,11 @@ def scoped_read(entry: dict, deadline: float = _READ_DEADLINE, poll: float = _PO
             if seen != origin:
                 raise OperationError("browser_scope_denied",
                                      "The page left the registered origin; nothing was read")
+            # Do not count answers from the previous page after a navigate: require the registered URL.
+            if not _same_page(value.get("href") if isinstance(value.get("href"), str) else "",
+                              entry["url"]):
+                last, stable = None, 0
+                continue
             data = value.get("data")
             if not isinstance(data, dict) or data.get("ready") is not True:
                 last, stable = None, 0     # still loading

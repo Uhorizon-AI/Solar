@@ -6,8 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
-### Fixed
-- mcp: a reused `browser.read` tab is now taken to the registered page when it is on another page of the origin (fragment ignored). Before, a read that needs a specific page, such as `linkedin-unread` (filtered inbox), found the user's tab on a conversation, never became readable and ended as `browser_read_failed`. The tab is still never closed, nothing is intercepted there, and the wrapper's origin check still applies. A tab already on the registered page is not touched. With several tabs of the origin the read no longer fails: it opens a tab of its own. Follow-up to #194 (#188).
+### Changed
+- mcp: a reused `browser.read` tab is taken to the registered page when it is on another page of the origin (fragment ignored; empty path and `/` compare equal without rewriting the registered URL). Settlement waits until `location.href` matches that page so a ready answer from the previous page cannot count. With several tabs of the origin the read opens a tab of its own and never fails for ambiguity. On a reused tab there is still no request interception: a redirect that leaves the origin is reported as `browser_scope_denied` and is not undone; Solar does not auto-accept `beforeunload` or other dialogs (a stuck navigate fails at the deadline). Follow-up to #194 (#188).
 
 ## [0.65.0] - 2026-11-26
 
