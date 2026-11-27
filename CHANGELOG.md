@@ -9,8 +9,10 @@ The format is based on Keep a Changelog.
 ### Fixed
 - mcp: a reused `browser.read` tab is now taken to the registered page when it is on another page of the origin (fragment ignored). Before, a read that needs a specific page, such as `linkedin-unread` (filtered inbox), found the user's tab on a conversation, never became readable and ended as `browser_read_failed`. The tab is still never closed, nothing is intercepted there, and the wrapper's origin check still applies. A tab already on the registered page is not touched. With several tabs of the origin the read no longer fails: it opens a tab of its own. Follow-up to #194 (#188).
 
+## [0.65.0] - 2026-11-26
+
 ### Changed
-- mcp: `browser.read` reuses the page tab of the registered origin when exactly one is already open in the Solar browser, instead of opening a second one. It does not intercept requests there, runs only the pinned script (behind the wrapper's origin check) and never closes that tab, also on error or timeout. The script can leave that tab on another page and Solar does not undo it (see "Where the guarantee ends" in `solar-mcp/SKILL.md`). With none or several open it creates and closes its own tab as before and touches none of them. Aimed at single-session sites such as WhatsApp Web (#188). Whether a second tab really harms the original session was not measured.
+- mcp: `browser.read` reuses the page tab of the registered origin when exactly one is already open in the Solar browser, instead of opening a second one. It does not navigate or intercept requests there, runs only the pinned script (behind the wrapper's origin check) and never closes that tab, also on error or timeout. The script can leave that tab on another page and Solar does not undo it (see "Where the guarantee ends" in `solar-mcp/SKILL.md`). With none open it creates and closes its own tab as before; with several it fails with the new `browser_tab_ambiguous` and touches none. Aimed at single-session sites such as WhatsApp Web (#188). Whether a second tab really harms the original session was not measured.
 
 ## [0.64.1] - 2026-11-26
 
